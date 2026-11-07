@@ -124,6 +124,9 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 	meta.Parts, meta.RowGroups, meta.Rows = s.reader.Parts(), s.reader.RowGroups(), s.reader.Rows()
 	s.schemaID = meta.SchemaID
 	s.objects = objectProjectionFor(meta.SchemaID)
+	if !opts.Prefetch.Off {
+		s.prefetch = newPrefetcher(opts.Prefetch, s.packedRows)
+	}
 	return s, meta, nil
 }
 

@@ -101,8 +101,8 @@ func meterLines(p scrape) []string {
 // fixture on all three routes and compares the payload's meters, names,
 // types and tags in payload order, with testdata/meters.txt: the Java
 // server's scrape after the same mix over the synthetic-10k fixture,
-// without the meters the Go server has no counterpart for (the prefetch
-// window cache, the sort progress counter, the JVM and host meters) and
+// without the meters the Go server has no counterpart for (the sort
+// progress counter, the JVM and host meters) and
 // with the handle_cache meters that stand for the Java delimiter reader
 // pool. The docs' meter table (docs/replay.md) lists every difference.
 // The test then sums the http.requests count as the bench scripts do.

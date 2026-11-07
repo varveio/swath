@@ -105,6 +105,9 @@ type Options struct {
 	// Zero selects sortedparquet.DefaultMaxOpenFiles(), half the soft
 	// descriptor limit, at most 4,096.
 	MaxOpenFiles int
+	// Prefetch configures the window cache in front of Rows; the zero
+	// value is on with the defaults.
+	Prefetch Prefetch
 }
 
 // Metadata describes an opened fixture for the startup line and metrics.

@@ -112,6 +112,29 @@ var (
 	HandleCacheOpen      = Def{Name: "swath.replay.handle_cache.open", Kind: Gauge}
 	HandleCachePeak      = Def{Name: "swath.replay.handle_cache.peak", Kind: Gauge}
 	HandleCacheLimit     = Def{Name: "swath.replay.handle_cache.limit", Kind: Gauge}
+	// The window cache in front of range reads (store.Prefetch): reads
+	// answered from windows, misses by why their fill was sized as it was
+	// (continuation, cold), each fill's duration and the rows it asked
+	// for, continuation anchors (registered, claimed,
+	// evicted_before_claim) and the ramp ceiling of a claimed one, windows
+	// evicted (and those the row bound forced), how each read was served
+	// (selection), why a two-window join was declined or hit, reads and
+	// windows kept out of the cache (uncached), and the windows, anchors
+	// and rows held now.
+	PrefetchWindowHit               = Def{Name: "swath.replay.prefetch.window.hit", Kind: Counter}
+	PrefetchWindowMiss              = Def{Name: "swath.replay.prefetch.window.miss", Kind: Counter, Tags: []string{"reason"}}
+	PrefetchWindowFill              = Def{Name: "swath.replay.prefetch.window.fill", Kind: Timer}
+	PrefetchFillRows                = Def{Name: "swath.replay.prefetch.fill.rows", Kind: Distribution}
+	PrefetchAnchor                  = Def{Name: "swath.replay.prefetch.anchor", Kind: Counter, Tags: []string{"event"}}
+	PrefetchWindowRampCeilingRows   = Def{Name: "swath.replay.prefetch.window.ramp_ceiling_rows", Kind: Distribution}
+	PrefetchWindowEviction          = Def{Name: "swath.replay.prefetch.window.eviction", Kind: Counter}
+	PrefetchWindowRowBudgetEviction = Def{Name: "swath.replay.prefetch.window.row_budget_eviction", Kind: Counter}
+	PrefetchWindowSelection         = Def{Name: "swath.replay.prefetch.window.selection", Kind: Counter, Tags: []string{"reason"}}
+	PrefetchWindowJoin              = Def{Name: "swath.replay.prefetch.window.join", Kind: Counter, Tags: []string{"reason"}}
+	PrefetchWindowUncached          = Def{Name: "swath.replay.prefetch.window.uncached", Kind: Counter, Tags: []string{"reason"}}
+	PrefetchWindowsLive             = Def{Name: "swath.replay.prefetch.windows.live", Kind: Gauge}
+	PrefetchAnchorsLive             = Def{Name: "swath.replay.prefetch.anchors.live", Kind: Gauge}
+	PrefetchRowsLive                = Def{Name: "swath.replay.prefetch.rows.live", Kind: Gauge}
 	// SortFixtureBuildLatency and SortFixtureOutputBytes are the
 	// sort-fixture command's; a server never sorts, so they read zero.
 	SortFixtureBuildLatency = Def{Name: "swath.replay.sortfixture.build.latency", Kind: Timer, NoPercentiles: true}

@@ -1,6 +1,6 @@
 # The meters a scrape shows after TestMeterSetMatchesTheContract's request mix, as "name type tags", in payload
 # order. Derived from the Java server's scrape after the same mix over the synthetic-10k fixture (all three
-# routes), less the meters with no Go counterpart (swath.replay.prefetch.*, swath.replay.sort.progress,
+# routes), less the meters with no Go counterpart (swath.replay.sort.progress,
 # swath.replay.delimiter.reader_pool.*, and the jvm.*, process.* and system.* meters), plus the
 # swath.replay.handle_cache.* meters of the Go reader's descriptor cache. docs/replay.md lists each difference.
 swath.replay.delimiter.path counter {"path":"rollup"}
@@ -27,6 +27,21 @@ swath.replay.parquet.queries.peak gauge {}
 swath.replay.parquet.query.errors counter {}
 swath.replay.parquet.query.latency timer {}
 swath.replay.parquet.query.rows distribution {}
+swath.replay.prefetch.anchor counter {"event":"claimed"}
+swath.replay.prefetch.anchor counter {"event":"evicted_before_claim"}
+swath.replay.prefetch.anchor counter {"event":"registered"}
+swath.replay.prefetch.anchors.live gauge {}
+swath.replay.prefetch.fill.rows distribution {}
+swath.replay.prefetch.rows.live gauge {}
+swath.replay.prefetch.window.eviction counter {}
+swath.replay.prefetch.window.fill timer {}
+swath.replay.prefetch.window.hit counter {}
+swath.replay.prefetch.window.miss counter {"reason":"cold"}
+swath.replay.prefetch.window.miss counter {"reason":"continuation"}
+swath.replay.prefetch.window.ramp_ceiling_rows distribution {}
+swath.replay.prefetch.window.row_budget_eviction counter {}
+swath.replay.prefetch.window.selection counter {"reason":"no_cover"}
+swath.replay.prefetch.windows.live gauge {}
 swath.replay.protocol.encoded.bytes counter {"protocol":"azure","shape":"delimiter"}
 swath.replay.protocol.encoded.bytes counter {"protocol":"azure","shape":"page"}
 swath.replay.protocol.encoded.bytes counter {"protocol":"gcs","shape":"delimiter"}

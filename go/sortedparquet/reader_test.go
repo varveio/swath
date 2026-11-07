@@ -402,3 +402,105 @@ func replacePart[T any](t *testing.T, dir string, rows []T) {
 		t.Fatal(err)
 	}
 }
+
+// scanRows rebuilds rows from what Scan hands its sink, checking the sink
+// contract on the way: Keys, then every column in order, each given in
+// full by Values calls or by one Missing call.
+type scanRows struct {
+	t       *testing.T
+	columns []string
+	rows    []sortedparquet.Row
+	run     int // the current run's first row
+	next    int // the column expected next
+	filled  int // rows of that column given so far
+}
+
+func (s *scanRows) Keys(keys [][]byte) {
+	if s.rows != nil && s.next != len(s.columns) {
+		s.t.Fatalf("a run started with column %d of %d still due", s.next, len(s.columns))
+	}
+	s.run, s.next, s.filled = len(s.rows), 0, 0
+	for _, k := range keys {
+		s.rows = append(s.rows, sortedparquet.Row{Key: k, Columns: s.columns, Values: make([]parquet.Value, len(s.columns))})
+	}
+}
+
+func (s *scanRows) Values(c int, values []parquet.Value) {
+	if c != s.next {
+		s.t.Fatalf("values of column %d while %d is due", c, s.next)
+	}
+	for _, v := range values {
+		s.rows[s.run+s.filled].Values[c] = v.Clone()
+		s.filled++
+	}
+	if s.run+s.filled == len(s.rows) {
+		s.next, s.filled = s.next+1, 0
+	}
+}
+
+func (s *scanRows) Missing(c int) {
+	if c != s.next || s.filled != 0 {
+		s.t.Fatalf("column %d missing while %d is due", c, s.next)
+	}
+	for i := s.run; i < len(s.rows); i++ {
+		s.rows[i].Values[c] = parquet.NullValue()
+	}
+	s.next++
+}
+
+// TestScanMatchesRead reads ranges across pages, row groups and parts with
+// a column no part holds, through Read and through Scan, and requires the
+// same rows and values.
+func TestScanMatchesRead(t *testing.T) {
+	var keys []string
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("k%04d", i))
+	}
+	dir := writeParts(t,
+		sortedparquettest.Part{Rows: rowsOf(keys[:120]), PageBytes: 256, GroupRows: 37},
+		sortedparquettest.Part{Rows: rowsOf(keys[120:]), PageBytes: 512, GroupRows: 50})
+	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Reader.Close()
+	columns := []string{"size", "etag", "no_such_column", "owner_id", "last_modified"}
+	for _, from := range []string{"", "k0000", "k0036", "k0037", "k0119", "k0150x", "k0299"} {
+		for _, limit := range []int{1, 13, 40, 120, 400} {
+			for _, to := range []string{"", "k0200"} {
+				rng := sortedparquet.Range{Limit: limit, Columns: columns, FromInclusive: true}
+				if from != "" {
+					rng.From = []byte(from)
+				}
+				if to != "" {
+					rng.To = []byte(to)
+				}
+				want, err := fixture.Reader.Read(context.Background(), rng, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sink := &scanRows{t: t, columns: columns}
+				if err := fixture.Reader.Scan(context.Background(), rng, nil, sink); err != nil {
+					t.Fatal(err)
+				}
+				if len(sink.rows) > 0 && sink.next != len(columns) {
+					t.Fatalf("the last run ended with column %d of %d due", sink.next, len(columns))
+				}
+				if len(sink.rows) != len(want) {
+					t.Fatalf("from %q limit %d to %q: %d rows, want %d", from, limit, to, len(sink.rows), len(want))
+				}
+				for i := range want {
+					got := sink.rows[i]
+					if string(got.Key) != string(want[i].Key) {
+						t.Fatalf("row %d key %q, want %q", i, got.Key, want[i].Key)
+					}
+					for c := range columns {
+						if !parquet.Equal(got.Values[c], want[i].Values[c]) || got.Values[c].IsNull() != want[i].Values[c].IsNull() {
+							t.Fatalf("row %d column %s: %v, want %v", i, columns[c], got.Values[c], want[i].Values[c])
+						}
+					}
+				}
+			}
+		}
+	}
+}

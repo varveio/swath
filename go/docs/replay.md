@@ -59,6 +59,8 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
 | `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`). The serving listener holds at most four times this many connections; one more is closed as soon as it is accepted |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
+| `--prefetch-window-rows` | `12500` | the rows a walk's window cache fill ramps to (below); `0` turns the cache off |
+| `--prefetch-max-windows` | `192` | the windows the cache holds, at most this many times `--prefetch-window-rows` rows; `0` turns it off |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
@@ -139,6 +141,37 @@ has no room for that. The response is then rendered into chunks sized from the p
 charged before it is allocated; rendering stops at the first byte past `--max-response-bytes`
 (`response_too_large`) or past the budget. The unused reservation goes back before any injected delay, and the
 chunks are held until the response is written.
+
+## The window cache
+
+A paginating client reads the fixture in order, a page at a time. The window cache in front of the store's
+range reads lets one fixture read serve the pages that follow it: when a read's lower bound is the tail of a
+page the server answered before (an S3 continuation token or `start-after`, the GCS and Azure tokens), its fill
+reads four times the rows the previous fill read, up to `--prefetch-window-rows` rounded up to a multiple of the
+page size, and keeps them as a window; the next pages are sliced from the window. Once a walk's page leaves less
+than a quarter of its window unread, the next window is read ahead in the background (at most half as many at
+once as there are processors, each holding a reader slot while it reads), and a walk that reaches the end of its
+window while that read is in flight waits for it: walks paced alike, such as a fleet under a latency profile,
+otherwise reach their windows' ends together and queue for the reader slots at once
+(`TestWindowCacheReadsAhead`; `server` `TestLoadNoOverrunAtSixtyFourWalks`). Any other read (a first page, a
+probe, a seek) reads only what it asks for, and keeps it only when the fixture had more. A read is answered
+from the windows only when they hold every row its bounds select, from one window or two adjacent ones;
+anything less reads the fixture, so an answer is byte for byte the one a fixture read gives
+(`store` `TestWindowCacheMatchesTheFixture`). A read answered from a window takes no reader slot: the
+`--parquet-connections` slots bound fixture reads only (`TestWindowCacheHitsTakeNoReaderSlot`). Delimiter
+rollups, and the GCS route's reads of a `swath/gcs-objects/v1` dataset (which project its own columns), read
+the fixture.
+
+Windows are evicted least recently used first, past `--prefetch-max-windows` windows or past that many times
+`--prefetch-window-rows` rows (a walk holds two while it reads the last quarter of one, so the default of 192
+windows serves 96 walks); a window's rows are held packed, the keys and each text column in one array
+apiece (about 130 bytes a row for the canonical schema with 44-byte keys). With the defaults the cache holds
+up to 2.4 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
+turns the cache off: every read then decodes its pages from the fixture. The Java server reads the same
+settings from the system properties `swath.replay.prefetch.window-rows`, `swath.replay.prefetch.max-windows` and
+`swath.replay.prefetch.enabled`, with the same window size and 96 windows (it does not read ahead), and
+publishes the same meters (below); a read-ahead is counted as a fill (`prefetch.window.fill`,
+`prefetch.fill.rows`), not as a miss.
 
 ## The Azure route
 
@@ -266,14 +299,14 @@ others appear on first use.
 | `serving.refused{reason}` | present | `row_group_disorder`, counted for every read that finds it, a range read or a rollup (the Java server counts the rollup's only) |
 | `index.load.latency{source=derived}`, `index.entries` | present, from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | present, from startup | how long a store read holds its reader slot, slot wait excluded |
-| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | present, from startup | one store call, slot wait included; its rows or rollup entries. The Java server's rows include its prefetch window fills, so its totals are larger |
+| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | present, from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read, on either server; a read answered from a window is none |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | present, from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag; the Java server has a pool per file and per read kind, so its peak can exceed the flag |
 | `delimiter.path{path}` | present | `rollup` or `walk` for an S3 delimiter page |
 | `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | present, from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages, so `row_group_opens` is lower and `decoded_key_rows` higher than the Java server's for the same rollup |
 | `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | renamed: `handle_cache.*` | the Java server opens a row-group reader pool per file on its first rollup; the Go reader has no reader pools. Every part is read through one descriptor cache instead: `handle_cache.opens` (first opens and reopens after eviction), `.evictions`, `.waits` (reads that waited for a descriptor) as counters, and `.open`, `.peak`, `.limit` (half the soft descriptor limit, at most 4,096) as gauges, from startup |
 | `sortfixture.build.latency`, `sortfixture.output.bytes` | present, from startup, zero | recorded by `sort-fixture`, never by a server |
 | `sort.progress`, `sort.steal_reason{outcome,reason}` | absent | the Java sorter's own scheduling; `sort-fixture` here sorts in memory |
-| `prefetch.*` (the window cache's fills, hits, misses, ramp, live windows, rows and anchors, selection, joins, evictions) | absent | the reader has no window cache: every page is decoded from the fixture |
+| `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | present while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |
 | `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | present (gauges from startup) | refusals by `shutdown`, `response_count_exhausted`, `response_budget_exhausted`, `response_too_large` |
 | `response.chunk.allocation{reason}`, `response.chunk.capacity.bytes{reason}` | present, from startup | chunks by `initial`, `initial_cap_partial`, `continuation`, `cap_partial` |
 | `response.percent.encoding.path{protocol,reason}`, `response.write.deadline{protocol,reason}` | present | |
@@ -300,6 +333,9 @@ others appear on first use.
   server instead, below), the DuckDB serving mode, and the Java server's
   `swath_replay_metrics` summary line at shutdown (logged below the Java launcher's default log level; poll the
   endpoint instead).
+- **Profiles.** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` (the lister's variables) write a CPU and an
+  allocation profile for `go tool pprof`, covering the server's life from the startup line; both are written when
+  SIGINT or SIGTERM stops it.
 - A client that disconnects while its page is being read does not cancel the read: the page is read, rendered and
   counted as served (`2xx`, nothing in `http.errors`, no log line), and only its write fails, as on the Java
   server (`TestClientGoneFinishesThePage`). Shutdown still interrupts it. A client that leaves while its request
@@ -451,14 +487,15 @@ the wire contract, not fixed here:
 Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
 with other jobs, 15 GiB RAM, Linux 6.18; **4 vCPU shared host, not the corridor's eight isolated cores**, and the
 client runs on the same four vCPUs over loopback, so these numbers are the pair's, not the server's alone. Go
-server: this module at the commit that added this section, `./build.sh`, GOMAXPROCS 4. Java server: swath `main`
-at `01dd55b` (0.3.3-SNAPSHOT) on Temurin 25.0.5+8 with the launcher's heap defaults and `JAVA_TOOL_OPTIONS` as the
-host sets it (trust store and proxy properties only), as `bench/fault_replay.sh` leaves it. One server at a time,
-both with `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. Fixtures, page cache
-warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups, 22.7 MB, written by the
-Java `sort-fixture`) and the `noaa-gk2a-pds` recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55
-row groups, 461 MB; not in the repository). Measured on 2026-11-07; runs vary by about 15% from one to the next
-on this host.
+server: this module at the commit that last updated this section, `./build.sh`, GOMAXPROCS 4, the window cache's
+defaults. Java server: swath `main` at `01dd55b` (0.3.3-SNAPSHOT) on Temurin 25.0.5+8 with the launcher's heap
+defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and proxy properties only), as
+`bench/fault_replay.sh` leaves it, its window cache at its defaults. One server at a time, nothing else running,
+the two measured back to back for each configuration (2026-11-07, 12:50 to 12:58 UTC), both with
+`--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`. Fixtures, page cache warm:
+`synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups, 22.7 MB, written by the Java
+`sort-fixture`) and the `noaa-gk2a-pds` recording (a public bucket's listing, 18,472,015 keys, 2 parts, 55 row
+groups, 461 MB; not in the repository). Runs vary by about 15% from one to the next on this host.
 
 ### Throughput and memory
 
@@ -470,24 +507,30 @@ the 64-walk rows are one minute of samples. RSS is the measured window's mean an
 
 | Server | Fixture | Walks | Object rows/s | Request p50 / p99 ms | RSS mean / max MB | Reader peak |
 |---|---|---|---|---|---|---|
-| Go | synthetic-1m rolled | 16 | 581,534 | 23.4 / 78.0 | 39 / 45 | 8 |
-| Go | synthetic-1m rolled | 64 | 667,485 | 92.5 / 153.7 | 45 / 50 | 8 |
-| Java | synthetic-1m rolled | 16 | 1,466,799 | 8.9 / 27.0 | 1,217 / 1,219 | 16 |
-| Java | synthetic-1m rolled | 64 | 1,918,334 | 28.8 / 91.6 | 1,600 / 1,601 | 46 |
-| Go | noaa-gk2a-pds | 16 | 636,777 | 21.4 / 65.1 | 64 / 72 | 8 |
-| Go | noaa-gk2a-pds | 64 | 708,869 | 85.5 / 165.3 | 79 / 84 | 8 |
-| Java | noaa-gk2a-pds | 16 | 758,565 | 15.8 / 84.8 | 1,937 / 2,206 | 10 |
-| Java | noaa-gk2a-pds | 64 | 1,062,748 | 49.2 / 184.0 | 2,118 / 2,474 | 16 |
+| Go | synthetic-1m rolled | 16 | 1,868,585 | 6.9 / 21.6 | 401 / 402 | 8 |
+| Java | synthetic-1m rolled | 16 | 1,261,226 | 10.4 / 32.9 | 1,056 / 1,105 | 16 |
+| Go | synthetic-1m rolled | 64 | 2,602,299 | 21.8 / 66.6 | 677 / 678 | 8 |
+| Java | synthetic-1m rolled | 64 | 1,876,586 | 29.7 / 90.9 | 1,472 / 1,473 | 46 |
+| Go | noaa-gk2a-pds | 16 | 1,224,641 | 10.6 / 33.0 | 887 / 894 | 8 |
+| Java | noaa-gk2a-pds | 16 | 738,430 | 16.2 / 83.9 | 1,752 / 1,860 | 10 |
+| Go | noaa-gk2a-pds | 64 | 1,811,143 | 30.1 / 96.9 | 900 / 909 | 8 |
+| Java | noaa-gk2a-pds | 64 | 1,039,262 | 50.6 / 183.3 | 2,043 / 2,595 | 16 |
 
-Idle, the Go server holds 13 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server
-holds about 180 MB and answers after 2.2 s. The Go server's memory does not follow the fixture's object count
-(18.5 million keys cost 30 MB more than one million); it is the in-flight pages and responses
-(`response.bytes.peak` 20.5 MB at 64 walks, 82 MB at 256). The Java server serves 1.2 to 2.9 times as many rows a
-second here: its prefetch window cache decodes a run of rows once for the pages a walk reads next, where the Go
-reader decodes every page's rows from the fixture (`page.read.latency`, the reader slot's hold time with 8 slots
-sharing 4 vCPUs, averaged 9.8 ms a 1,000-key page at 64 walks).
-With 256 walks the Go server served 708,891 rows/s with `parquet.queries.peak` 8, page reads 8.5 ms and the reader
-slot wait in `parquet.query.latency` (347 ms).
+The Go server serves 1.4 to 1.7 times the Java server's rows a second here, in about half its memory. Idle, the
+Go server holds 14 MB and answers `/healthz` 0.22 s after it starts on either fixture; the Java server holds
+about 175 MB and answers after 2.0 to 2.2 s. Both serve a walk's pages from their window caches (above): at 64
+walks over the recording the Go server read the fixture 7,617 times (12,821 rows a fill on average, read-aheads
+included) for 108,248 pages answered from windows, the Java server 4,062 times for 54,840. The Go server's memory
+is the cache (2.39 million rows held over the recording, 2.29 million over the synthetic fixture, whose walks
+overlap) and the in-flight responses (`response.bytes.peak` 20 to 24 MB at 64 walks), not the fixture's object
+count. With the cache off (`--prefetch-window-rows 0`) the same 64-walk synthetic run served 756,214 rows/s in
+45 MB, every page decoded from the fixture. With 256 walks the Go server served 3,582,394 rows/s (25 s, 680 MB,
+`parquet.queries.peak` 8).
+
+Where the Go server's CPU goes at 64 walks over the synthetic fixture (`SWATH_CPUPROFILE`, 40 s, 2.4 million rows
+a second): rendering the S3 document 40% (XML escaping 15%), slicing pages out of windows 29% (unpacking rows
+into objects 11%), the response write 13% (mostly the `write` system call), fixture reads 5%, the collector under
+1%.
 
 ### Overruns at 64 walks
 
@@ -496,13 +539,13 @@ slot wait in `parquet.query.latency` (347 ms).
 
 | Server | max-keys | Object rows/s | Request p50 / p99 ms | Requests | `inject.overrun` |
 |---|---|---|---|---|---|
-| Go | 1000 | 672,848 | 91.8 / 150.9 | 20,252 | 20,057 |
-| Go | 100 | 123,950 | 51.1 / 58.0 | 37,194 | 0 |
-| Java | 1000 | 1,011,384 | 54.6 / 163.9 | 30,382 | 312 |
+| Go | 1000 | 1,185,970 | 52.2 / 76.6 | 35,611 | 51 |
+| Java | 1000 | 988,981 | 54.5 / 204.3 | 29,719 | 262 |
+| Go | 100 | 124,415 | 51.1 / 56.2 | 37,337 | 0 |
 
-At 1,000-key pages the profile asks for 1.28 million rows a second, about twice what the Go server serves on this
-host with the client beside it, so nearly every page overruns: such a run measures the server, not the profile.
-At 100-key pages (128,000 rows a second) it holds the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks`
+At 1,000-key pages the profile asks for 1.28 million rows a second; with the client on the same four vCPUs both
+servers fall a little short, the Go server overrunning 0.14% of its pages and the Java server 0.9%. At 100-key
+pages (128,000 rows a second) the Go server holds the profile with no overrun (`TestLoadNoOverrunAtSixtyFourWalks`
 pins this). Check `inject.overrun` against the request count before trusting a run with a profile.
 
 ### Request ceiling, reader slots and descriptors

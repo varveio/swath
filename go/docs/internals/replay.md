@@ -149,7 +149,8 @@ overrun with the excess when there is none. Parsing reads numbers with the contr
   unused reservation returned when rendering ends, before the delay (`TestSparseResponsesReturnTheirReservation`);
   the chunks released after the write. Refusals are 503s (500 `response_too_large` for the cap) counted in
   `response.admission.refused{reason}`; nothing queues on the budget. The store bounds its own page decodes
-  (`--parquet-connections`); the server adds no read permit of its own.
+  (`--parquet-connections`), which a page answered from its window cache does not take; the server adds no read
+  permit of its own.
 - Writes get a deadline when writing starts (`http.ResponseController.SetWriteDeadline`); `http.Server`'s
   `WriteTimeout` would run from the end of the request headers and so include the injected delay.
 - Shutdown cancels one context: queued requests and sleeping delays answer 503 `shutdown` at once, a store read
@@ -269,7 +270,8 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 | the 0xFF carry | `s3` `TestPrefixUpperAndSuccessor`, `TestPrefixRangeLaw` |
 | tokens | `s3` `TestTokenGolden`, `TestTokenRoundTripsAndLegacyV1`, `TestBlankTokenIsAbsent`, `TestMalformedTokensAreRejected`, `TestTokenProperties`, `TestHasTokenAgreesWithDecode` |
 | response memory | `output` (the contract's sink tests by name), `s3` `TestOneKeyAndEmptyPagesUseSmallFirstChunks`, `TestRenderStopsAtTheCap`; `server` `TestSparseResponsesReturnTheirReservation`, `TestBudgetRefusesAnOverlappingPage`, `TestOversizedResponseStopsAtTheCap`, `TestSlowReadersReachTheResponseCeiling` |
-| XML | `s3` `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
+| the window cache | `store` `TestWindowCacheMatchesTheFixture` (every conformance fixture through a small cache against the bare reader: walks, probes, joins, evictions, reads past a window, concurrent walkers), `TestWindowCacheHitsTakeNoReaderSlot`, `TestWindowCacheReadsAhead`; `sortedparquet` `TestScanMatchesRead`; `server` `TestMeterSetMatchesTheContract` (`prefetch.*`) |
+| XML | `s3` `TestRowFastPathMatchesUnits` (whole elements appended where they fit against unit-by-unit rendering: bytes, refusal, chunks, percent-encoding counts), `TestTimestampCacheMatchesFreshFormatting`, `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
 | latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`, `TestNumberGrammar`, `TestHugeDelaysSaturate`; `s3` `TestLatencyKeyGolden`; `server` `TestContinuationPagesDrawDistinctJitter`, `TestCountsNoOverrunWhenInjectionIsOff` |
 | serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`, `TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`, `TestRejectsAmbiguousTargets`, `TestDisorderedFixtureNamesOnlyThePart`, `TestDisorderedPartOverHTTP` |
 | sorted serving | `server` `sorted_differential_test.go` (eleven cases of the contract's `SortedServingFullDifferentialTest`) |
