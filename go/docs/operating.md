@@ -81,7 +81,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
-| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
+| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. Once listing has ended the allowance grows by 1 MiB per worker (no page is in flight any more): 8 at 64 workers, 16 at 256 (report: `resources.drain.encoders_after_listing`). A given `--encoders` is never raised. A warning names a shortfall |
 | Spill disk | `--spill-max` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/` (a text output's under `$TMPDIR`; `--count-only` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
@@ -170,6 +170,16 @@ latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`, `li
 report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stuck_max_ns`, `peak_nodes`,
 `peak_markers`, `peak_ahead_rows`, `peak_heap_live_bytes`, `part_time_cuts` and `spill.peak_bytes`,
 `spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`, `spill.dir`, `spill.fs_type`.
+
+**The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
+work-stealing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
+until the leftmost range ends, and are then replayed in order. `timings.listing_done_at` is when the provider
+finished; `listing_finished_at` when the order stage ended; `resources.drain.tail_ns` the interval between, the
+part of the run in which only the drain was left. In it idle workers read and decode spilled frames ahead of
+the drainer (`resources.drain.read_ahead`) and more encoders are admitted (above). Where the tail goes:
+`replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders, with
+`encoder_wait_ns`), and the workers' `worker_idle_after_listing_done_ns`. A tail that is most of the run with
+`sink_write_ns` most of the tail is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 
 | Signal | Healthy | Act when |
 |---|---|---|

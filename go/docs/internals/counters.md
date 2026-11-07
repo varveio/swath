@@ -58,6 +58,16 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and the run warns at start |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
 | `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end |
+| `timings.listing_done_at` | time | the provider finished: every range expanded, none in flight (absent if it never did); `listing_finished_at` is the order stage's end, after the drain |
+| `drain.tail_ns` | ns | from `listing_done_at` to the drain's last row: the part of the run in which only the drain was left |
+| `drain.worker_idle_before_listing_done_ns`, `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time (nothing queued to list, read-ahead waits included), summed over workers, on either side of `listing_done_at` |
+| `drain.replay_read_ns`, `drain.replay_decode_ns` | ns | the drainer reading spilled frames itself, and the part of it spent decoding (trailers included) |
+| `drain.ahead_wait_ns`, `drain.order_check_ns`, `drain.sink_write_ns` | ns | the drainer waiting for a frame the read-ahead was reading; the stream-wide order guard; handing batches to the sink (`encoder_wait_ns` included) |
+| `drain.read_ahead.frames`, `drain.read_ahead.rows` | frames, rows | spilled frames idle workers read and decoded ahead of the drainer (feature: `spill`) |
+| `drain.read_ahead.drainer_frames`, `drain.read_ahead.unplanned_frames` | frames | frames planned and taken over unread by the drainer; frames it reached with nothing planned (both read by the drainer; with `frames`, every frame spilled, each once) |
+| `drain.read_ahead.drainer_waits`, `drain.read_ahead.capped_waits` | waits | the drainer waiting for a frame being read; workers waiting at the read-ahead's share of the row budget |
+| `drain.read_ahead.read_ns`, `drain.read_ahead.decode_ns` | ns | the workers' read-ahead time, and the part of it spent decoding |
+| `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 
 A dry run (`--count-only`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`

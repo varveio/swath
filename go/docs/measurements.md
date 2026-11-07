@@ -443,6 +443,26 @@ count-only run peaked at 438 MiB before and 97 MiB after. The ordered run's rema
 (157 MiB live against the 128 MiB budget) and the garbage collector's headroom. The in-repository guard is
 `TestRetainedBoundsDoNotPinPages` (synthetic: `scalefake`, 400,000 keys, [ordering](internals/ordering.md#what-a-waiting-range-retains)).
 
+## The drain after listing
+
+Local, noisy: a 4-core, 7 GB VM shared with other builds (load 3 to 10), keyfake at 50 ms, the first 2M keys of
+`idc-open-data`, sorted Parquet, spill on; five runs per arm, medians. Before is the engine-campaign build
+(7b05605), whose listing end is read from `progress.json` sampled every 250 ms (`objects` reaching the row
+count: up to a sample late, so its tail reads short); after reports `timings.listing_done_at`.
+
+| Arm | Wall s | Listing done s | Tail s | Rows/s in the tail | Encoders start/after | RSS MiB |
+|---|---|---|---|---|---|---|
+| before, 64 workers | 6.42 | ~5.0 | ~1.2 | 0.80 M | 4/4 | 484 |
+| after, 64 workers | 6.99 | 4.88 | 1.91 | 0.84 M | 4/4 (`at_cap`) | 454 |
+| before, 256 workers | 7.08 | ~5.5 | ~1.3 | 0.77 M | 4/4 | 578 |
+| after, 256 workers | 7.92 | 5.50 | 1.95 | 0.70 M | 4/4 (`at_cap`) | 585 |
+
+No difference stands out of the noise here. With the read-ahead the drainer's own replay is gone (about 1,200
+of 1,230 frames read ahead, `replay_read_ns` under 0.1 s); the tail is the encoders' (`sink_write_ns` equals
+it, `encoder_wait_ns` 1.3 to 3.7 s): 4 cores carry 4 encoders, so admission is `at_cap`. With
+`GOMAXPROCS=8` on the same 4 cores, admission engages (5 at start, 8 after listing, `listing_done`). Whether
+the tail halves where it was measured (16 vCPU, 5 encoders, about 15 s at 256 workers) is for the Batch arms.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

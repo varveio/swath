@@ -79,15 +79,27 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 
 func route(t *testing.T, rows []row, encoders int, partSize int64) (string, []dataset.Part) {
 	t.Helper()
+	return routeAdmit(t, rows, encoders, 0, -1, partSize)
+}
+
+// routeAdmit is route with MaxEncoders max, Admit called after the
+// admitAt-th Write (never when negative).
+func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSize int64) (string, []dataset.Part) {
+	t.Helper()
 	out := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewRouter(Options{Out: out, PartSize: partSize, Encoders: encoders}, &testSchema)
+	r, err := NewRouter(Options{Out: out, PartSize: partSize, Encoders: encoders, MaxEncoders: maxEnc}, &testSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < len(rows); i += 1500 {
+		if i/1500 == admitAt {
+			if n := r.Admit(); n != max(encoders, maxEnc) {
+				t.Fatalf("admitted %d, want %d", n, max(encoders, maxEnc))
+			}
+		}
 		segs := [][]row{rows[i:min(i+700, len(rows))], rows[min(i+700, len(rows)):min(i+1500, len(rows))]}
 		if err := r.Write(context.Background(), segs); err != nil {
 			t.Fatal(err)
@@ -134,6 +146,33 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 		if got := readKeys(t, parts); !slices.Equal(got, keysOf(rows)) {
 			t.Fatalf("enc=%d: keys differ after round trip", enc)
 		}
+	}
+}
+
+// TestRouterAdmitIsByteIdentical: encoders admitted mid-run (as once
+// listing has ended) change neither the parts' boundaries nor their bytes,
+// and the router honours its raised count.
+func TestRouterAdmitIsByteIdentical(t *testing.T) {
+	rows := testRows(60_000, 2)
+	_, base := route(t, rows, 1, 16<<10)
+	_, parts := routeAdmit(t, rows, 1, 4, 10, 16<<10)
+	if len(parts) != len(base) {
+		t.Fatalf("%d parts vs %d", len(parts), len(base))
+	}
+	for i := range parts {
+		if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+			t.Fatalf("part %d differs", i)
+		}
+	}
+	r, err := NewRouter(Options{Out: t.TempDir(), PartSize: 1 << 20, Encoders: 2, MaxEncoders: 5}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Encoders() != 2 || r.Admit() != 5 || r.Admit() != 5 || r.Encoders() != 5 {
+		t.Fatalf("encoders %d after admission", r.Encoders())
+	}
+	if _, err := r.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -69,6 +70,7 @@ type spiller[P any] struct {
 	tick uint64                  // reader use order, for eviction (mu)
 
 	rows, frames, bytes, files atomic.Int64
+	decodeNs                   atomic.Int64 // the drainer's own frame decoding (next)
 }
 
 func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max, reserve int64) (*spiller[P], error) {
@@ -83,7 +85,9 @@ func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max,
 	if compress {
 		// A decoded frame is bounded like a raw one: a damaged or hostile
 		// frame cannot claim more memory than any frame written.
-		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
+		// One decoder for the drainer and one per read-ahead read (DecodeAll
+		// blocks past the concurrency).
+		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1+aheadReads), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
 			return nil, err
 		}
 	}
@@ -133,8 +137,9 @@ func (s *spiller[P]) closeFile(f *spillFile) {
 // reopened at its position when the drainer comes back to it.
 const maxReaders = 8
 
-// MaxSpillReaders is maxReaders, for descriptor admission.
-const MaxSpillReaders = maxReaders
+// MaxSpillReaders is the spill descriptors open at once, for descriptor
+// admission: the drainer's readers and one per read-ahead read (readAt).
+const MaxSpillReaders = maxReaders + aheadReads
 
 func (s *spiller[P]) readers(d int64) {
 	if s.g != nil {
@@ -195,6 +200,9 @@ type spillFile struct {
 	read    int64 // rows replayed (drainer only)
 	pos     int64 // bytes replayed: where a closed reader reopens (drainer only)
 	used    uint64
+	// lastOff and lastSize locate the last rows frame written (owner
+	// only): its marker records them, so the frame can be read on its own.
+	lastOff, lastSize int64
 	// most is the row count of the largest frame written: a frame read
 	// back that claims more is malformed, refused before any allocation.
 	most atomic.Int64
@@ -217,6 +225,7 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 // write appends one frame of rows (and, when final, the trailer).
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
 	var buf []byte
+	var framed int64 // bytes of the rows frame
 	if len(rows) > 0 {
 		if int64(len(rows)) > f.most.Load() {
 			f.most.Store(int64(len(rows))) // the owner is the only writer
@@ -236,6 +245,7 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 			typ = 'Z'
 		}
 		buf = s.frame(typ, body)
+		framed = int64(len(buf))
 	}
 	if final {
 		buf = append(buf, s.frame('T', binary.AppendUvarint(nil, uint64(f.written)))...)
@@ -276,6 +286,9 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 			return err
 		}
 		return fmt.Errorf("spill: %w", err)
+	}
+	if len(rows) > 0 {
+		f.lastOff, f.lastSize = f.size, framed
 	}
 	f.size += n
 	f.written += int64(len(rows))
@@ -366,9 +379,8 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		return nil, errSpillFrame
 	}
 	f.pos += int64(len(hdr)) + int64(size)
-	body := payload[1:]
-	switch payload[0] {
-	case 'T':
+	if payload[0] == 'T' {
+		body := payload[1:]
 		n, k := binary.Uvarint(body)
 		s.closeFile(f)
 		if k <= 0 || int64(n) != f.read {
@@ -380,24 +392,75 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		}
 		s.release(f)
 		return nil, err
-	case 'Z':
-		var err error
-		if body, err = s.dec.DecodeAll(body, nil); err != nil {
-			s.closeFile(f)
-			return nil, errSpillFrame
-		}
-	case 'R':
-	default:
-		s.closeFile(f)
-		return nil, errSpillFrame
 	}
-	rows, err := decodeRows(body, s.codec, uint64(f.most.Load()))
+	t := time.Now()
+	rows, err := s.decodeFrame(f, payload)
+	s.decodeNs.Add(int64(time.Since(t)))
 	if err != nil {
 		s.closeFile(f)
 		return nil, err
 	}
 	f.read += int64(len(rows))
 	return rows, nil
+}
+
+// decodeFrame decodes the payload of one rows frame of f (its type byte
+// first). Frames are independently decodable: next and readAt share it.
+func (s *spiller[P]) decodeFrame(f *spillFile, payload []byte) ([]schema.Row[P], error) {
+	body := payload[1:]
+	switch payload[0] {
+	case 'Z':
+		var err error
+		if body, err = s.dec.DecodeAll(body, nil); err != nil {
+			return nil, errSpillFrame
+		}
+	case 'R':
+	default:
+		return nil, errSpillFrame
+	}
+	return decodeRows(body, s.codec, uint64(f.most.Load()))
+}
+
+// readAt reads and decodes the rows frame of size bytes at off in f on
+// its own descriptor, closed before it returns (the read-ahead: any
+// goroutine, concurrently with the drainer, which never reads this frame
+// itself). It returns the decoding time.
+func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], time.Duration, error) {
+	if size <= 8 || size-8 > maxSpillFrame { // checked before allocating
+		return nil, 0, errSpillFrame
+	}
+	fh, err := os.Open(f.path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("spill: %w", err)
+	}
+	s.readers(1)
+	defer func() {
+		fh.Close()
+		s.readers(-1)
+	}()
+	buf := make([]byte, size)
+	if _, err := fh.ReadAt(buf, off); err != nil {
+		return nil, 0, fmt.Errorf("spill: %w", err)
+	}
+	payload := buf[8:]
+	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(buf[4:8]) || payload[0] == 'T' {
+		return nil, 0, errSpillFrame
+	}
+	t := time.Now()
+	rows, err := s.decodeFrame(f, payload)
+	return rows, time.Since(t), err
+}
+
+// skip passes over the frame of size bytes holding rows rows that the
+// read-ahead replayed (drainer only): the next sequential read, or the
+// trailer's, starts after it, on a reader reopened there.
+func (s *spiller[P]) skip(f *spillFile, size, rows int64) {
+	if f.r != nil {
+		s.closeFile(f)
+		f.r = nil
+	}
+	f.pos += size
+	f.read += rows
 }
 
 // appendRows encodes rows for a frame: the count, then per row its key

@@ -33,6 +33,11 @@ type Options struct {
 	Out      string // dataset directory; parts go to .swath/parts/
 	PartSize int64  // target encoded bytes per part
 	Encoders int    // parts encoded concurrently (>= 1)
+	// MaxEncoders, if above Encoders, is how many Admit raises them to
+	// (the pipeline: once listing has ended); 0 is Encoders. Writers are
+	// created for that many column goroutines, so a part opened before
+	// the raise uses them too.
+	MaxEncoders int
 
 	// Publish, if set, publishes each part as soon as it is closed, in
 	// ordinal order (part i only after part i-1): the journaled run makes
@@ -102,25 +107,27 @@ type Resume struct {
 //
 // Each part is encoded by its own goroutine with its own writer and codec,
 // fed through a bounded queue while the part is still open; at most
-// Encoders parts are in flight. When fewer parts than encoders are active, a
-// part encodes its page columns in parallel (byte-identical), so a single
-// part still uses every core.
+// Encoders parts (MaxEncoders after Admit) are in flight. When fewer parts
+// than encoders are active, a part encodes its page columns in parallel
+// (byte-identical), so a single part still uses every core.
 type Router[P any] struct {
-	schema  *schema.Schema[P]
-	opt     Options
-	slots   chan struct{}
-	active  atomic.Int32
-	cur     *part[P]
-	parts   []*part[P]
-	limit   int64 // logical bytes per part; 0 until part 0 is measured
-	rows    int64
-	full    bool
-	errMu   sync.Mutex
-	err     error // first encoder error
-	aborted atomic.Bool
-	waitNs  atomic.Int64 // time Write waited for an encoder (queue or slot)
-	closed  bool
-	done    []dataset.Part // resumed parts, already published
+	schema   *schema.Schema[P]
+	opt      Options
+	slots    chan struct{} // MaxEncoders; the reserved part held until Admit
+	reserved atomic.Int32  // slots held for Admit
+	encoders atomic.Int32  // encoders admitted
+	active   atomic.Int32
+	cur      *part[P]
+	parts    []*part[P]
+	limit    int64 // logical bytes per part; 0 until part 0 is measured
+	rows     int64
+	full     bool
+	errMu    sync.Mutex
+	err      error // first encoder error
+	aborted  atomic.Bool
+	waitNs   atomic.Int64 // time Write waited for an encoder (queue or slot)
+	closed   bool
+	done     []dataset.Part // resumed parts, already published
 
 	// mu serializes Write, Close and Abort with the interval cut.
 	mu       sync.Mutex
@@ -163,7 +170,13 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	if err := os.MkdirAll(filepath.Join(opt.Out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}
-	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.Encoders)}
+	opt.MaxEncoders = max(opt.Encoders, opt.MaxEncoders)
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders)}
+	for range opt.MaxEncoders - opt.Encoders {
+		r.slots <- struct{}{}
+	}
+	r.reserved.Store(int32(opt.MaxEncoders - opt.Encoders))
+	r.encoders.Store(int32(opt.Encoders))
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
 	}
@@ -209,6 +222,21 @@ func (r *Router[P]) stop() {
 	r.ticked.Wait()
 	r.mu.Lock()
 }
+
+// Admit raises the encoders to MaxEncoders, once, and returns how many are
+// admitted. Safe at any time, from any goroutine.
+func (r *Router[P]) Admit() int {
+	if n := r.reserved.Swap(0); n > 0 {
+		for range n {
+			<-r.slots // a slot token, held since NewRouter: never blocks
+		}
+		r.encoders.Add(n)
+	}
+	return r.Encoders()
+}
+
+// Encoders is the encoders admitted now.
+func (r *Router[P]) Encoders() int { return int(r.encoders.Load()) }
 
 // RowCuts is the number of parts MaxRows closed (before their size target).
 func (r *Router[P]) RowCuts() int64 { return r.rowCuts.Load() }
@@ -361,7 +389,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		close(p.done)
 	}()
 	defer close(p.published)
-	columns := func() int { return max(1, r.opt.Encoders/max(1, int(r.active.Load()))) }
+	columns := func() int { return max(1, int(r.encoders.Load())/max(1, int(r.active.Load()))) }
 	var err error
 	if r.opt.Verify != nil {
 		err = r.opt.Verify()
@@ -371,7 +399,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.MaxEncoders, columns)
 	}
 	if err != nil {
 		p.err = err
@@ -581,6 +609,10 @@ type Encoder interface {
 	Close() ([]dataset.Part, error)
 	Abort()
 	EncoderWait() time.Duration
+	// Admit raises the encoders to Options.MaxEncoders and returns how
+	// many are admitted; Encoders is that count now.
+	Admit() int
+	Encoders() int
 	TimeCuts() int64
 	RowCuts() int64
 	// Routed is the rows this run routed into parts: after listing it

@@ -125,6 +125,11 @@ type Limits struct {
 	// (frozen for a resume: boundaries depend on it).
 	PartMaxRows int64
 	Spill       SpillLimits
+	// maxEncoders is the encoders admitted once listing has ended
+	// (admitAfterListing): the default's, or Encoders when given
+	// (encodersGiven).
+	maxEncoders   int
+	encodersGiven bool
 }
 
 // SpillLimits bound spill.
@@ -251,8 +256,10 @@ func (c *Config) resolve() error {
 	if l.RowBudget == 0 {
 		l.RowBudget = DefaultRowBudget
 	}
+	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
 	if l.Encoders == 0 {
 		l.Encoders = min(runtime.GOMAXPROCS(0), admitEncoders(l.RowBudget, l.Workers, fdLimit()))
+		l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.Workers, fdLimit())))
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
@@ -283,6 +290,23 @@ func admitEncoders(rowBudget int64, workers int, fds int64) int {
 	}
 	return int(max(1, n))
 }
+
+// admitAfterListing is how many encoders the run carries once the
+// provider has finished listing (order.Options.ListingDone): no page is
+// in flight any more, so the memory the workers' pages held beside the
+// row budget (listingPageBytes each) goes to writers instead, on top of
+// the allowance equal to the row budget; descriptors as admitEncoders
+// (the workers' idle connections stay open). Each writer costs
+// parquetout.EncoderBytes. 128 MiB and 64 workers carry 8, 256 workers
+// 16.
+func admitAfterListing(rowBudget int64, workers int, fds int64) int {
+	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, workers, fds)
+}
+
+// listingPageBytes is what one worker's page in flight holds outside the
+// row budget: a 1,000-key S3 response (about 300 KB of XML) and the arena
+// its strings are copied into, rounded up.
+const listingPageBytes = 1 << 20
 
 // fdReserve is the descriptors kept for the journal, lock, output and
 // spill directories, standard streams and the runtime.
@@ -557,7 +581,7 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 // close, their queues charged to the shared row budget, and an encoder
 // failure cancelling the run with its cause.
 func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) *parquetout.Options {
-	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, Account: shared.Add,
+	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, MaxEncoders: cfg.Limits.maxEncoders, Account: shared.Add,
 		Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
 	jr.routerOptions(&ropt)
 	jr.verifyOption(&ropt)
@@ -669,12 +693,51 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res.PeakAheadRows, res.FrontierStuckMaxNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
+	if !ost.ListingDone.IsZero() {
+		a.sum.Timings.ListingDoneAt = ost.ListingDone.UTC()
+	}
+	if !dryRun(a.cfg) {
+		res.Drain = a.drain(ost, oopt)
+	}
 	if a.router != nil {
 		w := int64(a.router.EncoderWait())
 		res.EncoderWaitNs = &w
 		res.PartTimeCuts = a.router.TimeCuts()
 		res.PartRowCuts = a.router.RowCuts()
 	}
+}
+
+// drain is the report's account of the drain: its tail after listing,
+// the workers' idle time on either side, the drainer's time, the spill
+// read-ahead, and the encoders admitted.
+func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
+	dt := ost.Drainer
+	d := &Drain{WorkerIdleBeforeNs: int64(ost.IdleBefore), WorkerIdleAfterNs: int64(ost.IdleAfter),
+		ReplayReadNs: int64(dt.ReplayRead), ReplayDecodeNs: int64(dt.ReplayDecode), AheadWaitNs: int64(dt.AheadWait),
+		OrderCheckNs: int64(dt.OrderCheck), SinkWriteNs: int64(dt.SinkWrite)}
+	if !ost.ListingDone.IsZero() && !ost.DrainEnd.IsZero() {
+		d.TailNs = int64(ost.DrainEnd.Sub(ost.ListingDone))
+	}
+	if oopt.SpillDir != "" {
+		ra := ost.ReadAhead
+		d.ReadAhead = &ReadAhead{Frames: ra.Frames, Rows: ra.Rows, DrainerFrames: ra.DrainerFrames, Unplanned: ra.Unplanned, Waits: ra.Waits,
+			CappedWaits: ra.Capped, ReadNs: int64(ra.Read), DecodeNs: int64(ra.Decode)}
+	}
+	if a.router != nil {
+		l := a.cfg.Limits
+		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
+		switch {
+		case l.encodersGiven:
+			d.EncoderAdmission = AdmissionExplicit
+		case l.maxEncoders == l.Encoders:
+			d.EncoderAdmission = AdmissionAtCap
+		case ost.ListingDone.IsZero():
+			d.EncoderAdmission = AdmissionNotReached
+		default:
+			d.EncoderAdmission = AdmissionListingDone
+		}
+	}
+	return d
 }
 
 // durable puts the parts that stay in the output after a failure (the

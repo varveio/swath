@@ -116,8 +116,19 @@ by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB ke
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
 a floor of one: as many writers as fit in an allowance equal to the row budget, kept apart from it (24 MiB each,
 measured at about 20 MiB of heap for one writer) and as many descriptors as the soft limit leaves after 8
-spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 5). An
-explicit `--encoders` above that is honoured with a warning.
+spill descriptors (`order.MaxSpillReaders`), two per worker and a reserve of 32 (`listing.admitEncoders`; the
+default 128 MiB admits 5). An explicit `--encoders` above that is honoured with a warning.
+
+Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
+the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
+in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
+1,000-key S3 response and its arena) is added to the writer allowance, still at most `GOMAXPROCS` and the
+descriptors. 128 MiB at 64 workers carries 8, at 256 workers 16. The router holds the extra slots from the
+start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
+goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
+An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
+`encoders_after_listing` and `encoder_admission`: `listing_done`, `explicit`, `at_cap` (the start already
+admitted the most the host carries) or `not_reached` (listing never finished).
 
 ## The waits
 
@@ -127,12 +138,17 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 
 | Wait | Who | Released by | Test |
 |---|---|---|---|
-| idle (`work`) | a worker, nothing queued | a range completing with children (pushed then), the drain ending, a stop | `TestIdleWorkerWakesOnChildren` |
+| idle (`work`) | a worker, nothing queued and no spilled frame planned to read | a range completing with children (pushed then), frames planned for the read-ahead, the drain ending, a stop | `TestIdleWorkerWakesOnChildren` |
+| ahead (`work`) | a worker, nothing queued, the read-ahead holding its share of the budget | the drainer taking read frames until the read-ahead holds half its share or less, the drain ending, a stop | `TestAheadWaitWakes` |
 | admission (`work`) | a worker, ranges queued, the budget used and spill unavailable (off, or the disk budget refused) | drained bytes released, bytes released downstream, spill credit returned (a drained range's file deleted), a stop | `TestAdmissionWaitWakes` |
 | publish (`drain`) | an emitter of rows facing a full budget; of markers, while the markers alone would fill it; after a refused frame | the same releases, a marker replayed while the total stays full, spill credit, the drainer awaiting its node, a stop | `TestPublishWaitWakes`, `TestMarkerSaturationWakes`, `TestRefusedSpillWakesOnCredit` |
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
+| fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 
-A release of drained bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
+The read-ahead's two waits broadcast on transitions only, not on every frame, so hundreds of idle workers
+are not woken per frame: planning wakes them when it queued frames (refilling at half of its window), and
+the drainer wakes the workers held at the share once the read-ahead holds half of it. A release of drained
+bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
 at once. Publishing only children never waits (`TestChildOnlyPublishIsAdmitted`). The run's own `WaitGroup`
@@ -190,10 +206,11 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   Children have their own files, so a parent's trailer says nothing about them.
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
   the reader is closed on every error path.
-- **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 readers
-  (a descriptor and a 64 KiB buffer each, `order.MaxSpillReaders`) are open; past that the least recently
-  used one is closed and reopened at its position when the drainer comes back to it
-  (`TestSpillReadersAreCapped`).
+- **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 drainer
+  readers (a descriptor and a 64 KiB buffer each) are open; past that the least recently used one is closed
+  and reopened at its position when the drainer comes back to it (`TestSpillReadersAreCapped`). The
+  read-ahead opens one descriptor per frame it reads, at most 8 at once, and closes it after the read:
+  `order.MaxSpillReaders` (16) is both, for descriptor admission (`peak_readers` counts both).
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier.
@@ -232,3 +249,41 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
   output; a reserve larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.
+
+### Read-ahead
+
+After listing ends, or wherever nothing is queued, the workers are idle while one drainer replays the spill:
+read, decode, order check and hand-on, frame after frame (on Batch at 256 workers about half of a sorted run's
+wall time, every worker idle). A finished node's items never change, so the frames the drainer replays next are
+known before it reaches them, and idle workers read them ahead of it (`order/readahead.go`):
+
+- **Planning.** Each spill marker records its frame's offset, size and the budget units its rows were
+  published with. The drainer plans: a cursor walks the finished nodes ahead of it in drain order and queues
+  each marker it meets (at most 64 frames, `aheadFrames`, refilled at half; at most 1,024 items per step,
+  `aheadScan`). It enters finished nodes only, and restarts at the drainer's position whenever nothing is
+  queued: the drainer may then have passed it, or a node it stopped at have been compacted since.
+- **Reading.** An idle worker (nothing queued to list) claims the next queued frame, reads it with one
+  `pread` on its own descriptor and decodes it through the same frame decoder as the drainer's own reads
+  (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder.
+- **Order.** The drainer takes frames from the head of the queue: it must be the marker the drainer is at,
+  or the run fails with an invariant error. A frame still queued is read by the drainer itself; one being
+  read is waited for (`fetch`); then the drainer only checks order and hands on. Its sequential reader skips
+  the frames read ahead (reopened at its position), so the trailer check still counts every row.
+  `TestReadAheadKeepsOrder` (random node shapes, frame sizes, budgets and compression) matches the oracle
+  row for row, and every spilled frame is replayed exactly once through one path.
+- **Memory.** A claimed frame's rows are charged to the row budget until the drainer takes them, so producers
+  still listing see them. Past a full budget the read-ahead holds at most a quarter of it (`aheadShare`, as
+  the awaited node's lead), or one frame when it holds nothing; a worker past that waits (`ahead`)
+  (`TestReadAheadMemoryIsBounded`).
+- **Failure.** A frame that fails its CRC or its decoding fails the run when the drainer reaches it: the rows
+  before it were handed on, none of its own or after (`TestReadAheadCorruptFrame`). A stop wakes both waits;
+  every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
+  (`TestReadAheadCancelMidReplay`).
+
+The report's `resources.drain.read_ahead` counts `frames` and `rows` read ahead, `drainer_frames` (planned,
+taken over unread), `unplanned_frames` (reached with nothing planned), `drainer_waits`, `capped_waits`,
+`read_ns` and `decode_ns`; beside it the drain's `tail_ns` (from `timings.listing_done_at` to the last row),
+the workers' idle time before and after listing ended, and the drainer's time: `replay_read_ns`,
+`replay_decode_ns`, `ahead_wait_ns`, `order_check_ns`, `sink_write_ns` (with `frontier_wait_ns`). On one
+processor the drainer may replay every frame before an idle worker is scheduled: `drainer_frames` then counts
+them all.

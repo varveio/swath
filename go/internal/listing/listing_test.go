@@ -210,14 +210,24 @@ func TestResourceAdmission(t *testing.T) {
 		fds     int64
 		want    int
 	}{
-		{128 << 20, 4, 0, 5},                     // 128 MiB / 24 MiB
-		{512 << 20, 4, 0, 21},                    // 512 MiB / 24 MiB
-		{512 << 20, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
-		{512 << 20, 64, 100, 1},                  // the floor
-		{minRowBudget, 4, 0, 1},                  // the floor
+		{128 << 20, 4, 0, 5},                      // 128 MiB / 24 MiB
+		{512 << 20, 4, 0, 21},                     // 512 MiB / 24 MiB
+		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
+		{512 << 20, 64, 100, 1},                   // the floor
+		{minRowBudget, 4, 0, 1},                   // the floor
 	} {
 		if got := admitEncoders(tc.budget, tc.workers, tc.fds); got != tc.want {
 			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)
+		}
+	}
+	// Once listing has ended, each worker's page (1 MiB) joins the
+	// allowance: 128 MiB at 64 workers carries 8, at 256 workers 16.
+	for _, tc := range []struct {
+		workers int
+		want    int
+	}{{64, 8}, {256, 16}, {4, 5}} {
+		if got := admitAfterListing(128<<20, tc.workers, 0); got != tc.want {
+			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
 		}
 	}
 	// The reserve: one part per encoder, at least 1 GiB (the defaults' 5

@@ -149,7 +149,19 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		st, err := order.Count(ctx, p, env.Ordered, env.Order)
 		return st, nil, err
 	}
-	st, err := order.Run(ctx, p, sink, b.s, env.Order)
+	opt := env.Order
+	if enc != nil {
+		// Once listing has ended, the encoders the router reserved for
+		// the drain are admitted (parquetout.Options.MaxEncoders).
+		prev := opt.ListingDone
+		opt.ListingDone = func() {
+			enc.Admit()
+			if prev != nil {
+				prev()
+			}
+		}
+	}
+	st, err := order.Run(ctx, p, sink, b.s, opt)
 	return st, enc, err
 }
 
