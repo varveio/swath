@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -171,5 +172,38 @@ func TestTokenCasesSkipWithoutAToken(t *testing.T) {
 		if len(rep.Skipped) != c.skipped || rep.Failed != 0 || rep.Passed+len(rep.Skipped) != len(tokenCases) {
 			t.Errorf("%v: %d passed, %d failed, %d skipped; want %d skipped", c.keys, rep.Passed, rep.Failed, len(rep.Skipped), c.skipped)
 		}
+	}
+}
+
+// TestResidualsStandApart: a residual request that is answered is listed
+// with both statuses and counted in neither Compared, Passed nor Failed;
+// one whose request fails (here the second server is gone) is a failure
+// of the run, not a residual.
+func TestResidualsStandApart(t *testing.T) {
+	base := startGo(t, false, "a", "b")
+	client := &http.Client{}
+	residual := []request{{Name: "residual", Method: "GET", Compare: "residual", Raw: "//{bucket}?list-type=2"}}
+
+	rep := &report{}
+	d := &driver{o: options{bucket: "bkt", parallel: 2}, ref: &target{name: "a", base: base, client: client},
+		got: &target{name: "b", base: base, client: client}, comp: bytesComparator{}, rep: rep}
+	d.runCases("case", residual)
+	if len(rep.Residuals) != 1 || rep.Residuals[0] != "residual: reference 400, go 400" ||
+		rep.Compared != 0 || rep.Passed != 0 || rep.Failed != 0 || len(rep.Results) != 0 {
+		t.Errorf("answered: residuals %v, compared %d passed %d failed %d", rep.Residuals, rep.Compared, rep.Passed, rep.Failed)
+	}
+
+	gone, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneBase := "http://" + gone.Addr().String()
+	gone.Close()
+	rep = &report{}
+	d = &driver{o: options{bucket: "bkt", parallel: 2}, ref: &target{name: "a", base: base, client: client},
+		got: &target{name: "b", base: goneBase, client: client}, comp: bytesComparator{}, rep: rep}
+	d.runCases("case", residual)
+	if len(rep.Residuals) != 0 || rep.Compared != 1 || rep.Failed != 1 || rep.Results[0].Error == "" {
+		t.Errorf("errored: residuals %v, compared %d failed %d, %+v", rep.Residuals, rep.Compared, rep.Failed, rep.Results)
 	}
 }

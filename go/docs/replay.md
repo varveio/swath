@@ -460,7 +460,8 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
   authentication are not served.
 - Five request cases are not byte-identical with the Java server, by decision. The differential driver compares
   the first three on the status and the headers the Java server sets, sends the last two and reports what each
-  server answered (`DOCUMENTED RESIDUAL` lines, neither pass nor failure), and says which in each case's name:
+  server answered (`DOCUMENTED RESIDUAL` lines and a count of their own, outside the compared, passed and failed
+  counts; a residual request that gets no answer fails the run), and says which in each case's name:
   - The error page of a target refused before routing (above). Status `400`, `Content-Type:
     text/html;charset=iso-8859-1` and `Cache-Control: must-revalidate,no-cache,no-store` match; the HTML body is
     this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
