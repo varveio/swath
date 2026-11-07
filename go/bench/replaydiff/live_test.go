@@ -214,9 +214,11 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 }
 
 // TestS3LiveComparatorPolicy pins what the S3 comparator sets aside
-// (request ids, dates, the tokens' values, Owner values) and what it
-// does not (a scalar, an unclassified header, a token echo that is not
-// the side's own, the error code).
+// (request ids, dates, the tokens' values, Owner values, an error's
+// RequestId and HostId values) and what it does not (a scalar, an
+// unclassified header, a token echo that is not the side's own, a key
+// written raw where S3 writes a reference, the error document's other
+// elements as written).
 func TestS3LiveComparatorPolicy(t *testing.T) {
 	page := func(token, owner, keyCount string) []byte {
 		return []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` +
@@ -246,19 +248,32 @@ func TestS3LiveComparatorPolicy(t *testing.T) {
 		"unclassified":  {&response{200, h("X-Other", "1"), page("v2:AA", "x", "1")}, "", "", "unclassified HTTP header x-other"},
 		"token echo":    {&response{200, h(), page("v2:AA", "x", "1")}, "", "v2:AB", "replay ContinuationToken echo differs"},
 		"date spelling": {&response{200, h("Date", "Sat, 7 Nov 2026 11:54:47 GMT"), page("v2:AA", "x", "1")}, "", "", "not padded GMT"},
+		"raw control":   {&response{200, h(), bytes.Replace(page("v2:AA", "x", "1"), []byte("&#x1;"), []byte("\x01"), 1)}, "", "", "key text as written differs"},
 	} {
 		if d := s3Live(live, c.got, "b", c.refTok, c.gotTo); d.OK || !strings.Contains(d.Detail, c.want) {
 			t.Errorf("%s: %+v", name, d)
 		}
 	}
-	e1 := &response{400, h(), []byte(`<Error><Code>InvalidArgument</Code><Message>S3 words</Message><RequestId>R</RequestId></Error>`)}
-	e2 := &response{400, h(), []byte(`<Error><Code>InvalidArgument</Code><Message>replay words</Message></Error>`)}
-	if d := s3Live(e1, e2, "b", "", ""); !d.OK {
-		t.Errorf("errors with the same code: %s", d.Detail)
+	doc := func(message, value, requestID, hostID string) []byte {
+		return []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<Error><Code>InvalidArgument</Code><Message>` + message +
+			`</Message><ArgumentName>prefix</ArgumentName><ArgumentValue>` + value + `</ArgumentValue><RequestId>` + requestID +
+			`</RequestId><HostId>` + hostID + `</HostId></Error>`)
 	}
-	e2.Body = []byte(`<Error><Code>InvalidToken</Code></Error>`)
-	if d := s3Live(e1, e2, "b", "", ""); d.OK {
-		t.Error("different error codes compared equal")
+	e1 := &response{400, h(), doc("S3 words", "a&#0;", "R", "H")}
+	e2 := &response{400, h(), doc("S3 words", "a&#0;", "S3LISTINGREPLAY", "S3LISTINGREPLAY")}
+	if d := s3Live(e1, e2, "b", "", ""); !d.OK {
+		t.Errorf("errors differing in RequestId and HostId: %s", d.Detail)
+	}
+	for _, body := range [][]byte{
+		doc("replay words", "a&#0;", "R", "H"),
+		doc("S3 words", "a&#x0;", "R", "H"),
+		bytes.Replace(doc("S3 words", "a&#0;", "R", "H"), []byte("<HostId>H</HostId>"), nil, 1),
+		[]byte(`<Error><Code>InvalidToken</Code></Error>`),
+	} {
+		e2.Body = body
+		if d := s3Live(e1, e2, "b", "", ""); d.OK {
+			t.Errorf("%s compared equal", body)
+		}
 	}
 }
 

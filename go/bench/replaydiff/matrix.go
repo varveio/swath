@@ -139,6 +139,17 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	add("fetch-owner=true", true, "fetch-owner", "true", "max-keys", "50")
 	add("fetch-owner=TRUE delimiter", true, "fetch-owner", "TRUE", "delimiter", "/", "max-keys", "50")
 	add("fetch-owner=false", true, "fetch-owner", "false", "max-keys", "50")
+	// Control characters echoed in listing text, and S3's error document
+	// (argument names and values, error text escaping).
+	add("control characters start-after", true, "start-after", "a\x01b\tc\nd\re\x0bf\x1fg\x7fh", "max-keys", "0")
+	add("control characters prefix", true, "prefix", "a\x01b\tc\x0cd", "max-keys", "0")
+	add("control characters delimiter", true, "delimiter", "\x00\x01\x1f\x7f", "max-keys", "2")
+	add("error document max-keys", true, "max-keys", "a\x01b\xff<&")
+	add("error document encoding-type", true, "encoding-type", "a\"'<>&\x01\xff", "max-keys", "1")
+	add("error document NUL prefix", true, "prefix", "a\x00\x01<", "max-keys", "1")
+	add("error document NUL start-after", true, "start-after", "a\x00\x1f", "max-keys", "1")
+	add("error document marker", true, "marker", "x", "max-keys", "1")
+	add("error document token", true, "continuation-token", "abc", "max-keys", "1")
 	// Tokens: malformed, blank, foreign (a live S3 token), v1, and a real
 	// token combined with a start-after on either side of it.
 	for _, tok := range []struct{ name, v string }{

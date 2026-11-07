@@ -159,6 +159,7 @@ func s3Live(ref, got *response, bucket, refToken, gotToken string) diff {
 			s3AssertPage(ref.Body, got.Body, bucket, refToken, gotToken)
 		} else {
 			pequal("S3 error code", s3ErrorCode(ref.Body), s3ErrorCode(got.Body))
+			pequal("S3 error document", s3ErrorElements(ref.Body), s3ErrorElements(got.Body))
 		}
 	})
 }
@@ -210,6 +211,37 @@ func s3AssertPage(nativeBody, replayBody []byte, bucket, nativeToken, replayToke
 	pequal("NextContinuationToken presence", a, b)
 	s3CompareContents(n.contents, r.contents)
 	pequal("CommonPrefixes", n.prefixes, r.prefixes)
+	// The values above are compared decoded; the key-carrying elements
+	// are also compared as written, so a control character written raw
+	// where S3 writes a reference (&#x1;) differs.
+	pequal("key text as written", s3KeyText(nativeBody), s3KeyText(replayBody))
+}
+
+var s3KeyElement = regexp.MustCompile(`<(Key|Prefix|StartAfter|Delimiter)>([^<]*)</`)
+
+func s3KeyText(body []byte) []string {
+	var out []string
+	for _, m := range s3KeyElement.FindAllSubmatch(body, -1) {
+		out = append(out, string(m[1])+"="+string(m[2]))
+	}
+	return out
+}
+
+var s3ErrorElement = regexp.MustCompile(`<([A-Za-z]+)>([^<]*)</[A-Za-z]+>`)
+
+// s3ErrorElements is an S3 error document's elements in order, each
+// name=text as written; RequestId and HostId, which S3 varies per
+// request, are compared by presence only.
+func s3ErrorElements(body []byte) []string {
+	var out []string
+	for _, m := range s3ErrorElement.FindAllSubmatch(body, -1) {
+		name, text := string(m[1]), string(m[2])
+		if name == "RequestId" || name == "HostId" {
+			text = "(volatile)"
+		}
+		out = append(out, name+"="+text)
+	}
+	return out
 }
 
 func checkS3Page(p *s3Page, side, bucket, requestToken string) {
