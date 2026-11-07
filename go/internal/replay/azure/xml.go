@@ -75,7 +75,7 @@ func AppendList(dst []byte, res *Result, endpoint string) ([]byte, error) {
 		if e.Object == nil {
 			dst = append(dst, "<BlobPrefix>"...)
 			var err error
-			if dst, err = appendName(dst, e.Prefix, true); err != nil {
+			if dst, err = appendName(dst, e.Prefix, true, res.onPath); err != nil {
 				return nil, err
 			}
 			dst = append(dst, "</BlobPrefix>"...)
@@ -94,7 +94,7 @@ func AppendList(dst []byte, res *Result, endpoint string) ([]byte, error) {
 		}
 		dst = append(dst, "<Blob>"...)
 		var err error
-		if dst, err = appendName(dst, o.Key, false); err != nil {
+		if dst, err = appendName(dst, o.Key, false, res.onPath); err != nil {
 			return nil, err
 		}
 		dst = append(dst, propertiesStart...)
@@ -143,7 +143,7 @@ func element(dst []byte, name, value string) []byte {
 // name that is not valid UTF-8, and one longer than 1,024 UTF-16 code
 // units. There is no path-segment limit: native Azure lists a flat
 // container's 255-segment name (evidence capture azure-12a).
-func appendName(dst, raw []byte, derivedPrefix bool) ([]byte, error) {
+func appendName(dst, raw []byte, derivedPrefix bool, onPath func(path, reason string)) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, fail(FixtureIncompatible, "empty_name")
 	}
@@ -180,6 +180,13 @@ func appendName(dst, raw []byte, derivedPrefix bool) ([]byte, error) {
 		dst = append(dst, "<Name>"...)
 		dst = appendNameText(dst, raw)
 		return append(dst, "</Name>"...), nil
+	}
+	if onPath != nil {
+		reason := "blob_xml_forbidden"
+		if derivedPrefix {
+			reason = "prefix_xml_forbidden"
+		}
+		onPath("encoded_name", reason)
 	}
 	dst = append(dst, `<Name Encoded="true">`...)
 	for _, b := range raw {

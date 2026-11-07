@@ -174,3 +174,23 @@ func TestAzureErrorEchoUsesTheClientIDRule(t *testing.T) {
 		t.Errorf("%+v", r.header)
 	}
 }
+
+// TestAzureEngagementMeters pins the provider.path meters the server
+// publishes for an encoded name and an empty window.
+func TestAzureEngagementMeters(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{Rollup: true}, "u/\uffff", "u/\ufffe/x"))
+	cfg.Protocols, cfg.AzureAccount = []string{"azure"}, DefaultAzureAccount
+	s := start(t, cfg)
+	for _, q := range []string{"prefix=u/&delimiter=/", "prefix=a&startFrom=b"} {
+		if r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list&"+q, "x-ms-version", "2026-06-06"); r.status != 200 {
+			t.Fatalf("%s: %+v", q, r)
+		}
+	}
+	for _, c := range []struct{ path, reason string }{
+		{"encoded_name", "blob_xml_forbidden"}, {"encoded_name", "prefix_xml_forbidden"}, {"empty_window", "lower_bound_past_prefix"},
+	} {
+		if n := count(s, ProviderPath, "azure", c.path, c.reason); n != 1 {
+			t.Errorf("%s %s: %d", c.path, c.reason, n)
+		}
+	}
+}

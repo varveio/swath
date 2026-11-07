@@ -508,3 +508,36 @@ func TestClientRequestIDLength(t *testing.T) {
 		}
 	}
 }
+
+// TestEngagementPaths pins the provider.path signals of the paths a page
+// can take: the empty window, an Encoded name (blob or prefix: u/ lists
+// two encoded blobs flat and one blob and one prefix delimited), the flat
+// and delimiter paths and the UTF-16 branch swap (EE/EF bytes with F0
+// siblings in range: every u/ and z listing).
+func TestEngagementPaths(t *testing.T) {
+	counts := map[string]int{}
+	p := &Pager{Store: newStore(t, true, objects("a/1", "u/\uffff", "u/\ufffe/x", "z\ue000", "z\U00010000")), FixtureIdentity: "f",
+		OnPath: func(path, reason string) { counts[path+" "+reason]++ }}
+	list := func(query string) {
+		t.Helper()
+		res, err := p.List(context.Background(), parse(t, query))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := AppendList(nil, res, "http://h:1/replay/"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list("prefix=a&startFrom=b")
+	list("prefix=u/")
+	list("prefix=u/&delimiter=/")
+	list("prefix=z")
+	for key, want := range map[string]int{
+		"empty_window lower_bound_past_prefix": 1, "encoded_name blob_xml_forbidden": 3, "encoded_name prefix_xml_forbidden": 1,
+		"flat prefix_window": 2, "flat start_from": 0, "delimiter_indexed native_skip_scan": 1, "utf16_order branch_swapped": 3,
+	} {
+		if counts[key] != want {
+			t.Errorf("%s: %d, want %d (%v)", key, counts[key], want, counts)
+		}
+	}
+}
