@@ -223,11 +223,11 @@ rescoped tokens, wrong buckets, paths and methods, raw and escaped non-ASCII), `
 and top-level prefixes, with and without the delimiter, at each page size) and a random walk. `gcsComparator`
 compares status, the compared headers plus `Allow`, and the body byte for byte (both servers are deterministic);
 a difference only in `nextPageToken` is named, and walks follow each server's own tokens, so tokens are judged by
-their effect. Measured with zero differences (the Java oracle at swath `main` 01dd55b, `--parquet-connections 2`,
-default `-walks 1,7,1000`, `-walk-limit 300` and a separate full `-walks 1000` run on the large fixtures): the
-GCS evidence corpus (1,051 compared), synthetic 10k (2,065), synthetic 1M rolled into 6 parts and 110 row groups
-(2,065 plus 1,551 with the full 1,000-page walks), and the recordings of `noaa-normals-pds` (1,227 + 701) and
-`giab` (2,119 + 1,569).
+their effect. Measured with zero differences, no skipped token case and no token byte difference (the Java oracle at swath
+`main` 01dd55b, `--parquet-connections 2`, default `-walks 1,7,1000` with `-walk-limit 300` on the large fixtures,
+plus a separate full `-walks 1000 -random 0` run): the GCS evidence corpus (1,065 compared), synthetic 10k
+(2,079), synthetic 1M rolled into 6 parts and 110 row groups (2,079 plus 1,565 with the full 1,000-page walks),
+and the recordings of `noaa-normals-pds` (1,241 + 715) and `giab` (2,133 + 1,583).
 
 `internal/replay/evidence` ports the conformance comparison: `compare_test.go` is the GCS field policy and
 exchange comparator with the suite's messages (`TestComparatorMessages`; a pin is the whole message,
