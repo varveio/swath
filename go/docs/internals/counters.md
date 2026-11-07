@@ -36,8 +36,10 @@ logical calls.
 Attempt latency is kept in the client as a fixed log-spaced histogram (four buckets per power of two of
 nanoseconds, up to 2^40 ns; one atomic per bucket) and reported as three derived values, `inflight.p50_ns`,
 `inflight.p90_ns` and `inflight.p99_ns`: each the upper edge of the bucket holding the percentile, at most 25 %
-above it. The buckets themselves are not counters: 156 rows would swamp the report for three numbers a reader
-uses. Every attempt is timed from send to body read, failed ones included (a timed-out attempt lands at
+above it. Attempts of 2^40 ns (about 18 min 20 s) or longer land in one open-ended bucket past the 156 finite
+ones, counted by `inflight.latency_overflow`; a percentile that falls there reads 9223372036854775807 (the
+largest gauge value), never the last finite edge, which would read as a bound (`TestLatencySaturation`). The
+buckets themselves are not counters: 157 rows would swamp the report for the four numbers a reader uses. Every attempt is timed from send to body read, failed ones included (a timed-out attempt lands at
 `--request-timeout`).
 
 Derived readings of the range engine's counters: the mean leaf depth is `split.leaf_depth_sum` /
@@ -190,9 +192,10 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
 | `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
-| `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
-| `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
-| `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
+| `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.latency_overflow` | count | attempts |  | attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket |
 | `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
 | `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
 | `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |

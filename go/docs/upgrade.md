@@ -205,7 +205,7 @@ longer has is refused (exit 2); finish such a run with the build that started it
   (`split.skipped.remainder`, `.lower_tiny`, `.upper_tiny`, `split.estimate_none`), depth (`split.max_depth`,
   `split.leaves`, `split.leaf_depth_sum`) and the probes' reasons (`structure.sent.*`, `structure.boundaries`,
   `structure.frontier_pivots`, `structure.suppressed_inherited`); the client adds `inflight.p50_ns`, `p90_ns`,
-  `p99_ns` and, for GCS, `transport.pool_size` ([internals/counters.md](internals/counters.md)).
+  `p99_ns` (9223372036854775807 when open-ended, past 2^40 ns), `inflight.latency_overflow` and, for GCS, `transport.pool_size` ([internals/counters.md](internals/counters.md)).
 - Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
   chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
   bare flag is `on`.
