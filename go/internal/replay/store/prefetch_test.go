@@ -340,16 +340,19 @@ func (k *syntheticKeys) read(ctx context.Context, from []byte, inclusive bool, t
 	return sink.packed()
 }
 
-// TestReadAheadsPendingStayWithinTheirSlots advances 40 disjoint walks to
-// their read-ahead thresholds while every read-ahead's fill is blocked:
-// the read-aheads registered (and their goroutines) never exceed the
-// read-ahead slots, the walks' own pages are not held up, and evicting
-// the windows the blocked read-aheads read on from cancels them.
-func TestReadAheadsPendingStayWithinTheirSlots(t *testing.T) {
+// TestReadAheadsPendingStayWithinTheirBound advances 40 disjoint walks
+// to their read-ahead thresholds while every read-ahead's fill is
+// blocked: the read-aheads registered (and their goroutines) never
+// exceed maxAhead (lowered to 5 here; 500 windows would allow 500), the
+// fills under way never exceed the decoding slots, the walks' own pages
+// are not held up, and evicting the windows the blocked read-aheads read
+// on from cancels them, waiting or decoding.
+func TestReadAheadsPendingStayWithinTheirBound(t *testing.T) {
 	keys := &syntheticKeys{rows: 1_000_000, release: make(chan struct{})}
 	p := newPrefetcher(Prefetch{WindowRows: 100, MaxWindows: 1000}, keys.read, nil)
 	defer p.close()
 	defer close(keys.release)
+	p.maxAhead = 5
 	slots := cap(p.aheadSlots)
 	ctx := context.WithValue(context.Background(), walkCtxKey{}, true)
 	const walks = 40
@@ -367,15 +370,16 @@ func TestReadAheadsPendingStayWithinTheirSlots(t *testing.T) {
 		p.mu.Lock()
 		pending := len(p.ahead)
 		p.mu.Unlock()
-		if pending > slots {
-			t.Fatalf("after %d walks: %d read-aheads pending, slots %d", w+1, pending, slots)
+		if pending > p.maxAhead || keys.blocked.Load() > int64(slots) {
+			t.Fatalf("after %d walks: %d read-aheads pending (bound %d), %d fills under way (slots %d)",
+				w+1, pending, p.maxAhead, keys.blocked.Load(), slots)
 		}
 	}
 	p.mu.Lock()
 	pending := len(p.ahead)
 	p.mu.Unlock()
-	if pending != slots {
-		t.Fatalf("%d read-aheads pending, want the %d slots taken", pending, slots)
+	if pending != p.maxAhead {
+		t.Fatalf("%d read-aheads pending, want the bound, %d", pending, p.maxAhead)
 	}
 	// Evicting every window abandons the blocked read-aheads.
 	p.mu.Lock()

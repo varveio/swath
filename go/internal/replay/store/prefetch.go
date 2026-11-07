@@ -223,14 +223,19 @@ type prefetcher struct {
 	ctx    context.Context // the read-aheads', ended by close
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	// aheadSlots bounds the read-aheads at once to half the processors:
-	// a fleet's read-aheads start together, and taking every reader slot
-	// and processor at once would stall the pages being served from
-	// windows, the work they exist to keep smooth. A read-ahead takes its
-	// slot before it is registered and is skipped when none is free, so
-	// the slots bound the pending read-aheads too, not only the decoding
-	// ones: a queue would grow with every walk reaching its threshold.
+	// aheadSlots bounds the read-aheads decoding at once to half the
+	// processors: a fleet's read-aheads start together, and taking every
+	// reader slot and processor at once would stall the pages being
+	// served from windows, the work they exist to keep smooth.
 	aheadSlots chan struct{}
+	// maxAhead bounds the read-aheads registered (waiting for a slot or
+	// decoding), half the windows: one per walk of a fleet the windows
+	// hold. A walk that reaches its threshold with maxAhead registered
+	// is not read ahead, so the queue does not grow with the walk
+	// positions visited. Skipping every read-ahead past the decoding
+	// slots instead would leave most of a fleet to fill at its windows'
+	// ends together, the stall read-aheads exist to avoid.
+	maxAhead int
 
 	mu sync.Mutex
 	// closed fails every read after close with sortedparquet.ErrClosed,
@@ -269,8 +274,8 @@ func newPrefetcher(cfg Prefetch, read func(context.Context, []byte, bool, []byte
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{
 		read: read, direct: direct, windowRows: rows, maxWindows: windows, maxRows: int64(rows) * int64(windows),
-		maxAnchors: int(min(int64(windows)*anchorsPerWindow, math.MaxInt32)),
-		anchors:    make(map[string]*list.Element), order: list.New(), ahead: make(map[windowKey]*pending),
+		maxAnchors: int(min(int64(windows)*anchorsPerWindow, math.MaxInt32)), maxAhead: max(1, windows/2),
+		anchors: make(map[string]*list.Element), order: list.New(), ahead: make(map[windowKey]*pending),
 		ctx: ctx, cancel: cancel, aheadSlots: make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/2)),
 	}
 }
@@ -447,7 +452,7 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 // (its ramp included) from w's last key on, under the store's own
 // context, takes a reader slot as any fill does, and is kept as a
 // window like one; a failed fill is dropped, and the walk then fills
-// for itself. One is skipped when every read-ahead slot is taken, and
+// for itself. One is skipped when maxAhead are registered, and
 // cancelled when w is evicted. Called under mu.
 func (p *prefetcher) readAhead(w *window, served, limit int) {
 	if !w.walk || w.final || w.rows.len()-served > w.fill/4 || p.ctx.Err() != nil {
@@ -465,9 +470,7 @@ func (p *prefetcher) readAhead(w *window, served, limit int) {
 			}
 		}
 	}
-	select {
-	case p.aheadSlots <- struct{}{}:
-	default:
+	if len(p.ahead) >= p.maxAhead {
 		return // the walk fills for itself if it gets there
 	}
 	ctx, cancel := context.WithCancel(p.ctx)
@@ -478,8 +481,15 @@ func (p *prefetcher) readAhead(w *window, served, limit int) {
 	go func() {
 		defer p.wg.Done()
 		defer cancel()
-		filled, err := p.fill(ctx, last, false, to, n, proj)
-		<-p.aheadSlots
+		var filled packed
+		err := ctx.Err()
+		select {
+		case p.aheadSlots <- struct{}{}:
+			filled, err = p.fill(ctx, last, false, to, n, proj)
+			<-p.aheadSlots
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		delete(p.ahead, key)
