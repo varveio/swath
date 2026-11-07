@@ -876,7 +876,7 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 					t.Errorf("%s: pinned match, now %s", id, got)
 				case strings.HasPrefix(pin, "mismatch:") && got == "match":
 					improvements = append(improvements, id)
-				case strings.HasPrefix(pin, "mismatch:") && !strings.Contains(got, strings.TrimPrefix(pin, "mismatch:")):
+				case strings.HasPrefix(pin, "mismatch:") && !atPin(strings.TrimPrefix(pin, "mismatch:"), got):
 					t.Errorf("%s: pinned %q, now %s", id, strings.TrimPrefix(pin, "mismatch:"), got)
 				}
 			}
@@ -888,6 +888,37 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 			t.Logf("%s: %d captures, %d match (%d pinned match), improvements: %v", name, len(outcomes), matches, countMatch(pins), improvements)
 		})
 	}
+}
+
+// tokenSpan is the per-run part a pin may leave open: a replay token's
+// body after its prefix.
+var tokenSpan = regexp.MustCompile(`^[A-Za-z0-9_=-]*`)
+
+// replayTokenPrefixes are the prefixes of the replay's own tokens. A pin
+// that ends with one stops where a token issued during the run begins
+// (it differs on every run), so that span, and only that span, is a
+// wildcard.
+var replayTokenPrefixes = []string{"gcs1.", "az1.", "v2:"}
+
+// atPin reports whether outcome is the pinned mismatch: the whole message,
+// equal, except that a pin ending at a replay token's prefix accepts the
+// token body there and nothing after it. A message that merely contains
+// the pin (a longer reason, an extra clause) is not at the pin.
+func atPin(pin, outcome string) bool {
+	rest, ok := strings.CutPrefix(outcome, "mismatch: ")
+	if !ok {
+		return false
+	}
+	if rest == pin {
+		return true
+	}
+	for _, prefix := range replayTokenPrefixes {
+		if strings.HasSuffix(pin, prefix) && strings.HasPrefix(rest, pin) {
+			tail := rest[len(pin):]
+			return len(tokenSpan.FindString(tail)) == len(tail)
+		}
+	}
+	return false
 }
 
 func countMatch(pins map[string]string) int {
@@ -988,6 +1019,20 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 		if err := bad.verify(c[0], path); err == nil {
 			t.Errorf("%s with %s was accepted", c[0], c[1])
 		}
+	}
+	// A pinned mismatch whose reason is changed is no longer at its pin,
+	// even though the new message contains the pinned one.
+	const pin = "GCS error reason differs: expected=invalidParameter actual=invalid"
+	path := filepath.Join(ev.root, ev.index.Captures["gcs-06f"].File)
+	clean := &endpoint{port: port, cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+	if err := clean.verify("gcs-06f", path); err == nil || !atPin(pin, "mismatch: "+err.Error()) {
+		t.Fatalf("gcs-06f: %v", err)
+	}
+	extended := &endpoint{port: port, cases: ev.cases, mutate: onFirst(func(b string) string {
+		return strings.Replace(b, `"reason":"invalid"`, `"reason":"invalidFoo"`, 1)
+	})}
+	if err := extended.verify("gcs-06f", path); err == nil || atPin(pin, "mismatch: "+err.Error()) {
+		t.Errorf("gcs-06f with an extended reason is at its pin: %v", err)
 	}
 }
 
@@ -1136,5 +1181,32 @@ func TestComparatorMessages(t *testing.T) {
 	}
 	if got := javaString(time.Date(2026, 1, 2, 3, 4, 5, 296_000_000, time.UTC)); got != "2026-01-02T03:04:05.296Z" {
 		t.Errorf("%s", got)
+	}
+}
+
+func TestPinsMatchWholeMessages(t *testing.T) {
+	const pin = "GCS error reason differs: expected=invalidParameter actual=invalid"
+	for outcome, want := range map[string]bool{
+		"mismatch: " + pin:                 true,
+		"mismatch: " + pin + "Foo":         false,
+		"mismatch: " + pin + " | and more": false,
+		"mismatch: prefix " + pin:          false,
+		"match":                            false,
+		"mismatch: GCS HTTP status differs: expected=200 actual=400": false,
+	} {
+		if got := atPin(pin, outcome); got != want {
+			t.Errorf("%q: %v", outcome, got)
+		}
+	}
+	const tokenPin = "replay marker echo differs: expected=token-sha256-96 actual=az1."
+	for outcome, want := range map[string]bool{
+		"mismatch: " + tokenPin + "AbC_-9":        true,
+		"mismatch: " + tokenPin:                   true,
+		"mismatch: " + tokenPin + "AbC and more":  false,
+		"mismatch: " + tokenPin[:len(tokenPin)-1]: false,
+	} {
+		if got := atPin(tokenPin, outcome); got != want {
+			t.Errorf("%q: %v", outcome, got)
+		}
 	}
 }
