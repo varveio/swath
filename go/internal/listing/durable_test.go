@@ -179,72 +179,137 @@ func durableFiles(t *testing.T, out string) []string {
 	return names
 }
 
-// TestDurableRepeatedRecovery (Sol 1): ledger frames persisted out of order
-// (an interior record lost, later ones intact), a recorded file missing and
-// an unrecorded file present; the resume is killed at each recovery step,
-// twice, before one completes: the part journal is never refused, and the
-// final dataset is the uninterrupted one.
-func TestDurableRepeatedRecovery(t *testing.T) {
-	url, _, ref, out := durableFixture(t)
-	ledger := filepath.Join(out, order.DurableDir, "ledger")
-	b, err := os.ReadFile(ledger)
+// ledgerFrames is the ledger's frames in out: each one's offset, type and,
+// for a record, its file ID.
+func ledgerFrames(t *testing.T, out string) (b []byte, offs []int, types []byte, ids [][]byte) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var offs []int
-	for off := 0; off+8 <= len(b); off += 8 + int(uint32(b[off])|uint32(b[off+1])<<8|uint32(b[off+2])<<16|uint32(b[off+3])<<24) {
-		offs = append(offs, off)
-	}
-	if len(offs) > 3 {
-		for i := offs[len(offs)/2]; i < offs[len(offs)/2+1]; i++ {
-			b[i] = 0
+	for off := 0; off+9 <= len(b); {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		if off+8+n > len(b) || n < 1 {
+			break
 		}
-		os.WriteFile(ledger, b, 0o644)
+		offs, types = append(offs, off), append(types, b[off+8])
+		var id []byte
+		if n >= 17 {
+			id = b[off+9 : off+25]
+		}
+		ids = append(ids, id)
+		off += 8 + n
 	}
-	files := durableFiles(t, out)
-	if len(files) < 2 {
-		t.Fatalf("%d durable files after the crash", len(files))
+	return b, offs, types, ids
+}
+
+// damagedSnapshot is a crashed run's output, damaged as Sol 1 schedules
+// it: a recorded file missing (recovery retires it: its append, sync,
+// unlink and directory sync are reached), an interior ledger record lost
+// with the ones after it intact (persisted out of order: the truncation is
+// reached), and an unrecorded file present (an orphan).
+func damagedSnapshot(t *testing.T, out string) {
+	t.Helper()
+	b, offs, types, ids := ledgerFrames(t, out)
+	victim, lost := -1, -1
+	for i := 1; i < len(offs); i++ {
+		if types[i] != 'S' {
+			continue
+		}
+		name := hex.EncodeToString(ids[i]) + ".spill"
+		if os.Remove(filepath.Join(out, order.DurableDir, name)) == nil {
+			victim = i
+			break
+		}
 	}
-	os.Remove(filepath.Join(out, order.DurableDir, files[0]))
+	if victim > 0 && victim < len(offs)-2 {
+		lost = len(offs) - 2 // interior, the last frame intact; the records before it stand
+	}
+	if victim < 0 || lost < 0 {
+		t.Fatalf("the fixture's ledger is too short for the schedule: %d frames, types %q", len(offs), types)
+	}
+	for k := offs[lost]; k < offs[lost+1]; k++ {
+		b[k] = 0
+	}
+	os.WriteFile(filepath.Join(out, order.DurableDir, "ledger"), b, 0o644)
 	os.WriteFile(filepath.Join(out, order.DurableDir, "0123456789abcdef0123456789abcdef.spill"), []byte("orphan"), 0o644)
-	completed := false
-	for _, point := range faults.RecoveryPoints {
-		for range 2 {
-			if completed {
-				break
-			}
-			var seen atomic.Int64
-			restore := faults.Set(func(p string) error {
-				if p == point && seen.Add(1) == 1 {
-					return faults.ErrCrash
-				}
-				return nil
-			})
-			_, err := Run(context.Background(), durableConfig(url, out, true))
-			restore()
-			if seen.Load() > 0 && !errors.Is(err, faults.ErrCrash) {
-				t.Fatalf("%s: %v", point, err)
-			}
-			if seen.Load() == 0 {
-				t.Logf("%s not reached (nothing to do there): the resume completed (%v)", point, err)
-				completed = err == nil
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if errors.Is(err, journal.ErrCorrupt) {
-				t.Fatalf("%s: the part journal refused: %v", point, err)
-			}
+}
+
+// TestDurableRepeatedRecovery (Sol 1): a resume is interrupted twice
+// inside the durable spill's recovery, each schedule on its own copy of
+// the damaged snapshot (damagedSnapshot), and every interruption must
+// happen (a point not reached fails the test). Where the state after the
+// first interruption still reaches the point, the second is there again:
+// before the truncation, before the retirements' append, at their sync
+// with the unsynced append lost (simulated loss: the ledger cut back to
+// its synced prefix), at the first recovery replay. Where it cannot (the
+// retirements durable), the second is at the first recovery replay. Then
+// a resume completes: the part journal is never refused, and the dataset
+// is the uninterrupted one.
+func TestDurableRepeatedRecovery(t *testing.T) {
+	url, _, ref, out := durableFixture(t)
+	damagedSnapshot(t, out)
+	ledger := func(dir string) string { return filepath.Join(dir, order.DurableDir, "ledger") }
+	for _, sc := range []struct {
+		first, second string
+		lose          bool // the first interruption loses the ledger's unsynced append
+	}{
+		{"spill-ledger-truncate", "spill-ledger-truncate", false},
+		{"spill-recovery-retire", "spill-recovery-retire", false},
+		{"spill-recovery-sync", "spill-recovery-sync", true},
+		{"spill-recovery-sync", "spill-replay", false},
+		{"spill-recovery-unlink", "spill-replay", false},
+		{"spill-recovery-dirsync", "spill-replay", false},
+		{"spill-replay", "spill-replay", false},
+	} {
+		name := sc.first + "+" + sc.second
+		if sc.lose {
+			name += "/unsynced-lost"
 		}
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "ds")
+			if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+				t.Fatal(err)
+			}
+			for i, point := range []string{sc.first, sc.second} {
+				var seen atomic.Int64
+				synced := int64(-1)
+				restore := faults.Set(func(p string) error {
+					if p == "spill-recovery-retire" && synced < 0 {
+						if fi, err := os.Stat(ledger(dir)); err == nil {
+							synced = fi.Size() // the truncated prefix, synced
+						}
+					}
+					if p == point && seen.Add(1) == 1 {
+						return faults.ErrCrash
+					}
+					return nil
+				})
+				_, err := Run(context.Background(), durableConfig(url, dir, true))
+				restore()
+				if seen.Load() == 0 || !errors.Is(err, faults.ErrCrash) {
+					t.Fatalf("interruption %d at %s not reached: %v", i+1, point, err)
+				}
+				if errors.Is(err, journal.ErrCorrupt) {
+					t.Fatalf("%s: the part journal refused: %v", point, err)
+				}
+				if sc.lose {
+					if synced < 0 {
+						t.Fatal("no synced prefix recorded")
+					}
+					if err := os.Truncate(ledger(dir), synced); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			sum, err := Run(context.Background(), durableConfig(url, dir, true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("final resume: %+v", sum.Resources.Spill.Durable.Resume)
+			sameDataset(t, name, ref, dir)
+		})
 	}
-	if !completed {
-		sum, err := Run(context.Background(), durableConfig(url, out, true))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("final resume: %+v", sum.Resources.Spill.Durable.Resume)
-	}
-	sameDataset(t, "repeated recovery", ref, out)
 }
 
 // TestDurableNewAncestorsLost: a power loss before the spill directories'
@@ -623,4 +688,185 @@ func recodec(t *testing.T, out, name string) bool {
 	}
 	os.WriteFile(lp, lb, 0o644)
 	return found
+}
+
+// TestDurableKillMatrix kills a durable-spill run (an injected crash that
+// skips all cleanup) at each of its steps (faults.SpillPoints: a durable
+// file's first write (its header, with the capture start), later frames and
+// the trailer, its seal's fsync,
+// the flusher's directory sync, ledger append, ledger sync and unlink), at
+// the first and the fourth occurrence, on the slow-frontier fixture built
+// to reach them: a point not reached fails the test. Then torn writes:
+// each kind of durable file write and a ledger append cut part way through
+// (a kill mid-write), and the unsynced state lost after a crash at the
+// ledger sync and at a seal (power loss: the ledger cut back to its last
+// sync, the unsealed file cut short). Every resume completes to the
+// uninterrupted dataset, and reuses only certificates whose record
+// survived in the prefix (the resume never refuses).
+func TestDurableKillMatrix(t *testing.T) {
+	url, _, _ := slowFrontier(t, "d06/")
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	resume := func(t *testing.T, out string) {
+		t.Helper()
+		sum, err := Run(context.Background(), durableConfig(url, out, true))
+		if err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+		sameDataset(t, out, ref, out)
+		if d := sum.Resources.Spill.Durable; d != nil && d.Resume != nil {
+			t.Logf("resume: %+v", *d.Resume)
+		}
+	}
+	for _, point := range faults.SpillPoints {
+		for _, nth := range []int64{1, 4} {
+			t.Run(fmt.Sprintf("%s#%d", point, nth), func(t *testing.T) {
+				out := filepath.Join(t.TempDir(), "ds")
+				crashDurable(t, durableConfig(url, out, false), point, nth)
+				resume(t, out)
+			})
+		}
+	}
+	// Torn writes: the nth write of a kind keeps half its bytes, then the
+	// process dies.
+	torn := func(t *testing.T, out string, match func(name string, b []byte) bool, nth int64) {
+		var seen atomic.Int64
+		restore := faults.SetIO(func(op, name string, b []byte) (int, error) {
+			if op == "write" && match(name, b) && seen.Add(1) == nth {
+				return len(b) / 2, faults.ErrCrash
+			}
+			return 0, nil
+		})
+		_, err := Run(context.Background(), durableConfig(url, out, false))
+		restore()
+		if seen.Load() < nth || !errors.Is(err, faults.ErrCrash) {
+			t.Fatalf("torn write not injected (%d seen): %v", seen.Load(), err)
+		}
+	}
+	spill := func(typ byte) func(string, []byte) bool {
+		return func(name string, b []byte) bool {
+			if !strings.HasSuffix(name, ".spill") || len(b) < 9 {
+				return false
+			}
+			// The write's frames: its first frame's type, or any frame's.
+			for off := 0; off+9 <= len(b); {
+				if b[off+8] == typ {
+					return true
+				}
+				off += 8 + int(binary.LittleEndian.Uint32(b[off:]))
+			}
+			return false
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		match func(string, []byte) bool
+		nth   int64
+	}{
+		{"header", spill('H'), 2},
+		{"capture", spill('C'), 2},
+		{"trailer", spill('T'), 2},
+		{"rows", func(name string, b []byte) bool {
+			return strings.HasSuffix(name, ".spill") && len(b) > 8 && b[8] != 'H' && b[8] != 'C'
+		}, 4},
+		{"ledger", func(name string, b []byte) bool { return strings.HasSuffix(name, "ledger") }, 2},
+	} {
+		t.Run("torn-"+tc.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "ds")
+			torn(t, out, tc.match, tc.nth)
+			resume(t, out)
+		})
+	}
+	// Unsynced state lost: crashed at the ledger's sync, its append (not yet
+	// synced) is lost; crashed at a seal (the file not yet synced), the
+	// file's last bytes are lost.
+	t.Run("lost-ledger-append", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "ds")
+		var before int64 = -1
+		var seen atomic.Int64
+		restore := faults.Set(func(p string) error {
+			switch {
+			case p == "spill-ledger-append" && seen.Load() == 1:
+				if fi, err := os.Stat(filepath.Join(out, order.DurableDir, "ledger")); err == nil {
+					before = fi.Size()
+				}
+			case p == "spill-ledger-sync" && seen.Add(1) == 2:
+				return faults.ErrCrash
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), durableConfig(url, out, false))
+		restore()
+		if !errors.Is(err, faults.ErrCrash) || before < 0 {
+			t.Fatalf("crash at the second ledger sync not injected (prefix %d): %v", before, err)
+		}
+		if err := os.Truncate(filepath.Join(out, order.DurableDir, "ledger"), before); err != nil {
+			t.Fatal(err)
+		}
+		resume(t, out)
+	})
+	t.Run("lost-unsealed-file", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "ds")
+		crashDurable(t, durableConfig(url, out, false), "spill-seal", 2)
+		for _, name := range durableFiles(t, out) {
+			p := filepath.Join(out, order.DurableDir, name)
+			if fi, err := os.Stat(p); err == nil && fi.Size() > 64 {
+				os.Truncate(p, fi.Size()-32)
+			}
+		}
+		resume(t, out)
+	})
+}
+
+// TestDurableLedgerTornWrite (Sol 3): a ledger append torn part way (a
+// partial write that fails) while parts are being published: the ledger
+// latches failed (no new certificate) and the run goes on publishing
+// (order's TestDurableLedgerFailureEvicts and TestDurableEviction hold the
+// unlinks and the credit after the failure); killed
+// after its next part record, the resume reads the ledger's prefix up to
+// the torn frame (dropping it), relists what lost its record, and the
+// dataset is the uninterrupted one.
+func TestDurableLedgerTornWrite(t *testing.T) {
+	url, _, _ := slowFrontier(t, "d06/")
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	var writes atomic.Int64
+	var tornAt atomic.Bool
+	restoreIO := faults.SetIO(func(op, name string, b []byte) (int, error) {
+		if op == "write" && strings.HasSuffix(name, "ledger") && writes.Add(1) == 2 {
+			tornAt.Store(true)
+			return len(b) / 2, errors.New("injected EIO")
+		}
+		return 0, nil
+	})
+	var after atomic.Int64
+	restore := faults.Set(func(p string) error {
+		// Publication goes on after the failure: two more part records,
+		// then the kill.
+		if p == "journal-append" && tornAt.Load() && after.Add(1) == 2 {
+			return faults.ErrCrash
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), durableConfig(url, out, false))
+	restore()
+	restoreIO()
+	if !tornAt.Load() || !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("torn ledger write %v, then the kill: %v", tornAt.Load(), err)
+	}
+	sum, err := Run(context.Background(), durableConfig(url, out, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameDataset(t, "torn ledger", ref, out)
+	r := sum.Resources.Spill.Durable.Resume
+	if r.LedgerDroppedBytes == 0 {
+		t.Fatalf("the torn frame was not dropped: %+v", r)
+	}
+	t.Logf("resume after the torn ledger: %+v", r)
 }

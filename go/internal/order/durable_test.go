@@ -605,17 +605,21 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 	}
 }
 
-// TestDurableLedgerFailureEvicts (Sol 3): the ledger's sync fails while
-// drained certificates occupy the spill budget: the ledger latches failed
-// (no new slot), retirements still unlink, eviction returns credit, the
-// run progresses to the oracle's output.
+// TestDurableLedgerFailureEvicts (Sol 3): a ledger append torn part way
+// (a partial write that fails), while drained certificates occupy the
+// spill budget and the run publishes: the ledger latches failed (no new
+// slot), retirements still unlink, refused frames evict, the run
+// progresses to the oracle's output. (TestDurableEviction holds the same
+// path deterministically; listing's TestDurableLedgerTornWrite resumes
+// after it.)
 func TestDurableLedgerFailureEvicts(t *testing.T) {
 	ledgerOrder(t)
-	defer faults.Set(func(p string) error {
-		if p == "spill-ledger-sync" {
-			return errors.New("injected EIO")
+	var writes atomic.Int64
+	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
+		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
+			return len(b) / 2, errors.New("injected EIO")
 		}
-		return nil
+		return 0, nil
 	})()
 	// A slow frontier (not held: a held one and a spill cap wait for each
 	// other by design): drained certificates, never retired without K,
@@ -648,6 +652,14 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 // drained certificate is held by hand and the cap set so the next frame is
 // refused; it passes GOMAXPROCS=1 -count=10. (TestDurableLedgerFailureEvicts runs the same path in a run.)
 func TestDurableEviction(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ledger-failed=%v", failed), func(t *testing.T) { evictOnce(t, failed) })
+	}
+}
+
+// evictOnce is TestDurableEviction, with the ledger latched failed after
+// the seal or not: unlinks and credit never depend on the ledger.
+func evictOnce(t *testing.T, failed bool) {
 	h := newHarness(t)
 	h.e.Span("r0001", "r0002", false)
 	h.rows(t, 0, 0, 100)
@@ -668,6 +680,9 @@ func TestDurableEviction(t *testing.T) {
 		t.Fatal("an undrained file evicted")
 	}
 	h.c.drainedFile(d)
+	if failed {
+		h.c.ledgerFailed() // after the seal: the certificate is held, the ledger gone
+	}
 	live := sp.live.Load()
 	if err := sp.write(undrained, []schema.Row[tp]{{Key: "r0003/a"}}, false); err != errSpillFull {
 		t.Fatalf("not refused: %v", err)

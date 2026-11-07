@@ -47,6 +47,15 @@ resume and compare with an uninterrupted run: byte for byte with the part interv
 refusal) with it on, where parts are closed by time (a trickling source in `TestCrashMatrix`, a slower bucket
 with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
 
+The durable spill has crash points of its own (`faults.SpillPoints`: a durable file's header (with the
+capture start at a range's start), later frames and trailer writes, its seal's fsync, the flusher's directory sync, ledger append, ledger sync and
+unlink; `faults.RecoveryPoints`: a resume's ledger truncation, its retirements' append and sync, an unlink,
+the directory sync and the first recovery replay). `TestDurableKillMatrix` (in process: at each point's 1st
+and 4th occurrence, then torn writes of each kind and lost unsynced state) and `TestSIGKILLDurableSpill` (the
+real process) run them on a slow-frontier fixture that spills and seals, and fail if a point is not reached;
+`TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
+damaged snapshot. Each then resumes to the uninterrupted dataset.
+
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
 target or, on a slow frontier, once it has been open for the part interval (default 30 s,
 [parquet-output.md](parquet-output.md)). `progress.json` reports the age (`part_age_ms`: since the last part

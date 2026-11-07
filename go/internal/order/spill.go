@@ -353,6 +353,21 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 	return append(hdr[:], payload...)
 }
 
+// durableWritePoint is the crash point before a durable file's write, by
+// what the write carries: the header (the first write, with the capture
+// start when the capture starts at the range's start, and the first
+// rows), the trailer and tail (the final one), or later frames (rows, or
+// a capture start armed at a later fence).
+func durableWritePoint(first, final bool) string {
+	switch {
+	case first:
+		return "spill-write-header"
+	case final:
+		return "spill-write-trailer"
+	}
+	return "spill-write-frames"
+}
+
 // write appends one frame of rows (and, when final, the trailer).
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
 	return s.writeFrames(f, rows, nil, final)
@@ -452,6 +467,9 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 	// directory the run owns (two stats per frame). A durable file is
 	// opened through the output root.
 	err := s.check()
+	if err == nil && f.d != nil {
+		err = faults.At(durableWritePoint(f.size == 0, final))
+	}
 	if err == nil {
 		var fh *os.File
 		if f.d != nil {
@@ -460,7 +478,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 			fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		}
 		if err == nil {
-			_, err = fh.Write(buf)
+			_, err = faults.Write(fh, buf)
 			if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
 				err = errSpillFull // the torn frame is gone: back off as if refused
 			}
