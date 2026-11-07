@@ -221,18 +221,30 @@ type prefetcher struct {
 	ctx    context.Context // the read-aheads', ended by close
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	// aheadSlots bounds the read-aheads decoding at once to half the
-	// processors: a fleet's read-aheads start together, and taking every
-	// reader slot and processor at once would stall the pages being
-	// served from windows, the work they exist to keep smooth.
+	// aheadSlots bounds the read-aheads at once to half the processors:
+	// a fleet's read-aheads start together, and taking every reader slot
+	// and processor at once would stall the pages being served from
+	// windows, the work they exist to keep smooth. A read-ahead takes its
+	// slot before it is registered and is skipped when none is free, so
+	// the slots bound the pending read-aheads too, not only the decoding
+	// ones: a queue would grow with every walk reaching its threshold.
 	aheadSlots chan struct{}
 
 	mu      sync.Mutex
-	ahead   map[windowKey]chan struct{} // read-aheads in flight, closed when done
+	ahead   map[windowKey]*pending // read-aheads in flight
 	windows []*window                   // least recently used first
 	live    int64
 	anchors map[string]*list.Element
 	order   *list.List // of *anchor, least recently used first
+}
+
+// pending is a read-ahead in flight: done is closed when it ends, cancel
+// abandons it once the window it reads on from is evicted (its walk has
+// moved on or been abandoned), from.
+type pending struct {
+	done   chan struct{}
+	cancel context.CancelFunc
+	from   *window
 }
 
 type anchor struct {
@@ -253,7 +265,7 @@ func newPrefetcher(cfg Prefetch, read func(context.Context, []byte, bool, []byte
 	return &prefetcher{
 		read: read, direct: direct, windowRows: rows, maxWindows: windows, maxRows: int64(rows) * int64(windows),
 		maxAnchors: int(min(int64(windows)*anchorsPerWindow, math.MaxInt32)),
-		anchors:    make(map[string]*list.Element), order: list.New(), ahead: make(map[windowKey]chan struct{}),
+		anchors:    make(map[string]*list.Element), order: list.New(), ahead: make(map[windowKey]*pending),
 		ctx: ctx, cancel: cancel, aheadSlots: make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/2)),
 	}
 }
@@ -277,11 +289,11 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 	// read-ahead is in flight waits for it rather than read the same rows.
 	if from != nil && !inclusive {
 		p.mu.Lock()
-		done := p.ahead[keyOf(to, proj, from, false)]
+		ahead := p.ahead[keyOf(to, proj, from, false)]
 		p.mu.Unlock()
-		if done != nil {
+		if ahead != nil {
 			select {
-			case <-done:
+			case <-ahead.done:
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -417,7 +429,8 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 // (its ramp included) from w's last key on, under the store's own
 // context, takes a reader slot as any fill does, and is kept as a
 // window like one; a failed fill is dropped, and the walk then fills
-// for itself. Called under mu.
+// for itself. One is skipped when every read-ahead slot is taken, and
+// cancelled when w is evicted. Called under mu.
 func (p *prefetcher) readAhead(w *window, served, limit int) {
 	if !w.walk || w.final || w.rows.len()-served > w.fill/4 || p.ctx.Err() != nil {
 		return
@@ -434,25 +447,26 @@ func (p *prefetcher) readAhead(w *window, served, limit int) {
 			}
 		}
 	}
-	done := make(chan struct{})
-	p.ahead[key] = done
+	select {
+	case p.aheadSlots <- struct{}{}:
+	default:
+		return // the walk fills for itself if it gets there
+	}
+	ctx, cancel := context.WithCancel(p.ctx)
+	ahead := &pending{done: make(chan struct{}), cancel: cancel, from: w}
+	p.ahead[key] = ahead
 	n, to, proj := p.nextFill(w.fill, limit), w.to, w.proj
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		var filled packed
-		err := p.ctx.Err()
-		select {
-		case p.aheadSlots <- struct{}{}:
-			filled, err = p.fill(p.ctx, last, false, to, n, proj)
-			<-p.aheadSlots
-		case <-p.ctx.Done():
-		}
+		defer cancel()
+		filled, err := p.fill(ctx, last, false, to, n, proj)
+		<-p.aheadSlots
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		delete(p.ahead, key)
-		close(done)
-		if err == nil && filled.len() > 0 && p.ctx.Err() == nil {
+		close(ahead.done)
+		if err == nil && filled.len() > 0 && ctx.Err() == nil {
 			p.publish(&window{key: key, rows: filled, lower: bound{last, false}, to: to, proj: proj,
 				final: filled.len() < n, fill: n, walk: true})
 		}
@@ -556,17 +570,29 @@ func (p *prefetcher) publish(w *window) {
 	}
 	if i := slices.IndexFunc(p.windows, func(o *window) bool { return o.key == w.key }); i >= 0 {
 		p.live -= int64(p.windows[i].rows.len())
+		p.abandon(p.windows[i])
 		p.windows = slices.Delete(p.windows, i, i+1)
 	}
 	for len(p.windows) > 0 && (len(p.windows) >= p.maxWindows || p.live+n > p.maxRows) {
 		rowBudget := p.live+n > p.maxRows
 		p.live -= int64(p.windows[0].rows.len())
+		p.abandon(p.windows[0])
 		p.windows[0] = nil
 		p.windows = p.windows[1:]
 		call(p.meters.Eviction, rowBudget)
 	}
 	p.windows = append(p.windows, w)
 	p.live += n
+}
+
+// abandon cancels the read-ahead reading on from w, which is evicted.
+// Called under mu.
+func (p *prefetcher) abandon(w *window) {
+	for _, ahead := range p.ahead {
+		if ahead.from == w {
+			ahead.cancel()
+		}
+	}
 }
 
 // rampedFill is how many rows a miss reads: never fewer than limit, and
