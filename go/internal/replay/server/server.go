@@ -133,6 +133,7 @@ type Server struct {
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
 	metricsConns        atomic.Int64 // open metrics connections
+	conns               *limitListener // the serving listener, bounded
 	s3Active            atomic.Int64
 	routes              *routes // nil: the S3 route answers every request
 	azure               *azureRoute
@@ -210,7 +211,8 @@ func (s *Server) Listen() error {
 	if err != nil {
 		return err
 	}
-	s.ln = ln
+	s.conns = &limitListener{Listener: ln, max: int64(s.cfg.MaxConnections())}
+	s.ln = s.conns
 	if s.cfg.MetricsPort >= 0 {
 		mln, err := net.Listen("tcp", net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.MetricsPort)))
 		if err != nil {
