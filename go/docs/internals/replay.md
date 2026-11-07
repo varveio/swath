@@ -331,8 +331,15 @@ server's `too_many_segments` refusals answered by the Go route as the known impr
 the archive's corpus (names up to 2,010 bytes, sorted with a 4,096-byte key limit and checked against the
 manifest) on the Azure route alone, and replays each capture as the conformance tree's
 `NativeEvidenceReplayTest` does, with a port of its comparators (`evidencecmp_test.go`) whose failure messages
-are spelled as the pins in `azure/replay-expectations.json` spell them. SDK runs are replayed as the requests
-the SDK sends (captured headers, client request ids `prefix-N`). A pinned match must match; a pinned mismatch
+are spelled as the pins in `azure/replay-expectations.json` spell them. The SDK runs (`azure-10a`, `10b`,
+`10c`) are consumed by the official Azure SDK for Go (`sdk_test.go`): its flat and hierarchy paginators on the
+local account path, retries off, through a recording transport that sets only what the captured Java run set by
+option (the service version, client request ids `prefix-N`) and, for the flat walk, adds the captured
+`startFrom` that this SDK release's flat paginator drops. The recorded exchanges are held to the capture as an
+SDK run (request scope compared as decoded parameters, since the Go SDK orders and escapes them its own way;
+the Go SDK's product token in place of the Java one), and the SDK's decoded blobs, prefixes, sizes and times,
+Encoded names included, to the native pages. `sdkunit_test.go` adds Encoded names and properties, 5,000-name
+pages, and a fixture fault with and without retries. A pinned match must match; a pinned mismatch
 must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
 
 ### Azure tests
@@ -347,4 +354,5 @@ must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
 | driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself` |
-| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier) |
+| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
+| the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |

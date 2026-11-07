@@ -732,59 +732,6 @@ func (e *endpoint) verifyWalk(c capture) {
 	e.verifyRun(c, replay, tokens)
 }
 
-// verifySDK replays an SDK run as the request sequence the SDK sends:
-// the captured headers of each call (service version, accept, user agent)
-// with the SDK's deterministic client request id, prefix-N for call N,
-// following each NextMarker until the walk ends. The reference test drives
-// the SDK itself; the requests are the same.
-func (e *endpoint) verifySDK(c capture, raw json.RawMessage) {
-	var opts struct {
-		ClientRequestIDPrefix string `json:"clientRequestIdPrefix"`
-		MaxPages              int    `json:"maxPages"`
-	}
-	if err := json.Unmarshal(raw, &opts); err != nil || opts.ClientRequestIDPrefix == "" {
-		fail("SDK options lack a client request id prefix")
-	}
-	first := c.steps[0].request
-	var replay []replayStep
-	tokens := map[string]string{}
-	var tok *string
-	for i := 0; ; i++ {
-		if i >= max(opts.MaxPages, 1) {
-			fail("replay SDK walk incomplete: page limit")
-		}
-		query := first.query
-		if tok != nil {
-			query += "&marker=" + encode(*tok)
-		}
-		native := c.steps[min(i, len(c.steps)-1)].request
-		var headers [][2]string
-		for _, n := range []string{"x-ms-version", "x-ms-client-request-id", "accept", "user-agent"} {
-			v := native.header(n)
-			switch {
-			case n == "x-ms-client-request-id":
-				headers = append(headers, [2]string{n, opts.ClientRequestIDPrefix + "-" + strconv.Itoa(i+1)})
-			case v != nil:
-				headers = append(headers, [2]string{n, *v})
-			}
-		}
-		if tok != nil && i < len(c.steps) {
-			if nt := queryValue(c.steps[i].request.query, "marker"); nt != nil {
-				tokens[encode(*tok)] = *nt
-			}
-		}
-		resp := e.send("GET", query, headers)
-		replay = append(replay, replayStep{newRequest("GET", e.replayPath(), query, headers), resp})
-		if resp.status != 200 {
-			fail("replay SDK walk incomplete: status %d", resp.status)
-		}
-		if tok = nextMarker(resp.body); tok == nil {
-			break
-		}
-	}
-	e.verifyRun(c, replay, tokens)
-}
-
 // verifyRun is the run receipt check: the requests carry the captured
 // scope, and the walks list the same inventory.
 func (e *endpoint) verifyRun(c capture, replay []replayStep, tokens map[string]string) {
