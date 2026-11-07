@@ -53,6 +53,10 @@ type Factory struct {
 	// so its rows cannot be written as text; the command refuses a text run
 	// of it before opening it.
 	BinaryKeys bool
+	// EncoderBytes is the working set admitted per Parquet encoder of the
+	// provider's schema (parquetout.EncoderBytes), known before the source
+	// is opened; 0 prices it as parquetout.DefaultEncoderBytes.
+	EncoderBytes int64
 	// Classify, if set, names the class of a failure the provider caused
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.

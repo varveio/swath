@@ -13,8 +13,10 @@ import (
 )
 
 // codec is pure-Go ZSTD (klauspost, SpeedDefault) with all-literal entropy
-// compression enabled. Each writer owns one; EncodeAll is safe for
-// concurrent use, so page columns can be compressed in parallel.
+// compression enabled. A router's writers share one (a writer made alone
+// owns one); EncodeAll is safe for concurrent use, so page columns, of one
+// part or several, are compressed in parallel, each call on one of its
+// states.
 type codec struct {
 	mu      sync.RWMutex
 	encoder *zstd.Encoder

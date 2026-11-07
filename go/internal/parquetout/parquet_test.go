@@ -50,7 +50,7 @@ func testRows(n int, seed int64) []row {
 
 func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part {
 	t.Helper()
-	w, err := create(nil, path, &testSchema, 0, columns, func() int { return columns })
+	w, err := create(nil, path, &testSchema, 0, nil, columns, func() int { return columns })
 	if err != nil {
 		t.Fatal(err)
 	}

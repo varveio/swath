@@ -105,14 +105,15 @@ type Resume struct {
 // only on the rows, never on timing or the encoder count. Ordinals are dense and the router marks
 // the last part final.
 //
-// Each part is encoded by its own goroutine with its own writer and codec,
-// fed through a bounded queue while the part is still open; at most
+// Each part is encoded by its own goroutine with its own writer (the codec
+// is the router's, shared), fed through a bounded queue while the part is still open; at most
 // Encoders parts (MaxEncoders after Admit) are in flight. When fewer parts
 // than encoders are active, a part encodes its page columns in parallel
 // (byte-identical), so a single part still uses every core.
 type Router[P any] struct {
 	schema   *schema.Schema[P]
 	opt      Options
+	codec    *codec        // every writer's (closed once every part has ended)
 	slots    chan struct{} // MaxEncoders; the reserved part held until Admit
 	reserved atomic.Int32  // slots held for Admit
 	encoders atomic.Int32  // encoders admitted
@@ -178,7 +179,15 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}
 	opt.MaxEncoders = max(opt.Encoders, opt.MaxEncoders)
-	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders)}
+	// One codec for every writer: its zstd states (each grows to the
+	// largest page it compressed and keeps it) are one per encoder, the
+	// most column goroutines at once across the parts (columns), however
+	// many parts are open. A codec per writer held a pool of states each.
+	c, err := newCodec(opt.MaxEncoders)
+	if err != nil {
+		return nil, fmt.Errorf("parquet router: %w", err)
+	}
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: c}
 	for range opt.MaxEncoders - opt.Encoders {
 		r.slots <- struct{}{}
 	}
@@ -421,10 +430,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		// Its codec's zstd states (about 1.3 MiB each, allocated at once
-		// on the first page) for as many goroutines as can take its
-		// columns: never more than the columns, whatever the encoders.
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, min(r.opt.MaxEncoders, len(r.schema.Columns)+1), columns)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.codec, 0, columns)
 	}
 	if err != nil {
 		p.err = err
@@ -597,6 +603,7 @@ func (r *Router[P]) Close() ([]dataset.Part, error) {
 		}
 		out = append(out, p.info)
 	}
+	_ = r.codec.Close()
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -635,6 +642,7 @@ func (r *Router[P]) abort() {
 	for _, p := range r.parts {
 		<-p.done
 	}
+	_ = r.codec.Close()
 }
 
 // Encoder is a router seen without its row type: what the pipeline does

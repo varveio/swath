@@ -130,6 +130,9 @@ type Limits struct {
 	// (encodersGiven).
 	maxEncoders   int
 	encodersGiven bool
+	// encoderBytes is the working set admitted per Parquet encoder, the
+	// source's schema's (encoderPrice).
+	encoderBytes int64
 }
 
 // SpillLimits bound spill.
@@ -227,7 +230,8 @@ const (
 	minSpillReserve = 1 << 30
 	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
 	// worker's pages at the default 64 workers to queue behind a slow
-	// frontier, and the allowance that admits 5 encoders (admitEncoders).
+	// frontier, and the allowance that admits 4 encoders of the object
+	// stores' schemas (admitEncoders).
 	DefaultRowBudget = 128 << 20
 	// DefaultWorkers is the default listing concurrency, whatever the CPU
 	// count: Java's proven default (--concurrency 64). Listing waits on
@@ -269,10 +273,11 @@ func (c *Config) resolve() error {
 		l.RowBudget = DefaultRowBudget
 	}
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
+	l.encoderBytes = encoderPrice(c.Source.URI)
 	if l.Encoders == 0 {
 		l.Encoders = min(runtime.GOMAXPROCS(0), admit(*c))
 		if c.Output.Text == nil { // Parquet writers only: a text output's jobs are not raised
-			l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.Workers, fdLimit())))
+			l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.encoderBytes, l.Workers, fdLimit())))
 		}
 	}
 	if l.PartSize == 0 {
@@ -290,15 +295,27 @@ func (c *Config) resolve() error {
 	return nil
 }
 
+// encoderPrice is the working set admitted per Parquet encoder of the
+// provider of root (registry.Factory.EncoderBytes: its schema's widest
+// pages and the shared codec's state, parquetout.EncoderBytes), known
+// before the source is opened; parquetout.DefaultEncoderBytes for a
+// provider that states none.
+func encoderPrice(root string) int64 {
+	if f, err := registry.Lookup(root); err == nil && f.EncoderBytes > 0 {
+		return f.EncoderBytes
+	}
+	return parquetout.DefaultEncoderBytes
+}
+
 // admitEncoders is how many Parquet encoders the run's resources carry,
 // never fewer than one. Encoder memory is admitted apart from the row
-// budget but sized by it: a writer's working set (parquetout.EncoderBytes)
-// each within an allowance equal to the row budget, so a host given a
+// budget but sized by it: per encoder bytes (encoderPrice: one writer and
+// one codec state) each within an allowance equal to the row budget, so a host given a
 // larger budget for rows also runs more writers to drain them; and one
 // descriptor each beside the spill readers, the workers' connections and
 // spill writes, and a reserve (fds 0 when the limit is unknown).
-func admitEncoders(rowBudget int64, workers int, fds int64) int {
-	n := rowBudget / parquetout.EncoderBytes
+func admitEncoders(rowBudget, per int64, workers int, fds int64) int {
+	n := rowBudget / per
 	if fds > 0 {
 		n = min(n, fds-int64(order.MaxSpillReaders)-2*int64(workers)-fdReserve)
 	}
@@ -310,17 +327,17 @@ func admitEncoders(rowBudget int64, workers int, fds int64) int {
 // in flight any more, so the memory the workers' pages held beside the
 // row budget (listingPageBytes each) goes to writers instead, on top of
 // the allowance equal to the row budget; descriptors as admitEncoders
-// (the workers' idle connections stay open). Each writer costs
-// parquetout.EncoderBytes. 128 MiB and 64 workers carry 8, 256 workers
-// 16.
-func admitAfterListing(rowBudget int64, workers int, fds int64) int {
-	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, workers, fds)
+// (the workers' idle connections stay open). Each encoder costs per
+// (encoderPrice). 128 MiB and 64 workers carry 6 of the object stores'
+// schemas, 256 workers 12.
+func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
+	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, per, workers, fds)
 }
 
 // segmentWorkers caps the workers writing the tail as parallel parts
 // (order.Options.SegmentWorkers): each feeds one part's writer, so no more
 // than the encoders admitted after listing (their working set is that
-// admission's, parquetout.EncoderBytes each), and the order stage keeps
+// admission's, encoderPrice each), and the order stage keeps
 // them to one per spare processor. Each reads one spill frame at a time on
 // its own descriptor: the 16 spill descriptors reserved at admission
 // (order.MaxSpillReaders), plus what the limit leaves beside the workers'
@@ -356,7 +373,7 @@ func admit(c Config) int {
 	if c.Output.Text != nil {
 		return admitTextJobs(c.Limits.RowBudget)
 	}
-	return admitEncoders(c.Limits.RowBudget, c.Limits.Workers, fdLimit())
+	return admitEncoders(c.Limits.RowBudget, c.Limits.encoderBytes, c.Limits.Workers, fdLimit())
 }
 
 // textJobs is the compression jobs of a text output and why that many
@@ -409,7 +426,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
 	default:
 		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --row-budget %d MiB and the descriptor limit carry %d",
-			asked, int64(asked)*parquetout.EncoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
+			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
 		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression, Compressor: textJobs(cfg, asked)}
