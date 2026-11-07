@@ -150,7 +150,8 @@ no drainer and no spill: memory is the pages in flight and the ranges queued for
 creates no file (`TestCountOnlyHoldsNothing`). A stop reaches the providers through the emitter: every
 `Rows` call, empty ones included, and every `Child` returns the cause once the run has stopped, and a child
 handed over then is disposed, never expanded, so a range emitting only children (a wide local directory
-with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`). The report says so: `features.order` false, `spill` absent,
+with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`, with and without empty `Rows` batches
+between the children). The report says so: `features.order` false, `spill` absent,
 `max_buffered_bytes`, `peak_ahead_rows` and `frontier_stuck_max_ns` 0.
 
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
