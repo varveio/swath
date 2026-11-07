@@ -643,8 +643,10 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 
 // TestDurableEviction: a frame refused by the spill cap while a drained
 // certificate is retained evicts that certificate (never an undrained
-// file): its unlink returns the credit, through the flusher, and the waiter
-// can retry. (TestDurableLedgerFailureEvicts runs the same path in a run.)
+// file): its unlink returns the credit, through the flusher, and the
+// retried frame is admitted. Deterministic (no timing premise): the
+// drained certificate is held by hand and the cap set so the next frame is
+// refused; it passes GOMAXPROCS=1 -count=10. (TestDurableLedgerFailureEvicts runs the same path in a run.)
 func TestDurableEviction(t *testing.T) {
 	h := newHarness(t)
 	h.e.Span("r0001", "r0002", false)
@@ -679,6 +681,13 @@ func TestDurableEviction(t *testing.T) {
 	}
 	if _, err := h.root.Stat(filepath.Join(DurableDir, d.name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the evicted file stays: %v", err)
+	}
+	// Progress: the refused frame, retried on the credit, is admitted.
+	if err := sp.write(undrained, []schema.Row[tp]{{Key: "r0003/a"}}, false); err != nil {
+		t.Fatalf("the retry after the eviction's credit: %v", err)
+	}
+	if undrained.written != 1 {
+		t.Fatalf("%d rows written after the credit", undrained.written)
 	}
 }
 
