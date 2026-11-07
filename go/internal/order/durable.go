@@ -237,6 +237,7 @@ type durableStats struct {
 	RequestsSavedEst    atomic.Int64
 	AcceptedBytes       atomic.Int64
 	LedgerTruncatedFrom atomic.Int64
+	LedgerCut           atomic.Int64
 }
 
 // DurableReport is durableStats for the run report
@@ -266,6 +267,7 @@ type DurableReport struct {
 // DurableResume is a resume's account of the durable spill it found.
 type DurableResume struct {
 	LedgerDroppedBytes int64            `json:"ledger_dropped_bytes"`
+	LedgerCut          bool             `json:"ledger_cut"` // the prefix was cut at H records or 10,000 live certificates
 	Accepted           int64            `json:"accepted"`
 	AcceptedBytes      int64            `json:"accepted_bytes"`
 	Rejected           map[string]int64 `json:"rejected"`
@@ -296,7 +298,7 @@ func (c *Cache) Report() *DurableReport {
 		Retired:        map[string]int64{"published": s.RetiredPublished.Load(), "evicted": s.RetiredEvicted.Load(), "recovery": s.RetiredRecovery.Load()},
 		RetireDeferred: s.RetireDeferred.Load()}
 	if c.resumed {
-		r.Resume = &DurableResume{LedgerDroppedBytes: s.LedgerDroppedBytes.Load(), Accepted: s.Accepted.Load(), AcceptedBytes: s.AcceptedBytes.Load(),
+		r.Resume = &DurableResume{LedgerDroppedBytes: s.LedgerDroppedBytes.Load(), LedgerCut: s.LedgerCut.Load() > 0, Accepted: s.Accepted.Load(), AcceptedBytes: s.AcceptedBytes.Load(),
 			Rejected: map[string]int64{"missing": s.RejectedMissing.Load(), "corrupt": s.RejectedCorrupt.Load(), "foreign": s.RejectedForeign.Load(),
 				"codec": s.RejectedCodec.Load(), "overlap": s.RejectedOverlap.Load(), "budget": s.RejectedBudget.Load()},
 			Orphans: s.Orphans.Load(), ReplayedRows: s.ReplayedRows.Load(), ReplaySkippedRows: s.ReplaySkippedRows.Load(),

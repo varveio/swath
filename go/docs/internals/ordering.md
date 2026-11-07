@@ -374,9 +374,11 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   `TestDurableEviction`). A live-only durable file is unlinked when drained.
 - **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
   `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
-  every unlink): K from part records only; the ledger's prefix (at most 10,000 live
-  certificates, the largest cap any attempt has); the directory streamed, every file no record names
-  unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
+  every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
+  trusting the writer: the scan stops at H records, and before a sealed record that would make more than
+  10,000 certificates live (the largest cap any attempt has); the ledger is truncated there like a damaged
+  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`);
+  the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
   CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
   `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the
   header's limits and the hard ones before anything sized by them is allocated (zstd frames decoded under
@@ -400,7 +402,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
-  resume `resume.{ledger_dropped_bytes, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},
+  resume `resume.{ledger_dropped_bytes, ledger_cut, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},
   orphans, replayed_rows, replay_skipped_rows, gaps, requests_saved_est}` (requests saved at the engine's
   1,000-key page). `spill.durable_off` says why durable spill was off when it could have run. The engine's
   counters add `reuse.ranges`, `reuse.gaps` and `reuse.boundary_overfetch_keys` (keys a gap listed past its

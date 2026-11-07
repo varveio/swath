@@ -1100,3 +1100,76 @@ func TestDurableCodecRejected(t *testing.T) {
 		t.Fatalf("%d entries left in the durable directory", len(ents))
 	}
 }
+
+// TestDurableRecoveryBounds: recovery bounds its scan and its inventory by
+// the persisted format, whatever a checksum-valid ledger holds. A ledger
+// of more than 10,000 live sealed records is cut before the first record
+// past that (no cap could have admitted it), and one of more than H
+// records is cut at H: the scan reads at most H records, the inventory
+// holds at most 10,000 entries, the ledger is truncated there
+// (ledger_cut, ledger_dropped_bytes), and the files named after the cut
+// are orphans.
+func TestDurableRecoveryBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sealed, extra int // sealed records, then retirements of unknown files
+	}{
+		{"live", maxCertificates + 64, 0},
+		{"history", 10, historyCap + 64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, root, dir := newDurable(t)
+			c.Close()
+			var buf []byte
+			var named [][16]byte
+			for i := range tc.sealed {
+				d := &Cert{id: randomID(), cs: fmt.Sprintf("k%06d", 2*i), ce: fmt.Sprintf("k%06d", 2*i+1), captured: 1, last: fmt.Sprintf("k%06d", 2*i+1), bytes: 1}
+				buf = appendLedgerFrame(buf, ledgerRec{cert: d})
+				named = append(named, d.id)
+			}
+			for range tc.extra {
+				buf = appendLedgerFrame(buf, ledgerRec{cert: &Cert{id: randomID()}, retire: retireRecovery})
+			}
+			path := filepath.Join(dir, DurableDir, ledgerName)
+			lf, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lf.Write(buf)
+			lf.Close()
+			// A file named after the cut: an orphan.
+			last := fileName(named[len(named)-1])
+			root.WriteFile(filepath.Join(DurableDir, last), []byte("x"), 0o644)
+			r, err := newCache(root, nil, testUUID, "ident", "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := r.readLedger()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) > maxCertificates || r.hist > historyCap {
+				t.Fatalf("%d entries (bound %d), %d records scanned (bound %d)", len(entries), maxCertificates, r.hist, historyCap)
+			}
+			if r.st.LedgerCut.Load() == 0 || r.st.LedgerDroppedBytes.Load() == 0 {
+				t.Fatalf("not cut: dropped %d", r.st.LedgerDroppedBytes.Load())
+			}
+			fi, _ := os.Stat(path)
+			if fi.Size() != r.lend {
+				t.Fatalf("ledger %d bytes, prefix %d: not truncated", fi.Size(), r.lend)
+			}
+			if tc.name == "live" {
+				if _, ok := entries[named[len(named)-1]]; ok {
+					t.Fatal("a record past the 10,000th live certificate kept")
+				}
+				if err := r.sweep(entries); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := root.Stat(filepath.Join(DurableDir, last)); !errors.Is(err, os.ErrNotExist) || r.st.Orphans.Load() != 1 {
+					t.Fatalf("the file past the cut is not an orphan: %v, %d orphans", err, r.st.Orphans.Load())
+				}
+			}
+			r.ledger.Close()
+		})
+	}
+}

@@ -143,15 +143,14 @@ func (c *Cache) newLedger() error {
 
 // entry is a sealed-not-retired ledger record.
 type entry struct {
-	id          [16]byte
-	cs, ce      string
-	ceOpen      bool
-	rows        int64
-	last        string
-	bytes       int64
-	crc         uint32
-	order       int // the record's position (ties)
-	overflowing bool
+	id     [16]byte
+	cs, ce string
+	ceOpen bool
+	rows   int64
+	last   string
+	bytes  int64
+	crc    uint32
+	order  int // the record's position (ties)
 }
 
 // RecoverDurable is a resume's recovery of its durable spill, single
@@ -197,6 +196,14 @@ func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec strin
 // ledger is truncated to the prefix and synced before anything is
 // appended). A missing, foreign or unreadable header starts a new ledger,
 // and every file becomes an orphan (nil entries).
+//
+// The prefix is also cut where the history no writer could have made
+// begins: at H records (a writer reserves within H), and at a sealed
+// record that would make more than 10,000 certificates live at once (the
+// largest cap any attempt has). The scan and the inventory are bounded by
+// the persisted format, not by trusting the writer's admission; what is
+// cut is dropped like a damaged tail (its files are orphans, their
+// intervals relisted), which is always safe (ledger_cut).
 func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	fi, err := dataset.NeedIn(c.root, c.rel(ledgerName), false, true)
 	if err != nil {
@@ -235,38 +242,40 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		return nil, c.newLedger()
 	}
 	entries := map[[16]byte]*entry{}
-	live, records := 0, 0
+	records := 0
 	for {
 		at := off
+		if records >= historyCap {
+			c.st.LedgerCut.Add(1) // H records read: nothing after is history
+			break
+		}
 		typ, body, ok := next()
 		if !ok {
 			off = at
 			break
 		}
-		switch e, ok := parseRecord(typ, body); {
-		case !ok:
+		e, ok := parseRecord(typ, body)
+		if !ok {
 			off = at
-		case typ == ledgerRetired:
+			break
+		}
+		if typ == ledgerRetired {
 			records++
-			if _, ok := entries[e.id]; ok {
-				delete(entries, e.id)
-				live--
-			}
-			continue
-		default:
-			records++
-			if _, dup := entries[e.id]; dup {
-				continue // a second seal of one file: the first stands
-			}
-			e.order = records
-			if live >= maxCertificates {
-				e.overflowing = true
-			}
-			entries[e.id] = e
-			live++
+			delete(entries, e.id)
 			continue
 		}
-		break
+		if _, dup := entries[e.id]; dup {
+			records++
+			continue // a second seal of one file: the first stands
+		}
+		if len(entries) >= maxCertificates {
+			off = at // more live certificates than any cap: cut here
+			c.st.LedgerCut.Add(1)
+			break
+		}
+		records++
+		e.order = records
+		entries[e.id] = e
 	}
 	if dropped := size - off; dropped > 0 {
 		c.st.LedgerDroppedBytes.Add(dropped)
@@ -345,10 +354,8 @@ func (c *Cache) sweep(entries map[[16]byte]*entry) error {
 			if name == ledgerName {
 				continue
 			}
-			if id, ok := parseName(name); ok {
-				if e := entries[id]; e != nil && !e.overflowing {
-					continue
-				}
+			if id, ok := parseName(name); ok && entries[id] != nil {
+				continue
 			}
 			rel := c.rel(name)
 			if _, err := dataset.NeedIn(c.root, rel, false, false); err != nil {
@@ -405,10 +412,6 @@ func (c *Cache) classify(entries map[[16]byte]*entry) error {
 	var keep []*Cert
 	var retire []*Cert
 	for _, e := range entries {
-		if e.overflowing {
-			c.st.RejectedBudget.Add(1)
-			continue // unlinked by sweep; its record retired below
-		}
 		d := &Cert{id: e.id, name: fileName(e.id), cs: e.cs, ce: e.ce, ceOpen: e.ceOpen, captured: e.rows, last: e.last,
 			bytes: e.bytes, crc: e.crc, certified: true, reused: true}
 		why, err := c.validate(d)
@@ -432,11 +435,6 @@ func (c *Cache) classify(entries map[[16]byte]*entry) error {
 			retire = append(retire, d)
 		default:
 			keep = append(keep, d)
-		}
-	}
-	for _, e := range entries {
-		if e.overflowing {
-			retire = append(retire, &Cert{id: e.id, name: fileName(e.id)})
 		}
 	}
 	slices.SortFunc(keep, func(a, b *Cert) int { return strings.Compare(a.cs, b.cs) })
