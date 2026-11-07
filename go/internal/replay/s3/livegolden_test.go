@@ -356,3 +356,25 @@ func TestLiveNULIsRefused(t *testing.T) {
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><Delimiter>\x00</Delimiter><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
 }
+
+// Key parameters are read as UTF-8 with replacement: S3 answered
+// start-after=P%FF with <StartAfter>P�</StartAfter> (encoded
+// %EF%BF%BD) and nothing after it under P, %FF%FF with two replacements,
+// %C3 and %F0%9F%98 (truncated) and %ED%A0%80 (an encoded surrogate)
+// with one, %E2%82A with one and the A, and prefix=P%FF and delimiter=%FF
+// with the replacement echoed.
+func TestLiveKeyParametersAreUTF8(t *testing.T) {
+	const r = "%EF%BF%BD"
+	wantLivePage(t, "list-type=2&prefix=r/&start-after=r/%FF&max-keys=2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><StartAfter>r/�</StartAfter><KeyCount>0</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>false</IsTruncated>", "")
+	for in, out := range map[string]string{"%FF%FF": r + r, "%C3": r, "%F0%9F%98": r, "%ED%A0%80": r, "%E2%82A": r + "A"} {
+		wantLivePage(t, "list-type=2&start-after=u"+in+"&max-keys=2&encoding-type=url",
+			"<Name>bkt</Name><Prefix></Prefix><StartAfter>u"+out+"</StartAfter><KeyCount>0</KeyCount><MaxKeys>2</MaxKeys>"+
+				"<EncodingType>url</EncodingType><IsTruncated>false</IsTruncated>", "")
+	}
+	wantLivePage(t, "list-type=2&prefix=r/%FF&max-keys=2&encoding-type=url",
+		"<Name>bkt</Name><Prefix>r/"+r+"</Prefix><KeyCount>0</KeyCount><MaxKeys>2</MaxKeys><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated>", "")
+	wantLivePage(t, "list-type=2&prefix=r/&delimiter=%FF&max-keys=2&encoding-type=url",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken><KeyCount>2</KeyCount><MaxKeys>2</MaxKeys>"+
+			"<Delimiter>"+r+"</Delimiter><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated>", "O:r/k01 O:r/k02")
+}

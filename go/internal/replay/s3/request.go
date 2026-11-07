@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // MaxPageSize is the most entries one page holds, whatever max-keys asks:
@@ -81,6 +82,22 @@ func (q query) has(name string) bool {
 	return ok
 }
 
+// utf8 is a key parameter (prefix, delimiter, start-after) as S3 reads
+// it: decoded as UTF-8, each malformed sequence one U+FFFD, so
+// start-after=%FF bounds and echoes as U+FFFD (TestLiveKeyParametersAreUTF8).
+// The grouping of malformed bytes into replacements is decodeText's,
+// which matched every sequence probed. nil when absent or empty.
+func (q query) utf8(name string) []byte {
+	v := q[name]
+	if len(v) == 0 {
+		return nil
+	}
+	if utf8.Valid(v) {
+		return v
+	}
+	return []byte(decodeText(v))
+}
+
 func (q query) text(name string) (string, bool) {
 	v, ok := q[name]
 	if !ok {
@@ -101,9 +118,9 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	}
 	r := &Request{
 		Bucket:     bucket,
-		Prefix:     nonEmpty(q["prefix"]),
-		Delimiter:  nonEmpty(q["delimiter"]),
-		StartAfter: nonEmpty(q["start-after"]),
+		Prefix:     q.utf8("prefix"),
+		Delimiter:  q.utf8("delimiter"),
+		StartAfter: q.utf8("start-after"),
 	}
 	_, r.StartAfterSet = q["start-after"]
 	r.Token, r.TokenSet = q.text("continuation-token")
@@ -138,13 +155,6 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	owner, _ := q.text("fetch-owner")
 	r.FetchOwner = strings.EqualFold(owner, "true")
 	return r, nil
-}
-
-func nonEmpty(v []byte) []byte {
-	if len(v) == 0 {
-		return nil
-	}
-	return v
 }
 
 func maxKeys(q query) (int32, error) {
