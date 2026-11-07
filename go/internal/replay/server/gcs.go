@@ -309,7 +309,11 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	}
 	defer out.Close()
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// A client that leaves does not cancel its page: the page is read,
+	// rendered and counted as served, and only its write fails, as the
+	// replay wire contract's server does (TestClientGoneFinishesThePage).
+	// Shutdown still cancels it.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	defer context.AfterFunc(s.stopCtx, cancel)()
 

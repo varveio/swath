@@ -239,7 +239,7 @@ others appear on first use.
 |---|---|---|
 | `http.requests`, `http.errors`, `http.request.latency` | present, from startup | every answer on the serving port; `errors` the 5xx. The latency runs from arrival to the start of the write. The bench scripts sum `http.requests` `count` |
 | `request.latency{shape}` | present, from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
-| `request.stage.latency{protocol,stage}` | present | `page`, `render`, `delay`, `write` of a page; an S3 or GCS error answer has no write stage (the Azure route records one) |
+| `request.stage.latency{protocol,stage}` | present | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
 | `fixture.list.latency`, `serving.path{mode}` | present, from startup | one S3 pager operation |
 | `serving.fallback{reason}` | absent | there is no other serving mode to fall back to: a fixture sorted serving refuses ends startup with the reason (the Java server's `--serving-mode sorted` does the same and records nothing) |
 | `serving.refused{reason}` | present | `row_group_disorder`, counted for every read that finds it, a range read or a rollup (the Java server counts the rollup's only) |
@@ -279,10 +279,10 @@ others appear on first use.
   server instead, below), the DuckDB serving mode, and the Java server's
   `swath_replay_metrics` summary line at shutdown (logged below the Java launcher's default log level; poll the
   endpoint instead).
-- A client that disconnects while its page is being read cancels the read: the server answers it `500 internal`
-  (nobody receives it), logs it as `replay failed to serve request:` with the cancellation, and counts it in
-  `http.errors`. The Java server finishes such a page and counts it as served. A client that leaves while its
-  request sleeps in an injected delay is not noticed: the delay runs out and the write fails without a log line
+- A client that disconnects while its page is being read does not cancel the read: the page is read, rendered and
+  counted as served (`2xx`, nothing in `http.errors`, no log line), and only its write fails, as on the Java
+  server (`TestClientGoneFinishesThePage`). Shutdown still interrupts it. A client that leaves while its request
+  sleeps in an injected delay is not noticed either: the delay runs out and the write fails without a log line
   (`bench/resume_storm.sh`, which kills a listing with 64 requests in flight, leaves the server log clean).
 
 ## With the bench scripts

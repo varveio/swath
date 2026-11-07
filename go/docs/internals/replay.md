@@ -185,7 +185,9 @@ are created when the server starts, so a scrape tells a zero from a meter that i
   (`Config.IndexLoad`, `Config.IndexEntries`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on
   the Java server, whose request meter stops when the response is handed to the write
-  (`TestRequestMeterSpans`).
+  (`TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`). A page's reads run under a context that a client
+  disconnect does not cancel, only shutdown, so a page whose client left is finished and counted as served
+  (`TestClientGoneFinishesThePage`).
 
 ## The differential driver
 
@@ -246,7 +248,7 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 | serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`, `TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`, `TestRejectsAmbiguousTargets`, `TestDisorderedFixtureNamesOnlyThePart`, `TestDisorderedPartOverHTTP` |
 | sorted serving | `server` `sorted_differential_test.go` (eleven cases of the contract's `SortedServingFullDifferentialTest`) |
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
-| meters | `server` `TestMeterSetMatchesTheContract` (names, types and tags after a three-route mix against `testdata/meters.txt`, the Java scrape's set; the bench scripts' `http.requests` extraction), `TestStoreMetersFollowTheReads`, `TestRequestMeterSpans`, `TestDisorderedPartOverHTTP` (`serving.refused`); `metrics` `TestTimerWindowCoversTheLastTwoMinutes`, `TestHistogramBuckets`, `TestCounterFunc`; `sortedparquet` `TestFileCacheBoundsHandles` and `TestCacheWaitEndsWithContextAndClose` (evictions, waits) |
+| meters | `server` `TestMeterSetMatchesTheContract` (names, types and tags after a three-route mix against `testdata/meters.txt`, the Java scrape's set; the bench scripts' `http.requests` extraction), `TestStoreMetersFollowTheReads`, `TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`, `TestClientGoneFinishesThePage`, `TestDisorderedPartOverHTTP` (`serving.refused`); `metrics` `TestTimerWindowCoversTheLastTwoMinutes`, `TestHistogramBuckets`, `TestCounterFunc`; `sortedparquet` `TestFileCacheBoundsHandles` and `TestCacheWaitEndsWithContextAndClose` (evictions, waits) |
 | diagnostics | `server` `TestSlowRequestLogLine`; `javanum` `TestFormatDouble` |
 | resource bounds under load (`SWATH_REPLAY_LOAD=1`) | `server` `TestLoadRequestCeilingUnderFaultProxy`, `TestLoadReadersBoundPageDecodes`, `TestLoadNoOverrunAtSixtyFourWalks`; `cmd/swath-replay` `TestServeWithinADescriptorLimit` (default suite) |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSigtermWithActiveWorkIsBoundedAndIdempotent`, `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
