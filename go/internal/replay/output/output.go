@@ -312,6 +312,39 @@ func (o *Output) put(b []byte) {
 	}
 }
 
+// Room is the bytes the current chunk can still take: appending at most
+// that many, in any units, is admitted (a chunk never reaches past the
+// per-response cap) and allocates nothing. It is 0 before the first chunk
+// and after a refusal.
+func (o *Output) Room() int {
+	if o.closed {
+		panic("output: response output is closed")
+	}
+	if o.frozen {
+		panic("output: response output is frozen")
+	}
+	n := len(o.chunks)
+	if n == 0 || o.err != nil {
+		return 0
+	}
+	return cap(o.chunks[n-1]) - len(o.chunks[n-1])
+}
+
+// AppendRoom appends b, which must fit in Room, at once: the bytes and the
+// state are those of appending it in any units. onePass and fallback add
+// to PercentPaths the PercentEncoded values b holds, as those calls would
+// have counted them.
+func (o *Output) AppendRoom(b []byte, onePass, fallback int) {
+	if len(b) > o.Room() {
+		panic("output: append exceeds the chunk's room")
+	}
+	n := len(o.chunks) - 1
+	o.chunks[n] = append(o.chunks[n], b...)
+	o.length += len(b)
+	o.onePass += onePass
+	o.fallback += fallback
+}
+
 // Byte appends one byte.
 func (o *Output) Byte(c byte) {
 	if !o.ensure(1) {
@@ -332,9 +365,13 @@ func (o *Output) Write(b []byte) {
 
 // ASCII appends s, which callers guarantee is ASCII (tags and fixed text).
 func (o *Output) ASCII(s string) {
-	if !o.ensure(len(s)) {
-		return
+	if o.ensure(len(s)) {
+		putText(o, s)
 	}
+}
+
+// putText copies s, already admitted, chunk by chunk.
+func putText[T string | []byte](o *Output, s T) {
 	for len(s) > 0 {
 		i := o.writable()
 		if i < 0 {
@@ -365,7 +402,12 @@ func (o *Output) ThreeDigits(v int) {
 // non-ASCII byte is admitted whole; otherwise each entity and each byte is
 // admitted on its own, so a refusal lands on the same byte as the replay
 // wire contract's.
-func (o *Output) Escaped(s string) {
+func (o *Output) Escaped(s string) { escaped(o, s) }
+
+// EscapedBytes is Escaped over bytes.
+func (o *Output) EscapedBytes(b []byte) { escaped(o, b) }
+
+func escaped[T string | []byte](o *Output, s T) {
 	safe := true
 	for i := 0; i < len(s) && safe; i++ {
 		switch c := s[i]; {
@@ -374,7 +416,9 @@ func (o *Output) Escaped(s string) {
 		}
 	}
 	if safe {
-		o.ASCII(s)
+		if o.ensure(len(s)) {
+			putText(o, s)
+		}
 		return
 	}
 	for i := 0; i < len(s) && o.err == nil; i++ {
@@ -411,6 +455,19 @@ var urlSafe = func() (t [256]bool) {
 	t['-'], t['_'], t['.'], t['/'] = true, true, true, true
 	return t
 }()
+
+// AppendPercentEncoded appends v percent-encoded as PercentEncoded writes
+// it.
+func AppendPercentEncoded(dst, v []byte) []byte {
+	for _, b := range v {
+		if urlSafe[b] {
+			dst = append(dst, b)
+		} else {
+			dst = append(dst, '%', hexDigits[b>>4], hexDigits[b&0x0f])
+		}
+	}
+	return dst
+}
 
 // PercentEncoded appends v percent-encoded (every byte but A-Z a-z 0-9
 // - _ . / as %XX, upper-case hex). When three bytes per input byte fit in

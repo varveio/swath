@@ -27,6 +27,15 @@ const replacement = "�"
 // encoded surrogate (ED A0..BF xx) is one replacement for all three bytes,
 // and a truncated sequence at the very end of the input is one replacement
 // that consumes what remains of it.
+// decodeString is decodeText over a string, without a copy when it is
+// valid UTF-8.
+func decodeString(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return decodeText([]byte(s))
+}
+
 func decodeText(raw []byte) string {
 	if utf8.Valid(raw) { // utf8.Valid also rejects encoded surrogates
 		return string(raw)
