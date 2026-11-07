@@ -5,11 +5,13 @@ package s3
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -176,4 +178,63 @@ func TestLastModifiedYears(t *testing.T) {
 	if got := string(ts.appendMillis(nil, 253402300800_123_999)); got != "+10000-01-01T00:00:00.123Z" {
 		t.Errorf("milliseconds: %s", got)
 	}
+}
+
+// TestOneKeyAndEmptyPagesUseSmallFirstChunks is the contract's
+// actualS3OneKeyAndEmptyPagesUseSmallPostPageFirstChunks: a max-keys=1000
+// request reserves for a full page before paging, but a page of one key or
+// none renders into a single 4 KiB chunk and gives the rest back.
+func TestOneKeyAndEmptyPagesUseSmallFirstChunks(t *testing.T) {
+	for _, keys := range [][]string{{"a"}, nil} {
+		p := pager(keys...)
+		req, err := ParseRequest("bucket", "list-type=2&max-keys=1000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		budget := output.NewBudget(1<<20, nil)
+		o, err := output.New(budget, EstimateSize(req.PageSize()), 64<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if budget.Charged() != 320_512 {
+			t.Errorf("reserved %d", budget.Charged())
+		}
+		res := list(t, p, req)
+		o.SetFirstChunkHint(EstimateSize(len(res.Entries)))
+		RenderList(o, res)
+		n := 0
+		for _, v := range o.Body() {
+			n += len(v)
+		}
+		if o.Err() != nil || n >= 4096 || o.Capacity() != 4096 || budget.Charged() != 4096 {
+			t.Errorf("%d keys: err %v body %d capacity %d charged %d", len(keys), o.Err(), n, o.Capacity(), budget.Charged())
+		}
+		o.Close()
+		if budget.Charged() != 0 {
+			t.Errorf("charged %d after close", budget.Charged())
+		}
+	}
+}
+
+// TestRenderStopsAtTheCap renders a thousand ~1 KiB keys against an 8 KiB
+// cap: rendering stops at the cap with response_too_large, and nothing past
+// the cap was ever charged (so nothing past it was allocated).
+func TestRenderStopsAtTheCap(t *testing.T) {
+	keys := make([]string, 1000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%04d/%s", i, strings.Repeat("k ", 500))
+	}
+	req, _ := ParseRequest("bucket", "list-type=2&max-keys=1000&encoding-type=url")
+	res := list(t, pager(keys...), req)
+	budget := output.NewBudget(1<<30, nil)
+	o, err := output.New(budget, min(8192, EstimateSize(req.PageSize())), 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.SetFirstChunkHint(EstimateSize(len(res.Entries)))
+	RenderList(o, res)
+	if o.Err() != output.ErrTooLarge || budget.Peak() != 8192 || o.Capacity() != 8192 || o.Len() > 8192 {
+		t.Errorf("err %v peak %d capacity %d len %d", o.Err(), budget.Peak(), o.Capacity(), o.Len())
+	}
+	o.Close()
 }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
 
@@ -26,96 +27,118 @@ const (
 )
 
 // EstimateSize is the response size reserved for a page of n entries
-// before it is rendered.
+// before it is read, and the first chunk's size once it is.
 func EstimateSize(n int) int { return max(4096, 512+n*bytesPerRow) }
 
-// AppendList appends the ListBucketResult document for res.
+// AppendList appends the ListBucketResult document for res, rendered
+// outside any budget.
 func AppendList(dst []byte, res *Result) []byte {
+	o := output.Standalone(EstimateSize(len(res.Entries)))
+	RenderList(o, res)
+	for _, v := range o.Body() {
+		dst = append(dst, v...)
+	}
+	o.Close()
+	return dst
+}
+
+// RenderList renders the ListBucketResult document for res into o; o.Err
+// reports a refusal (the per-response cap or the budget), which stops it
+// at the first byte that does not fit. Each append is the same unit the
+// replay wire contract's renderer admits at once, so a refusal falls on
+// the same byte.
+func RenderList(o *output.Output, res *Result) {
 	req := res.Request
-	dst = append(dst, xmlDecl...)
-	dst = append(dst, listOpen...)
-	dst = textElement(dst, "Name", req.Bucket)
-	dst = byteElement(dst, "Prefix", req.Prefix, req.EncodingURL)
+	o.ASCII(xmlDecl)
+	o.ASCII(listOpen)
+	textElement(o, "Name", req.Bucket)
+	byteElement(o, "Prefix", req.Prefix, req.EncodingURL)
 	// With both a token and a start-after the pager resumed at the token,
 	// so the response echoes the token and omits the start-after it
 	// ignored.
 	if req.HasToken() {
-		dst = textElement(dst, "ContinuationToken", req.Token)
+		textElement(o, "ContinuationToken", req.Token)
 	} else if req.StartAfter != nil {
-		dst = byteElement(dst, "StartAfter", req.StartAfter, req.EncodingURL)
+		byteElement(o, "StartAfter", req.StartAfter, req.EncodingURL)
 	}
 	if res.NextToken != "" {
-		dst = textElement(dst, "NextContinuationToken", res.NextToken)
+		textElement(o, "NextContinuationToken", res.NextToken)
 	}
-	dst = intElement(dst, "KeyCount", int64(len(res.Entries)))
-	dst = intElement(dst, "MaxKeys", int64(req.MaxKeys))
+	intElement(o, "KeyCount", int64(len(res.Entries)))
+	intElement(o, "MaxKeys", int64(req.MaxKeys))
 	if len(req.Delimiter) > 0 {
-		dst = byteElement(dst, "Delimiter", req.Delimiter, req.EncodingURL)
+		byteElement(o, "Delimiter", req.Delimiter, req.EncodingURL)
 	}
 	if req.EncodingURL {
-		dst = append(dst, "<EncodingType>url</EncodingType>"...)
+		textElement(o, "EncodingType", "url")
 	}
 	if res.Truncated {
-		dst = append(dst, "<IsTruncated>true</IsTruncated>"...)
+		fixedElement(o, "IsTruncated", "true")
 	} else {
-		dst = append(dst, "<IsTruncated>false</IsTruncated>"...)
+		fixedElement(o, "IsTruncated", "false")
 	}
 	var ts timestamps
 	for _, e := range res.Entries {
+		if o.Err() != nil {
+			return
+		}
 		if e.Object != nil {
-			dst = contents(dst, e.Object, req, &ts)
+			contents(o, e.Object, req, &ts)
 		}
 	}
 	for _, e := range res.Entries {
+		if o.Err() != nil {
+			return
+		}
 		if e.Object == nil {
-			dst = append(dst, "<CommonPrefixes>"...)
-			dst = byteElement(dst, "Prefix", e.CommonPrefix, req.EncodingURL)
-			dst = append(dst, "</CommonPrefixes>"...)
+			o.ASCII("<CommonPrefixes>")
+			byteElement(o, "Prefix", e.CommonPrefix, req.EncodingURL)
+			o.ASCII("</CommonPrefixes>")
 		}
 	}
-	return append(dst, "</ListBucketResult>"...)
+	o.ASCII("</ListBucketResult>")
 }
 
-func contents(dst []byte, o *store.Object, req *Request, ts *timestamps) []byte {
-	dst = append(dst, "<Contents>"...)
-	dst = byteElement(dst, "Key", o.Key, req.EncodingURL)
-	dst = append(dst, "<LastModified>"...)
+func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps) {
+	o.ASCII("<Contents>")
+	byteElement(o, "Key", obj.Key, req.EncodingURL)
+	o.ASCII("<LastModified>")
 	var micros int64 // a null time renders as the epoch
-	if o.LastModified != nil {
-		micros = o.LastModified.UnixMicro()
+	if obj.LastModified != nil {
+		micros = obj.LastModified.UnixMicro()
 	}
-	dst = ts.appendMillis(dst, micros)
-	dst = append(dst, "</LastModified>"...)
-	if o.ETag != nil {
-		dst = append(dst, "<ETag>&quot;"...)
-		dst = appendEscaped(dst, decodeText([]byte(*o.ETag)))
-		dst = append(dst, "&quot;</ETag>"...)
+	ts.render(o, micros)
+	o.ASCII("</LastModified>")
+	if obj.ETag != nil {
+		o.ASCII("<ETag>&quot;")
+		o.Escaped(decodeText([]byte(*obj.ETag)))
+		o.ASCII("&quot;</ETag>")
 	}
-	if o.ChecksumAlgorithm != nil {
-		dst = textElement(dst, "ChecksumAlgorithm", *o.ChecksumAlgorithm)
+	if obj.ChecksumAlgorithm != nil {
+		textElement(o, "ChecksumAlgorithm", *obj.ChecksumAlgorithm)
 	}
-	if o.ChecksumType != nil {
-		dst = textElement(dst, "ChecksumType", *o.ChecksumType)
+	if obj.ChecksumType != nil {
+		textElement(o, "ChecksumType", *obj.ChecksumType)
 	}
 	var size int64 // a null size renders as 0
-	if o.Size != nil {
-		size = *o.Size
+	if obj.Size != nil {
+		size = *obj.Size
 	}
-	dst = intElement(dst, "Size", size)
-	if o.StorageClass != nil {
-		dst = textElement(dst, "StorageClass", *o.StorageClass)
+	intElement(o, "Size", size)
+	if obj.StorageClass != nil {
+		textElement(o, "StorageClass", *obj.StorageClass)
 	}
-	if req.FetchOwner && (o.OwnerID != nil || o.OwnerDisplayName != nil) {
-		dst = append(dst, "<Owner>"...)
-		if o.OwnerID != nil {
-			dst = textElement(dst, "ID", *o.OwnerID)
+	if req.FetchOwner && (obj.OwnerID != nil || obj.OwnerDisplayName != nil) {
+		o.ASCII("<Owner>")
+		if obj.OwnerID != nil {
+			textElement(o, "ID", *obj.OwnerID)
 		}
-		if o.OwnerDisplayName != nil {
-			dst = textElement(dst, "DisplayName", *o.OwnerDisplayName)
+		if obj.OwnerDisplayName != nil {
+			textElement(o, "DisplayName", *obj.OwnerDisplayName)
 		}
-		dst = append(dst, "</Owner>"...)
+		o.ASCII("</Owner>")
 	}
-	return append(dst, "</Contents>"...)
+	o.ASCII("</Contents>")
 }
 
 // AppendError appends the S3 error document. resource is the request path
@@ -123,47 +146,70 @@ func contents(dst []byte, o *store.Object, req *Request, ts *timestamps) []byte 
 func AppendError(dst []byte, e *Error, resource string) []byte {
 	dst = append(dst, xmlDecl...)
 	dst = append(dst, "<Error>"...)
-	dst = textElement(dst, "Code", e.Code)
-	dst = textElement(dst, "Message", e.Message)
-	dst = textElement(dst, "Resource", resource)
-	dst = textElement(dst, "RequestId", requestID)
+	dst = appendTextElement(dst, "Code", e.Code)
+	dst = appendTextElement(dst, "Message", e.Message)
+	dst = appendTextElement(dst, "Resource", resource)
+	dst = appendTextElement(dst, "RequestId", requestID)
 	return append(dst, "</Error>"...)
 }
 
-func open(dst []byte, name string) []byte {
-	dst = append(dst, '<')
-	dst = append(dst, name...)
-	return append(dst, '>')
+// The element helpers admit the opening tag's three parts, the value and
+// the closing tag separately, as the contract's renderer does.
+
+func openTag(o *output.Output, name string) {
+	o.Byte('<')
+	o.ASCII(name)
+	o.Byte('>')
 }
 
-func closeTag(dst []byte, name string) []byte {
-	dst = append(dst, "</"...)
-	dst = append(dst, name...)
-	return append(dst, '>')
+func closeTag(o *output.Output, name string) {
+	o.ASCII("</")
+	o.ASCII(name)
+	o.Byte('>')
 }
 
-func textElement(dst []byte, name, value string) []byte {
-	dst = open(dst, name)
-	dst = appendEscaped(dst, decodeText([]byte(value)))
-	return closeTag(dst, name)
+func textElement(o *output.Output, name, value string) {
+	openTag(o, name)
+	o.Escaped(decodeText([]byte(value)))
+	closeTag(o, name)
 }
 
-func intElement(dst []byte, name string, v int64) []byte {
-	dst = open(dst, name)
-	dst = strconv.AppendInt(dst, v, 10)
-	return closeTag(dst, name)
+func fixedElement(o *output.Output, name, value string) {
+	openTag(o, name)
+	o.ASCII(value)
+	closeTag(o, name)
+}
+
+func intElement(o *output.Output, name string, v int64) {
+	openTag(o, name)
+	o.Int(v)
+	closeTag(o, name)
 }
 
 // byteElement renders raw key bytes: percent-encoded for encoding-type=url,
 // otherwise as text (malformed UTF-8 replaced) with XML escaping.
-func byteElement(dst []byte, name string, raw []byte, encoded bool) []byte {
-	dst = open(dst, name)
-	if encoded {
-		dst = AppendPercentEncoded(dst, raw)
-	} else {
-		dst = appendEscaped(dst, decodeText(raw))
+func byteElement(o *output.Output, name string, raw []byte, encoded bool) {
+	openTag(o, name)
+	if raw != nil {
+		if encoded {
+			o.PercentEncoded(raw)
+		} else {
+			o.Escaped(decodeText(raw))
+		}
 	}
-	return closeTag(dst, name)
+	closeTag(o, name)
+}
+
+// appendTextElement and appendEscaped build the small error document, which
+// is rendered outside the budget.
+func appendTextElement(dst []byte, name, value string) []byte {
+	dst = append(dst, '<')
+	dst = append(dst, name...)
+	dst = append(dst, '>')
+	dst = appendEscaped(dst, decodeText([]byte(value)))
+	dst = append(dst, "</"...)
+	dst = append(dst, name...)
+	return append(dst, '>')
 }
 
 // appendEscaped escapes the five XML metacharacters and copies every other
@@ -200,14 +246,29 @@ type timestamps struct {
 // 2006-01-02T15:04:05.000Z, rounding toward the earlier millisecond (so
 // one microsecond before the epoch is 1969-12-31T23:59:59.999Z).
 func (t *timestamps) appendMillis(dst []byte, epochMicros int64) []byte {
+	sec := t.prefixFor(epochMicros)
+	dst = append(dst, t.prefix...)
+	ms := (epochMicros - sec*1_000_000) / 1000
+	return append(dst, byte('0'+ms/100), byte('0'+ms/10%10), byte('0'+ms%10), 'Z')
+}
+
+// render writes the same timestamp into o.
+func (t *timestamps) render(o *output.Output, epochMicros int64) {
+	sec := t.prefixFor(epochMicros)
+	o.ASCII(string(t.prefix))
+	o.ThreeDigits(int((epochMicros - sec*1_000_000) / 1000))
+	o.Byte('Z')
+}
+
+// prefixFor caches the calendar prefix of epochMicros's second and returns
+// the second.
+func (t *timestamps) prefixFor(epochMicros int64) int64 {
 	sec := floorDiv(epochMicros, 1_000_000)
 	if t.prefix == nil || sec != t.second {
 		t.second = sec
 		t.prefix = appendCalendarSecond(t.prefix[:0], sec)
 	}
-	dst = append(dst, t.prefix...)
-	ms := (epochMicros - sec*1_000_000) / 1000
-	return append(dst, byte('0'+ms/100), byte('0'+ms/10%10), byte('0'+ms%10), 'Z')
+	return sec
 }
 
 // appendCalendarSecond appends the UTC calendar second as
