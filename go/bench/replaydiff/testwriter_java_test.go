@@ -59,11 +59,7 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	jp, err := startServer(context.Background(), "java", java, serveArgs(fixture, "bkt", "--parquet-connections 2 --protocols s3"), filepath.Join(dir, "java.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer jp.stop()
+	jp := startJava(t, java, serveArgs(fixture, "bkt", "--parquet-connections 2 --protocols s3"), filepath.Join(dir, "java.log"))
 	st, _, err := store.Open(context.Background(), fixture, store.Options{Readers: 2})
 	if err != nil {
 		t.Fatal(err)
