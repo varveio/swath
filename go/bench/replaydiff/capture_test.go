@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -594,5 +595,72 @@ func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
 			t.Errorf("replay: %s %s", r.Name, r.Detail)
 		}
 		t.Errorf("replay: %d failed, documented %q", rep.Failed, rep.Residuals)
+	}
+}
+
+// TestCaptureTokenIssuedByTwoScopes: a provider can issue the same token
+// to requests of different scope (a GCS token names the object it ends
+// at), where the Go server's tokens differ and each is refused with the
+// other's scope. Two walks whose first pages issue one token, their
+// pages interleaved, each continue with the Go token their own first
+// page issued, and pass.
+func TestCaptureTokenIssuedByTwoScopes(t *testing.T) {
+	keys := liveKeys()
+	re := regexp.MustCompile(`("nextPageToken":")([^"]*)"`)
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), tokenParam: "pageToken", tokenRe: re,
+		extra: http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}}, tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	defer live.Close()
+	path := "/storage/v1/b/bkt/o"
+	a := captureWalk(t, live.URL, path, "prefix=data/small/&maxResults=3", "pageToken", gcsNextToken, false)
+	b := captureWalk(t, live.URL, path, "prefix=data/tree/&maxResults=3", "pageToken", gcsNextToken, false)
+	same := func(w []capturedExchange) {
+		tok := gcsNextToken([]byte(*w[0].Response.Body))
+		body := strings.Replace(*w[0].Response.Body, tok, "SAME", 1)
+		w[0].Response.Body = &body
+		w[0].Response.Headers = slices.DeleteFunc(w[0].Response.Headers, func(h capturedHeader) bool { return h.Name == "Content-Length" })
+		w[1].Request.Query = strings.Replace(w[1].Request.Query, "pageToken="+campaignEscape(tok, ""), "pageToken=SAME", 1)
+	}
+	same(a)
+	same(b)
+	xs := []capturedExchange{a[0], b[0], a[1], b[1]}
+	for i := range xs {
+		xs[i].Seq = uint64(i + 1)
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+	if rep.Passed != 4 || rep.Failed != 0 {
+		for _, r := range rep.Results {
+			t.Errorf("%s: %s %s", r.Name, r.Error, r.Detail)
+		}
+		t.Fatalf("%d passed, %d failed", rep.Passed, rep.Failed)
+	}
+}
+
+// TestTokenMapLookup: a token issued from several requests resolves to
+// the entry of the request's own walk (the same query), else to the one
+// its annotated source case issued, else to the latest; re-issuing from
+// the same request replaces its entry and adds none.
+func TestTokenMapLookup(t *testing.T) {
+	tm := &tokenMap{m: map[string][]capturedToken{}}
+	tm.set("T", capturedToken{got: "a", query: "q=a", caseID: "walk a"})
+	tm.set("T", capturedToken{got: "b", query: "q=b", caseID: "walk b"})
+	tm.set("T", capturedToken{got: "c", query: "q=c", caseID: "walk c"})
+	if tm.grows("T", "q=b", "walk b") || !tm.grows("T", "q=b", "walk d") {
+		t.Error("grows")
+	}
+	if tm.set("T", capturedToken{got: "b2", query: "q=b", caseID: "walk b"}); tm.n != 3 {
+		t.Errorf("%d entries", tm.n)
+	}
+	for _, c := range []struct{ query, from, want string }{
+		{"q=b", "", "b2"}, {"q=a", "walk c", "a"}, {"q=x", "walk a", "a"}, {"q=x", "", "c"}, {"q=x", "walk z", "c"},
+	} {
+		if got, ok := tm.lookup("T", c.query, c.from); !ok || got.got != c.want {
+			t.Errorf("lookup %s from %q: %q", c.query, c.from, got.got)
+		}
+	}
+	if _, ok := tm.lookup("U", "q=a", ""); ok {
+		t.Error("an unknown token was found")
 	}
 }

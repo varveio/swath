@@ -331,14 +331,16 @@ func (lr *liveRun) nextToken(body []byte) string {
 	return nextToken(body)
 }
 
-// send asks both sides, each with its own token, and compares. how says
-// how the token was formed (recordNote), for a recording proxy.
-func (lr *liveRun) send(c liveCase, refTok, gotTok, how string) (a, b *response, df diff, err error) {
+// send asks both sides, each with its own token, and compares. note
+// says how the token was formed, for a recording proxy (its case is
+// c's).
+func (lr *liveRun) send(c liveCase, refTok, gotTok string, note recordNote) (a, b *response, df diff, err error) {
 	d := lr.d
 	query := c.query
 	ra := lr.request(lr.withToken(query, refTok), c.header)
 	if d.ref.recorder {
-		ra.Header = append(slices.Clone(ra.Header), recordNote{caseID: c.id, token: how}.headers()...)
+		note.caseID = c.id
+		ra.Header = append(slices.Clone(ra.Header), note.headers()...)
 	}
 	if a, err = d.ref.do(d.o.bucket, ra); err != nil {
 		return nil, nil, df, fmt.Errorf("live: %w", err)
@@ -370,11 +372,11 @@ func (lr *liveRun) result(c liveCase) result {
 
 func (lr *liveRun) exchange(c liveCase) {
 	res := lr.result(c)
-	how := ""
+	var note recordNote
 	if t, _, ok := queryToken(c.query, lr.tokenParam()); ok && t != "" {
-		how = tokenVerbatim // a token the case wrote itself, no answer issued
+		note.token = tokenVerbatim // a token the case wrote itself, no answer issued
 	}
-	a, b, df, err := lr.send(c, "", "", how)
+	a, b, df, err := lr.send(c, "", "", note)
 	lr.finish(&res, lr.judgement(c, "", "", "", a, b, df), err)
 }
 
@@ -439,7 +441,7 @@ func (lr *liveRun) walk(c liveCase) {
 	limit := lr.d.o.walkLimit
 	documented := ""
 	for {
-		a, b, df, err := lr.send(c, refTok, gotTok, "")
+		a, b, df, err := lr.send(c, refTok, gotTok, recordNote{})
 		res.Pages++
 		if err == nil && !df.OK {
 			if why := documentedDifference(lr.judgement(c, "", refTok, gotTok, a, b, df), lr.pins); why != "" {
@@ -482,10 +484,10 @@ func (lr *liveRun) token(c liveCase) {
 	res := lr.result(c)
 	src := c.src
 	var toks [2]string
-	how, mutation := "", src.Mutation
+	note, mutation := recordNote{from: src.TokenFrom}, src.Mutation
 	if src.Mutation == "tampered" {
 		toks = [2]string{tamperedToken, tamperedToken}
-		how, mutation = tokenVerbatim, ""
+		note, mutation = recordNote{token: tokenVerbatim}, ""
 	} else {
 		lr.mu.Lock()
 		walked, ok := lr.tokens[src.TokenFrom]
@@ -503,10 +505,10 @@ func (lr *liveRun) token(c liveCase) {
 			toks[i] = t
 		}
 		if mutation != "" {
-			how = tokenNote(mutation, walked[0][src.Page])
+			note.token = tokenNote(mutation, walked[0][src.Page])
 		}
 	}
-	a, b, df, err := lr.send(c, toks[0], toks[1], how)
+	a, b, df, err := lr.send(c, toks[0], toks[1], note)
 	lr.finish(&res, lr.judgement(c, mutation, toks[0], toks[1], a, b, df), err)
 }
 
