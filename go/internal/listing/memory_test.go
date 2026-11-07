@@ -75,7 +75,7 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 		t.Skip("a 400,000-key listing")
 	}
 	s3test.NoCredentials(t)
-	t.Setenv("TMPDIR", t.TempDir()) // the text run's spill
+	t.Setenv("TMPDIR", t.TempDir()) // the text run spills beside its file; nothing may land in the real TMPDIR
 	ks, err := scalefake.New(memShape)
 	if err != nil {
 		t.Fatal(err)

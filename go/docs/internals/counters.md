@@ -60,6 +60,15 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 
+A text run's sink (run summary, `output.text`):
+
+| Key | Unit | Meaning |
+|---|---|---|
+| `sink_wait_ns` | ns | the order stage was in the text sink: rows waiting on the writer (formatting them, and `output_wait_ns`) |
+| `output_wait_ns` | ns | of that, handing bytes on: to the compressor (a synchronous encoder compressing, or every parallel job busy), or to the file or stream uncompressed |
+| `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
+| `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `row_budget` (16 MiB each of an allowance equal to the row budget carries fewer), `encoders` (asked), `gzip` (one stream) |
+
 A dry run (`--count-only`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
 and `frontier_stuck_max_ns` are 0 and `spill` is absent.
 

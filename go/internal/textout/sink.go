@@ -77,6 +77,8 @@ func (k *Sink[P]) header(h []byte, f func(*P) (string, bool), name string) []byt
 
 // Write implements order.Sink.
 func (k *Sink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	t := time.Now()
+	defer func() { k.o.sink += time.Since(t) }()
 	for _, seg := range segs {
 		for i := range seg {
 			if _, err := k.o.bw.Write(k.row(&seg[i])); err != nil {
