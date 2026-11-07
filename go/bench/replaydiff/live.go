@@ -428,15 +428,26 @@ func readPins(path string) (map[string]string, error) {
 }
 
 // walk follows each side's own tokens to the end, comparing every page.
+// A page whose difference is a documented one ends the walk, which is
+// then listed as documented, as the page is in a replay of its
+// recording.
 func (lr *liveRun) walk(c liveCase) {
 	res := lr.result(c)
 	res.Pass = true
 	var refTokens, gotTokens []string
 	refTok, gotTok := "", ""
 	limit := lr.d.o.walkLimit
+	documented := ""
 	for {
 		a, b, df, err := lr.send(c, refTok, gotTok, "")
 		res.Pages++
+		if err == nil && !df.OK {
+			if why := documentedDifference(lr.judgement(c, "", refTok, gotTok, a, b, df), lr.pins); why != "" {
+				documented = why
+				lr.d.noteDocumented(res.Name, fmt.Sprintf("page %d: %s", res.Pages, why), df)
+				break
+			}
+		}
 		if err != nil || !df.OK {
 			res.Pass, res.FailAt = false, res.Pages
 			if err != nil {
@@ -460,7 +471,9 @@ func (lr *liveRun) walk(c liveCase) {
 	lr.mu.Lock()
 	lr.tokens[c.id] = [2][]string{refTokens, gotTokens}
 	lr.mu.Unlock()
-	lr.d.record(res)
+	if documented == "" {
+		lr.d.record(res)
+	}
 }
 
 // token sends a case with a token its source walk issued at page Page,

@@ -481,7 +481,7 @@ func TestLiveMatrixRecordedReplaysOffline(t *testing.T) {
 	keys := liveKeys()
 	for _, protocol := range []string{"s3", "gcs"} {
 		rec := &testRecorder{}
-		live := runFakeLiveThrough(t, protocol, nil, rec, true)
+		live := runFakeLiveThrough(t, protocol, nil, rec, true, nil)
 		if live.Compared < 50 || len(rec.xs) < live.Requests/2 {
 			t.Fatalf("%s: live compared %d, %d requests, %d recorded", protocol, live.Compared, live.Requests, len(rec.xs))
 		}
@@ -551,5 +551,48 @@ func TestLiveMatrixRecordedReplaysOffline(t *testing.T) {
 		}
 		t.Logf("%s: %d exchanges: %d compared (%d passed, %d failed), %d documented, %d skipped; live %d failed, %d documented",
 			protocol, len(rec.xs), rep.Compared, rep.Passed, rep.Failed, len(rep.Residuals), rep.SkippedCount, live.Failed, len(live.Residuals))
+	}
+}
+
+// TestPinnedDifferencesAreDocumentedInBoth: a provider whose later pages
+// name another object fails the walks at their second page and the
+// token cases; with each of those mismatches pinned for its case, the
+// live run documents every one (a walk at the page that differs) and
+// fails none, and the replay of its recording documents the same
+// exchanges, with the same pins, and fails none.
+func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
+	edit := func(query string, body []byte) []byte {
+		if strings.Contains(query, "continuation-token=") {
+			return bytes.Replace(body, []byte("<Key>data/"), []byte("<Key>date/"), 1)
+		}
+		return body
+	}
+	first := runFakeLiveThrough(t, "s3", edit, &testRecorder{}, false, nil)
+	pins := map[string]string{}
+	walks := 0
+	for _, r := range first.Results {
+		if !r.Pass && r.diff != nil {
+			pins[r.Name] = r.Detail
+			if r.Kind == "walk" {
+				walks++
+			}
+		}
+	}
+	if walks == 0 || len(pins) != first.Failed {
+		t.Fatalf("the edit failed %d cases, %d walks: %v", first.Failed, walks, pins)
+	}
+	rec := &testRecorder{}
+	live := runFakeLiveThrough(t, "s3", edit, rec, false, pins)
+	if live.Failed != 0 || len(live.Residuals) != len(pins)+1 { // and s3-07x
+		t.Errorf("live: %d failed, documented %q", live.Failed, live.Residuals)
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, liveKeys()...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "s3", gcsSynthetic, exchangeItems(rec.xs), testLimits)
+	if rep.Failed != 0 || len(rep.Residuals) != len(live.Residuals) {
+		for _, r := range rep.Results {
+			t.Errorf("replay: %s %s", r.Name, r.Detail)
+		}
+		t.Errorf("replay: %d failed, documented %q", rep.Failed, rep.Residuals)
 	}
 }

@@ -840,7 +840,7 @@ func documentedDifference(j judgement, pins map[string]string) string {
 		return ""
 	}
 	if p := pins[j.caseID]; p != "" && p == j.df.Detail {
-		return "the provider evidence pins this mismatch for " + j.caseID
+		return "the provider evidence pins this mismatch for " + j.caseID + ": " + p
 	}
 	if j.protocol == "gcs" {
 		if v, ok := firstParam(j.query, "softDeleted"); ok && v == "true" && j.ref.Status == 200 &&

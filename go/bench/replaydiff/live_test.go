@@ -119,13 +119,13 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte) *report {
 	t.Helper()
-	return runFakeLiveThrough(t, protocol, edit, nil, false)
+	return runFakeLiveThrough(t, protocol, edit, nil, false, nil)
 }
 
 // runFakeLiveThrough is runFakeLive with the provider behind rec, when
 // set (the live driver then runs with -live-record), and with the
-// scripted matrix when scripted is set.
-func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool) *report {
+// scripted matrix when scripted is set, and pins as -live-pins.
+func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool, pins map[string]string) *report {
 	t.Helper()
 	keys := liveKeys()
 	protocols := []string{server.ProtocolS3}
@@ -159,7 +159,7 @@ func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte)
 	}
 	rep := &report{}
 	lr := &liveRun{d: &driver{o: o, ref: ref, got: got, rep: rep}, protocol: protocol, scope: "data/",
-		roles: deriveRoles(listed, "data/"), tokens: map[string][2][]string{}}
+		roles: deriveRoles(listed, "data/"), tokens: map[string][2][]string{}, pins: pins}
 	lr.run(listed)
 	return rep
 }
