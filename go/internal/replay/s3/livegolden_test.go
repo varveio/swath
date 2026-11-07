@@ -179,9 +179,11 @@ func TestLiveEmptyTokenIsRefused(t *testing.T) {
 }
 
 // An altered token is refused: S3 answered its own token with the last
-// character replaced, with four characters dropped, and with one decoded
-// byte flipped, by 400 InvalidArgument "The continuation token provided
-// is incorrect".
+// character replaced and with four characters dropped by 400
+// InvalidArgument "The continuation token provided is incorrect". With
+// one decoded byte flipped S3 refused the second-to-last byte and served
+// the others (token.go); the replay refuses every flip, pinned here with
+// a byte in the middle.
 func TestLiveAlteredTokenIsRefused(t *testing.T) {
 	req, err := ParseRequest("bkt", "list-type=2&prefix=r/&max-keys=2")
 	if err != nil {

@@ -22,9 +22,14 @@ import (
 // delimiter page that ends on a rolled-up common prefix P resumes
 // inclusive at Successor(P), past P's whole subtree in one store read.
 //
-// The checksum is what makes an altered token a refusal, as on live S3,
-// which answers a token with a flipped or dropped character with 400
-// InvalidArgument (TestLiveAlteredTokenIsRefused): the decoder is strict
+// The checksum is what makes an altered token a refusal. Live S3 answers
+// its own token with the last character replaced or four characters
+// dropped with 400 InvalidArgument (TestLiveAlteredTokenIsRefused); with
+// one decoded byte flipped it refused one position and served the others
+// (from the first key, or, for the last byte, as if unaltered), so its
+// tokens are not uniformly checked. This server refuses every alteration
+// instead, a page from a wrong position being worse for a client than a
+// refusal: the decoder is strict
 // (no padding, no stray bits after the last byte, no line breaks), so
 // any change to the text changes the decoded bytes or fails to decode,
 // and a changed payload fails the checksum. It is a checksum, not a

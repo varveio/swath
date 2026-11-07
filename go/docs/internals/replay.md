@@ -74,8 +74,10 @@ equal to the listing computed directly.
 Unpadded base64url of a flag byte (0 exclusive, 1 inclusive), the boundary key and the big-endian CRC-32
 (IEEE) of the two. The decoder is strict (no padding, no stray bits after the last byte, no line breaks), so any
 change to the text changes the decoded bytes or fails to decode, and a changed payload fails the checksum: an
-altered token is `400 InvalidArgument`, as live S3 answers its own altered tokens
-(`TestLiveAlteredTokenIsRefused`, `TestTokenProperties`). It is a checksum, not a signature: a forged token
+altered token is `400 InvalidArgument` (`TestTokenProperties`). Live S3 refuses its own token with the last
+character replaced or four characters dropped (`TestLiveAlteredTokenIsRefused`), but of five single decoded-byte
+flips it refused one and served the rest (three from the first key, the last byte as if unaltered); this server
+refuses them all, so the live matrix's `flip-decoded` case answers `400` where S3 answers `200`. It is a checksum, not a signature: a forged token
 chooses a resume point the client could already choose with `start-after`.
 
 The Java server's tokens (`v2:` + base64url of flag and boundary, `v1:` + the key) carry no check and are

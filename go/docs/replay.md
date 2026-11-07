@@ -115,7 +115,8 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   in a `start-after` that is used (a token wins over it).
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
-  flipped or dropped character is refused as S3 refuses it. A flat page's token sent with a delimiter resumes
+  flipped or dropped character is refused as S3 refuses it (S3 serves some alterations of its own decoded
+  bytes; this server refuses every one). A flat page's token sent with a delimiter resumes
   at its key and rolls up what follows, the common prefix that key falls in included; a `start-after` inside a
   common prefix passes it. Replay tokens and S3's are not interchangeable, and neither are the Java server's
   (`v2:...`), which this server refuses.
