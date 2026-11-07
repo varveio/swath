@@ -292,8 +292,8 @@ as they are (each is listed below the table).
 | Azure: `Name`, `Content-Length` | mapped from the key and size | mapped from the name and size | mapped from the path and file size |
 | Azure: `Last-Modified` | mapped, seconds (Azure's precision) | mapped from `last_modified`, seconds | mapped, seconds |
 | Azure: `Etag` | placeholder `0x000000000000001` | placeholder `0x000000000000001` | placeholder `0x000000000000001` |
-| Azure: `Content-Type` | placeholder `application/octet-stream` | open (c): placeholder `application/octet-stream` | placeholder `application/octet-stream` |
-| Azure: `Content-MD5` | absent | open (c): absent | absent |
+| Azure: `Content-Type` | placeholder `application/octet-stream` | mapped from `content_type`; placeholder `application/octet-stream` when null or a value Azure cannot hold (a control character, not UTF-8) | placeholder `application/octet-stream` |
+| Azure: `Content-MD5` | absent | mapped from `md5` (GCS lists it as the standard base64 of 16 bytes, the form `Content-MD5` takes), after `Content-Type` and before `BlobType`, where native listings place it; absent when null or in any other form | absent |
 | Azure: `BlobType`, `AccessTier`, `AccessTierInferred`, `LeaseStatus`, `LeaseState` | placeholders `BlockBlob`, `Hot`, `true`, `unlocked`, `available` | the same placeholders | the same placeholders |
 
 The S3 view of a `swath/gcs-objects/v1` recording is Cloud Storage's own S3-compatible XML API's answer for
@@ -314,8 +314,6 @@ Open cells:
 - (a) The XML API's `LastModified` is the object's `timeCreated`, which a recording does not store; the route
   sends `updated`. They differ only for an object whose metadata changed after it was written (metageneration
   above 1).
-- (c) A GCS recording stores the content type and the MD5 (base64, the form Azure's `Content-MD5` takes), but
-  the Azure route sends its placeholder content type and no `Content-MD5`.
 
 The S3-shaped schemas' answers on every route are the replay wire contract's (the Java server reads
 `swath/canonical`; `server` `TestEmptyAndNullStringsEndToEnd`).

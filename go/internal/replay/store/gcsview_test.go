@@ -46,6 +46,7 @@ type gcsRow struct {
 	ETag         *string `parquet:"etag,optional"`
 	StorageClass *string `parquet:"storage_class,optional"`
 	MD5          *string `parquet:"md5,optional"`
+	ContentType  *string `parquet:"content_type,optional"`
 }
 
 // gcsRows returns n rows cycling through the cases the S3 ETag has: an
@@ -61,6 +62,9 @@ func gcsRows(n int) ([]gcsRow, []string) {
 		sum := md5.Sum([]byte(key))
 		etag := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x08%c\x10\x01", byte(i%128)))
 		r := gcsRow{Key: key, Size: int64(i), StorageClass: str(classes[i%len(classes)])}
+		if i%3 != 0 {
+			r.ContentType = str(fmt.Sprintf("type/%d", i%7))
+		}
 		switch i % 5 {
 		case 0:
 			r.MD5, r.ETag, want[i] = str(base64.StdEncoding.EncodeToString(sum[:])), str(etag), hex.EncodeToString(sum[:])
@@ -171,7 +175,7 @@ func TestPackerDerivedETagsStopAtTheArenaLimit(t *testing.T) {
 		t.Fatalf("columns %v", columns)
 	}
 	for limit, ok := range map[int]bool{64: true, 63: false, 48: false} {
-		k := gcsObjects.packer(columns, 2, limit)
+		k := gcsObjects.packer(columns, Projection{}, 2, limit)
 		k.Keys([][]byte{[]byte("a"), []byte("b")})
 		k.Values(md5Column, values)
 		for c := range columns[:md5Column] {
@@ -187,5 +191,76 @@ func TestPackerDerivedETagsStopAtTheArenaLimit(t *testing.T) {
 				t.Fatalf("limit %d: %+v", limit, got[1])
 			}
 		}
+	}
+}
+
+// TestGCSRecordingAzureView reads a swath/gcs-objects/v1 dataset with the
+// Content projection through the window cache (the MD5 column packed once
+// for the ETags and the MD5 field), the bare reader, the arena overflow
+// path and a rollup, and requires every row's ContentType and MD5 as
+// stored (nil for a null), its ETag still the S3 view's, and both nil
+// without the projection, which reads no content_type column. A schema
+// without the columns drops the projection, so its reads share windows
+// with reads without it. Before, no read carried a content type or MD5.
+func TestGCSRecordingAzureView(t *testing.T) {
+	ctx := context.Background()
+	rows, etags := gcsRows(1000)
+	dir := writeGCSRows(t, rows)
+	open := func(opts Options) *Sorted {
+		s, _, err := Open(ctx, dir, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s.(*Sorted)
+	}
+	bare := open(Options{Prefetch: Prefetch{Off: true}})
+	cached := open(Options{Prefetch: Prefetch{WindowRows: 37, MaxWindows: 5}})
+	overflow := open(Options{Prefetch: Prefetch{WindowRows: 37, MaxWindows: 5}})
+	overflow.arenaLimit = 900
+	same := func(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+	check := func(how string, got []Object, from int, content bool) {
+		t.Helper()
+		for i, o := range got {
+			r := rows[from+i]
+			wantType, wantMD5 := r.ContentType, r.MD5
+			if !content {
+				wantType, wantMD5 = nil, nil
+			}
+			if string(o.Key) != r.Key || !same(o.ContentType, wantType) || !same(o.MD5, wantMD5) || o.ETag == nil || *o.ETag != etags[from+i] {
+				t.Fatalf("%s: %s: %+v, want ContentType %v MD5 %v", how, o.Key, o, wantType, wantMD5)
+			}
+		}
+	}
+	for name, s := range map[string]*Sorted{"bare": bare, "cached": cached, "overflow": overflow} {
+		for page, from := 0, []byte(nil); ; page++ {
+			content := page%3 != 2
+			got, err := s.Rows(ctx, from, false, nil, 100, Projection{Owner: page%2 == 0, Content: content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) == 0 {
+				break
+			}
+			check(fmt.Sprintf("%s page %d", name, page), got, page*100, content)
+			from = got[len(got)-1].Key
+		}
+		entries, ok, err := s.DelimitedRollup(ctx, nil, true, nil, []byte("k/"), []byte("/"), 1000, Projection{Content: true}, true)
+		if err != nil || !ok || len(entries) != len(rows) {
+			t.Fatalf("%s rollup: %d entries, %v %v", name, len(entries), ok, err)
+		}
+		objects := make([]Object, len(entries))
+		for i, e := range entries {
+			objects[i] = *e.Object
+		}
+		check(name+" rollup", objects, 0, true)
+	}
+	for _, p := range []objectProjection{s3Objects, localObjects} {
+		if got := p.projection(Projection{Owner: true, Content: true}); got != (Projection{Owner: true}) {
+			t.Errorf("%+v: projection %+v, want Content dropped", p, got)
+		}
+	}
+	if got := gcsObjects.projection(Projection{Content: true}); got != (Projection{Content: true}) {
+		t.Errorf("GCS projection %+v", got)
 	}
 }

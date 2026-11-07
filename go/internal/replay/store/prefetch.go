@@ -101,13 +101,14 @@ type bound struct {
 // lower bound. The position is part of it, so walks at different places
 // in the keyspace with the same bounds keep their own windows.
 type windowKey struct {
-	to, lower        string
-	hasTo, hasLower  bool
-	owner, inclusive bool
+	to, lower       string
+	hasTo, hasLower bool
+	proj            Projection
+	inclusive       bool
 }
 
 func keyOf(to []byte, proj Projection, lower []byte, inclusive bool) windowKey {
-	return windowKey{to: string(to), hasTo: to != nil, owner: proj.Owner, lower: string(lower), hasLower: lower != nil, inclusive: inclusive}
+	return windowKey{to: string(to), hasTo: to != nil, proj: proj, lower: string(lower), hasLower: lower != nil, inclusive: inclusive}
 }
 
 // window is one fill's rows, immutable once published: the contiguous

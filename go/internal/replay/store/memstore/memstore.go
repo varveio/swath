@@ -152,6 +152,9 @@ func project(o store.Object, proj store.Projection) store.Object {
 	if !proj.Owner {
 		o.OwnerID, o.OwnerDisplayName = nil, nil
 	}
+	if !proj.Content {
+		o.ContentType, o.MD5 = nil, nil
+	}
 	return o
 }
 

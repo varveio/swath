@@ -24,7 +24,7 @@ type packed struct {
 	keys   []byte
 	keyEnd []uint32
 	ints   [2]packedInts // Size, LastModified (epoch microseconds)
-	texts  [6]packedText // ETag, StorageClass, OwnerID, OwnerDisplayName, ChecksumAlgorithm, ChecksumType
+	texts  [8]packedText // ETag, StorageClass, OwnerID, OwnerDisplayName, ChecksumAlgorithm, ChecksumType, ContentType, MD5
 }
 
 type packedInts struct {
@@ -44,8 +44,8 @@ type packedText struct {
 }
 
 // textFields are the Object fields packed as text, in packed.texts order.
-func textFields(o *Object) [6]**string {
-	return [6]**string{&o.ETag, &o.StorageClass, &o.OwnerID, &o.OwnerDisplayName, &o.ChecksumAlgorithm, &o.ChecksumType}
+func textFields(o *Object) [8]**string {
+	return [8]**string{&o.ETag, &o.StorageClass, &o.OwnerID, &o.OwnerDisplayName, &o.ChecksumAlgorithm, &o.ChecksumType, &o.ContentType, &o.MD5}
 }
 
 // packer is the sortedparquet.ColumnSink that packs a read for the
@@ -59,13 +59,15 @@ func textFields(o *Object) [6]**string {
 type packer struct {
 	out packed
 	// slots maps each read column to its packed field: 0 and 1 the ints,
-	// 2 to 7 the texts, 8 a GCS recording's MD5 (md5).
+	// 2 to 8 the texts before MD5, 9 a GCS recording's MD5 (md5).
 	slots []int
-	texts [6]strings.Builder
+	texts [7]strings.Builder
 	// md5 holds the MD5 column of a projection with one, from which
-	// packed derives the ETags (gcsETag).
-	md5     packedText
-	md5Text strings.Builder
+	// packed derives the ETags (gcsETag) and, when md5Field is set, the
+	// MD5 field.
+	md5      packedText
+	md5Text  strings.Builder
+	md5Field bool
 	// limit bounds each arena (at most maxPackedArena); overflow reports
 	// a row was refused, and stop (when set) ends the read early.
 	limit    int
@@ -80,15 +82,16 @@ const maxPackedArena = math.MaxUint32
 // packer's arena limit.
 var errPackedOverflow = errors.New("packed arena limit exceeded")
 
-// packer returns a packer for a read of columns (p.columns of a
-// projection) expected to return about n rows, its arenas bounded by
-// limit bytes (maxPackedArena when limit is not in (0, maxPackedArena]).
-func (p objectProjection) packer(columns []string, n, limit int) *packer {
+// packer returns a packer for a read of columns (p.columns of proj)
+// expected to return about n rows, its arenas bounded by limit bytes
+// (maxPackedArena when limit is not in (0, maxPackedArena]).
+func (p objectProjection) packer(columns []string, proj Projection, n, limit int) *packer {
 	if limit <= 0 || limit > maxPackedArena {
 		limit = maxPackedArena
 	}
-	k := &packer{slots: make([]int, len(columns)), limit: limit}
-	fields := [9]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType, p.md5}
+	k := &packer{slots: make([]int, len(columns)), limit: limit, md5Field: proj.Content}
+	fields := [10]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType,
+		p.contentType, p.md5}
 	for c, name := range columns {
 		k.slots[c] = slices.Index(fields[:], name)
 	}
@@ -114,7 +117,7 @@ func (p objectProjection) packer(columns []string, n, limit int) *packer {
 
 // text returns a text slot's column and arena.
 func (k *packer) text(slot int) (*packedText, *strings.Builder) {
-	if slot == 8 {
+	if slot == 9 {
 		return &k.md5, &k.md5Text
 	}
 	return &k.out.texts[slot-2], &k.texts[slot-2]
@@ -204,6 +207,9 @@ func (k *packer) packed() (packed, error) {
 			return packed{}, errPackedOverflow
 		}
 		k.out.texts[0] = etags
+		if k.md5Field {
+			k.out.texts[7] = k.md5
+		}
 	}
 	return k.out, nil
 }

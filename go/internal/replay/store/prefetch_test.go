@@ -329,7 +329,7 @@ func (k *syntheticKeys) read(ctx context.Context, from []byte, inclusive bool, t
 			return c > 0 || c == 0 && inclusive
 		})
 	}
-	sink := s3Objects.packer(nil, limit, 0)
+	sink := s3Objects.packer(nil, Projection{}, limit, 0)
 	for i := start; i < k.rows && i-start < limit; i++ {
 		key := []byte(fmt.Sprintf("k%08d", i))
 		if to != nil && bytes.Compare(key, to) >= 0 {

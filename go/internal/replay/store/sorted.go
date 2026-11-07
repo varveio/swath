@@ -200,7 +200,7 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		// Room for a window up front, never more: a read of a huge
 		// limit over a short range must not allocate for rows it will
 		// not find, and a longer read grows as it goes.
-		sink = s.objects.packer(columns, min(limit, s.windowRows()), s.arenaLimit)
+		sink = s.objects.packer(columns, proj, min(limit, s.windowRows()), s.arenaLimit)
 		sink.stop = stop
 		var stats sortedparquet.Stats
 		defer s.record(&stats, false)
@@ -276,6 +276,7 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 // Rows implements Store with the Object projection, through the window
 // cache when it is on.
 func (s *Sorted) Rows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, proj Projection) ([]Object, error) {
+	proj = s.objects.projection(proj)
 	if s.prefetch != nil && limit > 0 {
 		return s.prefetch.serve(ctx, from, fromInclusive, toExclusive, limit, proj)
 	}
@@ -290,7 +291,7 @@ func (s *Sorted) objectRows(ctx context.Context, from []byte, fromInclusive bool
 	}
 	out := make([]Object, len(rows))
 	for i := range rows {
-		out[i] = s.objects.object(&rows[i])
+		out[i] = s.objects.object(&rows[i], proj)
 	}
 	return out, nil
 }
@@ -308,7 +309,7 @@ func (s *Sorted) DelimitedRollup(ctx context.Context, from []byte, fromInclusive
 			out[i] = DelimitedEntry{CommonPrefix: entry.CommonPrefix}
 			continue
 		}
-		object := s.objects.object(entry.Row)
+		object := s.objects.object(entry.Row, proj)
 		out[i] = DelimitedEntry{Object: &object}
 	}
 	return out, true, nil
@@ -331,8 +332,12 @@ type objectProjection struct {
 	size, lastModified, etag, storageClass                     string
 	ownerID, ownerDisplayName, checksumAlgorithm, checksumType string
 	// md5 names the column of a GCS recording's MD5 (base64). When set,
-	// the ETag is not the etag column's value but gcsETag of the two.
+	// the ETag is not the etag column's value but gcsETag of the two, and
+	// the MD5 field (with Projection.Content) is the column's value.
 	md5 string
+	// contentType names the content type column, read with
+	// Projection.Content.
+	contentType string
 	// fixedETag and fixedStorageClass, when set, are the placeholder
 	// every row answers with, for a schema with no column the field maps
 	// from.
@@ -353,7 +358,7 @@ var s3Objects = objectProjection{
 // 2026-11-07, server TestLiveGCSXMLAPIContents): the ETag from the MD5 or
 // the etag (gcsETag), and no StorageClass, Owner or checksum element,
 // which that API's listing never carries, whatever the object's class.
-var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5"}
+var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5", contentType: "content_type"}
 
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.
@@ -392,11 +397,8 @@ const syntheticETag = "swath-s3-synthetic-v1"
 // syntheticETag. An md5 value that is not the standard base64 of 16
 // bytes is not an MD5, and the etag answers. Empty (a null) is no value.
 func gcsETag(dst []byte, md5, etag string) []byte {
-	if len(md5) == base64.StdEncoding.EncodedLen(16) {
-		var sum [18]byte // DecodedLen(24)
-		if n, err := base64.StdEncoding.Strict().Decode(sum[:], []byte(md5)); err == nil && n == 16 {
-			return hex.AppendEncode(dst, sum[:16])
-		}
+	if sum, ok := decodeMD5(md5); ok {
+		return hex.AppendEncode(dst, sum[:])
 	}
 	if etag != "" {
 		return append(append(dst, '-'), etag...)
@@ -404,12 +406,40 @@ func gcsETag(dst []byte, md5, etag string) []byte {
 	return append(dst, syntheticETag...)
 }
 
+// decodeMD5 decodes the standard base64 of 16 bytes, the form GCS lists
+// an MD5 in and Azure's Content-MD5 takes; anything else is no MD5.
+func decodeMD5(s string) (sum [16]byte, ok bool) {
+	if len(s) != base64.StdEncoding.EncodedLen(16) {
+		return sum, false
+	}
+	var buf [18]byte // DecodedLen(24)
+	n, err := base64.StdEncoding.Strict().Decode(buf[:], []byte(s))
+	copy(sum[:], buf[:])
+	return sum, err == nil && n == 16
+}
+
+// IsMD5 reports whether s is an MD5 in the standard base64 of 16 bytes.
+func IsMD5(s string) bool {
+	_, ok := decodeMD5(s)
+	return ok
+}
+
 func objectProjectionFor(schemaID string) objectProjection {
 	return objectProjections[schemaID]
 }
 
+// projection is proj as this schema reads it: Content dropped when the
+// schema has no column it reads, so such reads key the window cache as
+// reads without it do.
+func (p objectProjection) projection(proj Projection) Projection {
+	if p.contentType == "" && p.md5 == "" {
+		proj.Content = false
+	}
+	return proj
+}
+
 // columns returns the columns proj needs decoded: owner columns only with
-// Owner.
+// Owner, the content type only with Content.
 func (p objectProjection) columns(proj Projection) []string {
 	var names []string
 	for _, name := range []string{p.size, p.lastModified, p.etag, p.storageClass, p.checksumAlgorithm, p.checksumType, p.md5} {
@@ -424,10 +454,13 @@ func (p objectProjection) columns(proj Projection) []string {
 			}
 		}
 	}
+	if proj.Content && p.contentType != "" {
+		names = append(names, p.contentType)
+	}
 	return names
 }
 
-func (p objectProjection) object(row *sortedparquet.Row) Object {
+func (p objectProjection) object(row *sortedparquet.Row, proj Projection) Object {
 	o := Object{Key: row.Key}
 	if v, ok := value(row, p.size); ok {
 		size := v.Int64()
@@ -462,6 +495,10 @@ func (p objectProjection) object(row *sortedparquet.Row) Object {
 	o.OwnerDisplayName = text(row, p.ownerDisplayName)
 	o.ChecksumAlgorithm = text(row, p.checksumAlgorithm)
 	o.ChecksumType = text(row, p.checksumType)
+	if proj.Content {
+		o.ContentType = text(row, p.contentType)
+		o.MD5 = text(row, p.md5)
+	}
 	return o
 }
 
