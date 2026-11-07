@@ -463,6 +463,19 @@ it, `encoder_wait_ns` 1.3 to 3.7 s): 4 cores carry 4 encoders, so admission is `
 `GOMAXPROCS=8` on the same 4 cores, admission engages (5 at start, 8 after listing, `listing_done`). Whether
 the tail halves where it was measured (16 vCPU, 5 encoders, about 15 s at 256 workers) is for the Batch arms.
 
+On Batch (64 lists of 20M keys or more, 256 workers, 16 vCPU, fake at 50 ms; build 6a68dd65 against 7b05605)
+the wall median is 0.91× (p90 1.05×), and 0.89× with `--encoders 5`; the tail stays about half of the wall
+(median 12.6 s). The read-ahead replays nearly every frame (noaa-goes19: 145,089 of 145,096), so replay is no
+longer in the tail. The tail is the hand-off into the open part: the drainer's `sink_write_ns` is a median 86 %
+of the tail and `encoder_wait_ns` (the part's full queue) 76 %. Neither moves between 5 and 16 encoders. The
+order guard takes 8 %. The process uses 6.5 of 16 cores, and budget waits are 0. Rows reach one part at a
+time: a median 3 parts of 14M rows each, and the row budget cannot hold enough of a part's backlog to open
+the next one early. So the bound is one part's encoding pipeline, which joins all columns at every
+1,024-row page, not the encoder count. On noaa-goes19 the drainer also waits 11.9 s for read-ahead frames:
+1.14 ms per frame read against 0.09 ms decoding, 22.4 GB of spill read back in the 60 s tail, so the disk
+bounds it, not the share (`capped_waits` 0). On one core (the three largest lists) the read-ahead was 5 to 11 %
+slower, which is why it is now off with one processor.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

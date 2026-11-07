@@ -146,6 +146,34 @@ func replayed(t *testing.T, st Stats) {
 	}
 }
 
+// withAhead turns the read-ahead on whatever the processor count, so these
+// tests exercise it under GOMAXPROCS=1 too.
+func withAhead(t *testing.T) {
+	prev := aheadProcs
+	aheadProcs = func() int { return 1 + aheadReads }
+	t.Cleanup(func() { aheadProcs = prev })
+}
+
+// TestReadAheadOffOnOneProcessor: with one processor there is no
+// read-ahead (its reads would only take turns with the drainer): every
+// frame is the drainer's, the output the oracle's.
+func TestReadAheadOffOnOneProcessor(t *testing.T) {
+	prev := aheadProcs
+	aheadProcs = func() int { return 1 }
+	t.Cleanup(func() { aheadProcs = prev })
+	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	c := &collect{}
+	st, err := Run[fr, tp](context.Background(), f, c, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
+	if err != nil || !slices.Equal(c.keys, f.keys()) {
+		t.Fatalf("err %v, %d keys", err, len(c.keys))
+	}
+	if ra := st.ReadAhead; ra.MaxReads != 0 || ra.Frames != 0 || ra.DrainerFrames != 0 || st.SpillFrames == 0 {
+		t.Fatalf("read-ahead %+v with one processor (%d frames spilled)", ra, st.SpillFrames)
+	}
+}
+
 // TestReadAheadKeepsOrder: random trees (node shapes, frame sizes, budgets,
 // compression) whose frontier is held until the rest has listed and
 // spilled (one worker holds it, so at least two), so the drain is a
@@ -153,6 +181,7 @@ func replayed(t *testing.T, st Stats) {
 // output is the oracle's, row for row; every frame is replayed once; and
 // the read-ahead engaged.
 func TestReadAheadKeepsOrder(t *testing.T) {
+	withAhead(t)
 	var ahead int64
 	for seed := range uint64(24) {
 		r := rand.New(rand.NewPCG(seed, 7))
@@ -182,6 +211,7 @@ func TestReadAheadKeepsOrder(t *testing.T) {
 // of the budget (or one frame) on top of the stage's bound: the budget,
 // one publish batch per worker and the frontier path.
 func TestReadAheadMemoryIsBounded(t *testing.T) {
+	withAhead(t)
 	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
@@ -212,6 +242,7 @@ func TestReadAheadMemoryIsBounded(t *testing.T) {
 // ahead returns the cause, closes every read descriptor, removes its spill
 // files and leaves no goroutine behind.
 func TestReadAheadCancelMidReplay(t *testing.T) {
+	withAhead(t)
 	base := runtime.NumGoroutine()
 	f := &frontier{slowPages: 2, siblings: 60, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
@@ -253,6 +284,7 @@ func TestReadAheadCancelMidReplay(t *testing.T) {
 // the sink received an exact prefix of the output that ends before the
 // frame's first row.
 func TestReadAheadCorruptFrame(t *testing.T) {
+	withAhead(t)
 	f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
@@ -325,6 +357,7 @@ func waitsAt(t *testing.T, site string) chan string {
 // TestFetchWaitWakes: the drainer reaches a frame a worker is still reading
 // and waits (waitFetch); the read completing wakes it, and so does a stop.
 func TestFetchWaitWakes(t *testing.T) {
+	withAhead(t)
 	for _, event := range []string{"read", "cancel"} {
 		t.Run(event, func(t *testing.T) {
 			ws := waitsAt(t, waitFetch)
@@ -385,6 +418,7 @@ func (b *blockingSink) Write(ctx context.Context, segs [][]schema.Row[tp]) error
 // up to the read-ahead's share of the budget and then wait (waitAhead); the
 // drainer taking the frames read wakes them, and so does a stop.
 func TestAheadWaitWakes(t *testing.T) {
+	withAhead(t)
 	for _, event := range []string{"drained", "cancel"} {
 		t.Run(event, func(t *testing.T) {
 			ws := waitsAt(t, waitAhead)

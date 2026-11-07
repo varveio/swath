@@ -145,9 +145,10 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
 
-The read-ahead's two waits broadcast on transitions only, not on every frame, so hundreds of idle workers
-are not woken per frame: planning wakes them when it queued frames (refilling at half of its window), and
-the drainer wakes the workers held at the share once the read-ahead holds half of it. A release of drained
+The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
+not woken per frame: planning signals as many idle workers as can start a read when it queued frames
+(refilling at half of its window), and the drainer wakes the workers held at the share once the read-ahead
+holds half of it. A release of drained
 bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
@@ -264,7 +265,12 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   queued: the drainer may then have passed it, or a node it stopped at have been compacted since.
 - **Reading.** An idle worker (nothing queued to list) claims the next queued frame, reads it with one
   `pread` on its own descriptor and decodes it through the same frame decoder as the drainer's own reads
-  (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder.
+  (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder,
+  and at most one fewer than `GOMAXPROCS`, so the drainer keeps a processor. With one processor there is no
+  read-ahead: an idle worker's read would only take turns with the drainer (on Batch, one core, the three
+  largest lists ran 5 to 11 % slower with it), and the drainer replays alone (`max_reads` 0,
+  `TestReadAheadOffOnOneProcessor`). Planning wakes as many workers as can start a read (`Signal`), not every
+  idle one.
 - **Order.** The drainer takes frames from the head of the queue: it must be the marker the drainer is at,
   or the run fails with an invariant error. A frame still queued is read by the drainer itself; one being
   read is waited for (`fetch`); then the drainer only checks order and hands on. Its sequential reader skips
@@ -282,7 +288,7 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
 
 The report's `resources.drain.read_ahead` counts `frames` and `rows` read ahead, `drainer_frames` (planned,
 taken over unread), `unplanned_frames` (reached with nothing planned), `drainer_waits`, `capped_waits`,
-`read_ns` and `decode_ns`; beside it the drain's `tail_ns` (from `timings.listing_done_at` to the last row),
+`read_ns`, `decode_ns` and `max_reads`; beside it the drain's `tail_ns` (from `timings.listing_done_at` to the last row),
 the workers' idle time before and after listing ended, and the drainer's time: `replay_read_ns`,
 `replay_decode_ns`, `ahead_wait_ns`, `order_check_ns`, `sink_write_ns` (with `frontier_wait_ns`). On one
 processor the drainer may replay every frame before an idle worker is scheduled: `drainer_frames` then counts

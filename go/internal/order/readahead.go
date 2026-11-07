@@ -6,6 +6,7 @@ package order
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -48,6 +49,12 @@ const (
 	aheadScan = 1024
 )
 
+// aheadProcs is the processors the read-ahead may use (a variable for
+// tests). Its reads are capped one below it, so the drainer keeps a
+// processor; with one there is no read-ahead: the drainer replays alone,
+// as an idle worker's read would only take turns with it.
+var aheadProcs = func() int { return runtime.GOMAXPROCS(0) }
+
 type fetchState uint8
 
 const (
@@ -71,7 +78,9 @@ type readAhead[R, P any] struct {
 	q      []*fetch[P]        // planned and not yet taken by the drainer, in drain order
 	next   int                // q's first fetch that may still be pending
 	reads  int                // frames workers are reading
-	held   int64              // units charged for claimed frames not yet taken
+	// maxReads caps reads: aheadReads, at most aheadProcs()-1.
+	maxReads int
+	held     int64 // units charged for claimed frames not yet taken
 	// starved: a worker waits for the read-ahead to drop below its share;
 	// waiting: the drainer waits for a frame being read.
 	starved, waiting bool
@@ -86,7 +95,7 @@ func (o *run[R, P]) aheadShare() int64 { return max(1, o.opt.Budget/4) }
 // their cap, with capped set when the read-ahead holds its share.
 func (o *run[R, P]) claimAhead() (*fetch[P], bool) {
 	ra := o.ra
-	if ra == nil || ra.reads >= aheadReads {
+	if ra == nil || ra.reads >= ra.maxReads {
 		return nil, false
 	}
 	for ra.next < len(ra.q) && ra.q[ra.next].state != pending {
@@ -167,7 +176,7 @@ func (o *run[R, P]) planAhead(reset bool) {
 	} else if len(ra.q) > aheadFrames/2 {
 		return
 	}
-	planned := false
+	planned := 0
 	for scanned := 0; len(ra.q) < aheadFrames && scanned < aheadScan && len(ra.cursor) > 0; {
 		c := &ra.cursor[len(ra.cursor)-1]
 		if c.n.state != done {
@@ -185,11 +194,15 @@ func (o *run[R, P]) planAhead(reset bool) {
 			ra.cursor = append(ra.cursor, drainFrame[R, P]{n: it.child})
 		case it.spill != nil:
 			ra.q = append(ra.q, &fetch[P]{f: it.spill, at: it.at})
-			planned = true
+			planned++
 		}
 	}
-	if planned {
-		o.work.Broadcast() // idle workers read what was planned
+	// Wake as many workers as can start a read, not every idle one:
+	// hundreds of wake-ups per refill would cost more than the reads. A
+	// signal that reaches a worker held at admission is not lost work:
+	// the drainer reads any frame still queued when it gets there.
+	for range min(planned, ra.maxReads-ra.reads) {
+		o.work.Signal()
 	}
 }
 

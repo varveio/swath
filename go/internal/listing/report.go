@@ -334,6 +334,9 @@ type ReadAhead struct {
 	CappedWaits   int64 `json:"capped_waits"`
 	ReadNs        int64 `json:"read_ns"`
 	DecodeNs      int64 `json:"decode_ns"`
+	// MaxReads is the reads allowed at once (8, at most one fewer than
+	// GOMAXPROCS): 0 is off, the drainer replaying alone (one processor).
+	MaxReads int `json:"max_reads"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

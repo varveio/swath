@@ -721,7 +721,7 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 	if oopt.SpillDir != "" {
 		ra := ost.ReadAhead
 		d.ReadAhead = &ReadAhead{Frames: ra.Frames, Rows: ra.Rows, DrainerFrames: ra.DrainerFrames, Unplanned: ra.Unplanned, Waits: ra.Waits,
-			CappedWaits: ra.Capped, ReadNs: int64(ra.Read), DecodeNs: int64(ra.Decode)}
+			CappedWaits: ra.Capped, ReadNs: int64(ra.Read), DecodeNs: int64(ra.Decode), MaxReads: ra.MaxReads}
 	}
 	if a.router != nil {
 		l := a.cfg.Limits

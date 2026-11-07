@@ -136,6 +136,10 @@ type DrainerTimes struct {
 type ReadAheadStats struct {
 	Frames, Rows, DrainerFrames, Unplanned, Waits, Capped int64
 	Read, Decode                                          time.Duration
+	// MaxReads is the reads allowed at once: aheadReads, at most one
+	// fewer than the processors; 0 when the read-ahead is off (one
+	// processor).
+	MaxReads int
 }
 
 // Gauges are the order stage's live resource counts, read while it runs
@@ -517,6 +521,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.Drainer = o.dt
 	if o.ra != nil {
 		st.ReadAhead = o.ra.st
+		st.ReadAhead.MaxReads = o.ra.maxReads
 	}
 	if err == nil && st.Received != st.Rows {
 		// Conservation inside the stage (spill, compaction, replay): a row
@@ -573,7 +578,12 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		sp.wake, sp.verify = wake, opt.SpillVerify
 		sp.g = o.g
 		o.sp = sp
-		o.ra = &readAhead[R, P]{}
+		if n := aheadProcs() - 1; n > 0 {
+			// The read-ahead needs a processor beside the drainer's: on
+			// one, its reads only take turns with the drainer
+			// (ReadAheadStats.MaxReads 0).
+			o.ra = &readAhead[R, P]{maxReads: min(aheadReads, n)}
+		}
 	}
 	if opt.Shared != nil {
 		opt.Shared.setWake(wake)
