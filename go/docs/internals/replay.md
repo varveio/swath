@@ -268,8 +268,11 @@ profile comparators): the status; on both sides only classified headers, the med
 matches the body and a padded GMT date; then the page field by field, or the S3 error `Code` or the GCS error's
 first `reason`. Request ids, dates, token values (compared by presence and by where they lead) and owner values
 are the only things set aside. `-capture` replays a client's recorded stream (`capture.go`) under the same
-policy, mapping each captured token to the one the Go server issued for the same request
-(`TestCaptureReplaysAClientStream`); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
+policy, one exchange at a time, mapping each captured token to the one the Go server issued for the same request
+(`TestCaptureReplaysAClientStream`). The recorder (`bench/faultproxy`, `record.go`) writes each exchange before it
+releases the answer, so an issuing answer precedes every use of its token and an unknown token is a failure,
+not a skip; bodies, decoded bodies, lines and the token map are bounded by flags, and a bound reached fails the
+exchange explicitly ([replay.md](../replay.md#live-capture)); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
 stand-in provider with tokens and headers of its own.
 
 On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server

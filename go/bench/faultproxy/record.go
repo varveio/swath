@@ -11,13 +11,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
 
 // Exchange is one line of a -record capture: a request the proxy
@@ -27,13 +31,17 @@ import (
 // apart (the raw path and query) and the timestamps. A body that is
 // valid UTF-8 is written as text, any other as base64. Credentials a
 // client sends (Authorization and the signing headers) are never
-// written.
+// written. LimitExceeded, when set, says the answer's body was over the
+// recording's limit (-record-max-body): the response carries the
+// provider's status and headers, no body, and the client was answered
+// 502 instead.
 type Exchange struct {
-	Seq        uint64   `json:"seq"`
-	StartedAt  string   `json:"started_at"`
-	CapturedAt string   `json:"captured_at"`
-	Request    Request  `json:"request"`
-	Response   Response `json:"response"`
+	Seq           uint64   `json:"seq"`
+	StartedAt     string   `json:"started_at"`
+	CapturedAt    string   `json:"captured_at"`
+	LimitExceeded string   `json:"limit_exceeded,omitempty"`
+	Request       Request  `json:"request"`
+	Response      Response `json:"response"`
 }
 
 // Request is the forwarded request as the client sent it: Path and Query
@@ -76,12 +84,17 @@ var redacted = map[string]bool{"authorization": true, "x-amz-security-token": tr
 // instead would hold a window of finished exchanges in memory and still
 // need the same rule for the order a client can observe.
 type recorder struct {
-	next   http.Handler
-	target string
-	mu     sync.Mutex
-	w      *bufio.Writer
-	seq    uint64
-	err    error
+	next    http.Handler
+	target  string
+	maxBody int64 // the largest answer body recorded (and released)
+	mu      sync.Mutex
+	w       *bufio.Writer
+	enc     *json.Encoder // into line
+	line    bytes.Buffer
+	seq     uint64
+	err     error
+	// exceeded counts the answers over maxBody.
+	exceeded int
 	// closed refuses new requests once Close began; inflight counts the
 	// handlers still to record their exchange (Add only under adm while
 	// open, so Close's Wait never races an Add). adm is apart from mu so
@@ -92,8 +105,17 @@ type recorder struct {
 	inflight sync.WaitGroup
 }
 
-func newRecorder(next http.Handler, target string, w io.Writer) *recorder {
-	return &recorder{next: next, target: strings.TrimSuffix(target, "/"), w: bufio.NewWriter(w)}
+// newRecorder records the exchanges through next to w; an answer whose
+// body is over maxBody bytes is recorded without it and answered 502
+// (the proxy in front of a provider is given the same bound, so it never
+// buffers more: faulttest.Plan.MaxBody).
+func newRecorder(next http.Handler, target string, w io.Writer, maxBody int64) *recorder {
+	rec := &recorder{next: next, target: strings.TrimSuffix(target, "/"), maxBody: maxBody, w: bufio.NewWriter(w)}
+	rec.enc = json.NewEncoder(&rec.line)
+	// '<', '>' and '&' as they are: an XML body escaped for HTML would
+	// take six bytes for each.
+	rec.enc.SetEscapeHTML(false)
+	return rec
 }
 
 func (rec *recorder) begin() bool {
@@ -121,7 +143,7 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rec.end()
 	started := time.Now().UTC()
-	cw := &captureWriter{ResponseWriter: w}
+	cw := &captureWriter{ResponseWriter: w, limit: rec.maxBody}
 	path, query, _ := strings.Cut(r.RequestURI, "?")
 	x := Exchange{StartedAt: started.Format(time.RFC3339Nano),
 		Request: Request{Method: r.Method, URL: rec.target + r.RequestURI, Path: path, Query: query, Headers: headers(r.Header, r.Host, true)}}
@@ -140,18 +162,28 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !cw.hijacked {
 		x.Response.Status = cw.code()
 		x.Response.Headers = headers(cw.Header(), "", false)
-		body := cw.body.Bytes()
-		if utf8.Valid(body) {
-			s := string(body)
-			x.Response.Body = &s
-		} else {
-			s := base64.StdEncoding.EncodeToString(body)
-			x.Response.BodyBase64 = &s
+		switch {
+		case cw.over:
+			x.LimitExceeded = fmt.Sprintf("the answer's body is over %d bytes", rec.maxBody)
+		case cw.Header().Get(faulttest.BodyLimitHeader) != "":
+			x.LimitExceeded = fmt.Sprintf("the provider's answer body is over %s bytes; the proxy answered 502", cw.Header().Get(faulttest.BodyLimitHeader))
+		default:
+			body := cw.body.Bytes()
+			if utf8.Valid(body) {
+				s := string(body)
+				x.Response.Body = &s
+			} else {
+				s := base64.StdEncoding.EncodeToString(body)
+				x.Response.BodyBase64 = &s
+			}
 		}
 	}
 	rec.write(&x)
+	if x.LimitExceeded != "" {
+		log.Printf("faultproxy: recording exchange %d (%s %s): %s, recorded without its body", x.Seq, r.Method, r.RequestURI, x.LimitExceeded)
+	}
 	if !cw.hijacked {
-		cw.release()
+		cw.release(rec.maxBody)
 	}
 }
 
@@ -160,10 +192,16 @@ func (rec *recorder) write(x *Exchange) {
 	defer rec.mu.Unlock()
 	rec.seq++
 	x.Seq = rec.seq
-	line, err := json.Marshal(x)
+	if x.LimitExceeded != "" {
+		rec.exceeded++
+	}
+	rec.line.Reset()
+	err := rec.enc.Encode(x) // one line, '\n' included
 	if err == nil {
-		line = append(line, '\n')
-		_, err = rec.w.Write(line)
+		_, err = rec.w.Write(rec.line.Bytes())
+	}
+	if rec.line.Cap() > 1<<20 {
+		rec.line = bytes.Buffer{} // a large answer's buffer is not kept
 	}
 	if err == nil {
 		err = rec.w.Flush()
@@ -196,7 +234,15 @@ func (rec *recorder) Close(ctx context.Context) error {
 		rec.adm.Unlock()
 		return fmt.Errorf("%d exchanges still in flight at shutdown were not recorded: %w", n, ctx.Err())
 	}
-	return rec.Err()
+	if err := rec.Err(); err != nil {
+		return err
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.exceeded > 0 {
+		return fmt.Errorf("%d answers were over the body limit of %d bytes (-record-max-body): recorded without their bodies, answered 502", rec.exceeded, rec.maxBody)
+	}
+	return nil
 }
 
 // Err is the first write error, if any.
@@ -230,12 +276,15 @@ func headers(h http.Header, host string, request bool) []Header {
 }
 
 // captureWriter holds the answer the handler writes until release: the
-// status, the body (the headers are the client's own map, sent with the
-// status).
+// status, the body up to limit bytes (the headers are the client's own
+// map, sent with the status); over marks a body that went past limit,
+// whose bytes beyond it are dropped.
 type captureWriter struct {
 	http.ResponseWriter
+	limit    int64
 	status   int
 	body     bytes.Buffer
+	over     bool
 	hijacked bool
 }
 
@@ -249,6 +298,11 @@ func (c *captureWriter) Write(b []byte) (int, error) {
 	if c.status == 0 {
 		c.status = http.StatusOK
 	}
+	if c.over || c.limit > 0 && int64(c.body.Len()+len(b)) > c.limit {
+		c.over = true
+		c.body = bytes.Buffer{}
+		return len(b), nil
+	}
 	return c.body.Write(b)
 }
 
@@ -261,8 +315,18 @@ func (c *captureWriter) code() int {
 	return c.status
 }
 
-// release sends the held answer to the client.
-func (c *captureWriter) release() {
+// release sends the held answer to the client; one whose body went past
+// limit is answered 502, marked as the proxy marks its own, never cut.
+func (c *captureWriter) release(limit int64) {
+	if c.over {
+		h := c.Header()
+		clear(h)
+		h.Set(faulttest.BodyLimitHeader, strconv.FormatInt(limit, 10))
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+		c.ResponseWriter.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(c.ResponseWriter, "faultproxy: the answer's body is over %d bytes\n", limit)
+		return
+	}
 	c.ResponseWriter.WriteHeader(c.code())
 	_, _ = c.ResponseWriter.Write(c.body.Bytes())
 }

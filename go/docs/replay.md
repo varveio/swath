@@ -592,6 +592,23 @@ kill -INT %1
 # GCS: -target https://storage.googleapis.com and swath list gs://B/P --gcs-anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
 ```
 
+The capture is read and replayed one exchange at a time (`TestCaptureStreams`): one exchange, the token map and
+the report's failures stay in memory, and the report lists the failing and skipped exchanges while it counts the
+passing ones. Because the recorder writes an issuing answer before any request that uses its token, a token no
+earlier exchange issued fails its request (the capture is out of order or starts mid-walk), and the rest of that
+walk is skipped naming it, as it is after a page whose replay failed (`TestCaptureReplaysAClientStream`,
+`TestCaptureFailedIssuerSkipsItsWalk`). Every size is bounded, and a bound that is reached is a failure of that
+exchange, never a cut body (`TestRecordBodyLimit`, `TestCaptureLimits`):
+
+| Flag | Default | Bounds | When exceeded |
+|---|---|---|---|
+| `faultproxy -record-max-body` | 16 MiB | the answer body the proxy buffers and records (the proxy reads no further than one byte past it) | the client is answered `502` with `X-Faulttest-Body-Limit`, the exchange is recorded with `limit_exceeded` and no body, logged, and the proxy exits 1 at shutdown with the count |
+| `replaydiff -capture-max-body` | 16 MiB | a captured body as recorded; a capture line may be six times this plus 1 MiB (JSON escaping) | the exchange (or the line, read to its end) fails and the replay goes on |
+| `replaydiff -capture-max-decoded` | 64 MiB | a body once its content coding (gzip) is undone | the exchange fails |
+| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed | the replay fails at that exchange and stops |
+
+An exchange the recorder marked `limit_exceeded` fails in the replay as well.
+
 On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lister):
 
 | Capture | Exchanges | Passed | Differing |

@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -42,7 +43,7 @@ func TestRecordWritesEveryExchange(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	rec := newRecorder(p, upstream.URL, &out)
+	rec := newRecorder(p, upstream.URL, &out, 1<<20)
 	front := httptest.NewServer(rec)
 	defer front.Close()
 	for _, q := range []string{"list-type=2&prefix=a%2Fb", "list-type=2&prefix=bin", "list-type=2"} {
@@ -149,7 +150,7 @@ func TestRecordPersistsBeforeRelease(t *testing.T) {
 	}
 	var out bytes.Buffer
 	gate := &gateWriter{w: &out, open: make(chan struct{}), early: make(chan struct{})}
-	front := httptest.NewServer(newRecorder(p, upstream.URL, gate))
+	front := httptest.NewServer(newRecorder(p, upstream.URL, gate, 1<<20))
 	defer front.Close()
 	get := func(q string) string {
 		resp, err := http.Get(front.URL + "/b?" + q)
@@ -209,7 +210,7 @@ func TestRecordDrainsOnShutdown(t *testing.T) {
 		p.ServeHTTP(w, r)
 		<-open
 	})
-	rec := newRecorder(held, upstream.URL, f)
+	rec := newRecorder(held, upstream.URL, f, 1<<20)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -245,5 +246,71 @@ func TestRecordDrainsOnShutdown(t *testing.T) {
 	rec.ServeHTTP(w, httptest.NewRequest("GET", "/b?list-type=2", nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("after close: %d", w.Code)
+	}
+}
+
+// TestRecordBodyLimit: an answer over the recording's body limit, cut
+// short by the proxy in front of the provider (Plan.MaxBody) or written
+// whole by the handler it records, is recorded as exceeded with no body,
+// the client is answered a marked 502, never a cut 200, an answer at the
+// limit is recorded whole, and the shutdown reports the count.
+func TestRecordBodyLimit(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		io.WriteString(w, strings.Repeat("<", n))
+	}))
+	defer upstream.Close()
+	const limit = 1000
+	p, err := faulttest.New(upstream.URL, faulttest.Plan{MaxBody: limit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("direct") != "" {
+			io.WriteString(w, strings.Repeat("y", 600))
+			io.WriteString(w, strings.Repeat("y", 600))
+			return
+		}
+		p.ServeHTTP(w, r)
+	})
+	var out bytes.Buffer
+	rec := newRecorder(direct, upstream.URL, &out, limit)
+	front := httptest.NewServer(rec)
+	defer front.Close()
+	for _, c := range []struct {
+		q    string
+		code int
+	}{{"n=1000", 200}, {"n=1001", 502}, {"direct=1", 502}} {
+		resp, err := http.Get(front.URL + "/b?" + c.q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != c.code || c.code == 502 && (resp.Header.Get(faulttest.BodyLimitHeader) != "1000" || !strings.Contains(string(b), "over 1000 bytes")) {
+			t.Errorf("%s: %d %q %.80q", c.q, resp.StatusCode, resp.Header, b)
+		}
+	}
+	raw := append([]byte(nil), out.Bytes()...)
+	got := readExchanges(t, &out)
+	if len(got) != 3 {
+		t.Fatalf("%d exchanges", len(got))
+	}
+	if x := got[0]; x.LimitExceeded != "" || x.Response.Body == nil || len(*x.Response.Body) != limit {
+		t.Errorf("at the limit: %+v", x.LimitExceeded)
+	}
+	if !bytes.Contains(raw, []byte(`"body":"<<<`)) {
+		t.Errorf("a body's '<' is escaped in the line: %.300s", raw)
+	}
+	for _, x := range got[1:] {
+		if x.LimitExceeded == "" || x.Response.Body != nil || x.Response.BodyBase64 != nil {
+			t.Errorf("over the limit: %+v", x)
+		}
+	}
+	if got[2].Response.Status != 200 {
+		t.Errorf("the handler's own status: %d", got[2].Response.Status)
+	}
+	if err := rec.Close(context.Background()); err == nil || !strings.Contains(err.Error(), "2 answers were over the body limit") {
+		t.Errorf("close: %v", err)
 	}
 }

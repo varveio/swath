@@ -11,9 +11,10 @@
 //
 // With -record FILE it also writes every exchange it forwards (and every
 // answer it injects) to FILE as JSON lines (record.go), each before its
-// answer is released to the client: run a client
-// through it against a live provider endpoint (-target
-// https://s3.REGION.amazonaws.com for path-style S3, or
+// answer is released to the client, and bounds the answer bodies it
+// buffers by -record-max-body (a longer one is answered 502 and recorded
+// as exceeded): run a client through it against a live provider endpoint
+// (-target https://s3.REGION.amazonaws.com for path-style S3, or
 // https://storage.googleapis.com) and replay the capture with
 // replaydiff -capture.
 //
@@ -55,6 +56,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:19091", "listen address")
 	timeline := flag.String("timeline", "", "write the timeline TSV to this `file` on exit")
 	record := flag.String("record", "", "write every exchange to this `file` as JSON lines")
+	maxBody := flag.Int64("record-max-body", 16<<20, "with -record, the largest answer body in `bytes` buffered and recorded; a longer one is answered 502 and recorded without it")
 	drain := flag.Duration("drain", 30*time.Second, "on SIGINT or SIGTERM, wait this long for requests in flight to finish")
 	flag.Uint64Var(&plan.Seed, "seed", 1, "decision seed")
 	flag.StringVar(&plan.Dialect, "dialect", "s3", "throttle answer: s3 (503 SlowDown) or gcs (429 rateLimitExceeded)")
@@ -62,6 +64,9 @@ func main() {
 	flag.Var(&ws, "window", "FAULT:FROM-TO:FRACTION[:DELAY], repeatable; FAULT is throttle, latency or reset")
 	flag.Parse()
 	plan.Windows = ws
+	if *record != "" {
+		plan.MaxBody = *maxBody
+	}
 	p, err := faulttest.New(*target, plan)
 	if err != nil {
 		log.Fatal(err)
@@ -77,7 +82,7 @@ func main() {
 		if f, err = os.Create(*record); err != nil {
 			log.Fatal(err)
 		}
-		rec = newRecorder(p, *target, f)
+		rec = newRecorder(p, *target, f, *maxBody)
 		h = rec
 	}
 	srv := &http.Server{Handler: h}

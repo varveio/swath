@@ -67,6 +67,7 @@ type options struct {
 	liveScripted                                                   bool
 	liveWalkPages                                                  int
 	capture                                                        string
+	captureLimits                                                  captureLimits
 	maskMetadata                                                   bool
 	pins                                                           string
 }
@@ -91,6 +92,9 @@ func main() {
 	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
 	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
+	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
+	flag.Int64Var(&o.captureLimits.maxDecoded, "capture-max-decoded", 64<<20, "capture: the largest body in `bytes` once its content coding is undone; an exchange over it fails")
+	flag.IntVar(&o.captureLimits.maxTokens, "capture-max-tokens", 1<<20, "capture: the most page tokens remembered for walks still to be replayed; past it the replay fails and stops")
 	flag.IntVar(&o.liveWalkPages, "live-walk-pages", 300, "live: walk a prefix at a page size only when the walk takes at most this many pages")
 	flag.StringVar(&o.dumpTSV, "dump-tsv", "", "write the reference listing as a TSV fixture here and exit")
 	flag.StringVar(&o.logDir, "log-dir", os.TempDir(), "where the servers' stderr logs go")
@@ -397,6 +401,10 @@ type driver struct {
 	refTokens sync.Map // request name -> its reference answer's next token
 	// tokenNames are the names already listed in TokenBytes.
 	tokenNames map[string]bool
+	// countPasses keeps passing results out of the report's list (they
+	// are counted): a capture's report then grows with its failures,
+	// not with every exchange.
+	countPasses bool
 }
 
 func (d *driver) record(r result) {
@@ -406,7 +414,9 @@ func (d *driver) record(r result) {
 		d.rep.Skipped = append(d.rep.Skipped, fmt.Sprintf("%s %q: %s", r.Kind, r.Name, r.Skipped))
 		return
 	}
-	d.rep.Results = append(d.rep.Results, r)
+	if !r.Pass || !d.countPasses {
+		d.rep.Results = append(d.rep.Results, r)
+	}
 	d.rep.Compared++
 	if r.Pass {
 		d.rep.Passed++
