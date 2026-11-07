@@ -374,3 +374,26 @@ func TestListScopeDecodesListedNames(t *testing.T) {
 		t.Errorf("scope a b/: %q %v", scoped, err)
 	}
 }
+
+// TestGCSLiveRejectsTrailingData: a JSON answer is one object and
+// whitespace: trailing whitespace is accepted; an additional value, a
+// malformed suffix or a stray closing brace after the object fails the
+// comparison, on either side.
+func TestGCSLiveRejectsTrailingData(t *testing.T) {
+	h := http.Header{"Content-Type": {"application/json; charset=UTF-8"}}
+	const page = `{"kind":"storage#objects"}`
+	ref := &response{200, h, []byte(page)}
+	for _, suffix := range []string{"", " ", "\n", " \r\n\t "} {
+		if d := gcsLive(ref, &response{200, h, []byte(page + suffix)}, "b", false, gcsNative); !d.OK {
+			t.Errorf("%q: %s", suffix, d.Detail)
+		}
+	}
+	for _, suffix := range []string{"garbage", "{}", `"x"`, " 1", "}", "]", " ,", "\x00"} {
+		if d := gcsLive(ref, &response{200, h, []byte(page + suffix)}, "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "trailing data") {
+			t.Errorf("got side %q: %+v", suffix, d)
+		}
+		if d := gcsLive(&response{200, h, []byte(page + suffix)}, ref, "b", false, gcsNative); d.OK {
+			t.Errorf("reference side %q passed", suffix)
+		}
+	}
+}

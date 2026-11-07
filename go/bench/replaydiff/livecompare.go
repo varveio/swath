@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"regexp"
 	"slices"
@@ -564,13 +566,15 @@ type jsonObject struct {
 }
 
 func readObject(b []byte, what string) *jsonObject {
-	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec := json.NewDecoder(bytes.NewReader(b))
 	o, err := decodeObject(dec)
 	if err != nil {
 		pfail("%s: %v", what, err)
 	}
-	if _, err := dec.Token(); err == nil {
-		pfail("%s: trailing data", what)
+	// Only whitespace may follow the object: another value is a token
+	// and anything else a syntax error, and both fail.
+	if t, err := dec.Token(); err != io.EOF {
+		pfail("%s: trailing data after the object (%v %v)", what, t, err)
 	}
 	return o
 }
