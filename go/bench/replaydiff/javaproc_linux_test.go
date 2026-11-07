@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -120,4 +121,24 @@ func TestRunBoundedKillsTheGroup(t *testing.T) {
 			gone(t, child, child)
 		})
 	}
+}
+
+// TestDriverStopsALauncherThatExitsEarly runs the driver against a Java
+// launcher that forks a child ignoring SIGTERM and exits 0 before any
+// startup line: the driver returns the start error, and the child does not
+// outlive it (startServer stops the whole group on every path after Start).
+func TestDriverStopsALauncherThatExitsEarly(t *testing.T) {
+	dir := t.TempDir()
+	java := script(t, dir, "early-exit",
+		"sh -c 'trap \"\" TERM; exec sleep 3600' >/dev/null 2>&1 &\necho \"child $!\" >&2\nexit 0\n")
+	err := run(options{java: java, goBin: "unused", fixture: dir, bucket: "bkt", logDir: dir, protocol: "s3", parallel: 1})
+	if err == nil || !strings.Contains(err.Error(), "exited before its startup line") {
+		t.Fatalf("driver: %v", err)
+	}
+	log, rerr := os.ReadFile(filepath.Join(dir, "replaydiff-java.log"))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	child := childOf(t, log)
+	gone(t, child, child)
 }

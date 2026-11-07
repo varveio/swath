@@ -35,9 +35,11 @@ var (
 // startServer runs `bin serve args...`, waits for its startup line and its
 // health endpoint, and copies its stderr to logPath. ctx bounds the wait
 // for readiness (ten minutes at most). Once the command has started the
-// process is returned with any error, already stopped, so a caller can
-// confirm it is gone.
-func startServer(ctx context.Context, name, bin string, args []string, logPath string) (*process, error) {
+// process is returned with any error, already stopped (its whole group,
+// on every path after Start, including a launcher that exits before its
+// startup line and leaves a child behind), so a caller can confirm it is
+// gone and need not stop it.
+func startServer(ctx context.Context, name, bin string, args []string, logPath string) (_ *process, err error) {
 	cmd := exec.Command(bin, append([]string{"serve"}, args...)...)
 	cmd.Env = os.Environ()
 	stderr, err := cmd.StderrPipe()
@@ -58,6 +60,11 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 		return nil, err
 	}
 	s := &process{name: name, cmd: cmd, exited: make(chan struct{})}
+	defer func() {
+		if err != nil {
+			s.stop()
+		}
+	}()
 	startup := make(chan string, 1)
 	go func() {
 		defer logf.Close()
@@ -83,10 +90,8 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 	case <-s.exited:
 		return s, fmt.Errorf("%s exited before its startup line; see %s", name, logPath)
 	case <-time.After(10 * time.Minute):
-		s.stop()
 		return s, fmt.Errorf("%s printed no startup line in 10 minutes; see %s", name, logPath)
 	case <-ctx.Done():
-		s.stop()
 		return s, fmt.Errorf("%s printed no startup line before its deadline: %w; see %s", name, ctx.Err(), logPath)
 	}
 	if s.metrics != "" {
@@ -94,7 +99,6 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 		health := &http.Client{Timeout: 5 * time.Second}
 		for {
 			if ctx.Err() != nil {
-				s.stop()
 				return s, fmt.Errorf("%s: health endpoint not ready before its deadline: %w", name, ctx.Err())
 			}
 			resp, err := health.Get(s.metrics + "/healthz")
@@ -105,7 +109,6 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 				}
 			}
 			if time.Now().After(deadline) {
-				s.stop()
 				return s, errors.New(name + ": health endpoint never answered")
 			}
 			time.Sleep(200 * time.Millisecond)
