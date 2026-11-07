@@ -246,20 +246,20 @@ func TestContinuationTokenWinsOverConflictingStartAfterOnHTTP(t *testing.T) {
 	}
 }
 
-func TestBlankContinuationTokenLeavesStartAfterAsTheBoundaryOnHTTP(t *testing.T) {
+// An empty continuation-token is refused over HTTP, a start-after
+// notwithstanding, as live S3 refuses it.
+func TestEmptyContinuationTokenIsRefusedOnHTTP(t *testing.T) {
 	sorted, oracle := sortedPair(t, strs("a/1", "a/2", "a/3", "a/4"), 1000, 7)
-	q := "list-type=2&max-keys=1000&continuation-token=&start-after=a%2F1"
-	got := body(t, sorted, q)
-	if got != body(t, oracle, q) {
-		t.Error("the stores differ")
-	}
-	for _, want := range []string{"<Key>a/2</Key>", "<Key>a/3</Key>", "<Key>a/4</Key>", "<StartAfter>a/1</StartAfter>"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %s: %s", want, got)
+	for _, s := range []*Server{sorted, oracle} {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1000&continuation-token=&start-after=a%%2F1", s.Port()))
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if strings.Contains(got, "<Key>a/1</Key>") || strings.Contains(got, "<ContinuationToken>") {
-		t.Errorf("%s", got)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 400 || !strings.Contains(string(b), "<Code>InvalidArgument</Code><Message>The continuation token provided is incorrect</Message>") {
+			t.Errorf("%d %s", resp.StatusCode, b)
+		}
 	}
 }
 

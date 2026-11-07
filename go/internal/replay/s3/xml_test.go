@@ -136,13 +136,6 @@ func TestTokenSuppressesTheIgnoredStartAfter(t *testing.T) {
 	if !strings.Contains(xml, "<ContinuationToken>opaque-token</ContinuationToken>") || strings.Contains(xml, "<StartAfter>") {
 		t.Errorf("%s", xml)
 	}
-	for _, blank := range []string{"", "   "} {
-		req := &Request{Bucket: "bucket", StartAfter: b("a/2"), Token: blank, TokenSet: true, MaxKeys: 1000}
-		xml := string(AppendList(nil, &Result{Request: req}))
-		if !strings.Contains(xml, "<StartAfter>a/2</StartAfter>") || strings.Contains(xml, "<ContinuationToken>") {
-			t.Errorf("blank %q: %s", blank, xml)
-		}
-	}
 }
 
 func TestRenderError(t *testing.T) {

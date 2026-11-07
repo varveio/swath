@@ -161,3 +161,14 @@ func TestLivePlusIsASpace(t *testing.T) {
 	wantLivePage(t, "list-type=2&prefix=r+k&max-keys=2",
 		"<Name>bkt</Name><Prefix>r k</Prefix><KeyCount>0</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>false</IsTruncated>", "")
 }
+
+// A present but empty or blank continuation-token is refused: S3 answered
+// continuation-token=, =%20 and =+ with 400 InvalidArgument "The
+// continuation token provided is incorrect", also beside a start-after,
+// and a malformed token likewise.
+func TestLiveEmptyTokenIsRefused(t *testing.T) {
+	for _, tok := range []string{"", "%20", "+", "abc"} {
+		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&continuation-token="+tok, 400, "InvalidArgument", "The continuation token provided is incorrect")
+	}
+	wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&continuation-token=&start-after=r/k01", 400, "InvalidArgument", "The continuation token provided is incorrect")
+}

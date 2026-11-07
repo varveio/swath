@@ -100,7 +100,7 @@ func TestBadTokenIsRejectedEvenWithAStartAfter(t *testing.T) {
 	for _, sa := range []string{"", "a/1"} {
 		_, err := pager("a/1").List(context.Background(), &Request{StartAfter: b(sa), Token: "not-a-token", TokenSet: true, MaxKeys: 1000})
 		var e *Error
-		if !errors.As(err, &e) || e.Message != "invalid continuation-token" {
+		if !errors.As(err, &e) || e != errInvalidToken {
 			t.Errorf("start-after %q: %v", sa, err)
 		}
 	}
@@ -128,12 +128,14 @@ func TestTokenTakesPrecedenceOverStartAfter(t *testing.T) {
 	}
 }
 
-func TestBlankTokenLeavesStartAfterAsTheBoundary(t *testing.T) {
+// A present but empty or blank token is refused, a start-after
+// notwithstanding, as on live S3.
+func TestBlankTokenIsRefusedEvenWithAStartAfter(t *testing.T) {
 	p := pager("a/1", "a/2", "a/3", "a/4")
 	for _, blank := range []string{"", "   "} {
-		res := list(t, p, &Request{StartAfter: b("a/2"), Token: blank, TokenSet: true, MaxKeys: 1000})
-		if render(res) != "O:a/3 O:a/4" {
-			t.Errorf("blank %q: %s", blank, render(res))
+		_, err := p.List(context.Background(), &Request{StartAfter: b("a/2"), Token: blank, TokenSet: true, MaxKeys: 1000})
+		if err != errInvalidToken {
+			t.Errorf("blank %q: %v", blank, err)
 		}
 	}
 }

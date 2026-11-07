@@ -12,12 +12,12 @@ import (
 )
 
 func TestParseRequest(t *testing.T) {
-	r, err := ParseRequest("bkt", "list-type=2&prefix=a%2F&delimiter=%2F&start-after=a%2F1&max-keys=5000&encoding-type=url&fetch-owner=TRUE&continuation-token=")
+	r, err := ParseRequest("bkt", "list-type=2&prefix=a%2F&delimiter=%2F&start-after=a%2F1&max-keys=5000&encoding-type=url&fetch-owner=TRUE")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(r.Prefix) != "a/" || string(r.Delimiter) != "/" || string(r.StartAfter) != "a/1" || r.MaxKeys != 5000 ||
-		r.PageSize() != 1000 || !r.EncodingURL || !r.FetchOwner || !r.TokenSet || r.HasToken() {
+		r.PageSize() != 1000 || !r.EncodingURL || !r.FetchOwner || r.TokenSet {
 		t.Errorf("parsed %+v", r)
 	}
 	r, err = ParseRequest("bkt", "list-type=2&prefix=&max-keys=&encoding-type=URL&pre%66ix=q&prefix=a+b%2&fetch-owner=yes")

@@ -53,10 +53,10 @@ func TestTokenRoundTripsAndLegacyV1(t *testing.T) {
 	}
 }
 
-func TestBlankTokenIsAbsent(t *testing.T) {
+func TestBlankTokenIsRefused(t *testing.T) {
 	for _, s := range []string{"", "   ", "\t", " "} {
-		if _, ok, err := DecodeToken(s); ok || err != nil {
-			t.Errorf("DecodeToken(%q) = %v, %v; want absent", s, ok, err)
+		if _, _, err := DecodeToken(s); err != errInvalidToken {
+			t.Errorf("DecodeToken(%q) = %v; want the 400 InvalidArgument", s, err)
 		}
 	}
 }
@@ -67,7 +67,7 @@ func TestMalformedTokensAreRejected(t *testing.T) {
 		"v2:AGE==", "v2:AG=", "v2:A", "v2:AG\nE", "v2:AG+E", "v2:AG/E", "v2:é", "v1:*"} {
 		_, _, err := DecodeToken(s)
 		var e *Error
-		if !errors.As(err, &e) || e.Status != 400 || e.Message != "invalid continuation-token" {
+		if !errors.As(err, &e) || e.Status != 400 || e != errInvalidToken {
 			t.Errorf("DecodeToken(%q) = %v, want the 400 InvalidArgument", s, err)
 		}
 	}
@@ -126,27 +126,6 @@ func TestTokenProperties(t *testing.T) {
 	}
 	if rejected == 0 || different == 0 {
 		t.Errorf("mutations: %d rejected, %d decoded differently; want both", rejected, different)
-	}
-}
-
-// HasToken and DecodeToken classify every string the same way: a request
-// never drops its start-after for a token that resolves to nothing.
-func TestHasTokenAgreesWithDecode(t *testing.T) {
-	r := rand.New(rand.NewPCG(5, 6))
-	inputs := []string{"", " ", "   ", "\t", "\n", " \t\n "}
-	for range 500 {
-		b := make([]byte, r.IntN(20))
-		for i := range b {
-			b[i] = byte(r.IntN(128))
-		}
-		inputs = append(inputs, string(b), EncodeToken(randomBytes(r, 1, 10), true))
-	}
-	for _, s := range inputs {
-		_, ok, err := DecodeToken(s)
-		req := &Request{Token: s, TokenSet: true}
-		if req.HasToken() != (ok || err != nil) {
-			t.Errorf("token %q: HasToken %v, decode ok=%v err=%v", s, req.HasToken(), ok, err)
-		}
 	}
 }
 

@@ -45,16 +45,15 @@ func EncodeToken(boundary []byte, inclusive bool) string {
 	return tokenV2 + base64.RawURLEncoding.EncodeToString(payload)
 }
 
-// errInvalidToken is the answer to every malformed token.
-var errInvalidToken = &Error{Status: 400, Code: "InvalidArgument", Message: "invalid continuation-token"}
+// errInvalidToken is the answer to every token that is not one: live
+// S3's code and message (TestLiveEmptyTokenIsRefused).
+var errInvalidToken = &Error{Status: 400, Code: "InvalidArgument", Message: "The continuation token provided is incorrect"}
 
-// DecodeToken parses a token. A blank token (empty or whitespace) is
-// absent: ok=false with no error. Any other string that is not a v1 or v2
-// token is a 400 InvalidArgument.
+// DecodeToken parses a token. Any string that is not a v1 or v2 token,
+// the empty and blank strings included, is a 400 InvalidArgument: a
+// continuation-token parameter that is present must resume something, as
+// on live S3.
 func DecodeToken(token string) (t Token, ok bool, err error) {
-	if isBlank(token) {
-		return Token{}, false, nil
-	}
 	switch {
 	case strings.HasPrefix(token, tokenV2):
 		payload, err := decodeBase64URL(token[len(tokenV2):])

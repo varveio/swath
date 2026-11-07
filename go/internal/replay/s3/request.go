@@ -37,11 +37,11 @@ func (r *Request) PageSize() int {
 	return int(min(max(r.MaxKeys, 0), MaxPageSize))
 }
 
-// HasToken reports whether the request carries a continuation token that
-// resumes something. A blank continuation-token= is absent: it neither
-// resumes nor suppresses start-after, in the pager or in the response.
+// HasToken reports whether the request carries a continuation token. A
+// request that parsed carries a valid one: an empty or malformed token is
+// refused.
 func (r *Request) HasToken() bool {
-	return r.TokenSet && !isBlank(r.Token)
+	return r.TokenSet
 }
 
 // query is a parsed query string: parameter names are text, values raw
@@ -106,6 +106,11 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 		return nil, err
 	}
 	r.MaxKeys = mk
+	if r.TokenSet {
+		if _, _, err := DecodeToken(r.Token); err != nil {
+			return nil, err
+		}
+	}
 	enc, _ := q.text("encoding-type")
 	r.EncodingURL = enc == "url"
 	owner, _ := q.text("fetch-owner")
