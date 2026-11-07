@@ -267,9 +267,19 @@ func damageLedger(t *testing.T, out string) {
 	for off := 0; off+9 <= len(b); off += 8 + int(binary.LittleEndian.Uint32(b[off:])) {
 		offs = append(offs, off)
 	}
+	// The victim must be live in the surviving prefix (a seal with no
+	// retirement after it): killed at the first unlink, the ledger already
+	// holds that file's retirement, and removing a retired file retires
+	// nothing (listing's damagedSnapshot has the flake this avoids).
+	retired := map[string]bool{}
+	for _, off := range offs {
+		if b[off+8] == 'X' {
+			retired[string(b[off+9:off+25])] = true
+		}
+	}
 	victim := -1
 	for i := 1; i+2 < len(offs); i++ {
-		if b[offs[i]+8] != 'S' {
+		if b[offs[i]+8] != 'S' || retired[string(b[offs[i]+9:offs[i]+25])] {
 			continue
 		}
 		name := hex.EncodeToString(b[offs[i]+9:offs[i]+25]) + ".spill"

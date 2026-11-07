@@ -208,12 +208,26 @@ func ledgerFrames(t *testing.T, out string) (b []byte, offs []int, types []byte,
 // unlink and directory sync are reached), an interior ledger record lost
 // with the ones after it intact (persisted out of order: the truncation is
 // reached), and an unrecorded file present (an orphan).
+//
+// The missing file's certificate must be live in the surviving prefix: a
+// seal with no retirement after it. The fixture is killed at the first
+// unlink, after that cycle appended its retirement record, so the first
+// sealed file still on disk can be one whose retirement is already in the
+// ledger; removing it then retires nothing, and recovery reached its
+// retirement steps only when K happened to cover another certificate (the
+// flake: 2 runs in 8 reached none, crashmatrix-chase.log).
 func damagedSnapshot(t *testing.T, out string) {
 	t.Helper()
 	b, offs, types, ids := ledgerFrames(t, out)
 	victim, lost := -1, -1
-	for i := 1; i < len(offs); i++ {
-		if types[i] != 'S' {
+	retired := map[string]bool{}
+	for i := range offs {
+		if types[i] == 'X' && ids[i] != nil {
+			retired[string(ids[i])] = true
+		}
+	}
+	for i := 1; i < len(offs)-2; i++ { // before the lost record
+		if types[i] != 'S' || retired[string(ids[i])] {
 			continue
 		}
 		name := hex.EncodeToString(ids[i]) + ".spill"
