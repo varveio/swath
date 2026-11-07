@@ -26,7 +26,10 @@ func object(key string, size int64, micros int64, etag string) store.Object {
 
 // TestRenderListGolden pins a whole page against the bytes the Java server
 // answered for the same request over the same three objects
-// (GET /bkt?list-type=2&max-keys=3 on the synthetic 10k fixture).
+// (GET /bkt?list-type=2&max-keys=3 on the synthetic 10k fixture), apart
+// from the token: the Java server's was
+// v2:AGxvZ3MvYWxwaGEvZHQ9MjAyNi0wMS0wMS9wYXJ0LTAwMDA4Lmpzb24uZ3o, which
+// carries no checksum (token.go).
 func TestRenderListGolden(t *testing.T) {
 	s, _ := memstore.New([]store.Object{
 		object("logs/alpha/dt=2026-01-01/part-00000.json.gz", 1000, 1767225600000000, "cfcd208495d565ef66e7dff9f98764da"),
@@ -42,7 +45,7 @@ func TestRenderListGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix></Prefix><NextContinuationToken>v2:AGxvZ3MvYWxwaGEvZHQ9MjAyNi0wMS0wMS9wYXJ0LTAwMDA4Lmpzb24uZ3o</NextContinuationToken><KeyCount>3</KeyCount><MaxKeys>3</MaxKeys><IsTruncated>true</IsTruncated><Contents><Key>logs/alpha/dt=2026-01-01/part-00000.json.gz</Key><LastModified>2026-01-01T00:00:00.000Z</LastModified><ETag>&quot;cfcd208495d565ef66e7dff9f98764da&quot;</ETag><Size>1000</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>logs/alpha/dt=2026-01-01/part-00004.json.gz</Key><LastModified>2026-01-01T00:00:04.000Z</LastModified><ETag>&quot;a87ff679a2f3e71d9181a67b7542122c&quot;</ETag><Size>32676</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>logs/alpha/dt=2026-01-01/part-00008.json.gz</Key><LastModified>2026-01-01T00:00:08.000Z</LastModified><ETag>&quot;c9f0f895fb98ab9159f51fd0297e236d&quot;</ETag><Size>64352</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>`
+	const want = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix></Prefix><NextContinuationToken>AGxvZ3MvYWxwaGEvZHQ9MjAyNi0wMS0wMS9wYXJ0LTAwMDA4Lmpzb24uZ3qV49Nz</NextContinuationToken><KeyCount>3</KeyCount><MaxKeys>3</MaxKeys><IsTruncated>true</IsTruncated><Contents><Key>logs/alpha/dt=2026-01-01/part-00000.json.gz</Key><LastModified>2026-01-01T00:00:00.000Z</LastModified><ETag>&quot;cfcd208495d565ef66e7dff9f98764da&quot;</ETag><Size>1000</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>logs/alpha/dt=2026-01-01/part-00004.json.gz</Key><LastModified>2026-01-01T00:00:04.000Z</LastModified><ETag>&quot;a87ff679a2f3e71d9181a67b7542122c&quot;</ETag><Size>32676</Size><StorageClass>STANDARD</StorageClass></Contents><Contents><Key>logs/alpha/dt=2026-01-01/part-00008.json.gz</Key><LastModified>2026-01-01T00:00:08.000Z</LastModified><ETag>&quot;c9f0f895fb98ab9159f51fd0297e236d&quot;</ETag><Size>64352</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>`
 	if got := string(AppendList(nil, res)); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
@@ -63,7 +66,7 @@ func TestRenderListElementsAndOrder(t *testing.T) {
 		"<EncodingType>url</EncodingType>", "<KeyCount>2</KeyCount>", "<IsTruncated>true</IsTruncated>", "<Key>a/has%20space.txt</Key>",
 		"<LastModified>2026-01-01T00:00:00.123Z</LastModified>", "<ETag>&quot;abc&amp;def&quot;</ETag>",
 		"<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>", "<ChecksumType>FULL_OBJECT</ChecksumType>",
-		"<Owner><ID>owner-1</ID><DisplayName>Alice &amp; Bob</DisplayName></Owner>", "<Prefix>a/dir/</Prefix>", "<NextContinuationToken>v2:"} {
+		"<Owner><ID>owner-1</ID><DisplayName>Alice &amp; Bob</DisplayName></Owner>", "<Prefix>a/dir/</Prefix>", "<NextContinuationToken>AGEvZGlyL1jPDYI</NextContinuationToken>"} {
 		if !strings.Contains(xml, s) {
 			t.Errorf("missing %s in %s", s, xml)
 		}

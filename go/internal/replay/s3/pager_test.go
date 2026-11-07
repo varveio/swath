@@ -58,7 +58,7 @@ func TestTruncatesAndResumesFromToken(t *testing.T) {
 	p := pager("a/1", "a/2", "a/3")
 	first := list(t, p, &Request{Prefix: b("a/"), MaxKeys: 2})
 	second := list(t, p, &Request{Prefix: b("a/"), MaxKeys: 2, Token: first.NextToken, TokenSet: true})
-	if render(first) != "O:a/1 O:a/2" || !first.Truncated || !strings.HasPrefix(first.NextToken, "v2:") {
+	if render(first) != "O:a/1 O:a/2" || !first.Truncated || first.NextToken != EncodeToken([]byte("a/2"), false) {
 		t.Errorf("first %s %v %q", render(first), first.Truncated, first.NextToken)
 	}
 	if render(second) != "O:a/3" || second.Truncated {

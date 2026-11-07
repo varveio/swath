@@ -5,7 +5,9 @@ package s3
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -171,4 +173,35 @@ func TestLiveEmptyTokenIsRefused(t *testing.T) {
 		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&continuation-token="+tok, 400, "InvalidArgument", "The continuation token provided is incorrect")
 	}
 	wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&continuation-token=&start-after=r/k01", 400, "InvalidArgument", "The continuation token provided is incorrect")
+}
+
+// An altered token is refused: S3 answered its own token with the last
+// character replaced, with four characters dropped, and with one decoded
+// byte flipped, by 400 InvalidArgument "The continuation token provided
+// is incorrect".
+func TestLiveAlteredTokenIsRefused(t *testing.T) {
+	req, err := ParseRequest("bkt", "list-type=2&prefix=r/&max-keys=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := (&Pager{Store: memstore.Keys(memstore.Options{}, liveKeys...)}).List(context.Background(), req)
+	if err != nil || res.NextToken == "" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	tok := res.NextToken
+	last := "A"
+	if strings.HasSuffix(tok, "A") {
+		last = "B"
+	}
+	payload, _ := base64.RawURLEncoding.DecodeString(tok)
+	payload[len(payload)/2] ^= 1
+	for _, bad := range []string{tok[:len(tok)-1] + last, tok[:len(tok)-4], base64.RawURLEncoding.EncodeToString(payload)} {
+		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&continuation-token="+url.QueryEscape(bad), 400, "InvalidArgument",
+			"The continuation token provided is incorrect")
+	}
+	// Unaltered, it resumes.
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&continuation-token="+url.QueryEscape(tok),
+		"<Name>bkt</Name><Prefix>r/</Prefix><ContinuationToken>T</ContinuationToken><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k03 O:r/k04")
 }
