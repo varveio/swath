@@ -44,6 +44,7 @@ type captureLimits struct {
 	maxBody    int64 // a captured body as recorded (before any content coding is undone)
 	maxDecoded int64 // a body once its content coding is undone
 	maxTokens  int   // the tokens remembered for the walks still to be replayed
+	maxDetails int   // the failures, and apart from them the skips, the report details
 }
 
 // maxLine is the longest capture line accepted: the body JSON-escaped
@@ -181,12 +182,16 @@ func capturedResponse(x *capturedExchange, lim captureLimits) (*response, error)
 		}
 		r.Body = []byte(*x.Response.Body)
 	case x.Response.BodyBase64 != nil:
-		if n := int64(base64.StdEncoding.DecodedLen(len(*x.Response.BodyBase64))); n > lim.maxBody {
-			return nil, fmt.Errorf("the captured body is about %d bytes, over the limit of %d (-capture-max-body)", n, lim.maxBody)
-		}
-		b, err := base64.StdEncoding.DecodeString(*x.Response.BodyBase64)
+		// The limit is of the decoded bytes. DecodedLen is an upper
+		// bound that counts padding as data (a one-byte body is four
+		// characters), so the body is decoded through a reader that
+		// stops one byte past the limit and its actual length checked.
+		b, err := io.ReadAll(io.LimitReader(base64.NewDecoder(base64.StdEncoding, strings.NewReader(*x.Response.BodyBase64)), lim.maxBody+1))
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(b)) > lim.maxBody {
+			return nil, fmt.Errorf("the captured body is over %d bytes (-capture-max-body)", lim.maxBody)
 		}
 		r.Body = b
 	}
@@ -308,6 +313,19 @@ func runCapture(o options) error {
 	return d.write()
 }
 
+// maxDetail is the longest request path or query a report entry
+// quotes: a captured request is bounded only by the line limit, and a
+// report of -capture-max-details entries should not hold that many.
+const maxDetail = 1 << 10
+
+// clip is s cut to maxDetail bytes, saying how long it was.
+func clip(s string) string {
+	if len(s) <= maxDetail {
+		return s
+	}
+	return fmt.Sprintf("%s...(%d bytes)", s[:maxDetail], len(s))
+}
+
 // capturedToken is what replay knows of a token a captured answer
 // issued: the Go server's token for the same point, or the exchange
 // whose replay failed to give one.
@@ -323,6 +341,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 	if protocol == "gcs" {
 		tokenParam, next = "pageToken", gcsNextToken
 	}
+	d.maxDetails = lim.maxDetails
 	tokens := map[string]capturedToken{} // a captured token -> the Go server's for the same point
 	unread := 0                          // exchanges whose captured answer could not be read
 	for it := range items {
@@ -332,7 +351,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			continue
 		}
 		x := it.x
-		name := fmt.Sprintf("capture %d %s %s?%s", x.Seq, x.Request.Method, x.Request.Path, x.Request.Query)
+		name := fmt.Sprintf("capture %d %s %s?%s", x.Seq, x.Request.Method, clip(x.Request.Path), clip(x.Request.Query))
 		if x.LimitExceeded != "" {
 			unread++
 			d.record(result{Kind: "capture", Name: name, Error: "the recording's body limit was exceeded: " + x.LimitExceeded})
@@ -392,7 +411,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			query = strings.TrimPrefix(query, "&")
 		}
 		path := x.Request.Path
-		res := result{Kind: "capture", Name: name, Method: x.Request.Method, Target: path + "?" + query}
+		res := result{Kind: "capture", Name: name, Method: x.Request.Method, Target: clip(path) + "?" + clip(query)}
 		b, err := d.got.do(d.o.bucket, request{Method: x.Request.Method, Path: path, Query: query, Header: forwardedHeaders(x.Request.Headers)})
 		d.count(1)
 		if err != nil {

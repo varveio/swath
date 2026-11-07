@@ -51,9 +51,14 @@ import (
 // differ only in token bytes (token_byte_differences).
 
 // s3DivergenceRef reports whether d compares the S3 route with the Java
-// server, where the divergences apply.
+// server, where the divergences apply: every request of the S3 section,
+// and a request of another section that the S3 route answers (Compare
+// "s3").
 func (d *driver) s3DivergenceRef(r request) bool {
-	return d.ref != nil && d.ref.name == "java" && (d.o.protocol == "" || d.o.protocol == "s3") && r.Compare == ""
+	if d.ref == nil || d.ref.name != "java" {
+		return false
+	}
+	return r.Compare == "s3" || r.Compare == "" && (d.o.protocol == "" || d.o.protocol == "s3")
 }
 
 // s3Refusal is an S3 answer the Go route gives where the Java server does

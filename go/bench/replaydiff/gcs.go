@@ -235,7 +235,7 @@ func equalMaskedTokens(a, b []byte) bool {
 func (d *driver) skip(name, reason string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.rep.Skipped = append(d.rep.Skipped, name+": "+reason)
+	d.addSkip(func() string { return name + ": " + reason })
 }
 
 // runGCSCases is runCases with GCS page tokens: a request naming

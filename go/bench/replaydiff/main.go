@@ -97,6 +97,7 @@ func main() {
 	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
 	flag.Int64Var(&o.captureLimits.maxDecoded, "capture-max-decoded", 64<<20, "capture: the largest body in `bytes` once its content coding is undone; an exchange over it fails")
 	flag.IntVar(&o.captureLimits.maxTokens, "capture-max-tokens", 1<<20, "capture: the most page tokens remembered for walks still to be replayed; past it the replay fails and stops")
+	flag.IntVar(&o.captureLimits.maxDetails, "capture-max-details", 1000, "capture: the most failures, and separately the most skipped exchanges, the report details; past it they are only counted and the report says how many are not shown")
 	flag.IntVar(&o.liveWalkPages, "live-walk-pages", 300, "live: walk a prefix at a page size only when the walk takes at most this many pages")
 	flag.StringVar(&o.dumpTSV, "dump-tsv", "", "write the reference listing as a TSV fixture here and exit")
 	flag.StringVar(&o.logDir, "log-dir", os.TempDir(), "where the servers' stderr logs go")
@@ -293,8 +294,16 @@ type report struct {
 	Failed    int       `json:"failed"`
 	// Skipped names the cases that could not run as designed (a token
 	// case whose source page issued no token), with the reason: missing
-	// coverage, never a pass.
-	Skipped []string `json:"skipped,omitempty"`
+	// coverage, never a pass. SkippedCount counts them all, those past
+	// the detail limit too.
+	Skipped      []string `json:"skipped,omitempty"`
+	SkippedCount int      `json:"skipped_count"`
+	// FailuresNotShown and SkipsNotShown count the failures and the
+	// skips past the driver's detail limit (a capture's
+	// -capture-max-details): counted in Failed and SkippedCount, their
+	// details dropped so the report stays bounded however many there are.
+	FailuresNotShown int `json:"failures_not_shown,omitempty"`
+	SkipsNotShown    int `json:"skips_not_shown,omitempty"`
 	// TokenBytes names the walk pages that agree in meaning but whose
 	// page tokens differ in bytes: a wire difference, reported apart
 	// from the walk's verdict.
@@ -428,24 +437,45 @@ type driver struct {
 	// are counted): a capture's report then grows with its failures,
 	// not with every exchange.
 	countPasses bool
+	// maxDetails, when positive, bounds the failures and, apart from
+	// them, the skips the report details; the rest are counted only. A
+	// capture of any length full of failures then keeps its report, and
+	// the memory it takes, to this many entries.
+	maxDetails int
 }
 
 func (d *driver) record(r result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if r.Skipped != "" {
-		d.rep.Skipped = append(d.rep.Skipped, fmt.Sprintf("%s %q: %s", r.Kind, r.Name, r.Skipped))
+		d.addSkip(func() string { return fmt.Sprintf("%s %q: %s", r.Kind, r.Name, r.Skipped) })
 		return
 	}
-	if !r.Pass || !d.countPasses {
+	d.rep.Compared++
+	switch {
+	case r.Pass:
+		d.rep.Passed++
+		if !d.countPasses {
+			d.rep.Results = append(d.rep.Results, r)
+		}
+	case d.maxDetails > 0 && d.rep.Failed-d.rep.FailuresNotShown >= d.maxDetails:
+		d.rep.Failed++
+		d.rep.FailuresNotShown++
+	default:
+		d.rep.Failed++
 		d.rep.Results = append(d.rep.Results, r)
 	}
-	d.rep.Compared++
-	if r.Pass {
-		d.rep.Passed++
-	} else {
-		d.rep.Failed++
+}
+
+// addSkip counts a skip and keeps its detail while under the detail
+// limit; d.mu is held.
+func (d *driver) addSkip(detail func() string) {
+	d.rep.SkippedCount++
+	if d.maxDetails > 0 && len(d.rep.Skipped) >= d.maxDetails {
+		d.rep.SkipsNotShown++
+		return
 	}
+	d.rep.Skipped = append(d.rep.Skipped, detail())
 }
 
 func (d *driver) count(n int) {
@@ -701,6 +731,29 @@ func dump(path string, objs []store.Object) error {
 
 func (d *driver) write() error {
 	rep := d.rep
+	text := d.summary()
+	os.Stdout.Write(text)
+	if d.o.report != "" {
+		j, err := json.MarshalIndent(rep, "", " ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(d.o.report, j, 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(strings.TrimSuffix(d.o.report, filepath.Ext(d.o.report))+".txt", text, 0o644); err != nil {
+			return err
+		}
+	}
+	if rep.Failed > 0 {
+		return fmt.Errorf("%d differences", rep.Failed)
+	}
+	return nil
+}
+
+// summary is the report's text form.
+func (d *driver) summary() []byte {
+	rep := d.rep
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "replaydiff: reference=%s fixture=%s bucket=%s keys=%d seed=%d\n", rep.Reference, rep.Fixture, rep.Bucket, rep.Keys, rep.Seed)
 	kinds := map[string][2]int{}
@@ -767,8 +820,14 @@ func (d *driver) write() error {
 	if partial > 0 {
 		fmt.Fprintf(&text, "%d walks stopped at -walk-limit %d pages\n", partial, d.o.walkLimit)
 	}
+	if rep.FailuresNotShown > 0 {
+		fmt.Fprintf(&text, "%d more failures not shown (-capture-max-details %d)\n", rep.FailuresNotShown, d.maxDetails)
+	}
 	for _, s := range rep.Skipped {
 		fmt.Fprintf(&text, "SKIP %s\n", s)
+	}
+	if rep.SkipsNotShown > 0 {
+		fmt.Fprintf(&text, "%d more skips not shown (-capture-max-details %d)\n", rep.SkipsNotShown, d.maxDetails)
 	}
 	for _, s := range rep.TokenBytes {
 		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
@@ -786,25 +845,13 @@ func (d *driver) write() error {
 	if pinned := countPinned(rep.Results); pinned > 0 {
 		fmt.Fprintf(&text, "%d of the %d differences reproduce the provider evidence's pinned mismatch for their case\n", pinned, rep.Failed)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
-		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
-	os.Stdout.Write(text.Bytes())
-	if d.o.report != "" {
-		j, err := json.MarshalIndent(rep, "", " ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(d.o.report, j, 0o644); err != nil {
-			return err
-		}
-		if err := os.WriteFile(strings.TrimSuffix(d.o.report, filepath.Ext(d.o.report))+".txt", text.Bytes(), 0o644); err != nil {
-			return err
-		}
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals",
+		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.SkippedCount, len(rep.Residuals))
+	if n := rep.FailuresNotShown + rep.SkipsNotShown; n > 0 {
+		fmt.Fprintf(&text, " (%d failures and %d skips not shown)", rep.FailuresNotShown, rep.SkipsNotShown)
 	}
-	if rep.Failed > 0 {
-		return fmt.Errorf("%d differences", rep.Failed)
-	}
-	return nil
+	text.WriteByte('\n')
+	return text.Bytes()
 }
 
 func countPinned(rs []result) int {

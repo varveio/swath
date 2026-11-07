@@ -40,8 +40,11 @@ type request struct {
 	// compares the status only, for request lines Go's HTTP parser refuses
 	// before the server sees them (its page and Content-Type are the
 	// parser's); "residual" sends a documented difference and reports what
-	// each server answered without passing or failing it. Empty compares
-	// everything.
+	// each server answered without passing or failing it; "s3" judges an
+	// answer of the S3 route under the S3 divergence rules
+	// (s3_divergences.go) against the Java server whatever -protocol is
+	// compared, and compares everything against any other reference.
+	// Empty compares everything.
 	Compare string `json:"compare,omitempty"`
 	// Wire, when set, builds the whole byte stream sent on a connection of
 	// its own (several requests, odd line endings); the last answer is the

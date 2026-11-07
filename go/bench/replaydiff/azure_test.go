@@ -7,8 +7,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -231,5 +236,98 @@ func TestAzureDriverAgreesWithItself(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprint(rep.Results[0].Name), "version") {
 		t.Errorf("first case %q", rep.Results[0].Name)
+	}
+}
+
+// editingProxy serves base's answers with each body passed through edit.
+func editingProxy(t *testing.T, base string, edit func(body []byte) []byte) string {
+	t.Helper()
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := httputil.NewSingleHostReverseProxy(u)
+	p.ModifyResponse = func(resp *http.Response) error {
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		body = edit(body)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", fmt.Sprint(len(body)))
+		return nil
+	}
+	srv := httptest.NewServer(p)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestAzureS3RoutedCases: the Azure matrix's requests that the S3 route
+// answers are judged against the Java server by the S3 divergence rules.
+// A reference in the Java server's form (no newline after the XML
+// declaration, its own error document and token) passes a Go answer that
+// differs from it only there; a Go answer with a changed object key, a
+// changed error code or an empty listing fails.
+func TestAzureS3RoutedCases(t *testing.T) {
+	keys := []string{"d/1", "d/2", "e"}
+	var bkeys [][]byte
+	for _, k := range keys {
+		bkeys = append(bkeys, []byte(k))
+	}
+	all, _ := azureMatrix(bkeys, rand.New(rand.NewPCG(1, 1)), 10)
+	routed := map[string]bool{"wrong account": true, "extra segment": true, "S3 beside Azure": true, "account root": true}
+	var cases []request
+	for _, c := range all {
+		if routed[c.Name] {
+			cases = append(cases, c)
+		}
+	}
+	if len(cases) != len(routed) {
+		t.Fatalf("%d of the S3-routed cases in the matrix", len(cases))
+	}
+	javaForm := regexp.MustCompile(`<BucketName>[^<]*</BucketName>|<HostId>[^<]*</HostId>`)
+	javaToken := regexp.MustCompile(`<NextContinuationToken>[^<]*<`)
+	java := &target{name: "java", client: &http.Client{}, base: editingProxy(t, azureServer(t, false, keys...), func(b []byte) []byte {
+		b = bytes.Replace(b, []byte("?>\n"), []byte("?>"), 1)
+		b = javaForm.ReplaceAll(b, nil)
+		return javaToken.ReplaceAll(b, []byte("<NextContinuationToken>v2:AGQvMg<"))
+	})}
+	for _, c := range []struct {
+		name   string
+		edit   func([]byte) []byte
+		failed []string
+	}{
+		{"unchanged", func(b []byte) []byte { return b }, nil},
+		{"object key", func(b []byte) []byte { return bytes.Replace(b, []byte("<Key>d/2</Key>"), []byte("<Key>d/3</Key>"), 1) },
+			[]string{"S3 beside Azure"}},
+		{"error code", func(b []byte) []byte {
+			return bytes.Replace(b, []byte("<Code>NoSuchBucket</Code>"), []byte("<Code>NoSuchKey</Code>"), 1)
+		}, []string{"account root", "extra segment", "wrong account"}},
+		{"empty listing", func(b []byte) []byte {
+			if bytes.Contains(b, []byte("<ListBucketResult")) {
+				return nil
+			}
+			return b
+		}, []string{"S3 beside Azure"}},
+	} {
+		got := &target{name: "go", client: &http.Client{}, base: editingProxy(t, azureServer(t, false, keys...), c.edit)}
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt", parallel: 1, protocol: "azure"}, ref: java, got: got, comp: azureComparator{}, rep: rep}
+		d.runCases("case", cases)
+		var failed []string
+		for _, r := range rep.Results {
+			if !r.Pass {
+				failed = append(failed, r.Name)
+			}
+		}
+		slices.Sort(failed)
+		if !slices.Equal(failed, c.failed) || rep.Passed != len(cases)-len(c.failed) {
+			t.Errorf("%s: failed %q, want %q (%d passed)", c.name, failed, c.failed, rep.Passed)
+		}
+		if c.failed == nil && len(rep.Divergences) != 3 {
+			t.Errorf("%s: documented divergences %q, want the three error documents", c.name, rep.Divergences)
+		}
 	}
 }
