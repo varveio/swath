@@ -249,6 +249,10 @@ type report struct {
 	// page tokens differ in bytes: a wire difference, reported apart
 	// from the walk's verdict.
 	TokenBytes []string `json:"token_byte_differences,omitempty"`
+	// Divergences are the requests the Go S3 route answers as live S3
+	// does and the Java server does not (s3_divergences.go): compared on
+	// the Go side, listed with what each server answered.
+	Divergences []string `json:"documented_divergences,omitempty"`
 	// Residuals are the documented differences the driver sends anyway so
 	// they stay visible (Compare "residual"), with what each server
 	// answered. They are not in Compared, Passed or Failed; a residual
@@ -314,7 +318,7 @@ func run(o options) error {
 		rep.Seconds = time.Since(rep.Started).Seconds()
 		return d.write()
 	}
-	cases := s3Matrix(keys, rng, o.maxPrefixes)
+	cases := append(s3Matrix(keys, rng, o.maxPrefixes), s3DivergenceCases(keys)...)
 	if o.live != "" {
 		live := cases[:0]
 		for _, c := range cases {
@@ -360,6 +364,8 @@ type driver struct {
 	mu        sync.Mutex
 	rep       *report
 	refTokens sync.Map // request name -> its reference answer's next token
+	// tokenNames are the names already listed in TokenBytes.
+	tokenNames map[string]bool
 }
 
 func (d *driver) record(r result) {
@@ -386,6 +392,9 @@ func (d *driver) count(n int) {
 
 // compareOne sends r to both servers and compares the answers.
 func (d *driver) compareOne(r request) (*response, diff, error) {
+	if d.s3DivergenceRef(r) {
+		return d.compareS3(r)
+	}
 	a, err := d.ref.do(d.o.bucket, r)
 	if err != nil {
 		return nil, diff{}, fmt.Errorf("%s: %w", d.ref.name, err)
@@ -506,6 +515,9 @@ func (d *driver) walkOne(w walk) result {
 	query := w.Query
 	for {
 		r := request{Name: w.Name, Method: "GET", Query: query}
+		if res.Pages > 0 {
+			r.TokenFrom = w.Name // the query carries the reference's token
+		}
 		res.Target = d.got.url(d.o.bucket, r)
 		a, df, err := d.compareOne(r)
 		res.Pages++
@@ -582,7 +594,9 @@ func listAll(t *target, bucket string) ([][]byte, []store.Object, error) {
 			return nil, nil, err
 		}
 		for _, c := range page.Contents {
-			k := s3.PercentDecode(c.Key)
+			// S3 and the Go server write a space as '+'; the Java server
+			// escapes '+' itself, so reading '+' as a space suits all three.
+			k := s3.PercentDecode(strings.ReplaceAll(c.Key, "+", "%20"))
 			keys = append(keys, k)
 			o := store.Object{Key: k, Size: c.Size, StorageClass: c.StorageClass, ChecksumAlgorithm: c.ChecksumAlgorithm, ChecksumType: c.ChecksumType}
 			if c.ETag != nil {
@@ -670,6 +684,13 @@ func (d *driver) write() error {
 	}
 	for _, s := range rep.Residuals {
 		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
+	}
+	for _, s := range sortedDivergences(rep.Divergences) {
+		fmt.Fprintf(&text, "DOCUMENTED DIVERGENCE %s\n", s)
+	}
+	if len(rep.Divergences) > 0 {
+		fmt.Fprintf(&text, "%d documented divergences (answered as live S3), %d requests whose answers differ only in token bytes\n",
+			len(rep.Divergences), len(rep.TokenBytes))
 	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
 		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
