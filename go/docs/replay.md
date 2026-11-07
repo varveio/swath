@@ -294,3 +294,56 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 
 starts both servers with `--protocols gcs` and compares the GCS request matrix, token walks and a seeded random
 walk ([internals/replay.md](internals/replay.md#the-gcs-route)).
+## Container image
+
+`Dockerfile.replay-go` (at the repository root) builds an image that holds the static binary and nothing else:
+`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
+`scratch`, so there is no shell, no package manager and no OS package in it. Fixtures are never baked in: mount
+one read-only and pass its container path to `--fixture`.
+
+```bash
+docker build -f Dockerfile.replay-go --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath-replay-go:dev .
+docker run --rm -p 127.0.0.1:19090:19090 -p 127.0.0.1:19192:19192 -v /data/sorted:/fixtures:ro \
+  swath-replay-go:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
+```
+
+The server must bind `0.0.0.0` for a published port to reach it; it has no authentication, so bind the host
+side to loopback as shown unless an isolated container network is the boundary. The build context is `go/`
+alone (`Dockerfile.replay-go.dockerignore`, which also leaves out local build output). The build stage
+cross-compiles for the target platform, so `--platform linux/arm64` builds on an amd64 host without emulation.
+Build arguments: `SWATH_REVISION` is the commit `--version` prints (the context carries no `.git`, so without
+it the binary names no revision), `GOFLAGS` passes through to the Go toolchain (`-p=2` bounds the compile on a
+shared host), and `GOPROXY` names a module mirror.
+
+`sort-fixture` writes its output, so it needs a writable mount; running it as the invoking user leaves the
+output removable by that user:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v /data/capture:/capture:ro -v /data/out:/out \
+  swath-replay-go:dev sort-fixture --capture /capture --output /out/sorted
+```
+
+`scripts/ci/smoke-replay-container.sh IMAGE FIXTURE sorted` smokes the image: it serves `FIXTURE` (a directory
+of sorted parts, or a dataset directory) as bucket `smoke` with a metrics port, waits for `/healthz` to answer
+`ok`, requires a `ListBucketResult` naming the bucket and holding a key, `/metrics` with `schema_version` 2,
+and the container's user `10001:10001`. When the server refuses the fixture as not servable sorted (a capture,
+or a `swath list` dataset written without `--sort` by the Java lister), the smoke sorts it with the image's
+own `sort-fixture` into a temporary directory and serves that. Without the third argument, or with `duckdb`,
+the script smokes the Java replay image as before.
+
+## Continuous integration
+
+Two jobs of `.github/workflows/ci.yml` cover the Go port. Each always runs and does its work only when its
+inputs changed (or on a manual run); `ci-gate` needs both.
+
+- `go` (inputs: `go/`, the workflow, `Dockerfile.replay-go` and its ignore file, the replay smoke script):
+  `go vet`, `go test -race`, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
+  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
+  built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
+  smoked. The smoke's fixture is written in the job: `bench/s3fake` serves 2,000 keys and the Go lister's
+  dataset of that bucket is the fixture, so the smoke needs no network, Java or recording.
+- `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay` module, the evidence archive): JDK 25,
+  `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh` into the runner's temporary
+  directory, then the gated tests named in the step's `FIXTURE_PACKAGES` and `FIXTURE_TESTS` with
+  `SWATH_REPLAY_FIXTURES` set. Every named test must run and pass: one that skips, or a name that matches no
+  test, fails the step. A new gated test is added to those two lists.

@@ -1,0 +1,8 @@
+# Build context for Dockerfile.replay-go only (the other Dockerfiles have no ignore file):
+# the Go module and nothing else, without local build output (the binary names .gitignore
+# keeps out of the tree: swath, swath-<os>-<arch>, swath-replay, swath-replay-<os>-<arch>).
+*
+!go/
+go/swath
+go/swath-*
+go/swath.exe
