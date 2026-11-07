@@ -1,0 +1,47 @@
+# Build context for Dockerfile.replay-go only. BuildKit uses this file in place of a root
+# .dockerignore for this Dockerfile, so it carries every rule the build needs.
+#
+# The context is the Go module's source: go/ (go.mod, go.sum, build.sh, the packages, their
+# committed testdata, docs and bench scripts) and nothing else from the repository. Inside go/
+# it leaves out what a working tree accumulates and the build never reads: built binaries,
+# listing output (Parquet parts, dataset data/ directories, run.json and error.json,
+# checkpoints and the lister's .swath/ state), databases, logs, caches, editor and OS files,
+# and private or agent working material. The rules mirror the repository .gitignore.
+*
+!go/
+
+# Built binaries (go/build.sh -o swath, swath-<os>-<arch>, swath-replay, swath-replay-<os>-<arch>)
+go/swath
+go/swath-*
+go/swath.exe
+go/**/bin/
+go/**/out/
+go/**/build/
+
+# Listing output, checkpoints and databases
+go/**/*.parquet
+go/**/data/part-*.parquet
+go/**/.swath/
+go/**/.swath-checkpoint/
+go/**/run.json
+go/**/error.json
+go/**/*.sqlite
+go/**/*.sqlite-wal
+go/**/*.sqlite-shm
+go/**/tmp-fixtures/
+
+# Logs, caches, editor and OS files
+go/**/*.log
+go/**/*.swp
+go/**/.DS_Store
+go/**/.idea/
+go/**/.vscode/
+go/**/*.iml
+go/**/__pycache__/
+go/**/*.pyc
+go/**/.venv/
+go/**/.pytest_cache/
+
+# Private and agent working material
+go/**/private/
+go/**/.agent/

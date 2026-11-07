@@ -45,7 +45,12 @@ type Strict struct {
 	// Lean sends objects with only name, size, updated, generation and
 	// etag: the protocol is the same, and a run-level test that does not
 	// read the rest of the metadata lists and encodes less.
-	Lean     bool
+	Lean bool
+	// Resource, when set, is the object resource sent for key k (the
+	// i-th in byte order) in place of Object's: a test that needs
+	// particular metadata, such as an object without an MD5, states it.
+	// It returns a new map on each call: the fields selector trims it.
+	Resource func(i int, k string) map[string]any
 	requests atomic.Int64
 	empties  atomic.Int64
 	last     atomic.Value // the last request's query
@@ -251,9 +256,12 @@ func (f *Strict) write(w http.ResponseWriter, q url.Values, resp map[string]any)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// object is key i (k) as this fake sends it: Object, or with Lean its
-// listing fields only.
+// object is key i (k) as this fake sends it: Resource's, Object, or with
+// Lean its listing fields only.
 func (f *Strict) object(i int, k string) map[string]any {
+	if f.Resource != nil {
+		return f.Resource(i, k)
+	}
 	if f.Lean {
 		return leanObject(i, k)
 	}

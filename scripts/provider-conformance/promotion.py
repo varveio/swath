@@ -5,9 +5,9 @@
 
 The case matrix in each provider adapter owns row IDs and behavior text. `rows` rewrites
 the ledger rows and the matrix table from it, keeping any existing evidence. `promote`
-attaches sanitized captures (OBSERVED) and replay receipts (REPLAY_MATCH) from the
-evidence archive or an evidence directory, then runs the fail-closed validator; nothing is
-promoted on failure.
+attaches sanitized captures (OBSERVED) and Java replay receipts (REPLAY_MATCH) from the
+evidence archive or an evidence directory, and each Go replay receipt to its version's proof,
+then runs the fail-closed validator; nothing is promoted on failure.
 """
 
 from __future__ import annotations
@@ -72,7 +72,8 @@ UNPROBED_ROWS = [
      "profile_promise": FAMILY_PROMISES["s3-10"], "api_versions": [s3_live.API_VERSION],
      "evidence_kind": "retry_run"},
 ]
-TABLE_HEADER = "| ID | Provider | Feature or probe | Profile promise pending evidence | Capture SHA-256 | Replay test | State |"
+TABLE_HEADER = ("| ID | Provider | Feature or probe | Profile promise pending evidence | Capture SHA-256 | "
+                "Replay test (Java) | Replay test (Go) | State |")
 REPLAY_TEST_PATH = ("swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/"
                     "NativeEvidenceReplayTest.java")
 
@@ -123,7 +124,7 @@ def provider_display(row: dict) -> str:
 
 
 def matrix_lines(rows: list[dict]) -> list[str]:
-    lines = [TABLE_HEADER, "| --- | --- | --- | --- | --- | --- | --- |"]
+    lines = [TABLE_HEADER, "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for row in rows:
         checksum = test = "—"
         if row["status"] != "UNMEASURED":
@@ -131,13 +132,14 @@ def matrix_lines(rows: list[dict]) -> list[str]:
         if row["status"] == "REPLAY_MATCH":
             test = "`" + "; ".join(f"{v}:{row['evidence'][v]['replay_test']}" for v in row["api_versions"]) + "`"
         lines.append(f"| {row['id']} | {provider_display(row)} | {row['feature']} | "
-                     f"{row['profile_promise']} | {checksum} | {test} | {row['status']} |")
+                     f"{row['profile_promise']} | {checksum} | {test} | {evidence.go_matrix_cell(row)} | "
+                     f"{row['status']} |")
     return lines
 
 
 def rewrite_matrix(text: str, rows: list[dict]) -> str:
     lines = text.splitlines()
-    start = lines.index(TABLE_HEADER)
+    start = next(number for number, line in enumerate(lines) if line.startswith("| ID | Provider |"))
     end = start
     while end < len(lines) and lines[end].startswith("|"):
         end += 1
@@ -208,7 +210,11 @@ def expected_result(provider: str, capture: dict, run_prefix: str) -> str:
 # Promotion ------------------------------------------------------------------------
 
 
-def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dict:
+def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict],
+            go_receipts: dict[str, dict] | None = None) -> dict:
+    """Attach captures and receipts. Java receipts set the row's state; a Go receipt is attached to
+    its version's proof whatever the state, and a folded version, which has no capture, has none."""
+    go_receipts = go_receipts or {}
     indexes = {}
     equivalences = {}
     for provider in ("gcs", "azure", "s3"):
@@ -261,6 +267,11 @@ def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dic
                 proof.update({"replay_test": receipt["test"], "replay_test_path": receipt["test_path"],
                               "replay_result_file": receipt["file"],
                               "replay_result_sha256": receipt["sha256"]})
+            go_receipt = None if cites_reference else go_receipts.get(f"{row['provider']}/{key}")
+            if go_receipt is not None:
+                proof["go_replay"] = {"replay_test": go_receipt["test"], "replay_test_path": go_receipt["test_path"],
+                                      "replay_result_file": go_receipt["file"],
+                                      "replay_result_sha256": go_receipt["sha256"]}
             proofs[version] = proof
             kinds.add(entry["kind"])
         if len(proofs) != len(row["api_versions"]) or len(kinds) != 1:
@@ -275,15 +286,20 @@ def promote(ledger: dict, evidence_root: Path, receipts: dict[str, dict]) -> dic
     return ledger
 
 
-def load_receipts(evidence_root: Path) -> dict[str, dict]:
+def load_receipts(evidence_root: Path, producer: str = "java") -> dict[str, dict]:
+    """PASS receipts by `provider/capture key`: Java receipts in `<provider>/receipts/`, Go receipts
+    in `<provider>/receipts/go/`. A receipt naming another producer is refused."""
     receipts = {}
-    for path in sorted(evidence_root.glob("*/receipts/*.json")):
+    folder = "receipts" if producer == "java" else f"receipts/{producer}"
+    for path in sorted(evidence_root.glob(f"*/{folder}/*.json")):
         payload = path.read_bytes()
         receipt = evidence.strict_json(payload.decode("utf-8"))
+        if receipt.get("producer", "java") != producer:
+            raise ValueError(f"{path.name} in {folder} is not a {producer} receipt")
         if receipt.get("status") != "PASS":
             continue
-        provider = path.parent.parent.name
-        receipts[f"{provider}/{path.stem}"] = {**receipt, "file": f"{provider}/receipts/{path.name}",
+        provider = path.relative_to(evidence_root).parts[0]
+        receipts[f"{provider}/{path.stem}"] = {**receipt, "file": f"{provider}/{folder}/{path.name}",
                                                "sha256": hashlib.sha256(payload).hexdigest()}
     return receipts
 
@@ -310,7 +326,7 @@ def main() -> None:
                                 capture_output=True, text=True).stdout.strip()
     with evidence.evidence_root(args.evidence) as root:
         if args.command == "promote":
-            ledger = promote(ledger, root, load_receipts(root))
+            ledger = promote(ledger, root, load_receipts(root), load_receipts(root, "go"))
         evidence.validate_ledger(ledger, evidence.load_manifests(root), root, args.repo_root, commit,
                                  args.distribution)
     matrix = rewrite_matrix(args.matrix.read_text(encoding="utf-8"), ledger["rows"])
