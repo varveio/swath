@@ -6,24 +6,78 @@
 package main
 
 import (
-	"os"
+	"errors"
 	"os/exec"
+	"sync"
 	"syscall"
+	"time"
 )
 
-// detach leaves the process as started: process groups and a parent-death
-// signal are Linux facilities here, so elsewhere stopping a server reaches
-// the launcher only, and a launcher's descendants can outlive it.
-func detach(*exec.Cmd) {}
+// A group is a started command. Process groups, a parent-death signal and
+// an exit observed without reaping are Linux facilities here, so
+// elsewhere stopping reaches the launcher only, a launcher's descendants
+// can outlive it, and a test binary killed outright leaves the launcher
+// running. The launcher is reaped as soon as it exits; stop signals it by
+// its process handle, which stays valid until then, and is serialized and
+// does nothing once retired.
+type group struct {
+	cmd    *exec.Cmd
+	exited chan struct{}
 
-// signalGroup signals the server's process.
-func signalGroup(p *os.Process, sig syscall.Signal) error {
-	if sig == syscall.SIGKILL {
-		return p.Kill()
-	}
-	return p.Signal(sig)
+	mu      sync.Mutex
+	retired bool
+	waitErr error
 }
 
-// groupAlive is false: without process groups only the launcher, whose
-// exit stop waits for, is tracked.
-func groupAlive(*os.Process) bool { return false }
+func startGroup(cmd *exec.Cmd) (*group, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	g := &group{cmd: cmd, exited: make(chan struct{})}
+	go func() {
+		g.waitErr = cmd.Wait()
+		if errors.Is(g.waitErr, exec.ErrWaitDelay) {
+			g.waitErr = nil
+		}
+		close(g.exited)
+	}()
+	return g, nil
+}
+
+func (g *group) stop(grace time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.retired {
+		return
+	}
+	exited := func() bool {
+		select {
+		case <-g.exited:
+			return true
+		default:
+			return false
+		}
+	}
+	if !exited() {
+		g.cmd.Process.Signal(syscall.SIGTERM)
+		if !waitFor(exited, grace) {
+			g.cmd.Process.Kill()
+			waitFor(exited, 10*time.Second)
+		}
+	}
+	g.retired = exited()
+}
+
+func (g *group) clean() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.retired
+}
+
+func (g *group) kill() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.retired {
+		g.cmd.Process.Kill()
+	}
+}

@@ -9,9 +9,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -65,6 +69,7 @@ func script(t *testing.T, dir, name, body string) string {
 // on SIGTERM while its child ignores it, so the launcher's exit alone does
 // not prove the group stopped.
 func TestServerThatNeverBecomesReadyIsStopped(t *testing.T) {
+	ownedSignals(t)
 	for name, body := range map[string]string{
 		"child keeps running":                      "sleep 600 &\necho \"child $!\" >&2\nwait\n",
 		"launcher exits on TERM, child ignores it": "trap 'exit 0' TERM\nsh -c 'trap \"\" TERM; exec sleep 3600' &\necho \"child $!\" >&2\nwait\n",
@@ -100,6 +105,7 @@ func TestServerThatNeverBecomesReadyIsStopped(t *testing.T) {
 // deadline, one whose own process exits at once. Each returns within its
 // bounds, and neither the group nor the descendant survives.
 func TestRunBoundedKillsTheGroup(t *testing.T) {
+	ownedSignals(t)
 	for name, c := range map[string]struct {
 		body     string
 		deadline time.Duration
@@ -120,4 +126,108 @@ func TestRunBoundedKillsTheGroup(t *testing.T) {
 			gone(t, child, child)
 		})
 	}
+}
+
+// TestDriverStopsALauncherThatExitsEarly runs the driver against a Java
+// launcher that forks a child ignoring SIGTERM and exits 0 before any
+// startup line: the driver returns the start error, and the child does not
+// outlive it (startServer stops the whole group on every path after Start).
+func TestDriverStopsALauncherThatExitsEarly(t *testing.T) {
+	ownedSignals(t)
+	dir := t.TempDir()
+	java := script(t, dir, "early-exit",
+		"sh -c 'trap \"\" TERM; exec sleep 3600' >/dev/null 2>&1 &\necho \"child $!\" >&2\nexit 0\n")
+	err := run(options{java: java, goBin: "unused", fixture: dir, bucket: "bkt", logDir: dir, protocol: "s3", parallel: 1})
+	if err == nil || !strings.Contains(err.Error(), "exited before its startup line") {
+		t.Fatalf("driver: %v", err)
+	}
+	log, rerr := os.ReadFile(filepath.Join(dir, "replaydiff-java.log"))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	child := childOf(t, log)
+	gone(t, child, child)
+}
+
+// ownedSignals wraps killGroup for one test: every group signal is
+// counted, and must target an id whose leader pid is still allocated (the
+// leader alive or an unreaped zombie), so it cannot reach a group that
+// reused the id.
+func ownedSignals(t *testing.T) *atomic.Int64 {
+	var n atomic.Int64
+	orig := killGroup
+	killGroup = func(pgid int, sig syscall.Signal) error {
+		n.Add(1)
+		if _, err := os.Stat("/proc/" + strconv.Itoa(pgid)); err != nil {
+			t.Errorf("signal %v sent to group %d after its leader was reaped", sig, pgid)
+		}
+		return orig(pgid, sig)
+	}
+	t.Cleanup(func() { killGroup = orig })
+	return &n
+}
+
+// leaderState is the leader's /proc state letter, "" once it is reaped.
+func leaderState(pid int) string {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return ""
+	}
+	i := strings.LastIndexByte(string(stat), ')')
+	return strings.Fields(string(stat[i+1:]))[0]
+}
+
+// TestGroupCleanupOwnsItsIDAndRunsOnce pins the group's ownership of its
+// id: the leader of a group whose processes have all exited stays an
+// unreaped zombie until cleanup, so the id cannot be reused before then;
+// cleanup reaps it and retires the group; stop called again, or
+// concurrently, signals nothing; and every group signal, here and in
+// runBounded's sweep, targets an id the group still owns.
+func TestGroupCleanupOwnsItsIDAndRunsOnce(t *testing.T) {
+	signals := ownedSignals(t)
+	dir := t.TempDir()
+
+	// A leader whose whole group has already exited: held, not reaped.
+	quick, err := startGroup(exec.Command(script(t, dir, "quick", "exit 0\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-quick.exited
+	time.Sleep(200 * time.Millisecond)
+	pid := quick.cmd.Process.Pid
+	if st := leaderState(pid); st != "Z" {
+		t.Fatalf("an exited leader is %q before cleanup, want an unreaped zombie", st)
+	}
+	quick.stop(time.Second)
+	if !quick.clean() || leaderState(pid) != "" || signals.Load() != 0 {
+		t.Fatalf("clean %v, leader %q, %d signals", quick.clean(), leaderState(pid), signals.Load())
+	}
+
+	// A running group: stopped once by any number of concurrent and later
+	// calls.
+	slow, err := startGroup(exec.Command(script(t, dir, "slow", "sleep 600 &\nwait\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() { slow.stop(10 * time.Second) })
+	}
+	wg.Wait()
+	sent := signals.Load()
+	if !slow.clean() || sent == 0 {
+		t.Fatalf("clean %v after %d signals", slow.clean(), sent)
+	}
+	slow.stop(10 * time.Second)
+	slow.kill()
+	if signals.Load() != sent {
+		t.Errorf("%d signals after the group was retired", signals.Load()-sent)
+	}
+
+	// runBounded's kill on its deadline and its sweep.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, _ := runBounded(ctx, script(t, dir, "one-shot", "sleep 3600 &\necho \"child $!\"\nsleep 3600\n"))
+	child := childOf(t, out)
+	gone(t, child, child)
 }
