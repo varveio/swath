@@ -17,17 +17,25 @@ import (
 //	"az1." + base64url(flag || progress || binding || boundary), unpadded
 //
 // flag is 0x00 (resume after the boundary) or 0x01 (resume at it);
-// progress is reserved for adversarial page shaping and always 0 here;
-// binding is the first 16 bytes of a SHA-256 over the scope (fixture
+// progress (0 or 1) marks a walk that has passed a pagination test
+// profile's injected empty first page, so that page is not injected
+// again; binding is the first 16 bytes of a SHA-256 over the scope (fixture
 // identity, account, container, service version, prefix, delimiter,
 // startFrom), so a marker used under another scope or fixture is refused.
 // The boundary is at most 4,096 bytes and the marker at most 8,192
 // characters.
 //
+// This server serves only the production pagination profile, which never
+// injects a page or sets progress, but a marker that carries progress 1
+// passes it to every marker issued from it: the byte sits outside the
+// binding, and a walk's later markers keep it whichever page the walk
+// resumed from (TestMarkerProgressIsRetained).
+//
 // The bytes are the replay wire contract: a client walking a listing sees
 // the same markers from this server and the Java one for the same fixture
-// identity (TestMarkerGolden). A marker carries no secret; the binding only
-// keeps a marker from silently resuming a different listing.
+// identity (TestMarkerGolden, TestMarkerProgressIsRetained). A marker
+// carries no secret; the binding only keeps a marker from silently resuming
+// a different listing.
 const (
 	markerPrefix      = "az1."
 	bindingBytes      = 16
@@ -52,21 +60,36 @@ func binding(r *Request, fixtureIdentity string) []byte {
 	return d.Sum(nil)[:bindingBytes]
 }
 
-func encodeMarker(inclusive bool, boundary, bind []byte) string {
+// markerState is what every marker a request issues carries besides its
+// boundary: the scope binding and the progress byte of the marker the
+// request resumed from (0 for a first page).
+type markerState struct {
+	binding  []byte
+	progress byte
+}
+
+func (s markerState) encode(inclusive bool, boundary []byte) string {
+	return encodeMarker(inclusive, boundary, s.binding, s.progress)
+}
+
+func encodeMarker(inclusive bool, boundary, bind []byte, progress byte) string {
 	raw := make([]byte, 0, 2+bindingBytes+len(boundary))
 	flag := byte(0)
 	if inclusive {
 		flag = 1
 	}
-	raw = append(raw, flag, 0)
+	raw = append(raw, flag, progress)
 	raw = append(raw, bind...)
 	raw = append(raw, boundary...)
 	return markerPrefix + base64.RawURLEncoding.EncodeToString(raw)
 }
 
+// marker is a decoded marker: where the next page resumes, and the
+// progress byte it carried.
 type marker struct {
 	inclusive bool
 	boundary  []byte
+	progress  byte
 }
 
 func decodeMarker(m string, bind []byte) (marker, error) {
@@ -78,7 +101,7 @@ func decodeMarker(m string, bind []byte) (marker, error) {
 		raw[0] > 1 || raw[1] > 1 || subtle.ConstantTimeCompare(raw[2:2+bindingBytes], bind) != 1 {
 		return marker{}, errInvalidMarker
 	}
-	return marker{inclusive: raw[0] == 1, boundary: raw[2+bindingBytes:]}, nil
+	return marker{inclusive: raw[0] == 1, boundary: raw[2+bindingBytes:], progress: raw[1]}, nil
 }
 
 // decodeBase64URL accepts what the replay wire contract accepts: the

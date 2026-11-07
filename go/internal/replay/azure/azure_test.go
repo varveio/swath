@@ -237,7 +237,7 @@ func TestMarkerGolden(t *testing.T) {
 	r := parse(t, "prefix=logs/&maxresults=2")
 	r.Container = "synth"
 	bind := binding(r, "54ee4ea602dae0344b56f59b49d0dda6e4a8330627252cdcab6d177c3ce8cd49")
-	got := encodeMarker(false, []byte("logs/alpha/dt=2026-01-01/part-00004.json.gz"), bind)
+	got := encodeMarker(false, []byte("logs/alpha/dt=2026-01-01/part-00004.json.gz"), bind, 0)
 	const want = "az1.AADToCfJ7QNN16QFc8GhMeg_bG9ncy9hbHBoYS9kdD0yMDI2LTAxLTAxL3BhcnQtMDAwMDQuanNvbi5neg"
 	if got != want {
 		t.Fatalf("%s\nwant %s", got, want)
@@ -254,11 +254,11 @@ func TestMarkerGolden(t *testing.T) {
 func TestMarkerDecodeLeniency(t *testing.T) {
 	r := parse(t, "")
 	bind := binding(r, "f")
-	m := encodeMarker(true, []byte("k"), bind) // 19 bytes: one byte of the last unit carries spare bits
+	m := encodeMarker(true, []byte("k"), bind, 0) // 19 bytes: one byte of the last unit carries spare bits
 	last := m[len(m)-1]
 	spare := strings.IndexByte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", last) | 0x0f
 	flipped := m[:len(m)-1] + string("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[spare])
-	other := encodeMarker(true, []byte("k"), binding(parse(t, "prefix=x"), "f"))
+	other := encodeMarker(true, []byte("k"), binding(parse(t, "prefix=x"), "f"), 0)
 	raw := make([]byte, 2+bindingBytes)
 	copy(raw[2:], bind)
 	for _, c := range []struct {
@@ -282,6 +282,73 @@ func TestMarkerDecodeLeniency(t *testing.T) {
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+// withProgress is m with its progress byte set to v, re-encoded unpadded.
+func withProgress(t *testing.T, m string, v byte) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(m, markerPrefix))
+	if err != nil || len(raw) < 2 {
+		t.Fatalf("marker %q: %v", m, err)
+	}
+	raw[1] = v
+	return markerPrefix + b64(raw)
+}
+
+// TestMarkerProgressIsRetained resumes from a marker whose progress byte
+// is 1: the next marker keeps it. The constants are the Java server's
+// answers over a fixture of the keys a, b and c (container abc, fixture
+// identity 5d1f…6347, service version 2026-06-06): page one with
+// maxresults=1 issues the marker with progress 0, the test flips that byte
+// to 1, and resuming lists b with a next marker whose progress is still 1,
+// flat and with delimiter=/. A BlobPrefix page (inclusive marker) keeps it
+// too, on the native rollup and the row walk.
+func TestMarkerProgressIsRetained(t *testing.T) {
+	const identity = "5d1f9013fe89b5e5b844c2a7c69121bb091b5219ff40732ac44491127cf46347"
+	for _, c := range []struct {
+		delimiter, first, resumed, next string
+	}{
+		{"", "az1.AACo3WNYrLb8KXpW8C4we11uYQ", "az1.AAGo3WNYrLb8KXpW8C4we11uYQ", "az1.AAGo3WNYrLb8KXpW8C4we11uYg"},
+		{"/", "az1.AADhHd3yc6cQwtY2U5IKDe31YQ", "az1.AAHhHd3yc6cQwtY2U5IKDe31YQ", "az1.AAHhHd3yc6cQwtY2U5IKDe31Yg"},
+	} {
+		for _, rollup := range []bool{false, true} {
+			p := &Pager{Store: keyStore(t, rollup, "a", "b", "c"), FixtureIdentity: identity}
+			r := req("", c.delimiter, "", "", 1)
+			r.Container = "abc"
+			first, err := p.List(context.Background(), r)
+			if err != nil || first.NextMarker != c.first {
+				t.Fatalf("delimiter %q: first %q %v, want %q", c.delimiter, first.NextMarker, err, c.first)
+			}
+			if got := withProgress(t, first.NextMarker, 1); got != c.resumed {
+				t.Fatalf("delimiter %q: flipped %q, want %q", c.delimiter, got, c.resumed)
+			}
+			r.Marker, r.MarkerSupplied = c.resumed, true
+			if err := p.ValidateMarker(r); err != nil {
+				t.Fatal(err)
+			}
+			next, err := p.List(context.Background(), r)
+			if err != nil || !slices.Equal(names(next), []string{"O:b"}) || next.NextMarker != c.next {
+				t.Errorf("delimiter %q rollup %v: %v %q %v, want [O:b] %q", c.delimiter, rollup, names(next), next.NextMarker, err, c.next)
+			}
+		}
+	}
+	for _, rollup := range []bool{false, true} {
+		p := &Pager{Store: keyStore(t, rollup, "a/1", "b/1", "c/1", "d"), FixtureIdentity: "f"}
+		r := req("", "/", "", "", 1)
+		first, err := p.List(context.Background(), r)
+		if err != nil || !slices.Equal(names(first), []string{"P:a/"}) {
+			t.Fatalf("rollup %v: %v %v", rollup, names(first), err)
+		}
+		r.Marker, r.MarkerSupplied = withProgress(t, first.NextMarker, 1), true
+		next, err := p.List(context.Background(), r)
+		if err != nil || !slices.Equal(names(next), []string{"P:b/"}) {
+			t.Fatalf("rollup %v: %v %v", rollup, names(next), err)
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(next.NextMarker, markerPrefix))
+		if err != nil || len(raw) < 2 || raw[0] != 1 || raw[1] != 1 {
+			t.Errorf("rollup %v: next marker %q (%x) %v, want flag 1 progress 1", rollup, next.NextMarker, raw, err)
+		}
+	}
+}
 
 // TestParseRefusalOrder pins the request checks, their order (the first
 // problem is reported) and their codes.

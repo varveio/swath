@@ -462,9 +462,12 @@ rollup when it accepts the delimiter (`suppressPrefixAtOrBeforeFloor` false: the
 or a row walk that seeks past each rolled prefix. A page ends one item early to learn truncation; the marker
 resumes after a Blob's name (exclusive) or at a BlobPrefix's `upperOf` (inclusive).
 
-Markers are `az1.` + base64url(flag, progress (always 0), 16 bytes of SHA-256 over the length-prefixed scope,
-boundary). The scope digest is the Java server's, so markers are the same bytes for the same fixture identity
-(`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
+Markers are `az1.` + base64url(flag, progress, 16 bytes of SHA-256 over the length-prefixed scope, boundary).
+The progress byte (0 or 1) marks a walk past a pagination test profile's injected empty first page. This route
+serves only the production profile, which injects no page and never sets it, but the byte sits outside the
+scope digest and a marker that carries 1 passes it to the next marker, flat, delimited, native rollup or walk
+(`TestMarkerProgressIsRetained`, the Java server's markers over the keys a, b, c). The scope digest is the Java
+server's, so markers are the same bytes for the same fixture identity (`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
 flag or progress above 1, and boundaries over 4,096 bytes (`TestMarkerDecodeLeniency`).
 
 ### Text and the wire
@@ -524,7 +527,7 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | provider order, flat and delimited, against brute force (rollup and walk stores) | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix`, `TestCompareIsUTF16OrderForValidNames`, `TestInvalidUTF8NamesKeepATotalOrder` |
 | store reads | `azure` `TestLongStartFromCostBound`, `TestDeepLeadByteBoundsRetireEmptyPartsWithAFewProbes`, `TestNamesWithoutLeadBytesKeepOneRangeAndOneRead`, `TestSwappedBranchesReuseRowsAlreadyRead`, `TestFallbackBatchesFlatEntriesUnderDelimiter` |
 | page limit, shapes, counts, engagement | `azure` `TestFiveThousandPageLimitAndMarkerScope`, `TestInjectedLatencyShapes`, `TestPageReportsBlobAndPrefixCounts`, `TestEngagementPaths`; `server` `TestAzureEngagementMeters` |
-| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
+| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency`, `TestMarkerProgressIsRetained` |
 | request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
 | bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
 | client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
