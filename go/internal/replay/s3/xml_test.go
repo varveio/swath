@@ -63,7 +63,7 @@ func TestRenderListElementsAndOrder(t *testing.T) {
 	}}
 	xml := string(AppendList(nil, res))
 	for _, s := range []string{"<Name>bucket</Name>", "<Prefix>a/</Prefix>", "<Delimiter>/</Delimiter>", "<StartAfter>a/0</StartAfter>",
-		"<EncodingType>url</EncodingType>", "<KeyCount>2</KeyCount>", "<IsTruncated>true</IsTruncated>", "<Key>a/has%20space.txt</Key>",
+		"<EncodingType>url</EncodingType>", "<KeyCount>2</KeyCount>", "<IsTruncated>true</IsTruncated>", "<Key>a/has+space.txt</Key>",
 		"<LastModified>2026-01-01T00:00:00.123Z</LastModified>", "<ETag>&quot;abc&amp;def&quot;</ETag>",
 		"<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>", "<ChecksumType>FULL_OBJECT</ChecksumType>",
 		"<Owner><ID>owner-1</ID><DisplayName>Alice &amp; Bob</DisplayName></Owner>", "<Prefix>a/dir/</Prefix>", "<NextContinuationToken>AGEvZGlyL1jPDYI</NextContinuationToken>"} {
@@ -125,8 +125,8 @@ func TestPercentEncodesEveryUnsafeByte(t *testing.T) {
 	raw := []byte{'/', ' ', 0xff, '&', '<', '>'}
 	req := &Request{Bucket: "bucket", Prefix: raw, Delimiter: b("/"), StartAfter: raw, MaxKeys: 1, EncodingURL: true}
 	xml := string(AppendList(nil, &Result{Request: req, Entries: []Entry{{CommonPrefix: raw}}}))
-	for _, s := range []string{"<Prefix>/%20%FF%26%3C%3E</Prefix>", "<StartAfter>/%20%FF%26%3C%3E</StartAfter>",
-		"<Delimiter>/</Delimiter>", "<CommonPrefixes><Prefix>/%20%FF%26%3C%3E</Prefix></CommonPrefixes>"} {
+	for _, s := range []string{"<Prefix>/+%FF%26%3C%3E</Prefix>", "<StartAfter>/+%FF%26%3C%3E</StartAfter>",
+		"<Delimiter>/</Delimiter>", "<CommonPrefixes><Prefix>/+%FF%26%3C%3E</Prefix></CommonPrefixes>"} {
 		if !strings.Contains(xml, s) {
 			t.Errorf("missing %s in %s", s, xml)
 		}

@@ -48,10 +48,13 @@ func carry(prefix []byte) []byte {
 	return nil
 }
 
-// urlSafe is the set of bytes encoding-type=url leaves unescaped: letters,
-// digits, '-', '_', '.', '/'. Everything else, including '~', '+' and every
-// byte above 0x7F, is %XX with upper-case hex: the grammar S3 itself uses
-// for ListObjectsV2 (TestPercentEncodeMatchesS3).
+// urlSafe is the set of bytes PercentEncode leaves unescaped: letters,
+// digits, '-', '_', '.', '/'. Everything else, including ' ', '*', '~',
+// '+' and every byte above 0x7F, is %XX with upper-case hex. It is the
+// escape for building query values that both replay servers and S3 read
+// alike (TestPercentEncodeEscapesQueryValues); the response's
+// encoding-type=url grammar is output.AppendPercentEncoded, which writes a
+// space as '+' and leaves '*' as S3 does.
 var urlSafe = func() (t [256]bool) {
 	for c := 'A'; c <= 'Z'; c++ {
 		t[c] = true
@@ -68,7 +71,7 @@ var urlSafe = func() (t [256]bool) {
 
 const upperHex = "0123456789ABCDEF"
 
-// AppendPercentEncoded appends raw in the encoding-type=url grammar.
+// AppendPercentEncoded appends raw escaped as a query value.
 func AppendPercentEncoded(dst, raw []byte) []byte {
 	for _, b := range raw {
 		if urlSafe[b] {
@@ -80,7 +83,7 @@ func AppendPercentEncoded(dst, raw []byte) []byte {
 	return dst
 }
 
-// PercentEncode returns raw in the encoding-type=url grammar.
+// PercentEncode returns raw escaped as a query value.
 func PercentEncode(raw []byte) string {
 	return string(AppendPercentEncoded(make([]byte, 0, len(raw)), raw))
 }

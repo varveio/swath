@@ -15,8 +15,8 @@ import (
 // The response body is assembled byte by byte rather than with
 // encoding/xml: the element order, the escaping (all five XML
 // metacharacters, '\'' as &apos;), ETag quoting as &quot;, millisecond
-// LastModified and the encoding-type=url grammar are the replay wire
-// contract, which encoding/xml's marshaller does not produce (it escapes
+// LastModified are the replay wire contract and the encoding-type=url
+// grammar is live S3's (output.AppendPercentEncoded), which encoding/xml's marshaller does not produce (it escapes
 // '"' as &#34; and control bytes as &#xN;). TestRenderListGolden pins the
 // bytes.
 

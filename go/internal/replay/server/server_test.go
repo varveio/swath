@@ -250,12 +250,12 @@ func TestRequestCeilingQueues(t *testing.T) {
 	}
 }
 
-// spaceKeys are n keys of about 1 KiB that encoding-type=url triples, so a
-// max-keys=1000 page is about 3 MB.
+// spaceKeys are n keys of about 1 KiB that encoding-type=url triples
+// ('~' is %7E), so a max-keys=1000 page is about 3 MB.
 func spaceKeys(n int) []string {
 	keys := make([]string, n)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("%04d %s", i, strings.Repeat(" ", 1000))
+		keys[i] = fmt.Sprintf("%04d~%s", i, strings.Repeat("~", 1000))
 	}
 	return keys
 }

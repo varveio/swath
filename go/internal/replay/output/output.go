@@ -469,18 +469,26 @@ func escaped[T string | []byte](o *Output, s T) {
 
 const hexDigits = "0123456789ABCDEF"
 
-// urlSafe are the bytes encoding-type=url leaves as they are.
-var urlSafe = func() (t [256]bool) {
-	for c := 'A'; c <= 'Z'; c++ {
-		t[c] = true
+// urlPlain maps each byte encoding-type=url writes as one byte to that
+// byte; 0 means %XX with upper-case hex. It is live S3's table, probed on
+// 2026-11-07 for every byte 0x01..0x7F (echoed through start-after) and
+// on public keys holding ' ', '+', '=', '@', '[', ']', '~', ',' and ':':
+// letters, digits, '-', '_', '.', '/' and '*' as they are, a space as
+// '+', everything else escaped (TestLiveURLEncodingTable).
+var urlPlain = func() (t [256]byte) {
+	for c := byte('A'); c <= 'Z'; c++ {
+		t[c] = c
 	}
-	for c := 'a'; c <= 'z'; c++ {
-		t[c] = true
+	for c := byte('a'); c <= 'z'; c++ {
+		t[c] = c
 	}
-	for c := '0'; c <= '9'; c++ {
-		t[c] = true
+	for c := byte('0'); c <= '9'; c++ {
+		t[c] = c
 	}
-	t['-'], t['_'], t['.'], t['/'] = true, true, true, true
+	for _, c := range []byte("-_./*") {
+		t[c] = c
+	}
+	t[' '] = '+'
 	return t
 }()
 
@@ -488,8 +496,8 @@ var urlSafe = func() (t [256]bool) {
 // it.
 func AppendPercentEncoded(dst, v []byte) []byte {
 	for _, b := range v {
-		if urlSafe[b] {
-			dst = append(dst, b)
+		if p := urlPlain[b]; p != 0 {
+			dst = append(dst, p)
 		} else {
 			dst = append(dst, '%', hexDigits[b>>4], hexDigits[b&0x0f])
 		}
@@ -497,8 +505,9 @@ func AppendPercentEncoded(dst, v []byte) []byte {
 	return dst
 }
 
-// PercentEncoded appends v percent-encoded (every byte but A-Z a-z 0-9
-// - _ . / as %XX, upper-case hex). When three bytes per input byte fit in
+// PercentEncoded appends v in S3's encoding-type=url grammar (urlPlain:
+// A-Z a-z 0-9 - _ . / * as they are, a space as '+', every other byte as
+// %XX with upper-case hex). When three bytes per input byte fit in
 // the room left in the current chunk it writes in one pass, with nothing
 // to admit or allocate; otherwise it admits the exact encoded length and
 // lets an escape straddle a chunk edge.
@@ -517,8 +526,8 @@ func (o *Output) PercentEncoded(v []byte) {
 		if len(v) <= (cap(last)-len(last))/3 {
 			before := len(last)
 			for _, b := range v {
-				if urlSafe[b] {
-					last = append(last, b)
+				if p := urlPlain[b]; p != 0 {
+					last = append(last, p)
 				} else {
 					last = append(last, '%', hexDigits[b>>4], hexDigits[b&0x0f])
 				}
@@ -531,7 +540,7 @@ func (o *Output) PercentEncoded(v []byte) {
 	}
 	encoded := len(v)
 	for _, b := range v {
-		if !urlSafe[b] {
+		if urlPlain[b] == 0 {
 			encoded += 2
 		}
 	}
@@ -539,8 +548,8 @@ func (o *Output) PercentEncoded(v []byte) {
 		return
 	}
 	for _, b := range v {
-		if urlSafe[b] {
-			o.put([]byte{b})
+		if p := urlPlain[b]; p != 0 {
+			o.put([]byte{p})
 		} else {
 			o.put([]byte{'%', hexDigits[b>>4], hexDigits[b&0x0f]})
 		}

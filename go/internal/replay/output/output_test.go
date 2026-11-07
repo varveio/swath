@@ -215,7 +215,7 @@ func TestEntityUTF8AndPercentEscapesCrossChunkEdgesByteExactly(t *testing.T) {
 			if rng.IntN(2) == 0 {
 				input[i], want = 'a', want+1
 			} else {
-				input[i], want = ' ', want+3
+				input[i], want = '~', want+3
 			}
 		}
 		o := mustNew(t, NewBudget(int64(4*want), nil), 1, want, 7)
@@ -244,7 +244,7 @@ func TestPercentEncodingReusesChargedChunkWithoutAllocatingAndRejectsFrozenOrClo
 	if allocations != 1 || o.Capacity() != 32 || onePass != 1 || fallback != 0 {
 		t.Errorf("allocations %d capacity %d paths %d/%d", allocations, o.Capacity(), onePass, fallback)
 	}
-	if got := string(flat(o.Body())); got != "prefixa%20%E9" {
+	if got := string(flat(o.Body())); got != "prefixa+%E9" {
 		t.Errorf("%q", got)
 	}
 	mustPanic(t, "frozen", func() { o.PercentEncoded(nil) })
@@ -255,10 +255,14 @@ func TestPercentEncodingReusesChargedChunkWithoutAllocatingAndRejectsFrozenOrClo
 	mustPanic(t, "closed", func() { o.PercentEncoded(nil) })
 }
 
+// percentOracle is live S3's encoding-type=url table (probed 2026-11-07):
+// a space is '+', A-Z a-z 0-9 - _ . / * stay, every other byte is %XX.
 func percentOracle(v []byte) string {
 	var s strings.Builder
 	for _, c := range v {
-		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '/' {
+		if c == ' ' {
+			s.WriteByte('+')
+		} else if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || strings.IndexByte("-_./*", c) >= 0 {
 			s.WriteByte(c)
 		} else {
 			s.WriteString("%" + strings.ToUpper(string("0123456789abcdef"[c>>4])+string("0123456789abcdef"[c&15])))
@@ -335,7 +339,7 @@ func TestConservativePercentFastPathFallsBackToExactCapAndBudgetDecisions(t *tes
 	fit.Close()
 	capped := mustNew(t, b, 5, 10, 10)
 	capped.ASCII("xxxxxxx")
-	capped.PercentEncoded([]byte("a b"))
+	capped.PercentEncoded([]byte("a~b"))
 	_, fallback = capped.PercentPaths()
 	if capped.Err() != ErrTooLarge || capped.Len() != 7 || capped.Capacity() != 10 || fallback != 0 {
 		t.Errorf("capped: %v len %d capacity %d fallback %d", capped.Err(), capped.Len(), capped.Capacity(), fallback)
@@ -343,9 +347,9 @@ func TestConservativePercentFastPathFallsBackToExactCapAndBudgetDecisions(t *tes
 	capped.Close()
 	split := mustNew(t, b, 7, 14, 7)
 	split.ASCII("xxxxx")
-	split.PercentEncoded([]byte{' '})
+	split.PercentEncoded([]byte{'~'})
 	_, fallback = split.PercentPaths()
-	if fallback != 1 || string(flat(split.Body())) != "xxxxx%20" || !slices.Equal(sizes(split.Body()), []int{7, 1}) {
+	if fallback != 1 || string(flat(split.Body())) != "xxxxx%7E" || !slices.Equal(sizes(split.Body()), []int{7, 1}) {
 		t.Errorf("split: %d %q %v", fallback, flat(split.Body()), sizes(split.Body()))
 	}
 	split.Close()
@@ -355,7 +359,7 @@ func TestConservativePercentFastPathFallsBackToExactCapAndBudgetDecisions(t *tes
 	exhausted := NewBudget(6, nil)
 	o := mustNew(t, exhausted, 4, 8, 4)
 	o.ASCII("xxxx")
-	o.PercentEncoded([]byte{' '})
+	o.PercentEncoded([]byte{'~'})
 	_, fallback = o.PercentPaths()
 	if o.Err() != ErrBudget || o.Len() != 4 || o.Capacity() != 4 || exhausted.Charged() != 4 || fallback != 0 {
 		t.Errorf("exhausted: %v len %d capacity %d charged %d", o.Err(), o.Len(), o.Capacity(), exhausted.Charged())

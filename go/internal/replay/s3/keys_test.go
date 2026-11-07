@@ -10,12 +10,13 @@ import (
 	"testing"
 )
 
-func TestPercentEncodeMatchesS3(t *testing.T) {
+func TestPercentEncodeEscapesQueryValues(t *testing.T) {
 	for raw, want := range map[string]string{
 		"a/has space+tilde~.txt": "a/has%20space%2Btilde%7E.txt",
 		"test_file(3).png":       "test_file%283%29.png",
 		"/ \xff&<>":              "/%20%FF%26%3C%3E",
 		"é":                      "%C3%A9",
+		"a*b":                    "a%2Ab",
 	} {
 		if got := PercentEncode([]byte(raw)); got != want {
 			t.Errorf("PercentEncode(%q) = %q, want %q", raw, got, want)

@@ -32,7 +32,7 @@ type Request struct {
 	// EncodingType is the encoding-type value as sent ("url" in any case),
 	// echoed as it came; "" renders as "url".
 	EncodingType string
-	FetchOwner  bool
+	FetchOwner   bool
 }
 
 // PageSize is max-keys clamped to [0, MaxPageSize].

@@ -6,12 +6,15 @@ package s3
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/replay/output"
+	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
 
@@ -278,4 +281,50 @@ func TestLiveMarkerIsRefused(t *testing.T) {
 		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
+}
+
+// TestLiveURLEncodingTable pins encoding-type=url's table: S3 echoed a
+// start-after holding each byte 0x01..0x7F with letters, digits, '-',
+// '_', '.', '/' and '*' as they are, a space as '+' and every other byte
+// as %XX in upper-case hex, and listed public keys holding ' ', '+', '=',
+// '@', '[', ']', '~', ',' and ':' the same way (a space as '+', the rest
+// escaped). Keys are rendered through the row fast path and through the
+// unit path.
+func TestLiveURLEncodingTable(t *testing.T) {
+	var all []byte
+	var want strings.Builder
+	for c := 1; c < 0x80; c++ {
+		all = append(all, byte(c))
+		switch {
+		case c == ' ':
+			want.WriteByte('+')
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', strings.IndexByte("-_./*", byte(c)) >= 0:
+			want.WriteByte(byte(c))
+		default:
+			want.WriteString("%" + strings.ToUpper(hex.EncodeToString([]byte{byte(c)})))
+		}
+	}
+	all = append(all, 0xC3, 0xA9)
+	want.WriteString("%C3%A9")
+	key := "a" + string(all) + "b"
+	encoded := "a" + want.String() + "b"
+	for _, fast := range []bool{true, false} {
+		rowFastPath = fast
+		req := &Request{Bucket: "bkt", StartAfter: []byte(key), MaxKeys: 1, EncodingURL: true}
+		doc := string(AppendList(nil, &Result{Request: req, Entries: []Entry{{Object: &store.Object{Key: []byte(key)}}}}))
+		rowFastPath = true
+		if !strings.Contains(doc, "<StartAfter>"+encoded+"</StartAfter>") || !strings.Contains(doc, "<Key>"+encoded+"</Key>") {
+			t.Errorf("fast=%v: %s\nwant %s", fast, doc, encoded)
+		}
+	}
+	for raw, enc := range map[string]string{
+		"abyss-1.9+sealer/contigs.fa":    "abyss-1.9%2Bsealer/contigs.fa",
+		"Karyotype Report - X+T p36.pdf": "Karyotype+Report+-+X%2BT+p36.pdf",
+		"Y2Fw==":                         "Y2Fw%3D%3D", "CHM13@all/x": "CHM13%40all/x", "MAF[47].png": "MAF%5B47%5D.png", "trackDb.txt~": "trackDb.txt%7E",
+		"disorder,_and": "disorder%2C_and", "20:0-110221.vcf.gz": "20%3A0-110221.vcf.gz",
+	} {
+		if got := string(output.AppendPercentEncoded(nil, []byte(raw))); got != enc {
+			t.Errorf("%q: %q, want %q", raw, got, enc)
+		}
+	}
 }
