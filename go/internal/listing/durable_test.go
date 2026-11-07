@@ -36,31 +36,6 @@ type reqLog struct {
 	starts []string
 	n      atomic.Int64
 	on     atomic.Bool
-	gate   chan struct{} // the frontier's requests wait for it (nil: no wait)
-}
-
-// gateOnSeals makes the fixture's frontier wait until n certificates are
-// sealed, for the next run; the returned function ends it.
-func (l *reqLog) gateOnSeals(n int64) func() {
-	g := make(chan struct{})
-	var sealed atomic.Int64
-	var once sync.Once
-	l.mu.Lock()
-	l.gate = g
-	l.mu.Unlock()
-	restore := order.SetDurableEvents(func(e string) {
-		if e == "sealed" && sealed.Add(1) == n {
-			// Then a few flusher cycles, so the records are durable.
-			time.AfterFunc(400*time.Millisecond, func() { once.Do(func() { close(g) }) })
-		}
-	})
-	return func() {
-		restore()
-		once.Do(func() { close(g) })
-		l.mu.Lock()
-		l.gate = nil
-		l.mu.Unlock()
-	}
 }
 
 // slowFrontier serves the durable-spill fixture: 8,000 keys under nine
@@ -87,17 +62,6 @@ func slowFrontier(t *testing.T, slow string) (string, *s3mem.Backend, *reqLog) {
 			}
 			if q.Get("continuation-token") == "" && start < slow {
 				time.Sleep(50 * time.Millisecond)
-				// The frontier waits for the ranges ahead to seal (at most 3 s):
-				// certificates exist whatever the box's speed.
-				log.mu.Lock()
-				g := log.gate
-				log.mu.Unlock()
-				if g != nil {
-					select {
-					case <-g:
-					case <-time.After(3 * time.Second):
-					}
-				}
 			}
 		}
 		time.Sleep(time.Millisecond)
@@ -137,14 +101,12 @@ func TestDurableSpillResume(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
 	var seen atomic.Int64
 	restore := faults.Set(func(p string) error {
-		if p == "recorded" && seen.Add(1) == 2 {
+		if p == "spill-unlink" && seen.Add(1) == 1 {
 			return faults.ErrCrash
 		}
 		return nil
 	})
-	end := log.gateOnSeals(2)
 	_, err = Run(context.Background(), durableConfig(url, out, false))
-	end()
 	restore()
 	if !errors.Is(err, faults.ErrCrash) {
 		t.Fatalf("crash not injected: %v", err)
@@ -190,15 +152,15 @@ func crashDurable(t *testing.T, cfg Config, point string, nth int64) {
 // and a crashed run's output.
 func durableFixture(t *testing.T) (url string, b *s3mem.Backend, ref, out string) {
 	t.Helper()
-	url, b, log := slowFrontier(t, "d06/")
+	url, b, _ = slowFrontier(t, "d06/")
 	ref = filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
 		t.Fatal(err)
 	}
 	out = filepath.Join(t.TempDir(), "ds")
-	end := log.gateOnSeals(2)
-	crashDurable(t, durableConfig(url, out, false), "recorded", 2)
-	end()
+	// Killed at the first retirement's unlink: its cycle appended every
+	// seal queued before it, so certificates K does not cover are on disk.
+	crashDurable(t, durableConfig(url, out, false), "spill-unlink", 1)
 	return url, b, ref, out
 }
 
