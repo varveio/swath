@@ -70,19 +70,52 @@ type Options struct {
 	// identity); a part it closes does not calibrate the size ratio, as a
 	// time cut does not: only a part closed by size does.
 	MaxRows int64
-	// Cut, if set, fixes one part's boundary: the part with that ordinal
-	// is closed after exactly that many rows, neither by size nor by the
-	// interval. A resume sets it to reproduce a claimed part whose record
+	// Cut, if set, fixes one part as it was written before: the part with
+	// that ordinal is closed after exactly that many rows, neither by size
+	// nor by the interval, and written with the claimed part's columns and
+	// created_by. A resume sets it to reproduce a claimed part whose record
 	// was never written, whatever cut it (size, or a timer that fires
-	// differently now).
+	// differently now) and whichever build wrote it.
 	Cut *Cut
 }
 
-// Cut is a part boundary recovered from a claimed part: its ordinal and
-// its row count.
+// Cut is a part recovered from a claimed part's footer: its ordinal, its
+// row count and, when read, its columns (the key first) and created_by.
+// A build that adds an optional column writes the claimed part without it
+// and the parts after it with it, so the claimed part is reproduced byte
+// for byte; created_by names the build that wrote it, so a later build of
+// the same recipe reproduces it too. Columns the schema does not hold in
+// that order, or none, leave the schema whole, and CreatedBy empty leaves
+// this build's: the byte comparison then decides.
 type Cut struct {
-	Ordinal int
-	Rows    int64
+	Ordinal   int
+	Rows      int64
+	Columns   []string
+	CreatedBy string
+}
+
+// claimSchema is s restricted to the named columns, the key first, when
+// they are s's columns in s's order; otherwise s.
+func claimSchema[P any](s *schema.Schema[P], names []string) *schema.Schema[P] {
+	if len(names) == 0 || names[0] != "key" {
+		return s
+	}
+	names = names[1:]
+	if len(names) == len(s.Columns) {
+		return s
+	}
+	cols := make([]schema.Column[P], 0, len(names))
+	for _, c := range s.Columns {
+		if len(cols) < len(names) && c.Name == names[len(cols)] {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) != len(names) {
+		return s
+	}
+	sub := *s
+	sub.Columns = cols
+	return &sub
 }
 
 // Resume is the router state recovered from a journal.
@@ -369,9 +402,13 @@ func (r *Router[P]) encode(p *part[P]) {
 	if err == nil {
 		err = faults.At("part-create") // tests: the output replaced after the check
 	}
+	s, createdBy := r.schema, ""
+	if p.pinned {
+		s, createdBy = claimSchema(r.schema, r.opt.Cut.Columns), r.opt.Cut.CreatedBy
+	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, p.ordinal, r.opt.Encoders, columns, createdBy)
 	}
 	if err != nil {
 		p.err = err

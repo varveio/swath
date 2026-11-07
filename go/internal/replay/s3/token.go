@@ -31,8 +31,13 @@ import (
 // instead, a page from a wrong position being worse for a client than a
 // refusal: the decoder is strict
 // (no padding, no stray bits after the last byte, no line breaks), so
-// any change to the text changes the decoded bytes or fails to decode,
-// and a changed payload fails the checksum. It is a checksum, not a
+// any change to the text changes the decoded bytes or fails to decode.
+// A payload changed in place fails the checksum: CRC-32 detects every
+// error burst of 32 bits or fewer, which covers a replaced character or
+// byte. A payload shortened or lengthened is accepted only when its last
+// four bytes happen to be the checksum of the rest (1 in 2^32), and it is
+// then exactly the token of that other boundary (FuzzToken's seed
+// four-dropped-is-a-token). It is a checksum, not a
 // signature or a binding: it covers only flag || boundary, so a token
 // survives restarts and is accepted by a server on another fixture, and
 // a client that builds a token picks an arbitrary resume boundary, which

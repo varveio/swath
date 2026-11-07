@@ -57,7 +57,7 @@ func FuzzMarker(f *testing.F) {
 			t.Fatalf("round trip of %q/%v/%d: %+v %v", boundary, inclusive, progress, m, err)
 		}
 		other := bytes.Clone(bind)
-		other[int(pos)%bindingBytes] ^= 1 << (pos / bindingBytes % 8)
+		other[int(pos%uint(bindingBytes))] ^= 1 << (pos / bindingBytes % 8)
 		if _, err := decodeMarker(tok, other); err != errInvalidMarker {
 			t.Fatalf("marker accepted under another binding: %v", err)
 		}

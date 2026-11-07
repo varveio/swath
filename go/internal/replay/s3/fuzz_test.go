@@ -23,9 +23,17 @@ const tokenAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 // DecodeToken never panics and answers every string that is not a token
 // with the one 400 InvalidArgument; an accepted string is the token's only
 // spelling (EncodeToken of what it decoded to is the string); a boundary
-// round-trips; and every alteration of a token (a character replaced, one
-// or four dropped, a decoded byte changed, a character appended) is
-// refused, never a different boundary.
+// round-trips; an alteration the checksum always catches (a character
+// replaced, a decoded byte changed, padding added) is refused; and an
+// alteration that changes the payload's length (one or four characters
+// dropped, one appended) is refused or is itself the one spelling of a
+// different boundary. CRC-32 detects every error burst of 32 bits or fewer
+// in a payload of unchanged length, and a character's 6 bits or one byte
+// is such a burst. A shortened or lengthened payload is a different
+// codeword: its last four bytes match the checksum of the rest by a
+// 1-in-2^32 coincidence that a fuzzer choosing the boundary finds
+// (testdata/fuzz/FuzzToken/four-dropped-is-a-token: AAAAAksVGg2HhrTI less
+// four characters is AAAAAksVGg2H, the token of a shorter boundary).
 func FuzzToken(f *testing.F) {
 	for _, b := range []string{"", "a/dir/", "photos0", "logs/alpha/dt=2026-01-01/part-00008.json.gz", "\xff\xfe?", "\x00"} {
 		f.Add(b, true, uint(3), byte(1), "")
@@ -63,9 +71,26 @@ func FuzzToken(f *testing.F) {
 		for i := range len(tokenAlphabet) {
 			refused("character replaced", tokStr[:at]+tokenAlphabet[i:i+1]+tokStr[at+1:])
 		}
-		refused("one dropped", tokStr[:len(tokStr)-1])
-		refused("four dropped", tokStr[:max(len(tokStr)-4, 0)])
-		refused("one appended", tokStr+"A")
+		// The expectation for a resized token does not consult the decoder's
+		// own checks: an accepted string must re-encode to itself, so it is
+		// a token in its own right, and it differs from tokStr, so it names
+		// another boundary.
+		refusedOrCanonical := func(what, s string) {
+			t.Helper()
+			tok, ok, err := DecodeToken(s)
+			if err != nil {
+				if ok || err != errInvalidToken {
+					t.Fatalf("%s of %q: %q gave ok=%v %v, want the 400 InvalidArgument", what, tokStr, s, ok, err)
+				}
+				return
+			}
+			if !ok || EncodeToken(tok.Boundary, tok.Inclusive) != s {
+				t.Fatalf("%s of %q: %q accepted as %+v, which is not its spelling", what, tokStr, s, tok)
+			}
+		}
+		refusedOrCanonical("one dropped", tokStr[:len(tokStr)-1])
+		refusedOrCanonical("four dropped", tokStr[:max(len(tokStr)-4, 0)])
+		refusedOrCanonical("one appended", tokStr+"A")
 		refused("padded", tokStr+"=")
 		payload, err := base64.RawURLEncoding.DecodeString(tokStr)
 		if err != nil {
