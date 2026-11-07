@@ -8,9 +8,11 @@ is [../replay.md](../replay.md).
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture; `sort-fixture` as a thin command over `internal/replay/sortfixture` | server, latency, store, memstore, sortfixture |
-| `internal/replay/server` | the HTTP server: the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, store |
-| `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | store |
-| `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | – |
+| `internal/replay/server` | the HTTP server: request-target checks, the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, output, store, sortedparquet (its disorder error) |
+| `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | output, javanum, store |
+| `internal/replay/output` | the response byte budget and the chunked sink responses are rendered into | – |
+| `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
+| `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
@@ -85,14 +87,24 @@ Three conversions decide bytes on the wire, and each was measured against the Ja
   at the end one for the rest): `decodeText`, identical to the Java server's decoding on 546,200 generated inputs
   (exhaustive to four bytes over the boundary bytes of every sequence class); table `TestDecodeTextMatchesTable`.
   Go's own decoders group malformed bytes differently, which would change echoed prefixes and rendered keys.
-- **Integers and blanks.** `max-keys` accepts a sign and decimal digits of any script, within int32; "blank"
+- **Integers and blanks.** `max-keys` accepts a sign and decimal digits of any BMP script, within int32, and
+  refuses a digit outside the BMP, because the contract reads the value one UTF-16 code unit at a time and a
+  surrogate is no digit (`javanum` keeps the BMP digit runs as a table rather than following Go's Unicode
+  tables, `TestDigitTable`); "blank"
   (an absent token, a default `max-keys`) is the Unicode separators except the no-break spaces plus the ASCII
   and information-separator controls.
 
-The XML is appended byte by byte rather than marshalled: `encoding/xml` escapes `"` as `&#34;` and control bytes
+The XML is written byte by byte rather than marshalled: `encoding/xml` escapes `"` as `&#34;` and control bytes
 as character references, and the element order, `&apos;`, ETag quoting as `&quot;`, millisecond `LastModified`
-rounded toward the earlier millisecond and the `encoding-type=url` grammar are fixed by the wire contract
-(`TestRenderListGolden` is a page the Java server answered).
+rounded toward the earlier millisecond with the year of era (`+10000`, `0001` for year 0, `TestLastModifiedYears`)
+and the `encoding-type=url` grammar are fixed by the wire contract (`TestRenderListGolden` is a page the Java
+server answered).
+
+It is written into an `output.Output`, not a slice, so memory is charged before it exists. Each append admits
+the same unit the contract's renderer admits (a tag in three parts, an entity, a byte, a number, a value's exact
+percent-encoded length, or a percent-encoded value written in one pass into room already charged), so a
+response that crosses the per-response cap or the budget is refused at the same byte, with the same reason, as
+on the Java server.
 
 ## Latency
 
@@ -105,23 +117,39 @@ token and max-keys as the Java server does, so a request draws the same delay fr
 (`TestLatencyKeyGolden`); avalanching matters because successive pages of one walk differ only in nearby tokens.
 
 The server applies the target as a deadline from the start of paging: it sleeps for the remainder, or counts an
-overrun with the excess when there is none.
+overrun with the excess when there is none. Parsing reads numbers with the contract's floating-point grammar
+(`javanum.ParseDouble`: decimal or hexadecimal, a `d`/`f` suffix), and every conversion and sum saturates
+(`TestHugeDelaysSaturate`), because a wrapped delay is negative and a non-positive delay is read as none.
 
 ## Admission and shutdown
 
-- `--max-concurrent-requests` is a channel semaphore taken first and held for the whole request: excess
-  requests wait, as they would for a full worker pool. A request in an injected delay holds its slot.
-- A response-count ceiling (twice the request ceiling) and a byte budget sit behind it. The byte budget is
-  charged with an estimate before paging (`max(4096, 512 + 320 × pageSize)`, capped at the per-response cap) and
-  settled after rendering; a response over `--max-response-bytes` is a 500. Both refuse with a 503 rather than
-  queue, and count `response.admission.refused{reason}`. The store bounds its own page decodes
+- The request target is checked first (`targetProblem`), as the contract's HTTP layer checks it before any
+  route: an ambiguous or illegal target is a 400 with an HTML page, counted by no meter
+  (`TestRejectsAmbiguousTargets`). The rules were established by sending each raw target to the Java server.
+- `--max-concurrent-requests` is a channel semaphore, the execution slot: excess requests wait, as they would
+  for a full worker pool. It is held through parsing, paging, rendering and the injected delay, and released
+  before the response is written.
+- The response is held for longer: a response permit (one of twice the request ceiling) and the budget bytes
+  backing it are taken when the request is admitted and released when the write returns. So clients that read
+  slowly hold responses, not slots, and once twice the ceiling are outstanding the next request is refused
+  `response_count_exhausted` instead of waiting (`TestSlowReadersReachTheResponseCeiling`).
+- The byte budget follows the contract's credit model (`output`): a reservation of
+  `max(4096, 512 + 320 × pageSize)`, capped at `--max-response-bytes`, before paging; a first chunk sized from
+  the entries actually returned; each chunk taken from the reservation before the budget is charged again; the
+  unused reservation returned when rendering ends, before the delay (`TestSparseResponsesReturnTheirReservation`);
+  the chunks released after the write. Refusals are 503s (500 `response_too_large` for the cap) counted in
+  `response.admission.refused{reason}`; nothing queues on the budget. The store bounds its own page decodes
   (`--parquet-connections`); the server adds no read permit of its own.
 - Writes get a deadline when writing starts (`http.ResponseController.SetWriteDeadline`); `http.Server`'s
   `WriteTimeout` would run from the end of the request headers and so include the injected delay.
 - Shutdown cancels one context: queued requests and sleeping delays answer 503 `shutdown` at once, a store read
-  sees cancellation, both listeners close, and the store is closed after the last request holding it returns.
-  If the deadline passes first the server logs `shutdown_incomplete` and a read that ignores cancellation keeps
-  the store open until it returns (`TestUninterruptibleReadDefersStoreClose`).
+  sees cancellation, both listeners close, and the store is closed, on its own goroutine, after the last request
+  holding it returns. The HTTP stop and that close share one deadline: past it the server logs
+  `shutdown_incomplete` and returns, leaving a read that ignores cancellation, or a slow close, to finish on its
+  own (`TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`). A close failure is
+  logged and returned once (`TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`).
+- A store failure is a 500 with no detail, except the typed disorder of a row group, which the contract answers
+  `fixture_disordered` with the row group and the part's file name (`TestDisorderedFixtureNamesOnlyThePart`).
 
 ## Metrics
 
@@ -138,13 +166,22 @@ fixture (free ports, read from the startup lines; ready on `/healthz`), lists th
 and sends both servers the same requests:
 
 - the scripted matrix (`s3Matrix`): `max-keys` edges (0, 1, 2, 999, 1000, 1001, 100000) and garbage (`abc`,
-  `-1`, blank, signed, out of range), prefixes at every depth of the keys (sampled when there are many) and one
-  that matches nothing, each with no delimiter, `/` and a two-byte delimiter taken from the keys; `start-after`
-  before, at, between and after keys and at a prefix and its successor; keys that need encoding with and without
-  `encoding-type=url`; `fetch-owner`; malformed, blank, foreign and v1 tokens, and a real token with a
-  `start-after` on either side; wrong, escaped and missing buckets; extra path segments; HEAD, POST and DELETE;
+  `-1`, blank, signed, out of range, digits of other scripts in and outside the BMP), prefixes at every depth of
+  the keys (sampled when there are many) and one that matches nothing, each with no delimiter, `/` and a
+  two-byte delimiter taken from the keys; `start-after` before, at, between and after keys and at a prefix and
+  its successor; keys that need encoding with and without `encoding-type=url`; `fetch-owner`; malformed, blank,
+  foreign and v1 tokens; wrong, escaped and missing buckets; extra path segments; HEAD, POST and DELETE;
+- token-dependent requests: a seed page of one entry (and, with `/`, of the first prefix that rolls up to two or
+  more entries, so it truncates) whose token is then sent with a `start-after` before, after and blank. When a
+  seed issues no token the dependent requests are not sent and are reported as skipped, never as passing;
+- raw request targets, sent byte for byte on their own connection: the ones the contract's HTTP layer refuses
+  (compared on status, the compared headers and `Cache-Control`, since each server's error page is its own),
+  unusual ones it lets through (compared in full), and request lines Go's HTTP parser refuses itself (status
+  only, see the user page's limits);
 - token walks to the end at each page size (`-walks`, default 1, 7, 1000) over the bucket and each top-level
-  prefix, with and without the delimiter, following the reference's tokens and comparing every page;
+  prefix, with and without the delimiter, and walks that begin with a `start-after` at, inside and at the
+  successor of a few directory prefixes (at the root and inside the parent prefix), carrying the token and the
+  `start-after` together on every later page; each follows the reference's tokens and compares every page;
 - a seeded random walk (`-random`, `-seed`).
 
 "Identical" is: the same status, the same `Content-Type` and the same value for every `x-amz-*` and
@@ -155,21 +192,31 @@ identity cannot hold, a structural comparator; `-live-endpoint` uses one (leaf e
 codes only) to compare the Go server with live S3, where the bucket may have changed since it was recorded.
 
 In the package's own tests the driver compares two Go servers over the same keys, one whose store answers the
-`/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`).
+`/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`), and checks that
+token-dependent requests are skipped, not passed, where no token exists (`TestTokenCasesSkipWithoutAToken`).
+
+The driver only sees the shapes a fixture has. The adversarial ones (a giant prefix across many row groups, a
+successor that is a real key, high-scalar keys, a wide rollup with trailing plain keys, a multi-byte delimiter,
+a rolled multi-part fixture, start-after at and inside a common-prefix boundary) are built in the server's tests
+as stamped Parquet fixtures and served through the real store and through memstore's range walk, every page of
+every walk compared byte for byte (`sorted_differential_test.go`, the contract's
+`SortedServingFullDifferentialTest` case by case).
 
 ## Tests
 
 | Contract | Test |
 |---|---|
 | request parsing and its errors | `s3` `TestParseRequest`, `TestParseRequestErrors`, `TestParseHTTPRoutesByFirstSegment` |
-| query and text decoding | `s3` `TestQueryTextMatchesTable`, `TestDecodeTextMatchesTable`, `TestIsBlank`, `TestParseInt32` |
+| query and text decoding | `s3` `TestQueryTextMatchesTable`, `TestDecodeTextMatchesTable`, `TestIsBlank`, `TestParseInt32`; `javanum` `TestDigitTable`, `TestParseInt`, `TestParseDouble`, `TestSaturate` |
 | pager rules | `s3` `TestListsByPrefixAndExclusiveStartAfter`, `TestTruncatesAndResumesFromToken`, `TestMaxKeysZeroIsEmptyAndNotTruncated`, `TestRollsUpAndResumesPastARolledUpPrefix`, `TestStartAfterFiltersCommonPrefixes`, `TestBadTokenIsRejectedEvenWithAStartAfter`, `TestTokenTakesPrecedenceOverStartAfter`, `TestBlankTokenLeavesStartAfterAsTheBoundary`, `TestShortRunScansLongRunSeeksSameOutput`, `TestPrefixResumeIsInclusiveAtSuccessor`, `TestAllFFPrefixEndsTheListing` |
-| rollup equals walk | `s3` `TestRollupMatchesWalk`; `replaydiff` `TestDriverFindsNoDifferenceBetweenRollupAndWalk` |
+| rollup equals walk | `s3` `TestRollupMatchesWalk`; `replaydiff` `TestDriverFindsNoDifferenceBetweenRollupAndWalk`, `TestTokenCasesSkipWithoutAToken` |
 | the 0xFF carry | `s3` `TestPrefixUpperAndSuccessor`, `TestPrefixRangeLaw` |
 | tokens | `s3` `TestTokenGolden`, `TestTokenRoundTripsAndLegacyV1`, `TestBlankTokenIsAbsent`, `TestMalformedTokensAreRejected`, `TestTokenProperties`, `TestHasTokenAgreesWithDecode` |
-| XML | `s3` `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
-| latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`; `s3` `TestLatencyKeyGolden` |
-| serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestResponseCountAndBudgetRefusals`, `TestOversizedResponseIsRefusedAndTheBudgetRecovers`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose` |
+| response memory | `output` (the contract's sink tests by name), `s3` `TestOneKeyAndEmptyPagesUseSmallFirstChunks`, `TestRenderStopsAtTheCap`; `server` `TestSparseResponsesReturnTheirReservation`, `TestBudgetRefusesAnOverlappingPage`, `TestOversizedResponseStopsAtTheCap`, `TestSlowReadersReachTheResponseCeiling` |
+| XML | `s3` `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
+| latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`, `TestNumberGrammar`, `TestHugeDelaysSaturate`; `s3` `TestLatencyKeyGolden`; `server` `TestContinuationPagesDrawDistinctJitter`, `TestCountsNoOverrunWhenInjectionIsOff` |
+| serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`, `TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`, `TestRejectsAmbiguousTargets`, `TestDisorderedFixtureNamesOnlyThePart`, `TestDisorderedPartOverHTTP` |
+| sorted serving | `server` `sorted_differential_test.go` (eleven cases of the contract's `SortedServingFullDifferentialTest`) |
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
-| the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
+| the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSigtermWithActiveWorkIsBoundedAndIdempotent`, `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |

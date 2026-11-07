@@ -57,12 +57,12 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--bucket NAME` | required | the bucket name the S3 route answers for; any other is `NoSuchBucket` |
 | `--host`, `--port` | `127.0.0.1`, `0` | bind address; port `0` binds a free port, reported in the startup line |
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
-| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency |
+| `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`) |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
-| `--response-buffer-budget` | 256 MiB | encoded response bytes held at once; a request that would exceed it is refused |
+| `--response-buffer-budget` | 256 MiB | response memory held at once, charged before it is allocated; a request that would exceed it is refused (below) |
 | `--max-response-bytes` | 64 MiB | the largest encoded response; a larger page is a 500 |
 | `--stop-timeout` | `10s` | shutdown deadline |
 | `--idle-timeout` | `30s` | idle connection timeout |
@@ -87,8 +87,9 @@ swath_replay endpoint=http://127.0.0.1:19090 bucket=noaa-normals-pds fixture=/da
 
 (one line on the terminal). SIGINT or SIGTERM stops it: new requests and requests waiting for a slot are answered
 `503`, requests sleeping in an injected delay are answered `503` at once, the fixture is closed when the last
-read returns, and the process exits 130 or 143. A stop that outlives `--stop-timeout` logs
-`shutdown_incomplete`.
+read returns, and the process exits 130 or 143. Everything, closing the fixture included, is bounded by
+`--stop-timeout`: past it the server logs `shutdown_incomplete` and exits, leaving a read that ignores
+cancellation to finish on its own. A failure to close the fixture is logged (`replay store cleanup failed`).
 
 ## The S3 route
 
@@ -97,19 +98,38 @@ read returns, and the process exits 130 or 143. A stop that outlives `--stop-tim
 ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte order.
 
 - `max-keys` is echoed as asked; a page holds at most 1,000 entries, objects and common prefixes together.
-  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument`.
+  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument`. An integer is an optional sign
+  and decimal digits from any script of the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as
+  U+1D7D9) is not an integer.
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A blank token is absent. A malformed token is `400 InvalidArgument`
   even when a `start-after` could have served. Replay tokens (`v2:...`) and S3's are not interchangeable.
 - `encoding-type=url` percent-encodes every byte but `A-Z a-z 0-9 - _ . /` with upper-case hex, as S3 does.
   Without it, key bytes are rendered as UTF-8 text with malformed sequences replaced.
-- `LastModified` has millisecond precision; `Owner` appears only with `fetch-owner=true`.
+- `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
+  `Owner` appears only with `fetch-owner=true`.
 - Errors are S3's XML error document with `Code`, `Message`, `Resource` (the path as sent) and `RequestId`:
   `404 NoSuchBucket`, `405 MethodNotAllowed` (anything but GET), `400 InvalidArgument`. Every answer carries
   `x-amz-request-id` and `x-amz-id-2` (`S3LISTINGREPLAY`).
 - The replay's own refusals carry `x-swath-replay-error` with the reason: `503 ServiceUnavailable` for
   `shutdown`, `response_count_exhausted` and `response_budget_exhausted`, `500 InternalError` for
-  `response_too_large`, and `500 InternalError` (`internal`, no detail) when the fixture read fails.
+  `response_too_large`; `500 InternalError` with `fixture_disordered` when a row group's keys turn out not to
+  ascend (the message names the row group and the part's file name, never its directory); and
+  `500 InternalError` (`internal`, no detail) when the fixture read fails otherwise.
+- Some request targets are refused before the route, with `400`, an HTML page and
+  `Cache-Control: must-revalidate,no-cache,no-store`, as the Java server's HTTP layer refuses them: a fragment
+  (`#`), an empty path segment other than the last (`//bucket`, `/;/bucket`), an encoded `/` or `%`, an encoded
+  dot segment (`%2e%2e`) or a dot segment with a parameter (`..;`), a raw `\` or a raw byte outside the path
+  characters (`"`, `<`, `|`, non-ASCII, ...), an encoded control character or `\`, invalid UTF-8 once decoded,
+  a malformed escape or an encoded NUL, a path that climbs above the root (`/../bucket`), and user information
+  in an absolute target. The page is this server's own.
+
+Response memory. A request reserves room for a full page (320 bytes an entry, at least 4 KiB, at most
+`--max-response-bytes`) before it reads the fixture, and is refused (`response_budget_exhausted`) if the budget
+has no room for that. The response is then rendered into chunks sized from the page it actually got, each
+charged before it is allocated; rendering stops at the first byte past `--max-response-bytes`
+(`response_too_large`) or past the budget. The unused reservation goes back before any injected delay, and the
+chunks are held until the response is written.
 
 ## Injected latency
 
@@ -122,7 +142,9 @@ swath-replay serve ... --inject-latency prod-commoncrawl --latency-scale 50
 A request with a delimiter is a `structure_probe`, a delimiter-free request with `max-keys` at most 1 a
 `pivot_probe`, anything else a `worker_page` (aliases `structure`, `pivot`, `page`). A delay is `223ms`, `6.9s`
 or a bare millisecond count; `+55ms/cp` (structure probes only) adds a term per common prefix returned. An
-unlisted shape gets none. `prod-commoncrawl` is the built-in reference profile (223 ms pages, 121 ms pivots,
+unlisted shape gets none. The number before `ms` or `s` is read as a floating-point number in the Java
+grammar (`1.5e3ms`, `2dms`, `0x1p0s`); a delay too long to represent saturates at about 292 years rather than
+wrapping to none. `prod-commoncrawl` is the built-in reference profile (223 ms pages, 121 ms pivots,
 223 ms + 55 ms per prefix for structure probes).
 
 The delay is the request's total target time, not a surcharge: the server sleeps only for what its own cost
@@ -156,8 +178,10 @@ fixture answered a `/` listing in one pass, `walk` for the range walk), `inject.
 `inject.overrun.ms{shape}`, `protocol.http.requests{protocol,status_class}`,
 `protocol.objects|prefixes|encoded.bytes{protocol,shape}` (shape `page`, `seek`, `delimiter`),
 `protocol.requests.active{protocol}`, `response.admission.refused{protocol,reason}`,
-`response.bytes.live|peak`, `response.active` and `response.write.deadline{protocol,reason}`, all under
-`swath.replay.`.
+`response.bytes.live|peak`, `response.active`, `response.chunk.allocation{reason}` and
+`response.chunk.capacity.bytes{reason}` (response chunks by `initial`, `initial_cap_partial`, `continuation`,
+`cap_partial`), `response.percent.encoding.path{protocol,reason}` and `response.write.deadline{protocol,reason}`,
+all under `swath.replay.`.
 
 ## With the bench scripts
 
@@ -192,12 +216,12 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 
 - One route (S3 `ListObjectsV2`, path-style) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
-- The Java server's HTTP layer rejects some request targets before the S3 route sees them (an empty path
-  segment such as `//bucket`, an encoded `/` in the path, a raw non-ASCII byte in the path, a `#` in the
-  target) with an HTML `400`; this server answers them as S3 requests (`NoSuchBucket` or a listing).
+- Two request-target cases differ from the Java server: a request line Go's HTTP parser refuses itself
+  (whitespace or a control byte in the target, a malformed `%` escape in the path, a target with neither a
+  leading `/` nor a scheme) gets its `400` with a `text/plain` page; and an absolute target whose host differs
+  from the `Host` header, which the Java server refuses, is served, because Go's HTTP layer ignores the `Host`
+  header for an absolute target as RFC 9112 section 3.2.2 has an origin server do.
 - Timer `max_ms` is the all-time maximum and percentiles cover the last 4,096 samples; the Java registry decays
   both over a time window, so the two servers' timer fields agree on counts and sums, not on those.
-- `max-keys` accepts decimal digits from every script the Go toolchain's Unicode tables know; digits added in
-  later Unicode versions are not integers here.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in
   front for those.
