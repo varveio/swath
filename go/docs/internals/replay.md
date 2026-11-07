@@ -346,13 +346,16 @@ must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-
 
 | Contract | Test |
 |---|---|
-| provider order, flat and delimited, against brute force | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix` |
-| empty-read settlement cost | `azure` `TestLongStartFromCostBound` |
+| provider order, flat and delimited, against brute force (rollup and walk stores) | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix`, `TestCompareIsUTF16OrderForValidNames`, `TestInvalidUTF8NamesKeepATotalOrder` |
+| store reads | `azure` `TestLongStartFromCostBound`, `TestDeepLeadByteBoundsRetireEmptyPartsWithAFewProbes`, `TestNamesWithoutLeadBytesKeepOneRangeAndOneRead`, `TestSwappedBranchesReuseRowsAlreadyRead`, `TestFallbackBatchesFlatEntriesUnderDelimiter` |
+| page limit, shapes, counts, engagement | `azure` `TestFiveThousandPageLimitAndMarkerScope`, `TestInjectedLatencyShapes`, `TestPageReportsBlobAndPrefixCounts`, `TestEngagementPaths`; `server` `TestAzureEngagementMeters` |
 | markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
 | request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
-| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals` |
+| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
+| client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
+| the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
-| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself`, `TestMarkerCasesRunOrSkip` |
 | native captures | `azure` `TestAzureEvidenceReplay` (fixture tier), `TestEvidenceRejectsCorruptedReplayResults`, `TestPinRules`, `TestPinAdjustments` |
 | the official SDK | `azure` `TestSDKDecodesEncodedNamesAndProperties`, `TestSDKConsumesFiveThousandPages`, `TestSDKFixtureFaultAndRetries`; the SDK runs of `TestAzureEvidenceReplay` |
