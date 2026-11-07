@@ -56,7 +56,7 @@ the Java `swath-replay sort-fixture`.
 | `--write-timeout` | `30s` | response write timeout, counted from the first byte written (an injected delay does not count) |
 | `--slow-request-log-ms` | `$SWATH_REPLAY_SLOW_REQUEST_LOG_MS`, else `-1` | log requests whose own cost reaches this many milliseconds; negative disables |
 | `--serving-mode` | `sorted` | `sorted` only; `duckdb` is refused with the reason |
-| `--protocols` | `s3` | the routes served: `s3`, `azure` or both (below); `gcs` is a reserved name, refused |
+| `--protocols` | `s3` | any of `s3`, `gcs` and `azure`, comma-separated (below). With `gcs` the bucket must be a valid GCS bucket name, and `storage` is refused with both `s3` and `gcs`; with `azure` it must be a valid container name |
 | `--azure-account` | `replay` | the Azure route's account path segment (3 to 24 lower-case letters and digits); refused without `azure` |
 | `--advertised-host` | `--host` | the host the Azure `ServiceEndpoint` and `native_endpoints` name; required for a wildcard bind with `azure` |
 
@@ -220,13 +220,13 @@ either server.
 go build -o /tmp/replaydiff ./bench/replaydiff
 /tmp/replaydiff -java $JAVA_ROOT/swath-replay/build/install/swath-replay/bin/swath-replay -go ./swath-replay \
   -fixture /data/sorted -bucket bkt -report /tmp/diff.json     # exit 1 and FAIL lines on a difference
-/tmp/replaydiff -route azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
+/tmp/replaydiff -protocol azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
 ```
 
 ## Limits
 
-- Two routes (S3 `ListObjectsV2`, path-style, and the Azure flat `List Blobs` subset) and one serving mode
-  (sorted). Version listing, object data and
+- Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
+  subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
 - The Java server's HTTP layer rejects some request targets before the S3 route sees them (an empty path
   segment such as `//bucket`, an encoded `/` in the path, a raw non-ASCII byte in the path, a `#` in the
@@ -237,3 +237,109 @@ go build -o /tmp/replaydiff ./bench/replaydiff
   later Unicode versions are not integers here.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in
   front for those.
+
+## The GCS route
+
+With `--protocols gcs` (alone or with `s3`) the server answers the Cloud Storage JSON API's `objects.list`:
+`GET /storage/v1/b/{bucket}/o`. Point a GCS client at it with its endpoint override (for example
+`http://127.0.0.1:19090`) and anonymous credentials.
+
+```bash
+./swath-replay serve --fixture /data/rec/noaa-normals-pds/dataset/data --bucket noaa-normals-pds --protocols s3,gcs &
+curl 'http://127.0.0.1:19090/storage/v1/b/noaa-normals-pds/o?prefix=normals-hourly%2F&delimiter=%2F&maxResults=5'
+```
+
+With several routes a request is classified before anything else: a path under `/storage/v1/b/` belongs to the
+GCS route (with an S3 `list-type` parameter it is ambiguous: `400 {"error":"replay_ambiguous_request"}`); any
+other request is the S3 route's, or, when S3 is not enabled, `404 {"error":"replay_not_found"}`. Any other
+path under `/storage/v1/b/` (another bucket, an escaped spelling, a trailing slash or segment) is `404`
+`notFound`.
+
+| Parameter | Served |
+|---|---|
+| `prefix`, `delimiter` | any UTF-8 text up to 1,024 bytes; a delimiter of any length; empty is absent |
+| `startOffset` | inclusive lower bound; a prefix rolled up from a name at or after it is listed even when the offset falls inside that prefix |
+| `endOffset` | exclusive upper bound |
+| `maxResults` | 1 to 1,000 entries (objects and prefixes together) per page; larger asks are capped at 1,000; absent is 1,000; `0`, a sign, a leading zero or a non-integer is `invalid_max_results` |
+| `pageToken` | the replay's own `gcs1.` token, bound to the fixture and the request's prefix, delimiter and offsets (not to `maxResults`); anything else is `invalid_page_token` |
+| `projection` | `noAcl` (default) or `full` (each item carries an empty `acl`) |
+| `prettyPrint` | `true` or `false`, accepted and ignored: the body is always compact |
+| `alt` | `json` only (`alt_format` otherwise) |
+| `versions`, `softDeleted`, `includeFoldersAsPrefixes`, `includeTrailingDelimiter` | `false` only (`feature_NAME` otherwise) |
+| `matchGlob`, `filter`, `fields` | empty only (`feature_NAME` otherwise) |
+| anything else, or a repeated parameter | `unknown_or_duplicate_parameter` |
+
+A query is read as UTF-8 (a raw ill-formed sequence becomes U+FFFD); `%XX` escapes must be complete and decode
+to valid UTF-8 (`invalid_percent_escape`, `invalid_utf8`); a raw `+` stays `+`. A value over 1,024 bytes
+(2,048 for `pageToken`) is `field_too_long_NAME`. A request with several faults reports the first in this
+order: unknown or repeated names and bad escapes (left to right), the four boolean features (in the table's
+order), `matchGlob`, `filter`, `fields`, `alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths,
+then the token.
+
+The answer is `{"kind":"storage#objects"}` plus `items` and `prefixes` when non-empty and `nextPageToken` when
+there is more. Errors are the JSON API envelope `{"error":{"code":N,"message":...,"errors":[{"message":...,
+"domain":"global","reason":...}]}}` with the replay's reason in `x-swath-replay-error`: `400 invalid` for a
+refused request, `404 notFound`, `405 methodNotAllowed` (with `Allow: GET`; anything but `GET`, `HEAD` included),
+`503 backendError` for `shutdown`, `response_count_exhausted` and `response_budget_exhausted`, and
+`500 internalError` for `response_too_large`, a fixture row the API cannot represent (`name_length`,
+`invalid_utf8_name`, `name_newline`, `reserved_name`, `negative_size`, `timestamp_out_of_range`),
+`fixture_disordered` and `internal`. Every answer is `Content-Type: application/json; charset=utf-8`.
+
+The route shares the request ceiling, the response count and byte budget, the injected latency (a delimiter
+request is a structure probe, `maxResults=1` a pivot probe, anything else a worker page, with the jitter keyed
+by the request's prefix, delimiter, offsets, page size and token) and shutdown with the S3 route, and counts
+under the same meters tagged `protocol=gcs`, plus `swath.replay.provider.path{protocol,path,reason}` (the path
+each page took: `flat`, `delimiter_indexed`, `delimiter_walk`, `empty_intersection`, `page_limit_clamped`,
+`timestamp_render`, and the refusals).
+
+### Item metadata by fixture schema
+
+Each item carries `kind`, `bucket`, `name`, `size` (a decimal string), `updated` (RFC 3339 UTC, six fractional
+digits: the fixture's microseconds exactly), then the metadata fields. Which values they hold depends on the
+fixture's declared schema id:
+
+| Field | `swath/gcs-objects/v1` (the lister's GCS datasets) | every other schema (S3, canonical, sort-fixture output, local) |
+|---|---|---|
+| `name`, `size`, `updated` | exact | exact (a null size is `0`, a null time the epoch) |
+| `etag` | exact (`swath-gcs-synthetic-v1` when null) | synthetic: `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) |
+| `generation`, `metageneration` | exact (`1` when null) | synthetic: `1` |
+| `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
+| `contentType` | exact (`application/octet-stream` when null) | synthetic: `application/octet-stream` |
+| `md5Hash`, `crc32c` | exact, absent when null | absent |
+| `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
+| `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |
+
+The synthetic values are the wire contract's, so the Java server and this one answer a non-GCS fixture
+identically; the Java server does not read `swath/gcs-objects/v1` datasets.
+
+### The GCS evidence replay
+
+`go/internal/replay/evidence` replays the provider evidence archive (`docs/replay-provider-evidence.tar.gz`)
+against this server. With `SWATH_REPLAY_FIXTURES=ROOT` it extracts the archive into a temporary directory,
+serves the capture corpus (from `ROOT/fixtures/evidence-gcs/sorted` when present, and always from the same
+corpus written in the test and sorted by sort-fixture) under the bucket `replay-bucket`, and replays every
+`gcs/captures/*.json`: an exchange as captured with the bucket placeholder mapped and a native page token
+replaced by the replay's token for the same position (or its tampered, flipped or truncated form), a walk and
+an SDK run re-walked with the replay's own tokens (an SDK run with the run's captured query scope and client
+headers). Each answer is compared with the provider's under the conformance field policy: status, classified
+headers, then the page (items field by field, prefixes, terminal pagination; walks as merged inventories with
+unbroken token chains) or the error envelope's first reason. Each outcome must be its pin in
+`gcs/replay-expectations.json` (with `docs/replay-provider-expectations.json` applied) or better: a pinned
+mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
+outcomes to `DIR/<fixture>/gcs-outcomes.json`, in the shape of the Java suite's `-PproviderReport` file.
+
+```bash
+SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v ./internal/replay/evidence
+```
+
+Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet their pinned mismatches.
+
+### Comparing the GCS route with the Java server
+
+```bash
+/tmp/replaydiff -protocol gcs -java $JAVA_ROOT/swath-replay/build/install/swath-replay/bin/swath-replay \
+  -go ./swath-replay -fixture /data/sorted -bucket bkt -report /tmp/gcs-diff.json
+```
+
+starts both servers with `--protocols gcs` and compares the GCS request matrix, token walks and a seeded random
+walk ([internals/replay.md](internals/replay.md#the-gcs-route)).

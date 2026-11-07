@@ -19,65 +19,42 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/azure"
 	"github.com/varveio/swath/go/internal/replay/metrics"
-	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
 
 // The Azure Blob flat List Blobs route, /{account}/{container}?restype=
-// container&comp=list, beside the S3 route. Enabled native selectors claim
-// their requests before the method is checked (a POST with the Azure
-// selector is the Azure route's UnsupportedHttpVerb, not an S3 405), a
-// request carrying both the Azure and the S3 selector is a replay 400, and
-// with S3 disabled every unclaimed request is a replay 404: the replay wire
-// contract's routing (TestAzureRouting).
+// container&comp=list, beside the other routes. serveOtherRoute hands it a
+// request whose path is /{account}/{one segment} and whose query names
+// restype or comp, before the method is checked (a POST with the Azure
+// selector is the Azure route's UnsupportedHttpVerb, not an S3 405); a
+// request that also carries the S3 selector is a replay 400: the replay
+// wire contract's routing (TestAzureRouting).
+
+// ProtocolAzure is the Azure route's --protocols name.
+const ProtocolAzure = "azure"
 
 const (
-	protocolAzure  = "azure"
-	protocolReplay = "replay"
 	// DefaultAzureAccount is the account path segment without
 	// --azure-account.
 	DefaultAzureAccount = "replay"
 	azureOrdering       = "azure=utf16-code-unit-order"
 )
 
-// ProviderPath counts engaged provider paging paths and the classification
-// that selected each.
-var ProviderPath = metrics.Def{Name: "swath.replay.provider.path", Kind: metrics.Counter, Tags: []string{"protocol", "path", "reason"}}
-
-// EnabledProtocols is the sorted list of enabled routes.
-func (c *Config) EnabledProtocols() []string {
-	if len(c.Protocols) == 0 {
-		return []string{protocolS3}
-	}
-	p := slices.Clone(c.Protocols)
-	slices.Sort(p)
-	return slices.Compact(p)
+func init() {
+	profiles[ProtocolAzure] = "blob-list-flat-" + azure.Version20260606 + "," + azure.Version20261006
 }
 
 func (c *Config) enabled(protocol string) bool {
-	return slices.Contains(c.EnabledProtocols(), protocol)
+	return slices.Contains(c.protocols(), protocol)
 }
 
 // OrderingProfile names the key order: the fixture's byte order, and the
 // Azure route's UTF-16 code-unit order when that route is enabled.
 func (c *Config) OrderingProfile() string {
-	if c.enabled(protocolAzure) {
+	if c.enabled(ProtocolAzure) {
 		return store.OrderingProfile + ";" + azureOrdering
 	}
 	return store.OrderingProfile
-}
-
-// ProtocolProfile is the wire profile a route serves.
-func ProtocolProfile(protocol string) string {
-	switch protocol {
-	case protocolS3:
-		return "list-objects-v2"
-	case protocolAzure:
-		return "blob-list-flat-" + azure.Version20260606 + "," + azure.Version20261006
-	case "gcs":
-		return "json-v1"
-	}
-	return ""
 }
 
 var (
@@ -90,12 +67,7 @@ var (
 // and an advertised host for a wildcard bind (the ServiceEndpoint must
 // name a reachable host).
 func (c *Config) validateAzure() error {
-	for _, p := range c.Protocols {
-		if p != protocolS3 && p != protocolAzure {
-			return fmt.Errorf("unknown protocol %q", p)
-		}
-	}
-	if !c.enabled(protocolAzure) {
+	if !c.enabled(ProtocolAzure) {
 		if c.AzureAccount != "" {
 			return errors.New("--azure-account requires azure in --protocols")
 		}
@@ -132,17 +104,17 @@ type azureRoute struct {
 }
 
 func (s *Server) newAzureRoute() {
-	if !s.cfg.enabled(protocolAzure) {
+	if !s.cfg.enabled(ProtocolAzure) {
 		return
 	}
 	a := &azureRoute{}
 	a.pager = &azure.Pager{Store: s.cfg.Store, FixtureIdentity: s.cfg.FixtureIdentity, OnPath: s.azurePath}
 	s.azure = a
-	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(a.active.Load()) }, protocolAzure)
+	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(a.active.Load()) }, ProtocolAzure)
 }
 
 func (s *Server) azurePath(path, reason string) {
-	s.reg.Get(ProviderPath, protocolAzure, path, reason).Inc()
+	s.reg.Get(ProviderPath, ProtocolAzure, path, reason).Inc()
 }
 
 // azureEndpoint is the ServiceEndpoint: http://host:port/account/.
@@ -154,46 +126,15 @@ func (s *Server) azureEndpoint() string {
 	return "http://" + bracket(host) + ":" + strconv.Itoa(s.Port()) + "/" + s.cfg.AzureAccount + "/"
 }
 
-// routeNative answers a request a native route claims, or one no enabled
-// route claims; false leaves it to the S3 route.
-func (s *Server) routeNative(w http.ResponseWriter, r *http.Request, path, rawQuery string, arrived time.Time) bool {
+// azureClaims reports whether the Azure route is enabled and the request
+// is its: the path /{account}/{one segment}, a restype or comp parameter.
+func (s *Server) azureClaims(path, rawQuery string) bool {
 	if s.azure == nil {
 		return false
 	}
-	query := rawQuery
-	claimed := s.azureClaims(path) && (hasQueryKey(query, "restype") || hasQueryKey(query, "comp"))
-	switch {
-	case claimed && hasQueryKey(query, "list-type"):
-		s.serveEnvelope(w, r, arrived, 400, "replay_ambiguous_request")
-	case claimed:
-		s.serveAzure(w, r, path, rawQuery, arrived)
-	case s.cfg.enabled(protocolS3):
-		return false
-	default:
-		s.serveEnvelope(w, r, arrived, 404, "replay_not_found")
-	}
-	return true
-}
-
-// azureClaims reports whether path is /{account}/{one segment}.
-func (s *Server) azureClaims(path string) bool {
 	container, ok := strings.CutPrefix(path, "/"+s.cfg.AzureAccount+"/")
-	return ok && container != "" && !strings.Contains(container, "/")
-}
-
-// hasQueryKey reports whether a query parameter's percent-decoded name is
-// key.
-func hasQueryKey(query, key string) bool {
-	if query == "" {
-		return false
-	}
-	for _, field := range strings.Split(query, "&") {
-		name, _, _ := strings.Cut(field, "=")
-		if string(s3.PercentDecode(name)) == key {
-			return true
-		}
-	}
-	return false
+	return ok && container != "" && !strings.Contains(container, "/") &&
+		(hasQueryKey(rawQuery, "restype") || hasQueryKey(rawQuery, "comp"))
 }
 
 // admit takes a request slot (queueing as a full worker pool would) and
@@ -209,28 +150,6 @@ func (s *Server) admit() (release func(), ok bool) {
 		return func() { <-s.slots }, false
 	}
 	return func() { s.end(); <-s.slots }, true
-}
-
-// serveEnvelope answers a request no route serves with the replay's own
-// small JSON envelope.
-func (s *Server) serveEnvelope(w http.ResponseWriter, r *http.Request, arrived time.Time, status int, reason string) {
-	release, ok := s.admit()
-	defer release()
-	if !ok {
-		s.reg.Get(metrics.ResponseAdmissionRefused, protocolReplay, "shutdown").Inc()
-		status, reason = 503, "shutdown"
-		w.Header()["x-swath-replay-error"] = []string{reason}
-	}
-	body := []byte(`{"error":"` + reason + `"}`)
-	if r.Method == http.MethodHead {
-		body = nil
-	}
-	h := w.Header()
-	h["Content-Type"] = []string{"application/json"}
-	h["Content-Length"] = []string{strconv.Itoa(len(body))}
-	s.countResponse(protocolReplay, status, arrived)
-	w.WriteHeader(status)
-	w.Write(body)
 }
 
 func (s *Server) countResponse(protocol string, status int, arrived time.Time) {
@@ -303,7 +222,7 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		s.azureFail(w, r, arrived, err)
 		return
 	}
-	s.reg.Get(metrics.RequestStageLatency, protocolAzure, "page").Record(time.Since(started))
+	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "page").Record(time.Since(started))
 	shape := req.Shape()
 	delay := s.cfg.Latency.Delay(shape, int64(res.Prefixes), req.LatencyKey())
 
@@ -314,7 +233,7 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		s.azureFail(w, r, arrived, err)
 		return
 	}
-	s.reg.Get(metrics.RequestStageLatency, protocolAzure, "render").Record(time.Since(renderStart))
+	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "render").Record(time.Since(renderStart))
 	if len(body) > s.cfg.MaxResponseBytes {
 		s.azureRefuse(w, r, arrived, azureTooLarge)
 		return
@@ -338,16 +257,16 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 				s.azureFail(w, r, arrived, azureInterrupted)
 				return
 			}
-			s.reg.Get(metrics.RequestStageLatency, protocolAzure, "delay").Record(time.Since(delayStart))
+			s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "delay").Record(time.Since(delayStart))
 		} else {
 			s.reg.Get(metrics.InjectOverrun, shape.String()).Inc()
 			s.reg.Get(metrics.InjectOverrunMs, shape.String()).Observe(float64(-remaining) / 1e6)
 		}
 	}
 	neutral := neutralShape(shape)
-	s.reg.Get(metrics.ProtocolObjects, protocolAzure, neutral).Add(int64(len(res.Entries) - res.Prefixes))
-	s.reg.Get(metrics.ProtocolPrefixes, protocolAzure, neutral).Add(int64(res.Prefixes))
-	s.reg.Get(metrics.ProtocolEncodedBytes, protocolAzure, neutral).Add(int64(len(body)))
+	s.reg.Get(metrics.ProtocolObjects, ProtocolAzure, neutral).Add(int64(len(res.Entries) - res.Prefixes))
+	s.reg.Get(metrics.ProtocolPrefixes, ProtocolAzure, neutral).Add(int64(res.Prefixes))
+	s.reg.Get(metrics.ProtocolEncodedBytes, ProtocolAzure, neutral).Add(int64(len(body)))
 	s.azureWrite(w, r, 200, body, req, nil, arrived)
 }
 
@@ -364,7 +283,7 @@ func (s *Server) azureFail(w http.ResponseWriter, r *http.Request, arrived time.
 
 // azureRefuse answers an admission refusal and counts it.
 func (s *Server) azureRefuse(w http.ResponseWriter, r *http.Request, arrived time.Time, e *azure.Error) {
-	s.reg.Get(metrics.ResponseAdmissionRefused, protocolAzure, e.Reason).Inc()
+	s.reg.Get(metrics.ResponseAdmissionRefused, ProtocolAzure, e.Reason).Inc()
 	s.azureWriteError(w, r, arrived, e)
 }
 
@@ -409,7 +328,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 			h["allow"] = []string{"GET"}
 		}
 	}
-	s.countResponse(protocolAzure, status, arrived)
+	s.countResponse(ProtocolAzure, status, arrived)
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
@@ -420,7 +339,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 		body = body[n:]
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
-		s.reg.Get(metrics.ResponseWriteDeadline, protocolAzure, "total_deadline").Inc()
+		s.reg.Get(metrics.ResponseWriteDeadline, ProtocolAzure, "total_deadline").Inc()
 	}
-	s.reg.Get(metrics.RequestStageLatency, protocolAzure, "write").Record(time.Since(writeStart))
+	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "write").Record(time.Since(writeStart))
 }

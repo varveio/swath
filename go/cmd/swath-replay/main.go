@@ -157,7 +157,7 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.StringVar(&f.bucket, "bucket", "", "the bucket name to expose")
 	fs.StringVar(&f.host, "host", "127.0.0.1", "bind host")
 	fs.IntVar(&f.port, "port", 0, "bind port; 0 chooses a free port, reported in the startup line")
-	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, azure (gcs is reserved)")
+	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs, azure")
 	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (default replay; needs azure in --protocols)")
 	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (the Azure ServiceEndpoint)")
 	fs.StringVar(&f.servingMode, "serving-mode", "sorted", "how to serve the fixture: sorted")
@@ -301,8 +301,11 @@ func (f *serveFlags) config() (server.Config, error) {
 	if err != nil {
 		return cfg, err
 	}
+	if err := server.ValidateProtocols(protocols, f.bucket); err != nil {
+		return cfg, err
+	}
 	cfg.Protocols, cfg.AzureAccount, cfg.AdvertisedHost = protocols, f.azureAccount, f.advertisedHost
-	if f.azureAccount == "" && slices.Contains(protocols, "azure") {
+	if f.azureAccount == "" && slices.Contains(protocols, server.ProtocolAzure) {
 		cfg.AzureAccount = server.DefaultAzureAccount
 	}
 	if f.advertisedHost != "" && !validAdvertisedHost(f.advertisedHost) {
@@ -320,23 +323,17 @@ func (f *serveFlags) config() (server.Config, error) {
 	return cfg, cfg.Validate()
 }
 
-// parseProtocols reads a comma-separated subset of s3, gcs and azure; this
-// build serves s3 and azure.
+// parseProtocols reads a comma-separated subset of s3, gcs and azure.
 func parseProtocols(v string) ([]string, error) {
 	var out []string
 	for _, p := range strings.Split(v, ",") {
-		switch name := strings.ToLower(strings.TrimSpace(p)); name {
-		case "s3", "azure":
-			if !slices.Contains(out, name) {
-				out = append(out, name)
-			}
-		case "gcs":
-			return nil, fmt.Errorf("--protocols: the %s route is not built yet; this build serves s3 and azure", strings.TrimSpace(p))
+		switch p := strings.ToLower(strings.TrimSpace(p)); p {
+		case server.ProtocolS3, server.ProtocolGCS, server.ProtocolAzure:
+			out = append(out, p)
 		default:
 			return nil, errors.New("--protocols must be a comma-separated subset of s3,gcs,azure")
 		}
 	}
-	slices.Sort(out)
 	return out, nil
 }
 
@@ -447,26 +444,36 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 	if err != nil {
 		fixture = f.fixture
 	}
-	protocols := cfg.EnabledProtocols()
-	var profiles, endpoints []string
-	for _, p := range protocols {
-		profiles = append(profiles, p+"="+server.ProtocolProfile(p))
-	}
-	base := "http://" + bracketHost(f.advertisedHost, f.host) + ":" + strconv.Itoa(srv.Port())
-	if slices.Contains(protocols, "s3") {
-		endpoints = append(endpoints, "s3:"+base+"/"+f.bucket+"?list-type=2")
-	}
-	if slices.Contains(protocols, "azure") {
-		endpoints = append(endpoints, "azure:"+base+"/"+cfg.AzureAccount+"/"+f.bucket+"?restype=container&comp=list")
-	}
 	return fmt.Sprintf("swath_replay endpoint=http://%s:%d bucket=%s fixture=%s serving_mode=%s parquet_connections=%d "+
 		"inject_latency=%s latency_scale=%s metrics_endpoint=%s max_concurrent_requests=%d protocols=%s "+
 		"response_buffer_budget=%d max_response_bytes=%d max_responses=%d output_chunk_bytes=%d fixture_identity=%s "+
-		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles={%s} native_endpoints=%s",
+		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles=%s native_endpoints=%s",
 		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, decimalString(f.latencyScale),
-		metricsEndpoint, cfg.MaxConcurrentRequests, strings.Join(protocols, ","), cfg.ResponseBufferBudget, cfg.MaxResponseBytes,
-		cfg.MaxResponses(), server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), strings.Join(profiles, ", "),
-		strings.Join(endpoints, ","))
+		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
+		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
+		nativeEndpoints(f, cfg, srv.Port()))
+}
+
+// nativeEndpoints is one example URL per enabled route, S3 first.
+func nativeEndpoints(f *serveFlags, cfg server.Config, port int) string {
+	base := "http://" + bracketHost(f.advertisedHost, f.host) + ":" + strconv.Itoa(port)
+	var out []string
+	for _, p := range cfg.Protocols {
+		if p == server.ProtocolS3 {
+			out = append(out, "s3:"+base+"/"+f.bucket+"?list-type=2")
+		}
+	}
+	for _, p := range cfg.Protocols {
+		if p == server.ProtocolGCS {
+			out = append(out, "gcs:"+base+"/storage/v1/b/"+f.bucket+"/o")
+		}
+	}
+	for _, p := range cfg.Protocols {
+		if p == server.ProtocolAzure {
+			out = append(out, "azure:"+base+"/"+cfg.AzureAccount+"/"+f.bucket+"?restype=container&comp=list")
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 func bracketHost(advertised, host string) string {

@@ -9,14 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/sortedparquet"
 	"github.com/varveio/swath/go/sortedparquet/format2"
@@ -63,7 +67,7 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
 		t.Fatalf("summary %q", log.String())
 	}
-	sorted, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +132,7 @@ func TestKeyLimit(t *testing.T) {
 	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
-	sorted, err := format2.Open(context.Background(), out, nil)
+	sorted, err := format2.Open(context.Background(), out, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +169,9 @@ func TestRejectsUnknownRowType(t *testing.T) {
 		if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, ErrRowType) || !strings.Contains(err.Error(), "'p/'") {
 			t.Fatalf("row_type %q: %v", rowType, err)
 		}
-		if _, err := os.Stat(out); !os.IsNotExist(err) {
-			t.Fatalf("row_type %q: the output was created", rowType)
+		// The run owned the output (its lock is there) but wrote nothing.
+		if entries, _ := os.ReadDir(out); len(entries) != 1 || entries[0].Name() != dataset.Workspace {
+			t.Fatalf("row_type %q: the output holds %v", rowType, entries)
 		}
 	}
 	type nullable struct {
@@ -267,4 +272,211 @@ func tree(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return b.String()
+}
+
+// replaceOutput moves out aside and puts a directory owned by another
+// process (its lock held, its parts directory present) in its place, as a
+// fault hook at point. The other owner's lock is released at the test's
+// end.
+func replaceOutput(t *testing.T, out, point string) {
+	t.Helper()
+	replaceOutputWith(t, out, point, true)
+}
+
+// replaceOutputWith is replaceOutput; with parts false the replacement
+// holds only its workspace and lock.
+func replaceOutputWith(t *testing.T, out, point string, parts bool) {
+	t.Helper()
+	var other *journal.Lock
+	restore := faults.Set(func(p string) error {
+		if p != point || other != nil {
+			return nil
+		}
+		if err := os.Rename(out, out+".old"); err != nil {
+			t.Error(err)
+			return err
+		}
+		lock, err := journal.TakeLock(out)
+		if err != nil {
+			t.Error(err)
+			return err
+		}
+		other = lock
+		if !parts {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Join(out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
+			t.Error(err)
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		restore()
+		other.Release()
+	})
+}
+
+// TestReplacedOutputAtPartCreation replaces the output between the
+// router's ownership check and the creation of the first part: the part
+// is created in the directory the run locked, never in the replacement,
+// and the run fails with journal.ErrOutputReplaced before publishing.
+// Before, the part was created by pathname in the replacement.
+func TestReplacedOutputAtPartCreation(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	replaceOutput(t, out, "part-create")
+	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
+		t.Fatalf("run: %v", err)
+	}
+	assertUntouched(t, out)
+}
+
+// TestReplacedOutputAtPublication replaces the output after the parts are
+// renamed into data/ and before the manifest is installed (the published
+// hook): the manifest is not installed in the replacement and the run
+// fails with journal.ErrOutputReplaced. Before, the replacement received
+// the manifest and the run succeeded.
+func TestReplacedOutputAtPublication(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	replaceOutput(t, out, "published")
+	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
+		t.Fatalf("run: %v", err)
+	}
+	assertUntouched(t, out)
+}
+
+// assertUntouched requires the replacement output to hold only what its
+// owner made: the workspace with its lock and an empty parts directory.
+func assertUntouched(t *testing.T, out string) {
+	t.Helper()
+	if got := tree(t, out); strings.Count(got, "\n") != 4 || strings.Contains(got, ".parquet") || strings.Contains(got, dataset.ManifestName) {
+		t.Fatalf("the replacement output changed:\n%s", got)
+	}
+}
+
+// TestRefusesMalformedFooterCounts changes the footer row count of an
+// otherwise valid one-row capture: a negative count, one that disagrees
+// with the row groups and the largest int64 are refused with
+// ErrMalformedCapture. Before, math.MaxInt64 reached make and panicked
+// (parquet-go itself rejects a negative file count, now classified the
+// same way).
+func TestRefusesMalformedFooterCounts(t *testing.T) {
+	for _, change := range []struct {
+		name string
+		edit func(*format.FileMetaData)
+	}{
+		{"negative", func(m *format.FileMetaData) { m.NumRows = -1 }},
+		{"more than the groups", func(m *format.FileMetaData) { m.NumRows = 2 }},
+		{"largest", func(m *format.FileMetaData) { m.NumRows = math.MaxInt64 }},
+		{"negative group", func(m *format.FileMetaData) { m.RowGroups[0].NumRows = -1; m.NumRows = -1 }},
+		{"overflowing groups", func(m *format.FileMetaData) {
+			m.RowGroups = append(m.RowGroups, m.RowGroups[0])
+			m.RowGroups[0].NumRows, m.RowGroups[1].NumRows = math.MaxInt64, math.MaxInt64
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+			part := filepath.Join(in, "part-a.parquet")
+			if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error { change.edit(m); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+				t.Fatalf("run: %v", err)
+			}
+		})
+	}
+}
+
+// TestCountsRowTypesForCapacity counts the OBJECT and other rows the
+// arrays are sized from: groups proven all OBJECT and all COMMON_PREFIX
+// by their statistics, and a mixed group counted from its row_type
+// column. The object array is then allocated for the objects alone.
+func TestCountsRowTypesForCapacity(t *testing.T) {
+	kind := func(row sortedparquettest.Row, rowType string) sortedparquettest.Row {
+		row.RowType = rowType
+		return row
+	}
+	rows := []sortedparquettest.Row{
+		obj("a", 0), obj("b", 1), obj("c", 2), // all OBJECT
+		kind(obj("d/", 3), "COMMON_PREFIX"), kind(obj("e/", 4), "COMMON_PREFIX"), // none
+		obj("f", 5), kind(obj("g", 6), "DELETE_MARKER"), obj("h", 7), // mixed
+	}
+	dir := filepath.Join(t.TempDir(), "capture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := sortedparquettest.Write(filepath.Join(dir, "c.parquet"), sortedparquettest.Part{Rows: rows, Groups: []int{3, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	objects, others, err := countRows(context.Background(), []string{filepath.Join(dir, "c.parquet")})
+	if err != nil || objects != 5 || others != 3 {
+		t.Fatalf("counted %d objects, %d others: %v", objects, others, err)
+	}
+	stats, err := Run(context.Background(), Options{Capture: dir, Output: filepath.Join(t.TempDir(), "o")}, nil)
+	if err != nil || stats.Objects != 5 || stats.Skipped != 3 {
+		t.Fatalf("run: %+v %v", stats, err)
+	}
+}
+
+// TestReplacedOutputDuringCaptureRead replaces the output, while the
+// capture is read, with one whose owner holds only its lock: the run fails
+// with journal.ErrOutputReplaced and the replacement keeps exactly its
+// workspace and lock. Before, Prepare created data/ and the parts
+// directory in it before the ownership check.
+func TestReplacedOutputDuringCaptureRead(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	replaceOutputWith(t, out, "captured", false)
+	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
+		t.Fatalf("run: %v", err)
+	}
+	got := tree(t, out)
+	if strings.Count(got, "\n") != 3 || !strings.Contains(got, filepath.Join(dataset.Workspace, dataset.LockName)) {
+		t.Fatalf("the replacement output changed:\n%s", got)
+	}
+}
+
+// TestRefusesUndercountedRowGroup rewrites a capture of two OBJECT rows
+// in one group so that the file and the group declare one row, and clears
+// the group's row_type statistics: the counting pass finds two OBJECT
+// values in a group of one row and refuses the part with
+// ErrMalformedCapture. Before, the other-row count came out at -1 and the
+// allocation from it panicked.
+func TestRefusesUndercountedRowGroup(t *testing.T) {
+	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)})
+	part := filepath.Join(in, "part-a.parquet")
+	if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error {
+		m.NumRows, m.RowGroups[0].NumRows = 1, 1
+		for i := range m.RowGroups[0].Columns {
+			if md := &m.RowGroups[0].Columns[i].MetaData; slices.Equal(md.PathInSchema, []string{"row_type"}) {
+				md.Statistics = format.Statistics{}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestRefusesRepeatedRowType refuses a capture whose row_type column is
+// repeated: its values are not one per row.
+func TestRefusesRepeatedRowType(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "capture")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	type repeated struct {
+		Key     string   `parquet:"key"`
+		RowType []string `parquet:"row_type"`
+	}
+	if err := parquet.WriteFile(filepath.Join(dir, "c.parquet"), []repeated{{Key: "a", RowType: []string{"OBJECT", "OBJECT"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), Options{Capture: dir, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
+		t.Fatalf("run: %v", err)
+	}
 }

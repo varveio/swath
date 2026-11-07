@@ -72,8 +72,8 @@ type Config struct {
 	FixtureIdentity string
 	// Log receives the slow-request and shutdown lines.
 	Log io.Writer
-	// Protocols are the enabled listing routes (s3, azure); empty is s3
-	// only.
+	// Protocols are the enabled listing routes (ProtocolS3, ProtocolGCS,
+	// ProtocolAzure); empty is S3 only.
 	Protocols []string
 	// AzureAccount is the Azure route's account path segment and
 	// AdvertisedHost the host its ServiceEndpoint names (Host when empty).
@@ -126,6 +126,7 @@ type Server struct {
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
 	s3Active            atomic.Int64
+	routes              *routes // nil: the S3 route answers every request
 	azure               *azureRoute
 }
 
@@ -148,6 +149,7 @@ func New(cfg Config) (*Server, error) {
 		started: time.Now(),
 	}
 	s.stopCtx, s.stop = context.WithCancel(context.Background())
+	s.initRoutes()
 	s.pager = &s3.Pager{Store: cfg.Store, OnDelimiterPath: func(p string) { s.reg.Get(metrics.DelimiterPath, p).Inc() }}
 	// The meters every scrape shows from the start, so a reader can tell a
 	// zero from a meter that is not there.

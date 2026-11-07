@@ -57,10 +57,10 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 	if err != nil {
 		return nil, Metadata{}, err
 	}
-	s := &Sorted{sem: semaphore.NewWeighted(int64(readers))}
+	s := &Sorted{sem: semaphore.NewWeighted(int64(readers)), files: sortedparquet.NewFileCache(opts.MaxOpenFiles)}
 	meta := Metadata{Ordering: OrderingProfile}
 	if info.IsDir() && format2.IsDataset(path) {
-		dataset, err := format2.Open(ctx, path, expect)
+		dataset, err := format2.Open(ctx, path, expect, s.files)
 		if err != nil {
 			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
 		}
@@ -71,7 +71,7 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 			return nil, Metadata{}, err
 		}
 	} else {
-		fixture, err := javaera.Open(ctx, path, expect)
+		fixture, err := javaera.Open(ctx, path, expect, s.files)
 		if err != nil {
 			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
 		}

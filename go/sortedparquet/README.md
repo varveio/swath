@@ -70,10 +70,16 @@ and `no_page_index` (a non-empty row group whose key column lacks a ColumnIndex 
 - `RollupRead` returns the entries a one-key-at-a-time walk over `Read` would: each common prefix costs one
   routing hop and at most one page-index landing past it, and a row group whose first key and the next
   group's first key share a common prefix is skipped without a read.
-- A `Reader` is safe for concurrent use; file handles are one per part, and parsed footers and page indexes
-  are shared and loaded once.
+- A `Reader` is safe for concurrent use; parsed footers and page indexes are shared and loaded once. Both
+  profiles read parts through a `FileCache`: every open, the first included, waits for a slot under the
+  cache's bound (`DefaultMaxOpenFiles`: half the soft descriptor limit, at most 4,096), an idle descriptor
+  is closed (least recently used first) when another part needs one, and an evicted part is reopened by
+  path and must be the same file (`os.SameFile`). Opens are non-blocking on unix and anything but a
+  regular file is refused, so a FIFO put at a part's path cannot stall a read. A read waiting for a
+  descriptor ends with its context, and `Close` fails such waits with `ErrClosed` at once.
 
 ## What it does not check
 
 Keys it never decodes; value columns beyond their Parquet type; part MD5 digests and manifest coverage
-(a dataset that stopped early is served as what it holds); that files stay unchanged after `Open`.
+(a dataset that stopped early is served as what it holds); that file contents stay unchanged after `Open`
+(a part replaced by another file is refused when it is reopened, not when it is rewritten in place).

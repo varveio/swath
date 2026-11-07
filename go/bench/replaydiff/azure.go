@@ -19,7 +19,7 @@ import (
 	"unicode/utf8"
 )
 
-// The Azure route's section of the driver (-route azure): a request matrix
+// The Azure route's section of the driver (-protocol azure): a request matrix
 // of the flat List Blobs subset, marker walks, and a structural comparator.
 // Both servers serve s3,azure with the account "replay"; the S3 route stays
 // on so the key listing and the requests the Azure route does not claim

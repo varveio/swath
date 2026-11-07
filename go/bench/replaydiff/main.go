@@ -24,7 +24,7 @@
 // -dump-tsv FILE writes the reference's full listing as a memstore TSV
 // fixture and exits.
 //
-// -route azure compares the Azure List Blobs route instead (both servers
+// -protocol azure compares the Azure List Blobs route instead (both servers
 // serve s3,azure): the matrix in azure.go, marker walks in which each
 // server follows its own markers, and a structural comparator.
 package main
@@ -55,7 +55,8 @@ import (
 
 type options struct {
 	java, goBin, fixture, goFixture, bucket, report, live, dumpTSV string
-	javaArgs, goArgs, logDir, route                                string
+	protocol                                                       string
+	javaArgs, goArgs, logDir                                       string
 	walkSizes                                                      string
 	random, parallel, walkLimit, maxPrefixes, maxTop               int
 	seed                                                           uint64
@@ -68,6 +69,7 @@ func main() {
 	flag.StringVar(&o.goBin, "go", "", "the Go swath-replay binary")
 	flag.StringVar(&o.fixture, "fixture", "", "the fixture both servers serve")
 	flag.StringVar(&o.goFixture, "go-fixture", "", "a different fixture path for the Go server (e.g. a .tsv dump of the same listing)")
+	flag.StringVar(&o.protocol, "protocol", "s3", "the route to compare: s3, gcs (both servers get --protocols gcs) or azure (both get --protocols s3,azure)")
 	flag.StringVar(&o.bucket, "bucket", "bucket", "the bucket name")
 	flag.StringVar(&o.javaArgs, "java-args", "--parquet-connections 2", "extra serve flags for the Java server")
 	flag.StringVar(&o.goArgs, "go-args", "--parquet-connections 2", "extra serve flags for the Go server")
@@ -84,7 +86,6 @@ func main() {
 	flag.IntVar(&o.parallel, "parallel", 4, "requests in flight")
 	flag.BoolVar(&o.acceptSegments, "accept-segment-improvement", false,
 		"azure: count a reference 500 too_many_segments answered 200 by the Go server as the known improvement, not a difference")
-	flag.StringVar(&o.route, "route", "s3", "the route compared: s3, or azure (both servers then serve s3,azure)")
 	flag.Parse()
 	if err := run(o); err != nil {
 		log.Fatal(err)
@@ -163,12 +164,15 @@ type report struct {
 }
 
 func run(o options) error {
+	if o.protocol == "gcs" {
+		return runGCS(o)
+	}
 	ctx := context.Background()
 	if o.goBin == "" && o.dumpTSV == "" || o.java == "" && o.live == "" || o.fixture == "" && o.live == "" {
 		flag.Usage()
 		return fmt.Errorf("-go, -java (or -live-endpoint) and -fixture are required")
 	}
-	if o.route == "azure" {
+	if o.protocol == "azure" {
 		o.javaArgs += azureServeArgs
 		o.goArgs += azureServeArgs
 		if o.walkSizes == "1,7,1000" {
@@ -211,7 +215,7 @@ func run(o options) error {
 	rng := rand.New(rand.NewPCG(o.seed, 0x5eed))
 	d := &driver{o: o, ref: ref, got: got, comp: comp, rep: rep}
 
-	if o.route == "azure" {
+	if o.protocol == "azure" {
 		d.runAzure(keys, rng)
 		rep.Seconds = time.Since(rep.Started).Seconds()
 		return d.write()
