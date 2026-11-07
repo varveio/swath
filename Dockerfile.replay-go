@@ -1,0 +1,54 @@
+# Copyright 2026 Varve Systems Ltd
+# SPDX-License-Identifier: Apache-2.0
+#
+# Go swath-replay image: the static replay server, nothing else. Fixture data is mounted
+# read-only at runtime and never baked in:
+#
+#   docker build -f Dockerfile.replay-go --build-arg SWATH_REVISION="$(git rev-parse HEAD)" \
+#     -t swath-replay-go:dev .
+#   docker run --rm -p 127.0.0.1:19090:19090 -v /data/sorted:/fixtures:ro swath-replay-go:dev \
+#     serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090
+#
+# The build stage runs on the build platform and cross-compiles for TARGETOS/TARGETARCH
+# (CGO_ENABLED=0 through go/build.sh), so a foreign-architecture image needs no emulation.
+# The runtime stage is `scratch`: the binary is fully static, the server speaks plain HTTP
+# (no CA certificates), formats every time in UTC (no zone data) and runs as a numeric user
+# (no /etc/passwd). Without a shell, package manager or OS packages there is nothing in the
+# image but the binary to patch or for a scanner to flag, and nothing to exec into. The
+# runtime stage has no RUN, so a multi-architecture build pulls nothing and emulates nothing.
+#
+# Build arguments: SWATH_REVISION is the commit `swath-replay --version` names (CI passes
+# its commit; without it the binary reports no revision, since the context carries no
+# .git). GOFLAGS passes through to the Go toolchain (`--build-arg GOFLAGS=-p=2` bounds the
+# compiler's parallelism on a shared host); GOPROXY names a module mirror where
+# proxy.golang.org is not reachable (go.sum still verifies every module).
+#
+# The builder's Go is the `toolchain` line of go/go.mod (go1.26.10), digest-pinned, so the image
+# and CI compile with the same release: actions/setup-go reads that line from go-version-file.
+# Raise both together. GOTOOLCHAIN=local keeps the builder from downloading another.
+FROM --platform=$BUILDPLATFORM golang:1.26.10@sha256:cfa27959837144bf4649802ba38e59daffd0dd2a7994aa83daaf113285b0f551 AS build
+ENV GOTOOLCHAIN=local
+WORKDIR /src/go
+
+# Modules first, so a source change reuses the downloaded module layer.
+COPY go/go.mod go/go.sum ./
+ARG GOPROXY=https://proxy.golang.org,direct
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY go/ ./
+ARG TARGETOS
+ARG TARGETARCH
+ARG SWATH_REVISION=
+ARG GOFLAGS=
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH ./build.sh -o /out/swath-replay ./cmd/swath-replay
+
+FROM scratch AS runtime
+
+# Owned by root and not writable by the server's user: the process cannot replace itself.
+COPY --from=build --chmod=0555 /out/swath-replay /opt/swath-replay/swath-replay
+
+USER 10001:10001
+WORKDIR /opt/swath-replay
+
+ENTRYPOINT ["/opt/swath-replay/swath-replay"]

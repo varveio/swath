@@ -123,7 +123,11 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   that tree from this checkout with the Java replay distribution on `PATH` and `JAVA_HOME` set: DuckDB
   captures (synthetic 10k and 1M rows, the GCS and Azure evidence corpora), sorted by the Java
   `sort-fixture`. The script fixes every file's modification time, so the fixture identity the test
-  compares with the Java server's is reproducible.
+  compares with the Java server's is reproducible. CI runs this tier, except `TestRecordings`, in the
+  `go-fixtures` job ([replay.md](replay.md#continuous-integration)).
+  The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
+  [replay.md](replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
+  `ROOT/fixtures/evidence-gcs/sorted` when present.
 - **Policy toggles:** Java's policy layer can be switched off per mechanism with the hidden
   `--engine-toggle NAME=off`. The names are `owner_split`, `density_ewma`, `radix_bands`,
   `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`, `confetti_feedback`, `reflect_lift`,
@@ -138,6 +142,18 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   `swath diag list` flags) interleaved, `REPS` times; `bench/policy_table.py OUT` prints wall, requests,
   attempts (the replay server's HTTP count), splits, empty children, overfetched keys, probes and mean active
   ranges per arm.
+
+## Replay server oracle
+
+The Go `swath-replay` ([replay.md](replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one
+fixture, the same scripted matrix, token walks and seeded random requests to each, and every answer's status,
+compared headers and body bytes required equal ([internals/replay.md](internals/replay.md#the-differential-driver)):
+
+```bash
+go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./cmd/swath-replay
+/tmp/replaydiff -java "$(command -v swath-replay)" -go ./swath-replay -fixture /data/sorted -bucket bkt \
+  -report /tmp/diff.json
+```
 
 ## The fake bucket
 
