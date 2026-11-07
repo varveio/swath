@@ -20,7 +20,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01a.json",
-          "replay_result_sha256": "168f25c87a6f4a11a4404a6fb76246bbe79066da4e14c3a6b93b02d041cb3fec"
+          "replay_result_sha256": "168f25c87a6f4a11a4404a6fb76246bbe79066da4e14c3a6b93b02d041cb3fec",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01a.json",
+            "replay_result_sha256": "61237b11310a736520239ca6bfcefb53df2f5b05d91107b57240fd93f34d17aa"
+          }
         }
       }
     },
@@ -43,7 +49,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01b.json",
-          "replay_result_sha256": "32ef341eba7b4d53d6f07b9ae40e57c062f5bf119884ad2ebb840fc9ea0ab4c3"
+          "replay_result_sha256": "32ef341eba7b4d53d6f07b9ae40e57c062f5bf119884ad2ebb840fc9ea0ab4c3",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01b.json",
+            "replay_result_sha256": "b04f5efd7b327b7b5b1b8bf97d320bd27ac3147c1cc9265c9b40125a7576b8e9"
+          }
         }
       }
     },
@@ -66,7 +78,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01c.json",
-          "replay_result_sha256": "9bc361b283305ed072c82765b6ca2b4d399109d151ff28303e437191517eb9c9"
+          "replay_result_sha256": "9bc361b283305ed072c82765b6ca2b4d399109d151ff28303e437191517eb9c9",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01c.json",
+            "replay_result_sha256": "026c9d756c92d57e3fb090db6ea72a2342fc84cc41eee353b796c4c2cb93b084"
+          }
         }
       }
     },
@@ -89,7 +107,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01d.json",
-          "replay_result_sha256": "1c1a1007be59946394ead3875211d3d01b6e08e5348fdf04e6e8db3044ad70d9"
+          "replay_result_sha256": "1c1a1007be59946394ead3875211d3d01b6e08e5348fdf04e6e8db3044ad70d9",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01d.json",
+            "replay_result_sha256": "63b4a48b53ca48cc9cd26488ab77079850a641e5f12765e8c1a185d4a55713da"
+          }
         }
       }
     },
@@ -112,7 +136,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01e.json",
-          "replay_result_sha256": "f7c60f2a8dcfdc27ab5b2f4517a4bc3c68b44673ed00f0b2d7333b14f3c458c4"
+          "replay_result_sha256": "f7c60f2a8dcfdc27ab5b2f4517a4bc3c68b44673ed00f0b2d7333b14f3c458c4",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01e.json",
+            "replay_result_sha256": "2952ab3429819be95bbbff422434cc4278a0f015d54326040ab2d7fed0bee7c6"
+          }
         }
       }
     },
@@ -135,7 +165,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01f.json",
-          "replay_result_sha256": "79046625322b4104d84b13059a4895637aeea527bb0a8661d2186546aef65de9"
+          "replay_result_sha256": "79046625322b4104d84b13059a4895637aeea527bb0a8661d2186546aef65de9",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01f.json",
+            "replay_result_sha256": "3a579bb959a1bf6085296ca148d3b7ac89537e27b835b2cd7f769d5b270150f1"
+          }
         }
       }
     },
@@ -158,7 +194,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01g.json",
-          "replay_result_sha256": "3bd8abd6ccd2299237e42687b42c47382ba62d397fa39efec6806288f756fa03"
+          "replay_result_sha256": "3bd8abd6ccd2299237e42687b42c47382ba62d397fa39efec6806288f756fa03",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01g.json",
+            "replay_result_sha256": "bc774f66847ebe8c5b03d71eb0d679c549ca7c945de163390109616df9148f7b"
+          }
         }
       }
     },
@@ -181,7 +223,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01h.json",
-          "replay_result_sha256": "6661ae62eac941f049fc0e3074a70ad1ba42c4b36803b25cd66236ae4d32071e"
+          "replay_result_sha256": "6661ae62eac941f049fc0e3074a70ad1ba42c4b36803b25cd66236ae4d32071e",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01h.json",
+            "replay_result_sha256": "b1eb7fada3b33bbf5813fc104f760d30eabfffa0b8e3692940f034683dc7393a"
+          }
         }
       }
     },
@@ -204,7 +252,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01i.json",
-          "replay_result_sha256": "b98d00596bbe57704644eb2ff481511f3d838703689236b1a038427c823c3683"
+          "replay_result_sha256": "b98d00596bbe57704644eb2ff481511f3d838703689236b1a038427c823c3683",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01i.json",
+            "replay_result_sha256": "cd9c0036dd6c93539ef10074b96a2fad9d52222d805f60981289003424bc0f53"
+          }
         }
       }
     },
@@ -227,7 +281,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01j.json",
-          "replay_result_sha256": "a418d2ba496d150b55d1e5a28992c46a821640d34fefad517f72af1e68bc0148"
+          "replay_result_sha256": "a418d2ba496d150b55d1e5a28992c46a821640d34fefad517f72af1e68bc0148",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01j.json",
+            "replay_result_sha256": "fd2c60de360523b62b470fdb1670a8fc18354e8e5c23ca9cb01141ede100df1b"
+          }
         }
       }
     },
@@ -250,7 +310,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-01k.json",
-          "replay_result_sha256": "36a621c348629abde093ba38bf4d40d42762bc31e70340f8c6be051308e7b7e2"
+          "replay_result_sha256": "36a621c348629abde093ba38bf4d40d42762bc31e70340f8c6be051308e7b7e2",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-01k.json",
+            "replay_result_sha256": "41ea9bd041b169161736a844c6966399e23bf77304f8db755edc76c68282a74e"
+          }
         }
       }
     },
@@ -273,7 +339,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02a.json",
-          "replay_result_sha256": "b002409b55edba6f268acb6b42f135c84a86f1cd6e9a7f0597f4435f3f6ace02"
+          "replay_result_sha256": "b002409b55edba6f268acb6b42f135c84a86f1cd6e9a7f0597f4435f3f6ace02",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02a.json",
+            "replay_result_sha256": "2abddac4efe243c714ceb95f719e872a16bd81e4a8506ae3d7332c585822154c"
+          }
         }
       }
     },
@@ -296,7 +368,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02b.json",
-          "replay_result_sha256": "eedc963749a27c5aa39b3f90fff1cb0ca1629f1eca8f170bfc4c99196307d49c"
+          "replay_result_sha256": "eedc963749a27c5aa39b3f90fff1cb0ca1629f1eca8f170bfc4c99196307d49c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02b.json",
+            "replay_result_sha256": "b5e0d4e9f714abc6f01756b08691f263cb3e1cf0f311868750965fe50cb30d8e"
+          }
         }
       }
     },
@@ -319,7 +397,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02c.json",
-          "replay_result_sha256": "cf35d1ba48645f920ec739036530bf99c52a0072b38f3d944917fe632b3380dc"
+          "replay_result_sha256": "cf35d1ba48645f920ec739036530bf99c52a0072b38f3d944917fe632b3380dc",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02c.json",
+            "replay_result_sha256": "c914294f44b21274accc1013ec5de3851d05788a541135fc120ccd0a6d8a5535"
+          }
         }
       }
     },
@@ -342,7 +426,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02d.json",
-          "replay_result_sha256": "625df18d5bf9f6d4eb91c68a07ff376c2265cfa8e66c39be3b1c3a224ab5b114"
+          "replay_result_sha256": "625df18d5bf9f6d4eb91c68a07ff376c2265cfa8e66c39be3b1c3a224ab5b114",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02d.json",
+            "replay_result_sha256": "4fb0829978c768210d0326da948717584001f48206d17cb5dcaa032ef52dd462"
+          }
         }
       }
     },
@@ -365,7 +455,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02e.json",
-          "replay_result_sha256": "b7274bd70ef18a7c90220911fdf9ec75e95f818fa8447fc4e37f2a0bdc54357a"
+          "replay_result_sha256": "b7274bd70ef18a7c90220911fdf9ec75e95f818fa8447fc4e37f2a0bdc54357a",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02e.json",
+            "replay_result_sha256": "1c37c8afe5c1f33ece30658b9a507727bdee181dd44dbaa007eea61a444e631a"
+          }
         }
       }
     },
@@ -388,7 +484,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-02f.json",
-          "replay_result_sha256": "0d0956597183b9e15ab25bfeaacdd7b9aa62f4a4b2545bf54bfc6e61a107d34b"
+          "replay_result_sha256": "0d0956597183b9e15ab25bfeaacdd7b9aa62f4a4b2545bf54bfc6e61a107d34b",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-02f.json",
+            "replay_result_sha256": "c6ede00174d4f51d2c1ee66b1892d8a67d83b8888055264c0e4f4390dfd5e622"
+          }
         }
       }
     },
@@ -411,7 +513,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03a.json",
-          "replay_result_sha256": "1c8deaee7f674353a1205e1cebf7a93a3ac976c0cae13834bcf79ab3a251b411"
+          "replay_result_sha256": "1c8deaee7f674353a1205e1cebf7a93a3ac976c0cae13834bcf79ab3a251b411",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03a.json",
+            "replay_result_sha256": "cb3e6abf2257dac1f7acebce6530924b6a4a6999559d7eb4b4c4be5c6b4192c6"
+          }
         }
       }
     },
@@ -434,7 +542,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03b.json",
-          "replay_result_sha256": "51f1588a61840dd502c8a9bb8635095ab70bfdfe108ab293f91fbe4ce971ab07"
+          "replay_result_sha256": "51f1588a61840dd502c8a9bb8635095ab70bfdfe108ab293f91fbe4ce971ab07",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03b.json",
+            "replay_result_sha256": "4e78d964162deee322d6a5799812fe35da7cd8734f823d1de18e872909b24f55"
+          }
         }
       }
     },
@@ -457,7 +571,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03c.json",
-          "replay_result_sha256": "cac16627286ad1fbaeba8d2305ee8f5f57904368c48d455e372c21da4d1a40c8"
+          "replay_result_sha256": "cac16627286ad1fbaeba8d2305ee8f5f57904368c48d455e372c21da4d1a40c8",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03c.json",
+            "replay_result_sha256": "44e708965a49a93a3bce553667f3da9599d1f5b0f19b1f9c8c200fade5a23477"
+          }
         }
       }
     },
@@ -480,7 +600,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03d.json",
-          "replay_result_sha256": "5f767540823a1f6bb951c43427e7d3122e731a149f88af60354a9916858d768e"
+          "replay_result_sha256": "5f767540823a1f6bb951c43427e7d3122e731a149f88af60354a9916858d768e",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03d.json",
+            "replay_result_sha256": "136413fff3dd90b32d4612d54b626183fe07ab79cbde5a73a9b1546a60349edf"
+          }
         }
       }
     },
@@ -503,7 +629,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03e.json",
-          "replay_result_sha256": "d1c665c20e79bd87e585bd2261108867cd7441af4aaa9a3081e04ca4d31cd09a"
+          "replay_result_sha256": "d1c665c20e79bd87e585bd2261108867cd7441af4aaa9a3081e04ca4d31cd09a",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03e.json",
+            "replay_result_sha256": "1f9d94bf840dcf66f387e5d4a303c00bdd26fb72f34b12b88205795aada5fb8f"
+          }
         }
       }
     },
@@ -526,7 +658,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03f.json",
-          "replay_result_sha256": "ddb6c6c9890466dacbb6da3e68347a96234188c94a6881e33812e6f04f019021"
+          "replay_result_sha256": "ddb6c6c9890466dacbb6da3e68347a96234188c94a6881e33812e6f04f019021",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03f.json",
+            "replay_result_sha256": "2346d2788cd035d59a65d9adf7b3ba5e288000175903cb8992bb43ef7b0d5bc5"
+          }
         }
       }
     },
@@ -549,7 +687,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03g.json",
-          "replay_result_sha256": "43ea49bf3f0b991793ca7cf121c712c93d6683d9c958ab5a8ac4bb70e6c18d7d"
+          "replay_result_sha256": "43ea49bf3f0b991793ca7cf121c712c93d6683d9c958ab5a8ac4bb70e6c18d7d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03g.json",
+            "replay_result_sha256": "16a77118962449c5ddedd5aae2d46982391cfab5241eecdad747f73a4e5f1df5"
+          }
         }
       }
     },
@@ -572,7 +716,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03h.json",
-          "replay_result_sha256": "750fed297f7f7de01e03f556596e889e23c7974499f268011b3ba974e49e60a9"
+          "replay_result_sha256": "750fed297f7f7de01e03f556596e889e23c7974499f268011b3ba974e49e60a9",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03h.json",
+            "replay_result_sha256": "d44498eebb3b3a702407a495d978d0e0ac81ad4e73721fb40346b6e7c5d9134b"
+          }
         }
       }
     },
@@ -595,7 +745,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03i.json",
-          "replay_result_sha256": "94f235690ce1d8337c1071e832048f2b837039b7ff1162069bd5bb33f6097963"
+          "replay_result_sha256": "94f235690ce1d8337c1071e832048f2b837039b7ff1162069bd5bb33f6097963",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03i.json",
+            "replay_result_sha256": "6b5ae32b2cece813bf0c3241576cb1dcf66d04ee5aa763480dbe62f58c851de8"
+          }
         }
       }
     },
@@ -618,7 +774,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03j.json",
-          "replay_result_sha256": "807f9120ae5e1ae7b5b5607f34419ca9ca98199fbf879789e1bc7e0f4fe17c8f"
+          "replay_result_sha256": "807f9120ae5e1ae7b5b5607f34419ca9ca98199fbf879789e1bc7e0f4fe17c8f",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03j.json",
+            "replay_result_sha256": "032af81c932e6d003cfeb8466d4f3a2fa4d6b28c4a4bb049abc68b6dec33aad6"
+          }
         }
       }
     },
@@ -641,7 +803,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03k.json",
-          "replay_result_sha256": "3624a8aeb76aa2e62f2e7039b7a468b7246de7633742abdcfc06b2728b9800c2"
+          "replay_result_sha256": "3624a8aeb76aa2e62f2e7039b7a468b7246de7633742abdcfc06b2728b9800c2",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03k.json",
+            "replay_result_sha256": "667098399f31efa202c95d41dcce67a70abc5129d18f1ce2b8f5af75c5f3b0b6"
+          }
         }
       }
     },
@@ -664,7 +832,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03l.json",
-          "replay_result_sha256": "886f14790d19be9753588ccd0aa268bf0fddc42d3c2f1d112f29b35cf746e2b8"
+          "replay_result_sha256": "886f14790d19be9753588ccd0aa268bf0fddc42d3c2f1d112f29b35cf746e2b8",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03l.json",
+            "replay_result_sha256": "4ec150c8d259f9974f558b903c1572bf38da5b267292317a1c68dea847766c4e"
+          }
         }
       }
     },
@@ -687,7 +861,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03m.json",
-          "replay_result_sha256": "90751bc448bb299d75664be36cb3554a8221f1a949b727bf96608850b46b0d16"
+          "replay_result_sha256": "90751bc448bb299d75664be36cb3554a8221f1a949b727bf96608850b46b0d16",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03m.json",
+            "replay_result_sha256": "7151c8361b748a4a2e14fdf19a8209e3f2691fba920e3e82e8648dd292c03ea4"
+          }
         }
       }
     },
@@ -710,7 +890,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03n.json",
-          "replay_result_sha256": "48bb55b309e5b1bfade090134f13eb5b278f914ceb786ce11af2dfc9792c9629"
+          "replay_result_sha256": "48bb55b309e5b1bfade090134f13eb5b278f914ceb786ce11af2dfc9792c9629",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03n.json",
+            "replay_result_sha256": "3f520a0bacaa7fc65465b4c5b06413f8316969100de0244dcba9a4f242fb9795"
+          }
         }
       }
     },
@@ -733,7 +919,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03o.json",
-          "replay_result_sha256": "7f167648dc0240ce60f2570e5f81eece57593a412ca2eafc56ea9efb232ae8ac"
+          "replay_result_sha256": "7f167648dc0240ce60f2570e5f81eece57593a412ca2eafc56ea9efb232ae8ac",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03o.json",
+            "replay_result_sha256": "151362471db39a0d1861ee916bfce3968ef2bbe1af49b0ac10e60cbd0c3cc9a6"
+          }
         }
       }
     },
@@ -775,7 +967,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-03q.json",
-          "replay_result_sha256": "8bd1db9b4a052e6e49d451036cedee4725cadd8bfc873ffac301b758c6c2e28e"
+          "replay_result_sha256": "8bd1db9b4a052e6e49d451036cedee4725cadd8bfc873ffac301b758c6c2e28e",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-03q.json",
+            "replay_result_sha256": "ea0594253d2dc391e292823f50774905bd68c0b86ea23060c8596dbfdd827cbd"
+          }
         }
       }
     },
@@ -800,7 +998,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04a.json",
-          "replay_result_sha256": "3158d142531166307f12e3a572526c5d8b84a2f97bee6b979b844a35928c7f75"
+          "replay_result_sha256": "3158d142531166307f12e3a572526c5d8b84a2f97bee6b979b844a35928c7f75",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04a.json",
+            "replay_result_sha256": "9382ae4b49c9fc98570b77dc288d323244cf8336e68b5ccad0ef33f1034233aa"
+          }
         }
       }
     },
@@ -823,7 +1027,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04b.json",
-          "replay_result_sha256": "3048c8de443308f33f3a7d59c6a9e0dee2f08b4b5a1f43adb75706dfea434ad3"
+          "replay_result_sha256": "3048c8de443308f33f3a7d59c6a9e0dee2f08b4b5a1f43adb75706dfea434ad3",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04b.json",
+            "replay_result_sha256": "53f19d7e3d9785d44441d24a47e382a1f72627a1aeb96a4350911ae8135e8c18"
+          }
         }
       }
     },
@@ -846,7 +1056,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04c.json",
-          "replay_result_sha256": "c42347442679efd6a0a28604fda011cf318de48c7ccac41e488f530f6d0bb04c"
+          "replay_result_sha256": "c42347442679efd6a0a28604fda011cf318de48c7ccac41e488f530f6d0bb04c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04c.json",
+            "replay_result_sha256": "467043e7bef043a5ee525dacf1a19a7375f270c3557a4a359fb4bd240f56b289"
+          }
         }
       }
     },
@@ -869,7 +1085,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04d.json",
-          "replay_result_sha256": "390109357c3bf74bca8b170bebcfdf1bc967275745a3ccb53f0ec86043b8317e"
+          "replay_result_sha256": "390109357c3bf74bca8b170bebcfdf1bc967275745a3ccb53f0ec86043b8317e",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04d.json",
+            "replay_result_sha256": "4f9227a95fae5afa377e7c4324aa303e94fc96fd7ec566c5051d3b3e08a19e7e"
+          }
         }
       }
     },
@@ -892,7 +1114,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04e.json",
-          "replay_result_sha256": "59123aae3b7916d5c7875ca399b7de60bc752bd8e1c593692c7cc6a370dcc8b8"
+          "replay_result_sha256": "59123aae3b7916d5c7875ca399b7de60bc752bd8e1c593692c7cc6a370dcc8b8",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04e.json",
+            "replay_result_sha256": "0453b223df02ab88d2309b4e3d21a5edf3ade052969317e879a7db932fd6af14"
+          }
         }
       }
     },
@@ -915,7 +1143,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-04f.json",
-          "replay_result_sha256": "8a54907e4596021c69bef8c427716b8c94fafaa36b5de2e966a1c9361a77bfce"
+          "replay_result_sha256": "8a54907e4596021c69bef8c427716b8c94fafaa36b5de2e966a1c9361a77bfce",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-04f.json",
+            "replay_result_sha256": "4056c87f79f4072ee944cf40991d2c965d4f436142437ef715d4c38192c7ebea"
+          }
         }
       }
     },
@@ -957,7 +1191,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05b.json",
-          "replay_result_sha256": "7cce8d546bd55a95b40a519de7411658db744176dd765418af595b592bba85ce"
+          "replay_result_sha256": "7cce8d546bd55a95b40a519de7411658db744176dd765418af595b592bba85ce",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05b.json",
+            "replay_result_sha256": "39ee76d5c9ead015776cd16595b00dab0f834ff4ad921e09ee1040568ab1f3fc"
+          }
         }
       }
     },
@@ -980,7 +1220,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05c.json",
-          "replay_result_sha256": "f55e9819ef8b1358551f9a5e3afd0319df92e9fe1eb018147ca2c5c5d9961c3d"
+          "replay_result_sha256": "f55e9819ef8b1358551f9a5e3afd0319df92e9fe1eb018147ca2c5c5d9961c3d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05c.json",
+            "replay_result_sha256": "25614894c71f38c1fb23f2778616a6234f23d2e602554f161270981f43d04197"
+          }
         }
       }
     },
@@ -1003,7 +1249,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05d.json",
-          "replay_result_sha256": "39b5ec7d57480fa1ebbb2b7948320e4188c129edb911b9350b9dce4c9203144c"
+          "replay_result_sha256": "39b5ec7d57480fa1ebbb2b7948320e4188c129edb911b9350b9dce4c9203144c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05d.json",
+            "replay_result_sha256": "72bbc0c9f88c203ceae879aaf805550f03444cec8745cc7b99a5e0ccba94d159"
+          }
         }
       }
     },
@@ -1121,7 +1373,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05j.json",
-          "replay_result_sha256": "121a83fad5ea8089a4434a0d1b917a657dea543fad7d1b3f9fd68f875d4b756d"
+          "replay_result_sha256": "121a83fad5ea8089a4434a0d1b917a657dea543fad7d1b3f9fd68f875d4b756d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05j.json",
+            "replay_result_sha256": "26b5f23b67975c7b4de636a4a7de047bed2072e9a547c802d2946d30c9712cb5"
+          }
         }
       }
     },
@@ -1144,7 +1402,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05k.json",
-          "replay_result_sha256": "f0d12bbe36a050425f49861a1ecb34dc309cbe47e76f525301a35ad8466fdfcc"
+          "replay_result_sha256": "f0d12bbe36a050425f49861a1ecb34dc309cbe47e76f525301a35ad8466fdfcc",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05k.json",
+            "replay_result_sha256": "59a927f284644d9b2958049923d896dd4475e7e28aae3eb107de7a4eb411f6fb"
+          }
         }
       }
     },
@@ -1167,7 +1431,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05l.json",
-          "replay_result_sha256": "2cb5eeb7e2af9979c8e799a27f30a32864728485ac8e29076672621b1b442167"
+          "replay_result_sha256": "2cb5eeb7e2af9979c8e799a27f30a32864728485ac8e29076672621b1b442167",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05l.json",
+            "replay_result_sha256": "57f93020b8b69e81fc22b8e6bb443989902162c9be2210d4bff7e36b70a733d4"
+          }
         }
       }
     },
@@ -1190,7 +1460,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05m.json",
-          "replay_result_sha256": "c0973f3915216f704584f91143e78969ca7e731ee33ba1d10f976fedc38c11ea"
+          "replay_result_sha256": "c0973f3915216f704584f91143e78969ca7e731ee33ba1d10f976fedc38c11ea",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05m.json",
+            "replay_result_sha256": "4c605578bfac88ace0fa0f37b50a216db5ae4ea3ad933b9ff714703d6da3c820"
+          }
         }
       }
     },
@@ -1213,7 +1489,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05n.json",
-          "replay_result_sha256": "40ae216fa2cb9d9160e08c0b114ee3a74a607c7a9a4f69217fdcee728547a03e"
+          "replay_result_sha256": "40ae216fa2cb9d9160e08c0b114ee3a74a607c7a9a4f69217fdcee728547a03e",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05n.json",
+            "replay_result_sha256": "3321df336b5888d84846766b4697e7ceec78fe352781de5a29e6a8074192e57c"
+          }
         }
       }
     },
@@ -1236,7 +1518,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05o.json",
-          "replay_result_sha256": "2028c91253b8e85b14b89749ab4ba677852a0a08dbe062290ddf2d5f379a6078"
+          "replay_result_sha256": "2028c91253b8e85b14b89749ab4ba677852a0a08dbe062290ddf2d5f379a6078",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05o.json",
+            "replay_result_sha256": "ad1abcebc8eb827f703dda0f24b87d68b609e6e9cda111b7e4bbf61e698dcc3d"
+          }
         }
       }
     },
@@ -1259,7 +1547,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05p.json",
-          "replay_result_sha256": "e48a9c42a46ed89616051e97ac38a549174120c55353277d81961392a13efcd3"
+          "replay_result_sha256": "e48a9c42a46ed89616051e97ac38a549174120c55353277d81961392a13efcd3",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05p.json",
+            "replay_result_sha256": "a524aa152b1bb16dbf61323c86c5c8d259958607baa42985bb67c7798aa6d447"
+          }
         }
       }
     },
@@ -1282,7 +1576,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05q.json",
-          "replay_result_sha256": "6f9a3e96f15305cd0001fd4f0adfc53657ebbe3aea4182235b74205efb0fa635"
+          "replay_result_sha256": "6f9a3e96f15305cd0001fd4f0adfc53657ebbe3aea4182235b74205efb0fa635",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05q.json",
+            "replay_result_sha256": "b3bb0c20287d0db4f0de0ed39e3725f598752a4a7c6f4fc02b8ff0bbb0718b92"
+          }
         }
       }
     },
@@ -1305,7 +1605,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-05r.json",
-          "replay_result_sha256": "3725a29d9b133b7ac88280df0c6ad63f63ae8c4daddd5b626a7ca5f3f74675c6"
+          "replay_result_sha256": "3725a29d9b133b7ac88280df0c6ad63f63ae8c4daddd5b626a7ca5f3f74675c6",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-05r.json",
+            "replay_result_sha256": "4c8b6f3b768ee8b3b437301acae9222cee90a35cf8acab9cabb3dcddc4d5de34"
+          }
         }
       }
     },
@@ -1366,7 +1672,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06c.json",
-          "replay_result_sha256": "9985eee1e40b4d71cbe4c6084239d5b32d05322b5ce5c2d74570ceb9afcbf3d6"
+          "replay_result_sha256": "9985eee1e40b4d71cbe4c6084239d5b32d05322b5ce5c2d74570ceb9afcbf3d6",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-06c.json",
+            "replay_result_sha256": "cc6f79898cc5f7f681137f01c0dadcec647604f1ce3833f8ce06cdd095b47750"
+          }
         }
       }
     },
@@ -1389,7 +1701,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06d.json",
-          "replay_result_sha256": "11a5d9d6b175f81f139c697cb3a11dd65151e014d10ad0e319a1244f759908ed"
+          "replay_result_sha256": "11a5d9d6b175f81f139c697cb3a11dd65151e014d10ad0e319a1244f759908ed",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-06d.json",
+            "replay_result_sha256": "549a91b24a949fed905903b57f2d311ac95d42af8fe0ecced674244fad150e4a"
+          }
         }
       }
     },
@@ -1469,7 +1787,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06h.json",
-          "replay_result_sha256": "7a99eb7ffec0d140af26742a7756152b2d720b85a6cb054fec2261f612948405"
+          "replay_result_sha256": "7a99eb7ffec0d140af26742a7756152b2d720b85a6cb054fec2261f612948405",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-06h.json",
+            "replay_result_sha256": "dc87aaf461b761370e00397fe00c6584c572b71c22a66ced7e3e86d0cdaf0acf"
+          }
         }
       }
     },
@@ -1606,7 +1930,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-06o.json",
-          "replay_result_sha256": "63f979c110223fa21ed44615ccc33a0ebeb3a477e5475196f268fac1fb6d7384"
+          "replay_result_sha256": "63f979c110223fa21ed44615ccc33a0ebeb3a477e5475196f268fac1fb6d7384",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-06o.json",
+            "replay_result_sha256": "170bae825a66e2000a9e8c63abdfcf9e9e228a9939957a323d94b976405bd4f1"
+          }
         }
       }
     },
@@ -1629,7 +1959,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07a.json",
-          "replay_result_sha256": "a54631f3aac7c03cd20e56155bb95b420fd719831b3794a39c5ac450b5d2119d"
+          "replay_result_sha256": "a54631f3aac7c03cd20e56155bb95b420fd719831b3794a39c5ac450b5d2119d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07a.json",
+            "replay_result_sha256": "6eac3935a33d5a3053cb686e3f4f6c48cdf75403c81683febb1be40d3ea5539a"
+          }
         }
       }
     },
@@ -1652,7 +1988,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07b.json",
-          "replay_result_sha256": "798c5dfe397c19eff5931f5e3fb76cbdd0807cf28e574d1c02603387849443fe"
+          "replay_result_sha256": "798c5dfe397c19eff5931f5e3fb76cbdd0807cf28e574d1c02603387849443fe",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07b.json",
+            "replay_result_sha256": "6c841e9694056fe7df2587ca9cab3bb4a990079c9d6d7f6a21c53af17e2fdbfb"
+          }
         }
       }
     },
@@ -1675,7 +2017,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07c.json",
-          "replay_result_sha256": "d9d96fe4eb5b74cba297d7eaaefa1a1cb5da64c750b5af5c5f69b1740067fa86"
+          "replay_result_sha256": "d9d96fe4eb5b74cba297d7eaaefa1a1cb5da64c750b5af5c5f69b1740067fa86",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07c.json",
+            "replay_result_sha256": "59182615e530446e51a8409c48d4d7641184e42b9dc2b416b0a461c59291d73a"
+          }
         }
       }
     },
@@ -1698,7 +2046,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07d.json",
-          "replay_result_sha256": "5cec24d71b4d644cb537068acd61b52f478c2c2756c094baa9eb8fb6f7dc3d07"
+          "replay_result_sha256": "5cec24d71b4d644cb537068acd61b52f478c2c2756c094baa9eb8fb6f7dc3d07",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07d.json",
+            "replay_result_sha256": "1b6f0ea1613a2adc12d323aafce2c0e5f749596d36654f8783196ccdddfc4dcf"
+          }
         }
       }
     },
@@ -1721,7 +2075,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07e.json",
-          "replay_result_sha256": "2f58af5b4e48d6eecb238d73e713ca162e870b06fa98b4c40dc07b44f4620856"
+          "replay_result_sha256": "2f58af5b4e48d6eecb238d73e713ca162e870b06fa98b4c40dc07b44f4620856",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07e.json",
+            "replay_result_sha256": "a86301314b7d4e2792575103401f6a9b037410c1eb58616cf5bd852b6aa82c46"
+          }
         }
       }
     },
@@ -1744,7 +2104,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07f.json",
-          "replay_result_sha256": "e1e4ca15784290174f7dee39f4dbf470a9efb912f0f6eebb3e32a8fac0f6d59a"
+          "replay_result_sha256": "e1e4ca15784290174f7dee39f4dbf470a9efb912f0f6eebb3e32a8fac0f6d59a",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07f.json",
+            "replay_result_sha256": "fd856771467e02255ff12f3347f993382a6019fde1cfd13e6fa266bc3b06dc10"
+          }
         }
       }
     },
@@ -1767,7 +2133,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07g.json",
-          "replay_result_sha256": "78e0a8973caee6c7df507d1a4316c2a728cfbe0566e378033686ae0bfce4d93c"
+          "replay_result_sha256": "78e0a8973caee6c7df507d1a4316c2a728cfbe0566e378033686ae0bfce4d93c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07g.json",
+            "replay_result_sha256": "31a2ec578ea2fd23727968bd297f570ccc4f0355dfac69cec7220f846cbe9a6f"
+          }
         }
       }
     },
@@ -1790,7 +2162,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07h.json",
-          "replay_result_sha256": "dc770d688505b87fa5e7a0aa8cd971f3488aeba71351ffcbb3343df76b082727"
+          "replay_result_sha256": "dc770d688505b87fa5e7a0aa8cd971f3488aeba71351ffcbb3343df76b082727",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07h.json",
+            "replay_result_sha256": "9b8474ea98a4edb473764c0134263be3b981acd6c49ce1f09ed8c4b3c89532b2"
+          }
         }
       }
     },
@@ -1832,7 +2210,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07j.json",
-          "replay_result_sha256": "9f126ed6f52a1c5a8770a2669c3ceea0cc36d9aab34883e629739541b13acd2c"
+          "replay_result_sha256": "9f126ed6f52a1c5a8770a2669c3ceea0cc36d9aab34883e629739541b13acd2c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07j.json",
+            "replay_result_sha256": "45d31c63eb675c66c6db5e7448e7835a6f2dc5150f449548296a5e17d09b7652"
+          }
         }
       }
     },
@@ -1893,7 +2277,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07m.json",
-          "replay_result_sha256": "ecb2990575dc4d4a650449f046480e210afdbded5e61a4e287fd6c169f380cb5"
+          "replay_result_sha256": "ecb2990575dc4d4a650449f046480e210afdbded5e61a4e287fd6c169f380cb5",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07m.json",
+            "replay_result_sha256": "d3de7788ccea2a9dec1fb0bd6a02cdbede4877d927462fec7d3bb696a3a57070"
+          }
         }
       }
     },
@@ -1916,7 +2306,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07n.json",
-          "replay_result_sha256": "37c9740fcbc7d8eb0aaee69d40b69a4e754463d4120a6343aa7f0381115e7d3d"
+          "replay_result_sha256": "37c9740fcbc7d8eb0aaee69d40b69a4e754463d4120a6343aa7f0381115e7d3d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07n.json",
+            "replay_result_sha256": "a56826a8c633e382e80e31dfb2d216b792b5f6eaa8c317648fcc9b3de781084a"
+          }
         }
       }
     },
@@ -1958,7 +2354,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-07q.json",
-          "replay_result_sha256": "6a2a30564a19d40096f18b542e42bb246392856074ceb00540445171a013b806"
+          "replay_result_sha256": "6a2a30564a19d40096f18b542e42bb246392856074ceb00540445171a013b806",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-07q.json",
+            "replay_result_sha256": "474e425fd7e61ad95cd062b486b6467e8cb26101a873ce9f17d50b8b9c655111"
+          }
         }
       }
     },
@@ -2078,7 +2480,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-08a.json",
-          "replay_result_sha256": "1665a03f5d7027b6126a0ef155fad5648cbebee60f424c31778906a6b90852e5"
+          "replay_result_sha256": "1665a03f5d7027b6126a0ef155fad5648cbebee60f424c31778906a6b90852e5",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-08a.json",
+            "replay_result_sha256": "7c80ce72155ea8bb839f896de54bf2ac5da268a3a160411ac496b8b9fe40497d"
+          }
         }
       }
     },
@@ -2103,7 +2511,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-08b.json",
-          "replay_result_sha256": "cc13ded3c62f2f99003053212dc152138a88cd9a277d134e0618851ceed10cf0"
+          "replay_result_sha256": "cc13ded3c62f2f99003053212dc152138a88cd9a277d134e0618851ceed10cf0",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-08b.json",
+            "replay_result_sha256": "93df0784b6cb7bb48e6caafb8a1f20976604b5a89f374b7cf005f9650d07f21a"
+          }
         }
       }
     },
@@ -2145,7 +2559,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09a.json",
-          "replay_result_sha256": "fd57945b2fc3953c06826750a8ab542095c1ba26d31439686155317d6de0f2ad"
+          "replay_result_sha256": "fd57945b2fc3953c06826750a8ab542095c1ba26d31439686155317d6de0f2ad",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-09a.json",
+            "replay_result_sha256": "9d536540cedc6bd44378821ba98bb224242d498cd9cf67ddb0c9d685a9ab76eb"
+          }
         }
       }
     },
@@ -2168,7 +2588,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09b.json",
-          "replay_result_sha256": "baa18b36694464a46d96c736283a81d80614ccd8bd01f3913cdbec17d5d0a438"
+          "replay_result_sha256": "baa18b36694464a46d96c736283a81d80614ccd8bd01f3913cdbec17d5d0a438",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-09b.json",
+            "replay_result_sha256": "6d76d44bc8924ced794916fda73079217d991494417d3a5fe73315c46655cf63"
+          }
         }
       }
     },
@@ -2191,7 +2617,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-09c.json",
-          "replay_result_sha256": "32ba1367896cf035b5c3bf3e727848e2a349bc5afd8857063c35616afdfa4b5c"
+          "replay_result_sha256": "32ba1367896cf035b5c3bf3e727848e2a349bc5afd8857063c35616afdfa4b5c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-09c.json",
+            "replay_result_sha256": "0852d5deabb1d6cefb638067b6466720eb1e7abb177036ab1b9106cdfed6950d"
+          }
         }
       }
     },
@@ -2225,7 +2657,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11a.json",
-          "replay_result_sha256": "a0358ecc60c3b82c9a871ef98b08a60278695d11b114f8876bfec13a548cecf9"
+          "replay_result_sha256": "a0358ecc60c3b82c9a871ef98b08a60278695d11b114f8876bfec13a548cecf9",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-11a.json",
+            "replay_result_sha256": "a3cb69a151b06bc12a0d86abc1c9f4a938cc9a54a31b43a4e3bea9bb0317bec3"
+          }
         }
       }
     },
@@ -2248,7 +2686,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11b.json",
-          "replay_result_sha256": "c2f1c460727d3dd051696b997e7e39bd993f1336241fd3938c6ffb906ee2da12"
+          "replay_result_sha256": "c2f1c460727d3dd051696b997e7e39bd993f1336241fd3938c6ffb906ee2da12",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-11b.json",
+            "replay_result_sha256": "2f13e9de3e1d4a2f84daf7d4717685fb87df3e73ce759d646c7d4215631dea1b"
+          }
         }
       }
     },
@@ -2290,7 +2734,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11d.json",
-          "replay_result_sha256": "460bfac6ccf324f92542eaf19d869e651c3e0774aee4d24c4106e331125ed256"
+          "replay_result_sha256": "460bfac6ccf324f92542eaf19d869e651c3e0774aee4d24c4106e331125ed256",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-11d.json",
+            "replay_result_sha256": "ae4e7936567afd607a32a5874a6ad60af585d94caf2982add320c78bbbe7e087"
+          }
         }
       }
     },
@@ -2370,7 +2820,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11h.json",
-          "replay_result_sha256": "f293348b405cc84aea69a9014356db760b9d1392af85d6926ae1e28630f5aa2c"
+          "replay_result_sha256": "f293348b405cc84aea69a9014356db760b9d1392af85d6926ae1e28630f5aa2c",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-11h.json",
+            "replay_result_sha256": "04736b140145c212a5d32c6048bb1f35fa64bfc0039a5c855952c0f01a80d053"
+          }
         }
       }
     },
@@ -2412,7 +2868,13 @@
           "replay_test": "gcsNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "gcs/receipts/gcs-11j.json",
-          "replay_result_sha256": "6a36f3931323519eb20565366bd3db6771cf3ba4c2722051030f854aa0682a2d"
+          "replay_result_sha256": "6a36f3931323519eb20565366bd3db6771cf3ba4c2722051030f854aa0682a2d",
+          "go_replay": {
+            "replay_test": "TestGCSNativeCapturesMatchReplay",
+            "replay_test_path": "go/internal/replay/evidence/evidence_test.go",
+            "replay_result_file": "gcs/receipts/go/gcs-11j.json",
+            "replay_result_sha256": "23c85339ba3ab93daca802a6b8048c5bce31c94133b58586249e31ad711a3572"
+          }
         }
       }
     },
@@ -2435,7 +2897,13 @@
           "replay_test": "azureNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "azure/receipts/azure-01~2026-06-06.json",
-          "replay_result_sha256": "61445001cfe4320026a8803aa7b7f8995437374f1d071040be1d19d487fc0e26"
+          "replay_result_sha256": "61445001cfe4320026a8803aa7b7f8995437374f1d071040be1d19d487fc0e26",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-01~2026-06-06.json",
+            "replay_result_sha256": "5ede61b3b5eca871464630b044fa6a78bc9211177c9e6e15fae3caf33c12cae7"
+          }
         }
       }
     },
@@ -2458,7 +2926,13 @@
           "replay_test": "azureNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "azure/receipts/azure-02~2026-10-06.json",
-          "replay_result_sha256": "e5a876b683eb351faa5cc6841dbd05fd7c71c48ff9d1170332297e55a19b1e1b"
+          "replay_result_sha256": "e5a876b683eb351faa5cc6841dbd05fd7c71c48ff9d1170332297e55a19b1e1b",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-02~2026-10-06.json",
+            "replay_result_sha256": "4cfe6abe5db82691763a77d0fbeeac72ed558efeb85d1c16ecc0413f6d4e2553"
+          }
         }
       }
     },
@@ -2478,7 +2952,13 @@
           "capture_file": "azure/captures/azure-03a~2026-06-06.json",
           "capture_sha256": "d0fb8d97bbb83c94077de3b161478a3c98272a69242a292fc29d220afe11a99a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k02",
-          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 5 entries [item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03a~2026-06-06.json",
+            "replay_result_sha256": "4b42c39a6a7e71afffe6ea8ed65dd88c66d4e851540da3643fdd4d4320f17ec2"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03a~2026-06-06.json",
@@ -2505,7 +2985,13 @@
           "capture_file": "azure/captures/azure-03b~2026-06-06.json",
           "capture_sha256": "9128e1ec99de085e2871e0cb2f4f106370316c539d9930b461034f0ed6b188ea",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k04",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03b~2026-06-06.json",
+            "replay_result_sha256": "0f11f6997de513707cea947b4d5cea8824abccb7e7ea0e470dfa5ab69c63a6d8"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03b~2026-06-06.json",
@@ -2532,7 +3018,13 @@
           "capture_file": "azure/captures/azure-03c~2026-06-06.json",
           "capture_sha256": "bf7205bf68765aa8162a96546645aa8b211dd7fc28162a42e50dcd17d0696219",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03c~2026-06-06.json",
+            "replay_result_sha256": "0a1dac14703370568e905ed59ac2ab82efd94d6d7f5a8d135a97c451677d5058"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03c~2026-06-06.json",
@@ -2559,7 +3051,13 @@
           "capture_file": "azure/captures/azure-03d~2026-06-06.json",
           "capture_sha256": "197ded61ee74eccc75aca8e74bea283af2f815fe4deeac3ee4adf4091af29486",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/s",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03d~2026-06-06.json",
+            "replay_result_sha256": "c99eff38532d6be7ceb39c602b4d5c55312c28c5a6d35ae0ca1374fe6479d663"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03d~2026-06-06.json",
@@ -2586,7 +3084,13 @@
           "capture_file": "azure/captures/azure-03e~2026-06-06.json",
           "capture_sha256": "1e7ad5561fd6c5330c139f69c23349e1051c60d840a978cd1550f43fda884c2a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03e~2026-06-06.json",
+            "replay_result_sha256": "3918c2c72903095a8d0fac0731dd1604df38d8861525b024acf7be54f702a6cb"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03e~2026-06-06.json",
@@ -2613,7 +3117,13 @@
           "capture_file": "azure/captures/azure-03f~2026-06-06.json",
           "capture_sha256": "5be875b6dc4f5aaee6cbf1287ad3a1c96e8eddd10bb99b193cc928541f2046d5",
           "probe_request": "GET /{container}?restype=container&comp=list&startFrom=probe/r20261021t172702z-4109e13b/r/k06&maxresults=3",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k06', item:'r/k07', item:'s/1'], continues"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'r/k06', item:'r/k07', item:'s/1'], continues",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03f~2026-06-06.json",
+            "replay_result_sha256": "030badab2633fc63717ac773ddff8980d934dc03445126b7d77653b05a08bdf1"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03f~2026-06-06.json",
@@ -2640,7 +3150,13 @@
           "capture_file": "azure/captures/azure-03g~2026-06-06.json",
           "capture_sha256": "047972333bdff2b2cc4f60dea1ada13d03546133758f332f23558ce61db9a1b0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05', item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03g~2026-06-06.json",
+            "replay_result_sha256": "13080172c9c070e4ce96a7cf2cb7ddb4bf5dc7ca0650f2bfce0ea3638f8990ab"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03g~2026-06-06.json",
@@ -2721,7 +3237,13 @@
           "capture_file": "azure/captures/azure-03j~2026-06-06.json",
           "capture_sha256": "eb2fd8d04111492d64077c8e93e9c85dbf645d8634b757fe8b585a24edcd8cd1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/x/a",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'x/a', item:'x/ab', item:'x/abc'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03j~2026-06-06.json",
+            "replay_result_sha256": "1f18776b6519c8884a3e2812aaff2954c052f9968893169c9b2dd2c83839b2ce"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03j~2026-06-06.json",
@@ -2748,7 +3270,13 @@
           "capture_file": "azure/captures/azure-03k~2026-06-06.json",
           "capture_sha256": "f6085760d852d7484a460a009683f24bbe379ce31b6c667ccc05fbf192101ded",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/x/a&startFrom=probe/r20261021t172702z-4109e13b/x/ab",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'x/ab', item:'x/abc'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-03k~2026-06-06.json",
+            "replay_result_sha256": "90c66535b329838051c621a0cbad5f89e849b1cfcb317ea0f602f782c6a312e2"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-03k~2026-06-06.json",
@@ -2775,7 +3303,13 @@
           "capture_file": "azure/captures/azure-04a~2026-06-06.json",
           "capture_sha256": "76698d2d7e1a542fcf74a2024ab69ab075a2123b5130c436ff2fc840d8dacb13",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 8 entries [prefix:'d//', prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 8 entries [prefix:'d//', prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04a~2026-06-06.json",
+            "replay_result_sha256": "8e4d32776dce05833b154f190b8a2a4b906ea45f4296ee4491801cbf8f3c443b"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04a~2026-06-06.json",
@@ -2802,7 +3336,13 @@
           "capture_file": "azure/captures/azure-04b~2026-06-06.json",
           "capture_sha256": "4b9d417f5a6c961b7e66a4331899dc940852d46778c25d528be5934bf286d06b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/",
-          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04b~2026-06-06.json",
+            "replay_result_sha256": "03b24fc078b9f55f30c6594d7648ebc952b00fbc7a3f96bde12d9a777c02c927"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04b~2026-06-06.json",
@@ -2829,7 +3369,13 @@
           "capture_file": "azure/captures/azure-04c~2026-06-06.json",
           "capture_sha256": "cbb25c03e24d970ed73ca435b423167332163817ccf7fa732b8fef4e56586105",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/m",
-          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 7 entries [prefix:'d/a/', item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04c~2026-06-06.json",
+            "replay_result_sha256": "9aed7630fc84e350acd58498faa80860cadc2fc5114a61f3e64126ea7c29b9dd"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04c~2026-06-06.json",
@@ -2856,7 +3402,13 @@
           "capture_file": "azure/captures/azure-04d~2026-06-06.json",
           "capture_sha256": "f7027eb607dd6f2186012dd982e9a67cdf7e347a8164761b5de16e598a0cb41b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/b/3",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04d~2026-06-06.json",
+            "replay_result_sha256": "c257e4179f10712f62ef9dccb84ebe6f9fde86c52e88934e5e89e8fdb33b0625"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04d~2026-06-06.json",
@@ -2883,7 +3435,13 @@
           "capture_file": "azure/captures/azure-04e~2026-06-06.json",
           "capture_sha256": "cc5c54628fe7315a1ec5d845b658a791a392b60819ec8ac1cb69b5090d7d7c55",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a0",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'d/a0', prefix:'d/b/', item:'d/c', prefix:'d/e/', item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04e~2026-06-06.json",
+            "replay_result_sha256": "62f7e3384da098828fce6cf79e40143ae48baaf39a09c62e379ac3b31d13ff50"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04e~2026-06-06.json",
@@ -2910,7 +3468,13 @@
           "capture_file": "azure/captures/azure-04f~2026-06-06.json",
           "capture_sha256": "7c4333fbaac5384dcb6aa0a8ada842b62f2bda52ae35fd4696e87a7c6650a757",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/a/&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', prefix:'d/a/m/', item:'d/a/z'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'d/a/', item:'d/a/1', prefix:'d/a/m/', item:'d/a/z'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04f~2026-06-06.json",
+            "replay_result_sha256": "a705875298045d4ab63578198903852b06a78891896fcc3eb79221ad5a77badd"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04f~2026-06-06.json",
@@ -2937,7 +3501,13 @@
           "capture_file": "azure/captures/azure-04g~2026-06-06.json",
           "capture_sha256": "e52a7fda6725b45d0870af84829d3923b8e9fb0617e26b38ef50032627776ede",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/a&delimiter=/",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d/a/', item:'d/a0'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04g~2026-06-06.json",
+            "replay_result_sha256": "c9856bf0ac7ff8825384471e5ec64fb7d1ca5eb3357c06e2b4855013a1f4458e"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04g~2026-06-06.json",
@@ -2964,7 +3534,13 @@
           "capture_file": "azure/captures/azure-04h~2026-06-06.json",
           "capture_sha256": "a38da1ca05b1b6550e36e81aea9a811a3baf4b00a1a6b7aa03578c07e70a1a19",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=%7C",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04h~2026-06-06.json",
+            "replay_result_sha256": "07c480325f0b7e1f822b4e5177764167abe8878b928a0326207027b7fda7a668"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04h~2026-06-06.json",
@@ -2991,7 +3567,13 @@
           "capture_file": "azure/captures/azure-04i~2026-06-06.json",
           "capture_sha256": "9d383ec7959bbfcfecfff9c06dd1d972f1d57203f1d89640cb37c46613dc0707",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/1",
-          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', prefix:'d/a/1', prefix:'d/a/m/1', item:'d/a/z', item:'d/a0', prefix:'d/b/1', item:'d/b/2', item:'d/c', prefix:'d/e/1', item:'d/f-g-h', prefix:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 12 entries [item:'d//x', item:'d/a/', prefix:'d/a/1', prefix:'d/a/m/1', item:'d/a/z', item:'d/a0', prefix:'d/b/1', item:'d/b/2', item:'d/c', prefix:'d/e/1', item:'d/f-g-h', prefix:'d/f-g/1'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04i~2026-06-06.json",
+            "replay_result_sha256": "8d2c9aa55fd790492eaf601ca47ea870192129c4332a890441fa8166794aecf7"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04i~2026-06-06.json",
@@ -3018,7 +3600,13 @@
           "capture_file": "azure/captures/azure-04j~2026-06-06.json",
           "capture_sha256": "706e7e89698ec11ad948b8c0b58fc3e0231fd05712853ff7d703e5cd1d00bb29",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=-g",
-          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal"
+          "expected_result": "page 1: HTTP 200, 11 entries [item:'d//x', item:'d/a/', item:'d/a/1', item:'d/a/m/1', item:'d/a/z', item:'d/a0', item:'d/b/1', item:'d/b/2', item:'d/c', item:'d/e/1', prefix:'d/f-g'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04j~2026-06-06.json",
+            "replay_result_sha256": "4291ac271dc7fb1951a56e187fadfdb75c3eddaec8729d18c360684de530018a"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04j~2026-06-06.json",
@@ -3072,7 +3660,13 @@
           "capture_file": "azure/captures/azure-04l~2026-06-06.json",
           "capture_sha256": "54456f9e3b00b063a0e669e3b3c75df69cc587b1a4a38ecf1b70a32a319bd31d",
           "probe_request": "GET /{container}?restype=container&comp=list&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'probe/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04l~2026-06-06.json",
+            "replay_result_sha256": "3ae86f62f55a5e91f3c09f0d025d1b37362ad32613e34599d58f6542a0ef96fd"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04l~2026-06-06.json",
@@ -3099,7 +3693,13 @@
           "capture_file": "azure/captures/azure-04m~2026-06-06.json",
           "capture_sha256": "435f785bcda78e01dea9c000fe407a682da5dfde7222014308889e6a7bd8a4d1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&startFrom=probe/r20261021t172702z-4109e13b/d/a/m&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], continues; page 5: HTTP 200, 1 entries [prefix:'d/e/'], continues; page 6: HTTP 200, 1 entries [item:'d/f-g-h'], continues; page 7: HTTP 200, 1 entries [prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [prefix:'d/a/'], continues; page 2: HTTP 200, 1 entries [item:'d/a0'], continues; page 3: HTTP 200, 1 entries [prefix:'d/b/'], continues; page 4: HTTP 200, 1 entries [item:'d/c'], continues; page 5: HTTP 200, 1 entries [prefix:'d/e/'], continues; page 6: HTTP 200, 1 entries [item:'d/f-g-h'], continues; page 7: HTTP 200, 1 entries [prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-04m~2026-06-06.json",
+            "replay_result_sha256": "f2338b6cc4376be41dcef56fd644c35e6939e0497d47d71f6c75f6bd5f0659b2"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-04m~2026-06-06.json",
@@ -3126,7 +3726,13 @@
           "capture_file": "azure/captures/azure-05a~2026-06-06.json",
           "capture_sha256": "ebe5fcb2e9fa4428a1892ddef89e7c07d88d83434c53a0e585393140d65ee7ee",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&startFrom=probe/r20261021t172702z-4109e13b/r/k02&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k02'], continues; page 2: HTTP 200, 1 entries [item:'r/k03'], continues; page 3: HTTP 200, 1 entries [item:'r/k05'], continues; page 4: HTTP 200, 1 entries [item:'r/k06'], continues; page 5: HTTP 200, 1 entries [item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'r/k02'], continues; page 2: HTTP 200, 1 entries [item:'r/k03'], continues; page 3: HTTP 200, 1 entries [item:'r/k05'], continues; page 4: HTTP 200, 1 entries [item:'r/k06'], continues; page 5: HTTP 200, 1 entries [item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-05a~2026-06-06.json",
+            "replay_result_sha256": "ee8cad0309ecd09654b4d3a69128fb4e806091bb4491697ceafa6956b94fa7aa"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-05a~2026-06-06.json",
@@ -3234,7 +3840,13 @@
           "capture_file": "azure/captures/azure-06a~2026-06-06.json",
           "capture_sha256": "e8925d287db3728e4dca798a134b238895052af8c6717e55fe3403f8e4f1d80a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', item:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06a~2026-06-06.json",
+            "replay_result_sha256": "9192e9c4edc55439a8a718846199c96775206f68ceab0b84fa859b8b735a6bea"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06a~2026-06-06.json",
@@ -3261,7 +3873,13 @@
           "capture_file": "azure/captures/azure-06b~2026-06-06.json",
           "capture_sha256": "58c222baea1d6a0fd05b119ea4387dfa50943913dddaea2f46b1e8bba752c8a8",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&startFrom=probe/r20261021t172702z-4109e13b/u/%EE%80%80",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06b~2026-06-06.json",
+            "replay_result_sha256": "6d83f6d217b86a57af5e96d87506e87fd3f72a0db66628eac9d3845d83173124"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06b~2026-06-06.json",
@@ -3288,7 +3906,13 @@
           "capture_file": "azure/captures/azure-06c~2026-06-06.json",
           "capture_sha256": "8f51c266b4bb4ad9bf140ff59261e51249ea4713cbe91aadc15eb03b73f401a0",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/%C3%A9",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/\\xe9'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06c~2026-06-06.json",
+            "replay_result_sha256": "ae7e16808ca3910767eebcd05056cb5a339557a4ad42b0b78d7bc637690ce054"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06c~2026-06-06.json",
@@ -3315,7 +3939,13 @@
           "capture_file": "azure/captures/azure-06d~2026-06-06.json",
           "capture_sha256": "10934eaff3a208c194f781206d2439ed4f2a7c2be20812bc6ec9b4f92b602992",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/E",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'u/E'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06d~2026-06-06.json",
+            "replay_result_sha256": "011a7c3eb24439dd1be51e5b8c2c96d11c3d5a925be13c2508cbcb705db5b66c"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06d~2026-06-06.json",
@@ -3342,7 +3972,13 @@
           "capture_file": "azure/captures/azure-06e~2026-06-06.json",
           "capture_sha256": "19fef0b90429161352a956eee0951680ee525185bf6d6a087a8761f07e369b02",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&startFrom=probe/r20261021t172702z-4109e13b/u/%f0%9f%98%80",
-          "expected_result": "page 1: HTTP 200, 6 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 6 entries [item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06e~2026-06-06.json",
+            "replay_result_sha256": "728d30076d2a06d8327f4a7c8c0a23f9395cd07e7b6ff595665a6e3e32b74e3a"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06e~2026-06-06.json",
@@ -3369,7 +4005,13 @@
           "capture_file": "azure/captures/azure-06f~2026-06-06.json",
           "capture_sha256": "ff6ca80f46fa26247e0d37e4f2b9eb7106a0c5d488630b9a25272fc44e04e195",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/u/&delimiter=%C3%A9",
-          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', prefix:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal"
+          "expected_result": "page 1: HTTP 200, 14 entries [item:'u/E', item:'u/e', item:'u/e\\u0301', item:'u/z', prefix:'u/\\xe9', item:'u/\\xff', item:'u/\\ud7ff', item:'u/\\U00010000', item:'u/\\U0001f600', item:'u/\\U0010fffd', item:'u/\\ue000', item:'u/\\ufffd', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BE', item-encoded:'probe%2Fr20261021t172702z-4109e13b%2Fu%2F%EF%BF%BF'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-06f~2026-06-06.json",
+            "replay_result_sha256": "4d8a3bb400d9a8ec2f19048e8ce398b628a842dad1446e2731f5e5ed12d2b885"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-06f~2026-06-06.json",
@@ -3423,7 +4065,13 @@
           "capture_file": "azure/captures/azure-07b~2026-06-06.json",
           "capture_sha256": "e631e7612971e1c1db8adc00dfb89ae06aa7d95917ffa900b2a20bc29ad44254",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%2Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07b~2026-06-06.json",
+            "replay_result_sha256": "a795c2c55562317cb023527cd5053301bb5af9abbb39e35a4553de58aedf5536"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07b~2026-06-06.json",
@@ -3450,7 +4098,13 @@
           "capture_file": "azure/captures/azure-07c~2026-06-06.json",
           "capture_sha256": "0cff59d8a2ae8c80a74f85cd1274026203175b1d07321155594c4d2af518fe75",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%20b",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a b'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07c~2026-06-06.json",
+            "replay_result_sha256": "fad5717b3f7cf6d600183b285ed4756cf08a0c513fb75e99fd61b91d751775b9"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07c~2026-06-06.json",
@@ -3477,7 +4131,13 @@
           "capture_file": "azure/captures/azure-07d~2026-06-06.json",
           "capture_sha256": "0d4d7c87bfdd235b95ab711d2035344a942fb5477e7ac99044d61df4fd214b7d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%252Bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a%2Bb'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07d~2026-06-06.json",
+            "replay_result_sha256": "e7af20d961d515ea1be8f272ee3a182b2518273d259a81333371e54f28ce448a"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07d~2026-06-06.json",
@@ -3639,7 +4299,13 @@
           "capture_file": "azure/captures/azure-07j~2026-06-06.json",
           "capture_sha256": "02aac01d5197fc075ccd68d198d4cdfead1ef7a969f4f77acae67f87fc87b138",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/k%26v%3D1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/k&v=1'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07j~2026-06-06.json",
+            "replay_result_sha256": "8b7cf32137f638de971200952b58f9e3a6a6f4c3c0a577b050d5ae3711f34727"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07j~2026-06-06.json",
@@ -3666,7 +4332,13 @@
           "capture_file": "azure/captures/azure-07k~2026-06-06.json",
           "capture_sha256": "298f02a2ae509731f77b7d0dd78da21ad8d8d4f218dbc146a36edeab18aa80c9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/q?x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/q?x'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07k~2026-06-06.json",
+            "replay_result_sha256": "1219062d7721b2d28ddc445741124e1feb9fbab2e57b151345fe0b3e852e1364"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07k~2026-06-06.json",
@@ -3693,7 +4365,13 @@
           "capture_file": "azure/captures/azure-07l~2026-06-06.json",
           "capture_sha256": "449f8175847e14d5cfad148a21a62351bd6c01baef1dd431ae9f40d4243adcb9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe%2Fr20261021t172702z-4109e13b%2Fp%2F",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07l~2026-06-06.json",
+            "replay_result_sha256": "b4217ff9aa0be5221ca4a3b814e4205ca4de0414860c0c23036510d9ecb9c5b5"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07l~2026-06-06.json",
@@ -3720,7 +4398,13 @@
           "capture_file": "azure/captures/azure-07m~2026-06-06.json",
           "capture_sha256": "fcbcc5a9b3b53688502a98d096b5e74b2e7635f82f4b8652387aa2c0ecfde910",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/a%2bb",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/a+b'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07m~2026-06-06.json",
+            "replay_result_sha256": "5d75b4e60281c0b27850a986ee0ba57b7a53ee70065c3ab972eeb807182e04fe"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07m~2026-06-06.json",
@@ -3774,7 +4458,13 @@
           "capture_file": "azure/captures/azure-07o~2026-06-06.json",
           "capture_sha256": "c3ce8f464452cf9b9c2768813e2843bed218d7a18a57aa191a2868db5d6ecd53",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/",
-          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal"
+          "expected_result": "page 1: HTTP 200, 28 entries [item:'p/ lead', item:'p/a b', item:'p/a%20b', …:'22 more', item:'p/star*x', item:'p/tld~x', item:'p/\\ufffd'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07o~2026-06-06.json",
+            "replay_result_sha256": "33a52eeb5fd51ae4b51a36b25ad4ed04972c315dfcb050b945a4c7e776828d96"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07o~2026-06-06.json",
@@ -3801,7 +4491,13 @@
           "capture_file": "azure/captures/azure-07p~2026-06-06.json",
           "capture_sha256": "06cb6ba69d119b79139a82b63f0eb64b7d31fc23952cec7ee1f36d04423ecce1",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/end%20",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/end '], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07p~2026-06-06.json",
+            "replay_result_sha256": "195ebaf5d50fe15b5fac6e836e716e4a95d3740fca2d5ee182aefa32d3dfa529"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07p~2026-06-06.json",
@@ -3828,7 +4524,13 @@
           "capture_file": "azure/captures/azure-07q~2026-06-06.json",
           "capture_sha256": "8cec1e6fe431cd9b0a10cbba01f44979c3000dd9f314e145498c3a49df785ef2",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/p/eq=x",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'p/eq=x'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-07q~2026-06-06.json",
+            "replay_result_sha256": "8ed3eda17ae16bef64066fb93880a6b25017b4b29c5de2f6fe6f827218328d27"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-07q~2026-06-06.json",
@@ -3936,7 +4638,13 @@
           "capture_file": "azure/captures/azure-08a~2026-06-06.json",
           "capture_sha256": "ae822f01f4df9317a18f7edc643b8e6165516b70b5960162632455bf1c5db524",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=0",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08a~2026-06-06.json",
+            "replay_result_sha256": "913d736bb4a08c6616fac1d6ad15a66ae46d1aa2650882f9b7d32426f396f919"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08a~2026-06-06.json",
@@ -3963,7 +4671,13 @@
           "capture_file": "azure/captures/azure-08c~2026-06-06.json",
           "capture_sha256": "43b91ac4e0ad1e692e947f0f91b6c711eeadeaeedc7678730ef8cdeeb1e7ef5a",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1",
-          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 1 entries [item:'s/1'], continues; page 2: HTTP 200, 1 entries [item:'s/2'], continues; page 3: HTTP 200, 1 entries [item:'s/3'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08c~2026-06-06.json",
+            "replay_result_sha256": "ef39518e030cb231a87db65799f12a6aad189a315cdb9f7956caf0b41e626262"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08c~2026-06-06.json",
@@ -3990,7 +4704,13 @@
           "capture_file": "azure/captures/azure-08d~2026-06-06.json.gz",
           "capture_sha256": "f89a700f5f08fd966521c5fc44d8abb5719307ea9da47da41ddb107cb6b5fa1d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/b/0&maxresults=5000",
-          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], terminal"
+          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08d~2026-06-06.json",
+            "replay_result_sha256": "14b37bcd6094b809bedc43a9caf0f55c891fe2db3d512131bc3794e74b47190f"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08d~2026-06-06.json.gz",
@@ -4044,7 +4764,13 @@
           "capture_file": "azure/captures/azure-08f~2026-06-06.json",
           "capture_sha256": "f23e2d515d30cc3e9942a812ccbf4251164d15032d24b69becbc1c6f52541934",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=-1",
-          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue"
+          "expected_result": "HTTP 400 OutOfRangeQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08f~2026-06-06.json",
+            "replay_result_sha256": "3091359381b383329f776658b0244062cd8cdebe592159337095b50702e9fc59"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08f~2026-06-06.json",
@@ -4071,7 +4797,13 @@
           "capture_file": "azure/captures/azure-08g~2026-06-06.json",
           "capture_sha256": "2e7a43b500f48751e3058aee1c85411ce29385463e6715c9691d6a7688e88c12",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=abc",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08g~2026-06-06.json",
+            "replay_result_sha256": "ef092d10f5e40872134314651ad55fd419c064793b8f912585419c7abc8db7e1"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08g~2026-06-06.json",
@@ -4152,7 +4884,13 @@
           "capture_file": "azure/captures/azure-08j~2026-06-06.json",
           "capture_sha256": "28080c85e99c8efab9b75475bc315ac0e6828710fa091f263a9b10a0ecbc277f",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1.5",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08j~2026-06-06.json",
+            "replay_result_sha256": "31cb9f9d6ac3efaedcae2becf4edb782e2fd6ea23d538dd55ac7cec07284c5a0"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08j~2026-06-06.json",
@@ -4233,7 +4971,13 @@
           "capture_file": "azure/captures/azure-08m~2026-06-06.json",
           "capture_sha256": "db9a9456b3f9dde70b258c31067721773877b2f5ad28185d04a15fdc3dc410ae",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&maxresults=1&maxresults=2",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-08m~2026-06-06.json",
+            "replay_result_sha256": "b619ddc746346c9f1bd6c454b4bea81c7b798c3e5afcb2cf5226928fb57e77f7"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-08m~2026-06-06.json",
@@ -4368,7 +5112,13 @@
           "capture_file": "azure/captures/azure-09b~2026-06-06.json.gz",
           "capture_sha256": "4b5357aaa113da038130c6c842b09f17bbe0cf99d1adf1b7601fab975b586cc9",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/b/",
-          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal"
+          "expected_result": "page 1: HTTP 200, 5000 entries [item:'b/00000', item:'b/00001', item:'b/00002', …:'4994 more', item:'b/04997', item:'b/04998', item:'b/04999'], continues; page 2: HTTP 200, 1 entries [item:'b/zzzzz'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09b~2026-06-06.json",
+            "replay_result_sha256": "07e821616f25ee3f7bdd95b2e43207e3ca63e9a806e63440d37a39930bf6ee99"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09b~2026-06-06.json.gz",
@@ -4395,7 +5145,13 @@
           "capture_file": "azure/captures/azure-09c~2026-06-06.json",
           "capture_sha256": "e60794ce62d1db445ce1f02db509030f86192764575f0abc664cf872ce09ab35",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&delimiter=/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [prefix:'d//', prefix:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a0', prefix:'d/b/'], continues; page 3: HTTP 200, 2 entries [item:'d/c', prefix:'d/e/'], continues; page 4: HTTP 200, 2 entries [item:'d/f-g-h', prefix:'d/f-g/'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09c~2026-06-06.json",
+            "replay_result_sha256": "a309670d8ad1af924039d6e0954903030a043bb996288a375fea5ff5817d7158"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09c~2026-06-06.json",
@@ -4422,7 +5178,13 @@
           "capture_file": "azure/captures/azure-09e~2026-06-06.json",
           "capture_sha256": "1eefa4042aa845e62a30f7573f92aa22d89b3891ceb705ed448dd4c2a59c6496",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=4",
-          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 4 entries [item:'r/k01', item:'r/k02', item:'r/k03', item:'r/k05'], continues; page 2: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09e~2026-06-06.json",
+            "replay_result_sha256": "e17d2e26e9723fb748f8a33079c8ab6821a4380b21f85e96dba9bd79d68bb95f"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09e~2026-06-06.json",
@@ -4449,7 +5211,13 @@
           "capture_file": "azure/captures/azure-09f~2026-06-06.json",
           "capture_sha256": "b3beba0a5e8bd7f3b55ee1cd7fa0cd5b59f982979dd2956ba3690bd173093213",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/none/",
-          "expected_result": "page 1: HTTP 200, 0 entries [], terminal"
+          "expected_result": "page 1: HTTP 200, 0 entries [], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09f~2026-06-06.json",
+            "replay_result_sha256": "7021cced9bfacbaa957bbe29ea6192a4682047428e9d3050b92e2e54cfa4a399"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09f~2026-06-06.json",
@@ -4476,7 +5244,13 @@
           "capture_file": "azure/captures/azure-09g~2026-06-06.json",
           "capture_sha256": "84e6273217d754a36dbeaf2ac2880becbcbba9cc8fc5aca58f6e63907aaedd19",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2&marker=token-sha256-4e2ce20e038a8ff2acc21d6bbfc1ef550f47abb158a35f38ed5d50bba3e9a9b0",
-          "expected_result": "HTTP 400 InvalidQueryParameterValue"
+          "expected_result": "HTTP 400 InvalidQueryParameterValue",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09g~2026-06-06.json",
+            "replay_result_sha256": "1c59da012328d063f108f0c889c81a2a6c59f68aa8038b6850ed3648685a67b0"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09g~2026-06-06.json",
@@ -4638,7 +5412,13 @@
           "capture_file": "azure/captures/azure-09n~2026-06-06.json",
           "capture_sha256": "7eb16ab3bc4fac516f952e2918c70d2b9262025fa9baf990bafc6303de37fd38",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/d/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'d//x', item:'d/a/'], continues; page 2: HTTP 200, 2 entries [item:'d/a/1', item:'d/a/m/1'], continues; page 3: HTTP 200, 2 entries [item:'d/a/z', item:'d/a0'], continues; page 4: HTTP 200, 2 entries [item:'d/b/1', item:'d/b/2'], continues; page 5: HTTP 200, 2 entries [item:'d/c', item:'d/e/1'], continues; page 6: HTTP 200, 2 entries [item:'d/f-g-h', item:'d/f-g/1'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09n~2026-06-06.json",
+            "replay_result_sha256": "c75f83f1650044c0a0e6795e2ba95e998e0307e54d3660199734edbd3837a5e7"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09n~2026-06-06.json",
@@ -4692,7 +5472,13 @@
           "capture_file": "azure/captures/azure-09q~2026-06-06.json",
           "capture_sha256": "095fb8288579f0eeecd877e68eec5c30affc2a193ef2d717d047a8aeacc717f5",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/r/&maxresults=2",
-          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal"
+          "expected_result": "page 1: HTTP 200, 2 entries [item:'r/k01', item:'r/k02'], continues; page 2: HTTP 200, 2 entries [item:'r/k03', item:'r/k05'], continues; page 3: HTTP 200, 2 entries [item:'r/k06', item:'r/k07'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-09q~2026-06-06.json",
+            "replay_result_sha256": "1cb81122ca2a5f2cf9f86c1cb996d5dbaa48745db4e638e22be801c1b7f7d994"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-09q~2026-06-06.json",
@@ -4857,7 +5643,13 @@
           "replay_test": "azureNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "azure/receipts/azure-10a~2026-06-06.json",
-          "replay_result_sha256": "d50f81b9fd808e639ec037f47d2ebdd0e9c3e9504cd01b84b5a8de2cf73d91e3"
+          "replay_result_sha256": "d50f81b9fd808e639ec037f47d2ebdd0e9c3e9504cd01b84b5a8de2cf73d91e3",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-10a~2026-06-06.json",
+            "replay_result_sha256": "b249e9eec27862425e3cee8c7db80037a4cfca313d3d1b361a8738b5872a5481"
+          }
         }
       }
     },
@@ -4880,7 +5672,13 @@
           "replay_test": "azureNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "azure/receipts/azure-10b~2026-06-06.json",
-          "replay_result_sha256": "ef7e1a88aa80fa019066824967e0e193ac7683c7cf2ac5b2108f82995be5c9d3"
+          "replay_result_sha256": "ef7e1a88aa80fa019066824967e0e193ac7683c7cf2ac5b2108f82995be5c9d3",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-10b~2026-06-06.json",
+            "replay_result_sha256": "ca953865ac0a8a62cfb2106a74751106d43b2126fcd648d389094d29e56ed5d4"
+          }
         }
       }
     },
@@ -4903,7 +5701,13 @@
           "replay_test": "azureNativeCapturesMatchReplay",
           "replay_test_path": "swath-replay/src/test/java/io/varve/swath/replay/conformance/provider/NativeEvidenceReplayTest.java",
           "replay_result_file": "azure/receipts/azure-10c~2026-06-06.json",
-          "replay_result_sha256": "e7c06d3b58781b259e7f97803003025b290995e30e277e8013ad257725b2126f"
+          "replay_result_sha256": "e7c06d3b58781b259e7f97803003025b290995e30e277e8013ad257725b2126f",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-10c~2026-06-06.json",
+            "replay_result_sha256": "50fcc13e5c483132f5b9bfa815366fd33449afd12f4af907321fd3d07b293404"
+          }
         }
       }
     },
@@ -4946,7 +5750,13 @@
           "capture_file": "azure/captures/azure-12a~2026-06-06.json",
           "capture_sha256": "2d9ffa102d78ec617f7911149c0d67f52bec6868f2c53d992a72878579ba7519",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/q/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'q/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s', item:'q/su\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600x', item:'q/t/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'q/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s', item:'q/su\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600\\U0001f600x', item:'q/t/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-12a~2026-06-06.json",
+            "replay_result_sha256": "0ab7dd2f1c4530f02fc4b98d5c1cdca649ea091ba5c32b17f4907df2dc3d507f"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-12a~2026-06-06.json",
@@ -4973,7 +5783,13 @@
           "capture_file": "azure/captures/azure-13a~2026-06-06.json",
           "capture_sha256": "e9721bc7dd3a723aa024030f116a67d4c449fc098208703f1ecaa9df6e1b87ee",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-13a~2026-06-06.json",
+            "replay_result_sha256": "8dc6164e79db4ffbcfd46bd6cea35d24b1f2f3aca9d250390149233784949f61"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-13a~2026-06-06.json",
@@ -5000,7 +5816,13 @@
           "capture_file": "azure/captures/azure-13b~2026-06-06.json",
           "capture_sha256": "84ad6ab732236672963f51c8d007f58393531aab843ec3c3d6f91f576d425131",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-13b~2026-06-06.json",
+            "replay_result_sha256": "db214a396dcdd12815dc929b2ac252e0d03371ce8cfac5f96038d5522bd1b436"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-13b~2026-06-06.json",
@@ -5054,7 +5876,13 @@
           "capture_file": "azure/captures/azure-14b~2026-06-06.json",
           "capture_sha256": "258ff0d64f0ccb2f57bd730ab12e406a32b7e244a690cf64f468a3c21ece56ac",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&include=",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-14b~2026-06-06.json",
+            "replay_result_sha256": "99d710282af40e21fbaec8ec910164ec969d081bba47f751a75619ca9e998f1f"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-14b~2026-06-06.json",
@@ -5108,7 +5936,13 @@
           "capture_file": "azure/captures/azure-14d~2026-06-06.json",
           "capture_sha256": "bef629c7a89fb105a5d0db642ba8ee26d16aeae839e2f88c0ce146328c5f002b",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&timeout=1",
-          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal"
+          "expected_result": "page 1: HTTP 200, 3 entries [item:'s/1', item:'s/2', item:'s/3'], terminal",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-14d~2026-06-06.json",
+            "replay_result_sha256": "b0e493377af0ea54a33d2d635a866afbfb70e97b404d3fcf78c6ae3fc7e9d4a6"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-14d~2026-06-06.json",
@@ -5189,7 +6023,13 @@
           "capture_file": "azure/captures/azure-14g~2026-06-06.json",
           "capture_sha256": "f486b0d01cab2688573b14a89c7436fd00900d245a90f4e036b59a11af72e29d",
           "probe_request": "GET /{container}?restype=container&comp=list&prefix=probe/r20261021t172702z-4109e13b/s/&showonly=files",
-          "expected_result": "HTTP 400 UnsupportedQueryParameter"
+          "expected_result": "HTTP 400 UnsupportedQueryParameter",
+          "go_replay": {
+            "replay_test": "TestAzureEvidenceReplay",
+            "replay_test_path": "go/internal/replay/azure/evidence_test.go",
+            "replay_result_file": "azure/receipts/go/azure-14g~2026-06-06.json",
+            "replay_result_sha256": "f01396a5db816ea3cec6022943ee6891294a49d684d5c85c815c9b5faae90edc"
+          }
         },
         "2026-10-06": {
           "capture_file": "azure/captures/azure-14g~2026-06-06.json",
