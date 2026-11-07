@@ -191,6 +191,7 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	a := s.azure
 	release, ok := s.admit()
 	defer release()
+	w = releasing(w, release)
 	if !ok {
 		s.azureRefuse(w, r, arrived, azureStopping)
 		return
@@ -350,7 +351,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
-	if err := writeViews(w, body); errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, ProtocolAzure, "total_deadline").Inc()
 	}
 	s.reg.Get(metrics.RequestStageLatency, ProtocolAzure, "write").Record(time.Since(writeStart))

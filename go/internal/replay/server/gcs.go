@@ -234,6 +234,7 @@ func (s *Server) serveEnvelope(w http.ResponseWriter, r *http.Request, status in
 	arrived := time.Now()
 	release, ok := s.admit()
 	defer release()
+	w = releasing(w, release)
 	header := ""
 	if !ok {
 		s.reg.Get(metrics.ResponseAdmissionRefused, protocolReplay, "shutdown").Inc()
@@ -255,6 +256,7 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	rt := s.routes
 	release, ok := s.admit()
 	defer release()
+	w = releasing(w, release)
 	fail := func(kind gcs.Kind, reason string) {
 		var body []byte
 		if r.Method != http.MethodHead {
@@ -406,11 +408,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol stri
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
-	var err error
-	if r.Method != http.MethodHead {
-		err = writeViews(w, body)
-	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocol, "total_deadline").Inc()
 	}
 	if protocol != protocolReplay {
