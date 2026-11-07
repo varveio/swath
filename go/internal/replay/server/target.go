@@ -257,18 +257,24 @@ func (c *Config) maxHeaderBytes() int { return 2 * headLimitNative }
 // HTTP layer does (established by sending growing heads to the Java
 // server): a request line longer than the limit is 414 URI Too Long; a
 // head of more than limit bytes is 431 Request Header Fields Too Large.
-// The head is measured as it was sent in the usual form ("Name: value"
-// lines); net/http keeps no raw copy, so optional whitespace around a
-// value is not counted.
+// The head is the bytes the connection carried for it (headCounter); a
+// request without that count is measured from its parsed form.
+// Every request must call it once, in order, to keep a connection's
+// heads aligned with its requests.
 func headProblem(r *http.Request, limit int) (int, string) {
+	head, raw := rawHeadSize(r) // taken first, whatever the verdict
 	line := len(r.Method) + 1 + len(r.RequestURI) + 1 + len(r.Proto) + 2
 	if line > limit {
 		return http.StatusRequestURITooLong, "URI Too Long"
 	}
-	head := line + len("Host: ") + len(r.Host) + 2 + 2
-	for name, values := range r.Header {
-		for _, v := range values {
-			head += len(name) + 2 + len(v) + 2
+	if !raw {
+		// No connection counter: measure the parsed head, which can only
+		// be shorter than the bytes sent.
+		head = line + len("Host: ") + len(r.Host) + 2 + 2
+		for name, values := range r.Header {
+			for _, v := range values {
+				head += len(name) + 2 + len(v) + 2
+			}
 		}
 	}
 	if head > limit {

@@ -50,8 +50,16 @@ func (l *limitListener) Accept() (net.Conn, error) {
 
 type limitConn struct {
 	net.Conn
-	l    *limitListener
-	once sync.Once
+	l     *limitListener
+	once  sync.Once
+	heads headCounter
+}
+
+// Read counts the request heads as they arrive (headCounter).
+func (c *limitConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.heads.feed(p[:n])
+	return n, err
 }
 
 func (c *limitConn) Close() error {
