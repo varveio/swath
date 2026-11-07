@@ -15,7 +15,7 @@ import (
 // on the engine: one flag group (Flags), one value a provider passes on.
 type Policy struct {
 	Sequential bool  // one continuation-token chain, no ranges (the oracle)
-	Seed       bool  // parallel: tile the scope from delimiter probes first
+	Seed       bool  // parallel: first cut the scope at the common prefixes of one delimiter page
 	Structure  bool  // pivot on folder boundaries from structure probes sent alongside pages
 	MaxKeys    int64 // stop after this many objects (sequential only; 0 = all)
 	Floors     bool  // the gate-chain floors (off by default)
@@ -52,7 +52,7 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
 	f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
-	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter probes of the folder hierarchy before splitting")
+	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: before splitting, cut the keyspace at the folders of one delimiter page ('/') at the scope's root")
 	if diag {
 		f.BoolVar(&p.Structure, "structure", p.Structure, "ranges: structure probes: pivot on folder boundaries listed alongside a range's pages")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")

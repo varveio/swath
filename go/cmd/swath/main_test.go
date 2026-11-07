@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 )
@@ -66,15 +67,30 @@ func TestVersion(t *testing.T) {
 }
 
 func TestSize(t *testing.T) {
-	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4_000_000, "123": 123, "2GiB": 2 << 30} {
+	// One syntax with the size filters (filter.ParseSize): binary units in
+	// any case, exact decimal quantities.
+	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4 << 20, "4mb": 4 << 20, "4m": 4 << 20, "123": 123, "2GiB": 2 << 30,
+		"1.5g": 3 << 29, "0.5KiB": 512, " 64 MiB ": 64 << 20, "1t": 1 << 40} {
 		var s size
 		if err := s.Set(in); err != nil || int64(s) != want {
 			t.Errorf("%s: %d, %v", in, s, err)
 		}
+		if f, err := filter.ParseSize(in); err != nil || f != want {
+			t.Errorf("%s: the filter parser reads %d, %v", in, f, err)
+		}
 	}
 	var s size
-	if s.Set("0") == nil || s.Set("x") == nil || s.Set("9223372036854775807GiB") == nil || s.Set("8589934592GiB") == nil {
-		t.Error("invalid sizes accepted")
+	for _, bad := range []string{"0", "0KiB", "x", "-1", "1.3b", "9223372036854775807GiB", "8589934592GiB", "4PB"} {
+		if s.Set(bad) == nil {
+			t.Errorf("invalid size %q accepted", bad)
+		}
+	}
+	var z zsize
+	if err := z.Set("0"); err != nil || z != 0 {
+		t.Errorf("zsize 0: %d, %v", z, err)
+	}
+	if err := z.Set("2k"); err != nil || z != 2048 {
+		t.Errorf("zsize 2k: %d, %v", z, err)
 	}
 }
 
@@ -85,6 +101,9 @@ func TestCLIDocFlags(t *testing.T) {
 	usage(&b, newFlags(&options{}, false), false)
 	b.WriteString("\n")
 	usage(&b, newFlags(&options{}, true), true)
+	if strings.Contains(b.String(), " \t") {
+		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
+	}
 	const begin, end = "<!-- flags:begin -->\n", "<!-- flags:end -->"
 	readme, err := os.ReadFile("../../docs/cli.md")
 	if err != nil {

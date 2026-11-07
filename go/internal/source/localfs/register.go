@@ -17,7 +17,7 @@ import (
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	registry.Register(registry.Factory{Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open})
+	registry.Register(registry.Factory{Scheme: "", BinaryKeys: true, Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open})
 }
 
 // Set and String make Fields a flag value.

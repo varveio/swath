@@ -57,7 +57,7 @@ type running struct {
 	keys         int64
 	open         bool
 	continuing   bool // last page full and not at the bound
-	unsplittable bool
+	unsplittable bool // proven: no pivot exists above a safe cursor
 	id           uint64
 	dens         density        // page density, for the floors
 	sb           structure      // known folder boundaries (structure probes)
@@ -267,7 +267,6 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 // forward reflection for the open frontier, refined by the last page's
 // density (see below). On success the two children are
 // reserved in the demand count; the caller then commits the split.
-// commits or releases the split.
 func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
 	p.lock()
 	defer p.unlock()
@@ -329,8 +328,9 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 		// Refinement from the page's density (span·max(4, hunger) past the
 		// cursor, at most halfway to hi): taken when it is nearer the cursor
 		// than the spec pivot, or when the spec pivot is within one page span
-		// of the cursor, where its lower child would be empty. The probe
-		// below catches a refinement that overshoots the data.
+		// of the cursor, where its lower child would be empty. Nothing
+		// checks that the refined pivot lands on data: a refinement that
+		// overshoots leaves an empty upper child, paid as one request.
 		e, eok := extrapolate(page, c, ceil, bounded, int64(max(4, hunger)))
 		one, ook := extrapolate(page, c, ceil, bounded, 1)
 		if eok && c < e && (e < m || (ook && m < one)) {
@@ -340,11 +340,18 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	switch guard(c, m, found, ceil, bounded, false, p.safe) {
 	case clauseNoPivot:
 		p.c.Inc(cSplitRejectedNoPivot)
-		st.unsplittable = true
+		// No pivot after a safe cursor is a fact about the interval: a later
+		// cursor only narrows (c, hi]. After an unsafe one it is the
+		// cursor's, as below.
+		if p.safe(c) {
+			st.unsplittable = true
+		}
 		return
 	case clauseUnsafeCursor:
+		// The cursor cannot be the lower child's start-after: decline this
+		// page's split only. The next page ends at another key, usually a
+		// safe one, and is evaluated afresh.
 		p.c.Inc(cSplitRejectedUnsafeCursor)
-		st.unsplittable = true
 		return
 	case clauseCursor:
 		p.c.Inc(cSplitRejectedCursor)
@@ -374,8 +381,9 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	return m, extrapolated, true
 }
 
-// commit accepts a decided split: children, counters, boundaries for the
-// journal.
+// commit accepts a decided split: the two children and the counters.
+// Splits are not journaled: a resume restarts above the last published key
+// and splits afresh.
 func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated bool) (lower, upper Range) {
 	p.lock()
 	defer p.unlock()

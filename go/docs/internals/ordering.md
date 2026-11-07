@@ -30,7 +30,10 @@ counts with the provider's and the router's.
 
 `Options.Budget` is a byte budget, `--row-budget`, for rows in flight. A row counts its value (`schema.Row[P]`, the
 key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
-counting them approximates the arena they keep alive. The encoders' queues add the bytes of every queued
+counting them approximates the arena they keep alive. That holds only while most of a page is handed on: a row
+filter (`registry/filtered.go`) that keeps at most half of a page's rows or charged bytes detaches the survivors
+(`Schema.Detach`: a row slice and one string buffer sized to them, through the payload codec), so a sparse filter
+cannot hold whole pages for a few charged rows (`TestSparseFilterPipelinePlateau`). The encoders' queues add the bytes of every queued
 batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
 written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. Pages being
 parsed (each capped at 16 MiB), codecs and the garbage collector are outside it.

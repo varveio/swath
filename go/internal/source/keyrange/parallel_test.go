@@ -209,6 +209,49 @@ func TestT3Guard(t *testing.T) {
 	}
 }
 
+// R7: one unsafe page-ending cursor declines that page's split only. With
+// 100,000 safe keys but the 1,000th (the first page's last) unsafe, by its
+// bytes or by the provider's veto, the remaining 99,000 keys still split
+// and every row arrives once, in order.
+func TestSingleUnsafeCursorDoesNotDisableLaterSplits(t *testing.T) {
+	keys := make([]string, 100000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%06d", i)
+	}
+	splits := func(st Stats) int64 { return st.Get(cSplitAcceptedBounded) + st.Get(cSplitAcceptedFrontier) }
+	check := func(name string, want []string, got []string, st Stats) {
+		t.Helper()
+		t.Logf("%s: rows=%d splits=%d unsafe_rejections=%d max_active=%d", name, len(got), splits(st), st.Get(cSplitRejectedUnsafeCursor), st.Get(cMaxActive))
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: rows differ (%d, want %d)", name, len(got), len(want))
+		}
+		if st.Get(cSplitRejectedUnsafeCursor) == 0 {
+			t.Fatalf("%s: the unsafe cursor was never met", name)
+		}
+		// Splits, not peak concurrency: with GOMAXPROCS=1 and a fake
+		// without latency, one worker may drain each child before the next
+		// starts.
+		if splits(st) < 10 {
+			t.Errorf("%s: one unsafe cursor suppressed later splits: %d splits", name, splits(st))
+		}
+	}
+	odd := slices.Clone(keys)
+	odd[999] += "%"
+	got, st, _ := run(t, newSorted(odd, false, 1), Options{}, 16)
+	check("unsafe byte", odd, got, st)
+
+	veto := func(s string) bool { return Safe(s) && s != keys[999] }
+	p, err := New(Options{Workers: 16}, Description[Object]{Target: "test", Listing: Listing, AcceptBound: veto}, fetchFrom(newSorted(keys, false, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &collect{}
+	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: 16, Budget: 500 * 256}); err != nil {
+		t.Fatal(err)
+	}
+	check("provider veto", keys, keysOf(c.rows), p.Stats())
+}
+
 // T4: paging edges.
 func TestT4Paging(t *testing.T) {
 	keys := keyspaces()["exactly3000"]

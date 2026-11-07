@@ -18,6 +18,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // errNoCommand: an interrupted run that stopped before its journal header
@@ -59,6 +60,18 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if dir == "" {
 		return usageError{errors.New("usage: swath resume DIR [runtime flags]")}
 	}
+	// Every refusal below settles: it writes the report (--report). Its
+	// destination, and the given durations, are checked first, as a list
+	// command checks them, so no settlement replaces the dataset's own
+	// files or the text file being refused.
+	if err := nonNegativeDurations(f); err != nil {
+		return usageError{err}
+	}
+	target := resumeTarget(o, dir)
+	if err := checkSidePaths(&target); err != nil {
+		return usageError{err}
+	}
+	o.report = target.report // the destination checked, which refuse writes
 	// The run a refusal below is about, as read now: it is settled only
 	// if it is still that run once this process holds the lock.
 	seen := journal.Witness(dir)
@@ -128,6 +141,25 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// --spill-compress), and a recorded swath list command holds none
 	// that could change meaning.
 	return runWith(ctx, cmd, stdout, true, argv, true, att)
+}
+
+// resumeTarget is o (the resume's flags) with the output a resume of dir
+// names: the text file (or stdout) of a text run, refused below, or the
+// dataset directory.
+func resumeTarget(o options, dir string) options {
+	switch {
+	case dir == "-":
+		o.text = &textout.Config{}
+	case isFile(dir):
+		o.text = &textout.Config{Path: dir}
+	default:
+		if f, _ := textDest(dir); f != "" {
+			o.text = &textout.Config{Path: dir}
+		} else {
+			o.out = dir
+		}
+	}
+	return o
 }
 
 // refuse settles a resume that stopped before it could run: its outcome

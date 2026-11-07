@@ -199,8 +199,10 @@ type Timings struct {
 	// verification and publication included.
 	SessionMs int64 `json:"session_ms"`
 	ListingMs int64 `json:"listing_ms"` // to the end of the order stage
-	UserCPUMs int64 `json:"user_cpu_ms"`
-	SysCPUMs  int64 `json:"sys_cpu_ms"`
+	// UserCPUMs and SysCPUMs are the process's CPU times: absent (nil)
+	// where the platform does not measure them (Resources.RusageAvailable).
+	UserCPUMs *int64 `json:"user_cpu_ms,omitempty"`
+	SysCPUMs  *int64 `json:"sys_cpu_ms,omitempty"`
 }
 
 // Output is the row and part accounting: this invocation versus the
@@ -234,7 +236,12 @@ type TextOutput struct {
 
 // Resources the run used. Wait times sum over goroutines.
 type Resources struct {
-	PeakRSSBytes     int64 `json:"peak_rss_bytes"`
+	// PeakRSSBytes is the process's peak resident set (Windows: peak
+	// working set): absent (nil) where it is not measured.
+	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
+	// RusageAvailable says whether this platform measured the CPU times and
+	// peak RSS; false leaves them out rather than reporting zeros.
+	RusageAvailable  bool  `json:"rusage_available"`
 	RowBudgetBytes   int64 `json:"row_budget_bytes"`   // rows in flight: reorder storage and encoder queues
 	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage
 	FrontierWaitNs   int64 `json:"frontier_wait_ns"`
@@ -285,13 +292,22 @@ func (r *Report) finish() {
 	now := time.Now()
 	r.Timings.FinishedAt = now.UTC()
 	r.Timings.WallMs = now.Sub(r.Timings.StartedAt).Milliseconds()
-	u, sys := cpuTimes()
-	r.Timings.UserCPUMs, r.Timings.SysCPUMs = u.Milliseconds(), sys.Milliseconds()
-	r.Resources.PeakRSSBytes = peakRSS()
+	r.setRusage(rusage())
 	if r.Attempt != nil {
 		r.Timings.SessionMs = now.Sub(r.Attempt.Started).Milliseconds()
 	}
 	r.requests()
+}
+
+// setRusage records the process's measurements, or that there are none.
+func (r *Report) setRusage(user, sys time.Duration, peak int64, ok bool) {
+	r.Resources.RusageAvailable = ok
+	if !ok {
+		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = nil, nil, nil
+		return
+	}
+	u, s := user.Milliseconds(), sys.Milliseconds()
+	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = &u, &s, &peak
 }
 
 // requests fills Cost and Efficiency from the source's request account.

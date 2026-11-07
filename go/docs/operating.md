@@ -90,6 +90,9 @@ report's `output.bytes` over `output.rows_committed`. If the dataset outgrows th
 **Memory.** Outside `--row-budget` are the encoders' writers (24 MiB each), response bodies being parsed (up to
 16 MiB each, one per worker in the worst case), compression scratch and the garbage collector's headroom. Read the actual figure from the report's
 `resources.peak_rss_bytes` on a representative run, and size the host from that, not from `--row-budget`.
+Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it with the CPU times; on another
+platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.user_cpu_ms` and
+`timings.sys_cpu_ms` are left out (the summary line prints `-`), never reported as zero.
 
 ## Running
 

@@ -84,14 +84,17 @@ A second interleaved session on the deep recordings (same configuration, 3 repet
 | nara-1950-census | Java | 111.4 (109.9–114.0) | 14,961 | 1,015 | 170 | 709,051 | 19.3 |
 | | Go | 55.0 (49.6–57.2) | 19,128 | 7,131 | 2,908 | 5,360,246 | 39.1 |
 
-Per split (medians): overfetched keys 711 (Go) against 618 (Java) on fourcastnetgfs and 752 against 699 on
-nara; empty children 0.44 against 0.19 and 0.41 against 0.17.
+Divided by the splits (medians): overfetched keys 711 (Go) against 618 (Java) on fourcastnetgfs and 752 against
+699 on nara; empty children 0.44 against 0.19 and 0.41 against 0.17.
 
 - Go splits 8.6x and 7.0x as often as Java. That buys about 40 active ranges against Java's 9–19 and 5.0x and
   2.0x less wall. Each split adds a trimmed last page and a child's first page, so requests (+24 % and +28 %)
   and overfetched keys follow.
-- Per split, Go overfetches within 15 % of Java. The rest of the excess is empty upper children, which Java
-  avoids by probing the pivot from an idle thief (see the 1-key probe below).
+- Go's overfetched keys divided by its splits are within 15 % of Java's. That is total overfetch (every range's
+  last page, seeded and split ranges alike) over all splits, not the overfetch one split adds, so it does not
+  say what a split costs at the margin. The empty-children count aggregates lower and upper children, so it does
+  not attribute the excess to empty upper children either; Java probes the pivot from an idle thief, and the
+  1-key probe below is the only measurement of what probing removes.
 - S3 has no end bound, so a range's last page reads past it; GCS ranges send `endOffset` and overfetch nothing
   ([GCS route parity](#gcs-route-parity)).
 
@@ -120,8 +123,9 @@ seed descent was measured as `--seed` with the hybrid descent, since deleted.
 **1-key pivot probe** (deleted), deep recordings, the session of the previous section: with the probe, empty
 children fell 1,093 → 201 and 2,908 → 443, but it sent 2.8 and 2.3 probes per split, 31 % and 27 % more
 requests, and took 2.3x and 2.2x the wall (fourcastnetgfs 38.0 s, nara 119.9 s), because the owner waits for
-the probe. An asynchronous probe would save at most one request per empty child (0.41–0.44 per split) and
-spend at least one per probe.
+the probe. For a fixed stream of split proposals, an asynchronous probe would save at most one request per
+empty child it catches (0.41–0.44 per split, lower and upper together) and spend at least one per probe. That is
+an accounting bound, not a limit on a policy whose later splits change with what its probes learn.
 
 ## Live shallow buckets
 
@@ -209,8 +213,13 @@ repetitions (S3 then GCS), median (range):
 
 In all nine pairs the GCS dataset equals the S3 dataset (keys and sizes) and is ascending. GCS sends 0–4 % more
 requests and overfetches nothing (`endOffset`). The noaa-eri-pds gap is two slow GCS repetitions on a shared
-host; an earlier build on the same server took 11.67–11.77 s on GCS against 11.15–12.06 s on S3. No live GCS
-bucket was listed.
+host; an earlier build on the same server took 11.67–11.77 s on GCS against 11.15–12.06 s on S3.
+
+Live GCS, measured privately on one 5.1M-object bucket in-region (2026-11-06), by API and clock: Go on the JSON
+API 29.5-32.4 s end to end; Go on the XML API 34.4-39.8 s end to end; the Java tool on the XML API 49-52 s end to
+end, of which its listing phase 23-28 s. Both Go arms finish first end to end, though each takes longer than
+Java's listing phase alone; mean in flight about 16 of 64 workers; split tree 398 deep where a balanced one needs 13; the cause and the planned
+pivot-policy change are in [Known gaps](#known-gaps).
 
 **Reproduce:** swath-replay with GCS latency injection (varveio/swath#250) serving `--protocols s3,gcs`; list
 `s3://BUCKET` and `gs://BUCKET` through it alternately ([testing.md](testing.md#replay-oracle)).
@@ -373,6 +382,17 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   part plus 5 % of the listed keys, with the relisted bytes, requests and the durable frontier's age reported)
   is a gate to test on kills at peak speculation; it is not a property this build guarantees, and no claim
   about restart economics should precede it.
+- **Split depth.** Each split leaves almost all the remaining work in the upper child, which must fetch a page
+  before it can split again, so on a large flat keyspace the split tree is a chain of dependent requests rather
+  than a balanced tree: 398 deep on the live GCS run above where a balanced one needs 13, with about 16 of 64
+  workers in flight. The causes are in `keyrange`'s pivot policy: the frontier's forward reflection steps by the
+  distance since the previous pivot (about one page), the density refinement caps the step at `max(4, hunger)`
+  page spans and wins whenever it is nearer the cursor, and where `between` finds no midpoint scalar its fallback, a
+  key just above the cursor, still counts as found and lies within one page span of it, so the density step,
+  when the page yields one, replaces it (refinement applies only to a found pivot; with none found the page does not split). The planned change doubles the step along a chain of upper children (a gallop; a lower child
+  resets it), still capped at the midpoint of a bounded range; as an experiment on a fake serving the same keys it took the run from 22.3 s to 7.1 s and the depth
+  from 408 to 84. Date-partitioned layouts are not helped by it: there Java's hierarchy seed wins (a synthetic
+  case: 19 s against 4.4 s), and the Go seed is one delimiter page.
 - **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off, unmeasured). Under
   sustained throttling it holds the limit at 1–2 for the whole run ([above](#throttling-through-the-fault-proxy)).
   It has never met real 503s.
@@ -393,7 +413,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 
 ## Skipped or not measured
 
-- Live GCS listing; GCS's own latency profile.
+- Live GCS beyond the one private in-region run above; GCS's own latency profile.
 - Throttling against real S3 or GCS; Java under the sustained-throttle fault.
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
