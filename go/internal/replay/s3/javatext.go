@@ -4,6 +4,7 @@
 package s3
 
 import (
+	"math"
 	"unicode"
 
 	"github.com/varveio/swath/go/internal/replay/javanum"
@@ -167,5 +168,8 @@ func isSpace(r rune) bool {
 // digit outside the BMP is refused).
 func parseInt32(s string) (int32, bool) {
 	v, ok := javanum.ParseInt(s, 32)
-	return int32(v), ok
+	if !ok || v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(v), true
 }

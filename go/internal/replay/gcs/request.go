@@ -137,11 +137,11 @@ func Parse(bucket, rawQuery string) (*Request, error) {
 	}
 	r := &Request{Bucket: bucket, PageSize: MaxPageSize, FullProjection: projection == "full"}
 	if v, ok := params["maxResults"]; ok {
-		n, ok := parseMaxResults(v)
+		size, clamped, ok := parseMaxResults(v)
 		if !ok {
 			return nil, malformed("invalid_max_results")
 		}
-		r.PageSize, r.Clamped = int(min(n, MaxPageSize)), n > MaxPageSize
+		r.PageSize, r.Clamped = size, clamped
 	}
 	var err error
 	for _, f := range []struct {
@@ -160,20 +160,28 @@ func Parse(bucket, rawQuery string) (*Request, error) {
 	return r, nil
 }
 
-// parseMaxResults accepts a positive decimal integer without a sign or
-// leading zero that fits in an int64; zero and everything else are
-// refused.
-func parseMaxResults(v []byte) (int64, bool) {
+// parseMaxResults reads maxResults as the page size: a positive decimal
+// integer without a sign or leading zero that fits in an int64. A value
+// above MaxPageSize (2^31 and 2^63-1 included) is accepted and clamped,
+// as the wire contract does; zero, anything else and anything past 2^63-1
+// is refused. The bound is checked on the int64 before it is narrowed.
+func parseMaxResults(v []byte) (size int, clamped, ok bool) {
 	if len(v) == 0 || v[0] == '0' {
-		return 0, false
+		return 0, false, false
 	}
 	for _, c := range v {
 		if c < '0' || c > '9' {
-			return 0, false
+			return 0, false, false
 		}
 	}
 	n, err := strconv.ParseInt(string(v), 10, 64)
-	return n, err == nil
+	switch {
+	case err != nil:
+		return 0, false, false
+	case n > MaxPageSize:
+		return MaxPageSize, true, true
+	}
+	return int(n), false, true
 }
 
 // field returns a parameter's value, nil when absent or empty, refusing a

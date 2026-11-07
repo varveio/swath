@@ -153,3 +153,27 @@ func TestCompetingFeaturesUseTheFixedOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestMaxResultsBounds: the page size is checked as an int64 before it is
+// narrowed. 1 to 1,000 are taken as asked; 1,001, 2^31, 2^31-1 and
+// 2^63-1 are clamped to 1,000 (the wire contract parses a long and
+// clamps); 2^63 and beyond, zero and negatives are refused.
+func TestMaxResultsBounds(t *testing.T) {
+	for v, want := range map[string]struct {
+		size    int
+		clamped bool
+	}{
+		"1": {1, false}, "999": {999, false}, "1000": {1000, false}, "1001": {1000, true},
+		"2147483647": {1000, true}, "2147483648": {1000, true}, "9223372036854775807": {1000, true},
+	} {
+		r, err := Parse("bkt", "maxResults="+v)
+		if err != nil || r.PageSize != want.size || r.Clamped != want.clamped {
+			t.Errorf("%s: %+v %v", v, r, err)
+		}
+	}
+	for _, v := range []string{"9223372036854775808", "18446744073709551616", "0", "-1", "-9223372036854775808"} {
+		if _, err := Parse("bkt", "maxResults="+v); err == nil || err.(*Failure).Reason != "invalid_max_results" {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+}

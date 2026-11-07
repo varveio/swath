@@ -165,7 +165,13 @@ func Parse(method, path, rawQuery string, h http.Header, account, container stri
 		if n < 1 {
 			return nil, fail(Malformed, "maxresults_out_of_range")
 		}
-		r.PageSize = int(min(n, MaxPageSize))
+		// Narrowed only below the cap: n is at most 2^31-1 here, but the
+		// bound is checked on the int64 before the conversion.
+		if n > MaxPageSize {
+			r.PageSize = MaxPageSize
+		} else {
+			r.PageSize = int(n)
+		}
 	}
 	return r, nil
 }
