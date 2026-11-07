@@ -378,7 +378,7 @@ type ReadAhead struct {
 // workers at once (order.SegmentStats).
 type Segments struct {
 	// Reason: engaged, one_processor, one_encoder, single_part,
-	// not_planned or listing_active.
+	// not_planned, row_budget or listing_active.
 	Reason   string `json:"reason"`
 	Segments int    `json:"segments"`
 	Workers  int    `json:"workers"`
@@ -397,6 +397,13 @@ type Segments struct {
 	WriteNs  int64 `json:"write_ns"`
 	// MaxWorkers is the cap on workers (listing.segmentWorkers).
 	MaxWorkers int `json:"max_workers"`
+	// BudgetWaits are the times a worker waited for the row budget before
+	// reading a spilled frame, BudgetWaitNs their time; MaxHeldBytes the
+	// most counted against the budget at once while the segments ran (the
+	// tree, the encoders' queues, the frames the workers read).
+	BudgetWaits  int64 `json:"budget_waits"`
+	BudgetWaitNs int64 `json:"budget_wait_ns"`
+	MaxHeldBytes int64 `json:"max_held_bytes"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
@@ -191,8 +192,8 @@ func withProcs(t *testing.T, n int) {
 // until the rest has listed and spilled, replayed by segments after
 // listing; the parts (their rows, order, count, the last marked final) are
 // exactly the serial drain's, with a byte limit alone and with a row cap,
-// for 2, 3 and 8 encoders admitted (the tiny budgets hold the workers to
-// two: segmentBudget); every row passes the guard once (the oracle).
+// for 2, 3 and 8 encoders admitted (the tiny budgets hold what the workers
+// read to the row budget: segReserve); every row passes the guard once (the oracle).
 func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 	engaged := 0
 	for seed := range uint64(16) {
@@ -477,5 +478,137 @@ func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 		if p.final {
 			t.Fatalf("part %d final", i)
 		}
+	}
+}
+
+// queuedSink is partSink whose segments queue their batches to stalled
+// encoders, as the Parquet router's do: each batch's bytes are counted
+// downstream (Shared) from Write until its encoder has taken it, the
+// continued part's queue is the serial part's 16 batches deep, a new
+// part's two. peak is the most counted downstream at once.
+type queuedSink struct {
+	*partSink
+	shared *Shared
+	stall  time.Duration
+	wg     sync.WaitGroup
+	peak   atomic.Int64
+	held   *queuedSeg
+}
+
+type queuedSeg struct {
+	*fakeSeg
+	q *queuedSink
+	c chan [][]schema.Row[tp]
+}
+
+func (s *queuedSink) OpenSegment(ctx context.Context, cont bool) (SegmentSink[tp], error) {
+	out, err := s.partSink.OpenSegment(ctx, cont)
+	if err != nil {
+		return nil, err
+	}
+	depth := 2
+	if cont {
+		depth = 16
+	}
+	g := &queuedSeg{fakeSeg: out.(*fakeSeg), q: s, c: make(chan [][]schema.Row[tp], depth)}
+	s.wg.Go(func() {
+		for b := range g.c {
+			time.Sleep(s.stall)
+			_ = g.fakeSeg.Write(ctx, b)
+			var n int64
+			for _, seg := range b {
+				n += testSchema.RowsBytes(seg)
+			}
+			s.shared.Add(-n)
+		}
+	})
+	return g, nil
+}
+
+func (g *queuedSeg) Write(ctx context.Context, b [][]schema.Row[tp]) error {
+	var n int64
+	for _, seg := range b {
+		n += testSchema.RowsBytes(seg)
+	}
+	g.q.shared.Add(n)
+	for v := g.q.shared.Load(); v > g.q.peak.Load(); v = g.q.shared.Load() {
+		g.q.peak.Store(v)
+	}
+	select {
+	case g.c <- b:
+		return nil
+	case <-ctx.Done():
+		g.q.shared.Add(-n)
+		return context.Cause(ctx)
+	}
+}
+
+func (g *queuedSeg) Close(rowCut bool) {
+	close(g.c)
+	g.fakeSeg.Close(rowCut)
+}
+
+func (g *queuedSeg) Hold(rowCut bool) {
+	g.q.held = g
+	g.fakeSeg.Hold(rowCut)
+}
+
+// close ends the held part's queue and waits for every encoder.
+func (s *queuedSink) close() {
+	if s.held != nil {
+		close(s.held.c)
+	}
+	s.wg.Wait()
+	s.partSink.close()
+}
+
+// TestSegmentsStayWithinBudget: segments replaying spilled frames, some
+// of ranges with 1,000-byte keys among 220-byte ones, into stalled
+// encoders keep what is counted against the row budget (the tree, the
+// encoders' queues, the frames the workers read) within it, but for one
+// frame when nothing else is held (the encoders' queues alone within it);
+// the rows are the serial drain's. Before
+// (sol review 2, P2) every worker queued four-thousand-row batches into
+// its part's queue (16 deep for the continued part) whatever the budget:
+// tens of megabytes downstream against a 4 MiB budget.
+func TestSegmentsStayWithinBudget(t *testing.T) {
+	withProcs(t, 5)
+	countRows = false // the budget in bytes, as the encoders' queues count them
+	defer func() { countRows = true }()
+	const budget = 4 << 20
+	var waits atomic.Int64
+	hookWait = func(site string) {
+		if site == waitSegment {
+			waits.Add(1)
+		}
+	}
+	t.Cleanup(func() { hookWait = nil })
+	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100, long: 3}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	shared := &Shared{}
+	s := &queuedSink{partSink: &partSink{limit: 200_000, encoders: 4}, shared: shared, stall: 10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
+		t.Fatal("rows differ")
+	}
+	sg := st.Segments
+	t.Logf("segments %+v; downstream peak %d; %d waits; spilled %d rows, max buffered %d", sg, s.peak.Load(), waits.Load(), st.SpillRows, st.MaxBuffered)
+	if sg.Reason != SegmentEngaged || sg.Workers < 2 {
+		t.Fatalf("segments %+v", sg)
+	}
+	// A frame of the long keys: a publish batch of them, spilled whole.
+	frame := int64(publishRows) * (1100 + int64(unsafe.Sizeof(schema.Row[tp]{})))
+	if p := s.peak.Load(); p > budget {
+		t.Fatalf("%d bytes downstream at once, budget %d", p, budget)
+	}
+	if sg.MaxHeld > budget+frame || sg.BudgetWaits == 0 || waits.Load() == 0 {
+		t.Fatalf("held %d at most (budget %d), %d budget waits (%d seen)", sg.MaxHeld, budget, sg.BudgetWaits, waits.Load())
 	}
 }

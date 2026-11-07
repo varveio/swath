@@ -75,7 +75,11 @@ type SegmentSink[P any] interface {
 // decoded); Seams the seams checked. Time splits into Read (spill frames
 // read, Decode of it decoding), Write (handing batches to the part, its
 // encoder's queue wait included) and the rest (opening the part, the order
-// guard).
+// guard). BudgetWaits are the times a worker waited for the row budget
+// before reading a spilled frame (segReserve), BudgetWait their time;
+// MaxHeld the most bytes counted against the budget at once while the
+// segments ran: the tree's, the encoders' queues' and the frames the
+// workers hold.
 type SegmentStats struct {
 	Reason              string
 	Segments, Workers   int
@@ -84,6 +88,9 @@ type SegmentStats struct {
 	Time, MaxTime       time.Duration
 	Plan                time.Duration
 	Read, Decode, Write time.Duration
+	BudgetWaits         int64
+	BudgetWait          time.Duration
+	MaxHeld             int64
 }
 
 // Why the segment-parallel replay ran, or not (SegmentStats.Reason).
@@ -94,6 +101,7 @@ const (
 	SegmentSinglePart    = "single_part"    // what was left after listing fits one part
 	SegmentNotPlanned    = "not_planned"    // the sink could not state its rule before the drain ended (part 0 not measured, a recovered boundary ahead)
 	SegmentNotListedDone = "listing_active" // the drain ended before listing did
+	SegmentRowBudget     = "row_budget"     // the row budget cannot hold two workers' largest spilled frames
 )
 
 // minSegmentWorkers and a worker per two processors cap the segment
@@ -109,8 +117,11 @@ const minSegmentWorkers = 8
 // part's writer, admitted by its working set, parquetout.EncoderBytes),
 // one per spare processor (spareProcs: each reads and decodes, with its own
 // zstd decoder), and Options.SegmentWorkers (the descriptors: one spill
-// read each, at a time). Each holds one decoded frame, one batch and its
-// part's short queue (parquetout.segmentQueue).
+// read each, at a time). What they hold is within the row budget
+// (segReserve): a worker reserves a spilled frame's bytes before it reads
+// it, and hands them to the budget's downstream share (Shared, the
+// encoders' queues) when it writes the frame's rows; rows held in memory
+// move from the tree's share to the downstream one as they are written.
 
 // segState is the drainer's account of the segment-parallel replay.
 type segState[P any] struct {
@@ -120,6 +131,10 @@ type segState[P any] struct {
 	// handed on this many rows; it asks again once it has handed on more.
 	waitRows int64
 	st       SegmentStats
+	// held: the budget bytes of the spilled frames the workers have
+	// reserved and not yet written (mu); freed: the tree's bytes the
+	// workers released, written rows held in memory (mu).
+	held, freed int64
 }
 
 // unit is a run of rows still to hand on: an in-memory item's rows, or a
@@ -190,7 +205,6 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	t := time.Now()
 	units, files, released, releasedMeta, nodes, markers := o.flatten()
 	o.mu.Unlock()
-	k = min(k, o.segmentBudget(units))
 	// Every spill file's trailer must count the rows replayed from it
 	// before any segment's part is closed: a part closed is a part the
 	// router may journal.
@@ -214,7 +228,8 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			real++
 		}
 	}
-	if err != nil || !began || real < 2 {
+	tight := err == nil && began && real >= 2 && 2*maxFrame(units) > o.opt.Budget
+	if err != nil || !began || real < 2 || tight {
 		if began {
 			sg.AbandonSegments() // the drainer writes on, the interval cut resumes
 		}
@@ -224,6 +239,8 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			return false, err
 		case !began:
 			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
+		case tight:
+			o.seg.tried, o.seg.st.Reason = true, SegmentRowBudget
 		default:
 			o.seg.tried, o.seg.st.Reason = true, SegmentSinglePart
 		}
@@ -262,7 +279,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	o.released += released
+	o.released += released - o.seg.freed // what the workers released is gone already
 	o.releasedMeta += releasedMeta
 	o.g.nodes.add(-nodes)
 	o.g.markers.add(-markers)
@@ -270,25 +287,69 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	return true, nil
 }
 
-// segmentHold is the batches a segment worker holds at once, in rows of
-// batchRows: the frame it decodes, the batch it gathers, its part's queue
-// (parquetout.segmentQueue, two) and the batch its encoder is writing.
-const segmentHold = 5
-
-// segmentBudget caps the segment workers by the row budget: what they hold
-// beside the tree (segmentHold batches each, at the rows' mean budget
-// bytes) stays within it; at least two.
-func (o *run[R, P]) segmentBudget(units []unit[P]) int {
-	var rows, bytes int64
+// maxFrame is the largest spilled frame's budget bytes among units.
+func maxFrame[P any](units []unit[P]) int64 {
+	var m int64
 	for i := range units {
-		rows += units[i].n
-		bytes += units[i].units
+		if units[i].f != nil {
+			m = max(m, units[i].units)
+		}
 	}
-	if rows == 0 {
-		return 2
+	return m
+}
+
+// segReserve reserves c budget bytes for a spilled frame a segment worker
+// is about to read (mu not held): the tree's bytes, the encoders' queues'
+// (Shared) and the frames reserved already, with c, stay within the
+// budget; past it the worker waits (waitSegment) for the encoders or
+// another worker to release, unless nothing is held beside the tree, when
+// it goes on alone (a frame larger than what the budget leaves still
+// passes, one at a time, as on the serial drain). wait false: false at
+// once instead of waiting.
+func (o *run[R, P]) segReserve(c int64, wait bool, tm *segTimes) (bool, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var t time.Time
+	for {
+		if o.stopped.Load() {
+			return false, context.Cause(o.ctx)
+		}
+		held := o.seg.held
+		if s := o.opt.Shared; s != nil {
+			held += s.Load()
+		}
+		if held == 0 || o.buffered+held+c <= o.opt.Budget {
+			o.seg.held += c
+			o.seg.st.MaxHeld = max(o.seg.st.MaxHeld, o.buffered+held+c)
+			break
+		}
+		if !wait {
+			return false, nil
+		}
+		if t.IsZero() {
+			t = time.Now()
+			o.seg.st.BudgetWaits++
+		}
+		o.waitAt(o.drain, waitSegment)
 	}
-	per := max(1, bytes/rows)
-	return int(max(2, o.opt.Budget/(segmentHold*batchRows*per)))
+	if !t.IsZero() {
+		tm.budget += time.Since(t)
+	}
+	return true, nil
+}
+
+// segRelease returns c reserved bytes, written now (counted downstream),
+// and the tree's bytes tree of in-memory rows written (mu not held).
+func (o *run[R, P]) segRelease(c, tree int64) {
+	if c == 0 && tree == 0 {
+		return
+	}
+	o.mu.Lock()
+	o.seg.held -= c
+	o.buffered -= tree
+	o.seg.freed += tree
+	o.drain.Broadcast()
+	o.mu.Unlock()
 }
 
 // hookSegmenter runs (tests) just before the drainer calls its Segmenter;
@@ -359,7 +420,7 @@ func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error
 }
 
 // segTimes is one segment's time by what it did (SegmentStats).
-type segTimes struct{ read, decode, write time.Duration }
+type segTimes struct{ read, decode, write, budget time.Duration }
 
 // cut cuts units into segments where the sink would close its parts: a
 // unit that cannot hold a boundary (its logical bytes and rows do not reach
@@ -475,6 +536,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 		st.Read += parts[j].read
 		st.Decode += parts[j].decode
 		st.Write += parts[j].write
+		st.BudgetWait += parts[j].budget
 		if !has[j] {
 			continue
 		}
@@ -495,25 +557,52 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 // order guard (the first segment also after the drainer's last key). It
 // returns the rows, the first and last keys, and whether there were any.
 func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentSink[P], tm *segTimes) (n int64, lo, hi string, any bool, err error) {
-	write := func(batch [][]schema.Row[P]) error {
+	// The batch's spilled frames' reserved bytes (held) and the tree bytes
+	// of the in-memory units it finishes (tree): written, the batch's rows
+	// are counted downstream instead.
+	var batch [][]schema.Row[P]
+	var batched int
+	var held, tree int64
+	write := func() error {
+		o.segRelease(0, tree)
+		tree = 0
+		if len(batch) == 0 {
+			return nil
+		}
 		t := time.Now()
 		err := out.Write(o.ctx, batch)
 		tm.write += time.Since(t)
+		o.segRelease(held, 0)
+		batch, batched, held, tree = nil, 0, 0, 0
 		return err
 	}
+	defer func() { o.segRelease(held, 0) }() // on failure
 	prev, have := "", false
 	if first {
 		prev, have = o.last, o.hasLast
 	}
-	var batch [][]schema.Row[P]
-	var batched int
 	for ui := s.u0; ui < s.u1 || (ui == s.u1 && s.r1 > 0); ui++ {
 		if o.stopped.Load() {
 			return 0, "", "", false, context.Cause(o.ctx)
 		}
+		u := &units[ui]
+		if u.f != nil {
+			// The frame's bytes within the budget before it is read: a
+			// batch gathered so far is written first if they are not.
+			ok, err := o.segReserve(u.units, false, tm)
+			if err == nil && !ok {
+				if err = write(); err == nil {
+					_, err = o.segReserve(u.units, true, tm)
+				}
+			}
+			if err != nil {
+				return 0, "", "", false, err
+			}
+			held += u.units
+		}
 		t := time.Now()
-		rs, dec, err := o.rowsTimed(&units[ui])
-		if units[ui].f != nil {
+		rs, dec, err := o.rowsTimed(u)
+		if u.f != nil {
 			tm.read += time.Since(t)
 			tm.decode += dec
 		}
@@ -526,6 +615,9 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		}
 		if ui == s.u1 {
 			b = s.r1
+		}
+		if u.f == nil && b == len(rs) {
+			tree += u.units // its last rows: the tree holds it no longer once written
 		}
 		rs = rs[a:b]
 		if len(rs) == 0 {
@@ -546,16 +638,13 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		o.g.ahead.add(-int64(len(rs)))
 		batch = append(batch, rs)
 		if batched += len(rs); batched >= batchRows {
-			if err := write(batch); err != nil {
+			if err := write(); err != nil {
 				return 0, "", "", false, err
 			}
-			batch, batched = nil, 0
 		}
 	}
-	if len(batch) > 0 {
-		if err := write(batch); err != nil {
-			return 0, "", "", false, err
-		}
+	if err := write(); err != nil {
+		return 0, "", "", false, err
 	}
 	return n, lo, hi, any, nil
 }

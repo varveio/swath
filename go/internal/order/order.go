@@ -344,6 +344,7 @@ const (
 	waitFrontier  = "frontier"  // the drainer: the range it needs is being listed (drain.Wait)
 	waitAhead     = "ahead"     // a worker: nothing queued, the read-ahead at its share of the budget (work.Wait)
 	waitFetch     = "fetch"     // the drainer: its next frame being read by the read-ahead (drain.Wait)
+	waitSegment   = "segment"   // a segment worker: its next spilled frame would take the budget past full (drain.Wait)
 )
 
 // hookWait sees every wait just before it starts (tests; mu held).
