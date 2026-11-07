@@ -247,7 +247,7 @@ nice go test ./internal/replay/s3 -run XXX -fuzz '^FuzzToken$' -fuzztime 2m
 
 | Target | Property |
 |---|---|
-| `s3` `FuzzToken` | `DecodeToken` never panics and answers a non-token with the one 400 `InvalidArgument`; an accepted string is the only spelling of its boundary; a boundary round-trips; every altered token (a character replaced, one or four dropped, one appended, padded, a decoded byte changed) is refused |
+| `s3` `FuzzToken` | `DecodeToken` never panics and answers a non-token with the one 400 `InvalidArgument`; an accepted string is the only spelling of its boundary; a boundary round-trips; a token with a character replaced, a decoded byte changed or padding added is refused (CRC-32 catches every error burst of 32 bits or fewer); one with one or four characters dropped or one appended is refused or is the only spelling of another boundary (the seed `four-dropped-is-a-token` is such a pair) |
 | `s3` `FuzzParseRequest` | `ParseRequest` never panics; every refusal is a 400 `InvalidArgument`; an accepted request has a page of 0 to 1,000, UTF-8 bounds with no NUL where one is refused, and a token that decodes |
 | `s3` `FuzzListingText` | any key, prefix and delimiter render to a listing `encoding/xml` parses; with `encoding-type=url` each echoed value decodes back to its bytes by S3's table (`+` a space); without it each reads back as the key's text with malformed UTF-8 replaced, wherever that text is representable in XML 1.0 (no CR, which the parser folds, and no control character, which S3 writes as a character reference) |
 | `s3` `FuzzErrorText` | an error document carrying any value parses and reads back as the value, under the same representability |

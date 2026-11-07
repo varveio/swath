@@ -118,7 +118,8 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
   flipped or dropped character is refused as S3 refuses it (S3 serves some alterations of its own decoded
-  bytes; this server refuses every one). The checksum covers only the flag and the boundary: it shows a token was
+  bytes; this server refuses every one). A dropped or appended character is accepted only when the shorter or
+  longer payload is by a 1-in-2^32 coincidence the token of another boundary. The checksum covers only the flag and the boundary: it shows a token was
   not altered, not where it came from. No bucket, fixture, process or secret is bound in, so a token survives a
   restart, is accepted by a server on another fixture, and one a client builds for any boundary is accepted
   (one past the fixture's keys gives an empty page), as a `start-after` would be (`TestTokenIsNotBound`). A flat page's token sent with a delimiter resumes
