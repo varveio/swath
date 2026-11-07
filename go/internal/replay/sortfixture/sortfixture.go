@@ -53,6 +53,7 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
@@ -188,6 +189,9 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
 		}
 	}
+	if err := faults.At("captured"); err != nil { // tests: the output replaced during the read
+		return stats, err
+	}
 	objects := c.objects
 	stats.CaptureRows = int64(len(objects) + len(c.others))
 	stats.Objects, stats.Skipped = int64(len(objects)), int64(len(c.others))
@@ -233,6 +237,11 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 // in the workspace, as the lister leaves it. An output another process
 // owns was refused (journal.ErrLocked) by Run without a change.
 func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
+	// Prepare creates data/ and the parts directory: only in the directory
+	// still locked, which reading and sorting the capture may have outlasted.
+	if err := lock.Verify(); err != nil {
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
