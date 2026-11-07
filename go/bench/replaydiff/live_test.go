@@ -170,9 +170,19 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 		if len(rep.Coverage) != cases || sent < cases*3/5 {
 			t.Errorf("%s: %d of %d cases sent: %v", protocol, sent, cases, rep.Coverage)
 		}
-		// This provider knows only the tokens it issued; the replay
-		// decodes an altered token of its own to a position.
-		expected := map[string]bool{protocol + "-07r": true, protocol + "-07s": true}
+		// This provider knows only the tokens it issued and serves an
+		// unknown one as an empty page. The GCS route decodes an altered
+		// token of its own to a position; the S3 route refuses any
+		// alteration (its token carries a checksum), so of the S3 token
+		// mutations only the decoded-byte flip, sent now that the token is
+		// base64 as a whole, differs.
+		expected := map[string]bool{"gcs-07r": true, "gcs-07s": true, "s3-07x": true}
+		if protocol == "s3" {
+			delete(expected, "gcs-07r")
+			delete(expected, "gcs-07s")
+		} else {
+			delete(expected, "s3-07x")
+		}
 		for _, r := range rep.Results {
 			if r.Pass == expected[r.Name] {
 				t.Errorf("%s %s %q: pass %v %s %+v", protocol, r.Kind, r.Name, r.Pass, r.Error, r.diff)
@@ -196,7 +206,8 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 	}
 	for _, protocol := range []string{"s3", "gcs"} {
 		rep := runFakeLive(t, protocol, edit)
-		if rep.Failed <= 2 {
+		// More than the token differences of the faithful run.
+		if base := map[string]int{"s3": 1, "gcs": 2}[protocol]; rep.Failed <= base {
 			t.Errorf("%s: a changed name compared equal", protocol)
 		}
 	}
