@@ -28,6 +28,8 @@ type request struct {
 	// TokenFrom, when set, names a request whose reference answer's
 	// NextContinuationToken is appended to this one's query.
 	TokenFrom string `json:"-"`
+	// Header holds request headers, a name repeated when sent twice.
+	Header [][2]string `json:"-"`
 }
 
 // walk is a token walk: the same request repeated with each answer's

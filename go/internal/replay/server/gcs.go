@@ -197,6 +197,14 @@ func (s *Server) serveOtherRoute(w http.ResponseWriter, r *http.Request, path, r
 		}
 		return true
 	}
+	if s.azureClaims(path, rawQuery) {
+		if hasQueryKey(rawQuery, "list-type") {
+			s.serveEnvelope(w, r, 400, "replay_ambiguous_request")
+		} else {
+			s.serveAzure(w, r, path, rawQuery, time.Now())
+		}
+		return true
+	}
 	if rt.s3 {
 		return false
 	}

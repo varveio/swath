@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -156,9 +157,9 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.StringVar(&f.bucket, "bucket", "", "the bucket name to expose")
 	fs.StringVar(&f.host, "host", "127.0.0.1", "bind host")
 	fs.IntVar(&f.port, "port", 0, "bind port; 0 chooses a free port, reported in the startup line")
-	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs (azure is reserved)")
-	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (reserved: needs azure in --protocols)")
-	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (reserved)")
+	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs, azure")
+	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (default replay; needs azure in --protocols)")
+	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (the Azure ServiceEndpoint)")
 	fs.StringVar(&f.servingMode, "serving-mode", "sorted", "how to serve the fixture: sorted")
 	fs.IntVar(&f.parquetConnections, "parquet-connections", 0, "concurrent fixture page decodes; 0 is max(8, min(32, GOMAXPROCS))")
 	fs.IntVar(&f.maxConcurrentRequests, "max-concurrent-requests", server.DefaultMaxConcurrentRequests,
@@ -303,9 +304,9 @@ func (f *serveFlags) config() (server.Config, error) {
 	if err := server.ValidateProtocols(protocols, f.bucket); err != nil {
 		return cfg, err
 	}
-	cfg.Protocols = protocols
-	if f.azureAccount != "" {
-		return cfg, errors.New("--azure-account requires azure in --protocols")
+	cfg.Protocols, cfg.AzureAccount, cfg.AdvertisedHost = protocols, f.azureAccount, f.advertisedHost
+	if f.azureAccount == "" && slices.Contains(protocols, server.ProtocolAzure) {
+		cfg.AzureAccount = server.DefaultAzureAccount
 	}
 	if f.advertisedHost != "" && !validAdvertisedHost(f.advertisedHost) {
 		return cfg, errors.New("--advertised-host must be a concrete host without scheme or port")
@@ -322,16 +323,13 @@ func (f *serveFlags) config() (server.Config, error) {
 	return cfg, cfg.Validate()
 }
 
-// parseProtocols reads a comma-separated subset of s3, gcs and azure;
-// azure is not built in this binary.
+// parseProtocols reads a comma-separated subset of s3, gcs and azure.
 func parseProtocols(v string) ([]string, error) {
 	var out []string
 	for _, p := range strings.Split(v, ",") {
 		switch p := strings.ToLower(strings.TrimSpace(p)); p {
-		case server.ProtocolS3, server.ProtocolGCS:
+		case server.ProtocolS3, server.ProtocolGCS, server.ProtocolAzure:
 			out = append(out, p)
-		case "azure":
-			return nil, errors.New("--protocols: the azure route is not built yet; this build serves s3 and gcs")
 		default:
 			return nil, errors.New("--protocols must be a comma-separated subset of s3,gcs,azure")
 		}
@@ -452,7 +450,7 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 		"ordering_profile=%s metadata_policy=fixture-plus-synthetic profiles=%s native_endpoints=%s",
 		f.host, srv.Port(), f.bucket, fixture, cfg.ServingMode, readers, inject, decimalString(f.latencyScale),
 		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
-		server.OutputChunkBytes, cfg.FixtureIdentity, store.OrderingProfile, cfg.ProfilesString(),
+		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
 		nativeEndpoints(f, cfg, srv.Port()))
 }
 
@@ -468,6 +466,11 @@ func nativeEndpoints(f *serveFlags, cfg server.Config, port int) string {
 	for _, p := range cfg.Protocols {
 		if p == server.ProtocolGCS {
 			out = append(out, "gcs:"+base+"/storage/v1/b/"+f.bucket+"/o")
+		}
+	}
+	for _, p := range cfg.Protocols {
+		if p == server.ProtocolAzure {
+			out = append(out, "azure:"+base+"/"+cfg.AzureAccount+"/"+f.bucket+"?restype=container&comp=list")
 		}
 	}
 	return strings.Join(out, ",")
