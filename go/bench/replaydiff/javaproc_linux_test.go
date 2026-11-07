@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var childLine = regexp.MustCompile(`child (\d+)`)
@@ -199,7 +201,9 @@ func TestGroupCleanupOwnsItsIDAndRunsOnce(t *testing.T) {
 		t.Fatalf("an exited leader is %q before cleanup, want an unreaped zombie", st)
 	}
 	quick.stop(time.Second)
-	if !quick.clean() || leaderState(pid) != "" || signals.Load() != 0 {
+	// One signal: the final SIGKILL, sent while the zombie still holds
+	// the id.
+	if !quick.clean() || leaderState(pid) != "" || signals.Load() != 1 {
 		t.Fatalf("clean %v, leader %q, %d signals", quick.clean(), leaderState(pid), signals.Load())
 	}
 
@@ -230,4 +234,139 @@ func TestGroupCleanupOwnsItsIDAndRunsOnce(t *testing.T) {
 	out, _ := runBounded(ctx, script(t, dir, "one-shot", "sleep 3600 &\necho \"child $!\"\nsleep 3600\n"))
 	child := childOf(t, out)
 	gone(t, child, child)
+}
+
+// TestObserverFailures pins the exit observer's failures: where waitid is
+// refused (ENOSYS, as under a seccomp policy) the exit is observed from
+// /proc without reaping, so a one-shot command at its deadline is killed
+// and returns at once instead of running its hour; where the leader was
+// reaped elsewhere (ECHILD) ownership is lost and the group's id is never
+// signalled.
+func TestObserverFailures(t *testing.T) {
+	orig := observeExit
+	t.Cleanup(func() { observeExit = orig })
+	dir := t.TempDir()
+
+	signals := ownedSignals(t)
+	observeExit = func(int) error { return unix.ENOSYS }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	out, _ := runBounded(ctx, script(t, dir, "hour", "echo \"child $$\"\nexec sleep 3600\n"))
+	if took := time.Since(start); took > 20*time.Second {
+		t.Errorf("runBounded took %v with waitid refused", took)
+	}
+	child := childOf(t, out)
+	gone(t, child, child)
+	if signals.Load() == 0 {
+		t.Error("the group was never signalled")
+	}
+
+	observeExit = func(int) error { return unix.ECHILD }
+	cmd := exec.Command(script(t, dir, "reaped", "exec sleep 3600\n"))
+	g, err := startGroup(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	<-g.exited
+	before := signals.Load()
+	g.stop(time.Second)
+	g.kill()
+	if signals.Load() != before || g.clean() {
+		t.Errorf("after lost ownership: %d signals, clean %v", signals.Load()-before, g.clean())
+	}
+}
+
+// TestZombieMainThreadKeepsAMember: a group member whose main thread has
+// called pthread_exit is a zombie in /proc/PID/stat while its other thread
+// runs; it still counts as a member, and stopping the group ends it.
+func TestZombieMainThreadKeepsAMember(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not available")
+	}
+	ownedSignals(t)
+	dir := t.TempDir()
+	prog := "import ctypes, threading, time\nthreading.Thread(target=lambda: time.sleep(3600)).start()\nctypes.CDLL(None).pthread_exit(None)\n"
+	if err := os.WriteFile(filepath.Join(dir, "worker.py"), []byte(prog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(dir, "child")
+	cmd := exec.Command(script(t, dir, "launcher", "python3 "+filepath.Join(dir, "worker.py")+" &\necho \"child $!\" > "+pidFile+"\nexec sleep 3600\n"))
+	g, err := startGroup(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.stop(time.Second)
+	var written []byte
+	if !waitFor(func() bool { written, _ = os.ReadFile(pidFile); return childLine.Match(written) }, 10*time.Second) {
+		t.Fatal("no child pid")
+	}
+	child := childOf(t, written)
+	if !waitFor(func() bool { return leaderState(child) == "Z" }, 10*time.Second) {
+		t.Fatalf("the worker's main thread is %q, not a zombie", leaderState(child))
+	}
+	if live, ok := liveProcess(child); !ok || !live {
+		t.Fatalf("a process with a running thread reads live %v ok %v", live, ok)
+	}
+	if any, ok := g.members(); !ok || !any {
+		t.Fatalf("members %v ok %v with the worker's thread running", any, ok)
+	}
+	g.stop(time.Second)
+	if !g.clean() {
+		t.Fatal("the group did not stop")
+	}
+	gone(t, child, child)
+}
+
+// TestForkRelayIsStopped: after the launcher exits, its child keeps
+// forking a successor and exiting, so a single /proc scan can miss the
+// group's only live process. Stopping still ends the chain: the final
+// group SIGKILL is sent while the leader reserves the id, and an empty
+// scan is trusted only twice in a row.
+func TestForkRelayIsStopped(t *testing.T) {
+	ownedSignals(t)
+	dir := t.TempDir()
+	relay := script(t, dir, "relay", "relay() { (sleep 0.01; relay) & }\nrelay\nexit 0\n")
+	for range 5 {
+		g, err := startGroup(exec.Command(relay))
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		g.stop(time.Second)
+		if !g.clean() {
+			t.Fatal("the group did not stop")
+		}
+		// Nothing of the chain is left, now or a little later.
+		for range 10 {
+			if out, err := exec.Command("pgrep", "-f", relay).Output(); err == nil {
+				t.Fatalf("the relay survived: %s", out)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+// TestUnreadableProcIsNotEmpty: a /proc that cannot be read is never
+// taken as an empty group, so the group is kept, not retired; once it can
+// be read again, stopping completes.
+func TestUnreadableProcIsNotEmpty(t *testing.T) {
+	ownedSignals(t)
+	dir := t.TempDir()
+	g, err := startGroup(exec.Command(script(t, dir, "quick", "exit 0\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-g.exited
+	procRoot = filepath.Join(dir, "no-proc")
+	g.stop(0)
+	procRoot = "/proc"
+	if g.clean() {
+		t.Fatal("a group whose processes could not be read was retired")
+	}
+	g.stop(0)
+	if !g.clean() {
+		t.Fatal("the group did not stop once /proc could be read")
+	}
 }
