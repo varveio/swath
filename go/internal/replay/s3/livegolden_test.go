@@ -146,3 +146,18 @@ func TestLiveFirstDuplicateWins(t *testing.T) {
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
 		"O:r/k01 O:r/k02")
 }
+
+// '+' in a query value is a space: S3 answered max-keys=+2 with 400
+// InvalidArgument (its ArgumentValue was " 2"), max-keys=%2B2 with two
+// keys, and prefix=a+b with the echo "a b".
+func TestLivePlusIsASpace(t *testing.T) {
+	if e := liveError(t, "list-type=2&prefix=r/&max-keys=+2"); e.Status != 400 || e.Code != "InvalidArgument" {
+		t.Errorf("max-keys=+2: %v", e)
+	}
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=%2B2",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
+		"O:r/k01 O:r/k02")
+	wantLivePage(t, "list-type=2&prefix=r+k&max-keys=2",
+		"<Name>bkt</Name><Prefix>r k</Prefix><KeyCount>0</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>false</IsTruncated>", "")
+}
