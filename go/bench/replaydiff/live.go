@@ -426,8 +426,8 @@ func (lr *liveRun) token(c liveCase) {
 // mutate_token): flip the last character, cut four, or flip the lowest
 // bit of the last decoded byte of a base64 token. A token that is not
 // base64 has no encoding-preserving flip. The decoding is not strict
-// about the unused bits of the last character, as the campaign's is not
-// (live S3 tokens set them).
+// about the unused bits of the last character or the padding, as the
+// campaign's is not.
 func mutateToken(token, mutation string) (string, error) {
 	switch mutation {
 	case "":
@@ -448,7 +448,9 @@ func mutateToken(token, mutation string) (string, error) {
 		if strings.ContainsAny(token, "-_") {
 			enc = base64.URLEncoding
 		}
-		raw, err := enc.DecodeString(token + strings.Repeat("=", (4-len(token)%4)%4))
+		// Padding is not checked (live S3 tokens carry a stray '='), as
+		// the campaign's decoder does not check it.
+		raw, err := enc.WithPadding(base64.NoPadding).DecodeString(strings.TrimRight(token, "="))
 		if err != nil || strings.ContainsAny(token, "\r\n") {
 			return "", fmt.Errorf("token is not base64; no encoding-preserving mutation exists")
 		}

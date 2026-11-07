@@ -293,7 +293,7 @@ func TestGCSLiveComparatorMetadata(t *testing.T) {
 func TestMutateToken(t *testing.T) {
 	for _, c := range []struct{ token, mutation, want string }{
 		{"abcA", "flip", "abcB"}, {"abcd", "flip", "abcA"}, {"abcdefgh", "truncate", "abcd"}, {"abc", "truncate", "a"},
-		{"AAAA", "flip-decoded", "AAAB"}, {"AA-_", "flip-decoded", "AA--"},
+		{"AAAA", "flip-decoded", "AAAB"}, {"AA-_", "flip-decoded", "AA--"}, {"AAAAAAAB=", "flip-decoded", "AAAAAAAA"},
 	} {
 		if got, err := mutateToken(c.token, c.mutation); err != nil || got != c.want {
 			t.Errorf("%s %s = %q %v, want %q", c.mutation, c.token, got, err, c.want)
