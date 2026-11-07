@@ -267,6 +267,14 @@ so the S3 path is unchanged), and the protocols and profiles in the metrics payl
   `TestRenderGolden` rebuilds five pages the Java server answered over the evidence corpus (control characters,
   a BOM, U+2028, backslashes and quotes, a full projection, delimiter pages with offsets) and requires the same
   bytes. Rows the API cannot represent are refused while rendering with the contract's reasons.
+  `RenderPage` stages the document in a fixed 8,000-byte buffer and writes it to the response sink only where
+  the Java server's JSON generator flushes its own buffer of that size (`jsonWriter`), validating each item and
+  prefix before any of it is staged. Nothing larger than the buffer is held outside the sink, whatever the size
+  of a name or a native metadata value (`TestOversizedNativeMetadataStaysBounded`: a 1 MiB content type under
+  an 8 KiB cap allocates about 8 KiB), and when an invalid row and the response cap meet, the reason is the
+  Java server's: the row's problem unless a flush before it already passed the cap. `TestRenderOrderMatchesTheContract`
+  holds every position of an invalid row in eight layouts (short, 600- to 1,024-byte and mixed names, escapes,
+  a full projection, prefixes) to the cap thresholds the Java renderer answered.
 - **Native metadata.** `NewPager` reads a `swath/gcs-objects/v1` fixture's columns by name through
   `store.Sorted.ReadRows` and `RollupRows` (the same cursor and reader slots); any other store goes through
   `Rows` and the synthetic profile. `TestNativeSchemaRendersTheBucketsMetadata` lists a fake bucket with the
