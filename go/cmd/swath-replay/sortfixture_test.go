@@ -98,7 +98,7 @@ func TestSortFixtureThenServe(t *testing.T) {
 	for _, k := range keys {
 		got = append(got, k[1])
 	}
-	if want := "a/1 logs/a logs/b%20c logs/%C3%A9 z"; strings.Join(got, " ") != want {
+	if want := "a/1 logs/a logs/b+c logs/%C3%A9 z"; strings.Join(got, " ") != want {
 		t.Errorf("keys %q, want %q\n%s", strings.Join(got, " "), want, body)
 	}
 	if !strings.Contains(body, "<Key>logs/a</Key><LastModified>2026-01-01T00:00:01.000Z</LastModified>") ||

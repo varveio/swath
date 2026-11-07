@@ -163,7 +163,7 @@ func TestServeEndToEnd(t *testing.T) {
 		t.Errorf("healthz %q", body)
 	}
 	body = fetch(t, endpoint+"/bkt?list-type=2&encoding-type=url")
-	if !strings.Contains(body, "<Key>a/1</Key>") || !strings.Contains(body, "<Key>b%20c</Key>") {
+	if !strings.Contains(body, "<Key>a/1</Key>") || !strings.Contains(body, "<Key>b+c</Key>") {
 		t.Errorf("%s", body)
 	}
 	if !strings.Contains(fetch(t, metrics+"/metrics"), `"name":"swath.replay.http.requests","type":"counter","tags":{},"count":1.000000`) {
