@@ -132,7 +132,7 @@ type Server struct {
 	httpSrv, metricsSrv *http.Server
 	ln, metricsLn       net.Listener
 	accepting           atomic.Bool
-	metricsConns        atomic.Int64 // open metrics connections
+	metricsConns        atomic.Int64   // open metrics connections
 	conns               *limitListener // the serving listener, bounded
 	s3Active            atomic.Int64
 	routes              *routes // nil: the S3 route answers every request
