@@ -483,12 +483,14 @@ jobs:
         if: steps.changes.outputs.go == 'true'
         env:
           SWATH_REPLAY_FIXTURES: ${{ runner.temp }}/replay-fixtures
-          FIXTURE_PACKAGES: ./internal/replay/store
+          FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence
           FIXTURE_TESTS: >-
             TestJavaWrittenFixtures
             TestSortsTheAzureEvidenceCorpus
             TestStartupCost
             TestSortFixtureMemory
+            TestGCSNativeCapturesMatchReplay
+            TestEvidenceRejectsCorruptedReplayResults
         run: |
           set -euo pipefail
           log="$RUNNER_TEMP/fixture-tests.log"
