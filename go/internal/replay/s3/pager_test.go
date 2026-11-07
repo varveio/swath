@@ -172,8 +172,8 @@ func TestPrefixResumeIsInclusiveAtSuccessor(t *testing.T) {
 	// Successor("a/") is "a0", a real key here: it is listed after the
 	// prefix.
 	res := list(t, pager("a/1", "a/2", "a0", "b"), &Request{Delimiter: b("/"), MaxKeys: 10})
-	if render(res) != "P:a/ O:a0 O:b" {
-		t.Errorf("%s", render(res))
+	if render(res) != "P:a/ O:a0 O:b" || res.Truncated || res.NextToken != "" {
+		t.Errorf("%s truncated=%v token=%q", render(res), res.Truncated, res.NextToken)
 	}
 }
 

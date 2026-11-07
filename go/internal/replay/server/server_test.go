@@ -23,6 +23,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -685,3 +686,52 @@ func TestAttestation(t *testing.T) {
 }
 
 func jsonString(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+// TestCountsNoOverrunWhenInjectionIsOff is the contract's
+// countsNoOverrunWhenInjectionIsOff, with its
+// recordsFixtureListLatencyMetricOnList: without a profile no overrun is
+// counted, however slow the read, and every list is timed.
+func TestCountsNoOverrunWhenInjectionIsOff(t *testing.T) {
+	st := &hookStore{Store: memstore.Keys(memstore.Options{}, "a"), hook: func(context.Context) error { time.Sleep(20 * time.Millisecond); return nil }}
+	s := start(t, config(st))
+	for range 2 {
+		if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
+			t.Fatalf("%d", r.status)
+		}
+	}
+	if count(s, metrics.InjectOverrun, "worker_page") != -1 || count(s, metrics.RequestStageLatency, "s3", "delay") != -1 {
+		t.Errorf("an overrun or a delay was recorded with injection off: %s", s.reg.AppendMeters(nil))
+	}
+	if count(s, metrics.FixtureListLatency) != 2 {
+		t.Errorf("fixture list latency counted %d", count(s, metrics.FixtureListLatency))
+	}
+}
+
+// TestContinuationPagesDrawDistinctJitter is the contract's
+// continuationPagesDrawDistinctJitter: successive pages of one walk differ
+// only in their token, and must not all draw the same jitter.
+func TestContinuationPagesDrawDistinctJitter(t *testing.T) {
+	keys := make([]string, 40)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%03d", i)
+	}
+	p := &s3.Pager{Store: memstore.Keys(memstore.Options{}, keys...)}
+	profile, _ := latency.Parse("worker_page=1000ms", 0.5, 1)
+	seen := map[time.Duration]bool{}
+	query := "list-type=2&max-keys=2"
+	for page := 0; page < 8; page++ {
+		req, err := s3.ParseRequest("bucket", query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := p.List(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[profile.Delay(latency.WorkerPage, 0, req.LatencyKey())] = true
+		query = "list-type=2&max-keys=2&continuation-token=" + s3.PercentEncode([]byte(res.NextToken))
+	}
+	if len(seen) < 6 {
+		t.Errorf("8 continuation pages drew %d distinct delays", len(seen))
+	}
+}

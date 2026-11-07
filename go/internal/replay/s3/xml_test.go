@@ -238,3 +238,23 @@ func TestRenderStopsAtTheCap(t *testing.T) {
 	}
 	o.Close()
 }
+
+// TestRenderSurrogateBytesUnencoded is the lone-UTF-16-surrogate case of
+// the contract's adversarial rendering test in the form a byte key can
+// take: the bytes ED A0 80, a surrogate encoded as UTF-8 (which UTF-8
+// forbids), render as the single U+FFFD the contract's decoder makes of
+// them, and as %ED%A0%80 with encoding-type=url.
+func TestRenderSurrogateBytesUnencoded(t *testing.T) {
+	key := []byte{'k', 0xED, 0xA0, 0x80, 'z'}
+	for _, enc := range []bool{false, true} {
+		req := &Request{Bucket: "b", MaxKeys: 1, EncodingURL: enc}
+		got := string(AppendList(nil, &Result{Request: req, Entries: []Entry{{Object: &store.Object{Key: key}}}}))
+		want := "<Key>k\uFFFDz</Key>"
+		if enc {
+			want = "<Key>k%ED%A0%80z</Key>"
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("url=%v: %s", enc, got)
+		}
+	}
+}
