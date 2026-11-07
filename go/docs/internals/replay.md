@@ -8,7 +8,8 @@ is [../replay.md](../replay.md).
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture | server, latency, store, memstore |
-| `internal/replay/server` | the HTTP server: the S3 route's request flow, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, latency, metrics, store |
+| `internal/replay/server` | the HTTP server: the S3 and Azure routes' request flow, routing between them, admission, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, azure, latency, metrics, store |
+| `internal/replay/azure` | Azure flat List Blobs: request parsing, the UTF-16-ordered cursor, the pager, markers, the XML and error bodies, the request's latency key | s3, store, latency |
 | `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | store |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | – |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances) and the schema-2 JSON | – |
@@ -173,3 +174,104 @@ In the package's own tests the driver compares two Go servers over the same keys
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143) |
 | the Java server | `bench/replaydiff` against the Java launcher (not a unit test: it needs the Java build and a fixture) |
+
+## The Azure route
+
+### Routing
+
+`Server.routeNative` runs before the S3 handler and does nothing unless `azure` is enabled. It claims a request
+whose raw path is `/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded),
+before the method is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that
+also has `list-type` is the replay's ambiguous `400`; an unclaimed one goes to the S3 handler, or, without S3,
+gets the replay's `404`. Both envelopes are JSON (`{"error":"..."}`). The Azure flow takes the same request
+slot, `begin`/`end` store registration, response permit and byte budget as S3 (estimate `2048 + 512 ×
+pageSize`), applies the latency profile as a deadline, and answers shutdown with `503 ServerBusy`.
+
+### Order
+
+Azure lists names in UTF-16 code-unit order. For valid UTF-8 that is byte order except at the first differing
+byte, where lead bytes F0..F4 (a surrogate pair in UTF-16) rank before EE..EF (U+E000 to U+FFFF): byte ranks
+`00..ED, F0..F4, EE..EF, F5..FF` (`rank`, `Compare`). A prefix window is contiguous in both orders, and the
+orders disagree only between an EE/EF branch and an F0..F4 branch under the same parent, so provider order over
+a byte range is the byte order with each such pair of sibling branches swapped. Two pieces build it on the
+byte-sorted store:
+
+- `rangesFrom(lower, inclusive, prefix)` turns a lower bound into byte ranges in provider order: the subtree
+  below the bound and, outward position by position, the siblings that rank after the bound's byte, which are
+  one range except at an EE..F4 byte (two or three). A 4,096-byte bound of U+10000 is 2,049 ranges.
+- `cursor` reads each range in byte order, a batch at a time. When the next item has an EE/EF byte whose F0..F4
+  siblings are still inside its range (`firstSwap`), the range splits into the F0..F4 branch, the EE/EF branch
+  from that item, and the rest; items already read go to their part, so a split costs a read only for a part
+  not yet read. Most parts of a long bound are empty: when a read comes back empty, one probe for the first key
+  at or after the lowest unread store position settles every part below that key (`probeLowest`, `learn`), and
+  parts split later inherit the finding. A page whose names have no such bytes costs the same reads as byte
+  order; the 4,096-byte U+10000 bound costs under ten (`TestLongStartFromCostBound`).
+
+### The pager
+
+`Pager.List` takes the later, in provider order, of the prefix, `startFrom` (inclusive) and the marker's
+boundary; a bound past the prefix window is an empty last page. Flat pages read rows through the cursor. With a
+delimiter, a bound inside a rolled prefix first decides that prefix alone (listed when a name of it is at or
+after the bound, read with a flat cursor over its subtree), then continues at the prefix's provider-order upper
+bound (`upperOf`), so every later range holds whole subtrees; the remaining ranges are read through the store's
+rollup when it accepts the delimiter (`suppressPrefixAtOrBeforeFloor` false: the range bounds decide membership)
+or a row walk that seeks past each rolled prefix. A page ends one item early to learn truncation; the marker
+resumes after a Blob's name (exclusive) or at a BlobPrefix's `upperOf` (inclusive).
+
+Markers are `az1.` + base64url(flag, progress (always 0), 16 bytes of SHA-256 over the length-prefixed scope,
+boundary). The scope digest is the Java server's, so markers are the same bytes for the same fixture identity
+(`TestMarkerGolden`); decoding accepts padding and spare trailing bits and refuses CR/LF, a foreign scope, a
+flag or progress above 1, and boundaries over 4,096 bytes (`TestMarkerDecodeLeniency`).
+
+### Text and the wire
+
+The raw query is read as UTF-8 with each maximal ill-formed subsequence one U+FFFD (`requestLineText`; unlike
+the S3 route, valid non-ASCII passes through, which the Java server does on this route). Components are then
+percent-decoded strictly and must be valid UTF-8. The body is appended byte by byte: the BOM and
+`<?xml version="1.0" encoding="utf-8"?>` and a newline, the echoes in the order Prefix, Marker, MaxResults,
+Delimiter (each when the parameter was sent, `MaxResults` as sent), five-character XML escaping, CR in a name as
+`&#13;`, `Encoded="true"` percent-encoding (RFC 3986 unreserved bytes literal, upper-case hex) for a name holding
+U+FFFE or U+FFFF, `Last-Modified` in RFC 1123 at second precision (`TestRenderListGolden` is the Java server's
+answer over the same rows). The route drops the Java server's 254-segment limit on blob names: native Azure lists
+a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
+
+### The driver's Azure section
+
+`replaydiff -route azure` serves both sides with `--protocols s3,azure --azure-account replay` and runs
+`azureMatrix` (both versions; `maxresults` edges and garbage; prefixes at directory and inside-segment depths;
+delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
+characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
+routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
+scope, other version, truncated, flipped, padded), marker walks at `-walks` sizes (default 1, 7, 5000), and a
+seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
+`x-ms-version`, `x-ms-error-code`, `x-ms-client-request-id`, `Allow`, `x-swath-replay-error`), a well-formed
+`x-ms-request-id` and `Date` on each side, the BOM, and the same body bytes after masking the
+`ServiceEndpoint` authority and replacing every marker by its effect (flag, progress, boundary); it counts the
+answers that matched only by effect, which is zero when both servers report the same fixture identity. With
+`-java-args "... --serving-mode duckdb"` and `-go-fixture` it compares the Java server serving an unsorted
+capture with the Go server serving the same rows sorted; `-accept-segment-improvement` then counts the Java
+server's `too_many_segments` refusals answered by the Go route as the known improvement.
+
+### The evidence replay
+
+`azure` `TestAzureEvidenceReplay` (`SWATH_REPLAY_FIXTURES`) extracts `docs/replay-provider-evidence.tar.gz`, serves
+the archive's corpus (names up to 2,010 bytes, sorted with a 4,096-byte key limit and checked against the
+manifest) on the Azure route alone, and replays each capture as the conformance tree's
+`NativeEvidenceReplayTest` does, with a port of its comparators (`evidencecmp_test.go`) whose failure messages
+are spelled as the pins in `azure/replay-expectations.json` spell them. SDK runs are replayed as the requests
+the SDK sends (captured headers, client request ids `prefix-N`). A pinned match must match; a pinned mismatch
+must reproduce or improve; `SWATH_REPLAY_PROVIDER_REPORT=DIR` writes `DIR/azure-outcomes.json`.
+
+### Azure tests
+
+| Contract | Test |
+|---|---|
+| provider order, flat and delimited, against brute force | `azure` `TestProviderOrderMatchesUTF16`, `TestStartFromInsideRolledPrefix` |
+| empty-read settlement cost | `azure` `TestLongStartFromCostBound` |
+| markers | `azure` `TestMarkerGolden`, `TestMarkerDecodeLeniency` |
+| request checks and their order | `azure` `TestParseRefusalOrder`, `TestAcceptRule`, `TestRequestLineText` |
+| bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals` |
+| latency key | `azure` `TestLatencyKeyGolden` |
+| routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
+| driver | `replaydiff` `TestAzureComparator`, `TestAzureDriverAgreesWithItself` |
+| native captures | `azure` `TestAzureEvidenceReplay` (fixture tier) |

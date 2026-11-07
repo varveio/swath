@@ -56,8 +56,9 @@ the Java `swath-replay sort-fixture`.
 | `--write-timeout` | `30s` | response write timeout, counted from the first byte written (an injected delay does not count) |
 | `--slow-request-log-ms` | `$SWATH_REPLAY_SLOW_REQUEST_LOG_MS`, else `-1` | log requests whose own cost reaches this many milliseconds; negative disables |
 | `--serving-mode` | `sorted` | `sorted` only; `duckdb` is refused with the reason |
-| `--protocols` | `s3` | `s3` only; `gcs` and `azure` are reserved names, refused |
-| `--azure-account`, `--advertised-host` | | reserved for the Azure route; `--azure-account` is refused without it |
+| `--protocols` | `s3` | the routes served: `s3`, `azure` or both (below); `gcs` is a reserved name, refused |
+| `--azure-account` | `replay` | the Azure route's account path segment (3 to 24 lower-case letters and digits); refused without `azure` |
+| `--advertised-host` | `--host` | the host the Azure `ServiceEndpoint` and `native_endpoints` name; required for a wildcard bind with `azure` |
 
 The durations take `500ms`, `10s` or ISO-8601 (`PT10S`). A bad value is a usage error (exit 2) naming the
 flag; a fixture that cannot be opened exits 1.
@@ -97,6 +98,52 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - The replay's own refusals carry `x-swath-replay-error` with the reason: `503 ServiceUnavailable` for
   `shutdown`, `response_count_exhausted` and `response_budget_exhausted`, `500 InternalError` for
   `response_too_large`, and `500 InternalError` (`internal`, no detail) when the fixture read fails.
+
+## The Azure route
+
+```bash
+./swath-replay serve --fixture /data/sorted --bucket replay-fixture --protocols s3,azure --azure-account replay \
+  --host 127.0.0.1 --port 19090 &
+curl -H 'x-ms-version: 2026-06-06' 'http://127.0.0.1:19090/replay/replay-fixture?restype=container&comp=list&maxresults=2'
+```
+
+`--protocols s3,azure` serves Azure Blob's flat `List Blobs` beside S3 from the same fixture, store, admission
+and meters: `GET /{account}/{container}?restype=container&comp=list`, where `--bucket` is the container (it must
+be a valid container name) and `--azure-account` the account. A request whose path is `/{account}/{one segment}`
+and whose query has `restype` or `comp` belongs to this route before its method is checked; one that also has
+`list-type` is a replay `400 {"error":"replay_ambiguous_request"}`; every other request stays on the S3 route,
+or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
+
+- `x-ms-version` must be `2026-06-06` or `2026-10-06` and is echoed; anything else is `400 InvalidHeaderValue`.
+  `x-ms-client-request-id` (at most 1,024 bytes, no CR or LF) is echoed. `Accept` must allow `application/xml`.
+- Parameters: `prefix`, `delimiter` (any string), `marker`, `maxresults` (1 to 2,147,483,647 ASCII digits; a page
+  holds at most 5,000, the default; the value is echoed as sent), `startFrom` (inclusive), `timeout` (1 to
+  3,600), and an empty `include`. A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
+  malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
+  and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
+  matrix in [`../../docs/replay-provider-conformance.md`](../../docs/replay-provider-conformance.md) records.
+  `+` is a literal plus. Raw non-ASCII bytes in the query are read as UTF-8.
+- Names are listed in UTF-16 code-unit order, as live Azure lists them; the fixture stays byte-sorted
+  ([internals/replay.md](internals/replay.md#the-azure-route)). With a delimiter, `Blob` and `BlobPrefix` entries
+  interleave in that order, and a `startFrom` inside a rolled prefix keeps the prefix only when one of its names
+  is at or after `startFrom`.
+- `NextMarker` is `az1.` and base64url of the resume point, bound to the listing scope (account, container,
+  version, prefix, delimiter, `startFrom`, fixture identity): a marker used with another scope is
+  `400 InvalidQueryParameterValue`. Markers are the Java server's bytes for the same fixture identity.
+- Every body, errors included, starts with a UTF-8 byte order mark before the XML declaration. `Blob` carries
+  `Name` and synthetic `Properties`: `Last-Modified` (second precision), `Etag` `0x000000000000001`,
+  `Content-Length`, `Content-Type` `application/octet-stream`, `BlockBlob`, `Hot` (inferred), `unlocked`,
+  `available`. A name holding U+FFFE or U+FFFF is sent `Encoded="true"`, percent-encoded. A fixture row the
+  profile cannot render (a control character in a blob name, invalid UTF-8, over 1,024 UTF-16 units, a negative
+  size, a time outside years 1 to 9999) is `500 InternalError` with the reason in `x-swath-replay-error`.
+- Errors are `<Error><Code>X</Code><Message>X</Message></Error>` with `x-ms-error-code`; `HEAD` is refused
+  (`400`, no body) and other methods are `405 UnsupportedHttpVerb` with `Allow: GET`. Overload is
+  `503 ServerBusy`. Answers carry `x-ms-request-id` (`replay-` and a counter) and `Date`.
+- The injected latency profile applies alike: a delimiter request is a structure probe, `maxresults=1` a pivot
+  probe.
+
+Unlike the Java server, a name of more than 254 `/`-separated segments is listed: native Azure lists one (the
+evidence archive's capture `azure-12a`), where the Java server answers `500 too_many_segments`.
 
 ## Injected latency
 
@@ -173,11 +220,13 @@ either server.
 go build -o /tmp/replaydiff ./bench/replaydiff
 /tmp/replaydiff -java $JAVA_ROOT/swath-replay/build/install/swath-replay/bin/swath-replay -go ./swath-replay \
   -fixture /data/sorted -bucket bkt -report /tmp/diff.json     # exit 1 and FAIL lines on a difference
+/tmp/replaydiff -route azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
 ```
 
 ## Limits
 
-- One route (S3 `ListObjectsV2`, path-style) and one serving mode (sorted). Version listing, object data and
+- Two routes (S3 `ListObjectsV2`, path-style, and the Azure flat `List Blobs` subset) and one serving mode
+  (sorted). Version listing, object data and
   authentication are not served.
 - The Java server's HTTP layer rejects some request targets before the S3 route sees them (an empty path
   segment such as `//bucket`, an encoded `/` in the path, a raw non-ASCII byte in the path, a `#` in the
