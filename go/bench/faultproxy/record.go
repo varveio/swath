@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"slices"
@@ -317,18 +318,44 @@ func (c *captureWriter) code() int {
 
 // release sends the held answer to the client; one whose body went past
 // limit is answered 502, marked as the proxy marks its own, never cut.
+//
+// The client is a listing client, never a browser, but the body is the
+// provider's and passes through unread, so it is sent with a Content-Type
+// set here and never sniffed: the provider's own type, unless it is an
+// HTML one (served as text/plain: no listing API answers HTML, and the
+// recording keeps the provider's header as it was), and
+// application/octet-stream when the provider named none (net/http would
+// otherwise sniff one from the bytes, text/html included), with
+// X-Content-Type-Options: nosniff.
 func (c *captureWriter) release(limit int64) {
+	w := c.ResponseWriter
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
 	if c.over {
-		h := c.Header()
 		clear(h)
+		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set(faulttest.BodyLimitHeader, strconv.FormatInt(limit, 10))
 		h.Set("Content-Type", "text/plain; charset=utf-8")
-		c.ResponseWriter.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(c.ResponseWriter, "faultproxy: the answer's body is over %d bytes\n", limit)
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintf(w, "faultproxy: the answer's body is over %d bytes\n", limit)
 		return
 	}
-	c.ResponseWriter.WriteHeader(c.code())
-	_, _ = c.ResponseWriter.Write(c.body.Bytes())
+	h.Set("Content-Type", servedType(h.Get("Content-Type")))
+	w.WriteHeader(c.code())
+	_, _ = w.Write(c.body.Bytes())
+}
+
+// servedType is the Content-Type the client is sent for a provider
+// answer of type ct.
+func servedType(ct string) string {
+	if ct == "" {
+		return "application/octet-stream"
+	}
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil || mt == "text/html" || mt == "application/xhtml+xml" {
+		return "text/plain; charset=utf-8"
+	}
+	return ct
 }
 
 // Hijack lets the proxy reset the connection; the exchange is recorded

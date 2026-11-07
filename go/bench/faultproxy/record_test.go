@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -312,5 +313,62 @@ func TestRecordBodyLimit(t *testing.T) {
 	}
 	if err := rec.Close(context.Background()); err == nil || !strings.Contains(err.Error(), "2 answers were over the body limit") {
 		t.Errorf("close: %v", err)
+	}
+}
+
+// TestRecordReleasesWithAContentType: the client is sent the provider's
+// body with a Content-Type set and X-Content-Type-Options: nosniff,
+// never a sniffed type: the provider's own type, application/octet-stream
+// when it named none (the body below would sniff as text/html), and
+// text/plain for an HTML type; the recording keeps the provider's
+// headers as they were.
+func TestRecordReleasesWithAContentType(t *testing.T) {
+	const page = "<html><body><script>x</script></body></html>"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch ct := r.URL.Query().Get("ct"); ct {
+		case "":
+			w.Header()["Content-Type"] = nil // no type, none sniffed upstream
+		default:
+			w.Header().Set("Content-Type", ct)
+		}
+		io.WriteString(w, page)
+	}))
+	defer upstream.Close()
+	p, err := faulttest.New(upstream.URL, faulttest.Plan{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	front := httptest.NewServer(newRecorder(p, upstream.URL, &out, 1<<20))
+	defer front.Close()
+	for _, c := range []struct{ ct, want, recorded string }{
+		{"application/xml", "application/xml", "application/xml"},
+		{"", "application/octet-stream", ""},
+		{"text/html; charset=utf-8", "text/plain; charset=utf-8", "text/html; charset=utf-8"},
+		{"TEXT/HTML", "text/plain; charset=utf-8", "TEXT/HTML"},
+	} {
+		out.Reset()
+		resp, err := http.Get(front.URL + "/b?ct=" + url.QueryEscape(c.ct))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if got := resp.Header.Get("Content-Type"); got != c.want || resp.Header.Get("X-Content-Type-Options") != "nosniff" || string(b) != page {
+			t.Errorf("%q: served %q nosniff=%q body %q", c.ct, got, resp.Header.Get("X-Content-Type-Options"), b)
+		}
+		x := readExchanges(t, &out)
+		recorded := ""
+		for _, h := range x[0].Response.Headers {
+			if h.Name == "Content-Type" {
+				recorded = h.Value
+			}
+			if h.Name == "X-Content-Type-Options" {
+				t.Errorf("%q: the recording holds the proxy's nosniff", c.ct)
+			}
+		}
+		if recorded != c.recorded {
+			t.Errorf("%q: recorded %q", c.ct, recorded)
+		}
 	}
 }
