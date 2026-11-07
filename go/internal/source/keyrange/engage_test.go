@@ -416,17 +416,26 @@ func structureEngages(t *testing.T, inline bool) {
 // TestStructureSuppressionInherited: on flat keys inside one folder, with
 // every range probing (StructureOn), the children inherit the count of
 // probes that found no folder, so no chain from the root pays more than
-// 8 and the suppression is mostly inherited.
+// 8 and the suppression is mostly inherited. Whether a probe's result is
+// absorbed before its range splits is a race the engine never waits on
+// (on one core the zero-fan-out results often land late), so the arm
+// that asserts inheritance runs the probes inline (probeInline: each lands
+// before its range's next decision); the timed arm checks only that the
+// listing is complete and no structure pivot is taken.
 func TestStructureSuppressionInherited(t *testing.T) {
 	keys := shapes()["flat"]
-	f := newSorted(keys, false, 1)
-	f.Latency, f.DelimLatency = time.Millisecond, 500*time.Microsecond
-	got, st, _ := runBudget(t, f, Options{PageSize: shapePage, Structure: StructureOn}, 64, 1<<20)
-	if len(got) != len(keys) {
-		t.Fatalf("%d keys", len(got))
-	}
-	if st.Get(cStructureSuppressedInherited) == 0 || st.Get(cSplitPivotStructure) != 0 {
-		t.Fatalf("suppressed %d, inherited %d, structure pivots %d", st.Get(cStructureSuppressed), st.Get(cStructureSuppressedInherited), st.Get(cSplitPivotStructure))
+	for _, inline := range []bool{false, true} {
+		probeInline = inline
+		f := newSorted(keys, false, 1)
+		f.Latency, f.DelimLatency = time.Millisecond, 500*time.Microsecond
+		got, st, _ := runBudget(t, f, Options{PageSize: shapePage, Structure: StructureOn}, 64, 1<<20)
+		probeInline = false
+		if len(got) != len(keys) {
+			t.Fatalf("inline=%v: %d keys", inline, len(got))
+		}
+		if (inline && st.Get(cStructureSuppressedInherited) == 0) || st.Get(cSplitPivotStructure) != 0 {
+			t.Fatalf("inline=%v: suppressed %d, inherited %d, structure pivots %d", inline, st.Get(cStructureSuppressed), st.Get(cStructureSuppressedInherited), st.Get(cSplitPivotStructure))
+		}
 	}
 	// A range that inherited the limit sends nothing.
 	p, err := newTest(newSorted(keys, false, 1), Options{Workers: 4, Structure: StructureOn})
