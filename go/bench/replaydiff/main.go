@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,6 +49,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/s3"
@@ -174,8 +176,17 @@ func rawTarget(t *target, bucket string, r request) string {
 	return strings.NewReplacer("{bucket}", bucket, "{host}", strings.TrimPrefix(t.base, "http://")).Replace(r.Raw)
 }
 
+// wireDeadline bounds a byte-stream request's whole connection.
+var wireDeadline = time.Minute
+
 // doWire sends r's whole byte stream on a connection of its own and
-// returns the last answer read before the connection ends.
+// returns the last answer read before the connection ends. Each answer
+// must be read whole: a body cut short (fewer bytes than its
+// Content-Length, a broken chunk; a body framed by the connection's end
+// is whole when it ends) is an error, as is a successor answer
+// that starts and does not parse, or a connection still open at the
+// deadline. Only a connection that ends (EOF or reset) before any byte of
+// a further answer ends the stream cleanly.
 func (t *target) doWire(bucket string, r request) (*response, error) {
 	host := strings.TrimPrefix(t.base, "http://")
 	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
@@ -183,25 +194,37 @@ func (t *target) doWire(bucket string, r request) (*response, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(time.Minute))
+	conn.SetDeadline(time.Now().Add(wireDeadline))
 	go io.WriteString(conn, r.Wire(bucket, host))
 	br := bufio.NewReader(conn)
 	var last *response
 	for {
+		if _, err := br.Peek(1); err != nil && last != nil && (err == io.EOF || errors.Is(err, syscall.ECONNRESET)) {
+			return last, nil
+		}
 		resp, err := http.ReadResponse(br, nil)
 		if err != nil {
 			if last == nil {
 				return nil, err
 			}
-			return last, nil
+			return nil, fmt.Errorf("after answer %d %s: %w", last.Status, http.StatusText(last.Status), err)
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
-		if err != nil {
-			return last, nil
+		if err != nil && !(closeDelimited(resp) && errors.Is(err, syscall.ECONNRESET)) {
+			return nil, fmt.Errorf("answer %d: its body: %w", resp.StatusCode, err)
 		}
+		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
 	}
+}
+
+// closeDelimited reports whether resp's body ends where the connection
+// does (no Content-Length, not chunked), as net/http's answer to a
+// request it cannot parse is framed. A reset ends such a body as an EOF
+// would: the framing cannot tell a cut one from a whole one. (A server
+// that closes with the client's bytes unread resets the connection.)
+func closeDelimited(resp *http.Response) bool {
+	return resp.ContentLength < 0 && len(resp.TransferEncoding) == 0
 }
 
 // doRaw sends r's raw target as the request line on a connection of its
