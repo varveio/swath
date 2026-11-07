@@ -60,7 +60,7 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`). The serving listener holds at most four times this many connections; one more is closed as soon as it is accepted |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--prefetch-window-rows` | `12500` | the rows a walk's window cache fill ramps to (below); `0` turns the cache off |
-| `--prefetch-max-windows` | `96` | the windows the cache holds, at most this many times `--prefetch-window-rows` rows; `0` turns it off |
+| `--prefetch-max-windows` | `192` | the windows the cache holds, at most this many times `--prefetch-window-rows` rows; `0` turns it off |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
@@ -147,8 +147,13 @@ A paginating client reads the fixture in order, a page at a time. The window cac
 range reads lets one fixture read serve the pages that follow it: when a read's lower bound is the tail of a
 page the server answered before (an S3 continuation token or `start-after`, the GCS and Azure tokens), its fill
 reads four times the rows the previous fill read, up to `--prefetch-window-rows` rounded up to a multiple of the
-page size, and keeps them as a window; the next pages are sliced from the window. Any other read (a first page,
-a probe, a seek) reads only what it asks for, and keeps it only when the fixture had more. A read is answered
+page size, and keeps them as a window; the next pages are sliced from the window. Once a walk's page leaves less
+than a quarter of its window unread, the next window is read ahead in the background (at most half as many at
+once as there are processors, each holding a reader slot while it reads), and a walk that reaches the end of its
+window while that read is in flight waits for it: walks paced alike, such as a fleet under a latency profile,
+otherwise reach their windows' ends together and queue for the reader slots at once
+(`TestWindowCacheReadsAhead`; `server` `TestLoadNoOverrunAtSixtyFourWalks`). Any other read (a first page, a
+probe, a seek) reads only what it asks for, and keeps it only when the fixture had more. A read is answered
 from the windows only when they hold every row its bounds select, from one window or two adjacent ones;
 anything less reads the fixture, so an answer is byte for byte the one a fixture read gives
 (`store` `TestWindowCacheMatchesTheFixture`). A read answered from a window takes no reader slot: the
@@ -157,12 +162,15 @@ rollups, and the GCS route's reads of a `swath/gcs-objects/v1` dataset (which pr
 the fixture.
 
 Windows are evicted least recently used first, past `--prefetch-max-windows` windows or past that many times
-`--prefetch-window-rows` rows; a window's rows are held packed, the keys and each text column in one array
+`--prefetch-window-rows` rows (a walk holds two while it reads the last quarter of one, so the default of 192
+windows serves 96 walks); a window's rows are held packed, the keys and each text column in one array
 apiece (about 130 bytes a row for the canonical schema with 44-byte keys). With the defaults the cache holds
-up to 1.2 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
+up to 2.4 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
 turns the cache off: every read then decodes its pages from the fixture. The Java server reads the same
 settings from the system properties `swath.replay.prefetch.window-rows`, `swath.replay.prefetch.max-windows` and
-`swath.replay.prefetch.enabled`, with the same defaults, and publishes the same meters (below).
+`swath.replay.prefetch.enabled`, with the same window size and 96 windows (it does not read ahead), and
+publishes the same meters (below); a read-ahead is counted as a fill (`prefetch.window.fill`,
+`prefetch.fill.rows`), not as a miss.
 
 ## The Azure route
 

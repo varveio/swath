@@ -262,3 +262,36 @@ func TestWindowCacheHitsTakeNoReaderSlot(t *testing.T) {
 		t.Fatal("a fill past the window was served without a reader slot")
 	}
 }
+
+// TestWindowCacheReadsAhead walks 60 pages of 10 rows through 100-row
+// windows: after its first page (cold) and its first continuation fill,
+// every window the walk enters was read ahead while it read the last
+// quarter of the one before, so the walk's later pages are all hits, and
+// the read-aheads' fills are counted as fills.
+func TestWindowCacheReadsAhead(t *testing.T) {
+	ctx := context.Background()
+	f := fixtures(t)[0]
+	opened, _, err := Open(ctx, f.path, Options{Prefetch: Prefetch{WindowRows: 100, MaxWindows: 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	s := opened.(*Sorted)
+	var counts prefetchMeterCounts
+	var fills atomic.Int64
+	m := counts.meters()
+	m.Prefetch.Fill = func(time.Duration, int) { fills.Add(1) }
+	s.SetMeters(m)
+	var from []byte
+	for page := range 60 {
+		rows, err := s.Rows(ctx, from, from == nil, nil, 10, Projection{})
+		if err != nil || len(rows) != 10 {
+			t.Fatalf("page %d: %d rows, %v", page, len(rows), err)
+		}
+		from = rows[len(rows)-1].Key
+	}
+	if counts.cold.Load() != 1 || counts.continuation.Load() != 1 || counts.hits.Load() != 58 || fills.Load() < 7 {
+		t.Fatalf("cold %d continuation %d hits %d fills %d; want 1, 1, 58 and the read-aheads' fills",
+			counts.cold.Load(), counts.continuation.Load(), counts.hits.Load(), fills.Load())
+	}
+}

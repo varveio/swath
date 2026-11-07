@@ -288,8 +288,14 @@ func (s *Sorted) DelimitedRollup(ctx context.Context, from []byte, fromInclusive
 	return out, true, nil
 }
 
-// Close closes the fixture's files after reads in progress.
-func (s *Sorted) Close() error { return s.reader.Close() }
+// Close stops the window cache's read-aheads and closes the fixture's
+// files after reads in progress.
+func (s *Sorted) Close() error {
+	if s.prefetch != nil {
+		s.prefetch.close()
+	}
+	return s.reader.Close()
+}
 
 // objectProjection names, per Object field, the column of a schema that
 // holds it; "" leaves the field nil.
