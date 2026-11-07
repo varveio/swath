@@ -175,3 +175,30 @@ func TestGCSWalkSeparatesTokenBytesFromSemantics(t *testing.T) {
 		t.Errorf("token-only difference: %+v %v", res, rep.TokenBytes)
 	}
 }
+
+// TestCompetingFeaturesCompareAllButTheChosenFeature: a competing-feature
+// case passes when the servers name different refused features, and
+// fails on any other difference or a feature the query did not refuse.
+func TestCompetingFeaturesCompareAllButTheChosenFeature(t *testing.T) {
+	c := request{Name: "competing features versions softDeleted", Query: gcsCompetingFeatures["competing features versions softDeleted"]}
+	answer := func(reason string) *response {
+		return &response{400, http.Header{"Content-Type": {"application/json; charset=utf-8"}, "X-Swath-Replay-Error": {reason}}, []byte(`{"error":{}}`)}
+	}
+	for _, x := range []struct {
+		ref, got string
+		name     string
+		ok       bool
+	}{
+		{"feature_versions", "feature_softDeleted", c.Name, true},
+		{"feature_softDeleted", "feature_versions", c.Name, true},
+		{"feature_versions", "feature_filter", c.Name, false},
+		{"feature_versions", "feature_softDeleted", "maxResults=0", false},
+	} {
+		cc := c
+		cc.Name = x.name
+		a, b := answer(x.ref), answer(x.got)
+		if got := competingFeatureOK(cc, a, b, (gcsComparator{}).compare(a, b)); got != x.ok {
+			t.Errorf("%+v: %v", x, got)
+		}
+	}
+}

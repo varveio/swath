@@ -223,9 +223,13 @@ path under `/storage/v1/b/` (another bucket, an escaped spelling, a trailing sla
 A query is read as UTF-8 (a raw ill-formed sequence becomes U+FFFD); `%XX` escapes must be complete and decode
 to valid UTF-8 (`invalid_percent_escape`, `invalid_utf8`); a raw `+` stays `+`. A value over 1,024 bytes
 (2,048 for `pageToken`) is `field_too_long_NAME`. A request with several faults reports the first in this
-order: unknown or repeated names and bad escapes (left to right), the four boolean features (in the table's
-order), `matchGlob`, `filter`, `fields`, `alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths,
-then the token.
+order: unknown or repeated names and bad escapes (left to right), the four boolean features (`versions`,
+`softDeleted`, `includeFoldersAsPrefixes`, `includeTrailingDelimiter`), `matchGlob`, `filter`, `fields`,
+`alt`, `prettyPrint`, `projection`, `maxResults`, the field lengths, then the token. The Java server checks the
+two feature groups in the same order, but within a group it takes its set's iteration order, which is
+randomized each time the JVM starts: with two refused features of one group (say `versions=true&softDeleted=true`
+or `fields=x&filter=x`) its `x-swath-replay-error` names either, while this server's order is fixed as listed.
+The status and the envelope are the same either way.
 
 The answer is `{"kind":"storage#objects"}` plus `items` and `prefixes` when non-empty and `nextPageToken` when
 there is more. Errors are the JSON API envelope `{"error":{"code":N,"message":...,"errors":[{"message":...,

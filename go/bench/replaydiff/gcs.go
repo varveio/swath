@@ -251,10 +251,13 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 						c.Query += "&pageToken=" + gcsEscape(t)
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
-					a, df, err := d.compareOne(c)
+					a, b, df, err := d.gcsCompareOne(c)
 					if err != nil {
 						res.Error = err.Error()
 					} else {
+						if competingFeatureOK(c, a, b, df) {
+							df.OK = true
+						}
 						res.Pass, res.diff = df.OK, &df
 						if tok := gcsNextToken(a.Body); tok != "" {
 							d.refTokens.Store(c.Name, tok)
@@ -273,6 +276,18 @@ func (d *driver) runGCSCases(kind string, cases []request) {
 		close(work)
 		wg.Wait()
 	}
+}
+
+// gcsCompareOne sends c to both servers and compares the answers.
+func (d *driver) gcsCompareOne(c request) (ref, got *response, df diff, err error) {
+	if ref, err = d.ref.do(d.o.bucket, c); err != nil {
+		return nil, nil, df, fmt.Errorf("%s: %w", d.ref.name, err)
+	}
+	if got, err = d.got.do(d.o.bucket, c); err != nil {
+		return ref, nil, df, fmt.Errorf("%s: %w", d.got.name, err)
+	}
+	d.count(2)
+	return ref, got, d.comp.compare(ref, got), nil
 }
 
 func cmpOrPath(p string) string {
@@ -458,7 +473,11 @@ func gcsMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 	raw("raw non-ASCII", "prefix=é&maxResults=3")
 	raw("raw invalid byte", "prefix=a\xff&maxResults=3")
 	raw("raw truncated sequence", "prefix=a\xe1\x80&maxResults=3")
-	raw("two unsupported features", "versions=true&softDeleted=false&maxResults=1")
+	raw("one refused feature beside an accepted one", "versions=true&softDeleted=false&maxResults=1")
+	raw("refused features across the groups", "fields=x&versions=true&maxResults=1")
+	for name, query := range gcsCompetingFeatures {
+		raw(name, query)
+	}
 	// Tokens: malformed, tampered, padded, foreign, and real tokens
 	// replayed with another scope or page size.
 	for _, tok := range []struct{ name, v string }{
@@ -543,6 +562,41 @@ var gcsTokenEdits = map[string]func(string) string{
 }
 
 func editOf(name string) string { return strings.TrimPrefix(name, "token page 2 ") }
+
+// gcsCompetingFeatures are requests with two or more refused features of
+// one group. The Java server picks the reason among them by a set order
+// randomized per JVM launch, so these cases compare everything but the
+// x-swath-replay-error value, which must name one of the refused
+// features (gcsFeatureReasons).
+var gcsCompetingFeatures = map[string]string{
+	"competing features versions softDeleted":    "versions=true&softDeleted=true&maxResults=1",
+	"competing features all four booleans":       "versions=true&softDeleted=true&includeFoldersAsPrefixes=true&includeTrailingDelimiter=true",
+	"competing features fields filter matchGlob": "fields=x&filter=x&matchGlob=x",
+}
+
+// gcsFeatureReasons is the reason header a competing-feature case may
+// carry: feature_NAME for a feature its query refuses.
+func gcsFeatureReasons(query string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range strings.Split(query, "&") {
+		name, value, _ := strings.Cut(part, "=")
+		if value != "false" && value != "" && name != "maxResults" {
+			out["feature_"+name] = true
+		}
+	}
+	return out
+}
+
+// competingFeatureOK passes a competing-feature case whose only
+// difference is a reason header naming another of its refused features.
+func competingFeatureOK(c request, ref, got *response, df diff) bool {
+	if _, ok := gcsCompetingFeatures[c.Name]; !ok || df.OK || ref.Status != got.Status || df.Offset >= 0 || len(df.HeaderDiffs) != 1 {
+		return false
+	}
+	allowed := gcsFeatureReasons(c.Query)
+	return strings.HasPrefix(df.HeaderDiffs[0], "x-swath-replay-error:") &&
+		allowed[values(ref.Header, "x-swath-replay-error")] && allowed[values(got.Header, "x-swath-replay-error")]
+}
 
 func trim(s string) string {
 	if len(s) > 20 {
