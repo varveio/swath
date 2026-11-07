@@ -21,8 +21,11 @@
 # its commit; without it the binary reports no revision, since the context carries no
 # .git). GOFLAGS passes through to the Go toolchain (`--build-arg GOFLAGS=-p=2` bounds the
 # compiler's parallelism on a shared host); GOPROXY names a module mirror where
-# proxy.golang.org is not reachable (go.sum still verifies every module). The builder is the newest patch of the Go line
-# go/go.mod names, digest-pinned; GOTOOLCHAIN=local keeps it from downloading another.
+# proxy.golang.org is not reachable (go.sum still verifies every module).
+#
+# The builder's Go is the `toolchain` line of go/go.mod (go1.26.10), digest-pinned, so the image
+# and CI compile with the same release: actions/setup-go reads that line from go-version-file.
+# Raise both together. GOTOOLCHAIN=local keeps the builder from downloading another.
 FROM --platform=$BUILDPLATFORM golang:1.26.10@sha256:cfa27959837144bf4649802ba38e59daffd0dd2a7994aa83daaf113285b0f551 AS build
 ENV GOTOOLCHAIN=local
 WORKDIR /src/go
