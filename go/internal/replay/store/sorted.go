@@ -6,6 +6,8 @@ package store
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"math"
 	"sync/atomic"
 	"time"
@@ -322,10 +324,15 @@ func (s *Sorted) Close() error {
 }
 
 // objectProjection names, per Object field, the column of a schema that
-// holds it; "" leaves the field nil.
+// holds it; "" leaves the field nil. The Object is the S3 route's view of
+// a row (the other routes read only its key, size and time, or their own
+// columns).
 type objectProjection struct {
 	size, lastModified, etag, storageClass                     string
 	ownerID, ownerDisplayName, checksumAlgorithm, checksumType string
+	// md5 names the column of a GCS recording's MD5 (base64). When set,
+	// the ETag is not the etag column's value but gcsETag of the two.
+	md5 string
 }
 
 // s3Objects is the projection of the S3-shaped schemas: the Java-era
@@ -337,14 +344,47 @@ var s3Objects = objectProjection{
 	checksumAlgorithm: "checksum_algorithm", checksumType: "checksum_type",
 }
 
+// gcsObjects is the S3 view of the GCS recording schema, the answer Cloud
+// Storage's own S3-compatible XML API gives for the same object (probed
+// 2026-11-07, server TestLiveGCSXMLAPIContents): the ETag from the MD5 or
+// the etag (gcsETag), and no StorageClass, Owner or checksum element,
+// which that API's listing never carries, whatever the object's class.
+var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5"}
+
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.
 var objectProjections = map[string]objectProjection{
 	"swath/canonical":         s3Objects,
 	"swath/s3-objects/v1":     s3Objects,
 	"swath-replay/objects/v1": s3Objects,
-	"swath/gcs-objects/v1":    {size: "size", lastModified: "last_modified", etag: "etag", storageClass: "storage_class"},
+	"swath/gcs-objects/v1":    gcsObjects,
 	"swath-local/v1":          {size: "size", lastModified: "last_modified"},
+}
+
+// syntheticGCSETag is the S3 ETag of a GCS recording's row that holds
+// neither an MD5 nor an etag (Cloud Storage lists every object with an
+// etag, so only a recording made otherwise lacks both). Neither 32
+// hexadecimal digits (an MD5, S3's or the XML API's) with an optional
+// "-N" part count (an S3 multipart upload), nor "-" and base64 (the XML
+// API's composite object), it cannot be taken for a real ETag.
+const syntheticGCSETag = "swath-s3-synthetic-v1"
+
+// gcsETag appends the S3 ETag of a GCS object, as the XML API forms it:
+// the MD5 in lower-case hexadecimal when the object has one; otherwise
+// (a composite object) "-" and the JSON API's etag; otherwise
+// syntheticGCSETag. An md5 value that is not the standard base64 of 16
+// bytes is not an MD5, and the etag answers. Empty (a null) is no value.
+func gcsETag(dst []byte, md5, etag string) []byte {
+	if len(md5) == base64.StdEncoding.EncodedLen(16) {
+		var sum [18]byte // DecodedLen(24)
+		if n, err := base64.StdEncoding.Strict().Decode(sum[:], []byte(md5)); err == nil && n == 16 {
+			return hex.AppendEncode(dst, sum[:16])
+		}
+	}
+	if etag != "" {
+		return append(append(dst, '-'), etag...)
+	}
+	return append(dst, syntheticGCSETag...)
 }
 
 func objectProjectionFor(schemaID string) objectProjection {
@@ -355,7 +395,7 @@ func objectProjectionFor(schemaID string) objectProjection {
 // Owner.
 func (p objectProjection) columns(proj Projection) []string {
 	var names []string
-	for _, name := range []string{p.size, p.lastModified, p.etag, p.storageClass, p.checksumAlgorithm, p.checksumType} {
+	for _, name := range []string{p.size, p.lastModified, p.etag, p.storageClass, p.checksumAlgorithm, p.checksumType, p.md5} {
 		if name != "" {
 			names = append(names, name)
 		}
@@ -381,6 +421,17 @@ func (p objectProjection) object(row *sortedparquet.Row) Object {
 		o.LastModified = &t
 	}
 	o.ETag = text(row, p.etag)
+	if p.md5 != "" {
+		var md5, stored string
+		if v := text(row, p.md5); v != nil {
+			md5 = *v
+		}
+		if o.ETag != nil {
+			stored = *o.ETag
+		}
+		etag := string(gcsETag(nil, md5, stored))
+		o.ETag = &etag
+	}
 	o.StorageClass = text(row, p.storageClass)
 	o.OwnerID = text(row, p.ownerID)
 	o.OwnerDisplayName = text(row, p.ownerDisplayName)

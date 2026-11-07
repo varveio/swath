@@ -22,7 +22,7 @@ import (
 // wherever a schema has it: the Object projection's (the S3-shaped
 // schemas' nine columns) and the GCS route's native columns of
 // swath/gcs-objects/v1 (generation, metageneration, md5, crc32c,
-// content_type). A part with such a column of another physical type, a
+// content_type; md5 also gives the S3 route its ETag). A part with such a column of another physical type, a
 // conflicting logical annotation or a repeated one is refused at open
 // (unsupported_schema, naming the column), so no read decodes a value as a
 // type it is not. No schema the store serves uses one of these names for

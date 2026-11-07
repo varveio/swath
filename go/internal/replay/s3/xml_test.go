@@ -279,7 +279,8 @@ func TestRenderSurrogateBytesUnencoded(t *testing.T) {
 }
 
 // TestRowFastPathMatchesUnits renders pages of adversarial objects (XML
-// metacharacters, malformed UTF-8, control characters) through
+// metacharacters, malformed UTF-8, control characters, a GCS recording's
+// ETags) through
 // outputs of many chunk sizes and caps, once with whole Contents elements
 // appended where they fit and once unit by unit, and requires the same
 // bytes, refusal, chunk allocations and percent-encoding counts. Each
@@ -297,6 +298,10 @@ func TestRowFastPathMatchesUnits(t *testing.T) {
 		{Key: []byte("k\x00\x01\t\n\r\x1f\x7f/"), ETag: sp("\x0be"), StorageClass: sp("S\x1f"), OwnerID: sp("\x01")},
 		{Key: []byte(strings.Repeat("long key/", 40)), Size: &size, LastModified: &mod},
 		{Key: []byte("k")},
+		// A GCS recording's S3 view: a composite object's ETag and the
+		// placeholder, with no StorageClass.
+		{Key: []byte("gcs/composite.vcf.gz"), Size: &size, LastModified: &mod, ETag: sp("-CM6Qk6/M3JADEAE=")},
+		{Key: []byte("gcs/none"), Size: &size, LastModified: &mod, ETag: sp("swath-s3-synthetic-v1")},
 	}
 	var entries []Entry
 	for i := 0; i < 3*len(objects); i++ {
