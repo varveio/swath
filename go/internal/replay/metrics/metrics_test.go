@@ -79,45 +79,99 @@ func TestAppendString(t *testing.T) {
 	}
 }
 
-// TestTimerWindowCoversTheLastTwoMinutes pins the timer window: the max
-// and percentiles cover samples from the last 80 to 120 seconds, rotating
-// every 40 seconds, while count and sum cover the meter's life; the
-// one-off timers publish no percentiles.
-func TestTimerWindowCoversTheLastTwoMinutes(t *testing.T) {
-	now := time.Unix(1_000_000, 0)
+// probeField returns one field of the first meter named name in a
+// snapshot.
+func probeField(t *testing.T, r *Registry, name, field string) string {
+	t.Helper()
+	s := string(r.AppendMeters(nil))
+	i := strings.Index(s, `"name":"`+name+`"`)
+	if i < 0 {
+		t.Fatalf("no %s in %s", name, s)
+	}
+	j := strings.Index(s[i:], `"`+field+`":`)
+	if j < 0 {
+		t.Fatalf("no %s.%s in %s", name, field, s)
+	}
+	rest := s[i+j+len(field)+3:]
+	return rest[:strings.IndexAny(rest, ",}")]
+}
+
+// TestWindowsFollowTheJavaRegistry pins the two windows of the Java
+// server's registry (Micrometer's TimeWindowMax and
+// TimeWindowPercentileHistogram under SimpleMeterRegistry: a one-minute
+// expiry, three buffers) with a controlled clock, on the probe the two
+// servers were compared on: 900 ms at 0 s and 10 ms at 79 s. At 79 s the
+// percentiles describe only the 10 ms sample while the maximum is still
+// 900 ms; at 121 s the maximum is still 900 ms and the percentiles are
+// empty; at 181 s the maximum is 10 ms, at 241 s nothing. Count and sum
+// are lifetime totals throughout. A distribution's maximum follows the
+// same window; the one-off timers publish no percentiles.
+func TestWindowsFollowTheJavaRegistry(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	now := start
 	r := NewRegistry()
 	r.clock = func() time.Time { return now }
-	m := r.Get(RequestLatency, "worker_page")
-	m.Record(900 * time.Millisecond)
-	field := func(name string) string {
-		s := string(r.AppendMeters(nil))
-		i := strings.Index(s, `"`+name+`":`)
-		if i < 0 {
-			t.Fatalf("no %s in %s", name, s)
+	at := func(s int) { now = start.Add(time.Duration(s) * time.Second) }
+	timer := r.Get(RequestLatency, "worker_page")
+	dist := r.Get(IndexEntries)
+	timer.Record(900 * time.Millisecond)
+	dist.Observe(900)
+	at(79)
+	timer.Record(10 * time.Millisecond)
+	dist.Observe(10)
+	const name = "swath.replay.request.latency"
+	for _, c := range []struct {
+		at                                 int
+		max, p50, p99, distMax, count, sum string
+	}{
+		{79, "900.000000", "10.000000", "10.000000", "900.000000", "2", "910.000000"},
+		{121, "900.000000", "0.000000", "0.000000", "900.000000", "2", "910.000000"},
+		{181, "10.000000", "0.000000", "0.000000", "10.000000", "2", "910.000000"},
+		{241, "0.000000", "0.000000", "0.000000", "0.000000", "2", "910.000000"},
+	} {
+		at(c.at)
+		got := []string{probeField(t, r, name, "max_ms"), probeField(t, r, name, "p50_ms"), probeField(t, r, name, "p99_ms"),
+			probeField(t, r, "swath.replay.index.entries", "max"), probeField(t, r, name, "count"), probeField(t, r, name, "sum_ms")}
+		want := []string{c.max, c.p50, c.p99, c.distMax, c.count, c.sum}
+		if !slices.Equal(got, want) {
+			t.Errorf("at %d s: max, p50, p99, distribution max, count, sum %v, want %v", c.at, got, want)
 		}
-		rest := s[i+len(name)+3:]
-		return rest[:strings.IndexAny(rest, ",}")]
-	}
-	now = now.Add(79 * time.Second)
-	m.Record(10 * time.Millisecond)
-	if field("max_ms") != "900.000000" || field("p99_ms") != "900.000000" {
-		t.Errorf("at 79 s: max %s p99 %s, want the 900 ms sample", field("max_ms"), field("p99_ms"))
-	}
-	now = now.Add(40 * time.Second) // 119 s: the buffer read still holds the first sample
-	if field("max_ms") != "900.000000" {
-		t.Errorf("at 119 s: max %s, want the 900 ms sample", field("max_ms"))
-	}
-	now = now.Add(2 * time.Second) // 121 s: the buffer read began at 40 s
-	if field("max_ms") != "10.000000" || field("count") != "2" || field("sum_ms") != "910.000000" {
-		t.Errorf("at 121 s: max %s count %s sum %s", field("max_ms"), field("count"), field("sum_ms"))
-	}
-	now = now.Add(windowExpiry)
-	if field("max_ms") != "0.000000" || field("p50_ms") != "0.000000" || field("count") != "2" {
-		t.Errorf("after an idle window: max %s p50 %s count %s", field("max_ms"), field("p50_ms"), field("count"))
 	}
 	r.Get(IndexLoadLatency, "derived").Record(time.Second)
 	if s := string(r.AppendMeters(nil)); !strings.Contains(s, `"tags":{"source":"derived"},"count":1,"sum_ms":1000.000000,"mean_ms":1000.000000,"max_ms":1000.000000,"p50_ms":null,"p99_ms":null}`) {
 		t.Errorf("index load: %s", s)
+	}
+}
+
+// TestWindowRotationRules pins the two rotations' details on their own
+// clocks: the maximum rotates once per minute and clears everything after
+// three idle minutes, re-anchoring its clock to the step; the histogram
+// clears at most three buffers per call and its clock catches up one
+// 20-second step per buffer cleared, so a sample recorded after a long
+// idle spell is cleared again by the next calls until the clock catches
+// up.
+func TestWindowRotationRules(t *testing.T) {
+	m := newWindowMax(0)
+	m.record(0, 5)
+	if m.read(59_999) != 5 || m.read(60_000) != 5 || m.cur != 1 || m.last != 60_000 {
+		t.Errorf("max after one rotation: %+v", m)
+	}
+	m2 := newWindowMax(0)
+	m2.record(0, 5)
+	m2.read(190_000) // 190 s idle: all cleared, the clock re-anchored to 190 - 190 % 60 = 180 s
+	if m2.ring != [windowBuffers]float64{} || m2.cur != 0 || m2.last != 180_000 {
+		t.Errorf("max after an idle spell: %+v", m2)
+	}
+
+	h := newWindowHistogram(0)
+	h.record(0, 1)
+	h.read(600_000) // ten idle minutes: three buffers cleared, the clock at 60 s
+	if h.last != 60_000 || h.ring[h.cur].n != 0 {
+		t.Errorf("histogram after an idle spell: last %d", h.last)
+	}
+	h.record(600_000, 2) // clears three more first, clock at 120 s, then records
+	if p50, _ := h.read(600_000); p50 != 0 || h.last != 180_000 {
+		t.Errorf("a sample after an idle spell survives the catch-up: p50 %d, last %d", p50, h.last)
 	}
 }
 

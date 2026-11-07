@@ -33,7 +33,10 @@ var (
 )
 
 // startServer runs `bin serve args...`, waits for its startup line and its
-// health endpoint, and copies its stderr to logPath.
+// health endpoint, and copies its stderr to logPath. ctx bounds the wait
+// for readiness (ten minutes at most). Once the command has started the
+// process is returned with any error, already stopped, so a caller can
+// confirm it is gone.
 func startServer(ctx context.Context, name, bin string, args []string, logPath string) (*process, error) {
 	cmd := exec.Command(bin, append([]string{"serve"}, args...)...)
 	cmd.Env = os.Environ()
@@ -42,6 +45,9 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 		return nil, err
 	}
 	cmd.Stdout = io.Discard
+	// A descendant that outlives the server and keeps its stderr open
+	// must not keep Wait (and so stop) waiting forever.
+	cmd.WaitDelay = 5 * time.Second
 	detach(cmd)
 	logf, err := os.Create(logPath)
 	if err != nil {
@@ -75,18 +81,23 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 			s.metrics = m[1]
 		}
 	case <-s.exited:
-		return nil, fmt.Errorf("%s exited before its startup line; see %s", name, logPath)
+		return s, fmt.Errorf("%s exited before its startup line; see %s", name, logPath)
 	case <-time.After(10 * time.Minute):
 		s.stop()
-		return nil, fmt.Errorf("%s printed no startup line in 10 minutes; see %s", name, logPath)
+		return s, fmt.Errorf("%s printed no startup line in 10 minutes; see %s", name, logPath)
 	case <-ctx.Done():
 		s.stop()
-		return nil, ctx.Err()
+		return s, fmt.Errorf("%s printed no startup line before its deadline: %w; see %s", name, ctx.Err(), logPath)
 	}
 	if s.metrics != "" {
 		deadline := time.Now().Add(10 * time.Minute)
+		health := &http.Client{Timeout: 5 * time.Second}
 		for {
-			resp, err := http.Get(s.metrics + "/healthz")
+			if ctx.Err() != nil {
+				s.stop()
+				return s, fmt.Errorf("%s: health endpoint not ready before its deadline: %w", name, ctx.Err())
+			}
+			resp, err := health.Get(s.metrics + "/healthz")
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode == 200 {
@@ -95,7 +106,7 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 			}
 			if time.Now().After(deadline) {
 				s.stop()
-				return nil, errors.New(name + ": health endpoint never answered")
+				return s, errors.New(name + ": health endpoint never answered")
 			}
 			time.Sleep(200 * time.Millisecond)
 		}

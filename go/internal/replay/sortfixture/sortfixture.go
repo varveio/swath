@@ -583,6 +583,7 @@ func readCapture(ctx context.Context, name string, c *captured) error {
 			c.objects = append(c.objects, schema.Row[Object]{Key: string(key), Data: Object{
 				Size: values[cSize].Int64(), HasSize: !values[cSize].IsNull(),
 				Mtime: values[cModified].Int64(), HasMtime: !values[cModified].IsNull(),
+				Present:           present(values),
 				ETag:              text(values[cETag]),
 				StorageClass:      text(values[cStorageClass]),
 				OwnerID:           text(values[cOwnerID]),
@@ -608,7 +609,27 @@ func describeValue(v parquet.Value) string {
 	return fmt.Sprintf("%q", v.ByteArray())
 }
 
-// text returns a string column's value, "" (null in the schema) when null.
+// text returns a string column's value, "" when null (Present tells the
+// two apart).
+// present returns the string columns of a capture row that are not null,
+// an empty string included.
+func present(values []parquet.Value) Strings {
+	var set Strings
+	for _, c := range stringColumns {
+		if !values[c.column].IsNull() {
+			set |= c.bit
+		}
+	}
+	return set
+}
+
+// stringColumns pairs the capture's string columns with their bits.
+var stringColumns = [...]struct {
+	column int
+	bit    Strings
+}{{cETag, HasETag}, {cStorageClass, HasStorageClass}, {cOwnerID, HasOwnerID},
+	{cOwnerDisplayName, HasOwnerDisplayName}, {cChecksumAlgorithm, HasChecksumAlgorithm}, {cChecksumType, HasChecksumType}}
+
 func text(v parquet.Value) string {
 	if v.IsNull() {
 		return ""
