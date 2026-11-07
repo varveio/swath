@@ -12,12 +12,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 )
 
@@ -107,6 +109,15 @@ type spiller[P any] struct {
 	rows, frames, bytes, files atomic.Int64
 	logical                    atomic.Int64 // schema.LogicalBytes of the rows written
 	decodeRefused              atomic.Int64 // frames refused at read for decoding past their bound
+
+	// cache, if set, is the attempt's durable spill (durable.go): a range
+	// whose provider declared its span gets a durable file when a slot is
+	// free. codecID names the row codec in a durable file's header.
+	cache   *Cache
+	codecID string
+	// rdec decodes zstd frames of a recovery replay when this run does not
+	// compress (made on first need).
+	rdec *zstd.Decoder
 }
 
 func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress bool, max, reserve int64) (*spiller[P], error) {
@@ -165,6 +176,9 @@ func (s *spiller[P]) close() {
 	s.mu.Unlock()
 	if s.dec != nil {
 		s.dec.Close()
+	}
+	if s.rdec != nil {
+		s.rdec.Close()
 	}
 	if s.check() == nil { // else the pathname names another directory now
 		_ = os.RemoveAll(s.dir)
@@ -230,7 +244,13 @@ func (s *spiller[P]) openReader(f *spillFile) error {
 		lru.r = nil
 	}
 	s.mu.Unlock()
-	fh, err := os.Open(f.path)
+	var fh *os.File
+	var err error
+	if f.d != nil {
+		fh, err = s.cache.root.Open(s.cache.rel(f.d.name))
+	} else {
+		fh, err = os.Open(f.path)
+	}
 	if err != nil {
 		return fmt.Errorf("spill: %w", err)
 	}
@@ -263,11 +283,65 @@ type spillFile struct {
 	// the largest storage a delta frame written declared: a frame read
 	// back that claims more is malformed, refused before any allocation.
 	most, mostOwned atomic.Int64
+
+	// A durable file (d set): its version-2 frames are written through the
+	// output root, crc is the CRC-32C of every byte written (owner only),
+	// capturing is set from its C frame until the seal or an abandon.
+	d                    *Cert
+	crc                  uint32
+	capturing, abandoned bool
+	captureAt            int64 // the C frame's offset
 }
 
 func (s *spiller[P]) file() *spillFile {
 	s.files.Add(1)
 	return &spillFile{path: filepath.Join(s.dir, fmt.Sprintf("%08d.spill", s.seq.Add(1)))}
+}
+
+// durableFile is a new durable file for a range of logical bounds (lo,
+// hi], or nil when no slot is free (the range spills disposably, as
+// without durable spill): the slot and its history are taken without a
+// wait.
+func (s *spiller[P]) durableFile(lo, hi string, open bool) *spillFile {
+	if s.cache == nil || !s.cache.reserve() {
+		return nil
+	}
+	s.files.Add(1)
+	id := randomID()
+	return &spillFile{d: &Cert{id: id, name: fileName(id), lo: lo, hi: hi, open: open, slot: true}}
+}
+
+// capture writes f's C frame, cs: the frames after it are its
+// certificate's rows. It is always admitted (a few bytes).
+func (s *spiller[P]) capture(f *spillFile, cs string) error {
+	off := f.size
+	if err := s.writeFrames(f, nil, frame2(nil, frameCapture, schema.AppendString(nil, cs)), false); err != nil {
+		return err
+	}
+	f.capturing, f.captureAt = true, off
+	f.d.cs = cs
+	return nil
+}
+
+// seal makes a durable file's data durable (its trailer written): the
+// flusher syncs its name with the directory before the record.
+func (s *spiller[P]) seal(f *spillFile) error {
+	err := faults.At("spill-seal")
+	if err == nil {
+		err = s.check()
+	}
+	var fh *os.File
+	if err == nil {
+		fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_WRONLY, 0)
+	}
+	if err == nil {
+		err = errors.Join(faults.Sync(fh), fh.Close())
+	}
+	if err != nil {
+		return fmt.Errorf("spill seal: %w", err)
+	}
+	f.d.bytes, f.d.crc = f.size, f.crc
+	return nil
 }
 
 func (s *spiller[P]) frame(typ byte, body []byte) []byte {
@@ -281,9 +355,21 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 
 // write appends one frame of rows (and, when final, the trailer).
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
+	return s.writeFrames(f, rows, nil, final)
+}
+
+// writeFrames appends, for a durable file's first write, its header; then
+// meta (whole frames, a capture start), the frame of rows and, when final,
+// the trailer (with a durable file's tail).
+func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte, final bool) error {
 	bp := s.buffer()
 	defer s.bufs.Put(bp)
 	buf := (*bp)[:0]
+	if f.d != nil && f.size == 0 {
+		buf = frame2(buf, frameHeader, s.cache.headerBody(f.d, s.codecID))
+	}
+	buf = append(buf, meta...)
+	at := len(buf) // the rows frame's offset in buf
 	var logical int64
 	if len(rows) > 0 {
 		if int64(len(rows)) > f.most.Load() {
@@ -327,26 +413,53 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 		} else {
 			buf = body
 		}
-		binary.LittleEndian.PutUint32(buf[:4], uint32(len(buf)-8))
-		binary.LittleEndian.PutUint32(buf[4:8], crc32.Checksum(buf[8:], spillCRC))
+		if f.d != nil {
+			seal2(buf[at:])
+		} else {
+			binary.LittleEndian.PutUint32(buf[at:at+4], uint32(len(buf)-at-8))
+			binary.LittleEndian.PutUint32(buf[at+4:at+8], crc32.Checksum(buf[at+8:], spillCRC))
+		}
 	}
-	if final {
+	if final && f.d == nil {
 		buf = append(buf, s.frame(frameTrailer, binary.AppendUvarint(nil, uint64(f.written)))...)
+	}
+	var captured int64
+	if f.capturing {
+		captured = int64(len(rows))
+	}
+	if final && f.d != nil {
+		d := f.d
+		off := f.size + int64(len(buf))
+		prior := crc32.Update(f.crc, spillCRC, buf)
+		rowsBefore, capBefore, lastBefore := d.rows, d.captured, d.last
+		d.rows, d.captured = d.rows+int64(len(rows)), d.captured+captured
+		if captured > 0 {
+			d.last = rows[len(rows)-1].Key
+		}
+		buf = frame2(buf, frameTrailer, trailerBody(d, f.captureAt > 0 || f.capturing, off, prior))
+		buf = append(buf, tail(off)...)
+		d.rows, d.captured, d.last = rowsBefore, capBefore, lastBefore
 	}
 	*bp = buf
 	if len(buf) == 0 {
 		return nil
 	}
 	n := int64(len(buf))
-	if !s.admit(n, final) {
+	if !s.admit(n, final || len(rows) == 0) {
 		return errSpillFull
 	}
 	// Each frame opens the file by name: the output must still be the
-	// directory the run owns (two stats per frame).
+	// directory the run owns (two stats per frame). A durable file is
+	// opened through the output root.
 	err := s.check()
 	if err == nil {
 		var fh *os.File
-		if fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		if f.d != nil {
+			fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		} else {
+			fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		}
+		if err == nil {
 			_, err = fh.Write(buf)
 			if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
 				err = errSpillFull // the torn frame is gone: back off as if refused
@@ -373,6 +486,18 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 	}
 	f.size += n
 	f.written += int64(len(rows))
+	if d := f.d; d != nil {
+		f.crc = crc32.Update(f.crc, spillCRC, buf)
+		s.cache.charge(d, n)
+		d.rows += int64(len(rows))
+		if captured > 0 {
+			if d.captured == 0 {
+				d.first = strings.Clone(rows[0].Key)
+			}
+			d.captured += captured
+			d.last = strings.Clone(rows[len(rows)-1].Key)
+		}
+	}
 	if len(rows) > 0 {
 		s.rows.Add(int64(len(rows)))
 		s.frames.Add(1)
@@ -405,6 +530,10 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 			s.live.Add(-n)
 			s.refused.Add(1)
 			s.full.Store(true)
+			// Drained certificates hold credit until K covers them: the
+			// oldest is retired now (its credit returns at its unlink,
+			// through the waker); an undrained file never is.
+			s.cache.evictOne()
 			return false
 		}
 	}
@@ -463,6 +592,9 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 	if size == 0 || size > maxSpillFrame { // checked before allocating
 		s.closeFile(f)
 		return nil, errSpillFrame
+	}
+	if f.d != nil {
+		return s.nextDurable(f, hdr, size)
 	}
 	var payload []byte
 	if s.delta {

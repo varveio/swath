@@ -15,8 +15,13 @@ import (
 var ErrCrash = errors.New("injected crash")
 
 // Points are the crash points the matrix covers, in run order.
-var Points = []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append",
+var Points = []string{"response-read", "split", "range-done", "spill-seal", "spill-ledger-dirsync", "spill-ledger-append",
+	"spill-ledger-sync", "spill-unlink", "encoding", "part-closed", "journal-append",
 	"journal-sync", "recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"}
+
+// RecoveryPoints are the durable spill recovery's crash points, reached on
+// a resume (the repeated-recovery tests).
+var RecoveryPoints = []string{"spill-ledger-truncate", "spill-recovery-retire", "spill-recovery-unlink", "spill-replay"}
 
 var hook atomic.Pointer[func(point string) error]
 
