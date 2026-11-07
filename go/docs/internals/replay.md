@@ -488,7 +488,8 @@ a 255-segment name (`TestRenderRefusals`; evidence capture `azure-12a`).
 `azureMatrix` (both versions; `maxresults` edges and garbage; prefixes at directory and inside-segment depths;
 delimiters `/`, multi-byte, astral, empty; `startFrom` around names, inside rolled prefixes and with EE..F4
 characters including the 4,096-byte U+10000 bound; header, `Accept`, query-grammar and raw-byte refusals;
-routing, HEAD, POST, DELETE), marker cases in which each server resumes with its own marker (page 2, other
+routing, HEAD, POST, DELETE; the routing requests the S3 route answers compare status and headers only, as the
+S3 section holds that route's bodies through its divergence rules), marker cases in which each server resumes with its own marker (page 2, other
 scope, other version, truncated, flipped, padded, progress byte set to 1; each source asks for one result in a scope with at least two
 entries, and a case whose sources agree without a marker is reported as skipped, not passed), marker walks at `-walks` sizes (default 1, 7, 5000), and a
 seeded random set. `azureComparator` requires the same status and classified headers (`Content-Type`,
