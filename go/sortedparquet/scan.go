@@ -6,6 +6,7 @@ package sortedparquet
 import (
 	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -45,34 +46,76 @@ type Range struct {
 // Read returns the rows of rng. It decodes key pages only from the page
 // that can hold From, and value pages only for the rows it returns.
 func (r *Reader) Read(ctx context.Context, rng Range, stats *Stats) ([]Row, error) {
-	if err := r.enter(); err != nil {
+	sink := &rowSink{columns: rng.Columns}
+	if err := r.Scan(ctx, rng, stats, sink); err != nil {
 		return nil, err
+	}
+	sink.flush()
+	return sink.rows, nil
+}
+
+// ColumnSink receives the rows of a Scan column by column, one run of
+// consecutive rows of a row group at a time: Keys starts a run, then each
+// column of Range.Columns, in order, is given by Values calls or one
+// Missing call.
+type ColumnSink interface {
+	// Keys starts a run with its rows' keys, which the sink may keep
+	// (they share one allocation, each capped at its own end).
+	Keys(keys [][]byte)
+	// Values gives the next values of column c (an index into
+	// Range.Columns) for the run's rows, in row order; the run's rows take
+	// one or more calls. The values alias page buffers and are valid only
+	// until the call returns: a sink copies what it keeps.
+	Values(c int, values []parquet.Value)
+	// Missing reports that the run's part lacks column c: it is null for
+	// the run's rows.
+	Missing(c int)
+}
+
+// Scan reads the rows of rng as Read does and hands them to sink, without
+// cloning a value or building a row.
+func (r *Reader) Scan(ctx context.Context, rng Range, stats *Stats, sink ColumnSink) error {
+	if err := r.enter(); err != nil {
+		return err
 	}
 	defer r.leave()
 	if stats == nil {
 		stats = new(Stats)
 	}
 	if rng.Limit <= 0 || len(r.groups) == 0 {
-		return nil, nil
+		return nil
 	}
-	var out []Row
+	n := 0
 	from, inclusive := rng.From, rng.FromInclusive
 	var last []byte
-	for g := r.groupFor(from); g < len(r.groups) && len(out) < rng.Limit; g++ {
+	for g := r.groupFor(from); g < len(r.groups) && n < rng.Limit; g++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		grp := r.groups[g]
 		if rng.To != nil && bytes.Compare(grp.first, rng.To) >= 0 {
 			break
 		}
-		rows, done, err := r.readGroup(ctx, grp, from, inclusive, rng, rng.Limit-len(out), last, stats)
+		keys, start, done, err := r.readKeys(ctx, grp, from, inclusive, rng, rng.Limit-n, last, stats)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, rows...)
-		if len(rows) > 0 {
-			last = rows[len(rows)-1].Key
+		if len(keys) > 0 {
+			sink.Keys(keys)
+			p := r.parts[grp.part]
+			for c, name := range rng.Columns {
+				column, ok := p.leaves[name]
+				if !ok {
+					sink.Missing(c)
+					continue
+				}
+				err := p.readColumnInto(ctx, grp.physical, column, start, len(keys), stats, func(values []parquet.Value) { sink.Values(c, values) })
+				if err != nil {
+					return fmt.Errorf("%s row group %d column %s: %w", p.name, grp.physical, name, err)
+				}
+			}
+			n += len(keys)
+			last = keys[len(keys)-1]
 		}
 		if done {
 			break
@@ -80,56 +123,89 @@ func (r *Reader) Read(ctx context.Context, rng Range, stats *Stats) ([]Row, erro
 		// Later groups are read from their first row.
 		from, inclusive = nil, true
 	}
-	return out, nil
+	return nil
 }
 
-// readGroup reads up to want rows of one row group at or after from; done
-// reports that the range's upper bound was reached.
-func (r *Reader) readGroup(ctx context.Context, grp group, from []byte, inclusive bool, rng Range, want int, last []byte, stats *Stats) ([]Row, bool, error) {
+// rowSink builds Read's rows, cloning each value out of its page.
+type rowSink struct {
+	columns []string
+	rows    []Row
+	keys    [][]byte
+	values  [][]parquet.Value
+}
+
+func (s *rowSink) Keys(keys [][]byte) {
+	s.flush()
+	s.keys, s.values = keys, make([][]parquet.Value, len(s.columns))
+}
+
+func (s *rowSink) Values(c int, values []parquet.Value) {
+	if s.values[c] == nil {
+		s.values[c] = make([]parquet.Value, 0, len(s.keys))
+	}
+	for _, v := range values {
+		s.values[c] = append(s.values[c], v.Clone())
+	}
+}
+
+func (s *rowSink) Missing(int) {}
+
+// flush adds the run's rows.
+func (s *rowSink) flush() {
+	for i := range s.keys {
+		s.rows = append(s.rows, Row{Key: s.keys[i], Columns: s.columns, Values: rowValues(s.values, i)})
+	}
+	s.keys, s.values = nil, nil
+}
+
+// readKeys reads the keys of up to want rows of one row group at or after
+// from, and the row of the first; done reports that the range's upper
+// bound was reached. The keys share one allocation, each capped at its own
+// end.
+func (r *Reader) readKeys(ctx context.Context, grp group, from []byte, inclusive bool, rng Range, want int, last []byte, stats *Stats) ([][]byte, int64, bool, error) {
 	p := r.parts[grp.part]
 	index, err := p.keyIndex(ctx, grp.physical)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	cursor := p.keyCursor(ctx, grp.physical, index, stats)
 	defer cursor.close()
 	stats.GroupsOpened++
 	key, row, ok, err := cursor.seek(from, inclusive)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	if ok && last != nil && bytes.Compare(key, last) <= 0 {
-		return nil, false, corrupt("%s row group %d starts at or before the previous row group's keys", p.name, grp.physical)
+		return nil, 0, false, corrupt("%s row group %d starts at or before the previous row group's keys", p.name, grp.physical)
 	}
 	start := row
-	var keys [][]byte
+	var arena []byte
+	var ends []int
 	done := false
-	for ok && len(keys) < want {
+	for ok && len(ends) < want {
 		if rng.To != nil && bytes.Compare(key, rng.To) >= 0 {
 			done = true
 			break
 		}
-		keys = append(keys, bytes.Clone(key))
-		if len(keys) == want {
+		arena = append(arena, key...)
+		ends = append(ends, len(arena))
+		if len(ends) == want {
 			break
 		}
 		key, _, ok, err = cursor.advance()
 		if err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 	}
-	if len(keys) == 0 {
-		return nil, done, nil
+	keys := make([][]byte, len(ends))
+	for i, end := range ends {
+		begin := 0
+		if i > 0 {
+			begin = ends[i-1]
+		}
+		keys[i] = arena[begin:end:end]
 	}
-	values, err := p.readValues(ctx, grp.physical, start, len(keys), rng.Columns, stats)
-	if err != nil {
-		return nil, false, err
-	}
-	rows := make([]Row, len(keys))
-	for i := range keys {
-		rows[i] = Row{Key: keys[i], Columns: rng.Columns, Values: rowValues(values, i)}
-	}
-	return rows, done, nil
+	return keys, start, done, nil
 }
 
 // rowValues returns row i of column-major values, null where a column was

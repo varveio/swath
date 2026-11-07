@@ -225,35 +225,49 @@ func (p *part) readValues(ctx context.Context, physical int, row int64, n int, n
 }
 
 func (p *part) readColumn(ctx context.Context, physical, column int, row int64, n int, stats *Stats) ([]parquet.Value, error) {
-	chunk, err := p.chunk(physical, column)
+	out := make([]parquet.Value, 0, n)
+	err := p.readColumnInto(ctx, physical, column, row, n, stats, func(values []parquet.Value) {
+		for _, value := range values {
+			out = append(out, value.Clone())
+		}
+	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// readColumnInto hands n rows of a value column of a physical row group
+// from row on to emit, a page at a time; the values alias the page's
+// buffers and are valid only until emit returns.
+func (p *part) readColumnInto(ctx context.Context, physical, column int, row int64, n int, stats *Stats, emit func([]parquet.Value)) error {
+	chunk, err := p.chunk(physical, column)
+	if err != nil {
+		return err
 	}
 	// Without an OffsetIndex SeekToRow decodes from the chunk's start,
 	// which is correct, only slower.
 	if _, err := chunk.OffsetIndexFrom(p.at(ctx)); err != nil && !errors.Is(err, parquet.ErrMissingOffsetIndex) {
-		return nil, fmt.Errorf("read offset index: %w", err)
+		return fmt.Errorf("read offset index: %w", err)
 	}
 	pages := chunk.PagesFrom(p.at(ctx))
 	defer func() { _ = pages.Close() }()
-	out := make([]parquet.Value, 0, n)
 	var scratch []parquet.Value
-	for next := row; len(out) < n; {
+	for next, done := row, 0; done < n; {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		page, values, err := readPage(pages, next, scratch)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		stats.PagesDecoded++
-		take := min(len(values), n-len(out))
-		for _, value := range values[:take] {
-			out = append(out, value.Clone())
-		}
+		take := min(len(values), n-done)
+		emit(values[:take])
 		parquet.Release(page)
 		scratch = values[:0]
 		next += int64(take)
+		done += take
 	}
-	return out, nil
+	return nil
 }

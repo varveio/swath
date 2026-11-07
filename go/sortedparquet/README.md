@@ -9,7 +9,7 @@ keys. It imports only the standard library and `github.com/parquet-go/parquet-go
 
 | Package | What it is |
 |---|---|
-| `sortedparquet` | the format-neutral core: `Open` over parts given in key order, `Reader.Read` (a bounded range read), `Reader.RollupRead` (a prefix and single-byte-delimiter skip-scan), `Successor`, `CommonPrefix`, the refusal vocabulary |
+| `sortedparquet` | the format-neutral core: `Open` over parts given in key order, `Reader.Read` (a bounded range read), `Reader.Scan` (the same read handed to a sink column by column, the values aliasing the decoded pages, for a caller that keeps its own copy), `Reader.RollupRead` (a prefix and single-byte-delimiter skip-scan), `Successor`, `CommonPrefix`, the refusal vocabulary |
 | `sortedparquet/javaera` | the Java tool's sorted output: footer-stamped parts of the 13-column canonical schema |
 | `sortedparquet/format2` | manifest datasets (format 2): `manifest.json` lists the parts with exact base64 key bounds |
 | `sortedparquet/sortedparquettest` | writes small synthetic Java-era parts for tests |
