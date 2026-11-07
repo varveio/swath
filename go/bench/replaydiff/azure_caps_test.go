@@ -60,59 +60,64 @@ func TestAzureSmallCapsAgainstJava(t *testing.T) {
 		t.Fatal(err)
 	}
 	sort := exec.Command(java, "sort-fixture", "--capture", capture, "--output", fixture)
+	detach(sort)
 	if out, err := sort.CombinedOutput(); err != nil {
 		t.Fatalf("java sort-fixture: %v\n%s", err, out)
 	}
 	client := &http.Client{}
 	for _, maxBytes := range []int{256, 4096, server.DefaultMaxResponseBytes} {
-		args := fmt.Sprintf("--parquet-connections 2 --protocols azure --azure-account replay --max-response-bytes %d", maxBytes)
-		jp, err := startServer(context.Background(), "java", java, serveArgs(fixture, "bkt", args), filepath.Join(dir, fmt.Sprintf("java-%d.log", maxBytes)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		st, _, err := store.Open(context.Background(), fixture, store.Options{Readers: 2})
-		if err != nil {
-			jp.stop()
-			t.Fatal(err)
-		}
-		srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 16,
-			ResponseBufferBudget: server.DefaultResponseBufferBudget, MaxResponseBytes: maxBytes, StopTimeout: time.Second,
-			IdleTimeout: time.Minute, WriteTimeout: time.Minute, SlowRequestLog: -1, Store: st, ServingMode: "SORTED",
-			FixtureIdentity: "caps", Protocols: []string{"azure"}, AzureAccount: "replay"})
-		if err == nil {
-			err = srv.Listen()
-		}
-		if err != nil {
-			jp.stop()
-			t.Fatal(err)
-		}
-		go srv.Serve()
-		ref := &target{name: "java", base: jp.endpoint, client: client}
-		got := &target{name: "go", base: fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), client: client}
-		compared := 0
-		for _, prefix := range []string{"", "q", "neg", "c", "y", "ok/", "z"} {
-			for _, size := range []string{"1", "2", "5000"} {
-				for _, delimiter := range []string{"", "/"} {
-					r := request{Method: "GET", Path: azurePath, Query: aq("prefix", prefix, "maxresults", size, "delimiter", delimiter),
-						Header: versionHeader(azureVersions[0])}
-					a, err := ref.do("bkt", r)
-					if err != nil {
-						t.Fatal(err)
-					}
-					b, err := got.do("bkt", r)
-					if err != nil {
-						t.Fatal(err)
-					}
-					compared++
-					if d := (azureComparator{}).compare(a, b); !d.OK {
-						t.Errorf("cap %d %s: %d %s | %d %s: %+v", maxBytes, r.Query, a.Status, values(a.Header, "x-swath-replay-error"),
-							b.Status, values(b.Header, "x-swath-replay-error"), d)
-					}
+		t.Run(fmt.Sprint(maxBytes), func(t *testing.T) {
+			testSmallCap(t, java, dir, fixture, client, maxBytes)
+		})
+	}
+}
+
+// testSmallCap compares the two servers under one cap. Both servers are
+// stopped in cleanups, on every path out of the subtest.
+func testSmallCap(t *testing.T, java, dir, fixture string, client *http.Client, maxBytes int) {
+	args := fmt.Sprintf("--parquet-connections 2 --protocols azure --azure-account replay --max-response-bytes %d", maxBytes)
+	jp := startJava(t, java, serveArgs(fixture, "bkt", args), filepath.Join(dir, fmt.Sprintf("java-%d.log", maxBytes)))
+	st, _, err := store.Open(context.Background(), fixture, store.Options{Readers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.New(server.Config{Bucket: "bkt", Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 16,
+		ResponseBufferBudget: server.DefaultResponseBufferBudget, MaxResponseBytes: maxBytes, StopTimeout: time.Second,
+		IdleTimeout: time.Minute, WriteTimeout: time.Minute, SlowRequestLog: -1, Store: st, ServingMode: "SORTED",
+		FixtureIdentity: "caps", Protocols: []string{"azure"}, AzureAccount: "replay"})
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	if err := srv.Listen(); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { srv.Shutdown(time.Second) })
+	ref := &target{name: "java", base: jp.endpoint, client: client}
+	got := &target{name: "go", base: fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), client: client}
+	compared := 0
+	for _, prefix := range []string{"", "q", "neg", "c", "y", "ok/", "z"} {
+		for _, size := range []string{"1", "2", "5000"} {
+			for _, delimiter := range []string{"", "/"} {
+				r := request{Method: "GET", Path: azurePath, Query: aq("prefix", prefix, "maxresults", size, "delimiter", delimiter),
+					Header: versionHeader(azureVersions[0])}
+				a, err := ref.do("bkt", r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, err := got.do("bkt", r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				compared++
+				if d := (azureComparator{}).compare(a, b); !d.OK {
+					t.Errorf("cap %d %s: %d %s | %d %s: %+v", maxBytes, r.Query, a.Status, values(a.Header, "x-swath-replay-error"),
+						b.Status, values(b.Header, "x-swath-replay-error"), d)
 				}
 			}
 		}
-		t.Logf("cap %d: %d compared", maxBytes, compared)
-		srv.Shutdown(time.Second)
-		jp.stop()
 	}
+	t.Logf("cap %d: %d compared", maxBytes, compared)
 }
