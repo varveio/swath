@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -61,9 +60,7 @@ func TestAzureSmallCapsAgainstJava(t *testing.T) {
 	}
 	sortCtx, cancelSort := context.WithTimeout(context.Background(), javaReady)
 	defer cancelSort()
-	sort := exec.CommandContext(sortCtx, java, "sort-fixture", "--capture", capture, "--output", fixture)
-	detach(sort)
-	if out, err := sort.CombinedOutput(); err != nil {
+	if out, err := runBounded(sortCtx, java, "sort-fixture", "--capture", capture, "--output", fixture); err != nil {
 		t.Fatalf("java sort-fixture: %v\n%s", err, out)
 	}
 	client := &http.Client{Timeout: javaRequests}

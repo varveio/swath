@@ -138,3 +138,33 @@ func (s *process) stop() {
 		<-s.exited
 	}
 }
+
+// waitFor polls done until it holds or within passes.
+func waitFor(done func() bool, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for !done() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
+}
+
+// runBounded runs a one-shot command (the Java sort-fixture) as the
+// servers are run: in a process group of its own, the whole group killed
+// when ctx ends, Wait bounded when a descendant keeps the output pipe
+// open, and any member left after the command returns killed and waited
+// for, so neither a stuck command nor its descendants outlive the caller.
+func runBounded(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	detach(cmd)
+	cmd.Cancel = func() error { return signalGroup(cmd.Process, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if cmd.Process != nil {
+		signalGroup(cmd.Process, syscall.SIGKILL)
+		waitFor(func() bool { return !groupAlive(cmd.Process) }, 10*time.Second)
+	}
+	return out, err
+}
