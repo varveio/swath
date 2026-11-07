@@ -39,6 +39,14 @@ func (h *headCounter) feed(p []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, b := range p {
+		// CR and LF before a head starts are not part of it: net/http
+		// discards them after a request without a body (up to four,
+		// after a POST; elsewhere the request line is malformed and the
+		// connection closes), and the contract's server does not count
+		// them either.
+		if h.cur == 0 && (b == '\r' || b == '\n') {
+			continue
+		}
 		h.cur++
 		h.window = h.window<<8 | uint32(b)
 		if h.window == 0x0d0a0d0a || h.window&0xffff == 0x0a0a {

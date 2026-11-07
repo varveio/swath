@@ -143,3 +143,37 @@ func TestRawHeadsStayAlignedOnAConnection(t *testing.T) {
 		}
 	}
 }
+
+// TestBlankLinesBetweenRequestsAreNotAHead: net/http discards the CR and
+// LF a client sends after a bodyless POST before its next request; the
+// head counter must too, or the stray bytes take the next request's place
+// in the queue. A POST with Content-Length: 0, then CRLFCRLF, then a GET
+// head one byte over the limit: 405 for the POST, 431 for the GET (and a
+// GET of exactly the limit is served), as on the Java server.
+func TestBlankLinesBetweenRequestsAreNotAHead(t *testing.T) {
+	s := start(t, config(memstore.Keys(memstore.Options{}, "a")))
+	post := "POST /bucket?list-type=2 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+	for _, c := range []struct {
+		total, want int
+	}{{8192, 200}, {8193, 431}} {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		go io.WriteString(conn, post+"\r\n\r\n"+padded(c.total, false))
+		br := bufio.NewReader(conn)
+		for i, want := range []int{405, c.want} {
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				t.Fatalf("%d-byte GET, answer %d: %v", c.total, i, err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != want {
+				t.Errorf("%d-byte GET, answer %d: %d, want %d", c.total, i, resp.StatusCode, want)
+			}
+		}
+		conn.Close()
+	}
+}

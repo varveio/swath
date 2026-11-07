@@ -122,6 +122,9 @@ func (t *target) url(bucket string, r request) string {
 }
 
 func (t *target) do(bucket string, r request) (*response, error) {
+	if r.Wire != nil {
+		return t.doWire(bucket, r)
+	}
 	if r.Raw != "" {
 		return t.doRaw(bucket, r)
 	}
@@ -145,6 +148,36 @@ func (t *target) do(bucket string, r request) (*response, error) {
 // target's own host and port (the Host header the request carries).
 func rawTarget(t *target, bucket string, r request) string {
 	return strings.NewReplacer("{bucket}", bucket, "{host}", strings.TrimPrefix(t.base, "http://")).Replace(r.Raw)
+}
+
+// doWire sends r's whole byte stream on a connection of its own and
+// returns the last answer read before the connection ends.
+func (t *target) doWire(bucket string, r request) (*response, error) {
+	host := strings.TrimPrefix(t.base, "http://")
+	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(time.Minute))
+	go io.WriteString(conn, r.Wire(bucket, host))
+	br := bufio.NewReader(conn)
+	var last *response
+	for {
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			if last == nil {
+				return nil, err
+			}
+			return last, nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
+		if err != nil {
+			return last, nil
+		}
+	}
 }
 
 // doRaw sends r's raw target as the request line on a connection of its
