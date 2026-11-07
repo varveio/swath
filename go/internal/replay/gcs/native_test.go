@@ -6,11 +6,13 @@ package gcs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/replay/store"
@@ -22,7 +24,7 @@ import (
 // Go lister (full object resources), serves the dataset it wrote, and
 // requires every item to carry the bucket's own generation,
 // metageneration, etag, storage class, content type and checksums, with
-// size and updated exact, on the flat path and the rollup.
+// size, updated and timeCreated exact, on the flat path and the rollup.
 func TestNativeSchemaRendersTheBucketsMetadata(t *testing.T) {
 	var keys []string
 	for i := range 700 {
@@ -110,8 +112,12 @@ func TestNativeSchemaRendersTheBucketsMetadata(t *testing.T) {
 		if acl, ok := it["acl"].([]any); !ok || len(acl) != 0 || it["bucket"] != "bkt" || it["kind"] != "storage#object" {
 			t.Fatalf("%s: %v", k, it)
 		}
-		if _, ok := it["timeCreated"]; ok {
-			t.Fatalf("%s: timeCreated is not stored, so it is not rendered", k)
+		created, err := time.Parse(time.RFC3339Nano, want["timeCreated"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprint(it["timeCreated"]); got != created.UTC().Format("2006-01-02T15:04:05.000000Z") {
+			t.Fatalf("%s timeCreated: %v, want %v", k, got, want["timeCreated"])
 		}
 	}
 	if !strings.HasSuffix(fmt.Sprint(got[0]["updated"]), ".456789Z") {
@@ -144,6 +150,45 @@ func TestNativeNullContentTypeIsOmitted(t *testing.T) {
 		}
 		if got := strings.Contains(string(body), `"contentType"`); got != (c.want != "") || c.want != "" && !strings.Contains(string(body), c.want) {
 			t.Errorf("native %+v: %s", c.native, body)
+		}
+	}
+}
+
+// TestNativeTimeCreatedIsRenderedWhenStored: a native row's stored
+// creation time is listed as timeCreated, just before updated as live GCS
+// lists it, with updated's six fractional digits; a null (a part written
+// before the column was recorded) and a fixture without GCS metadata list
+// none; a time outside years 0 to 9999 is a fixture problem, as for
+// updated.
+func TestNativeTimeCreatedIsRenderedWhenStored(t *testing.T) {
+	r, err := Parse("bkt", "maxResults=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	micros := func(v int64) *int64 { return &v }
+	for _, c := range []struct {
+		native *Native
+		want   string
+	}{
+		{&Native{TimeCreated: micros(1_700_000_000_123_456)}, `"size":"0","timeCreated":"2023-11-14T22:13:20.123456Z","updated":"1970-01-01T00:00:00.000000Z"`},
+		{&Native{TimeCreated: micros(-1)}, `"timeCreated":"1969-12-31T23:59:59.999999Z","updated"`},
+		{&Native{}, `"size":"0","updated"`},
+		{nil, `"size":"0","updated"`},
+	} {
+		body, err := AppendPage(nil, r, &Page{Items: []Item{{Key: []byte("a"), Native: c.native}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := c.native != nil && c.native.TimeCreated != nil
+		if !strings.Contains(string(body), c.want) || stored != strings.Contains(string(body), "timeCreated") {
+			t.Errorf("native %+v: %s", c.native, body)
+		}
+	}
+	for _, v := range []int64{-62_167_219_200_000_001, 253_402_300_800_000_000} { // before year 0, after year 9999
+		_, err := AppendPage(nil, r, &Page{Items: []Item{{Key: []byte("a"), Native: &Native{TimeCreated: micros(v)}}}})
+		var problem *FixtureProblem
+		if !errors.As(err, &problem) || problem.Reason != "timestamp_out_of_range" {
+			t.Errorf("timeCreated %d: %v", v, err)
 		}
 	}
 }

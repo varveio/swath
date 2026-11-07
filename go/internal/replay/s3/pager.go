@@ -167,7 +167,7 @@ func (p *Pager) listDelimited(ctx context.Context, req *Request, b *bound, pageS
 	// The store may answer the whole rollup in one pass; it declines shapes
 	// it has no fast path for, and the range walk below serves those.
 	rollup, ok, err := p.Store.DelimitedRollup(ctx, cur.key, cur.inclusive, upper, prefix, delimiter, pageSize,
-		store.Projection{Owner: req.FetchOwner}, !cur.token)
+		projection(req), !cur.token)
 	if err != nil {
 		return nil, err
 	}
@@ -271,11 +271,19 @@ func delimitedPage(req *Request, rollup []store.DelimitedEntry, pageSize int) *R
 	return res
 }
 
+// projection is what the route reads: the owner columns for fetch-owner,
+// and LastModified as an object's creation time where the recording holds
+// one, the time an S3 listing of a GCS bucket (Cloud Storage's XML API)
+// gives.
+func projection(req *Request) store.Projection {
+	return store.Projection{Owner: req.FetchOwner, Created: true}
+}
+
 // fetch reads a range and keeps the rows under the request's prefix. With
 // the bounds PrefixUpper gives, the filter removes nothing; it guards a
 // store that returns rows outside the range it was asked for.
 func (p *Pager) fetch(ctx context.Context, lower bound, upper []byte, limit int, req *Request) ([]store.Object, error) {
-	rows, err := p.Store.Rows(ctx, lower.key, lower.inclusive, upper, limit, store.Projection{Owner: req.FetchOwner})
+	rows, err := p.Store.Rows(ctx, lower.key, lower.inclusive, upper, limit, projection(req))
 	if err != nil || len(req.Prefix) == 0 {
 		return rows, err
 	}
