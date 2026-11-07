@@ -206,9 +206,10 @@ func s3Matrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) []request {
 // headers), the unusual ones it lets through to the S3 route (compared in
 // full), and request lines Go's HTTP parser refuses itself (status only).
 // Each name carries its comparison: [headers], [full] or [status]. The
-// documented residuals (docs/replay.md, Limits) are the headers and
-// status cases; an absolute target whose host differs from the Host
-// header is not sent, since this server cannot see the difference.
+// documented residuals (docs/internals/replay-java.md, request framing)
+// are the headers and status cases; an absolute target whose host
+// differs from the Host header is not sent, since this server cannot see
+// the difference.
 func rawTargets() []request {
 	var out []request
 	add := func(method, compare string, targets ...string) {

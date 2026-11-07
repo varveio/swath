@@ -2,7 +2,8 @@
 # order. Derived from the Java server's scrape after the same mix over the synthetic-10k fixture (all three
 # routes), less the meters with no Go counterpart (swath.replay.sort.progress,
 # swath.replay.delimiter.reader_pool.*, and the jvm.*, process.* and system.* meters), plus the
-# swath.replay.handle_cache.* meters of the Go reader's descriptor cache. docs/replay.md lists each difference.
+# swath.replay.handle_cache.* meters of the Go reader's descriptor cache. docs/internals/replay-java.md (the meters
+# side by side) lists each difference.
 swath.replay.delimiter.path counter {"path":"rollup"}
 swath.replay.delimiter.path counter {"path":"walk"}
 swath.replay.delimiter.skipscan.decoded_key_rows distribution {}
