@@ -438,14 +438,7 @@ func (c *Cache) classify(entries map[[16]byte]*entry) error {
 		}
 	}
 	slices.SortFunc(keep, func(a, b *Cert) int { return strings.Compare(a.cs, b.cs) })
-	// Disjointness: certificates of one run cannot overlap (I2); any that
-	// do are all rejected (tests assert none is).
-	overlap := make([]bool, len(keep))
-	for i := 1; i < len(keep); i++ {
-		if prev := keep[i-1]; prev.ceOpen || keep[i].cs < prev.ce {
-			overlap[i-1], overlap[i] = true, true
-		}
-	}
+	overlap := overlaps(keep)
 	kept := keep[:0]
 	for i, d := range keep {
 		if overlap[i] {
@@ -457,6 +450,34 @@ func (c *Cache) classify(entries map[[16]byte]*entry) error {
 	}
 	c.reused = kept
 	return c.retireNow(retire)
+}
+
+// overlaps marks every certificate of keep (ascending by cs) that
+// overlaps another. Certificates of one run cannot overlap (I2), so every
+// member of a connected overlap group is rejected (tests assert none is):
+// a group's reach is the largest ce of its members so far (open: ⊤), so a
+// wide certificate followed by several nested ones marks them all, not
+// only the adjacent pair.
+func overlaps(keep []*Cert) []bool {
+	overlap := make([]bool, len(keep))
+	start := 0 // the current group's first member
+	reach, open := "", false
+	for i, d := range keep {
+		if i > 0 && (open || d.cs < reach) {
+			for j := start; j <= i; j++ {
+				overlap[j] = true
+			}
+			start = i // members before it are marked; extend from here
+		} else {
+			start, reach, open = i, "", false
+		}
+		if d.ceOpen {
+			open = true
+		} else if d.ce > reach {
+			reach = d.ce
+		}
+	}
+	return overlap
 }
 
 // retireNow is recovery's (and Start's) retirement, before the flusher

@@ -1173,3 +1173,36 @@ func TestDurableRecoveryBounds(t *testing.T) {
 		})
 	}
 }
+
+// TestDurableNestedOverlaps: every member of a connected overlap group is
+// rejected, not only adjacent pairs: a wide certificate followed by nested
+// ones, an open-ended one followed by any, and a chain; disjoint ones
+// (adjacent bounds included) after a group are kept.
+func TestDurableNestedOverlaps(t *testing.T) {
+	type iv struct {
+		cs, ce string
+		open   bool
+	}
+	for _, tc := range []struct {
+		name string
+		in   []iv
+		want []bool
+	}{
+		{"nested", []iv{{"a", "z", false}, {"b", "c", false}, {"d", "e", false}}, []bool{true, true, true}},
+		{"open-ended", []iv{{"a", "", true}, {"b", "c", false}, {"x", "y", false}}, []bool{true, true, true}},
+		{"open-ended last", []iv{{"a", "b", false}, {"c", "d", false}, {"c", "", true}}, []bool{false, true, true}},
+		{"nested then disjoint", []iv{{"a", "m", false}, {"b", "c", false}, {"m", "n", false}, {"o", "p", false}}, []bool{true, true, false, false}},
+		{"chain", []iv{{"a", "d", false}, {"c", "f", false}, {"e", "g", false}, {"g", "h", false}}, []bool{true, true, true, false}},
+		{"adjacent", []iv{{"a", "b", false}, {"b", "c", false}, {"c", "", true}}, []bool{false, false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keep := make([]*Cert, len(tc.in))
+			for i, v := range tc.in {
+				keep[i] = &Cert{cs: v.cs, ce: v.ce, ceOpen: v.open}
+			}
+			if got := overlaps(keep); !slices.Equal(got, tc.want) {
+				t.Fatalf("rejected %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
