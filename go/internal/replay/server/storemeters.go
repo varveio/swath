@@ -20,6 +20,51 @@ type meteredStore interface {
 	Files() *sortedparquet.FileCache
 }
 
+// prefetchingStore is a store with a window cache (store.Sorted).
+type prefetchingStore interface {
+	PrefetchStats() (store.PrefetchStats, bool)
+}
+
+// initPrefetchMeters creates the window cache's meters, those the Java
+// server registers at startup among them, and returns the store's hooks
+// into them.
+func (s *Server) initPrefetchMeters(st prefetchingStore) store.PrefetchMeters {
+	r := s.reg
+	hit := r.Get(metrics.PrefetchWindowHit)
+	fill := r.Get(metrics.PrefetchWindowFill)
+	fillRows := r.Get(metrics.PrefetchFillRows)
+	anchors := map[string]*metrics.Meter{}
+	for _, event := range []string{"registered", "claimed", "evicted_before_claim"} {
+		anchors[event] = r.Get(metrics.PrefetchAnchor, event)
+	}
+	evictions := r.Get(metrics.PrefetchWindowEviction)
+	rowBudget := r.Get(metrics.PrefetchWindowRowBudgetEviction)
+	ramp := r.Get(metrics.PrefetchWindowRampCeilingRows)
+	stats := func() store.PrefetchStats { v, _ := st.PrefetchStats(); return v }
+	r.SetGauge(metrics.PrefetchWindowsLive, func() float64 { return float64(stats().Windows) })
+	r.SetGauge(metrics.PrefetchAnchorsLive, func() float64 { return float64(stats().Anchors) })
+	r.SetGauge(metrics.PrefetchRowsLive, func() float64 { return float64(stats().Rows) })
+	return store.PrefetchMeters{
+		Hit:  func(struct{}) { hit.Inc() },
+		Miss: func(reason string) { r.Get(metrics.PrefetchWindowMiss, reason).Inc() },
+		Fill: func(d time.Duration, requested int) {
+			fill.Record(d)
+			fillRows.Observe(float64(requested))
+		},
+		Anchor:      func(event string) { anchors[event].Inc() },
+		RampCeiling: func(rows int) { ramp.Observe(float64(rows)) },
+		Eviction: func(byRows bool) {
+			evictions.Inc()
+			if byRows {
+				rowBudget.Inc()
+			}
+		},
+		Selection: func(reason string) { r.Get(metrics.PrefetchWindowSelection, reason).Inc() },
+		Join:      func(reason string) { r.Get(metrics.PrefetchWindowJoin, reason).Inc() },
+		Uncached:  func(reason string) { r.Get(metrics.PrefetchWindowUncached, reason).Inc() },
+	}
+}
+
 // initStoreMeters creates the fixture and store meters and connects the
 // store's measurements to them. They exist from startup, so a scrape tells
 // a store that has not read from one that is not metered.
@@ -43,6 +88,12 @@ func (s *Server) initStoreMeters() {
 	reseeks := r.Get(metrics.DelimiterSkipScanPageReseeks)
 
 	st, ok := s.cfg.Store.(meteredStore)
+	var prefetch store.PrefetchMeters
+	if c, cached := s.cfg.Store.(prefetchingStore); ok && cached {
+		if _, on := c.PrefetchStats(); on {
+			prefetch = s.initPrefetchMeters(c)
+		}
+	}
 	if !ok {
 		for _, d := range []metrics.Def{metrics.ParquetQueriesInFlight, metrics.ParquetQueriesPeak} {
 			r.SetGauge(d, func() float64 { return 0 })
@@ -64,7 +115,8 @@ func (s *Server) initStoreMeters() {
 			decoded.Observe(float64(stats.KeysDecoded))
 			reseeks.Observe(float64(stats.Reseeks))
 		},
-		Refused: func(reason string) { r.Get(metrics.ServingRefused, reason).Inc() },
+		Refused:  func(reason string) { r.Get(metrics.ServingRefused, reason).Inc() },
+		Prefetch: prefetch,
 	})
 	c := st.Counters()
 	r.SetGauge(metrics.ParquetQueriesInFlight, func() float64 { return float64(c.InFlightReaders.Load()) })

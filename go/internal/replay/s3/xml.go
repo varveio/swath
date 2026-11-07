@@ -6,6 +6,7 @@ package s3
 import (
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
@@ -78,12 +79,13 @@ func RenderList(o *output.Output, res *Result) {
 		fixedElement(o, "IsTruncated", "false")
 	}
 	var ts timestamps
+	var row []byte
 	for _, e := range res.Entries {
 		if o.Err() != nil {
 			return
 		}
 		if e.Object != nil {
-			contents(o, e.Object, req, &ts)
+			row = contents(o, e.Object, req, &ts, row)
 		}
 	}
 	for _, e := range res.Entries {
@@ -99,7 +101,88 @@ func RenderList(o *output.Output, res *Result) {
 	o.ASCII("</ListBucketResult>")
 }
 
-func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps) {
+// rowFastPath is off only in the test that compares the two paths.
+var rowFastPath = true
+
+// contents renders one Contents element. When the whole element fits in
+// the room left in the current chunk it is built in scratch and appended
+// at once: every unit would then be admitted without an allocation, so the
+// bytes, the chunks and the percent-encoding counts are the same as unit
+// by unit (TestRowFastPathMatchesUnits). It returns scratch for reuse.
+func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps, scratch []byte) []byte {
+	if room := o.Room(); room > 0 && rowFastPath {
+		var onePass, fallback int
+		scratch, onePass, fallback = appendContents(scratch[:0], obj, req, ts, room)
+		if len(scratch) <= room {
+			o.AppendRoom(scratch, onePass, fallback)
+			return scratch
+		}
+	}
+	contentUnits(o, obj, req, ts)
+	return scratch
+}
+
+// appendContents appends the Contents element contentUnits renders, and
+// how PercentEncoded would have counted its key with room bytes left in
+// the chunk at the element's start.
+func appendContents(dst []byte, obj *store.Object, req *Request, ts *timestamps, room int) (row []byte, onePass, fallback int) {
+	start := len(dst)
+	dst = append(dst, "<Contents><Key>"...)
+	if req.EncodingURL {
+		if len(obj.Key) <= (room-(len(dst)-start))/3 {
+			onePass = 1
+		} else {
+			fallback = 1
+		}
+		dst = output.AppendPercentEncoded(dst, obj.Key)
+	} else if utf8.Valid(obj.Key) {
+		dst = appendEscaped(dst, obj.Key)
+	} else {
+		dst = appendEscaped(dst, decodeText(obj.Key))
+	}
+	dst = append(dst, "</Key><LastModified>"...)
+	var micros int64
+	if obj.LastModified != nil {
+		micros = obj.LastModified.UnixMicro()
+	}
+	dst = ts.appendMillis(dst, micros)
+	dst = append(dst, "</LastModified>"...)
+	if obj.ETag != nil {
+		dst = append(dst, "<ETag>&quot;"...)
+		dst = appendEscaped(dst, decodeString(*obj.ETag))
+		dst = append(dst, "&quot;</ETag>"...)
+	}
+	if obj.ChecksumAlgorithm != nil {
+		dst = appendTextElement(dst, "ChecksumAlgorithm", *obj.ChecksumAlgorithm)
+	}
+	if obj.ChecksumType != nil {
+		dst = appendTextElement(dst, "ChecksumType", *obj.ChecksumType)
+	}
+	var size int64
+	if obj.Size != nil {
+		size = *obj.Size
+	}
+	dst = append(dst, "<Size>"...)
+	dst = strconv.AppendInt(dst, size, 10)
+	dst = append(dst, "</Size>"...)
+	if obj.StorageClass != nil {
+		dst = appendTextElement(dst, "StorageClass", *obj.StorageClass)
+	}
+	if req.FetchOwner && (obj.OwnerID != nil || obj.OwnerDisplayName != nil) {
+		dst = append(dst, "<Owner>"...)
+		if obj.OwnerID != nil {
+			dst = appendTextElement(dst, "ID", *obj.OwnerID)
+		}
+		if obj.OwnerDisplayName != nil {
+			dst = appendTextElement(dst, "DisplayName", *obj.OwnerDisplayName)
+		}
+		dst = append(dst, "</Owner>"...)
+	}
+	return append(dst, "</Contents>"...), onePass, fallback
+}
+
+// contentUnits renders one Contents element unit by unit.
+func contentUnits(o *output.Output, obj *store.Object, req *Request, ts *timestamps) {
 	o.ASCII("<Contents>")
 	byteElement(o, "Key", obj.Key, req.EncodingURL)
 	o.ASCII("<LastModified>")
@@ -111,7 +194,7 @@ func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps)
 	o.ASCII("</LastModified>")
 	if obj.ETag != nil {
 		o.ASCII("<ETag>&quot;")
-		o.Escaped(decodeText([]byte(*obj.ETag)))
+		o.Escaped(decodeString(*obj.ETag))
 		o.ASCII("&quot;</ETag>")
 	}
 	if obj.ChecksumAlgorithm != nil {
@@ -170,7 +253,7 @@ func closeTag(o *output.Output, name string) {
 
 func textElement(o *output.Output, name, value string) {
 	openTag(o, name)
-	o.Escaped(decodeText([]byte(value)))
+	o.Escaped(decodeString(value))
 	closeTag(o, name)
 }
 
@@ -193,6 +276,8 @@ func byteElement(o *output.Output, name string, raw []byte, encoded bool) {
 	if raw != nil {
 		if encoded {
 			o.PercentEncoded(raw)
+		} else if utf8.Valid(raw) {
+			o.EscapedBytes(raw)
 		} else {
 			o.Escaped(decodeText(raw))
 		}
@@ -206,33 +291,31 @@ func appendTextElement(dst []byte, name, value string) []byte {
 	dst = append(dst, '<')
 	dst = append(dst, name...)
 	dst = append(dst, '>')
-	dst = appendEscaped(dst, decodeText([]byte(value)))
+	dst = appendEscaped(dst, decodeString(value))
 	dst = append(dst, "</"...)
 	dst = append(dst, name...)
 	return append(dst, '>')
 }
 
 // appendEscaped escapes the five XML metacharacters and copies every other
-// byte, control characters included, as it is.
-func appendEscaped(dst []byte, s string) []byte {
+// byte, control characters included, as it is, a run of plain bytes at a
+// time.
+func appendEscaped[T string | []byte](dst []byte, s T) []byte {
+	plain := 0
 	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
-		case '&':
-			dst = append(dst, "&amp;"...)
-		case '<':
-			dst = append(dst, "&lt;"...)
-		case '>':
-			dst = append(dst, "&gt;"...)
-		case '"':
-			dst = append(dst, "&quot;"...)
-		case '\'':
-			dst = append(dst, "&apos;"...)
-		default:
-			dst = append(dst, c)
+		entity := xmlEntity[s[i]]
+		if entity == "" {
+			continue
 		}
+		dst = append(dst, s[plain:i]...)
+		dst = append(dst, entity...)
+		plain = i + 1
 	}
-	return dst
+	return append(dst, s[plain:]...)
 }
+
+// xmlEntity is the escape of each XML metacharacter, "" for other bytes.
+var xmlEntity = [256]string{'&': "&amp;", '<': "&lt;", '>': "&gt;", '"': "&quot;", '\'': "&apos;"}
 
 // timestamps caches the formatted calendar second: listings hold long runs
 // of objects modified in the same second, and formatting the date costs far
@@ -255,19 +338,32 @@ func (t *timestamps) appendMillis(dst []byte, epochMicros int64) []byte {
 // render writes the same timestamp into o.
 func (t *timestamps) render(o *output.Output, epochMicros int64) {
 	sec := t.prefixFor(epochMicros)
-	o.ASCII(string(t.prefix))
+	o.Write(t.prefix)
 	o.ThreeDigits(int((epochMicros - sec*1_000_000) / 1000))
 	o.Byte('Z')
 }
 
 // prefixFor caches the calendar prefix of epochMicros's second and returns
 // the second.
+//
+// Within the cached second's day only the time of day changes, so it
+// rewrites the HH:mm:ss. that ends the prefix; a listing's objects are
+// often modified seconds apart.
 func (t *timestamps) prefixFor(epochMicros int64) int64 {
 	sec := floorDiv(epochMicros, 1_000_000)
-	if t.prefix == nil || sec != t.second {
-		t.second = sec
-		t.prefix = appendCalendarSecond(t.prefix[:0], sec)
+	if t.prefix != nil && sec == t.second {
+		return sec
 	}
+	if day := floorDiv(sec, 86_400); t.prefix != nil && day == floorDiv(t.second, 86_400) {
+		clock := sec - day*86_400
+		tail := t.prefix[len(t.prefix)-9:]
+		h, m, s := clock/3600, clock/60%60, clock%60
+		tail[0], tail[1], tail[3], tail[4], tail[6], tail[7] = byte('0'+h/10), byte('0'+h%10), byte('0'+m/10), byte('0'+m%10), byte('0'+s/10), byte('0'+s%10)
+		t.second = sec
+		return sec
+	}
+	t.second = sec
+	t.prefix = appendCalendarSecond(t.prefix[:0], sec)
 	return sec
 }
 

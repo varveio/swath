@@ -19,7 +19,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -165,6 +167,7 @@ type serveFlags struct {
 	servingMode, injectLatency                                     string
 	stopTimeout, idleTimeout, writeTimeout                         string
 	port, metricsPort, parquetConnections, maxConcurrentRequests   int
+	prefetchWindowRows, prefetchMaxWindows                         int
 	maxResponseBytes                                               int
 	responseBufferBudget, slowRequestLogMs                         int64
 	latencyJitter, latencyScale                                    float64
@@ -187,6 +190,8 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (the Azure ServiceEndpoint)")
 	fs.StringVar(&f.servingMode, "serving-mode", "sorted", "how to serve the fixture: sorted")
 	fs.IntVar(&f.parquetConnections, "parquet-connections", 0, "concurrent fixture page decodes; 0 is max(8, min(32, GOMAXPROCS))")
+	fs.IntVar(&f.prefetchWindowRows, "prefetch-window-rows", store.DefaultPrefetchWindowRows, "rows a walk's window cache fill ramps to; 0 turns the window cache off")
+	fs.IntVar(&f.prefetchMaxWindows, "prefetch-max-windows", store.DefaultPrefetchMaxWindows, "windows the window cache holds (at most this many times --prefetch-window-rows rows); 0 turns it off")
 	fs.IntVar(&f.maxConcurrentRequests, "max-concurrent-requests", server.DefaultMaxConcurrentRequests,
 		"requests served at once; more queue. Injected delay holds a slot, so set it above the widest client fan-out")
 	fs.Int64Var(&f.responseBufferBudget, "response-buffer-budget", server.DefaultResponseBufferBudget, "bytes of encoded responses held at once")
@@ -248,7 +253,7 @@ func serve(args []string, stderr io.Writer) error {
 		readers = store.DefaultReaders()
 	}
 	opened := time.Now()
-	st, mode, meta, err := openFixture(f.fixture, readers)
+	st, mode, meta, err := openFixture(f.fixture, store.Options{Readers: readers, Prefetch: f.prefetch()})
 	if err != nil {
 		return err
 	}
@@ -260,6 +265,12 @@ func serve(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	stopProfile, err := devProfile()
+	if err != nil {
+		srv.Shutdown(cfg.StopTimeout)
+		return err
+	}
+	defer stopProfile()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	served := make(chan error, 1)
@@ -281,6 +292,38 @@ func serve(args []string, stderr io.Writer) error {
 		}
 		return exitSignal(130)
 	}
+}
+
+// devProfile starts the CPU profile and arranges the allocation profile named
+// by the environment (SWATH_CPUPROFILE, SWATH_MEMPROFILE, the lister's
+// names), for development: both are written when the server stops.
+func devProfile() (stop func(), err error) {
+	var stops []func()
+	if path := os.Getenv("SWATH_CPUPROFILE"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			f.Close()
+			return nil, err
+		}
+		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
+	}
+	if path := os.Getenv("SWATH_MEMPROFILE"); path != "" {
+		runtime.MemProfileRate = 64 << 10
+		stops = append(stops, func() {
+			if f, err := os.Create(path); err == nil {
+				_ = pprof.Lookup("allocs").WriteTo(f, 0)
+				f.Close()
+			}
+		})
+	}
+	return func() {
+		for _, s := range stops {
+			s()
+		}
+	}, nil
 }
 
 // startServer builds and binds the server over cfg.Store, which it owns
@@ -305,7 +348,15 @@ func startServer(cfg server.Config, stderr io.Writer) (*server.Server, error) {
 
 // openFixture opens a .tsv key list in memory, anything else as a sorted
 // fixture.
-func openFixture(path string, readers int) (store.Store, string, store.Metadata, error) {
+// prefetch is the window cache the flags configure.
+func (f *serveFlags) prefetch() store.Prefetch {
+	return store.Prefetch{
+		Off:        f.prefetchWindowRows == 0 || f.prefetchMaxWindows == 0,
+		WindowRows: f.prefetchWindowRows, MaxWindows: f.prefetchMaxWindows,
+	}
+}
+
+func openFixture(path string, opts store.Options) (store.Store, string, store.Metadata, error) {
 	if strings.HasSuffix(path, ".tsv") {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -322,7 +373,7 @@ func openFixture(path string, readers int) (store.Store, string, store.Metadata,
 		sum := sha256.Sum256(b)
 		return st, "MEMORY", store.Metadata{Identity: hex.EncodeToString(sum[:])}, nil
 	}
-	st, meta, err := store.Open(context.Background(), path, store.Options{Readers: readers})
+	st, meta, err := store.Open(context.Background(), path, opts)
 	if err != nil {
 		return nil, "", store.Metadata{}, fmt.Errorf("open fixture %s: %w", path, err)
 	}
@@ -337,6 +388,9 @@ func (f *serveFlags) config() (server.Config, error) {
 	}
 	if f.slowRequestLogMs < 0 {
 		cfg.SlowRequestLog = -1
+	}
+	if f.prefetchWindowRows < 0 || f.prefetchMaxWindows < 0 {
+		return cfg, errors.New("--prefetch-window-rows and --prefetch-max-windows must not be negative (0 turns the window cache off)")
 	}
 	switch strings.ToLower(f.servingMode) {
 	case "sorted":

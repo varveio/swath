@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -255,6 +256,98 @@ func TestRenderSurrogateBytesUnencoded(t *testing.T) {
 		}
 		if !strings.Contains(got, want) {
 			t.Errorf("url=%v: %s", enc, got)
+		}
+	}
+}
+
+// TestRowFastPathMatchesUnits renders pages of adversarial objects through
+// outputs of many chunk sizes and caps, once with whole Contents elements
+// appended where they fit and once unit by unit, and requires the same
+// bytes, refusal, chunk allocations and percent-encoding counts.
+func TestRowFastPathMatchesUnits(t *testing.T) {
+	size, neg := int64(123456789), int64(math.MinInt64)
+	mod, early := time.UnixMicro(1_767_225_600_123_456), time.UnixMicro(-1)
+	objects := []store.Object{
+		object("logs/alpha/dt=2026-01-01/part-00000.json.gz", 1000, 1767225600000000, "cfcd208495d565ef66e7dff9f98764da"),
+		{Key: []byte("k/😀&<>'\" space"), Size: &neg, LastModified: &early, ETag: sp("e&<>\"'😀"), StorageClass: sp("ST😀&"),
+			OwnerID: sp("id<"), OwnerDisplayName: sp("display'"), ChecksumAlgorithm: sp("CRC&"), ChecksumType: sp("TYPE>")},
+		{Key: []byte{'k', 0xED, 0xA0, 0x80, 'z', 0xff}, ETag: sp(string([]byte{0xff, 'x'})), OwnerID: sp("o")},
+		{Key: []byte(strings.Repeat("long key/", 40)), Size: &size, LastModified: &mod},
+		{Key: []byte("k")},
+	}
+	var entries []Entry
+	for i := 0; i < 3*len(objects); i++ {
+		o := objects[i%len(objects)]
+		entries = append(entries, Entry{Object: &o})
+	}
+	type outcome struct {
+		body                      string
+		err                       error
+		length, capacity, charged int
+		onePass, fallback, chunks int
+	}
+	render := func(req *Request, chunk, limit int, fast bool) outcome {
+		rowFastPath = fast
+		defer func() { rowFastPath = true }()
+		var chunks int
+		budget := output.NewBudget(1<<30, func(output.Reason, int) { chunks++ })
+		o, err := output.NewChunked(budget, min(limit, 4096), limit, chunk, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		RenderList(o, &Result{Request: req, Entries: entries})
+		var body strings.Builder
+		for _, v := range o.Body() {
+			body.Write(v)
+		}
+		one, fall := o.PercentPaths()
+		got := outcome{body.String(), o.Err(), o.Len(), o.Capacity(), o.Charged(), one, fall, chunks}
+		o.Close()
+		return got
+	}
+	for _, enc := range []bool{false, true} {
+		for _, owner := range []bool{false, true} {
+			req := &Request{Bucket: "b", MaxKeys: 1000, EncodingURL: enc, FetchOwner: owner}
+			// Every chunk size up to 1,200 bytes puts each element's start
+			// at many distances from a chunk edge, so the key meets the
+			// percent encoder's one-third-of-the-room threshold on both sides.
+			chunks := []int{4096, 1 << 20}
+			for c := 1; c <= 1200; c++ {
+				chunks = append(chunks, c)
+			}
+			for _, chunk := range chunks {
+				limits := []int{999, 1 << 24}
+				if chunk%97 == 0 || chunk > 1200 {
+					limits = append(limits, 50, 5000)
+				}
+				for _, limit := range limits {
+					fast, units := render(req, chunk, limit, true), render(req, chunk, limit, false)
+					if fast != units {
+						t.Fatalf("url=%v owner=%v chunk %d cap %d:\nfast  %+v\nunits %+v", enc, owner, chunk, limit, fast, units)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestTimestampCacheMatchesFreshFormatting formats a run of times through
+// one cache (same second, same day, the next and the previous day, before
+// the epoch, around year 0 and past year 9999) and each through a fresh
+// one: the cached time-of-day rewrite must agree with the full formatting.
+func TestTimestampCacheMatchesFreshFormatting(t *testing.T) {
+	seconds := []int64{0, 0, 1, 59, 3599, 86399, 86400, 86401, 43200, -1, -86400, -86401, -86399,
+		253402300799, 253402300800, 253402300801, -62167219201, -62167219200, -62167219199, 1767225600, 1767225601, 1767225600}
+	r := rand.New(rand.NewPCG(3, 4))
+	for range 2000 {
+		seconds = append(seconds, seconds[len(seconds)-1]+r.Int64N(200_000)-100_000)
+	}
+	var cached timestamps
+	for _, sec := range seconds {
+		micros := sec*1_000_000 + r.Int64N(1_000_000)
+		var fresh timestamps
+		if got, want := string(cached.appendMillis(nil, micros)), string(fresh.appendMillis(nil, micros)); got != want {
+			t.Fatalf("%d: cached %s, fresh %s", micros, got, want)
 		}
 	}
 }
