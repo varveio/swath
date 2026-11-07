@@ -36,13 +36,14 @@ var (
 
 // requestTarget splits the request target as sent into its path and raw
 // query: the S3 route compares the bucket with the path still
-// percent-encoded, and reads the query's own bytes.
+// percent-encoded, and reads the query's own bytes. An absolute target
+// ("http://host/b?q") contributes the path after its authority.
 func requestTarget(r *http.Request) (path, query string) {
 	target := r.RequestURI
-	if !strings.HasPrefix(target, "/") {
-		return r.URL.EscapedPath(), r.URL.RawQuery
+	path, _ = targetPath(target)
+	if i := strings.IndexByte(target, '?'); i >= 0 {
+		query = target[i+1:]
 	}
-	path, query, _ = strings.Cut(target, "?")
 	return path, query
 }
 
@@ -58,6 +59,10 @@ func requestTarget(r *http.Request) (path, query string) {
 // refused with response_count_exhausted, not queued
 // (TestSlowReadersReachTheResponseCeiling).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if problem := targetProblem(r.RequestURI); problem != "" {
+		rejectTarget(w, r, problem)
+		return
+	}
 	arrived := time.Now()
 	path, rawQuery := requestTarget(r)
 	// The request ceiling queues a request beyond it, as a full worker
