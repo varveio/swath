@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -17,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -459,25 +461,63 @@ func (tm *tokenMap) set(tok string, t capturedToken) {
 	tm.n++
 }
 
-// lookup is the entry for tok that a request of query continues: the
-// one its own walk issued (the same query), else the one the case from
-// issued (a token case naming its source walk), else the latest.
-func (tm *tokenMap) lookup(tok, query, from string) (capturedToken, bool) {
+// errNotIssued: no earlier captured answer issued the token at all.
+var errNotIssued = errors.New("not issued")
+
+// lookup is the entry for tok that a request of query, in case caseID,
+// sends. A request annotated with its source walk (from) sends that
+// walk's token: its entry, or none (the annotation names a walk that
+// issued no such token), whatever other walks issued the same provider
+// token. Only a request with no source sends its own walk's token: the
+// entry an earlier request of the same query issued, the request's own
+// case's where several did. Entries that would send different Go tokens
+// are never chosen between: the request fails as ambiguous.
+func (tm *tokenMap) lookup(tok, query, caseID, from string) (capturedToken, error) {
 	list := tm.m[tok]
 	if len(list) == 0 {
-		return capturedToken{}, false
+		return capturedToken{}, errNotIssued
 	}
-	for i := len(list) - 1; i >= 0; i-- {
-		if list[i].query == query {
-			return list[i], true
+	var match []capturedToken
+	var what string
+	if from != "" {
+		what = "the annotated source " + from
+		for _, t := range list {
+			if t.caseID == from {
+				match = append(match, t)
+			}
+		}
+	} else {
+		what = "an earlier request of the same query"
+		for _, t := range list {
+			if t.query == query {
+				match = append(match, t)
+			}
+		}
+		if !agree(match) {
+			own := slices.DeleteFunc(slices.Clone(match), func(t capturedToken) bool { return t.caseID != caseID })
+			if len(own) > 0 {
+				match = own
+			}
 		}
 	}
-	for i := len(list) - 1; from != "" && i >= 0; i-- {
-		if list[i].caseID == from {
-			return list[i], true
+	switch {
+	case len(match) == 0:
+		return capturedToken{}, fmt.Errorf("its token was issued by an earlier captured answer, but not to %s", what)
+	case !agree(match):
+		return capturedToken{}, fmt.Errorf("its token was issued to %d earlier requests of %s whose Go tokens differ: the source is ambiguous", len(match), what)
+	}
+	return match[0], nil
+}
+
+// agree reports whether the entries all send the same Go token (or all
+// failed at the same exchange).
+func agree(list []capturedToken) bool {
+	for _, t := range list[min(1, len(list)):] {
+		if t.got != list[0].got || t.failedAt != list[0].failedAt {
+			return false
 		}
 	}
-	return list[len(list)-1], true
+	return true
 }
 
 // replayCapture sends each captured request to d.got in order and
@@ -579,10 +619,13 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			}
 		}
 		if hasTok && refTok != "" && note.token != tokenVerbatim {
-			t, ok := tokens.lookup(source, rest, note.from)
+			t, err := tokens.lookup(source, rest, note.caseID, note.from)
 			switch {
-			case !ok:
-				msg := "its token was not issued by an earlier captured answer: the capture is out of order or does not start at the walk's first page"
+			case err != nil:
+				msg := err.Error()
+				if errors.Is(err, errNotIssued) {
+					msg = "its token was not issued by an earlier captured answer: the capture is out of order or does not start at the walk's first page"
+				}
 				if unread > 0 {
 					msg += fmt.Sprintf(" (%d earlier captured answers could not be read)", unread)
 				}
