@@ -46,6 +46,12 @@ func TestAzureComparator(t *testing.T) {
 	if d := (azureComparator{}).compare(ref, &response{200, h("x", "2026-06-06"), body("1", m1)}); d.OK {
 		t.Error("a malformed request id compared equal")
 	}
+	// A marker element closed by the other marker tag is not normalized
+	// into a valid one.
+	broken := &response{200, h("replay-4", "2026-06-06"), []byte(strings.Replace(string(body("2", m2)), "</NextMarker>", "</Marker>", 1))}
+	if d := (azureComparator{}).compare(ref, broken); d.OK {
+		t.Error("a mismatched marker tag compared equal")
+	}
 	noBOM := &response{200, h("replay-3", "2026-06-06"), body("1", m1)[3:]}
 	if d := (azureComparator{}).compare(ref, noBOM); d.OK {
 		t.Error("a body without the BOM compared equal")

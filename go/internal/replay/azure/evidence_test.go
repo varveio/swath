@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,60 +55,13 @@ func TestAzureEvidenceReplay(t *testing.T) {
 	if root == "" {
 		t.Skip("SWATH_REPLAY_FIXTURES is not set: the evidence replay is a fixture-tier test")
 	}
-	dir := t.TempDir()
-	evidence := extractEvidence(t, filepath.Join("..", "..", "..", "..", "docs", "replay-provider-evidence.tar.gz"), dir)
-	az := filepath.Join(evidence, "azure")
-	var index struct {
-		Captures  map[string]json.RawMessage `json:"captures"`
-		Cases     []json.RawMessage          `json:"cases"`
-		Manifests map[string]struct {
-			File string `json:"file"`
-		} `json:"manifests"`
-	}
-	readJSON(t, filepath.Join(az, "index.json"), &index)
-	cases := map[string]caseRecord{}
-	for _, raw := range index.Cases {
-		var c caseRecord
-		if err := json.Unmarshal(raw, &c); err != nil {
-			t.Fatal(err)
-		}
-		cases[c.ID] = c
-	}
-	manifest := ""
-	for _, v := range slices.Sorted(mapKeys(index.Manifests)) {
-		if f := index.Manifests[v].File; f != "" {
-			manifest = f
-			break
-		}
-	}
-	objects := manifestObjects(t, filepath.Join(az, manifest))
-	st, identity := corpusStore(t, root, dir, objects)
-
-	srv, err := server.New(server.Config{Bucket: replayBucket, Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 16,
-		ResponseBufferBudget: 256 << 20, MaxResponseBytes: 64 << 20, StopTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second,
-		WriteTimeout: 30 * time.Second, SlowRequestLog: -1, Store: st, ServingMode: "SORTED", FixtureIdentity: identity,
-		Protocols: []string{"azure"}, AzureAccount: replayAccount})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.Listen(); err != nil {
-		t.Fatal(err)
-	}
-	go srv.Serve()
-	defer srv.Shutdown(10 * time.Second)
-	ep := &endpoint{port: srv.Port(), cases: cases}
+	ev := openEvidence(t, root)
+	az, index, ep := ev.dir, ev.index, ev.endpoint
 
 	outcomes := map[string]string{}
 	for _, key := range slices.Sorted(mapKeys(index.Captures)) {
-		var entry struct {
-			File       string          `json:"file"`
-			SDKOptions json.RawMessage `json:"sdk_options"`
-		}
-		if err := json.Unmarshal(index.Captures[key], &entry); err != nil {
-			t.Fatal(err)
-		}
-		file := filepath.Join(az, entry.File)
-		err := catch(func() { ep.verify(t, key, file, entry.SDKOptions) })
+		file, sdk := ev.capture(t, key)
+		err := catch(func() { ep.verify(t, key, file, sdk) })
 		if err != nil {
 			outcomes[key] = "mismatch: " + err.Error()
 		} else {
@@ -142,7 +96,7 @@ func TestAzureEvidenceReplay(t *testing.T) {
 			}
 		case got == "match":
 			improved = append(improved, key)
-		case !strings.HasPrefix(got, "mismatch: ") || !strings.Contains(got, pin.mismatch):
+		case !atPin(key, got, pin.mismatch):
 			t.Errorf("%s: pinned mismatch %q, got %s", key, pin.mismatch, got)
 		}
 	}
@@ -153,6 +107,111 @@ func TestAzureEvidenceReplay(t *testing.T) {
 	}
 	t.Logf("%d captures: %d match (%d pinned matches), improvements over the pins: %v", len(outcomes), matched,
 		matched-len(improved), improved)
+}
+
+// evidence is the extracted Azure evidence and a Go server serving its
+// corpus on the Azure route alone.
+type evidence struct {
+	dir   string
+	index struct {
+		Captures  map[string]json.RawMessage `json:"captures"`
+		Cases     []json.RawMessage          `json:"cases"`
+		Manifests map[string]struct {
+			File string `json:"file"`
+		} `json:"manifests"`
+	}
+	endpoint *endpoint
+}
+
+// openEvidence extracts the archive and starts the server: over root's
+// sorted capture when root has one, else over the manifest in memory.
+func openEvidence(t *testing.T, root string) *evidence {
+	t.Helper()
+	dir := t.TempDir()
+	ev := &evidence{dir: filepath.Join(extractEvidence(t, filepath.Join("..", "..", "..", "..", "docs", "replay-provider-evidence.tar.gz"), dir), "azure")}
+	readJSON(t, filepath.Join(ev.dir, "index.json"), &ev.index)
+	cases := map[string]caseRecord{}
+	for _, raw := range ev.index.Cases {
+		var c caseRecord
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatal(err)
+		}
+		cases[c.ID] = c
+	}
+	manifest := ""
+	for _, v := range slices.Sorted(mapKeys(ev.index.Manifests)) {
+		if f := ev.index.Manifests[v].File; f != "" {
+			manifest = f
+			break
+		}
+	}
+	objects := manifestObjects(t, filepath.Join(ev.dir, manifest))
+	st, identity := corpusStore(t, root, dir, objects)
+	srv, err := server.New(server.Config{Bucket: replayBucket, Host: "127.0.0.1", MetricsPort: -1, MaxConcurrentRequests: 16,
+		ResponseBufferBudget: 256 << 20, MaxResponseBytes: 64 << 20, StopTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second,
+		WriteTimeout: 30 * time.Second, SlowRequestLog: -1, Store: st, ServingMode: "SORTED", FixtureIdentity: identity,
+		Protocols: []string{"azure"}, AzureAccount: replayAccount})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { srv.Shutdown(10 * time.Second) })
+	ev.endpoint = &endpoint{port: srv.Port(), cases: cases}
+	return ev
+}
+
+// captureEntry is one capture's index entry.
+func (ev *evidence) capture(t *testing.T, key string) (file string, sdk json.RawMessage) {
+	t.Helper()
+	var entry struct {
+		File       string          `json:"file"`
+		SDKOptions json.RawMessage `json:"sdk_options"`
+	}
+	if err := json.Unmarshal(ev.index.Captures[key], &entry); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(ev.dir, entry.File), entry.SDKOptions
+}
+
+// wildcardPins are the pins whose actual= field is deliberately a prefix:
+// the replay's own marker follows it and differs on every run. Every other
+// mismatch pin must equal the outcome in full, so a pin ending in actual=
+// pins an empty actual value, not any value.
+var wildcardPins = map[string]bool{"azure-09h~2026-06-06": true, "azure-09j~2026-06-06": true}
+
+// differs splits "<label> differs: expected=<e> actual=<a>".
+func differs(s string) (label, expected, actual string, ok bool) {
+	label, rest, ok := strings.Cut(s, " differs: expected=")
+	if !ok {
+		return "", "", "", false
+	}
+	i := strings.LastIndex(rest, " actual=")
+	if i < 0 {
+		return "", "", "", false
+	}
+	return label, rest[:i], rest[i+len(" actual="):], true
+}
+
+// atPin reports whether a mismatch outcome is the pinned one: equal in
+// full, or, for a wildcard pin, the same label and expected value with an
+// actual value that starts with the pinned one.
+func atPin(key, outcome, pin string) bool {
+	got, ok := strings.CutPrefix(outcome, "mismatch: ")
+	if !ok {
+		return false
+	}
+	if got == pin {
+		return true
+	}
+	if !wildcardPins[key] {
+		return false
+	}
+	pl, pe, pa, ok1 := differs(pin)
+	gl, ge, ga, ok2 := differs(got)
+	return ok1 && ok2 && pl == gl && pe == ge && strings.HasPrefix(ga, pa)
 }
 
 const (
@@ -319,42 +378,66 @@ func expectations(t *testing.T, archived, updates string) map[string]pin {
 	t.Helper()
 	var raw map[string]json.RawMessage
 	readJSON(t, archived, &raw)
-	parse := func(v json.RawMessage) pin {
+	var file struct {
+		Azure map[string]json.RawMessage `json:"azure"`
+	}
+	readJSON(t, updates, &file)
+	out, err := adjustPins(raw, file.Azure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// adjustPins applies the reference's two adjustments to the archived
+// pins: a pin opening with the archived BOM mismatch expects what follows
+// it ("nothing else" is a match), and each update replaces the pin for its
+// capture; an update must name a pinned capture and change its pin.
+func adjustPins(archived, updates map[string]json.RawMessage) (map[string]pin, error) {
+	parse := func(v json.RawMessage) (pin, error) {
 		var s string
 		if json.Unmarshal(v, &s) == nil {
-			return pin{match: s == "match"}
+			return pin{match: s == "match"}, nil
 		}
 		var m struct {
 			Mismatch string `json:"mismatch"`
 		}
-		if err := json.Unmarshal(v, &m); err != nil {
-			t.Fatal(err)
-		}
-		return pin{mismatch: m.Mismatch}
+		err := json.Unmarshal(v, &m)
+		return pin{mismatch: m.Mismatch}, err
 	}
 	out := map[string]pin{}
-	for k, v := range raw {
-		p := parse(v)
+	for k, v := range archived {
+		p, err := parse(v)
+		if err != nil {
+			return nil, err
+		}
 		if rest, ok := strings.CutPrefix(p.mismatch, archivedBOMPinPrefix); ok {
-			if rest == "nothing else" {
+			switch rest {
+			case "":
+				return nil, errors.New("archived BOM pin names no remainder")
+			case "nothing else":
 				p = pin{match: true}
-			} else {
+			default:
 				p = pin{mismatch: rest}
 			}
 		}
 		out[k] = p
 	}
-	var file struct {
-		Azure map[string]json.RawMessage `json:"azure"`
-	}
-	readJSON(t, updates, &file)
-	for k, v := range file.Azure {
-		if _, ok := out[k]; !ok {
-			t.Fatalf("expectation update for %s, which the archive does not pin", k)
+	for _, k := range slices.Sorted(mapKeys(updates)) {
+		old, ok := out[k]
+		if !ok {
+			return nil, fmt.Errorf("expectation update for %s, which the archive does not pin", k)
 		}
-		out[k] = parse(v)
+		p, err := parse(updates[k])
+		if err != nil {
+			return nil, err
+		}
+		if p == old {
+			return nil, fmt.Errorf("expectation update for %s repeats the expectation it replaces", k)
+		}
+		out[k] = p
 	}
-	return out
+	return out, nil
 }
 
 // prettyOutcomes renders the outcomes as the reference report does
@@ -533,6 +616,16 @@ func readCapture(file string) (capture, rawCapture) {
 type endpoint struct {
 	port  int
 	cases map[string]caseRecord
+	// mutate, when set, corrupts the replay's answers (in page order)
+	// before they are compared.
+	mutate func([]exchange) []exchange
+}
+
+func (e *endpoint) apply(pages []exchange) []exchange {
+	if e.mutate == nil {
+		return pages
+	}
+	return e.mutate(slices.Clone(pages))
 }
 
 func (e *endpoint) replayPath() string { return "/" + replayAccount + "/" + replayBucket }
@@ -582,7 +675,7 @@ func (e *endpoint) verifyExchange(c capture, record caseRecord) {
 		query = strings.ReplaceAll(query, "marker="+*nativeToken, "marker="+encoded)
 	}
 	headers := replayHeaders(native.request, &record)
-	response := e.send(native.request.method, query, headers)
+	response := e.apply([]exchange{e.send(native.request.method, query, headers)})[0]
 	replayRequest := newRequest(native.request.method, e.replayPath(), query, headers)
 
 	assertMapped(native.request.path, replayRequest.path, nativeEndpoint, e.replayEndpoint())
@@ -626,6 +719,16 @@ func (e *endpoint) verifyWalk(c capture) {
 			break
 		}
 	}
+	pages := make([]exchange, len(replay))
+	for i := range replay {
+		pages[i] = replay[i].exchange
+	}
+	pages = e.apply(pages)
+	walked := make([]replayStep, len(pages))
+	for i := range pages {
+		walked[i] = replayStep{replay[min(i, len(replay)-1)].request, pages[i]}
+	}
+	replay = walked
 	e.verifyRun(c, replay, tokens)
 }
 

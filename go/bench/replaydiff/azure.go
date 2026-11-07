@@ -447,9 +447,13 @@ func (d *driver) azureWalkOne(w azureWalk) result {
 
 var (
 	nextMarkerRe = regexp.MustCompile(`<NextMarker>([^<]*)</NextMarker>`)
-	anyMarkerRe  = regexp.MustCompile(`<(Next)?Marker>([^<]*)</(Next)?Marker>`)
-	endpointRe2  = regexp.MustCompile(`ServiceEndpoint="http://[^"/]*/`)
-	requestIDRe  = regexp.MustCompile(`^replay-[0-9a-f]+$`)
+	// The two marker elements are matched separately, each with its own
+	// closing tag, so a corrupted pair such as <NextMarker>...</Marker> is
+	// left as it is and compared byte for byte.
+	markerRe    = regexp.MustCompile(`<Marker>([^<]*)</Marker>`)
+	nextMarkRe  = regexp.MustCompile(`<NextMarker>([^<]*)</NextMarker>`)
+	endpointRe2 = regexp.MustCompile(`ServiceEndpoint="http://[^"/]*/`)
+	requestIDRe = regexp.MustCompile(`^replay-[0-9a-f]+$`)
 )
 
 func azureNextMarker(body []byte) string {
@@ -552,12 +556,14 @@ func (c azureComparator) compare(ref, got *response) diff {
 
 func normalizeAzure(body []byte) []byte {
 	body = endpointRe2.ReplaceAll(body, []byte(`ServiceEndpoint="http://HOST:PORT/`))
-	return anyMarkerRe.ReplaceAllFunc(body, func(m []byte) []byte {
-		s := anyMarkerRe.FindSubmatch(m)
-		tag := "Marker"
-		if len(s[1]) > 0 {
-			tag = "NextMarker"
-		}
-		return []byte("<" + tag + ">" + markerEffect(xmlUnescape(string(s[2]))) + "</" + tag + ">")
-	})
+	for _, m := range []struct {
+		re  *regexp.Regexp
+		tag string
+	}{{markerRe, "Marker"}, {nextMarkRe, "NextMarker"}} {
+		body = m.re.ReplaceAllFunc(body, func(b []byte) []byte {
+			v := m.re.FindSubmatch(b)[1]
+			return []byte("<" + m.tag + ">" + markerEffect(xmlUnescape(string(v))) + "</" + m.tag + ">")
+		})
+	}
+	return body
 }
