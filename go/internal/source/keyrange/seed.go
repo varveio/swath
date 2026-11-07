@@ -256,12 +256,13 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	if start != after {
 		tiles[0].lo, tiles[0].after = start, after
 	}
+	tiles = p.aroundReuse(tiles)
 	if p.opt.Resume != nil {
 		p.c.Set(cResumedRanges, int64(len(tiles)))
 		p.c.Set(cSeedResumed, 1)
 	}
 	p.account(time.Now())
-	p.queued += len(tiles)
+	p.queued += p.queue(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.unlock()
 	for _, t := range tiles {

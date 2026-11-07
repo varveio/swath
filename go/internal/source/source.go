@@ -66,3 +66,48 @@ type Provider[R, P any] interface {
 type Disposer[R any] interface {
 	Dispose(r R)
 }
+
+// Fencer is an Emitter that accepts coverage fences, the declarations a
+// durable spill certifies coverage from (go/docs/internals/ordering.md,
+// "Durable spill"). An emitter that is not one ignores them; an adapter
+// between a provider and the order stage forwards both calls.
+type Fencer interface {
+	// Span declares the range's logical interval (lo, hi] (open: up to ⊤),
+	// before its first row: lo is max(request bound, resume key), never a
+	// request bound below the resume key. It is also the fence at lo.
+	Span(lo, hi string, open bool)
+	// Fence declares that every row of the range's logical interval up to
+	// x (top: up to ⊤) that the provider will ever emit has been emitted.
+	// x is a bound the provider accepts or the run's resume key, never a
+	// key below that key.
+	Fence(x string, top bool)
+}
+
+// Fencing is a provider whose ranges declare fences through a Fencer
+// emitter: durable spill engages only for one (and only when every adapter
+// between it and the order stage forwards them).
+type Fencing interface {
+	Fences() bool
+}
+
+// Replaying is a provider whose tree may hold replay ranges: positions the
+// order stage fills from a reused coverage certificate (its index) instead
+// of expanding the range.
+type Replaying[R any] interface {
+	Replay(r R) (cert int, ok bool)
+}
+
+// Span is a coverage certificate's interval (Lo, Hi] (HiOpen: up to ⊤), as
+// a resume hands it to the provider to list around.
+type Span struct {
+	Lo, Hi string
+	HiOpen bool
+}
+
+// Reusing is a resumable source that lists around reused certificates:
+// Reuse is called before Root, with the certificates' spans in ascending,
+// disjoint order; the provider emits a replay range (Replaying) at each one
+// and lists only the gaps between them.
+type Reusing interface {
+	Reuse(spans []Span)
+}

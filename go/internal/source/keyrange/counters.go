@@ -94,6 +94,9 @@ const (
 	cChildSmallUpper
 	cFrontierHandoutKeys
 	cResumedRanges
+	cReuseRanges
+	cReuseGaps
+	cReuseBoundaryOverfetch
 	cMaxActive
 	cMaxQueued
 	cBusyNs
@@ -215,6 +218,9 @@ var Counters = table([numCounters]counters.Def{
 	cChildSmallUpper:              d("child_small.upper", counters.Count, "ranges", "upper split children that ended or split having listed fewer keys than one page (empty ones included)", "split"),
 	cFrontierHandoutKeys:          d("split.frontier_handout_keys", counters.Count, "keys", "keys listed inside the lower children of frontier splits (the child and its descendants): over split.accepted_frontier, the work a frontier split hands out", "split"),
 	cResumedRanges:                d("resumed_ranges", counters.Count, "ranges", "ranges a resume started with: (K, ⊤], or the seed's tiling of it", "resume"),
+	cReuseRanges:                  d("reuse.ranges", counters.Count, "ranges", "reused coverage certificates a resume replays from durable spill instead of listing them", "resume"),
+	cReuseGaps:                    d("reuse.gaps", counters.Count, "ranges", "ranges a resume with reused certificates lists: the gaps between them, tiled", "resume"),
+	cReuseBoundaryOverfetch:       d("reuse.boundary_overfetch_keys", counters.Count, "keys", "keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys)", "resume"),
 	cMaxActive:                    d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
 	cMaxQueued:                    d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	cBusyNs:                       d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
@@ -301,7 +307,7 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.Sequential || !p.opt.Seed {
 		off = append(off, "seed")
 	}
-	if p.opt.Resume == nil {
+	if p.opt.Resume == nil && len(p.reuse) == 0 {
 		off = append(off, "resume")
 	}
 	if p.opt.MaxKeys == 0 {

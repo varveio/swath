@@ -140,6 +140,13 @@ func (o *opened) Restart(after string) error {
 	return nil
 }
 
+// Reuse lists around a resume's reused coverage certificates
+// (source.Reusing): the engine replays them, lists the gaps.
+func (o *opened) Reuse(spans []source.Span) { o.p.Reuse(spans) }
+
+// Fences reports the engine's coverage fences (source.Fencing).
+func (o *opened) Fences() bool { return o.p.Fences() }
+
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("gcs", o.target(), o.p.opt.Prefix, &st, st.Counters)
@@ -148,6 +155,7 @@ func (o *opened) Report() source.Report {
 var (
 	_ source.Identified = (*opened)(nil)
 	_ source.Resumable  = (*opened)(nil)
+	_ source.Reusing    = (*opened)(nil)
 	_ source.Capable    = (*opened)(nil)
 	_ source.Reporter   = (*opened)(nil)
 )

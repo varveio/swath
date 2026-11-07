@@ -205,7 +205,8 @@ type Engine[P any] struct {
 	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
-	area    float64 // ∫ active dt, for the mean
+	reuse   []source.Span // reused certificates a resume lists around (Reuse)
+	area    float64       // ∫ active dt, for the mean
 	areaAt  time.Time
 }
 
