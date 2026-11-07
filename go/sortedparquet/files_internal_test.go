@@ -53,6 +53,7 @@ func openTwoParts(t *testing.T) (*Reader, *FileCache, []*CachedFile) {
 // still held; releasing it closes the last descriptor.
 func TestCacheWaitEndsWithContextAndClose(t *testing.T) {
 	r, cache, files := openTwoParts(t)
+	waited := waiters(cache)
 	if _, err := files[0].lease(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -64,10 +65,9 @@ func TestCacheWaitEndsWithContextAndClose(t *testing.T) {
 		}()
 		return done
 	}
-	waitForWaiter(t, cache)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelled := read(ctx)
-	waitForWaiter(t, cache)
+	awaitWaiter(t, waited)
 	cancel()
 	select {
 	case err := <-cancelled:
@@ -79,7 +79,7 @@ func TestCacheWaitEndsWithContextAndClose(t *testing.T) {
 	}
 
 	queued := read(context.Background())
-	waitForWaiter(t, cache)
+	awaitWaiter(t, waited)
 	closed := make(chan error, 1)
 	go func() { closed <- r.Close() }()
 	select {
@@ -102,21 +102,29 @@ func TestCacheWaitEndsWithContextAndClose(t *testing.T) {
 	}
 }
 
-// waitForWaiter waits until the cache's change channel has been taken by
-// a waiter: the slot is full and a read is blocked on it. It polls the
-// one state a waiter leaves, a full cache with nothing idle.
-func waitForWaiter(t *testing.T, cache *FileCache) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		cache.mu.Lock()
-		full := cache.open >= cache.max && cache.idle.Len() == 0
-		cache.mu.Unlock()
-		if full {
-			time.Sleep(10 * time.Millisecond) // let a starting read reach its wait
-			return
+// waiters returns a channel that receives each time a read of cache is
+// about to wait for a descriptor: the explicit barrier the test
+// synchronizes on (the read registers its wait before it parks, so a
+// change after the barrier still wakes it).
+func waiters(cache *FileCache) <-chan struct{} {
+	ch := make(chan struct{}, 16)
+	cache.mu.Lock()
+	cache.waiting = func() {
+		select {
+		case ch <- struct{}{}:
+		default: // never block under the cache's lock
 		}
-		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("the cache never filled")
+	cache.mu.Unlock()
+	return ch
+}
+
+// awaitWaiter receives from a waiters channel or fails after 5 s.
+func awaitWaiter(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no read waited for a descriptor")
+	}
 }
