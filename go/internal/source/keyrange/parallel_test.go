@@ -66,7 +66,11 @@ func TestT1RandomSplitsCoverEveryKeyOnce(t *testing.T) {
 				rng := rand.New(rand.NewSource(int64(s*1000 + w)))
 				var mu sync.Mutex
 				coin := func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(3) == 0 }
-				got, st, leaves := run(t, newSorted(keys, true, int64(s)), Options{SplitCoin: coin, Seed: s%2 == 1}, w)
+				opt := Options{SplitCoin: coin, Seed: s%2 == 1}
+				if s%3 == 2 {
+					opt.Structure = StructureAuto // folder boundaries on the frontier and stalled chains
+				}
+				got, st, leaves := run(t, newSorted(keys, true, int64(s)), opt, w)
 				if !slices.Equal(got, want) {
 					t.Fatalf("%s seed=%d w=%d: %d keys, want %d (splits %d)", name, s, w, len(got), len(want), st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier))
 				}
@@ -288,17 +292,21 @@ func TestT4Paging(t *testing.T) {
 	if after := runtime.NumGoroutine(); after > before+2 {
 		t.Fatalf("goroutines left: %d -> %d", before, after)
 	}
-	// Seed: truncated top level, cap and subsample, sentinel.
-	var many []string
-	for i := range 1500 {
-		many = append(many, fmt.Sprintf("d%04d/x", i))
+	// Seed: a top level of two pages is followed whole (sentinel), one past
+	// the page cap is truncated (no sentinel); both subsampled to 4W = 8.
+	for _, c := range []struct{ n, pages, truncated, sentinel int64 }{{1500, 2, 0, 1}, {4500, seedPages, 1, 0}} {
+		var many []string
+		for i := range c.n {
+			many = append(many, fmt.Sprintf("d%04d/x", i))
+		}
+		_, st, leaves := run(t, newSorted(many, false, 1), Options{Seed: true}, 2)
+		if st.Get(cSeedPages) != c.pages || st.Get(cSeedPrefixes) != min(c.n, seedPages*PageKeys) || st.Get(cSeedTruncated) != c.truncated ||
+			st.Get(cSeedSubsampled) == 0 || st.Get(cSeedCuts) != 8 || st.Get(cSeedSentinel) != c.sentinel || st.Get(cSeedStopWide) != 1 {
+			t.Fatalf("seed (%d folders, cap 4W=8): %+v", c.n, st.Counters)
+		}
+		checkTiling(t, fmt.Sprintf("seed %d folders", c.n), leaves)
 	}
-	_, st, leaves := run(t, newSorted(many, false, 1), Options{Seed: true}, 2)
-	if st.Get(cSeedTruncated) == 0 || st.Get(cSeedSubsampled) == 0 || st.Get(cSeedCuts) != 8 || st.Get(cSeedSentinel) != 0 {
-		t.Fatalf("seed (truncated, cap 4W=8): %+v", st.Counters)
-	}
-	checkTiling(t, "seed truncated", leaves)
-	_, st, leaves = run(t, newSorted([]string{"a/1", "b/1", "c/1"}, false, 1), Options{Seed: true}, 4)
+	_, st, leaves := run(t, newSorted([]string{"a/1", "b/1", "c/1"}, false, 1), Options{Seed: true}, 4)
 	if st.Get(cSeedSentinel) == 0 || st.Get(cSeedCuts) != 3 {
 		t.Fatalf("seed sentinel: %+v", st.Counters)
 	}

@@ -169,7 +169,7 @@ func TestPageSize(t *testing.T) {
 			for i, opt := range []Options{
 				{Sequential: true},
 				{Workers: 8},
-				{Workers: 8, Seed: true, Floors: true, Structure: true},
+				{Workers: 8, Seed: true, Floors: true, Structure: StructureOn},
 				{Workers: 8, Seed: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)

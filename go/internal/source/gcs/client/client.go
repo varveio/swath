@@ -15,6 +15,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +64,9 @@ type Config struct {
 	BaseBackoff     time.Duration // default 100 ms
 	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
+	// Workers sizes the built transport pool (PoolSize); a supplied
+	// HTTPClient is used alone.
+	Workers int
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
 	// Rate, if set, caps attempts per second (objhttp.Rate).
@@ -152,7 +156,8 @@ var ErrSyntax = objhttp.ErrSyntax
 type Client struct {
 	cfg    Config
 	base   *url.URL
-	http   *http.Client
+	http   []*http.Client // the transport pool, requests round-robin (pick)
+	next   atomic.Uint64
 	ts     oauth2.TokenSource // nil: anonymous
 	source string
 
@@ -183,26 +188,35 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
 	}
-	c := &Client{cfg: cfg, base: u, http: cfg.HTTPClient, source: "anonymous",
+	c := &Client{cfg: cfg, base: u, source: "anonymous",
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
-	if c.http == nil {
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
-		c.http = &http.Client{Transport: t}
-	} else {
-		hc := *c.http
-		c.http = &hc
-	}
 	// Redirects are answers, never followed, also through a supplied HTTP
 	// client: the resume identity freezes the route the requests go to (as
 	// S3's client does).
-	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if cfg.HTTPClient == nil {
+		// One transport per connWorkers workers: Go's HTTP/2 transport opens a
+		// second connection only at the server's stream limit (~100), so one
+		// transport would carry every worker on one connection. The pool's
+		// transports share one TLS session cache, so later connections resume.
+		cache := tls.NewLRUClientSessionCache(0)
+		for range PoolSize(cfg.Workers) {
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
+			t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
+			c.http = append(c.http, &http.Client{Transport: t, CheckRedirect: noRedirect})
+		}
+	} else {
+		hc := *cfg.HTTPClient
+		hc.CheckRedirect = noRedirect
+		c.http = []*http.Client{&hc}
+	}
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
 	// exchange (the attempt deadline bounds the wait, token below).
 	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
-		&http.Client{Transport: c.http.Transport, Timeout: cfg.RequestTimeout})
+		&http.Client{Transport: c.http[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
 	case cfg.TokenSource != nil:
 		c.ts, c.source = cfg.TokenSource, "token source"
@@ -237,6 +251,25 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 	return c, nil
+}
+
+// connWorkers is the workers per pooled transport (one HTTP/2 connection
+// each, below the server's stream limit); maxConns caps the pool.
+const connWorkers, maxConns = 16, 8
+
+// PoolSize is the number of transports a built client spreads its requests
+// over for workers: one per connWorkers, at least 1, at most maxConns.
+func PoolSize(workers int) int {
+	return min(max((workers+connWorkers-1)/connWorkers, 1), maxConns)
+}
+
+// Transports is the size of the client's transport pool (1 with a supplied
+// HTTPClient): the report's transport.pool_size.
+func (c *Client) Transports() int { return len(c.http) }
+
+// pick is the next transport, round-robin.
+func (c *Client) pick() *http.Client {
+	return c.http[(c.next.Add(1)-1)%uint64(len(c.http))]
 }
 
 // adcConfigured reports whether Application Default Credentials are
@@ -434,7 +467,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 		tok.SetAuthHeader(req)
 	}
 	defer c.counts.Attempt()()
-	resp, err := c.http.Do(req)
+	resp, err := c.pick().Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}

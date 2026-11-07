@@ -97,10 +97,13 @@ func TestSIGKILLResume(t *testing.T) {
 // TestSIGKILLAtEveryPoint makes the real process SIGKILL itself at each
 // crash point (response read, encoding, journal append and sync, rename,
 // publication, ...), resumes, and compares with an uninterrupted run, for
-// each journaled provider. The "s3-interval" arm runs (and resumes) with a
-// 1 ms part interval against a slower bucket, so parts are closed by time
-// and boundaries depend on timing: it requires the clean run's rows, in
-// order, and no refusal.
+// each journaled provider. The byte-comparison arms run (and resume) with
+// --part-interval=0: the default 30 s interval would close a part by time
+// when a run under load is slow, and the part boundaries would then differ
+// between runs whose rows agree. The "s3-interval" arm runs with a 1 ms
+// part interval against a slower bucket, so parts are closed by time and
+// boundaries depend on timing: it requires the clean run's rows, in order,
+// and no refusal.
 func TestSIGKILLAtEveryPoint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -118,10 +121,11 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		name    string
 		src     []string
 		runtime []string // also given to swath resume
+		byTime  bool     // parts are closed by time: compare rows, not part bytes
 	}{
-		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, nil},
-		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, nil},
-		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}},
+		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
+		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, []string{"--part-interval=0"}, false},
+		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {
 			a := append(append(append(append([]string{"list"}, prov.src...), common...), prov.runtime...), "-o", out)
@@ -161,7 +165,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 						t.Fatalf("%s resume: %v\n%s", at, err, o)
 					}
 				}
-				if prov.runtime != nil {
+				if prov.byTime {
 					sameRows(t, at, ref, out)
 				} else {
 					sameParts(t, at, ref, out)

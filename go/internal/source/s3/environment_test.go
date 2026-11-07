@@ -115,7 +115,7 @@ func TestOneAdmission(t *testing.T) {
 		{Fraction: 0.2, Fault: faulttest.Throttle},
 		{Fraction: 0.1, Fault: faulttest.Reset}}})
 	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: 1,
-		Policy: keyrange.Policy{Seed: true, Structure: true}, Admission: objhttp.Admission{Limiter: true}}, 8)
+		Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, Admission: objhttp.Admission{Limiter: true}}, 8)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("%d keys, want %d", len(rows), len(keys))
 	}

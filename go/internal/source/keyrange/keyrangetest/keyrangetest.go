@@ -112,16 +112,21 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		if delim != "" {
 			if j := strings.Index(k[len(prefix):], delim); j >= 0 {
 				cp := k[:len(prefix)+j+len(delim)]
+				// The rest of cp's keys are skipped, as a service does: a
+				// probe of a deep bucket costs one seek per folder.
+				skip := max(i, sort.SearchStrings(f.Keys, cp[:len(cp)-1]+string(cp[len(cp)-1]+1))-1)
 				if in.ContinuationToken == "" && in.StartAfter != "" && cp <= in.StartAfter {
 					// S3 returns no common prefix at or below StartAfter
 					// (measured: "a/" is not listed for start-after "a/"
 					// or "a/b"), so the keys it covers are skipped.
+					i = skip
 					continue
 				}
 				if m := len(out.CommonPrefixes); m == 0 || out.CommonPrefixes[m-1] != cp {
 					out.CommonPrefixes = append(out.CommonPrefixes, cp)
 					n++
 				}
+				i = skip
 				continue
 			}
 		}
@@ -178,6 +183,28 @@ func Keyspaces() map[string][]string {
 		}
 	}
 	ks["deepTree"] = deep
+	// Date-partitioned and forecast-archive layouts: the folders a page's
+	// density cannot see past, where the reflection climbs levels.
+	var date []string
+	for m := 1; m <= 12; m++ {
+		for d := 1; d <= 28; d++ {
+			for p := range 12 {
+				date = append(date, fmt.Sprintf("warehouse/events/year=2025/month=%02d/day=%02d/part-%05d.parquet", m, d, p))
+			}
+		}
+	}
+	ks["dateTree"] = date
+	var nbm []string
+	for d := 1; d <= 10; d++ {
+		for h := range 24 {
+			for _, kind := range []string{"core", "grib2", "text"} {
+				for f := range 5 {
+					nbm = append(nbm, fmt.Sprintf("blend.202011%02d/%02d/%s/blend.t%02dz.%s.f%03d.co.grib2", d, h, kind, h, kind, f))
+				}
+			}
+		}
+	}
+	ks["nbmLike"] = nbm
 	skew := gen(4000, func(i int) string { return fmt.Sprintf("big/%06d", i) })
 	skew = append(skew, gen(50, func(i int) string { return fmt.Sprintf("small%02d/x", i) })...)
 	ks["badlySkewed"] = skew

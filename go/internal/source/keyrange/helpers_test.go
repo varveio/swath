@@ -100,3 +100,13 @@ func (s *stub) List(_ context.Context, in *keyrangetest.ListInput) (*keyrangetes
 	}
 	return &out, nil
 }
+
+// decidePage is a split decision after a full page, as expandRange takes
+// it: the pivot proposed on a snapshot of the demand, then decided.
+func (p *Engine[P]) decidePage(st *running, r Range, page []string, c string) (pivot, bool) {
+	p.lock()
+	hunger := p.opt.Workers - len(p.running) - p.queued
+	p.unlock()
+	ceil, bounded := p.ceiling(r)
+	return p.decide(st, r, c, propose(r, page, page[0], c, ceil, bounded, hunger))
+}

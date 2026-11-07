@@ -92,6 +92,13 @@ type Stats struct {
 	// Peaks of the stage's metadata (Gauges): outstanding range nodes,
 	// spill markers in memory, open spill readers.
 	PeakNodes, PeakMarkers, PeakReaders int64
+	// PeakAhead is the most rows received and not yet handed on at once:
+	// rows ahead of the publish frontier, in memory or spilled (Gauges).
+	PeakAhead int64
+	// FrontierStuck is the longest interval in which the drainer handed
+	// nothing on: from the drain's start to the first row, between two
+	// hand-ons, or from the last row to the drain's end.
+	FrontierStuck time.Duration
 }
 
 // Gauges are the order stage's live resource counts, read while it runs
@@ -100,6 +107,7 @@ type Stats struct {
 // bytes, each with its peak.
 type Gauges struct {
 	nodes, markers, readers, spill gauge
+	ahead                          gauge // rows received and not yet handed on
 }
 
 // gauge is a count and its peak.
@@ -128,6 +136,10 @@ type GaugeSnapshot struct {
 	PeakSpillReaders int64 `json:"peak_spill_readers"`
 	SpillLiveBytes   int64 `json:"spill_live_bytes"`
 	PeakSpillBytes   int64 `json:"peak_spill_live_bytes"`
+	// AheadRows are rows received and not yet handed on: ahead of the
+	// publish frontier, in memory or spilled.
+	AheadRows     int64 `json:"ahead_rows"`
+	PeakAheadRows int64 `json:"peak_ahead_rows"`
 }
 
 // Snapshot reads g; a nil Gauges reads as zero.
@@ -136,7 +148,8 @@ func (g *Gauges) Snapshot() GaugeSnapshot {
 		return GaugeSnapshot{}
 	}
 	return GaugeSnapshot{Nodes: g.nodes.n.Load(), PeakNodes: g.nodes.peak.Load(), Markers: g.markers.n.Load(), PeakMarkers: g.markers.peak.Load(),
-		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load()}
+		SpillReaders: g.readers.n.Load(), PeakSpillReaders: g.readers.peak.Load(), SpillLiveBytes: g.spill.n.Load(), PeakSpillBytes: g.spill.peak.Load(),
+		AheadRows: g.ahead.n.Load(), PeakAheadRows: g.ahead.peak.Load()}
 }
 
 // batchRows is the minimum number of rows per sink call (except the last).
@@ -199,6 +212,10 @@ type run[R, P any] struct {
 	// The stream-wide order guard: the last key handed on (drainer only).
 	last    string
 	hasLast bool
+	// advanced is when the drainer last handed rows on (or began), stuck
+	// the longest interval between two such moments (Stats.FrontierStuck).
+	advanced time.Time
+	stuck    time.Duration
 
 	received atomic.Int64 // rows the emitters received
 }
@@ -254,6 +271,11 @@ func (o *run[R, P]) waitAt(c *sync.Cond, site string) {
 
 // Test hooks that widen race windows; nil in production.
 var hookBeforeDrain, hookAfterExpand func()
+
+// hookStopCallback runs (tests) in the context's stop callback before it
+// sets stopped: delaying it opens the window in which only a latch taken
+// with the failure keeps the drainer from passing a failed node.
+var hookStopCallback func()
 
 // hookMarkers sees the marker bytes held after each publish, hookDrained
 // the bytes and marker bytes still counted when the drain ends (tests;
@@ -353,6 +375,10 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 		}
 		o.last, o.hasLast = k, true
 	}
+	now := time.Now()
+	o.stuck = max(o.stuck, now.Sub(o.advanced))
+	o.advanced = now
+	o.g.ahead.add(-int64(len(rows)))
 	o.segs = append(o.segs, rows)
 	o.segRows += len(rows)
 	if o.segRows >= batchRows {
@@ -422,6 +448,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
 	st.Received = o.received.Load()
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
+	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	if err == nil && st.Received != st.Rows {
 		// Conservation inside the stage (spill, compaction, replay): a row
 		// received and never handed on is a lost row, never a success.
@@ -480,7 +507,11 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	if opt.Shared != nil {
 		opt.Shared.setWake(wake)
 	}
+	hook := hookStopCallback // read now: the callback may outlive the run
 	stop := context.AfterFunc(ctx, func() {
+		if hook != nil {
+			hook()
+		}
 		o.stopped.Store(true)
 		wake()
 	})
@@ -550,8 +581,13 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	}
 	if err != nil {
 		// Latch the failure before the node is exposed as done: otherwise
-		// the drainer could see a finished tree and succeed first.
+		// the drainer could see a finished tree and succeed first, or pass
+		// the failed node and hand on its siblings' rows (a gap: the rows
+		// it emitted are dropped, those after it are not). stopped is set
+		// here, under mu, not only by the context's AfterFunc, which runs
+		// later on its own goroutine.
 		o.cancel(err)
+		o.stopped.Store(true)
 	}
 	if err != nil { // children emitted but never published will not be expanded
 		if d, ok := o.p.(source.Disposer[R]); ok {
@@ -603,6 +639,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 		return nil
 	}
 	e.o.received.Add(int64(len(rows)))
+	e.o.g.ahead.add(int64(len(rows)))
 	if e.direct {
 		if e.o.stopped.Load() {
 			return context.Cause(e.o.ctx)
@@ -807,6 +844,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	var st Stats
 	releaseEvery := max(1, o.opt.Budget/16)
 	frames := []drainFrame[R, P]{{n: root}}
+	o.advanced = time.Now()
 	o.mu.Lock()
 	root.onPath.Store(true)
 	for len(frames) > 0 {
@@ -852,6 +890,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
+	o.stuck = max(o.stuck, time.Since(o.advanced))
 	return st, o.flush()
 }
 

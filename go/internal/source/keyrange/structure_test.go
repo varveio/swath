@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
@@ -70,7 +71,7 @@ func TestStructureNeverBlocksASplit(t *testing.T) {
 	keys := seedShapes()["deep census"]
 	g := &structureGate{sorted: newSorted(keys, false, 1), release: make(chan struct{})}
 	g.Latency = time.Millisecond
-	p, err := newTest(g, Options{Workers: 16, Structure: true})
+	p, err := newTest(g, Options{Workers: 16, Structure: StructureOn})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestStructurePivotsOnFolders(t *testing.T) {
 	}
 	want := slices.Sorted(slices.Values(keys))
 	var empty [2]int64
-	for i, on := range []bool{false, true} {
+	for i, on := range []Structure{StructureOff, StructureOn} {
 		f := newSorted(keys, false, 1)
 		f.Latency, f.DelimLatency = 2*time.Millisecond, 500*time.Microsecond
 		got, st, leaves := runBudget(t, f, Options{Structure: on}, 16, 1<<20)
@@ -123,8 +124,26 @@ func TestStructurePivotsOnFolders(t *testing.T) {
 		t.Logf("structure=%v splits=%d empty=%d pivot_structure=%d probes=%d late=%d requests=%d",
 			on, st.Get(cSplitAcceptedBounded)+st.Get(cSplitAcceptedFrontier), empty[i], st.Get(cSplitPivotStructure),
 			st.Get(cStructureRequests), st.Get(cStructureLate), st.Get(cRequests))
-		if on && st.Get(cSplitPivotStructure) == 0 {
+		if on != StructureOff && st.Get(cSplitPivotStructure) == 0 {
 			t.Fatal("no split pivoted on a folder")
+		}
+	}
+}
+
+// TestDetach: detach keeps the strings and their order and shares no byte
+// with the buffer they were views of.
+func TestDetach(t *testing.T) {
+	page := "a/b/c/dd/eee/"
+	in := []string{page[0:2], page[2:4], "", page[6:9], page[9:]}
+	want := slices.Clone(in)
+	got := detach(in)
+	if !slices.Equal(got, want) {
+		t.Fatalf("%q, want %q", got, want)
+	}
+	lo, hi := uintptr(unsafe.Pointer(unsafe.StringData(page))), uintptr(unsafe.Pointer(unsafe.StringData(page)))+uintptr(len(page))
+	for _, s := range got {
+		if p := uintptr(unsafe.Pointer(unsafe.StringData(s))); len(s) > 0 && p >= lo && p < hi {
+			t.Fatalf("%q is still a view of the page", s)
 		}
 	}
 }

@@ -29,8 +29,8 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 
 // TestMetamorphicLaws: the listing is invariant to the page size, to the
 // range decomposition (seed on and off, 1, 4 and 64 workers, forced random
-// splits), to the memory budget and to the policy toggles (the
-// floors, the seed, structure probes). One
+// splits, a resume), to the memory budget and to the policy toggles (the
+// floors, the seed and its descent, structure probes). One
 // table, over the fixture keyspaces and the hostile ones; the reference is
 // the sorted keyspace itself.
 func TestMetamorphicLaws(t *testing.T) {
@@ -42,6 +42,7 @@ func TestMetamorphicLaws(t *testing.T) {
 		short   bool
 		pageCap int
 		coin    bool // forced random splits
+		resume  bool // resume after the key a third of the way in
 	}
 	variants := []variant{
 		{name: "sequential", opt: Options{Sequential: true}, workers: 1, budget: 500},
@@ -58,8 +59,13 @@ func TestMetamorphicLaws(t *testing.T) {
 		{name: "w64/floors/page=13", opt: Options{Floors: true}, workers: 64, budget: 500, pageCap: 13},
 		{name: "w16/seed/floors/short", opt: Options{Seed: true, Floors: true}, workers: 16, budget: 500, short: true},
 		{name: "w64/seed/page=13", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 13},
-		{name: "w16/structure/short", opt: Options{Structure: true}, workers: 16, budget: 500, short: true},
-		{name: "w32/seed/structure/floors/page=7", opt: Options{Seed: true, Structure: true, Floors: true}, workers: 32, budget: 500, pageCap: 7},
+		{name: "w16/structure/short", opt: Options{Structure: StructureOn}, workers: 16, budget: 500, short: true},
+		{name: "w64/structure-on-frontier", opt: Options{Structure: StructureAuto}, workers: 64, budget: 500},
+		{name: "w8/structure-auto/forced-splits/page=7", opt: Options{Structure: StructureAuto}, workers: 8, budget: 500, coin: true, pageCap: 7},
+		{name: "w32/seed/structure/floors/page=7", opt: Options{Seed: true, Structure: StructureOn, Floors: true}, workers: 32, budget: 500, pageCap: 7},
+		// Pages of 3 make the seed paginate and descend in several waves.
+		{name: "w64/seed-descent", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 3},
+		{name: "w16/seed-descent/resume", opt: Options{Seed: true}, workers: 16, budget: 500, pageCap: 3, coin: true, resume: true},
 	}
 	spaces := keyspaces()
 	for k, v := range hostile() {
@@ -86,6 +92,11 @@ func TestMetamorphicLaws(t *testing.T) {
 				rng := rand.New(rand.NewSource(int64(i)))
 				var mu sync.Mutex
 				opt.SplitCoin = func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(2) == 0 }
+			}
+			want := want
+			if v.resume && len(want) > 0 {
+				opt.Resume = &Resume{After: want[len(want)/3]}
+				want = want[len(want)/3+1:]
 			}
 			got, _, _ := runBudget(t, api, opt, v.workers, v.budget)
 			if !slices.Equal(got, want) {

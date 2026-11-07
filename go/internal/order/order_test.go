@@ -213,3 +213,58 @@ func TestWorkerFailureNeverSucceeds(t *testing.T) {
 		}
 	}
 }
+
+// siblings is a root with two children: "a" emits a row and fails after
+// "b", its right sibling, has finished listing.
+type siblings struct{ bDone chan struct{} }
+
+func (s *siblings) Root() rng { return rng{} }
+
+func (s *siblings) Expand(_ context.Context, r rng, e source.Emitter[rng, tp]) error {
+	switch r.prefix {
+	case "":
+		if err := e.Child(rng{prefix: "a"}); err != nil {
+			return err
+		}
+		return e.Child(rng{prefix: "b"})
+	case "a":
+		<-s.bDone
+		if err := e.Rows([]schema.Row[tp]{{Key: "a1"}}); err != nil {
+			return err
+		}
+		return errors.New("provider failed")
+	}
+	defer close(s.bDone)
+	return e.Rows([]schema.Row[tp]{{Key: "b1"}, {Key: "b2"}})
+}
+
+// TestFailedRangeStopsTheStream: when a range fails, nothing after it
+// reaches the sink, however soon after the failure the drainer passes its
+// node: the rows handed on stay a prefix of the keyspace with no gap, the
+// prefix a resume continues after. The drainer must not pass a failed
+// node before it sees the run stopped. Every tenth run forces the
+// window: the drainer starts late (hookBeforeDrain), so workers expand
+// both siblings and "a" fails while it waits, and the context's stop
+// callback is delayed (hookStopCallback), so only the latch taken with the
+// failure stops the drainer at the failed node; the other runs keep the
+// undisturbed timing. It covers a failed leaf next to a finished sibling,
+// not nested split failures, cancellation mid-drain or spill-trailer
+// errors.
+func TestFailedRangeStopsTheStream(t *testing.T) {
+	defer func() { hookBeforeDrain, hookStopCallback = nil, nil }()
+	for i := range 300 {
+		hookBeforeDrain, hookStopCallback = nil, nil
+		if i%10 == 0 {
+			hookBeforeDrain = func() { time.Sleep(5 * time.Millisecond) }
+			hookStopCallback = func() { time.Sleep(50 * time.Millisecond) }
+		}
+		c := &collect{}
+		_, err := Run[rng, tp](context.Background(), &siblings{bDone: make(chan struct{})}, c, &testSchema, Options{Workers: 2, Budget: 1 << 20})
+		if err == nil || err.Error() != "provider failed" {
+			t.Fatalf("run %d: err = %v", i, err)
+		}
+		if slices.ContainsFunc(c.keys, func(k string) bool { return k[0] == 'b' }) {
+			t.Fatalf("run %d: the sink received %q after the range before them failed", i, c.keys)
+		}
+	}
+}

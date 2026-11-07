@@ -148,8 +148,10 @@ value differs from Java's listing-scope hash), and `stop_source` (under `outcome
 | `engine.peak_in_flight` | `inflight.max_active` |
 | `swath.workers.active` | `max_active` (ranges in `Expand` at once) |
 | `swath.probe.fetches`, `swath.probe.empty_upper_bisections` | – (no 1-key probe; `child_empty.upper` counts the empty upper children it would have caught) |
-| `swath.steal_reason{PIVOT,midpoint}` | splits minus `split.pivot_extrapolated` |
-| `swath.steal_reason{PIVOT,extrapolate}` | `split.pivot_extrapolated` |
+| `swath.steal_reason{PIVOT,midpoint}` | `split.pivot.midpoint`, `split.pivot.reflect` (the anchor reflection, frontier and bounded); a sliver pivot is never taken: `split.sliver_refused` counts the refusals |
+| `swath.steal_reason{PIVOT,extrapolate}` | `split.pivot.density.bounded` + `split.pivot.density.frontier` (the galloped density step) |
+| `swath.steal_reason{STRUCTURE,*}` | `structure.*`; a split on a folder boundary is `split.pivot.structure` |
+| `swath.steal_reason{OWNER_SPLIT,remaining_est_floor}` | `split.skipped.remaining_floor` (only with `swath diag list --floors`); the default gates are `split.skipped.remainder`, `split.skipped.lower_tiny` and `split.skipped.upper_tiny` |
 | `swath.steal_reason{CHILD_MASS,empty}` | `child_empty.lower` + `child_empty.upper` |
 | `swath.steal_reason{RETRY,cursor_passed_pivot}`, `swath.split.guard_aborts` | `split.rejected.cursor`, `split.rejected.*` |
 | `swath.steal_reason{OWNER_SPLIT,demand_gated}` | `split.skipped.no_demand` |
@@ -167,8 +169,9 @@ rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath 
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
 `-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
-is `--workers`, default 64 as Java's, whatever the CPU count (an earlier Go build derived it from the CPU
-count, `min(64, max(4, 3*GOMAXPROCS))`); `--encoders` stays CPU-derived.
+is `--workers`, default 64 as Java's, whatever the CPU count; `--encoders` stays CPU-derived. Java's
+`--tune seed.mode=none` is `--seed=false` (the seed is on by default, as Java's `shallow` is), and `--format discard` is
+`--count-only`, which counts without ordering or spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
 `--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
 shape, so they are read with what already reads S3 listings ([cli.md](cli.md), "Text output"): Java's `key`,
@@ -181,17 +184,42 @@ file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`
 `.parquet` one-writer file. Text runs are not resumable: they keep no journal. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
 never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
 is not, instead of failing on its first request. `--endpoint-url` and `--force` are accepted as Java's names
-of `--endpoint` and `--overwrite`; a custom endpoint is path-style by default, as Java's (an interrupted Go run
-started by an earlier build with `--endpoint` on a host name and no `--path-style` now resolves the path-style
-route, so its resume is refused by the identity check; start it over with `--overwrite`). The seven filters are
+of `--endpoint` and `--overwrite`; a custom endpoint is path-style by default, as Java's. The seven filters are
 Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
 earlier one: `swath resume` replays the recorded command with this build's flags, and a flag this build no
 longer has is refused (exit 2); finish such a run with the build that started it, or start over.
-- `swath diag list --seed-descent` was removed with the seed descent; `--seed` is the one delimiter page.
-  The `seed.probes`, `seed.levels.*` and other descent counters are gone.
+- `--workers` defaults to 64 whatever the CPU count (it was `min(64, max(4, 3*GOMAXPROCS))`).
+- A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
+  and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it
+  over with `--overwrite`.
+- Sizes are binary in every unit (`64MB` is 64 MiB); `KB`, `MB` and `GB` were decimal for the resource sizes,
+  so a run started that way sees a different part size on resume and is refused.
+- Split counters: `split.pivot_extrapolated` is `split.pivot.density.bounded` + `split.pivot.density.frontier`,
+  and `split.pivot_structure` is `split.pivot.structure`. Every split path now counts its engagement: the pivot
+  sources (`split.pivot.*`), empty and small children by source (`child_empty.*`, `child_small.*`), the density
+  step's refusals, the gallop and the reflection (`split.gallop.*`, `split.frontier.anchored`,
+  `split.reflect.ceiling`, `split.density.shrink_prevented`, `split.sliver_refused`), the admission gates
+  (`split.skipped.remainder`, `.lower_tiny`, `.upper_tiny`, `split.estimate_none`), depth (`split.max_depth`,
+  `split.leaves`, `split.leaf_depth_sum`) and the probes' reasons (`structure.sent.*`, `structure.boundaries`,
+  `structure.frontier_pivots`, `structure.suppressed_inherited`); the client adds `inflight.p50_ns`, `p90_ns`,
+  `p99_ns` and, for GCS, `transport.pool_size` ([internals/counters.md](internals/counters.md)).
+- Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
+  chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
+  bare flag is `on`.
+- `--count-only` no longer runs the order stage: the report's `features.order` is false, `spill` is absent
+  and `max_buffered_bytes` is 0.
+- `swath diag list --seed-descent` was removed with the seed descent. The `seed.probes`, `seed.levels.*` and
+  other counters of that descent are gone.
+- `--seed` is on by default (`--seed=false` turns it off) and no longer one delimiter page: it paginates the top
+  level up to 4 pages and descends levels narrower than `--workers` up to 4 deep, in parallel waves (at most 64
+  requests in 6 round trips, the empty pages it follows included), and it also tiles a resumed scope. Its new
+  counters are `seed.pages`, `seed.requests`, `seed.round_trips`, `seed.levels`, `seed.level.<n>.cuts`,
+  `seed.stop.<reason>` (`failed` when its listing fails or the run is canceled: the counters are still published)
+  and `seed.resumed`; `seed.prefixes` counts the top level's folders over all its pages, and on a resume the
+  `seed` feature is on and `resumed_ranges` counts the seed's tiles.
 - `swath diag list --probe` was removed with the 1-key probe; the `probe.*` counters and
   `split.rejected.probe_empty` are gone.
 - `--memory N` is `--row-budget N/2`: the flag names the bytes of rows in flight it bounds, which were half of

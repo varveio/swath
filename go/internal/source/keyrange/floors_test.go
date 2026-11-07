@@ -117,7 +117,7 @@ func TestFloorsGateDecide(t *testing.T) {
 			if c.dens > 0 {
 				st.dens.ewma *= c.dens
 			}
-			_, _, ok := p.decide(st, r, pg, cur)
+			_, ok := p.decidePage(st, r, pg, cur)
 			want := c.want || !floors
 			if ok != want {
 				t.Fatalf("floors=%v %s: split=%v, want %v", floors, c.name, ok, want)
