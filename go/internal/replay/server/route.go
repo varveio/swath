@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/go/sortedparquet"
 )
 
 const protocolS3 = "s3"
@@ -156,15 +158,34 @@ func neutralShape(s latency.Shape) string {
 	return "page"
 }
 
-// fail answers an error: an S3 error as it is, anything else (a store
-// failure) as a 500 that carries no detail.
+// fail answers an error: an S3 error as it is; a fixture found disordered
+// inside a row group as a 500 fixture_disordered that names the part by
+// its base name only (disorderError); anything else (a store failure) as a
+// 500 that carries no detail. The full error, path included, goes to the
+// log only.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, err error) {
 	var e *s3.Error
-	if !errors.As(err, &e) {
+	var disorder *sortedparquet.DisorderError
+	switch {
+	case errors.As(err, &e):
+	case errors.As(err, &disorder):
+		fmt.Fprintf(s.cfg.Log, "replay refused a request over a disordered fixture: %v\n", err)
+		e = disorderError(disorder)
+	default:
 		fmt.Fprintf(s.cfg.Log, "replay failed to serve request: %v\n", err)
 		e = errInternal
 	}
 	s.writeError(w, r, path, arrived, e)
+}
+
+// disorderError is the replay wire contract's answer to a row group whose
+// keys do not ascend: the reason row_group_disorder, the group and the
+// part's file name, never the server's directory layout
+// (TestDisorderedFixtureNamesOnlyThePart).
+func disorderError(d *sortedparquet.DisorderError) *s3.Error {
+	msg := fmt.Sprintf("row group %d of %s is not sorted (reason=%s): %s",
+		d.RowGroup, filepath.Base(d.Part), sortedparquet.ReasonRowGroupDisorder, d.Detail)
+	return &s3.Error{Status: 500, Code: "InternalError", Message: msg, Reason: "fixture_disordered"}
 }
 
 // refuse answers an admission refusal and counts it.
