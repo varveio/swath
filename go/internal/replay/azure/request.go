@@ -98,7 +98,7 @@ func Parse(method, path, rawQuery string, h http.Header, account, container stri
 		return nil, fail(Unsupported, "unsupported_accept")
 	}
 	clientID, hasClientID, _ := header(h, "x-ms-client-request-id")
-	if hasClientID && !validClientRequestID(clientID) {
+	if hasClientID && !ValidClientRequestID(clientID) {
 		return nil, fail(Malformed, "invalid_client_request_id")
 	}
 	params := map[string]string{}
@@ -185,10 +185,20 @@ func decimal(v string) (int64, bool) {
 	return n, true
 }
 
-// validClientRequestID is the echo rule for x-ms-client-request-id: at
-// most 1,024 UTF-8 bytes and no CR or LF.
-func validClientRequestID(v string) bool {
-	return len(v) <= maxClientRequestID && !strings.ContainsAny(v, "\r\n")
+// ValidClientRequestID is the rule for x-ms-client-request-id, applied
+// both to refuse a request and to decide whether an error echoes the id:
+// at most 1,024 bytes once the header's bytes are read as Latin-1 text and
+// written as UTF-8 (each byte at or above 0x80 counts two), and no CR or
+// LF. The HTTP layer of the replay wire contract reads header bytes as
+// Latin-1, so 513 raw 0xE9 bytes are 1,026 (TestClientRequestIDLength).
+func ValidClientRequestID(v string) bool {
+	n := len(v)
+	for i := 0; i < len(v); i++ {
+		if v[i] >= 0x80 {
+			n++
+		}
+	}
+	return n <= maxClientRequestID && !strings.ContainsAny(v, "\r\n")
 }
 
 // decodeComponent percent-decodes one query component strictly: a '%'

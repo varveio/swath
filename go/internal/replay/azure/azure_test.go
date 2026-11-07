@@ -486,3 +486,25 @@ func TestRenderRefusals(t *testing.T) {
 		}
 	}
 }
+
+// TestClientRequestIDLength pins the length rule over raw header bytes:
+// a byte at or above 0x80 is one Latin-1 character, two UTF-8 bytes.
+func TestClientRequestIDLength(t *testing.T) {
+	for _, c := range []struct {
+		id string
+		ok bool
+	}{
+		{strings.Repeat("c", 1024), true}, {strings.Repeat("c", 1025), false},
+		{strings.Repeat("\xe9", 512), true}, {strings.Repeat("\xe9", 513), false},
+		{strings.Repeat("c", 1023) + "\xe9", false}, {"a\rb", false}, {"", true},
+	} {
+		if got := ValidClientRequestID(c.id); got != c.ok {
+			t.Errorf("%d bytes: %v", len(c.id), got)
+		}
+		_, err := Parse("GET", "/replay/c1", "restype=container&comp=list",
+			http.Header{"X-Ms-Version": {Version20260606}, "X-Ms-Client-Request-Id": {c.id}}, "replay", "c1")
+		if (err == nil) != c.ok {
+			t.Errorf("%d bytes: parse %v", len(c.id), err)
+		}
+	}
+}

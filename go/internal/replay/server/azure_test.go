@@ -156,3 +156,21 @@ func TestValidateAzure(t *testing.T) {
 		}
 	}
 }
+
+// TestAzureErrorEchoUsesTheClientIDRule pins the error echo to the same
+// length rule as the refusal: 512 raw 0xE9 bytes are echoed, 513 are not.
+func TestAzureErrorEchoUsesTheClientIDRule(t *testing.T) {
+	s := start(t, azureConfig("azure"))
+	for n, echoed := range map[int]bool{512: true, 513: false} {
+		id := strings.Repeat("\xe9", n)
+		r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list", "x-ms-version", "bad", "x-ms-client-request-id", id)
+		if r.status != 400 || (r.header.Get("x-ms-client-request-id") == id) != echoed {
+			t.Errorf("%d bytes: %d echo %d bytes", n, r.status, len(r.header.Get("x-ms-client-request-id")))
+		}
+	}
+	r := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list", "x-ms-version", "2026-06-06",
+		"x-ms-client-request-id", strings.Repeat("\xe9", 513))
+	if r.status != 400 || r.header.Get("x-swath-replay-error") != "invalid_client_request_id" || r.header.Get("x-ms-client-request-id") != "" {
+		t.Errorf("%+v", r.header)
+	}
+}

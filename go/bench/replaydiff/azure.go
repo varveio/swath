@@ -163,6 +163,13 @@ func azureMatrix(keys [][]byte, rng *rand.Rand, maxPrefixes int) ([]request, []a
 	add("empty client request id", with([2]string{"x-ms-client-request-id", ""}), aq("maxresults", "1"))
 	add("long client request id", with([2]string{"x-ms-client-request-id", strings.Repeat("c", 1025)}), aq("maxresults", "1"))
 	add("duplicate client request id", with([2]string{"x-ms-client-request-id", "a"}, [2]string{"x-ms-client-request-id", "b"}), aq("maxresults", "1"))
+	// Raw obs-text bytes: the length limit counts each as two.
+	for _, n := range []int{512, 513} {
+		id := strings.Repeat("\xe9", n)
+		add(fmt.Sprintf("client request id %d raw 0xE9", n), with([2]string{"x-ms-client-request-id", id}), aq("maxresults", "1"))
+		add(fmt.Sprintf("client request id %d raw 0xE9 bad version", n), [][2]string{{"x-ms-version", "x"}, {"x-ms-client-request-id", id}}, aq("maxresults", "1"))
+	}
+	add("client request id mixed obs-text", with([2]string{"x-ms-client-request-id", "id-\xc3\xa9-\xff"}), aq("maxresults", "1"))
 	add("client id with bad version", [][2]string{{"x-ms-version", "x"}, {"x-ms-client-request-id", "c"}}, aq("maxresults", "1"))
 	for _, a := range []string{"application/xml", "*/*", "application/json", "application/vnd.apache.arrow.stream", "application/xml;q=0",
 		"application/xml;q=0.5", "application/xml;q=2", "application/xml;q=abc", "text/plain, application/xml", "application/xml,", ",", " ", "APPLICATION/XML;Q=1E0"} {
