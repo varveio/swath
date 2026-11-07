@@ -76,6 +76,11 @@ type Options struct {
 	// (Stats.ListingDone). The drain may still have rows to hand on. A
 	// failed or stopped listing never calls it.
 	ListingDone func()
+	// SegmentWorkers caps the workers writing the tail's segments
+	// (segments.go) by the run's resources (listing.segmentWorkers: the
+	// encoders admitted after listing and the descriptors); 0: no cap
+	// beyond the processors. Never more than one per spare processor.
+	SegmentWorkers int
 }
 
 // Stats describe a run.

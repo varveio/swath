@@ -61,14 +61,18 @@ type SegmentSink[P any] interface {
 // or not (Segment*). Rows are the rows the segments handed on, MaxRows the
 // largest segment's; Time sums the segments' wall time (open to close),
 // MaxTime the longest; Plan is the planning time (the boundary frames
-// decoded); Seams the seams checked.
+// decoded); Seams the seams checked. Time splits into Read (spill frames
+// read, Decode of it decoding), Write (handing batches to the part, its
+// encoder's queue wait included) and the rest (opening the part, the order
+// guard).
 type SegmentStats struct {
-	Reason            string
-	Segments, Workers int
-	Rows, MaxRows     int64
-	Seams             int64
-	Time, MaxTime     time.Duration
-	Plan              time.Duration
+	Reason              string
+	Segments, Workers   int
+	Rows, MaxRows       int64
+	Seams               int64
+	Time, MaxTime       time.Duration
+	Plan                time.Duration
+	Read, Decode, Write time.Duration
 }
 
 // Why the segment-parallel replay ran, or not (SegmentStats.Reason).
@@ -81,11 +85,12 @@ const (
 	SegmentNotListedDone = "listing_active" // the drain ended before listing did
 )
 
-// The segment workers are at most the encoders admitted and spareReaders:
-// each reads frames on its own descriptor (the read-ahead is off while they
-// run, so MaxSpillReaders, its 8 included, still bounds the descriptors),
-// with its own zstd decoder, and holds one decoded frame, a batch and its
-// part's queue.
+// The segment workers are at most the encoders admitted (each feeds one
+// part's writer, admitted by its working set, parquetout.EncoderBytes),
+// one per spare processor (spareProcs: each reads and decodes, with its own
+// zstd decoder), and Options.SegmentWorkers (the descriptors: one spill
+// read each, at a time). Each holds one decoded frame, one batch and its
+// part's short queue (parquetout.segmentQueue).
 
 // segState is the drainer's account of the segment-parallel replay.
 type segState[P any] struct {
@@ -127,7 +132,7 @@ func (o *run[R, P]) handed() int64 { return o.rows + int64(o.segRows) }
 // held, and on return); done: the drain is complete.
 func (o *run[R, P]) trySegments() (bool, error) {
 	sg := o.seg.sg
-	if spareReaders() < 1 { // one processor: nothing to run beside the drainer
+	if spareProcs() < 1 { // one processor: nothing to run beside the drainer
 		o.seg.tried, o.seg.st.Reason = true, SegmentOneProcessor
 		return false, nil
 	}
@@ -147,7 +152,10 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		return false, nil
 	}
 	o.seg.tried = true
-	k := min(pl.Encoders, spareReaders())
+	k := min(pl.Encoders, spareProcs())
+	if c := o.opt.SegmentWorkers; c > 0 {
+		k = min(k, c)
+	}
 	if k < 2 {
 		o.seg.st.Reason = SegmentOneEncoder
 		if pl.Encoders >= 2 {
@@ -180,6 +188,9 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		o.ra.held, o.ra.q = 0, nil
 	}
 	sg.BeginSegments()
+	if o.sp != nil {
+		o.sp.closeReaders() // the drainer reads no more frames
+	}
 	o.mu.Unlock()
 	o.stalled()
 	err = o.runSegments(units, segs, o.seg.st.Workers)
@@ -243,18 +254,27 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 // own descriptor; a frame holding other than the rows its marker recorded
 // is refused.
 func (o *run[R, P]) rowsOf(u *unit[P]) ([]schema.Row[P], error) {
+	rows, _, err := o.rowsTimed(u)
+	return rows, err
+}
+
+// rowsTimed is rowsOf with the frame's decoding time.
+func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error) {
 	if u.f == nil {
-		return u.rows, nil
+		return u.rows, 0, nil
 	}
-	rows, _, err := o.sp.readAt(u.f, u.at.off, u.at.size)
+	rows, dec, err := o.sp.readAt(u.f, u.at.off, u.at.size)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if int64(len(rows)) != u.n {
-		return nil, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), u.n)
+		return nil, 0, fmt.Errorf("spill: %s frame at %d holds %d rows, its marker %d", u.f.path, u.at.off, len(rows), u.n)
 	}
-	return rows, nil
+	return rows, dec, nil
 }
+
+// segTimes is one segment's time by what it did (SegmentStats).
+type segTimes struct{ read, decode, write time.Duration }
 
 // cut cuts units into segments where the sink would close its parts: a
 // unit that cannot hold a boundary (its logical bytes and rows do not reach
@@ -315,6 +335,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 	last := make([]string, len(segs))
 	has := make([]bool, len(segs))
 	times := make([]time.Duration, len(segs))
+	parts := make([]segTimes, len(segs))
 	counts := make([]int64, len(segs))
 	var wg sync.WaitGroup
 	var failed atomic.Bool
@@ -341,7 +362,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 					fail(err)
 					return
 				}
-				n, f, l, ok, err := o.segment(units, segs[j], j == 0, out)
+				n, f, l, ok, err := o.segment(units, segs[j], j == 0, out, &parts[j])
 				if err != nil {
 					fail(err)
 					return
@@ -362,6 +383,9 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 		st.MaxRows = max(st.MaxRows, counts[j])
 		st.Time += times[j]
 		st.MaxTime = max(st.MaxTime, times[j])
+		st.Read += parts[j].read
+		st.Decode += parts[j].decode
+		st.Write += parts[j].write
 		if !has[j] {
 			continue
 		}
@@ -381,7 +405,13 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 // segment hands one segment's rows to its part in batches, through the
 // order guard (the first segment also after the drainer's last key). It
 // returns the rows, the first and last keys, and whether there were any.
-func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentSink[P]) (n int64, lo, hi string, any bool, err error) {
+func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentSink[P], tm *segTimes) (n int64, lo, hi string, any bool, err error) {
+	write := func(batch [][]schema.Row[P]) error {
+		t := time.Now()
+		err := out.Write(o.ctx, batch)
+		tm.write += time.Since(t)
+		return err
+	}
 	prev, have := "", false
 	if first {
 		prev, have = o.last, o.hasLast
@@ -392,7 +422,12 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		if o.stopped.Load() {
 			return 0, "", "", false, context.Cause(o.ctx)
 		}
-		rs, err := o.rowsOf(&units[ui])
+		t := time.Now()
+		rs, dec, err := o.rowsTimed(&units[ui])
+		if units[ui].f != nil {
+			tm.read += time.Since(t)
+			tm.decode += dec
+		}
 		if err != nil {
 			return 0, "", "", false, err
 		}
@@ -422,14 +457,14 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		o.g.ahead.add(-int64(len(rs)))
 		batch = append(batch, rs)
 		if batched += len(rs); batched >= batchRows {
-			if err := out.Write(o.ctx, batch); err != nil {
+			if err := write(batch); err != nil {
 				return 0, "", "", false, err
 			}
 			batch, batched = nil, 0
 		}
 	}
 	if len(batch) > 0 {
-		if err := out.Write(o.ctx, batch); err != nil {
+		if err := write(batch); err != nil {
 			return 0, "", "", false, err
 		}
 	}

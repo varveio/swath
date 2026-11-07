@@ -68,6 +68,12 @@ func (r *Router[P]) BeginSegments() {
 	r.segmented = true
 }
 
+// segmentQueue bounds the batches (4,096 rows or more each) queued to a
+// segment's part: its one producer only needs to stay a batch ahead of the
+// encoder, and with tens of parts open at once a deep queue (partQueue)
+// would hold tens of batches each.
+const segmentQueue = 2
+
 // Segment is one part written by one goroutine (OpenSegment).
 type Segment[P any] struct {
 	r *Router[P]
@@ -125,7 +131,7 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 		return nil, fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
 			dataset.ErrPartLimit, o, rows, r.opt.PartSize, r.opt.MaxRows)
 	}
-	p := &part[P]{ordinal: o, opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: o, opened: time.Now(), segs: make(chan batch[P], segmentQueue), done: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]

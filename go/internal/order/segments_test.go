@@ -318,3 +318,45 @@ func TestSegmentsMemoryIsBounded(t *testing.T) {
 		t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
 	}
 }
+
+// TestSegmentsFromMemory: without spill, the rest held in memory is cut
+// and written as segments too, the parts the serial drain's.
+func TestSegmentsFromMemory(t *testing.T) {
+	run := func(procs int) (*partSink, Stats) {
+		withProcs(t, procs)
+		f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+		f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+		f.left.Store(int64(f.siblings))
+		s := &partSink{limit: 20_000, encoders: 4}
+		st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.close()
+		return s, st
+	}
+	serial, _ := run(1)
+	s, st := run(5)
+	if st.Segments.Reason != SegmentEngaged || st.SpillRows != 0 {
+		t.Fatalf("segments %+v, %d rows spilled", st.Segments, st.SpillRows)
+	}
+	if !slices.EqualFunc(s.boundaries(), serial.boundaries(), slices.Equal[[]string]) {
+		t.Fatal("parts differ from the serial drain's")
+	}
+}
+
+// TestSegmentWorkersCap: Options.SegmentWorkers caps the workers.
+func TestSegmentWorkersCap(t *testing.T) {
+	withProcs(t, 9)
+	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	s := &partSink{limit: 3000, encoders: 8}
+	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir(), SegmentWorkers: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Segments.Reason != SegmentEngaged || st.Segments.Workers != 3 {
+		t.Fatalf("segments %+v, want 3 workers", st.Segments)
+	}
+}

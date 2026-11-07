@@ -124,11 +124,11 @@ func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress boo
 	if compress {
 		// A decoded frame is bounded like a raw one: a damaged or hostile
 		// frame cannot claim more memory than any frame written.
-		// One decoder for the drainer and one per concurrent read (the
-		// read-ahead's, or the segments', at most one per spare
-		// processor: DecodeAll blocks past the concurrency); one alone on
-		// one processor.
-		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1+spareReaders()), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
+		// One decoder for the drainer and one per spare processor, the
+		// most concurrent reads (the read-ahead's or the segments'):
+		// DecodeAll blocks past the concurrency. One alone on one
+		// processor.
+		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1+spareProcs()), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
 			return nil, err
 		}
 	}
@@ -163,18 +163,27 @@ func (s *spiller[P]) rowsType() byte {
 // close releases every reader still open (a run that failed downstream
 // of a replay leaves one) and removes the spill directory.
 func (s *spiller[P]) close() {
-	s.mu.Lock()
-	for f := range s.open {
-		f.close()
-	}
-	s.open = map[*spillFile]struct{}{}
-	s.mu.Unlock()
+	s.closeReaders()
 	if s.dec != nil {
 		s.dec.Close()
 	}
 	if s.check() == nil { // else the pathname names another directory now
 		_ = os.RemoveAll(s.dir)
 	}
+}
+
+// closeReaders closes every reader still open (a failed run's, or the
+// drainer's when the segments take over: they read on their own
+// descriptors, so the spill descriptors admitted are theirs).
+func (s *spiller[P]) closeReaders() {
+	s.mu.Lock()
+	for f := range s.open {
+		f.close()
+		f.r = nil
+		s.readers(-1)
+	}
+	s.open = map[*spillFile]struct{}{}
+	s.mu.Unlock()
 }
 
 // check is the output's identity check (Options.SpillVerify) before a

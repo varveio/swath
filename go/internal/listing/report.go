@@ -388,6 +388,15 @@ type Segments struct {
 	TimeNs   int64  `json:"time_ns"`     // summed over segments, open to close
 	MaxNs    int64  `json:"max_time_ns"` // the longest segment
 	PlanNs   int64  `json:"plan_ns"`     // cutting the rest into segments (boundary frames decoded)
+	// The segments' time by what it did: reading spill frames (DecodeNs
+	// of it decoding), handing batches to their parts (WriteNs: the
+	// encoders' queue waits included); the rest of time_ns is the order
+	// guard and opening parts.
+	ReadNs   int64 `json:"read_ns"`
+	DecodeNs int64 `json:"decode_ns"`
+	WriteNs  int64 `json:"write_ns"`
+	// MaxWorkers is the cap on workers (listing.segmentWorkers).
+	MaxWorkers int `json:"max_workers"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

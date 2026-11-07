@@ -317,6 +317,25 @@ func admitAfterListing(rowBudget int64, workers int, fds int64) int {
 	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, workers, fds)
 }
 
+// segmentWorkers caps the workers writing the tail as parallel parts
+// (order.Options.SegmentWorkers): each feeds one part's writer, so no more
+// than the encoders admitted after listing (their working set is that
+// admission's, parquetout.EncoderBytes each), and the order stage keeps
+// them to one per spare processor. Each reads one spill frame at a time on
+// its own descriptor: the 16 spill descriptors reserved at admission
+// (order.MaxSpillReaders), plus what the limit leaves beside the workers'
+// connections, the encoders' part files and the reserve (fds 0: unknown,
+// no cap). Beside its writer a worker holds one decoded frame, one batch
+// and a two-batch queue: about 3 × 4,096 rows.
+func segmentWorkers(encoders, workers int, fds int64) int {
+	n := int64(encoders)
+	if fds > 0 {
+		free := fds - int64(order.MaxSpillReaders) - 2*int64(workers) - fdReserve - int64(encoders)
+		n = min(n, int64(order.MaxSpillReaders)+max(0, free))
+	}
+	return int(max(1, n))
+}
+
 // listingPageBytes is what one worker's page in flight holds outside the
 // row budget: a 1,000-key S3 response (about 300 KB of XML) and the arena
 // its strings are copied into, rounded up.
@@ -696,7 +715,7 @@ func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel cont
 func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (oopt order.Options, scratch string, err error) {
 	gauges := &order.Gauges{}
 	oopt = order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
-		After: jr.after(), Gauges: gauges}
+		After: jr.after(), Gauges: gauges, SegmentWorkers: segmentWorkers(cfg.Limits.maxEncoders, cfg.Limits.Workers, fdLimit())}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
 	}
@@ -840,7 +859,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 	if a.router != nil {
 		s := ost.Segments
 		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, MaxRows: s.MaxRows, Seams: s.Seams,
-			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan)}
+			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan), ReadNs: int64(s.Read), DecodeNs: int64(s.Decode), WriteNs: int64(s.Write),
+			MaxWorkers: oopt.SegmentWorkers}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
 		switch {

@@ -283,7 +283,11 @@ func (o *run[R, P]) replayMarker(it *item[R, P]) error {
 	return o.send(rows)
 }
 
-// spareReaders is how many reads may run beside the drainer's: one per
-// spare processor, at most aheadReads (the read-ahead's and the segments'
-// cap, and the extra zstd decoders); 0 on one processor.
-func spareReaders() int { return min(aheadReads, max(0, aheadProcs()-1)) }
+// spareReaders is how many read-ahead reads may run beside the drainer's:
+// one per spare processor, at most aheadReads; 0 on one processor.
+func spareReaders() int { return min(aheadReads, spareProcs()) }
+
+// spareProcs is the processors beside the drainer's: the segment workers'
+// cap, and the zstd decoders beside the drainer's (one per concurrent
+// reader); 0 on one processor.
+func spareProcs() int { return max(0, aheadProcs()-1) }

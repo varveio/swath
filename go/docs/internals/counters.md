@@ -75,6 +75,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.segments.reason` | reason | the segment-parallel replay after listing: `engaged`, or why not: `one_processor` (GOMAXPROCS 2 or less), `one_encoder`, `single_part`, `not_planned` (the router's rule not stated before the drain ended), `listing_active` (absent without a dataset) |
 | `drain.segments.segments`, `.workers`, `.rows`, `.max_rows`, `.seam_checks` | parts, workers, rows, rows, seams | segments written (one part each), the workers writing them, their rows and the largest segment's, the seams checked |
 | `drain.segments.time_ns`, `.max_time_ns`, `.plan_ns` | ns | segments' time summed (open to close) and the longest; cutting the rest into segments |
+| `drain.segments.read_ns`, `.decode_ns`, `.write_ns`, `.max_workers` | ns, workers | of `time_ns`: spill frames read (and decoded), batches handed to the parts (encoder queue waits included); the workers' cap (`listing.segmentWorkers`) |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 

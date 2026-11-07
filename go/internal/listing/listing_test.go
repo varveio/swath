@@ -230,6 +230,17 @@ func TestResourceAdmission(t *testing.T) {
 			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
 		}
 	}
+	// The tail's segment workers: the encoders admitted after listing, and
+	// the 16 spill descriptors plus what the limit leaves.
+	for _, tc := range []struct {
+		encoders, workers int
+		fds               int64
+		want              int
+	}{{32, 1024, 0, 32}, {32, 64, 1 << 20, 32}, {32, 64, 16 + 128 + 32 + 32 + 4, 20}, {32, 64, 100, 16}, {1, 64, 0, 1}} {
+		if got := segmentWorkers(tc.encoders, tc.workers, tc.fds); got != tc.want {
+			t.Errorf("segmentWorkers(%d, %d, %d) = %d, want %d", tc.encoders, tc.workers, tc.fds, got, tc.want)
+		}
+	}
 	// The reserve: one part per encoder, at least 1 GiB (the defaults' 5
 	// encoders of 64 MiB parts take the floor); negative is none.
 	if a, b := spillReserve(5, DefaultPartSize), spillReserve(16, 256<<20); a != 1<<30 || b != 4<<30 {

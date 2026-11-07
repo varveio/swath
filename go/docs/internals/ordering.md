@@ -366,8 +366,13 @@ is done, the order stage cuts the rest of the stream into parts itself and write
 - **When.** Listing is done (every range finished, so the rest is immutable), the sink states its cut rule
   (`order.Segmenter`: the Parquet router once part 0 has frozen its size ratio, and no recovered boundary,
   `parquetout.Options.Cut`, lies ahead), at least two encoders are admitted and two processors are spare
-  beside the drainer's. Workers: the encoders admitted, at most one per spare processor and at most 8
-  (`spareReaders`). With two processors or one nothing changes. Before listing is done nothing changes either: the drainer walks the tree as
+  beside the drainer's. With two processors or one nothing changes.
+- **How many workers.** Each feeds one part's writer and reads one frame at a time: at most the encoders
+  admitted after listing (each writer's working set, `parquetout.EncoderBytes`, is that admission's), one per
+  processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
+  spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
+  leaves beside the workers' connections, the part files and the reserve). On sentinel-cogs (1.09B keys, 32
+  cores) a fixed cap of 8 was the bound: 8 workers busy through a 146 s tail. Before listing is done nothing changes either: the drainer walks the tree as
   always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
 - **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
   (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
@@ -390,10 +395,14 @@ is done, the order stage cuts the rest of the stream into parts itself and write
 - **Failure.** Any failure stops every worker. A segment that did not finish leaves its part unclosed, and
   the router's abort discards it: no partial part is published (`TestSegmentsFailureClosesNoPart`). The
   parts before it that finished may publish, in order: a durable prefix, as always.
-- **Memory.** No rows are queued beyond the serial drain's: each worker holds one decoded frame, one batch
-  and its part's queue (16 batches), and the tree's in-memory rows stay where they were until the drain
-  ends (`TestSegmentsMemoryIsBounded`). The read-ahead stops when segments begin.
+- **Memory.** No rows are queued beyond the serial drain's: beside its writer each worker holds one decoded
+  frame, one batch and its part's queue of two batches (`parquetout.segmentQueue`), about 3 × 4,096 rows, and
+  the tree's in-memory rows stay where they were until the drain ends (`TestSegmentsMemoryIsBounded`). The
+  read-ahead stops when segments begin.
 
 The report's `resources.drain.segments` carries `reason` (`engaged`, `one_processor`, `one_encoder`,
 `single_part`, `not_planned`, `listing_active`), `segments`, `workers`, `rows`, `max_rows`, `seam_checks`,
-`time_ns` (summed, open to close), `max_time_ns` and `plan_ns`.
+`time_ns` (summed, open to close), `max_time_ns`, `plan_ns`, `max_workers` (the cap), and the time's split:
+`read_ns` (spill frames read, `decode_ns` of it decoding) and `write_ns` (handing batches to the parts, their
+encoders' queue waits included). A tail whose `write_ns` is most of `time_ns` is bound by the parts' encoding;
+one whose `read_ns` is, by the spill disk.
