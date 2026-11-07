@@ -433,6 +433,7 @@ comments and CDATA apart as its scalar policy does (`TestEvidenceRejectsCorrupte
 | bodies | `azure` `TestRenderListGolden`, `TestRenderRefusals`, `TestUnrenderableYearsAndNegativeEpoch`, `TestHTTPDatePadsSingleDigitDay` |
 | client request id | `azure` `TestClientRequestIDLength`; `server` `TestAzureErrorEchoUsesTheClientIDRule` |
 | response bounds with escaping-heavy names | `server` `TestAzureEscapingHeavyPageStopsAtTheCap`, `TestAzureConcurrentBudgetExhaustion` |
+| caps against fixture refusals, in the replay wire contract's order | `azure` `TestRenderErrorPrecedence`; `replaydiff` `TestAzureSmallCapsAgainstJava` (with `SWATH_REPLAY_JAVA=` the Java launcher: caps of 256 bytes, 4 KiB and the default over unrenderable rows, both servers on one fixture the Java tool sorted) |
 | the evidence comparator itself | `azure` `TestComparatorAcceptsTheProfile`, `TestComparatorOmitsNativeOrMetadata`, `TestComparatorAcceptsTheRenderer`, `TestComparatorRefusesChanges`, `TestComparatorWalkBoundaries`, `TestComparatorRefusesCrossPagePrefixRepeat`, `TestNamespaceMapping`, `TestExchangeChecksVersionClientIDAndErrorCode`, `TestWalkChecksVersionAndPreamble`, `TestWalkRequestsCarryClientIDAndRefuseDuplicates`, `TestPageParsing` |
 | latency key | `azure` `TestLatencyKeyGolden` |
 | routing, headers, meters, configuration | `server` `TestAzureRouting`, `TestAzureMarkerWalk`, `TestValidateAzure`; `cmd/swath-replay` `TestAzureFlagsAndStartupLine` |
