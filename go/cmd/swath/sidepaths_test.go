@@ -9,8 +9,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // exitOf is the exit code main gives err.
@@ -551,5 +553,94 @@ func TestDanglingLinkSidePaths(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(target); string(b) != "keep" {
 		t.Fatalf("the link's target changed: %d bytes", len(b))
+	}
+}
+
+// fakeEntry is an entry of fakeCaseFS: a file identity and its kind.
+type fakeEntry struct {
+	id  int
+	dir bool
+}
+
+func (e fakeEntry) Name() string       { return "" }
+func (e fakeEntry) Size() int64        { return 0 }
+func (e fakeEntry) Mode() os.FileMode  { return map[bool]os.FileMode{true: os.ModeDir}[e.dir] }
+func (e fakeEntry) ModTime() time.Time { return time.Time{} }
+func (e fakeEntry) IsDir() bool        { return e.dir }
+func (e fakeEntry) Sys() any           { return nil }
+
+// fakeCaseFS is a filesystem for the case probe: entries by exact path,
+// and the directories whose lookups fold case (a case-insensitive volume
+// mounted there; its parent's rules are its parent's own).
+func fakeCaseFS(entries map[string]fakeEntry, folding ...string) caseProbe {
+	lookup := func(p string) (fakeEntry, bool) {
+		if e, ok := entries[p]; ok {
+			return e, true
+		}
+		if slices.Contains(folding, filepath.Dir(p)) {
+			for q, e := range entries {
+				if filepath.Dir(q) == filepath.Dir(p) && strings.EqualFold(filepath.Base(q), filepath.Base(p)) {
+					return e, true
+				}
+			}
+		}
+		return fakeEntry{}, false
+	}
+	return caseProbe{
+		names: func(dir string, n int) []string {
+			var names []string
+			for q := range entries {
+				if filepath.Dir(q) == dir && q != dir {
+					names = append(names, filepath.Base(q))
+				}
+			}
+			slices.Sort(names)
+			return names[:min(len(names), n)]
+		},
+		lstat: func(p string) (os.FileInfo, error) {
+			if e, ok := lookup(p); ok {
+				return e, nil
+			}
+			return nil, os.ErrNotExist
+		},
+		same: func(a, b os.FileInfo) bool { return a.(fakeEntry).id == b.(fakeEntry).id },
+	}
+}
+
+// TestFoldsCaseProbeInside: the probe asks the directory itself, so a
+// case-insensitive volume mounted under a case-sensitive parent folds
+// (its entries do, though its own name does not fold in the parent); two
+// case-distinct hard links do not; an empty directory falls back to its
+// own name in its parent.
+func TestFoldsCaseProbeInside(t *testing.T) {
+	root := string(filepath.Separator)
+	p := func(names ...string) string { return filepath.Join(append([]string{root}, names...)...) }
+	fs := fakeCaseFS(map[string]fakeEntry{
+		p("mnt"):                 {1, true},
+		p("mnt", "Links"):        {2, true},
+		p("mnt", "Links", "a"):   {3, false},
+		p("mnt", "Links", "A"):   {3, false}, // a hard link, listed under its own spelling
+		p("mnt", "Drive"):        {4, true},  // a case-insensitive volume
+		p("mnt", "Drive", "a"):   {5, false},
+		p("mnt", "Drive", "Sub"): {6, true},
+		p("mnt", "Files"):        {7, true}, // another, holding a file only
+		p("mnt", "Files", "f"):   {8, false},
+		p("mnt", "Empty"):        {9, true},
+		p("ci"):                  {10, true},
+		p("ci", "Empty"):         {11, true},
+	}, p("mnt", "Drive"), p("mnt", "Files"), p("ci"))
+	for _, tc := range []struct {
+		name, dir string
+		want      bool
+	}{
+		{"hard links a and A", p("mnt", "Links"), false},
+		{"a folding volume, a directory entry", p("mnt", "Drive"), true},
+		{"a folding volume, a file entry with no other-case entry listed", p("mnt", "Files"), true},
+		{"an empty directory in a case-sensitive parent", p("mnt", "Empty"), false},
+		{"an empty directory in a folding parent", p("ci", "Empty"), true},
+	} {
+		if got := fs.folds(tc.dir); got != tc.want {
+			t.Errorf("%s: folds(%s) = %v, want %v", tc.name, tc.dir, got, tc.want)
+		}
 	}
 }

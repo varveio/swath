@@ -158,14 +158,94 @@ func existingPrefix(p string) (string, []string) {
 	}
 }
 
-// foldsCase reports whether dir looks names up without case: dir's own
-// name, respelled in the other case, reaches dir itself in its parent (a
-// directory cannot be hard-linked, so two case-distinct names of one
-// directory are folding, never two links). A name without letters defers
-// to the nearest ancestor's; with none to try it answers true, the answer
-// that refuses. It probes the parent's filesystem, which is dir's but at a
-// mount point. A variable for tests.
-var foldsCase = func(dir string) bool {
+// foldsCase reports whether dir looks names up without case. A variable
+// for tests (caseFS is the filesystem it asks).
+var foldsCase = func(dir string) bool { return caseFS.folds(dir) }
+
+// caseProbe is the filesystem the case probe asks: the names in a
+// directory (at most n), an entry by path (Lstat), and whether two entries
+// are one file.
+type caseProbe struct {
+	names func(dir string, n int) []string
+	lstat func(path string) (os.FileInfo, error)
+	same  func(a, b os.FileInfo) bool
+}
+
+var caseFS = caseProbe{
+	names: func(dir string, n int) []string {
+		f, err := os.Open(dir)
+		if err != nil {
+			return nil
+		}
+		defer f.Close()
+		names, _ := f.Readdirnames(n)
+		return names
+	},
+	lstat: os.Lstat,
+	same:  os.SameFile,
+}
+
+// maxProbeNames bounds the names the probe reads from one directory, and
+// maxProbeCandidates the entries it examines for a directory to try.
+const (
+	maxProbeNames      = 1 << 16
+	maxProbeCandidates = 256
+)
+
+// folds probes inside dir itself, so the answer is dir's filesystem's
+// even at a mount point (a case-insensitive volume at /mnt/Drive under a
+// case-sensitive /mnt): an entry with a letter, respelled in the other
+// case, must reach the same file, and the listing must not hold that
+// other spelling as an entry of its own (a hard link A beside a is listed
+// under both names; a case-folded alias is not). A directory entry is
+// preferred: directories cannot be hard-linked, so for one the listing
+// check is redundant. Where the listing is too long to read whole, a file
+// entry's other spelling past the read counts as unlisted: true, the
+// answer that refuses. With no entry to try (an empty directory, or names
+// without letters) it falls back to dir's own name in its parent
+// (parentFolds); a mount point at an empty directory is the limit that
+// remains.
+func (c caseProbe) folds(dir string) bool {
+	names := c.names(dir, maxProbeNames)
+	listed := make(map[string]bool, len(names))
+	for _, n := range names {
+		listed[n] = true
+	}
+	var file string
+	for _, n := range names[:min(len(names), maxProbeCandidates)] {
+		other := swapCase(n)
+		if other == n {
+			continue
+		}
+		fa, err := c.lstat(filepath.Join(dir, n))
+		if err != nil {
+			continue
+		}
+		if fa.IsDir() {
+			fb, err := c.lstat(filepath.Join(dir, other))
+			return err == nil && c.same(fa, fb)
+		}
+		if file == "" {
+			file = n
+		}
+	}
+	if file != "" {
+		other := swapCase(file)
+		fa, ea := c.lstat(filepath.Join(dir, file))
+		fb, eb := c.lstat(filepath.Join(dir, other))
+		if ea != nil || eb != nil || !c.same(fa, fb) {
+			return false
+		}
+		return !listed[other]
+	}
+	return c.parentFolds(dir)
+}
+
+// parentFolds: dir's own name, respelled in the other case, reaches dir in
+// its parent (the parent's lookup rules, which are dir's unless dir is a
+// mount point); a name without letters defers to the nearest ancestor's,
+// and with none to try the answer is true, the answer that refuses.
+func (c caseProbe) parentFolds(dir string) bool {
 	for d := dir; ; d = filepath.Dir(d) {
 		parent, name := filepath.Dir(d), filepath.Base(d)
 		if parent == d {
@@ -175,12 +255,12 @@ var foldsCase = func(dir string) bool {
 		if other == name {
 			continue
 		}
-		fa, ea := os.Lstat(d)
+		fa, ea := c.lstat(d)
 		if ea != nil || !fa.IsDir() {
 			continue
 		}
-		fb, eb := os.Lstat(filepath.Join(parent, other))
-		return eb == nil && os.SameFile(fa, fb)
+		fb, eb := c.lstat(filepath.Join(parent, other))
+		return eb == nil && c.same(fa, fb)
 	}
 }
 
