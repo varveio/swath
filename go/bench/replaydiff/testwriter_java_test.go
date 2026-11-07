@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,8 +26,10 @@ import (
 // driver judges every S3 request against the Java server (compareS3):
 // the Java answer with the newline live S3 writes after the XML
 // declaration, token values masked, and no other difference, documented
-// or not. The Java
-// server's rollup refuses a row group whose key column index does not
+// or not. The fixture's rows carry owners, so the same listings with
+// fetch-owner=true are compared as well: each must pass only as the
+// documented divergence of Owner's place (written before StorageClass, as
+// live S3 does). The Java server's rollup refuses a row group whose key column index does not
 // declare ASCENDING (fixture_disordered), which the test writer once left
 // to parquet-go's default. It needs the Java launcher:
 // SWATH_REPLAY_JAVA=PATH (with JAVA_HOME set as the launcher needs it);
@@ -85,11 +88,11 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 	got := &target{name: "go", base: fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), client: client}
 	rep := &report{}
 	d := &driver{o: options{bucket: "bkt"}, ref: ref, got: got, rep: rep}
-	compared := 0
+	compared, owned := 0, map[string]bool{}
 	for _, prefix := range []string{"", "d0/", "d3/", "d3/s2/", "d5/s1/", "top"} {
 		for _, maxKeys := range []string{"1", "3", "1000"} {
-			for _, delimiter := range []string{"/", ""} {
-				query := q("list-type", "2", "prefix", prefix, "delimiter", delimiter, "max-keys", maxKeys)
+			for _, params := range [][]string{{"delimiter", "/"}, {"delimiter", ""}, {"delimiter", "/", "fetch-owner", "true"}, {"fetch-owner", "true"}} {
+				query := q(append([]string{"list-type", "2", "prefix", prefix, "max-keys", maxKeys}, params...)...)
 				r := request{Name: "test writer " + query, Method: "GET", Query: query}
 				a, df, err := d.compareOne(r)
 				if err != nil {
@@ -102,11 +105,21 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 				if !df.OK {
 					t.Errorf("%s: %+v", r.Query, df)
 				}
+				if strings.Contains(query, "fetch-owner") && strings.Contains(string(a.Body), "<Owner>") {
+					owned[r.Name] = true
+				}
 			}
 		}
 	}
-	if len(rep.Divergences) != 0 {
-		t.Errorf("plain listings judged as documented divergences: %q", rep.Divergences)
+	for _, l := range rep.Divergences {
+		name, _, _ := strings.Cut(l, ": java ")
+		if !owned[name] || !strings.HasSuffix(l, "(as live S3: Owner before StorageClass)") {
+			t.Errorf("not the owner divergence alone: %s", l)
+		}
+		delete(owned, name)
+	}
+	for name := range owned {
+		t.Errorf("%s: an owner listing not judged as the documented divergence", name)
 	}
 	t.Logf("%d requests compared (%d with token bytes differing)", compared, len(rep.TokenBytes))
 }
