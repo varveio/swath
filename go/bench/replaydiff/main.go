@@ -51,6 +51,7 @@ import (
 
 type options struct {
 	java, goBin, fixture, goFixture, bucket, report, live, dumpTSV string
+	protocol                                                       string
 	javaArgs, goArgs, logDir                                       string
 	walkSizes                                                      string
 	random, parallel, walkLimit, maxPrefixes, maxTop               int
@@ -63,6 +64,7 @@ func main() {
 	flag.StringVar(&o.goBin, "go", "", "the Go swath-replay binary")
 	flag.StringVar(&o.fixture, "fixture", "", "the fixture both servers serve")
 	flag.StringVar(&o.goFixture, "go-fixture", "", "a different fixture path for the Go server (e.g. a .tsv dump of the same listing)")
+	flag.StringVar(&o.protocol, "protocol", "s3", "the route to compare: s3 or gcs (both servers get --protocols gcs)")
 	flag.StringVar(&o.bucket, "bucket", "bucket", "the bucket name")
 	flag.StringVar(&o.javaArgs, "java-args", "--parquet-connections 2", "extra serve flags for the Java server")
 	flag.StringVar(&o.goArgs, "go-args", "--parquet-connections 2", "extra serve flags for the Go server")
@@ -152,6 +154,9 @@ type report struct {
 }
 
 func run(o options) error {
+	if o.protocol == "gcs" {
+		return runGCS(o)
+	}
 	ctx := context.Background()
 	if o.goBin == "" && o.dumpTSV == "" || o.java == "" && o.live == "" || o.fixture == "" && o.live == "" {
 		flag.Usage()

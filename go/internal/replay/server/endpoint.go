@@ -49,7 +49,9 @@ func (s *Server) Snapshot(now time.Time) []byte {
 	c := &s.cfg
 	out := []byte(`{"schema_version":2,"serving_mode":`)
 	out = metrics.AppendString(out, c.ServingMode)
-	out = append(out, `,"serving":{"protocols":["s3"],"bucket":`...)
+	out = append(out, `,"serving":{"protocols":`...)
+	out = c.appendServingProtocols(out)
+	out = append(out, `,"bucket":`...)
 	out = metrics.AppendString(out, c.Bucket)
 	out = append(out, `,"azure_account":null,"fixture_identity":`...)
 	out = metrics.AppendString(out, c.FixtureIdentity)
@@ -80,7 +82,9 @@ func (s *Server) Snapshot(now time.Time) []byte {
 	if c.Latency != nil {
 		injection = "shape"
 	}
-	out = append(out, `,"latency_injection":"`+injection+`","pagination_profile":"default","profiles":{"s3":"list-objects-v2"}}`...)
+	out = append(out, `,"latency_injection":"`+injection+`","pagination_profile":"default","profiles":`...)
+	out = c.appendServingProfiles(out)
+	out = append(out, '}')
 	out = append(out, `,"uptime_ms":`...)
 	out = strconv.AppendInt(out, now.Sub(s.started).Milliseconds(), 10)
 	out = append(out, `,"sampled_at_epoch_ms":`...)
