@@ -15,6 +15,7 @@ the rename into `data/` (a record is synced before its part is renamed), and rec
 |---|---|---|
 | fetched | a response body in the client | fetched again |
 | emitted | rows in the order stage (memory, or a disposable spill file) | listed again from the durable frontier |
+| certified | rows in a sealed durable spill file whose ledger record survived ([ordering.md](ordering.md#durable-spill)) | replayed from the file (rows above K only), not listed |
 | encoded | an open or closed part in `.swath/parts/` | discarded unless its journal record is durable; a claimed part is set aside (below) |
 | durable | a synced journal record for a synced part | kept; the part is renamed if the rename was lost |
 | published | renamed into `data/` (early, part by part; not yet a dataset) | kept |
@@ -257,7 +258,7 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 7 (version 3 made the identity provider-neutral, version 4 writes part
+the payload, and the payload (JSON); journal version 8 (version 3 made the identity provider-neutral, version 4 writes part
 bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
 refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
 hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
@@ -265,10 +266,14 @@ record would skip listing; version 7 marks the claimed-part protocol: a version 
 last record at the unclaimed temporary name until the rename into `data/`, and version 7 recovery protects
 only the claimed name, so it would remove that acknowledged part as unrecorded when the last record is torn or
 lost and could then commit a changed replacement; a version 6 journal is refused before recovery reads,
-moves or removes any part or touches the journal).
+moves or removes any part or touches the journal; version 8 adds the run UUID to the header, made when the
+run starts and kept across every resume, and keeps the durable spill across a resume: its part records and
+claimed-part handling are version 7's). A version 7 journal is still read and resumes as version 7: it keeps
+its version, writes nothing of version 8, and resumes with durable spill off (the disposable spill is
+relisted, as before); a version 7 build refuses a version 8 journal.
 An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
-`--overwrite`. The first frame is the header (tool, format, identity, creation time).
+`--overwrite`. The first frame is the header (tool, format, identity, creation time, and from version 8 the run UUID).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
 `fsync`; its one caller is the ordered committer. A record must follow the one before it
 (`journal.Follows`: the next ordinal, no record after the final one, a nonempty part strictly after the last

@@ -28,7 +28,11 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
 `swath diag list --no-spill` or `--count-only`, `features.order` is false for `--count-only` (rows counted, not
-ordered), and `encoder_wait_ns` is absent without output.
+ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
+abandons by reason, retirements, retained bytes, and on a resume `resume` with what it accepted, rejected and
+replayed; [ordering.md](ordering.md#durable-spill)) is absent when durable spill was off, and
+`spill.durable_off` then says why when it could have run (a version 7 journal, a spill cap below 16 MiB, a
+provider without fences, a directory that could not be set up).
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts
 logical calls.
