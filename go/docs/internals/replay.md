@@ -256,7 +256,10 @@ recording of the same bucket. The requests are then the provider conformance mat
 names, bound either to the corpus (where it renders the campaign's own query byte for byte,
 `TestProviderMatrixMatchesTheCampaign`, which runs the campaign's Python) or to names of the recording chosen to
 keep each name's part (`deriveRoles`: a directory of six objects and a gap between two of them, a name that is a
-byte prefix of the next, a directory with two subtrees, the smallest directory over 1,000 names, ...). A case
+byte prefix of the next, a directory with two subtrees, the smallest directory over 1,000 names, ...). The
+recording's names come from the Go server's own `encoding-type=url` listing, decoded in the response grammar (a
+`+` is a space, `%2B` a plus sign) and required to rise strictly in byte order, which the roles' binary search
+assumes (`TestListScopeDecodesListedNames`). A case
 whose question needs names an owned bucket holds (the Unicode, reserved-character, control-character and
 name-limit groups) or an official client library is listed as not sent, with the reason. Token cases take each
 side's own token from the source walk and apply the campaign's mutations (`mutateToken`). The comparison

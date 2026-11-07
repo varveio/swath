@@ -147,8 +147,8 @@ func gcsMetadataOf(got *target, o options) (gcsMetadata, error) {
 	return gcsSynthetic, nil
 }
 
-// listScope lists the Go server's names under prefix, and the newest
-// modification time among them.
+// listScope lists the Go server's names under prefix, in rising byte
+// order, and the newest modification time among them.
 func listScope(t *target, protocol, bucket, prefix string) ([]string, time.Time, error) {
 	var keys []string
 	var newest time.Time
@@ -203,12 +203,21 @@ func listScope(t *target, protocol, bucket, prefix string) ([]string, time.Time,
 				return nil, newest, err
 			}
 			for _, c := range p.Contents {
-				keys = append(keys, string(s3.PercentDecode(c.Key)))
+				keys = append(keys, string(listedKey(c.Key)))
 				note(c.LastModified)
 			}
 			token = p.NextContinuationToken
 		}
 		if token == "" {
+			// The roles and walks search these names by binary search
+			// (under): a listing that is not in strictly rising byte
+			// order, or names decoded wrongly, would bind them to the
+			// wrong names, so it is refused here.
+			for i := 1; i < len(keys); i++ {
+				if keys[i-1] >= keys[i] {
+					return nil, newest, fmt.Errorf("the listing is not in rising byte order: %q then %q", keys[i-1], keys[i])
+				}
+			}
 			return keys, newest, nil
 		}
 	}

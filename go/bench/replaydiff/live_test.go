@@ -349,3 +349,28 @@ func TestReadPins(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// TestListScopeDecodesListedNames: discovery reads the names of an
+// encoding-type=url listing in the response grammar, where a space is
+// '+' and a '+' is %2B, so names with spaces beside names with literal
+// plus signs (and the escape-like "%20" and "%2B" as text) come back as
+// stored, in rising byte order, and a scope with a space finds its
+// subtree.
+func TestListScopeDecodesListedNames(t *testing.T) {
+	keys := []string{"a b/1", "a b/2", "a!/z", "a%20b/y", "a%2Bb/x", "a+b/1", "a+b/c d+e", "data/x"}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	names, _, err := listScope(got, "s3", "bkt", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, "|") != strings.Join(keys, "|") {
+		t.Fatalf("listed %q, want %q", names, keys)
+	}
+	if sub := under(names, "a b/"); len(sub) != 2 || sub[0] != "a b/1" {
+		t.Errorf("under a b/: %q", sub)
+	}
+	scoped, _, err := listScope(got, "s3", "bkt", "a b/")
+	if err != nil || strings.Join(scoped, "|") != "a b/1|a b/2" {
+		t.Errorf("scope a b/: %q %v", scoped, err)
+	}
+}

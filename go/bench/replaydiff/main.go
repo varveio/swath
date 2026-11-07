@@ -625,9 +625,7 @@ func listAll(t *target, bucket string) ([][]byte, []store.Object, error) {
 			return nil, nil, err
 		}
 		for _, c := range page.Contents {
-			// S3 and the Go server write a space as '+'; the Java server
-			// escapes '+' itself, so reading '+' as a space suits all three.
-			k := s3.PercentDecode(strings.ReplaceAll(c.Key, "+", "%20"))
+			k := listedKey(c.Key)
 			keys = append(keys, k)
 			o := store.Object{Key: k, Size: c.Size, StorageClass: c.StorageClass, ChecksumAlgorithm: c.ChecksumAlgorithm, ChecksumType: c.ChecksumType}
 			if c.ETag != nil {
@@ -649,6 +647,15 @@ func listAll(t *target, bucket string) ([][]byte, []store.Object, error) {
 		}
 		query = base + "&continuation-token=" + s3.PercentEncode([]byte(page.NextContinuationToken))
 	}
+}
+
+// listedKey decodes a name an encoding-type=url listing carries. S3 and
+// the Go server write a space as '+' and a '+' as %2B; the Java server
+// escapes '+' itself, so reading '+' as a space suits all three. A
+// percent-decoder that keeps '+' (s3.PercentDecode, the request
+// grammar's) would turn "a b/1" into "a+b/1".
+func listedKey(s string) []byte {
+	return s3.PercentDecode(strings.ReplaceAll(s, "+", "%20"))
 }
 
 func dump(path string, objs []store.Object) error {
