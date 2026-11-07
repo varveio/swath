@@ -93,6 +93,10 @@ type SourceConfig struct {
 	// Options is the provider's options value (registry.Factory.Flags or
 	// Defaults); opaque here. nil takes the provider's defaults.
 	Options any
+	// SeedFrom is a prior to start the range engine from instead of its
+	// delimiter seed (--seed-from): a committed dataset directory of the
+	// same source and scope, or a cut file. "" for none.
+	SeedFrom string
 }
 
 // OutputConfig is where the dataset goes.
@@ -412,6 +416,22 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
+	if cfg.Source.SeedFrom != "" {
+		pr, err := seedFrom(cfg, src)
+		switch {
+		case err == nil:
+			sum.Invocation.Prior = pr
+		case cfg.Output.Resume:
+			// A prior shapes the tiling only: a resume whose prior is gone
+			// or changed lists as a run without one.
+			warn(fmt.Sprintf("%v: resuming without it, as a run without --seed-from", err))
+		default:
+			rep, err := sum.failed(err)
+			cfg.finalize(&rep, err)
+			rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
+			return rep, err
+		}
+	}
 	id := identity(src, s, cfg)
 	sum.ArgsHash, sum.src = id.Hash(), src
 	jr, err := openJournal(ctx, cfg, src, id)

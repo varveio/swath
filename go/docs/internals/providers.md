@@ -311,7 +311,7 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 
-The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
+The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
 seed requests ask for it, structure probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
@@ -365,6 +365,54 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   above `K` are kept: a cut at or below `K` would list published keys again, and the drop of keys up to `K`
   covers only the first tile, `(K, c1]`. An inclusive-start provider returns the folder at or below the bound,
   which the engine drops (`bound_drops`). `seed.resumed` marks it and `resumed_ranges` counts the tiles.
+
+**Warm start** (`--seed-from PATH`, `prior.go`; off by default). A previous listing is a cut-point set with a density
+prior, so the engine can start from it instead of the seed: the root tiles the scope at the prior's cuts and lists
+nothing itself, no delimiter request is sent (`seed.requests` 0, the `seed` feature off, `seed_from` on). The prior
+(`source.Prior`, in `internal/source` so the pipeline fills it without importing a provider package; `source.Seeded` takes it) is source-neutral: ordered byte-exact cut keys, each with an optional count of the keys expected
+in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/listing/prior.go`):
+- *a committed format-2 dataset directory*: the manifest's parts give exact bounds and row counts; the key
+  column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
+  reads the footer and those two index sections, never a data page) gives cuts a thousand times finer. The
+  reader offers 4,096 cuts of about equal rows (four candidates per tile at the most tiles a run starts with),
+  reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a key over
+  the 1,024-byte index bound) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes
+  the last cut;
+- *a cut file*: one key per line, ascending bytewise without repeats, optionally a tab and the expected count;
+  every line has a count or none does (uncounted cuts weigh one each).
+
+Identity, checked before any request (exit 2, class `refused`, `ErrPrior`): a dataset's manifest must name the
+run's source kind and container (the bucket), and its scope must be the run's prefix exactly: a dataset of
+`s3://b/logs/` does not seed `s3://b` nor `s3://b/logs/2026/` (a prefix mismatch is refused, not clipped). The
+manifest records no endpoint or region, so those are not checked: a dataset of another store's bucket of the same
+name is accepted, which can make the run slower, never wrong. A cut file records no scope: every cut must carry the
+run's prefix. Either way the cuts must ascend, be valid UTF-8 and at most 1,024 bytes. The prior is not the output
+directory; the sequential listing and sources off the range engine (the filesystem) refuse it.
+
+Tiling (`tilePrior`): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
+K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its
+longest accepted prefix when that still sorts after the previous cut and inside the scope, else merged into the
+next (`seed.from.unsafe`); with more cuts than `min(1000, 4 × workers) − 1`, a cut is kept where the running mass
+first reaches the next multiple of total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]` and
+the open frontier `(ck, ⊤]` for keys the prior did not know (`seed.from.tiles` counts all). Each bounded tile
+carries its expected keys as its estimate (`Range.est`), the rank's remainder until its first page.
+
+The prior sets the initial tiles and that first estimate only; the adaptive engine is the same for every source
+(owner splits on demand, the gauge, the admission gates, the override, structure probes). How a stale prior is
+corrected: a tile's first page replaces the prior's estimate with its gauge's remainder, so a grown segment is
+under-ranked only until its first page; from then the rank, by estimated remainder, sees it as large, and once
+workers go idle (hunger) it splits inside like any range, the gates reading the page, not the prior. A gauge that
+cannot read the bound (+∞) ranks it above every finite estimate; where the gauge errs, the admission override (4
+refusals in a row) and hunger cover the rest. An emptied segment costs one request for its tile; a new folder
+between cuts lies inside one tile and is split there. The report shows it: `seed.from.error.within_2x`, `.grown`,
+`.shrunk` and `.max_grown` compare every prior tile's listed keys (its descendants included, exact once the run
+ends) with the prior's count; `split.pivot.*`, `split.max_depth` and `child_empty.*` show the splits it took, as on
+any run; `seed.from.expected_keys` against `objects` is the scope's growth. The run report's `invocation.prior`
+names the path, the source (`dataset` or `cuts`), the cuts offered and whether they were counted. On a resume the
+prior is read again; one that is gone or no longer matches is a warning, and the resume lists without it.
+
+There are no finer cuts than the page index: the index gives every 1,024th key, more than the 1,000 tiles a run
+starts with need, and a tile's own pages measure the rest.
 
 The seed is a serial pre-phase of 1 to 6 waves: on a bucket of a few pages it is paid on the critical path
 for little gain, which is why `--seed=false` remains. The default is measured against `--seed=false` on
@@ -529,7 +577,8 @@ concurrency: 27–31 % more requests and 2.2–2.3× the wall.
 
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, pages, requests, round trips, levels, cuts per level, why it stopped, cuts, unsafe, subsampled,
-sentinel and why declined, resumed); splits (considered, accepted bounded and
+sentinel and why declined, resumed); warm start (`seed.from.*`: parts, indexed and failed parts, cuts, unsafe
+cuts, tiles, expected keys, the prior's error per tile); splits (considered, accepted bounded and
 frontier, rejected per guard clause, skipped for no demand, outranked, not continuing, or by an admission
 gate), each accepted
 split's pivot source, the density refinement's refusals by reason; `child_empty.{lower,upper}` and by pivot
@@ -559,7 +608,7 @@ generation and the anchor its upper child carries.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with the seed it is tiled as above, without it the root is
+**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root is
 one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
 
 ## Registry and optional interfaces

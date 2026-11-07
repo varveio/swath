@@ -151,15 +151,16 @@ func ExclusiveEnd(through string, accept func(string) bool) (string, bool) {
 
 // Options configure an Engine.
 type Options struct {
-	Prefix     string    // the scope
-	Sequential bool      // one continuation-token chain, no ranges (the oracle)
-	Seed       bool      // parallel: tile the scope (or a resumed (K, ⊤]) from delimiter listings of its folders first
-	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages (zero: off)
-	Workers    int       // parallel: the order stage's worker count (split demand)
-	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
-	Resume     *Resume   // continue after a journaled run's last published key
-	Floors     bool      // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
-	PageSize   int       // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
+	Prefix     string        // the scope
+	Sequential bool          // one continuation-token chain, no ranges (the oracle)
+	Seed       bool          // parallel: tile the scope (or a resumed (K, ⊤]) from delimiter listings of its folders first
+	Structure  Structure     // pivot on folder boundaries from structure probes sent alongside pages (zero: off)
+	Workers    int           // parallel: the order stage's worker count (split demand)
+	MaxKeys    int64         // stop after this many objects (sequential only; 0 = all)
+	Resume     *Resume       // continue after a journaled run's last published key
+	Prior      *source.Prior // parallel: tile the scope at a prior's cuts instead of the seed (SeedFrom)
+	Floors     bool          // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	PageSize   int           // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
@@ -205,7 +206,8 @@ type Engine[P any] struct {
 	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
-	area    float64 // ∫ active dt, for the mean
+	tiles   []tileAccount // the prior's bounded tiles (expandPrior), by Range.tile
+	area    float64       // ∫ active dt, for the mean
 	areaAt  time.Time
 }
 
@@ -266,6 +268,7 @@ func (p *Engine[P]) Stats() Stats {
 	p.lock()
 	defer p.unlock()
 	p.account(time.Now())
+	p.priorErrors()
 	s := Stats{Counters: p.c.Snapshot(p.disabled()...)}
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el

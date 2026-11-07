@@ -33,6 +33,7 @@ const (
 	whole         // sequential oracle: the scope as one continuation chain
 	seed          // delimiter listings of the folder hierarchy that emit the first tiling (of (after, ⊤] on a resume)
 	resume        // (after, ⊤] after a journaled run's last published key, without the seed
+	warm          // the tiling at a prior's cuts (SeedFrom), of (after, ⊤] on a resume
 )
 
 type origin uint8
@@ -99,6 +100,10 @@ type Range struct {
 	// remainder until its own first page gives one (running.rem).
 	est   float64
 	estOK bool
+	// tile: 1 + the index of the prior tile (expandPrior) the range lies
+	// in, inherited by its children; 0 for none. Its keys add to the
+	// tile's, which the report compares with the prior (priorErrors).
+	tile int32
 }
 
 // estimate is the range's remainder before its first page: +Inf on the
@@ -136,6 +141,8 @@ func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
+	case p.opt.Prior != nil:
+		return Range{kind: warm}
 	case p.opt.Seed:
 		return Range{kind: seed}
 	case p.opt.Resume != nil:
@@ -151,6 +158,8 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 		return p.expandSequential(ctx, e)
 	case seed:
 		return p.expandSeed(ctx, e)
+	case warm:
+		return p.expandPrior(e)
 	case resume:
 		return p.expandResume(e)
 	}
@@ -209,6 +218,9 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
 	p.account(time.Now())
 	delete(p.running, r.id)
 	p.c.Add(cBusyNs, int64(time.Since(start)))
+	if r.tile > 0 {
+		p.tiles[r.tile-1].keys += st.keys
+	}
 	child := r.born == fromLower || r.born == fromUpper
 	if child && st.keys == 0 {
 		upper := 0
@@ -697,9 +709,9 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	p.c.Max(cMaxQueued, int64(p.queued))
 	depth := r.depth + 1
 	p.c.Max(cSplitMaxDepth, depth)
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src,
+	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc,
+	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
 		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
 		stall: stalled(c, m, r, len(p.opt.Prefix))}

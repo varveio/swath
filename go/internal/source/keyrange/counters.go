@@ -37,6 +37,17 @@ const (
 	cSeedStopRoundTrips
 	cSeedStopFailed
 	cSeedResumed
+	cSeedFromParts
+	cSeedFromIndexed
+	cSeedFromIndexFailed
+	cSeedFromCuts
+	cSeedFromUnsafe
+	cSeedFromTiles
+	cSeedFromExpected
+	cSeedFromErrWithin
+	cSeedFromErrGrown
+	cSeedFromErrShrunk
+	cSeedFromErrMaxGrown
 	cSentinelDeclinedTruncated
 	cSentinelDeclinedObjectLast
 	cSentinelDeclinedNoCeiling
@@ -162,6 +173,17 @@ var Counters = table([numCounters]counters.Def{
 	cSeedStopRoundTrips:           d("seed.stop.round_trips", counters.Count, "seeds", "the seed stopped: 6 round trips spent (a wave costs its longest chain of requests, empty pages followed included)", "seed"),
 	cSeedStopFailed:               d("seed.stop.failed", counters.Count, "seeds", "the seed stopped: a listing failed or the run was canceled (the seed counters are what it spent until then)", "seed"),
 	cSeedResumed:                  d("seed.resumed", counters.Flag, "", "the seed tiled a resumed scope (K, ⊤]", "seed"),
+	cSeedFromParts:                d("seed.from.parts", counters.Count, "parts", "parts of the --seed-from dataset (0 for a cut file)", "seed_from"),
+	cSeedFromIndexed:              d("seed.from.indexed_parts", counters.Count, "parts", "parts whose key page index was read for finer cuts", "seed_from"),
+	cSeedFromIndexFailed:          d("seed.from.index_failed", counters.Count, "parts", "parts whose key page index could not be read: their part bounds were cut at instead", "seed_from"),
+	cSeedFromCuts:                 d("seed.from.cuts", counters.Count, "cuts", "cut keys the prior offered (before the merge into tiles)", "seed_from"),
+	cSeedFromUnsafe:               d("seed.from.unsafe", counters.Count, "cuts", "cuts the provider does not accept as a bound: cut at their longest accepted prefix, or merged into the next", "seed_from"),
+	cSeedFromTiles:                d("seed.from.tiles", counters.Count, "ranges", "ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers))", "seed_from"),
+	cSeedFromExpected:             d("seed.from.expected_keys", counters.Count, "keys", "keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth", "seed_from"),
+	cSeedFromErrWithin:            d("seed.from.error.within_2x", counters.Count, "ranges", "prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included)", "seed_from"),
+	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out)", "seed_from"),
+	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
+	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
 	cSplitConsidered:              d("split.considered", counters.Count, "decisions", "split decisions taken with demand and rank", "split"),
 	cSplitPivotReflect:            d("split.pivot.reflect", counters.Count, "splits", "accepted splits whose pivot is the cursor reflected from its chain's anchor (forwardReflect at the scalar where they diverge)", "split"),
 	cSplitPivotMidpoint:           d("split.pivot.midpoint", counters.Count, "splits", "accepted splits whose pivot is a safe scalar midpoint between the cursor and hi", "split"),
@@ -298,8 +320,11 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.Sequential || !p.opt.Floors {
 		off = append(off, "floors")
 	}
-	if p.opt.Sequential || !p.opt.Seed {
+	if p.opt.Sequential || !p.opt.Seed || p.opt.Prior != nil {
 		off = append(off, "seed")
+	}
+	if p.opt.Sequential || p.opt.Prior == nil {
+		off = append(off, "seed_from")
 	}
 	if p.opt.Resume == nil {
 		off = append(off, "resume")

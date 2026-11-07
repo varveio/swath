@@ -292,6 +292,26 @@ overwrite it. Switch readers through a pointer outside the datasets (a generatio
 symlink swapped by rename) once the new directory's `manifest.json` exists, and delete an old generation only
 when no reader uses it.
 
+### Seeding a refresh from the previous dataset
+
+A scheduled relisting of the same bucket should pass the previous generation as `--seed-from`:
+
+```bash
+swath list s3://bucket/logs/ -o /data/logs-2026-11-08 --seed-from /data/logs-2026-11-07
+```
+
+The previous dataset's parts and key page index divide the scope into ranges of about equal expected keys, so the
+run skips the delimiter seed and most early splits, and its requests approach one page per 1,000 keys. The prior
+must be the same source and scope: the manifest's bucket and prefix are compared with the run's (exit 2 on a
+mismatch; a dataset of `logs/` does not seed `logs/2026/`), and the endpoint and region are not recorded in it, so
+point it only at a dataset of the same store. It cannot be the output directory, and `--overwrite` of the prior's
+own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
+changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
+`seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
+them), and `seed.from.expected_keys` against `objects` is the growth. A cut file (one sorted key per line,
+optionally a tab and a count) seeds from anything else that knows the keys, but carries no identity; prefer the
+dataset.
+
 ## Reading the output
 
 ```text

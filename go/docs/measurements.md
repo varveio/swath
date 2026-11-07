@@ -292,6 +292,31 @@ against 118 for the Parquet row on the same fixture), spilled 21.5 GB under `$TM
 its overlay filesystem, and one zstd writer compressed about 21 GB of rows where Java runs three text writers.
 The study's timing grades for these rows describe its instrument, equally for both tools in a group.
 
+## Warm start from the previous dataset (`--seed-from`)
+
+**Synthetic, local.** The first 2,000,000 keys of the argoverse production key list (hierarchical: hex scene
+ids, then frame files) served by `keyfake` at a flat 50 ms per page, 64 workers, sorted Parquet output to the
+local disk, on the 4-vCPU, 7 GB build VM (GCP n4, shared with nothing else). Three runs per arm, interleaved by
+repetition. *Cold* is the default (delimiter seed); *seeded* lists the same keys with `--seed-from` the first
+cold run's dataset (one part, its key page index read: 1,954 cuts merged into 256 tiles); *grown* replaces keys
+800,001–850,000 by ten keys each (2,450,000 keys, one segment 10×) and lists it cold and seeded from the stale
+dataset. Rows equal keys in every run; the seeded datasets are byte-identical to the cold ones (same parts, same
+MD5s).
+
+| Arm | Wall, s (3 runs) | Requests / 1k keys | `split.max_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
+|---|---|---|---|---|---|---|---|
+| cold, 2.0M | 4.03, 4.03, 4.01 | 1.140–1.148 | 25–27 | 49–56 | 263–279 | 39.0–39.7 | – |
+| seeded, 2.0M | 2.68, 3.85, 3.11 | 1.112–1.113 | 2 | 0 | 29–34 | 57.8–60.5 | 255 / 0 |
+| cold, grown 2.45M | 5.35, 4.65, 6.44 | 1.133–1.146 | 28–29 | 65–87 | 330–359 | 30.1–45.0 | – |
+| seeded from the stale dataset, 2.45M | 3.83, 3.90, 3.85 | 1.118–1.122 | 9 | 23–27 | 134–147 | 49.9–50.5 | 248 / 7 (max 10×) |
+
+The seeded runs send no seed request (24 cold) and split only at the tail; the requests above 1 per 1,000 keys
+are each tile's last page (S3 has no end bound, so a tile's final request is a partial page) and the frontier's.
+On the stale prior the 7 tiles of the grown segment are counted `grown` (max 10×) and split inside it (depth 9
+against 2), and the run still beats the cold one. The seeded walls vary with the Parquet encoders on 4 cores
+(the ideal at 64 workers is about 1.9 s); the fleet measurement on the 251 production lists is the
+orchestrator's (Batch).
+
 ## Split admission on small lists
 
 The keyfake S3 fake (`keyfake-static`, 50 ms a page, ListObjectsV2, path-style, anonymous) on 4 shared cores,
