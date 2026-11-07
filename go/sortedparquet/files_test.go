@@ -53,8 +53,8 @@ func TestFileCacheBoundsHandles(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if st := cache.Stats(); st.Peak > 3 || st.Open > 3 || st.Opens <= 10 {
-		t.Fatalf("stats %+v: at most 3 open, and reopens after eviction", st)
+	if st := cache.Stats(); st.Peak > 3 || st.Open > 3 || st.Opens <= 10 || st.Evictions != st.Opens-st.Open {
+		t.Fatalf("stats %+v: at most 3 open, reopens after eviction, an eviction for every descriptor closed", st)
 	}
 	// Evict f0 by reading three others, then replace it.
 	for _, i := range []int{1, 2, 3} {
