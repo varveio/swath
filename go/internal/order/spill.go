@@ -464,11 +464,17 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 		return errSpillFull
 	}
 	// Each frame opens the file by name: the output must still be the
-	// directory the run owns (two stats per frame). A durable file is
-	// opened through the output root.
-	err := s.check()
-	if err == nil && f.d != nil {
+	// directory the run owns. Ownership is checked before each mutation
+	// (the create or open, the append, an ENOSPC rollback's truncation),
+	// two stats each, so a replacement while one was under way stops the
+	// next as the fatal replacement, never as a refused frame. A durable
+	// file is opened through the output root.
+	var err error
+	if f.d != nil {
 		err = faults.At(durableWritePoint(f.size == 0, final))
+	}
+	if err == nil {
+		err = s.check()
 	}
 	if err == nil {
 		var fh *os.File
@@ -478,9 +484,15 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 			fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		}
 		if err == nil {
-			_, err = faults.Write(fh, buf)
-			if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
-				err = errSpillFull // the torn frame is gone: back off as if refused
+			if err = s.check(); err == nil {
+				_, err = faults.Write(fh, buf)
+				if err != nil && errors.Is(err, syscall.ENOSPC) {
+					if verr := s.check(); verr != nil {
+						err = verr // replaced mid-write: fatal, nothing more touched
+					} else if fh.Truncate(f.size) == nil {
+						err = errSpillFull // the torn frame is gone: back off as if refused
+					}
+				}
 			}
 			if cerr := fh.Close(); err == nil {
 				err = cerr

@@ -280,11 +280,11 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 	if dropped := size - off; dropped > 0 {
 		c.st.LedgerDroppedBytes.Add(dropped)
 		c.st.LedgerTruncatedFrom.Store(off)
-		if err := c.verify(); err != nil {
+		if err := faults.At("spill-ledger-truncate"); err != nil {
 			f.Close()
 			return nil, err
 		}
-		if err := faults.At("spill-ledger-truncate"); err != nil {
+		if err := c.verify(); err != nil { // after the crash point: immediately before the truncation
 			f.Close()
 			return nil, err
 		}

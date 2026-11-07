@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1088,6 +1089,89 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 			}
 			if point != "spill-recovery-dirsync" && files() != before {
 				t.Fatalf("%d of %d entries left: unlinked after the replacement", files(), before)
+			}
+		})
+	}
+	// The ledger's truncation: a replacement at its crash point leaves the
+	// ledger unshortened.
+	t.Run("spill-ledger-truncate", func(t *testing.T) {
+		root, _ := sealedSpill(t, 6)
+		path := filepath.Join(DurableDir, ledgerName)
+		b, _ := root.ReadFile(path)
+		b = append(b, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) // a torn tail: the prefix is shorter
+		root.WriteFile(path, b, 0o644)
+		var bad atomic.Bool
+		verify := func() error {
+			if bad.Load() {
+				return replaced
+			}
+			return nil
+		}
+		defer faults.Set(func(p string) error {
+			if p == "spill-ledger-truncate" {
+				bad.Store(true)
+			}
+			return nil
+		})()
+		_, err := RecoverDurable(root, verify, testUUID, "ident", "test", nil)
+		if !errors.Is(err, replaced) {
+			t.Fatalf("recovery after the replacement: %v", err)
+		}
+		if after, _ := root.ReadFile(path); len(after) != len(b) {
+			t.Fatalf("ledger %d bytes, was %d: truncated after the replacement", len(after), len(b))
+		}
+	})
+	// A durable file's write: replaced at its crash point (before the open)
+	// nothing is written; replaced during a write that runs out of space,
+	// the torn frame is not rolled back and the error is the replacement,
+	// not a refused frame.
+	for _, at := range []string{"crash-point", "enospc-rollback"} {
+		t.Run("spill-write/"+at, func(t *testing.T) {
+			h := newHarness(t)
+			h.e.Span("r0001", "r0002", false)
+			h.rows(t, 0, 0, 10)
+			h.e.Fence("r0001/000000-99999", false)
+			h.publish(t, true)
+			f := h.n.spill
+			if f == nil || f.d == nil {
+				t.Fatal("no durable file")
+			}
+			var bad atomic.Bool
+			h.o.sp.verify = func() error {
+				if bad.Load() {
+					return replaced
+				}
+				return nil
+			}
+			name := filepath.Join(DurableDir, f.d.name)
+			fi, _ := h.root.Stat(name)
+			before := fi.Size()
+			if at == "crash-point" {
+				defer faults.Set(func(p string) error {
+					if p == "spill-write-frames" {
+						bad.Store(true)
+					}
+					return nil
+				})()
+			} else {
+				defer faults.SetIO(func(op, n string, b []byte) (int, error) {
+					if op == "write" && strings.HasSuffix(n, ".spill") {
+						bad.Store(true)
+						return len(b) / 2, syscall.ENOSPC
+					}
+					return 0, nil
+				})()
+			}
+			err := h.o.sp.write(f, []schema.Row[tp]{{Key: "r0001/000001-00000"}}, false)
+			if !errors.Is(err, replaced) {
+				t.Fatalf("write after the replacement: %v", err)
+			}
+			fi, _ = h.root.Stat(name)
+			switch {
+			case at == "crash-point" && fi.Size() != before:
+				t.Fatalf("%d bytes written after the replacement", fi.Size()-before)
+			case at == "enospc-rollback" && fi.Size() == before:
+				t.Fatal("the torn frame was truncated after the replacement")
 			}
 		})
 	}
