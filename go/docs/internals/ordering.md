@@ -186,8 +186,9 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Files.** One file per range under `DIR/.swath/spill/spill-*/` (or the temp directory for a text output; a dry run never spills).
   Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
-  uncompressed (`swath diag list --spill-compress=false`), `Z` and `R` plain rows, compressed and not
-  (`swath diag list --spill-plain`, the comparison arm), and `T` the trailer with the row count. A run writes
+  uncompressed (`--spill-compress=false`), `Z` and `R` plain rows, compressed and not
+  (`--spill-plain`, the comparison arm; both flags are runtime flags of `swath list`, and a resume may
+  change them: spill is disposable, removed when a run starts, so a resume never reads another run's frames), and `T` the trailer with the row count. A run writes
   one rows type and its reader refuses every other, so a frame of an unknown or foreign format is never
   decoded. The trailer is written when the range ends and checked after replay. Children have their own
   files, so a parent's trailer says nothing about them.

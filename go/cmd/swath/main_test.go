@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,5 +221,34 @@ func TestPartIntervalDefault(t *testing.T) {
 	}
 	if listing.DefaultPartInterval != 30*time.Second {
 		t.Fatalf("listing.DefaultPartInterval %s", listing.DefaultPartInterval)
+	}
+}
+
+// TestSpillFormatFlags: swath list and swath diag list both take the spill
+// frame flags, and the default is delta frames compressed with zstd: a
+// flag registered on one command only would leave the other on another
+// format (as an earlier build did, writing uncompressed frames under
+// swath list).
+func TestSpillFormatFlags(t *testing.T) {
+	out := t.TempDir()
+	for _, diag := range []bool{false, true} {
+		for _, c := range []struct {
+			args            []string
+			plain, compress bool
+		}{
+			{nil, false, true},
+			{[]string{"--spill-compress=false"}, false, false},
+			{[]string{"--spill-plain"}, true, true},
+			{[]string{"--spill-plain", "--spill-compress=false"}, true, false},
+		} {
+			args := append(append([]string{}, c.args...), "-o", filepath.Join(out, "ds"), "s3://bkt")
+			o, _, err := parseList(args, io.Discard, diag)
+			if err != nil {
+				t.Fatalf("diag=%v %v: %v", diag, c.args, err)
+			}
+			if o.spillPlain != c.plain || o.spillCompress != c.compress {
+				t.Fatalf("diag=%v %v: plain %v compress %v, want %v %v", diag, c.args, o.spillPlain, o.spillCompress, c.plain, c.compress)
+			}
+		}
 	}
 }

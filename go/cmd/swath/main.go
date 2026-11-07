@@ -395,12 +395,15 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		}
 		return nil
 	})
+	// The spill frame format is a runtime choice on every list command (and
+	// on resume: spill is disposable, so a resume's frames never meet the
+	// crashed run's).
+	f.BoolVar(&o.spillCompress, "spill-compress", true, "compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
+	f.BoolVar(&o.spillPlain, "spill-plain", false, "write spill frames without delta coding (each key and payload whole; a comparison arm)")
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 		f.Var(&o.spillReserve, "spill-reserve", "diagnostic: free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
-		f.BoolVar(&o.spillCompress, "spill-compress", true, "diagnostic: compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
-		f.BoolVar(&o.spillPlain, "spill-plain", false, "diagnostic: write spill frames without delta coding (each key and payload whole)")
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
