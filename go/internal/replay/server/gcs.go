@@ -40,10 +40,8 @@ var profiles = map[string]string{ProtocolS3: "list-objects-v2", ProtocolGCS: "js
 // unknown bucket.
 const gcsPathPrefix = "/storage/v1/b/"
 
-// ProviderPath counts the path a provider route took for a page or a
-// refusal, and why (the GCS route's flat, delimiter_indexed,
-// delimiter_walk, query_refused, ...).
-var ProviderPath = metrics.Def{Name: "swath.replay.provider.path", Kind: metrics.Counter, Tags: []string{"protocol", "path", "reason"}}
+// ProviderPath is metrics.ProviderPath, the name the routes use.
+var ProviderPath = metrics.ProviderPath
 
 // routes is the multi-protocol state of a server; nil when only the S3
 // route is enabled, so the S3 route answers every request as before.
@@ -234,6 +232,8 @@ func (s *Server) serveEnvelope(w http.ResponseWriter, r *http.Request, status in
 	arrived := time.Now()
 	release, ok := s.admit()
 	defer release()
+	rw := releasing(w, release)
+	w = rw
 	header := ""
 	if !ok {
 		s.reg.Get(metrics.ResponseAdmissionRefused, protocolReplay, "shutdown").Inc()
@@ -255,7 +255,10 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	rt := s.routes
 	release, ok := s.admit()
 	defer release()
+	rw := releasing(w, release)
+	w = rw
 	fail := func(kind gcs.Kind, reason string) {
+		dropResponse(w)
 		var body []byte
 		if r.Method != http.MethodHead {
 			body = gcs.AppendError(nil, kind)
@@ -301,7 +304,9 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		refuse(gcs.Overload, "response_count_exhausted")
 		return
 	}
-	defer s.responses.Add(-1)
+	hold := &responseHold{s: s}
+	defer hold.drop()
+	rw.hold = hold
 	// The response's memory: reserved for a full page before it is read,
 	// then the chunks the rendered page needs (output.Output).
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, gcs.EstimateSize(req.PageSize)), s.cfg.MaxResponseBytes)
@@ -309,9 +314,13 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		refuse(gcs.Overload, "response_budget_exhausted")
 		return
 	}
-	defer out.Close()
+	hold.out = out
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// A client that leaves does not cancel its page: the page is read,
+	// rendered and counted as served, and only its write fails, as the
+	// replay wire contract's server does (TestClientGoneFinishesThePage).
+	// Shutdown still cancels it.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	defer context.AfterFunc(s.stopCtx, cancel)()
 
@@ -403,18 +412,17 @@ func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, protocol stri
 		s.reg.Get(metrics.HTTPErrors).Inc()
 	}
 	s.reg.Get(metrics.ProtocolHTTPRequests, protocol, strconv.Itoa(status/100)+"xx").Inc()
+	// The request latency ends where the write begins, and only a page
+	// has a write stage: the replay wire contract's meter semantics
+	// (TestRequestMeterSpans).
+	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 	writeStart := time.Now()
 	_ = http.NewResponseController(w).SetWriteDeadline(writeStart.Add(s.cfg.WriteTimeout))
 	w.WriteHeader(status)
-	var err error
-	if r.Method != http.MethodHead {
-		err = writeViews(w, body)
-	}
-	if errors.Is(err, os.ErrDeadlineExceeded) {
+	if err := sendBody(w, r, body); errors.Is(err, os.ErrDeadlineExceeded) {
 		s.reg.Get(metrics.ResponseWriteDeadline, protocol, "total_deadline").Inc()
 	}
-	if protocol != protocolReplay {
+	if protocol != protocolReplay && status/100 == 2 {
 		s.reg.Get(metrics.RequestStageLatency, protocol, "write").Record(time.Since(writeStart))
 	}
-	s.reg.Get(metrics.HTTPRequestLatency).Record(time.Since(arrived))
 }

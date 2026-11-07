@@ -209,17 +209,85 @@ func decodeSegment(raw string) (string, string) {
 // HTTP layer does: 400, an HTML page, no caching, the connection closed,
 // and nothing counted by the replay meters.
 func rejectTarget(w http.ResponseWriter, r *http.Request, problem string) {
-	body := "<html>\n<head>\n<title>Error 400 " + htmlEscape(problem) + "</title>\n</head>\n<body>\n<h2>HTTP ERROR 400 " +
+	rejectRequest(w, r, http.StatusBadRequest, problem)
+}
+
+// rejectRequest answers a request the contract's HTTP layer refuses
+// before routing, with its status, an HTML page naming the problem, no
+// caching, and the connection closed.
+func rejectRequest(w http.ResponseWriter, r *http.Request, status int, problem string) {
+	code := strconv.Itoa(status)
+	body := "<html>\n<head>\n<title>Error " + code + " " + htmlEscape(problem) + "</title>\n</head>\n<body>\n<h2>HTTP ERROR " + code + " " +
 		htmlEscape(problem) + "</h2>\n</body>\n</html>\n"
 	h := w.Header()
 	h["Cache-Control"] = []string{"must-revalidate,no-cache,no-store"}
 	h["Content-Type"] = []string{"text/html;charset=iso-8859-1"}
 	h["Content-Length"] = []string{strconv.Itoa(len(body))}
 	h["Connection"] = []string{"close"}
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write([]byte(body))
 	}
+}
+
+// The request-head limits, the contract's: 8 KiB with the S3 route alone
+// (its HTTP layer's default), 64 KiB when a native route is enabled.
+const (
+	headLimitS3     = 8 << 10
+	headLimitNative = 64 << 10
+)
+
+// headLimit is the largest request head (request line, headers and the
+// blank line) the server reads for cfg.
+func (c *Config) headLimit() int {
+	if p := c.protocols(); len(p) == 1 && p[0] == ProtocolS3 {
+		return headLimitS3
+	}
+	return headLimitNative
+}
+
+// maxHeaderBytes is http.Server.MaxHeaderBytes: twice the larger head
+// limit (128 KiB), so a head up to that size (plus net/http's 4 KiB of
+// slack) reaches headProblem and gets the contract's answer; net/http
+// refuses a larger one itself (431 with its own text/plain page), one of
+// the parser-level residuals.
+func (c *Config) maxHeaderBytes() int { return 2 * headLimitNative }
+
+// headProblem measures a request head against limit as the contract's
+// HTTP layer does (established by sending growing heads to the Java
+// server): a request line longer than the limit is 414 URI Too Long; a
+// head of more than limit bytes is 431 Request Header Fields Too Large.
+// The head is the bytes the connection carried for it (headCounter); a
+// head on a counting connection that the counter did not frame is refused
+// as too large, and only a request on a connection that does not count
+// (none on the serving listener) is measured from its parsed form.
+// Every request must call it once, in order, to keep a connection's
+// heads aligned with its requests.
+func headProblem(r *http.Request, limit int) (int, string) {
+	head, raw, counted := rawHeadSize(r) // taken first, whatever the verdict
+	line := len(r.Method) + 1 + len(r.RequestURI) + 1 + len(r.Proto) + 2
+	if line > limit {
+		return http.StatusRequestURITooLong, "URI Too Long"
+	}
+	if counted && !raw {
+		// The connection counts heads but did not frame this one: never
+		// trust the parsed measure, which can only be shorter.
+		return http.StatusRequestHeaderFieldsTooLarge, "Request Header Fields Too Large"
+	}
+	if !raw {
+		// No connection counter: measure the parsed head, which can only
+		// be shorter than the bytes sent.
+		head = line + len("Host: ") + len(r.Host) + 2 + 2
+		for name, values := range r.Header {
+			for _, v := range values {
+				head += len(name) + 2 + len(v) + 2
+			}
+		}
+	}
+	if head > limit {
+		return http.StatusRequestHeaderFieldsTooLarge, "Request Header Fields Too Large"
+	}
+	return 0, ""
 }
 
 func htmlEscape(s string) string {

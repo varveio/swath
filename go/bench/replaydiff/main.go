@@ -122,6 +122,9 @@ func (t *target) url(bucket string, r request) string {
 }
 
 func (t *target) do(bucket string, r request) (*response, error) {
+	if r.Wire != nil {
+		return t.doWire(bucket, r)
+	}
 	if r.Raw != "" {
 		return t.doRaw(bucket, r)
 	}
@@ -147,6 +150,36 @@ func rawTarget(t *target, bucket string, r request) string {
 	return strings.NewReplacer("{bucket}", bucket, "{host}", strings.TrimPrefix(t.base, "http://")).Replace(r.Raw)
 }
 
+// doWire sends r's whole byte stream on a connection of its own and
+// returns the last answer read before the connection ends.
+func (t *target) doWire(bucket string, r request) (*response, error) {
+	host := strings.TrimPrefix(t.base, "http://")
+	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(time.Minute))
+	go io.WriteString(conn, r.Wire(bucket, host))
+	br := bufio.NewReader(conn)
+	var last *response
+	for {
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			if last == nil {
+				return nil, err
+			}
+			return last, nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		last = &response{Status: resp.StatusCode, Header: resp.Header, Body: body}
+		if err != nil {
+			return last, nil
+		}
+	}
+}
+
 // doRaw sends r's raw target as the request line on a connection of its
 // own and reads the one answer.
 func (t *target) doRaw(bucket string, r request) (*response, error) {
@@ -161,6 +194,9 @@ func (t *target) doRaw(bucket string, r request) (*response, error) {
 	var extra strings.Builder
 	for _, h := range r.Header {
 		extra.WriteString(h[0] + ": " + h[1] + "\r\n")
+	}
+	if r.BucketPad > 0 {
+		extra.WriteString("X-Pad: " + strings.Repeat("a", max(0, r.BucketPad-len(bucket))) + "\r\n")
 	}
 	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n", r.Method, target, host, extra.String()); err != nil {
 		return nil, err
@@ -213,7 +249,12 @@ type report struct {
 	// page tokens differ in bytes: a wire difference, reported apart
 	// from the walk's verdict.
 	TokenBytes []string `json:"token_byte_differences,omitempty"`
-	Results    []result `json:"results"`
+	// Residuals are the documented differences the driver sends anyway so
+	// they stay visible (Compare "residual"), with what each server
+	// answered. They are not in Compared, Passed or Failed; a residual
+	// request that gets no answer is a failure, not a residual.
+	Residuals []string `json:"documented_residuals,omitempty"`
+	Results   []result `json:"results"`
 }
 
 func run(o options) error {
@@ -357,6 +398,14 @@ func (d *driver) compareOne(r request) (*response, diff, error) {
 	return a, narrow(r.Compare, d.comp.compare(a, b), a, b), nil
 }
 
+// noteResidual records what the two servers answered to a documented
+// residual. It is neither compared, passed nor failed.
+func (d *driver) noteResidual(name string, df diff) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: reference %d, go %d", name, df.Status[0], df.Status[1]))
+}
+
 // narrow applies a request's Compare mode to a verdict: "headers" sets the
 // body aside and adds Cache-Control to the compared headers; "status"
 // keeps the status alone.
@@ -402,6 +451,14 @@ func (d *driver) runCases(kind string, cases []request) {
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
 					a, df, err := d.compareOne(c)
+					if c.Compare == "residual" && err == nil {
+						// A documented difference: listed with what each
+						// server answered, outside the verdict counts. A
+						// transport error is not a documented residual: it
+						// falls through and fails the run.
+						d.noteResidual(c.Name, df)
+						continue
+					}
 					if err != nil {
 						res.Error = err.Error()
 					} else {
@@ -611,7 +668,11 @@ func (d *driver) write() error {
 	for _, s := range rep.TokenBytes {
 		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped))
+	for _, s := range rep.Residuals {
+		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
+	}
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
+		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
 	os.Stdout.Write(text.Bytes())
 	if d.o.report != "" {
 		j, err := json.MarshalIndent(rep, "", " ")

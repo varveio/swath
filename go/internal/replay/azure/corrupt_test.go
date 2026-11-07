@@ -101,6 +101,10 @@ var mutations = map[string]func([]exchange) []exchange{
 		i := strings.Index(b, "<Name>") + len("<Name>")
 		return b[:i+1] + "<!--corrupt-->" + b[i+1:]
 	}),
+	"reference-after-root": onFirst(func(b string) string { return replaceOnce(b, "</EnumerationResults>", "</EnumerationResults>&#32;") }),
+	"reference-before-root": onFirst(func(b string) string {
+		return replaceOnce(b, "<EnumerationResults", "&#10;<EnumerationResults")
+	}),
 	"nbsp-between-elements": onFirst(func(b string) string { return replaceOnce(b, "</Blob><Blob>", "</Blob>\u00a0<Blob>") }),
 }
 
@@ -119,7 +123,8 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 		{"azure-09q~2026-06-06", "terminate-early"}, {"azure-09c~2026-06-06", "repeat-prefix"},
 		{"azure-08f~2026-06-06", "wrong-status"}, {"azure-08f~2026-06-06", "wrong-error"},
 		{"azure-03a~2026-06-06", "duplicate-attribute"}, {"azure-03a~2026-06-06", "comment-in-name"},
-		{"azure-03a~2026-06-06", "nbsp-between-elements"},
+		{"azure-03a~2026-06-06", "nbsp-between-elements"}, {"azure-03a~2026-06-06", "reference-after-root"},
+		{"azure-03a~2026-06-06", "reference-before-root"},
 	} {
 		file, sdk := ev.capture(t, c.key)
 		ev.endpoint.mutate = nil
@@ -189,4 +194,24 @@ func TestPinAdjustments(t *testing.T) {
 		err.Error() != "expectation update for unknown, which the archive does not pin" {
 		t.Errorf("%v", err)
 	}
+}
+
+// TestLiteralWhiteSpaceOutsideTheRootIsAccepted is the counterpart of the
+// reference mutations: literal spaces, tabs and line breaks before and
+// after the root leave a matched answer matched.
+func TestLiteralWhiteSpaceOutsideTheRootIsAccepted(t *testing.T) {
+	ev := openEvidence(t, "")
+	file, sdk := ev.capture(t, "azure-03a~2026-06-06")
+	for name, edit := range map[string]func(string) string{
+		"after root": func(b string) string {
+			return replaceOnce(b, "</EnumerationResults>", "</EnumerationResults>\n \t\r\n")
+		},
+		"before root": func(b string) string { return replaceOnce(b, "<EnumerationResults", " \n\t<EnumerationResults") },
+	} {
+		ev.endpoint.mutate = onFirst(edit)
+		if err := catch(func() { ev.endpoint.verify(t, "azure-03a~2026-06-06", file, sdk) }); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	ev.endpoint.mutate = nil
 }

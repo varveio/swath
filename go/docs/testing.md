@@ -127,7 +127,9 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   `go-fixtures` job ([replay.md](replay.md#continuous-integration)).
   The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
   [replay.md](replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
-  `ROOT/fixtures/evidence-gcs/sorted` when present.
+  `ROOT/fixtures/evidence-gcs/sorted` when present. The Azure evidence replay (`go/internal/replay/azure`
+  `TestAzureEvidenceReplay`) runs on the same variable and sorts `ROOT/fixtures/evidence-azure/capture`
+  itself; CI's `go-fixtures` job runs both evidence replays.
 - **Policy toggles:** Java's policy layer can be switched off per mechanism with the hidden
   `--engine-toggle NAME=off`. The names are `owner_split`, `density_ewma`, `radix_bands`,
   `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`, `confetti_feedback`, `reflect_lift`,
@@ -142,6 +144,12 @@ python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical:
   `swath diag list` flags) interleaved, `REPS` times; `bench/policy_table.py OUT` prints wall, requests,
   attempts (the replay server's HTTP count), splits, empty children, overfetched keys, probes and mean active
   ranges per arm.
+
+- **Replay load tests:** `SWATH_REPLAY_LOAD=1` runs the replay server's load tests
+  (`go/internal/replay/server` `TestLoad*`: the request ceiling under the fault proxy, the reader-slot bound under
+  256 walks, no overrun at 64 walks), a few seconds each; they serve `ROOT/fixtures/synthetic-1m/sorted-rolled`
+  when `SWATH_REPLAY_FIXTURES=ROOT` is set, else a generated fixture. `bench/replayload` is the walker the
+  [replay measurements](replay.md#measurements) use.
 
 ## Replay server oracle
 

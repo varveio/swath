@@ -75,9 +75,7 @@ func TestGCSResponseLimitsAreEnforcedBeforeAllocating(t *testing.T) {
 	if allocated > reading+64<<10 {
 		t.Errorf("the refused request allocated %d bytes, %d beyond reading its page; the body is %d", allocated, allocated-reading, body)
 	}
-	if s.budget.Charged() != 0 {
-		t.Errorf("%d bytes still charged", s.budget.Charged())
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 
 	// Beside a stream of refused full pages, small pages keep getting the
 	// budget: each refusal returns its charge as it stops.
@@ -122,9 +120,10 @@ func TestGCSResponseLimitsAreEnforcedBeforeAllocating(t *testing.T) {
 	if served == 0 || refused == 0 {
 		t.Errorf("%d small pages served, %d refused for the budget, %d full pages refused", served, busy, refused)
 	}
-	if peak := s.budget.Peak(); peak > int64(cfg.ResponseBufferBudget) || s.budget.Charged() != 0 {
-		t.Errorf("peak %d, charged %d", peak, s.budget.Charged())
+	if peak := s.budget.Peak(); peak > int64(cfg.ResponseBufferBudget) {
+		t.Errorf("peak %d", peak)
 	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 	if count(s, metrics.ResponseAdmissionRefused, "gcs", "response_too_large") < 1 {
 		t.Error("no response_too_large refusal counted")
 	}
