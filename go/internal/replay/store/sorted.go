@@ -57,6 +57,7 @@ type Sorted struct {
 	counters Counters
 	files    *sortedparquet.FileCache
 	meters   Meters
+	prefetch *prefetcher
 }
 
 // Meters receives a Sorted store's per-read measurements, for the server's
@@ -74,11 +75,27 @@ type Meters struct {
 	// Refused is a read that failed for a fixture reason
 	// (row_group_disorder).
 	Refused func(reason string)
+	// Prefetch receives the window cache's events.
+	Prefetch PrefetchMeters
 }
 
 // SetMeters installs m. It is called before the store serves its first
 // read.
-func (s *Sorted) SetMeters(m Meters) { s.meters = m }
+func (s *Sorted) SetMeters(m Meters) {
+	s.meters = m
+	if s.prefetch != nil {
+		s.prefetch.meters = m.Prefetch
+	}
+}
+
+// PrefetchStats returns the window cache's live counts, and false when the
+// cache is off.
+func (s *Sorted) PrefetchStats() (PrefetchStats, bool) {
+	if s.prefetch == nil {
+		return PrefetchStats{}, false
+	}
+	return s.prefetch.stats(), true
+}
 
 // Readers returns the reader-slot bound (Options.Readers resolved).
 func (s *Sorted) Readers() int { return s.readers }
@@ -157,6 +174,35 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	return rows, s.finished(started, len(rows), err)
 }
 
+// packedRows reads what objectRows reads, packed for the window cache
+// straight from the decoded pages.
+func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, proj Projection) (packed, error) {
+	if limit <= 0 {
+		return packed{}, nil
+	}
+	started := time.Now()
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return packed{}, err
+	}
+	columns := s.objects.columns(proj)
+	// Room for a window up front; a longer read grows as it goes.
+	sink := s.objects.packer(columns, min(limit, DefaultPrefetchWindowRows+limit))
+	err = func() error {
+		defer release()
+		var stats sortedparquet.Stats
+		defer s.record(&stats, false)
+		return s.reader.Scan(ctx, sortedparquet.Range{
+			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
+			Limit: limit, Columns: columns,
+		}, &stats, sink)
+	}()
+	if err := s.finished(started, sink.out.n, err); err != nil {
+		return packed{}, err
+	}
+	return sink.packed(), nil
+}
+
 // finished meters a store call that read and counts an error the replay
 // server classifies, and returns the error.
 func (s *Sorted) finished(started time.Time, rows int, err error) error {
@@ -201,8 +247,17 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 	return entries, true, s.finished(started, len(entries), err)
 }
 
-// Rows implements Store with the Object projection.
+// Rows implements Store with the Object projection, through the window
+// cache when it is on.
 func (s *Sorted) Rows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, proj Projection) ([]Object, error) {
+	if s.prefetch != nil && limit > 0 {
+		return s.prefetch.serve(ctx, from, fromInclusive, toExclusive, limit, proj)
+	}
+	return s.objectRows(ctx, from, fromInclusive, toExclusive, limit, proj)
+}
+
+// objectRows reads Rows from the fixture.
+func (s *Sorted) objectRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, proj Projection) ([]Object, error) {
 	rows, err := s.ReadRows(ctx, from, fromInclusive, toExclusive, limit, s.objects.columns(proj))
 	if err != nil {
 		return nil, err

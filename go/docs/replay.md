@@ -59,6 +59,8 @@ held in memory while it is sorted (about 300 bytes per row), so it suits capture
 | `--metrics-port` | `-1` | the metrics port (below); negative disables it, `0` binds a free one |
 | `--max-concurrent-requests` | `512` | requests served at once (at least 8); more wait for a slot. An injected delay holds its slot, so set this above the widest client fan-out or the queue shows up as latency. Writing a response does not hold a slot: up to twice this many responses can be outstanding, and past that a request is refused (`response_count_exhausted`). The serving listener holds at most four times this many connections; one more is closed as soon as it is accepted |
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
+| `--prefetch-window-rows` | `12500` | the rows a walk's window cache fill ramps to (below); `0` turns the cache off |
+| `--prefetch-max-windows` | `96` | the windows the cache holds, at most this many times `--prefetch-window-rows` rows; `0` turns it off |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
@@ -138,6 +140,29 @@ has no room for that. The response is then rendered into chunks sized from the p
 charged before it is allocated; rendering stops at the first byte past `--max-response-bytes`
 (`response_too_large`) or past the budget. The unused reservation goes back before any injected delay, and the
 chunks are held until the response is written.
+
+## The window cache
+
+A paginating client reads the fixture in order, a page at a time. The window cache in front of the store's
+range reads lets one fixture read serve the pages that follow it: when a read's lower bound is the tail of a
+page the server answered before (an S3 continuation token or `start-after`, the GCS and Azure tokens), its fill
+reads four times the rows the previous fill read, up to `--prefetch-window-rows` rounded up to a multiple of the
+page size, and keeps them as a window; the next pages are sliced from the window. Any other read (a first page,
+a probe, a seek) reads only what it asks for, and keeps it only when the fixture had more. A read is answered
+from the windows only when they hold every row its bounds select, from one window or two adjacent ones;
+anything less reads the fixture, so an answer is byte for byte the one a fixture read gives
+(`store` `TestWindowCacheMatchesTheFixture`). A read answered from a window takes no reader slot: the
+`--parquet-connections` slots bound fixture reads only (`TestWindowCacheHitsTakeNoReaderSlot`). Delimiter
+rollups, and the GCS route's reads of a `swath/gcs-objects/v1` dataset (which project its own columns), read
+the fixture.
+
+Windows are evicted least recently used first, past `--prefetch-max-windows` windows or past that many times
+`--prefetch-window-rows` rows; a window's rows are held packed, the keys and each text column in one array
+apiece (about 130 bytes a row for the canonical schema with 44-byte keys). With the defaults the cache holds
+up to 1.2 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
+turns the cache off: every read then decodes its pages from the fixture. The Java server reads the same
+settings from the system properties `swath.replay.prefetch.window-rows`, `swath.replay.prefetch.max-windows` and
+`swath.replay.prefetch.enabled`, with the same defaults, and publishes the same meters (below).
 
 ## The Azure route
 
@@ -265,14 +290,14 @@ others appear on first use.
 | `serving.refused{reason}` | present | `row_group_disorder`, counted for every read that finds it, a range read or a rollup (the Java server counts the rollup's only) |
 | `index.load.latency{source=derived}`, `index.entries` | present, from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | present, from startup | how long a store read holds its reader slot, slot wait excluded |
-| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | present, from startup | one store call, slot wait included; its rows or rollup entries. The Java server's rows include its prefetch window fills, so its totals are larger |
+| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | present, from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read, on either server; a read answered from a window is none |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | present, from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag; the Java server has a pool per file and per read kind, so its peak can exceed the flag |
 | `delimiter.path{path}` | present | `rollup` or `walk` for an S3 delimiter page |
 | `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | present, from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages, so `row_group_opens` is lower and `decoded_key_rows` higher than the Java server's for the same rollup |
 | `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | renamed: `handle_cache.*` | the Java server opens a row-group reader pool per file on its first rollup; the Go reader has no reader pools. Every part is read through one descriptor cache instead: `handle_cache.opens` (first opens and reopens after eviction), `.evictions`, `.waits` (reads that waited for a descriptor) as counters, and `.open`, `.peak`, `.limit` (half the soft descriptor limit, at most 4,096) as gauges, from startup |
 | `sortfixture.build.latency`, `sortfixture.output.bytes` | present, from startup, zero | recorded by `sort-fixture`, never by a server |
 | `sort.progress`, `sort.steal_reason{outcome,reason}` | absent | the Java sorter's own scheduling; `sort-fixture` here sorts in memory |
-| `prefetch.*` (the window cache's fills, hits, misses, ramp, live windows, rows and anchors, selection, joins, evictions) | absent | the reader has no window cache: every page is decoded from the fixture |
+| `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | present while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |
 | `response.admission.refused{protocol,reason}`, `response.bytes.live`, `response.bytes.peak`, `response.active` | present (gauges from startup) | refusals by `shutdown`, `response_count_exhausted`, `response_budget_exhausted`, `response_too_large` |
 | `response.chunk.allocation{reason}`, `response.chunk.capacity.bytes{reason}` | present, from startup | chunks by `initial`, `initial_cap_partial`, `continuation`, `cap_partial` |
 | `response.percent.encoding.path{protocol,reason}`, `response.write.deadline{protocol,reason}` | present | |
