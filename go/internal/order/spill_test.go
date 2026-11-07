@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,7 +234,7 @@ func TestSpillDiskBudget(t *testing.T) {
 // of a replay is closed with the spiller.
 func TestSpillReadFailures(t *testing.T) {
 	newSp := func(compress bool) *spiller[tp] {
-		s, err := newSpiller(testSchema.Codec, t.TempDir(), compress, 0, 0)
+		s, err := newSpiller(&testSchema, t.TempDir(), true, compress, 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -429,7 +430,7 @@ func TestRunningNodeStorageIsBounded(t *testing.T) {
 // exactly, trailer checks included. Before, every partly read file kept
 // its reader open.
 func TestSpillReadersAreCapped(t *testing.T) {
-	s, err := newSpiller(testSchema.Codec, t.TempDir(), false, 0, 0)
+	s, err := newSpiller(&testSchema, t.TempDir(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,5 +489,105 @@ func TestSpillReadersAreCapped(t *testing.T) {
 	}
 	if s.live.Load() != 0 || g.spill.n.Load() != 0 {
 		t.Fatalf("live spill bytes %d after every file was replayed", s.live.Load())
+	}
+}
+
+// TestDeltaFrameMalformed: checksum-valid delta frames that lie are
+// refused before their memory is allocated: a frame whose prefixes expand
+// past the storage it declares (a few bytes per row standing for a
+// 1,000-byte key each), one declaring more storage than any frame its file
+// was given, a prefix longer than the previous key, a suffix past the
+// frame, trailing bytes, a foreign payload coding, and a rows frame of
+// another format; a zstd delta frame decoding past the limit is refused
+// like a plain one. Every decode-cap refusal is counted.
+func TestDeltaFrameMalformed(t *testing.T) {
+	newSp := func(compress bool) *spiller[tp] {
+		s, err := newSpiller(&testSchema, t.TempDir(), false, compress, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.close)
+		return s
+	}
+	// A legitimate file: one frame of 1,000 one-byte-ish keys.
+	legit := func(s *spiller[tp]) *spillFile {
+		f := s.file()
+		rows := make([]schema.Row[tp], 1000)
+		for i := range rows {
+			rows[i].Key = fmt.Sprintf("%04d", i)
+		}
+		if err := s.write(f, rows, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.next(f); err != nil {
+			t.Fatal(err)
+		}
+		f.close()
+		f.r, f.pos = nil, 0
+		return f
+	}
+	// header is a stateless delta body's header.
+	header := func(n, owned uint64, coding byte) []byte {
+		return append(binary.AppendUvarint(binary.AppendUvarint(nil, n), owned), coding)
+	}
+	row := func(dst []byte, shared uint64, suffix string) []byte {
+		dst = schema.AppendString(binary.AppendUvarint(dst, shared), suffix)
+		return tpCodec{}.Append(dst, &tp{})
+	}
+	expand := header(1000, 4000, payloadStateless)
+	expand = row(expand, 0, strings.Repeat("k", 1000))
+	for range 999 {
+		expand = row(expand, 1000, "")
+	}
+	for _, c := range []struct {
+		name string
+		body []byte
+		want error
+	}{
+		{"expands past its storage", expand, schema.ErrDecodeCap},
+		{"declares more storage than written", row(header(1, 1<<30, payloadStateless), 0, "a"), schema.ErrDecodeCap},
+		{"prefix past the previous key", row(row(header(2, 10, payloadStateless), 0, "a"), 2, "b"), schema.ErrCodec},
+		{"suffix past the frame", append(binary.AppendUvarint(header(1, 10, payloadStateless), 0), 9, 'a'), schema.ErrCodec},
+		{"trailing bytes", append(row(header(1, 10, payloadStateless), 0, "a"), 0), schema.ErrCodec},
+		{"another payload coding", row(header(1, 10, payloadContextual), 0, "a"), schema.ErrCodec},
+		{"more rows than written", row(header(1001, 10, payloadStateless), 0, "a"), schema.ErrCodec},
+	} {
+		s := newSp(false)
+		f := legit(s)
+		if err := os.WriteFile(f.path, s.frame(frameDelta, c.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := s.next(f)
+		runtime.ReadMemStats(&after)
+		if alloc := after.TotalAlloc - before.TotalAlloc; !errors.Is(err, c.want) || alloc > 1<<20 || f.f != nil {
+			t.Fatalf("%s: %v (want %v), %d bytes allocated, reader open %v", c.name, err, c.want, alloc, f.f != nil)
+		}
+		if refused := s.decodeRefused.Load(); (refused == 1) != (c.want == schema.ErrDecodeCap) {
+			t.Fatalf("%s: %d decode-cap refusals counted", c.name, refused)
+		}
+	}
+
+	s := newSp(false)
+	f := legit(s)
+	if err := os.WriteFile(f.path, s.frame(frameRows, appendRows(nil, []schema.Row[tp]{{Key: "a"}}, s.codec)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) {
+		t.Fatalf("a plain frame in a delta run: %v", err)
+	}
+
+	old := maxSpillDecoded
+	maxSpillDecoded = 1 << 20
+	s = newSp(true)
+	maxSpillDecoded = old
+	enc, _ := zstd.NewWriter(nil)
+	f = s.file()
+	if err := os.WriteFile(f.path, s.frame(frameDeltaZstd, enc.EncodeAll(make([]byte, 4<<20), nil)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
+		t.Fatalf("a zstd delta frame decoded past the limit: %v (reader open %v)", err, f.f != nil)
 	}
 }

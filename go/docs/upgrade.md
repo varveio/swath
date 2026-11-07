@@ -205,7 +205,7 @@ longer has is refused (exit 2); finish such a run with the build that started it
   (`split.skipped.remainder`, `.lower_tiny`, `.upper_tiny`, `split.estimate_none`), depth (`split.max_depth`,
   `split.leaves`, `split.leaf_depth_sum`) and the probes' reasons (`structure.sent.*`, `structure.boundaries`,
   `structure.frontier_pivots`, `structure.suppressed_inherited`); the client adds `inflight.p50_ns`, `p90_ns`,
-  `p99_ns` and, for GCS, `transport.pool_size` ([internals/counters.md](internals/counters.md)).
+  `p99_ns` (9223372036854775807 when open-ended, past 2^40 ns), `inflight.latency_overflow` and, for GCS, `transport.pool_size` ([internals/counters.md](internals/counters.md)).
 - Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
   chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
   bare flag is `on`.
@@ -227,8 +227,11 @@ longer has is refused (exit 2); finish such a run with the build that started it
   The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes` (equal to
   `resources.row_budget_bytes`). A journal that recorded `--memory` is refused on resume.
 - `--spill-max` is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
-  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
+  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` (since back on `swath list`, below) moved to
   `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
+- Spill frames are delta-coded and zstd-compressed (level 1) by default; `--spill-compress=false` (on `swath list` and `swath resume`)
+  writes them uncompressed and `--spill-plain` without delta coding. The report's `resources.spill` adds
+  `logical_bytes`, `format` and `decode_refused`.
 
 ## The downstream reader: dispatch on schema id
 

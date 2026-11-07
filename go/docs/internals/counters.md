@@ -36,8 +36,10 @@ logical calls.
 Attempt latency is kept in the client as a fixed log-spaced histogram (four buckets per power of two of
 nanoseconds, up to 2^40 ns; one atomic per bucket) and reported as three derived values, `inflight.p50_ns`,
 `inflight.p90_ns` and `inflight.p99_ns`: each the upper edge of the bucket holding the percentile, at most 25 %
-above it. The buckets themselves are not counters: 156 rows would swamp the report for three numbers a reader
-uses. Every attempt is timed from send to body read, failed ones included (a timed-out attempt lands at
+above it. Attempts of 2^40 ns (about 18 min 20 s) or longer land in one open-ended bucket past the 156 finite
+ones, counted by `inflight.latency_overflow`; a percentile that falls there reads 9223372036854775807 (the
+largest gauge value), never the last finite edge, which would read as a bound (`TestLatencySaturation`). The
+buckets themselves are not counters: 157 rows would swamp the report for the four numbers a reader uses. Every attempt is timed from send to body read, failed ones included (a timed-out attempt lands at
 `--request-timeout`).
 
 Derived readings of the range engine's counters: the mean leaf depth is `split.leaf_depth_sum` /
@@ -54,10 +56,12 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `budget_wait_ns` | ns | emitters, and workers with ranges queued, waited on a full reorder budget (the reorder cost); summed over goroutines |
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
 | `spill.rows`, `spill.bytes`, `spill.ranges` | rows, bytes, ranges | rows written to spill and replayed, bytes written, ranges that spilled |
+| `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--spill-compress=false`), `plain+zstd` or `plain` (`--spill-plain`) |
+| `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and the run warns at start |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
-| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end |
+| `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
 | `timings.listing_done_at` | time | the provider finished: every range expanded, none in flight (absent if it never did); `listing_finished_at` is the order stage's end, after the drain |
 | `drain.tail_ns` | ns | from `listing_done_at` to the drain's last row: the part of the run in which only the drain was left |
 | `drain.worker_idle_before_listing_done_ns`, `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time (nothing queued to list, read-ahead waits included), summed over workers, on either side of `listing_done_at` |
@@ -70,6 +74,16 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.read_ahead.max_reads` | reads | reads allowed at once: 8, at most `GOMAXPROCS` - 1; 0 is off (one processor: the drainer replays alone) |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
+
+A text run's sink (run summary, `output.text`):
+
+| Key | Unit | Meaning |
+|---|---|---|
+| `sink_wait_ns` | ns | the order stage was in the text sink: rows waiting on the writer (one formatter: formatting them, and `output_wait_ns`; more: handing batches to the formatters' full queue) |
+| `output_wait_ns` | ns | handing bytes on: to the compressor (a synchronous encoder compressing, or every parallel job busy), or to the file or stream uncompressed; by the order stage with one formatter, by the sequencer with more |
+| `formatters` | goroutines | rows formatted at once: `--encoders` (as admitted) for a file, 1 (the order stage) for stdout |
+| `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
+| `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `row_budget` (16 MiB each of an allowance equal to the row budget carries fewer), `encoders` (asked), `gzip` (one stream) |
 
 A dry run (`--count-only`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
 and `frontier_stuck_max_ns` are 0 and `spill` is absent.
@@ -201,9 +215,10 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
 | `inflight.max_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
 | `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
-| `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
-| `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
-| `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above |
+| `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.latency_overflow` | count | attempts |  | attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket |
 | `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
 | `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
 | `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |

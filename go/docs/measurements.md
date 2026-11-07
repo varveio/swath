@@ -41,6 +41,12 @@ distinct timestamps: parquet-go cannot switch from dictionary to delta mid-chunk
 
 ## Replayed recordings: Go against Java defaults
 
+**Build.** The Go rows of this section, the next one and [Policy switches](#policy-switches) were measured during
+the port, before it merged as `01dd55b`: that engine's pivot policy (the spec pivot with a clamped density
+refinement) and its single-page seed, not the engine campaign's anchor reflection, gallop, admission gates and
+seed descent. They have not been rerun on the current engine ([Skipped or not measured](#skipped-or-not-measured)),
+and the request and split explanations below are about that older policy.
+
 Replay at each recording's worker-page p50 latency, 64 workers, `--seed`, sorted Parquet output, 3 interleaved
 repetitions (Java defaults interleaved with the Go arm), median (min–max). Requests per 1k keys are computed
 from the medians.
@@ -104,8 +110,9 @@ Divided by the splits (medians): overfetched keys 711 (Go) against 618 (Java) on
 
 **What it is.** Production key lists: the keys of anonymous public S3 buckets of 1M to 150M objects, taken from
 earlier Java runs' sorted output, served as ListObjectsV2 by a private key-list fake (`keyfake`: start-after,
-continuation tokens and delimiter pages, a flat 50 ms per page). No request reached S3. One run per arm and list,
-64 workers, `--count-only`, a 600 s cap per arm, on n4-highcpu-16 Spot VMs (GCP Batch). These are diagnostic
+continuation tokens and delimiter pages, a flat 50 ms per page). No request reached S3 (the live runs below say so).
+One run per arm and list, 64 workers, `--count-only` unless an arm says otherwise, a 600 s cap per arm unless
+stated, on n4-highcpu-16 Spot VMs (GCP Batch). These are diagnostic
 runs outside the study harness: no receipts. The ideal is `ideal64 = (pages/64 + 7 + seed round trips) × 50 ms`
 (one seed round trip in the candidate's ideal, none in the baseline's).
 
@@ -141,9 +148,149 @@ runs outside the study harness: no receipts. The ideal is `ideal64 = (pages/64 +
   regressions, and the two large lists where Java is faster. Peak RSS in this binary still includes the
   retained-page leak ([Memory behind a held-up frontier](#memory-behind-a-held-up-frontier)).
 
-Candidate 3 (`c48ea228`: candidate 1 plus the retained-bound copies and `order.Count`, the review fixes and the
-admission gates) is being swept on the same lists, with sorted Parquet, kill-and-resume and spill-cap arms; its
-table follows here when that sweep completes.
+**Builds after candidate 1.** Each row of the tables below names the build it measured. The head of this change
+(`7b05605`) was not re-swept on the iteration and held-out sets: it adds to candidate 4 a consistent total order
+for the remainder rank (a decision change: three ranges could each outrank the next) and cancellation of
+`order.Count` between children; the runs that name `7b05605` are the scale, one-core and study runs further down.
+
+- **Candidate 3:** `c48ea228`: candidate 1 plus the retained-bound copies and `order.Count`, the review fixes and
+  the admission gates.
+- **Candidate 4:** `26f363ea`: candidate 3 plus the admission override (a gate refuses a split at most 4
+  consecutive pages while workers want work) and the rank's fallback to age on an unknowable estimate.
+
+**Candidate 3 on the iteration set** (2026-11-07, 201 lists, same fake and VMs, 600 s cap per arm). Arms:
+count-only; sorted Parquet, whose keys were compared byte for byte with the key list served (the keys of the
+Java run's sorted output); the Java CLI as above; a kill (SIGKILL to the process group) at 40 % of the keys
+then `swath resume`, compared row for row; and `--spill-max` at a tenth of the default.
+
+| Gate | Campaign bar | Candidate 3 |
+|---|---|---|
+| completed within the cap | all | **201 of 201**, every arm |
+| wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.19 / 1.76 / 8.1** (haisslab, an admission regression) |
+| requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.07 / 1.35** |
+| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 181 / 156 of 201 |
+| mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **61.9** |
+| regressions against the baseline: wall / requests | 0 / 0 | **3 / 0** (haisslab 18 → 48 s, common-screens 115 → 192 s, spacenet 13 → 13 s) |
+| lists where Go is slower than Java | 0 | **3 of 199** (common-screens, haisslab, nexrad-arco 86 against 67 s) |
+| peak RSS, count-only | – | median 0.08 GB, max 0.1 GB |
+| sorted Parquet keys byte-identical to the key list | every list | **201 of 201** (see below) |
+| kill at 40 % then resume, rows identical | every list | **201 of 201** |
+| `--spill-max` at a tenth, wall against unconstrained, six largest lists | ≤ 2x | pds-css-archive 2.87x, genome-browser 1.94x, logan-pub 1.60x; hrrr, rap, pmc 0.99–1.07x; output identical on 193 of 194 lists |
+
+The first sorted-Parquet pass matched on 200 of 201: 17 keys of nifs-lhd end in a bare carriage return, which
+the fake sent raw although the client asks for `encoding-type=url` (S3 percent-encodes such keys), and XML
+line-end normalization turned it into a newline. With the fake fixed, that list's 22,156,937 rows are
+byte-identical too. The three regressions are one admission gate (`split.skipped.upper_tiny`: the gauge
+underestimated the upper remainder and held a tile's remainder serial); on the 50 held-out lists the same gate
+took argoverse (19.1M keys) from 121 s to 267 s at 4 in flight (`idle_demand_ns` 16,000 s over the run), which
+the admission override of candidate 4 removes.
+
+**Candidate 4 on the iteration and held-out sets** (2026-11-07, same fake and VMs, count-only and the Java CLI;
+no sorted-Parquet or kill arm ran on this build's 201 and 50):
+
+| Gate | Campaign bar | Candidate 4, iteration (201) | Candidate 4, held-out (50) |
+|---|---|---|---|
+| completed within the cap | all | **201** | **50** |
+| wall / ideal64, median / p90 / worst | ≤ 2.0 / 3.0 / 5 | **1.20 / 1.67 / 2.3** | **1.19 / 1.50 / 2.2** |
+| requests per 1k keys, median / p90 | ≤ 1.20 / 1.40 | **1.08 / 1.35** | **1.09 / 1.37** |
+| `split.max_depth` within 4 log2(pages) + 8 / 3 log2(pages) + 8 | every list | 186 / 154 | 49 / 42 |
+| mean active ranges, lists of 10M keys or more | ≥ 40 of 64 | **60.7** | **61.1** |
+| regressions against the baseline: wall / requests | 0 / 0 | **0 / 0** | **0 / 0** |
+| lists where Go is slower than Java | 0 | **0 of 199** (Go / Java wall median 0.29) | **0 of 50** (median 0.26) |
+| wall on lists under 2M keys, against the baseline | not slower | 0.32x | 0.37x |
+| peak RSS, count-only | – | max 0.2 GB | max 0.1 GB |
+
+What separates candidate 4 from the stricter bar (requests p90 ≤ 1.25, every list within the depth bound):
+empty children at folder gaps on small lists, which only a structure probe sees, and 16 lists above the depth
+bound that still run at 1.2–1.5x the ideal.
+
+**The sorted run's working set** (candidate 4, 2026-11-07; the 64 lists of 20M keys or more, same fake,
+n4-highcpu-16, 64 workers, sorted Parquet, the default 128 MiB `--row-budget`, 900 s cap; medians over the
+lists):
+
+| Arm | Completed | Wall s | Rows spilled | Rows ahead of the frontier at peak | Lists with spill refusals | Budget wait s (summed) | Requests / 1k | Keys byte-identical |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| defaults | 64 of 64 | 51 | 96 % | 71 % | 0 | 0 | 1.02 | 64 |
+| `--spill-max` 2 × the row budget | **8 of 64** | 275 | 62 % | 13 % | 8 | 15,442 | 1.02 | 8 |
+| kill at 40 % then `swath resume` | 64 of 64 | 71 | 95 % | 67 % | 0 | 0 | 1.02 | 64 |
+
+Under today's ordered emission a healthy sorted run of a large list holds most of its rows ahead of the
+publish frontier and spills nearly all of them once: work stealing finishes ranges in roughly key-uniform
+order, so the leftmost unfinished range holds the drain until listing is nearly over (an earlier sweep of
+candidate 3 put `peak_ahead_rows` at 0.90–0.98 of the dataset on skewed tiles, and its pq arm spilled a median
+86 %, p90 97 %, of all rows, at 11–111x the Parquet output's bytes). The set is bounded by `--spill-max`, not
+by `--row-budget`. A tight cap does not degrade gracefully: at 2 × the budget, 56 of 64 lists did not finish
+within 900 s. And a kill relists most of the run: the 40 % kill on candidate 3 relisted 90–100 % of the keys
+on every list of 20M or more (0–12M rows durable at the kill), since the durable frontier is the published
+parts' ([Known gaps](#known-gaps)). A frontier-priority variant of demand and claiming cut the ahead set to
+10 % of rows and completed 39 of 64 spill-capped runs, but ran a median 3.2x slower on the defaults and was
+not adopted.
+
+**Live S3** (candidate 3, `c48ea228`, 2026-11-07). One n4-highcpu-16 Spot VM in GCP us-east1 listing the two
+buckets in AWS us-east-1: cross-cloud, the same geography, one run each, Go then Java. Anonymous,
+`--count-only --max-duration 15m` at the defaults (64 workers); Java `--format=discard --concurrency=64`. Attempt
+latency as Go measured it: p50 84 ms, p99 168 ms on nbm; p50 117 ms, p99 268 ms on fourcastnetgfs.
+
+| Bucket | Objects | Go wall | Go requests (per 1k keys) | Go mean in flight / `split.max_depth` / RSS | Java wall | Java requests | Java in flight |
+|---|---:|---:|---:|---|---:|---:|---:|
+| noaa-nbm-grib2-pds | 69,132,677 | **91 s** | 69,772 (1.01) | 63 / 16 / 74 MB | 99 s | 70,454 | 56 |
+| noaa-nws-fourcastnetgfs-pds | 4,081,170 | **12 s** | 5,446 (1.33) | 47 / 59 / 64 MB | 57 s | 5,008 | 9 |
+
+No throttle, no retry, both counts exact. At 64 wide and the measured p50 the nbm ideal is 69,133 pages / 64 ×
+84 ms = 91 s; the baseline build crawled at 4 in flight on this key list and was killed at 710 s through the
+fake. fourcastnetgfs still sends 9 % more requests than Java (empty children on a small bucket). One run per
+tool: an observation on that VM and that hour, not a rate.
+
+**Workers above 64** (`7b05605`, 2026-11-07; the 64 lists of 20M keys or more, fake at 50 ms, n4-highcpu-16;
+medians over the lists):
+
+| Arm | Wall s | Against count-only at 64 | Mean active | `split.max_depth` | Requests / 1k |
+|---|---:|---:|---:|---:|---:|
+| count-only, 64 workers | 41.5 | 1.00 | 63 | 38 | 1.019 |
+| count-only, 256 | 12.9 | 0.31 | 237 | 49 | 1.074 |
+| count-only, 512 | 11.9 | 0.27 | 458 | 51 | 1.124 |
+| sorted Parquet, 256 | 29.3 | 0.69 | 114 | 50 | 1.075 |
+
+The engine scales near-linearly to 256 workers and still gains at 512 (requests +10 %, the fan-out's cost).
+Sorted output at 256 runs at 114 active and 2.3x the count-only wall: about half its wall is a single-threaded
+drain after listing ends (at peak 94 % of rows are ahead of the frontier), so on 16 vCPU the order stage, spill
+and encoders are the limit above 64 workers, not the engine.
+
+**One core, sorted Parquet** (n4-highcpu-2, 2 vCPU and 4 GB, `GOMAXPROCS=1` so one encoder, fake at 50 ms, the
+three largest iteration lists; Java pinned with `-XX:ActiveProcessorCount=1 -Xmx2g`, `--format=parquet`; one
+run each, 2026-11-07):
+
+| List | Keys | Java, 1 core | Go candidate 4 (`26f363ea`) | Go `7b05605` | Spill written (`7b05605`) |
+|---|---:|---:|---:|---:|---:|
+| noaa-goes19 | 144.8M | 515 s | 559 s | **465 s** | 22.2 GB |
+| chalmerscloudiceclimatology | 139.1M | 362 s | 365 s | **347 s** | 16.0 GB |
+| deafrica-sentinel-5p-cloud | 129.8M | 446 s | 469 s | **415 s** | 20.4 GB |
+
+On candidate 4 Java was ahead by 1–8 % on one core; on `7b05605` Go is ahead by 4–17 %. Both tools are bound
+by the one core and the disk there (Go writes and reads back 86–98 % of its rows through spill). Go's output
+was byte-identical to the key list on candidate 4's runs. The same lists take 187, 154 and 120 s on
+n4-highcpu-16.
+
+**Through the study harness** (`7b05605`, 2026-11-07). The scale study's replay fixtures and harness (its
+replay image, fixture digests, latency deadlines, warm-up, machines, container memory and subject vCPUs as in
+the release rows), with Java 0.3.2 beside Go at the same concurrency, output written. Every row completed with
+the fixture's row count; content was not compared in these rows.
+
+| Fixture | Keys | Machine (subject) | Mode | Workers | Java s | Go s | Go / Java | Go RSS |
+|---|---:|---|---|---:|---:|---:|---:|---:|
+| aws-public-blockchain | 143.0M | n4-highcpu-80 (8 vCPU, 8 GB) | sorted Parquet | 256 | 218 | 170 | 0.78 | 1.2 GB |
+| | | | sorted Parquet | 64 | 324 | 258 | 0.80 | 0.6 GB |
+| | | | zstd TSV (Java: a dataset, 3 writers; Go: one file) | 256 | 154 | **284** | **1.84** | 1.1 GB |
+| idc-open-data (no injected latency) | 56.3M | n4-highcpu-16 (6 vCPU, 16 GB) | sorted Parquet | 64 | 125 | 82 | 0.66 | 0.6 GB |
+| noaa-nbm-grib2-pds | 66.4M | n4-highcpu-32 (4 vCPU, 8 GB) | sorted Parquet | 64 | 159 | 105 | 0.66 | 0.5 GB |
+| nara-1950-census | 13.5M | n4-highcpu-32 | sorted Parquet | 64 | 79 | 27 | 0.34 | 0.5 GB |
+| real-changesets | 13.9M | n4-highcpu-32 | sorted Parquet | 64 | 63 | 34 | 0.54 | 0.4 GB |
+| noaa-nws-fourcastnetgfs-pds | 4.1M | n4-highcpu-16 | sorted Parquet | 64 | 48 | 12 | 0.25 | 0.4 GB |
+
+The one loss is the zstd text output at 256 workers: the engine waited on the output (mean active 76 of 256
+against 118 for the Parquet row on the same fixture), spilled 21.5 GB under `$TMPDIR`, which in the container is
+its overlay filesystem, and one zstd writer compressed about 21 GB of rows where Java runs three text writers.
+The study's timing grades for these rows describe its instrument, equally for both tools in a group.
 
 ## Split admission on small lists
 
@@ -196,8 +343,9 @@ http://127.0.0.1:19600 --path-style --anonymous --region us-east-1 --count-only 
 ## Policy switches
 
 Same session and configuration as [the four recordings](#replayed-recordings-go-against-java-defaults), Go
-arms only; wall s / requests, median of 3. `--floors` and `--structure` are `swath diag list` switches
-(`--structure` here is that build's boolean switch, before the `auto` mode); the
+arms only, on the pre-merge build named [there](#replayed-recordings-go-against-java-defaults); wall s / requests,
+median of 3. `--floors` and `--structure` are `swath diag list` switches (`--structure` here is that build's
+boolean switch, before the `auto` mode and the structure probes of the engine campaign); the
 seed descent was measured as `--seed` with the hybrid descent, since deleted.
 
 | Arm | noaa-eri-pds | pansurg | fourcastnetgfs | nara |
@@ -476,6 +624,95 @@ the next one early. So the bound is one part's encoding pipeline, which joins al
 bounds it, not the share (`capped_waits` 0). On one core (the three largest lists) the read-ahead was 5 to 11 %
 slower, which is why it is now off with one processor.
 
+## Text sink, 2026-11-07
+
+Local fake (keyfake, 50 ms a page), the first 2.5M keys of aws-public-blockchain, 64 workers, 4 vCPU,
+`-o out.tsv.zst`; wall s, two quiet runs each (a third round on a shared, loaded box ran 1.5 to 2 times
+slower across all arms and is not used). The fake's rows compress 35x (one ETag for every object), so
+compression here is cheap and formatting dominates.
+
+| Arm | Wall | CPU | RSS MiB | Spill MiB | Mean active | Sink wait s |
+|---|---|---|---|---|---|---|
+| Parquet `-o out` | 5.0, 5.3 | 9.3 | 410-430 | 210-230 | 41 | - |
+| text before (spill under `/tmp`, ext4 here) | 5.9, 6.0 | 9.1 | 430-450 | 220-245 | 33-35 | - |
+| text before, `TMPDIR` beside the output | 5.9, 6.0 | 9.1 | 440 | 217-235 | 34 | - |
+| placement + 4 parallel zstd jobs | 5.6, 5.7 | 8.8 | 440 | 227-239 | 35-36 | 1.8 |
+| + run-at-a-time escaper (this change) | 5.2, 5.2 | 8.3 | 450-460 | 230 | 38 | 1.2-1.3 |
+| this change, `--encoders 1` (synchronous) | 5.7, 5.8 | 8.3 | 400 | 215-245 | 36 | 1.5 (0.5 output) |
+
+Placement does not move the local wall (`/tmp` is the same ext4 here); in the study container `/tmp` was
+the overlay filesystem. Before the change the order stage spent 1.68 s of a 6.1 s run in the sink, 1.56 s
+of it formatting rows (`appendEscaped` alone 0.95 s, byte by byte). Every decompressed output equals the
+uncompressed TSV byte for byte.
+
+The compressor alone (klauspost v1.19.1, level default, a 400 MB TSV of the same keys with per-object ETags,
+sizes and times: ratio 4.4, as the blockchain's 4.26 GB output suggests): one synchronous stream 249 MB/s;
+the old default (concurrency GOMAXPROCS without concurrent blocks: one block overlapped) 283 MB/s; 4 jobs
+at the 8 MiB window 459 MB/s and 449 MiB allocated; 4 jobs at a 1 MiB window 492 MB/s, 70 MiB, the same
+ratio (4.42). `BenchmarkSink` (the order stage's cost, rows to a `.tsv.zst` file): 135 MB/s with one
+synchronous encoder, 205 MB/s with 4 jobs.
+
+Batch (orchestrator, the three largest lists, 130-145M keys, 256 workers, 8 cores, fake at 50 ms): the
+change above took `.tsv.zst` from 216/115/151 s to 167/105/140 s (Parquet 129/74/99 s), with
+`output.text.sink_wait_ns` still 64/51/63 s: one formatting stream. Parallel formatters (`--encoders`
+goroutines, one ordered stream), on the local fake above, box shared and loaded, three interleaved rounds:
+
+| Workers | Before (7b05605) | One formatter (f4653660) | 4 formatters | Sink wait s: one / four |
+|---|---|---|---|---|
+| 64 | 9.96, 7.93, 8.16 | 7.17, 7.95, 7.35 | 7.27, 6.88, 6.75 | 1.9-2.4 / 0.54-0.77 |
+| 256 | 9.74, 9.43, 8.41 | 9.83, 9.39, 8.63 | 9.30, 7.23, 6.91 | 3.0-3.8 / 0.58-1.17 |
+
+Mean active at 256 workers rose from 105-114 (before) to 132-137. The output equals the serial path's byte
+for byte.
+
+## Delta-coded spill frames
+
+**Synthetic, frame layer** (`BenchmarkSpillFormats`: 50 frames of 4,096 S3 rows written to a spill file and
+replayed, the keys 204,800 consecutive keys of a prod list, the payload what a real bucket lists: a random MD5
+ETag per row, sizes over decades, times a few seconds apart, `STANDARD`, a checksum; page cache, 4-core host,
+10 iterations). CPU is a write plus a replay per row:
+
+| Keys | Arm | Bytes/row | CPU ns/row | Allocated B/row |
+|---|---|---:|---:|---:|
+| `aws-public-blockchain` (103 B/key) | plain | 181.7 | 322 | 331 |
+| | plain+zstd | 40.0 | 1,069 | 456 |
+| | delta | 54.4 | 313 | 284 |
+| | **delta+zstd** (default) | **30.3** | 657 | 354 |
+| `idc-open-data` (77 B/key) | plain | 155.5 | 277 | 300 |
+| | plain+zstd | 55.2 | 1,302 | 436 |
+| | delta | 65.5 | 254 | 249 |
+| | **delta+zstd** | **53.2** | 733 | 306 |
+| `nara-1950-census` (80 B/key) | plain | 158.1 | 324 | 303 |
+| | plain+zstd | 36.3 | 911 | 401 |
+| | delta | 32.7 | 253 | 257 |
+| | **delta+zstd** | **25.2** | 542 | 325 |
+
+Delta coding costs no CPU against plain frames (it writes and reads a third to a fifth of the bytes), and
+delta+zstd takes 55-60 % of plain+zstd's CPU for fewer bytes: zstd's input is already a few times smaller. What zstd still finds after delta is in the key suffixes (the ETags' 16 raw
+bytes are incompressible): 24 B/row on blockchain, 7 on nara, 12 on idc, whose suffixes are random UIDs.
+Against plain frames, the production default before this change, delta+zstd saves 100 to 150 B/row of
+disk traffic for 220 to 460 ns/row of CPU; delta alone saves 90 to 125 B/row for none. On one core the
+zstd share is the open question (the Batch arms answer it).
+
+**Synthetic, end to end** (keyfake: the first 2,500,000 keys of `aws-public-blockchain`, 50 ms per request,
+64 workers, sorted Parquet, `--row-budget 128KiB` so nearly every row spills; the fake's payload is constant
+(one ETag, time, size), so its payload bytes are an underestimate for every arm; one or two runs per arm on
+the shared host). "Before" is `go/engine-campaign` at 7b05605:
+
+| Arm | Spilled rows | Spill bytes | B/row | Peak spill | CPU s | Peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| before, plain | 2.21-2.27 M | 325-334 MB | 147 | 217-226 MB | 9.5-10.0 | 111-125 MiB |
+| before, `--spill-compress` | 2.20-2.26 M | 9.6-9.7 MB | 4.3 | 6.4-6.6 MB | 9.9-10.3 | 198-228 MiB |
+| plain (`--spill-plain --spill-compress=false`) | 2.24-2.35 M | 330-347 MB | 147 | 218-221 MB | 8.9-9.4 | 108-119 MiB |
+| plain+zstd (`--spill-plain`) | 2.21-2.26 M | 9.6-9.7 MB | 4.3 | 6.2-6.4 MB | 8.8-9.2 | 166-179 MiB |
+| delta (`--spill-compress=false`) | 2.24-2.27 M | 58-59 MB | 26 | 38-40 MB | 8.7-9.0 | 110-117 MiB |
+| **delta+zstd** (default) | 2.17-2.30 M | 6.5-6.6 MB | 2.9 | 4.5 MB | 8.9-9.2 | 128-142 MiB |
+
+Wall time (12-24 s, against 203 s with `--no-spill`) is the fake's latency and the frontier, noise at this
+size. The Parquet parts of every arm, with `--part-interval 0`, are byte-identical to the `--no-spill` run's.
+The plain+zstd arm's RSS is its fresh decode buffer per frame; delta frames reuse theirs. The production
+lists, at 16 cores and 1 core, are the orchestrator's Batch arms.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured
@@ -527,7 +764,9 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   ordinals). That suffix is bounded by how far the listing ran ahead of the frontier (the row budget and spill
   cap, the workers and the time since the last published part), not by the part size: the part size is a target,
   not a hard maximum, and `--part-interval` bounds the age of the durable frontier, not the work done past it.
-  On a slow first range the suffix can be most of the listing (the slow-first smoke above). Java resumed each
+  On a slow first range the suffix can be most of the listing (the slow-first smoke above), and on a large
+  sorted run it is: a kill at 40 % relisted 90–100 % of the keys on every key list of 20M or more
+  ([the sorted run's working set](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)). Java resumed each
   range from its own durable cursor. The measurement campaign's relisted-work gate (relisted keys at most one
   part plus 5 % of the listed keys, with the relisted bytes, requests and the durable frontier's age reported)
   is a gate to test on kills at peak speculation; it is not a property this build guarantees, and no claim
@@ -539,7 +778,8 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   185 of 201 lists are within that bound and 150 within 3 log2(pages) + 8
   ([engine campaign](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms), through a fake at
   50 ms); the 16 above it are open, and fourcastnetgfs sits at the bound in the local admission runs
-  ([above](#split-admission-on-small-lists)). The policy has not been measured live.
+  ([above](#split-admission-on-small-lists)). Live, candidate 3 listed noaa-nbm-grib2-pds at depth 16 and the
+  64-wide ideal, cross-cloud from GCP us-east1 (one run); no live GCS run of the campaign's engine yet.
 - **Throttling.** The limiter starts at `--workers` unless `--limiter-slow-start` (off, unmeasured). Under
   sustained throttling it holds the limit at 1–2 for the whole run ([above](#throttling-through-the-fault-proxy)).
   It has never met real 503s.
@@ -554,13 +794,17 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - **Platforms.** Windows refuses journaled runs (no directory sync,
   [internals/durability.md](internals/durability.md)); Windows and macOS builds are compiled, not run. Power
   loss is untested.
-- **Scale.** Billions of keys, runs of hours and 256 or more workers are unmeasured; the largest runs are the
-  replay recordings and live buckets above (13.9 M objects).
+- **Scale.** Billions of keys and runs of hours are unmeasured. The largest runs are the campaign's key lists
+  through the fake (up to 150M keys) and the live nbm bucket (69M objects); 256 and 512 workers were measured
+  through the fake only ([engine campaign](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ## Skipped or not measured
 
-- Live GCS beyond the one private in-region run above; GCS's own latency profile.
+- Live GCS beyond the one private in-region run above, which measured the port before the engine campaign; the
+  campaign's in-region GCS gate (that bucket within 12 s) has not run. GCS's own latency profile.
+- The four replay recordings (noaa-eri-pds, pansurg, fourcastnetgfs, nara) on the campaign's engine: the
+  recordings are not on the measuring host and have to be made again with the Java CLI (live, anonymous) first.
 - Throttling against real S3 or GCS; Java under the sustained-throttle fault.
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.

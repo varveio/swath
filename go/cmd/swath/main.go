@@ -307,6 +307,7 @@ type options struct {
 	spillMax, spillReserve zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
+	spillPlain             bool
 	sources                map[string]any      // each provider's options value, by scheme
 	owners                 map[string][]string // a provider flag's name: the schemes it applies to
 	term                   termOptions
@@ -318,7 +319,7 @@ type options struct {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "spill-plain", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -370,7 +371,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	o.rowBudget = listing.DefaultRowBudget
 	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
-	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
+	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
 	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
 	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
 	f.Var(&o.spillMax, "spill-max", "the spill disk budget: cap on spill `bytes` on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling")
@@ -394,11 +395,15 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		}
 		return nil
 	})
+	// The spill frame format is a runtime choice on every list command (and
+	// on resume: spill is disposable, so a resume's frames never meet the
+	// crashed run's).
+	f.BoolVar(&o.spillCompress, "spill-compress", true, "compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
+	f.BoolVar(&o.spillPlain, "spill-plain", false, "write spill frames without delta coding (each key and payload whole; a comparison arm)")
 	if diag {
 		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
 		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 		f.Var(&o.spillReserve, "spill-reserve", "diagnostic: free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
-		f.BoolVar(&o.spillCompress, "spill-compress", false, "diagnostic: compress spill files (zstd level 1)")
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
@@ -631,7 +636,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Compress: o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,

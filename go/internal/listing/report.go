@@ -236,7 +236,38 @@ type TextOutput struct {
 	Compression string `json:"compression"` // none, gzip, zstd
 	Rows        int64  `json:"rows"`
 	Bytes       int64  `json:"bytes"` // delivered, compressed
+	// SinkWaitNs is the time the order stage spent in the text sink: with
+	// one formatter, formatting rows and handing the bytes on; with more,
+	// handing batches to them (waiting while their queue is full).
+	// OutputWaitNs is the time spent handing bytes to the compressor, or
+	// to the file or stream when uncompressed: by the order stage with one
+	// formatter, by the sequencer behind them with more (textout.Stats).
+	// Formatters is the goroutines formatting rows (1: the order stage).
+	SinkWaitNs   int64 `json:"sink_wait_ns"`
+	OutputWaitNs int64 `json:"output_wait_ns"`
+	Formatters   int   `json:"formatters"`
+	// Compressor is the compression's work (absent uncompressed).
+	Compressor *TextCompressor `json:"compressor,omitempty"`
 }
+
+// TextCompressor is a compressed text output's compressor: the bytes in
+// (formatted rows) and out (delivered), and the zstd jobs compressed at
+// once with why that many (gzip is one stream).
+type TextCompressor struct {
+	BytesIn    int64  `json:"bytes_in"`
+	BytesOut   int64  `json:"bytes_out"`
+	Jobs       int    `json:"jobs"`
+	JobsReason string `json:"jobs_reason"` // a Jobs* reason
+}
+
+// Why a text output's compressor runs the jobs it does
+// (TextCompressor.JobsReason).
+const (
+	JobsAsked     = "encoders"   // --encoders (Limits.Encoders) set it
+	JobsCores     = "cores"      // GOMAXPROCS: the budget carries more
+	JobsRowBudget = "row_budget" // the row budget's allowance carries fewer than GOMAXPROCS (admitTextJobs)
+	JobsGzip      = "gzip"       // gzip: one stream
+)
 
 // Resources the run used. Wait times sum over goroutines.
 type Resources struct {

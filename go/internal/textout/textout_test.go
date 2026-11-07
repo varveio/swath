@@ -28,14 +28,15 @@ func nonEmpty(f func(*obj) string) func(*obj) (string, bool) {
 
 // testSchema has a provider's extra column (owner_id stands in, with no
 // owner_display_name) and an unquoted etag (GCS-like).
-var testSchema = &schema.Schema[obj]{Info: schema.Info{ID: "test", Key: schema.String}, Columns: []schema.Column[obj]{
-	{Spec: schema.Spec{Name: "size"}, Int: func(o *obj) (int64, bool) { return o.size, true }},
-	{Spec: schema.Spec{Name: "last_modified"}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
-	{Spec: schema.Spec{Name: "etag"}, Str: nonEmpty(func(o *obj) string { return o.etag })},
-	{Spec: schema.Spec{Name: "storage_class"}, Str: nonEmpty(func(o *obj) string { return o.class })},
-	{Spec: schema.Spec{Name: "owner_id"}, Str: nonEmpty(func(o *obj) string { return o.owner })},
-	{Spec: schema.Spec{Name: "generation"}, Int: func(o *obj) (int64, bool) { return 7, true }},
-}}
+var testSchema = &schema.Schema[obj]{Info: schema.Info{ID: "test", Key: schema.String},
+	Heap: func(o *obj) int64 { return int64(len(o.etag) + len(o.class) + len(o.owner)) }, Columns: []schema.Column[obj]{
+		{Spec: schema.Spec{Name: "size"}, Int: func(o *obj) (int64, bool) { return o.size, true }},
+		{Spec: schema.Spec{Name: "last_modified"}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
+		{Spec: schema.Spec{Name: "etag"}, Str: nonEmpty(func(o *obj) string { return o.etag })},
+		{Spec: schema.Spec{Name: "storage_class"}, Str: nonEmpty(func(o *obj) string { return o.class })},
+		{Spec: schema.Spec{Name: "owner_id"}, Str: nonEmpty(func(o *obj) string { return o.owner })},
+		{Spec: schema.Spec{Name: "generation"}, Int: func(o *obj) (int64, bool) { return 7, true }},
+	}}
 
 var rows = [][]schema.Row[obj]{{
 	{Key: "a/b.txt", Data: obj{size: 12, mtime: 1_700_000_000_000_000, etag: "e1", class: "STANDARD"}},

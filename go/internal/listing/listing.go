@@ -134,10 +134,13 @@ type Limits struct {
 
 // SpillLimits bound spill.
 type SpillLimits struct {
-	Off      bool  // wait on the reorder budget instead of spilling ahead-of-frontier rows
-	Compress bool  // zstd level 1 on spill frames
-	Max      int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
-	Reserve  int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
+	Off   bool // wait on the reorder budget instead of spilling ahead-of-frontier rows
+	Plain bool // plain spill frames instead of delta-coded ones (a comparison arm)
+	// Uncompressed writes spill frames without zstd (level 1 by default: it
+	// still finds the ETag and key-suffix bytes delta coding leaves).
+	Uncompressed bool
+	Max          int64 // cap on live spill bytes (0: half the free space on the spill filesystem at start, after Reserve; negative: none)
+	Reserve      int64 // free bytes spill leaves on its filesystem (0: derived, spillReserve; negative: none)
 }
 
 // ConfigError is an invalid configuration: a value or a combination.
@@ -147,11 +150,20 @@ func (e *ConfigError) Error() string { return "invalid configuration: " + e.Reas
 
 // Spill describes the run's spill (see order.Stats).
 type Spill struct {
-	Rows      int64 `json:"rows"`   // rows written to spill files and replayed
-	Bytes     int64 `json:"bytes"`  // bytes written
-	Ranges    int64 `json:"ranges"` // ranges that spilled
-	PeakBytes int64 `json:"peak_bytes"`
-	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+	Rows  int64 `json:"rows"`  // rows written to spill files and replayed
+	Bytes int64 `json:"bytes"` // bytes written
+	// LogicalBytes is the spilled rows' logical size (key and column
+	// values, as the part router counts them): Bytes against it is what
+	// the frame coding saved. Format names the frames: "delta" or "plain",
+	// "+zstd" unless --spill-compress=false.
+	LogicalBytes int64  `json:"logical_bytes"`
+	Format       string `json:"format"`
+	// DecodeRefused counts frames refused at read for decoding past their
+	// storage bound (a malformed frame; the run fails).
+	DecodeRefused int64 `json:"decode_refused"`
+	Ranges        int64 `json:"ranges"` // ranges that spilled
+	PeakBytes     int64 `json:"peak_bytes"`
+	Refused       int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
 	// MaxBytes is the cap on live spill bytes in effect (0: none);
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
@@ -258,8 +270,10 @@ func (c *Config) resolve() error {
 	}
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
 	if l.Encoders == 0 {
-		l.Encoders = min(runtime.GOMAXPROCS(0), admitEncoders(l.RowBudget, l.Workers, fdLimit()))
-		l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.Workers, fdLimit())))
+		l.Encoders = min(runtime.GOMAXPROCS(0), admit(*c))
+		if c.Output.Text == nil { // Parquet writers only: a text output's jobs are not raised
+			l.maxEncoders = max(l.Encoders, min(runtime.GOMAXPROCS(0), admitAfterListing(l.RowBudget, l.Workers, fdLimit())))
+		}
 	}
 	if l.PartSize == 0 {
 		l.PartSize = DefaultPartSize
@@ -308,6 +322,45 @@ func admitAfterListing(rowBudget int64, workers int, fds int64) int {
 // its strings are copied into, rounded up.
 const listingPageBytes = 1 << 20
 
+// admitTextJobs is how many zstd jobs a text output's compressor runs at
+// once, never fewer than one: each within textout.JobBytes of an allowance
+// equal to the row budget, as Parquet encoders are admitted (admitEncoders),
+// but with the compressor's own working set and no descriptor (the jobs
+// write one file).
+func admitTextJobs(rowBudget int64) int {
+	return int(max(1, rowBudget/textout.JobBytes))
+}
+
+// admit is the encoders (Parquet writers, or a text output's compression
+// jobs) c's resources carry.
+func admit(c Config) int {
+	if c.Output.Text != nil {
+		return admitTextJobs(c.Limits.RowBudget)
+	}
+	return admitEncoders(c.Limits.RowBudget, c.Limits.Workers, fdLimit())
+}
+
+// textJobs is the compression jobs of a text output and why that many
+// (TextCompressor), from the encoders asked (0: none) and the resolved
+// limits; nil when the output is uncompressed.
+func textJobs(c Config, asked int) *TextCompressor {
+	switch c.Output.Text.Compression {
+	case textout.Zstd:
+	case textout.Gzip:
+		return &TextCompressor{Jobs: 1, JobsReason: JobsGzip}
+	default:
+		return nil
+	}
+	t := &TextCompressor{Jobs: c.Limits.Encoders, JobsReason: JobsCores}
+	switch {
+	case asked > 0:
+		t.JobsReason = JobsAsked
+	case admitTextJobs(c.Limits.RowBudget) < runtime.GOMAXPROCS(0):
+		t.JobsReason = JobsRowBudget
+	}
+	return t
+}
+
 // fdReserve is the descriptors kept for the journal, lock, output and
 // spill directories, standard streams and the runtime.
 const fdReserve = 32
@@ -330,9 +383,23 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if err := cfg.resolve(); err != nil {
 		return sum.failed(err)
 	}
-	if n := admitEncoders(cfg.Limits.RowBudget, cfg.Limits.Workers, fdLimit()); asked > n && cfg.Warn != nil {
+	switch n := admit(cfg); {
+	case asked <= n || cfg.Warn == nil:
+	case cfg.Output.Text != nil:
+		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the row budget; --row-budget %d MiB carries %d",
+			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
+	default:
 		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --row-budget %d MiB and the descriptor limit carry %d",
 			asked, int64(asked)*parquetout.EncoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
+	}
+	if t := cfg.Output.Text; t != nil {
+		sum.Output.Text = &TextOutput{Format: t.Format, Destination: t.Path, Compression: t.Compression, Compressor: textJobs(cfg, asked)}
+		if t.Path == "" {
+			sum.Output.Text.Destination = "-"
+		}
+		if t.Compression == "" {
+			sum.Output.Text.Compression = textout.None
+		}
 	}
 	argv := cfg.Argv
 	if argv == nil {
@@ -472,16 +539,32 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// no reorder storage and never spills (order.Count).
 	env.Count = dryRun(cfg)
 	a := &attempt{cfg: cfg, jr: jr, sum: sum}
-	oopt, err := orderOptions(cfg, jr, sum.Resources.RowBudgetBytes, shared)
+	oopt, scratch, err := orderOptions(cfg, jr, sum.Resources.RowBudgetBytes, shared)
 	if err != nil {
 		return a.sum.failed(err)
+	}
+	if scratch != "" {
+		// This attempt's own directory (textScratch): after the order
+		// stage has removed its spill files, after success or failure.
+		defer os.RemoveAll(scratch)
 	}
 	env.Order = oopt
 	var dropped atomic.Int64
 	env.Filter, env.Filtered = cfg.Filter, &dropped
 	var text *textout.Out
 	if cfg.Output.Text != nil {
-		t, err := textout.Open(*cfg.Output.Text)
+		tc := *cfg.Output.Text
+		if c := sum.Output.Text.Compressor; c != nil {
+			tc.Jobs = c.Jobs
+		}
+		if tc.Path != "" {
+			// A file's rows are formatted by as many goroutines as the
+			// encoders admitted, their queued batches charged to the
+			// shared budget; a stream's by the order stage, flushed per
+			// batch to its reader.
+			tc.Formatters, tc.Account = cfg.Limits.Encoders, shared.Add
+		}
+		t, err := textout.Open(tc)
 		if err != nil {
 			return a.sum.failed(err)
 		}
@@ -608,10 +691,11 @@ func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel cont
 
 // orderOptions configures the order stage: the row budget, the resume
 // key, and spill (its directory, after reclaiming a crashed run's orphans,
-// and its disk budget).
-func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (order.Options, error) {
+// and its disk budget). scratch is a directory this attempt made for its
+// spill (textScratch), for the caller to remove when the stage is done.
+func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared) (oopt order.Options, scratch string, err error) {
 	gauges := &order.Gauges{}
-	oopt := order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillCompress: cfg.Limits.Spill.Compress, SpillReserve: cfg.Limits.Spill.Reserve,
+	oopt = order.Options{Workers: cfg.Limits.Workers, Budget: budget, Shared: shared, SpillPlain: cfg.Limits.Spill.Plain, SpillCompress: !cfg.Limits.Spill.Uncompressed, SpillReserve: cfg.Limits.Spill.Reserve,
 		After: jr.after(), Gauges: gauges}
 	if pr := cfg.Progress; pr != nil {
 		pr.gauges.Store(gauges)
@@ -622,7 +706,7 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		// Reclaim a crashed run's orphans (the output lock is held), with
 		// spill on or off.
 		if err := jr.verify(); err != nil {
-			return oopt, err
+			return oopt, "", err
 		}
 		if err := os.RemoveAll(spill); err != nil && cfg.Warn != nil {
 			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
@@ -634,15 +718,48 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 			}
 		}
 	} else if !cfg.Limits.Spill.Off && !dryRun(cfg) {
+		// A text file spills beside itself, on the filesystem it is
+		// written to; a stream has no directory of its own and spills
+		// under the temporary directory ($TMPDIR), which the user points
+		// at a disk.
 		oopt.SpillDir = os.TempDir()
+		if path := cfg.Output.Text.Path; path != "" {
+			if scratch, err = textScratch(path, cfg.Attempt); err != nil {
+				return oopt, "", err
+			}
+			oopt.SpillDir = filepath.Join(scratch, "spill")
+		}
 	}
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
 		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
-			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); set TMPDIR to a disk", oopt.SpillDir, fs))
+			fix := "write the output to a disk"
+			if scratch == "" && cfg.Output.Dir == "" {
+				fix = "set TMPDIR to a disk"
+			}
+			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); %s", oopt.SpillDir, fs, fix))
 		}
 	}
-	return oopt, nil
+	return oopt, scratch, nil
+}
+
+// textScratch makes the scratch directory of one attempt writing the text
+// file path: beside it, named for it and the attempt
+// (.NAME.swath-ATTEMPT-RANDOM, created exclusively), so its spill is on
+// the output's filesystem, and two attempts writing sibling outputs, or
+// the same one, never share or remove each other's. Only the attempt that
+// made it removes it; a killed attempt leaves it (with its .NAME.*.tmp)
+// for the user to delete.
+func textScratch(path string, att *Attempt) (string, error) {
+	prefix := "." + filepath.Base(path) + ".swath-"
+	if att != nil && len(att.ID) >= 8 {
+		prefix += att.ID[:8] + "-"
+	}
+	dir, err := os.MkdirTemp(filepath.Dir(path), prefix+"*")
+	if err != nil {
+		return "", fmt.Errorf("text output: scratch directory: %w", err)
+	}
+	return dir, nil
 }
 
 // dryRun reports whether cfg writes nothing (no dataset, no text): its
@@ -666,13 +783,10 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 	} else {
 		text.Abort()
 	}
-	a.sum.Output.Text = &TextOutput{Format: text.Format(), Destination: a.cfg.Output.Text.Path, Compression: a.cfg.Output.Text.Compression,
-		Rows: text.Rows(), Bytes: text.Bytes()}
-	if a.sum.Output.Text.Destination == "" {
-		a.sum.Output.Text.Destination = "-"
-	}
-	if a.sum.Output.Text.Compression == "" {
-		a.sum.Output.Text.Compression = textout.None
+	st, out := text.Stats(), a.sum.Output.Text
+	out.Rows, out.Bytes, out.SinkWaitNs, out.OutputWaitNs, out.Formatters = text.Rows(), text.Bytes(), int64(st.SinkWait), int64(st.OutputWait), st.Formatters
+	if c := out.Compressor; c != nil {
+		c.BytesIn, c.BytesOut = st.In, st.Out
 	}
 	return err
 }
@@ -686,7 +800,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	// (order.Count: no reorder storage, max_buffered_bytes 0).
 	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
-		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir))}
 	}

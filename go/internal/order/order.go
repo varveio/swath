@@ -52,8 +52,10 @@ type Options struct {
 	Shared *Shared
 	// SpillDir, if set, enables spill: when the budget is used up, ranges
 	// that are not being drained write their rows to files there instead
-	// of waiting (see spill.go). SpillCompress compresses frames (zstd 1).
+	// of waiting (see spill.go). Frames are delta-coded unless SpillPlain;
+	// SpillCompress compresses them (zstd 1).
 	SpillDir      string
+	SpillPlain    bool
 	SpillCompress bool
 	// SpillMax caps the live spill bytes (0: no cap); SpillReserve is the
 	// free space spill leaves on its filesystem (0: none). Past either, an
@@ -86,6 +88,14 @@ type Stats struct {
 	SpillBytes  int64
 	SpillFiles  int64 // ranges that spilled
 	SpillPeak   int64 // peak live spill bytes
+	// SpillLogical is the spilled rows' logical bytes (schema.LogicalBytes):
+	// against SpillBytes, what the frame coding saved. SpillFormat names
+	// the frames ("delta", "plain", each optionally "+zstd").
+	SpillLogical int64
+	SpillFormat  string
+	// SpillDecodeRefused counts frames refused at read for decoding past
+	// their storage bound (a malformed frame: the run fails).
+	SpillDecodeRefused int64
 	// SpillRefused counts frames the disk budget refused; each made its
 	// emitter wait on the reorder budget instead.
 	SpillRefused int64
@@ -441,7 +451,7 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	}
 	now := time.Now()
 	o.dt.OrderCheck += now.Sub(start)
-	o.stuck = max(o.stuck, now.Sub(o.advanced))
+	o.stalled()
 	o.advanced = now
 	o.g.ahead.add(-int64(len(rows)))
 	o.segs = append(o.segs, rows)
@@ -532,6 +542,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
 		st.Drainer.ReplayDecode += time.Duration(o.sp.decodeNs.Load())
+		st.SpillLogical, st.SpillFormat, st.SpillDecodeRefused = o.sp.logical.Load(), o.sp.format(), o.sp.decodeRefused.Load()
 	}
 	return st, err
 }
@@ -569,7 +580,7 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 			err = opt.SpillVerify()
 		}
 		if err == nil {
-			sp, err = newSpiller(s.Codec, opt.SpillDir, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
+			sp, err = newSpiller(s, opt.SpillDir, opt.SpillPlain, opt.SpillCompress, opt.SpillMax, opt.SpillReserve)
 		}
 		if err != nil {
 			cancel(nil)
@@ -957,6 +968,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	for len(o.path) > 0 {
 		if o.stopped.Load() {
 			o.mu.Unlock()
+			o.stalled()
 			return st, context.Cause(o.ctx)
 		}
 		f := &o.path[len(o.path)-1]
@@ -984,6 +996,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		}
 		if err != nil {
 			o.mu.Unlock()
+			o.stalled()
 			return st, err
 		}
 		if child != nil {
@@ -997,11 +1010,17 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
-	o.stuck = max(o.stuck, time.Since(o.advanced))
+	o.stalled()
 	err := o.flush()
 	o.drainEnd = time.Now()
 	return st, err
 }
+
+// stalled closes the interval since the drainer last handed rows on into
+// stuck. Every drain exit calls it, cancellation and errors included: an
+// interrupted run's last stall (a frontier that never answered before the
+// stop) is the one its report most needs.
+func (o *run[R, P]) stalled() { o.stuck = max(o.stuck, time.Since(o.advanced)) }
 
 // drainFinished drains a finished node's items up to its next child,
 // which it returns. A finished node's items are immutable: they are
