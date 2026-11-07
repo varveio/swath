@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,49 +241,180 @@ func TestRequestCeilingQueues(t *testing.T) {
 	}
 }
 
-func TestResponseCountAndBudgetRefusals(t *testing.T) {
-	s := start(t, config(memstore.Keys(memstore.Options{}, "a")))
-	s.responses.Store(int64(s.cfg.MaxResponses()))
-	r := get(t, s, "/bucket?list-type=2")
-	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_count_exhausted" || !strings.Contains(r.body, "<Code>ServiceUnavailable</Code>") {
-		t.Errorf("count: %d %v %s", r.status, r.header, r.body)
+// spaceKeys are n keys of about 1 KiB that encoding-type=url triples, so a
+// max-keys=1000 page is about 3 MB.
+func spaceKeys(n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("%04d %s", i, strings.Repeat(" ", 1000))
 	}
-	s.responses.Store(0)
-	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 {
-		t.Errorf("after the permits came back: %d", r.status)
+	return keys
+}
+
+const bigPage = "/bucket?list-type=2&max-keys=1000&encoding-type=url"
+
+// slowReader opens a connection with a small receive buffer, sends one
+// request and never reads the answer, so the server's write blocks.
+func slowReader(t *testing.T, s *Server, target string) net.Conn {
+	t.Helper()
+	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		c.Control(func(fd uintptr) { serr = setReceiveBuffer(fd, 4096) })
+		return serr
+	}}
+	conn, err := d.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	s.budget.charged.Store(s.budget.limit)
-	r = get(t, s, "/bucket?list-type=2")
-	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" {
-		t.Errorf("budget: %d %v", r.status, r.header)
+	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: replay\r\n\r\n", target); err != nil {
+		t.Fatal(err)
 	}
-	s.budget.charged.Store(0)
-	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") != 1 ||
-		count(s, metrics.ResponseAdmissionRefused, "s3", "response_budget_exhausted") != 1 {
-		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
-	}
-	if r := get(t, s, "/bucket?list-type=2"); r.status != 200 || s.budget.charged.Load() != 0 {
-		t.Errorf("after the budget came back: %d, charged %d", r.status, s.budget.charged.Load())
+	return conn
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-func TestOversizedResponseIsRefusedAndTheBudgetRecovers(t *testing.T) {
-	keys := make([]string, 200)
+// TestSlowReadersReachTheResponseCeiling: clients that stop reading hold
+// their responses (count and bytes) but not their execution slots, so with
+// a request ceiling of 8 there can be 16 outstanding responses, and the
+// next request is answered 503 response_count_exhausted at once rather
+// than queued behind the stalled writes. When the readers go away every
+// permit and byte comes back.
+func TestSlowReadersReachTheResponseCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("receive buffer sizing")
+	}
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
+	cfg.MaxConcurrentRequests = MinMaxConcurrentRequests
+	cfg.WriteTimeout = time.Minute
+	s := start(t, cfg)
+	var conns []net.Conn
+	for range cfg.MaxResponses() {
+		conns = append(conns, slowReader(t, s, bigPage))
+	}
+	// Every response is admitted and writing, and no execution slot is
+	// held by a response that is only writing.
+	waitFor(t, "16 outstanding responses holding no execution slot", func() bool {
+		return s.responses.Load() == int64(cfg.MaxResponses()) && len(s.slots) == 0
+	})
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1", s.Port()))
+	if err != nil {
+		t.Fatalf("the request past the ceiling was not answered: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" ||
+		!strings.Contains(string(body), "<Message>response buffer budget exhausted</Message>") {
+		t.Errorf("%d %v %s", resp.StatusCode, resp.Header, body)
+	}
+	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") != 1 {
+		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
+	if r := get(t, s, "/bucket?list-type=2&max-keys=1"); r.status != 200 {
+		t.Errorf("after the readers left: %d", r.status)
+	}
+}
+
+// TestSparseResponsesReturnTheirReservation is the review's scenario: with
+// a 400,000-byte budget, a max-keys=1000 request reserves 320,512 bytes
+// before paging, but a one-object page renders into one 4 KiB chunk and
+// gives the rest back before its injected delay, so an overlapping request
+// fits.
+func TestSparseResponsesReturnTheirReservation(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{}, "a"))
+	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 400_000, 400_000
+	cfg.Latency, _ = latency.Parse("worker_page=600ms", 0, 1)
+	s := start(t, cfg)
+	results := make(chan response, 2)
+	go func() { results <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	waitFor(t, "the first request's delay", func() bool { return s.responses.Load() == 1 && s.budget.Charged() == 4096 })
+	go func() { results <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	for range 2 {
+		if r := <-results; r.status != 200 {
+			t.Errorf("%d %v", r.status, r.header)
+		}
+	}
+	if s.budget.Peak() != 4096+320_512 {
+		t.Errorf("peak %d", s.budget.Peak())
+	}
+}
+
+// TestBudgetRefusesAnOverlappingPage: a response holding its rendered
+// chunks through its delay leaves too little budget for the next
+// request's reservation, which is refused 503 response_budget_exhausted;
+// once it is written the budget is whole again.
+func TestBudgetRefusesAnOverlappingPage(t *testing.T) {
+	keys := make([]string, 1000)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("%s%03d", strings.Repeat("x", 100), i)
+		keys[i] = fmt.Sprintf("%04d/%s", i, strings.Repeat("k", 300))
 	}
 	cfg := config(memstore.Keys(memstore.Options{}, keys...))
+	cfg.ResponseBufferBudget, cfg.MaxResponseBytes = 600_000, 600_000
+	cfg.Latency, _ = latency.Parse("worker_page=600ms", 0, 1)
+	s := start(t, cfg)
+	first := make(chan response, 1)
+	go func() { first <- get(t, s, "/bucket?list-type=2&max-keys=1000") }()
+	waitFor(t, "the first request's delay", func() bool { return s.responses.Load() == 1 && s.budget.Charged() > 300_000 })
+	r := get(t, s, "/bucket?list-type=2&max-keys=1000")
+	if r.status != 503 || r.header.Get("x-swath-replay-error") != "response_budget_exhausted" {
+		t.Errorf("overlapping: %d %v", r.status, r.header)
+	}
+	if r := <-first; r.status != 200 {
+		t.Errorf("first: %d", r.status)
+	}
+	if count(s, metrics.ResponseAdmissionRefused, "s3", "response_budget_exhausted") != 1 {
+		t.Errorf("refusal meters: %s", s.reg.AppendMeters(nil))
+	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
+	if r := get(t, s, "/bucket?list-type=2&max-keys=10"); r.status != 200 {
+		t.Errorf("after: %d", r.status)
+	}
+}
+
+// TestOversizedResponseStopsAtTheCap asks for a ~3 MB page against an 8 KiB
+// cap: the answer is 500 response_too_large, rendering stopped at the cap
+// (the budget never held more than the cap, and the request allocated far
+// less than the page would encode to), and the budget recovers.
+func TestOversizedResponseStopsAtTheCap(t *testing.T) {
+	cfg := config(memstore.Keys(memstore.Options{}, spaceKeys(1000)...))
 	cfg.MaxResponseBytes = 8 << 10
 	s := start(t, cfg)
-	r := get(t, s, "/bucket?list-type=2")
+	get(t, s, "/bucket?list-type=2&max-keys=1") // warm the connection pool and the meters
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	r := get(t, s, bigPage)
+	runtime.ReadMemStats(&after)
 	if r.status != 500 || r.header.Get("x-swath-replay-error") != "response_too_large" || !strings.Contains(r.body, "<Code>InternalError</Code>") {
 		t.Errorf("%d %v %s", r.status, r.header, r.body)
+	}
+	// The page itself (a thousand 1 KiB keys) is about 1 MB; its encoding
+	// would be about 3 MB more.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 2<<20 {
+		t.Errorf("the refused request allocated %d bytes", allocated)
+	}
+	if peak := s.budget.Peak(); peak > int64(cfg.MaxResponseBytes) {
+		t.Errorf("peak charged %d above the %d cap", peak, cfg.MaxResponseBytes)
 	}
 	if r := get(t, s, "/bucket?list-type=2&max-keys=5"); r.status != 200 {
 		t.Errorf("a small page after the refusal: %d", r.status)
 	}
-	if s.budget.charged.Load() != 0 || s.budget.peak.Load() == 0 {
-		t.Errorf("charged %d peak %d", s.budget.charged.Load(), s.budget.peak.Load())
+	if s.budget.Charged() != 0 {
+		t.Errorf("charged %d", s.budget.Charged())
 	}
 }
 

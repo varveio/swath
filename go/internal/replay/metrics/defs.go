@@ -54,6 +54,15 @@ var (
 	ResponseBytesLive = Def{Name: "swath.replay.response.bytes.live", Kind: Gauge}
 	ResponseBytesPeak = Def{Name: "swath.replay.response.bytes.peak", Kind: Gauge}
 	ResponseActive    = Def{Name: "swath.replay.response.active", Kind: Gauge}
+	// ResponseChunkAllocation counts response chunks by allocation reason
+	// (initial, initial_cap_partial, continuation, cap_partial), and
+	// ResponseChunkCapacityBytes records their sizes.
+	ResponseChunkAllocation    = Def{Name: "swath.replay.response.chunk.allocation", Kind: Counter, Tags: []string{"reason"}}
+	ResponseChunkCapacityBytes = Def{Name: "swath.replay.response.chunk.capacity.bytes", Kind: Distribution, Tags: []string{"reason"}}
+	// ResponsePercentEncodingPath counts encoding-type=url values by how
+	// they were written: charged_chunk_one_pass into room already charged,
+	// or exact_length_fallback after admitting their exact length.
+	ResponsePercentEncodingPath = Def{Name: "swath.replay.response.percent.encoding.path", Kind: Counter, Tags: []string{"protocol", "reason"}}
 	// ResponseWriteDeadline counts responses whose write outlived
 	// --write-timeout.
 	ResponseWriteDeadline = Def{Name: "swath.replay.response.write.deadline", Kind: Counter, Tags: []string{"protocol", "reason"}}

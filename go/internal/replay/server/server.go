@@ -26,6 +26,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/metrics"
+	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 )
@@ -101,7 +102,7 @@ type Server struct {
 
 	slots     chan struct{}
 	responses atomic.Int64
-	budget    budget
+	budget    *output.Budget
 
 	stopCtx  context.Context
 	stop     context.CancelFunc
@@ -137,10 +138,13 @@ func New(cfg Config) (*Server, error) {
 		cfg:     cfg,
 		reg:     metrics.NewRegistry(),
 		slots:   make(chan struct{}, cfg.MaxConcurrentRequests),
-		budget:  budget{limit: cfg.ResponseBufferBudget},
 		started: time.Now(),
 	}
 	s.stopCtx, s.stop = context.WithCancel(context.Background())
+	s.budget = output.NewBudget(cfg.ResponseBufferBudget, func(r output.Reason, n int) {
+		s.reg.Get(metrics.ResponseChunkAllocation, r.String()).Inc()
+		s.reg.Get(metrics.ResponseChunkCapacityBytes, r.String()).Observe(float64(n))
+	})
 	s.pager = &s3.Pager{Store: cfg.Store, OnDelimiterPath: func(p string) { s.reg.Get(metrics.DelimiterPath, p).Inc() }}
 	// The meters every scrape shows from the start, so a reader can tell a
 	// zero from a meter that is not there.
@@ -151,8 +155,12 @@ func New(cfg Config) (*Server, error) {
 		s.reg.Get(metrics.RequestLatency, sh.String())
 	}
 	s.reg.Get(metrics.ServingPath, servingPathTag(cfg.ServingMode))
-	s.reg.SetGauge(metrics.ResponseBytesLive, func() float64 { return float64(s.budget.charged.Load()) })
-	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.peak.Load()) })
+	for _, r := range output.Reasons {
+		s.reg.Get(metrics.ResponseChunkAllocation, r.String())
+		s.reg.Get(metrics.ResponseChunkCapacityBytes, r.String())
+	}
+	s.reg.SetGauge(metrics.ResponseBytesLive, func() float64 { return float64(s.budget.Charged()) })
+	s.reg.SetGauge(metrics.ResponseBytesPeak, func() float64 { return float64(s.budget.Peak()) })
 	s.reg.SetGauge(metrics.ResponseActive, func() float64 { return float64(s.responses.Load()) })
 	s.reg.SetGauge(metrics.ProtocolRequestsActive, func() float64 { return float64(s.s3Active.Load()) }, "s3")
 	s.httpSrv = &http.Server{
@@ -274,33 +282,6 @@ func (s *Server) Shutdown(timeout time.Duration) bool {
 	})
 	return complete
 }
-
-// budget is the response byte budget: encoded responses are charged
-// before they are rendered (an estimate) and settled after; a request
-// that cannot be charged is refused rather than queued.
-type budget struct {
-	limit         int64
-	charged, peak atomic.Int64
-}
-
-func (b *budget) tryCharge(n int64) bool {
-	for {
-		cur := b.charged.Load()
-		if cur+n > b.limit {
-			return false
-		}
-		if b.charged.CompareAndSwap(cur, cur+n) {
-			for {
-				p := b.peak.Load()
-				if cur+n <= p || b.peak.CompareAndSwap(p, cur+n) {
-					return true
-				}
-			}
-		}
-	}
-}
-
-func (b *budget) release(n int64) { b.charged.Add(-n) }
 
 // begin registers a request that will use the store; false once shutdown
 // has begun.
