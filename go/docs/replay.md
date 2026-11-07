@@ -588,6 +588,16 @@ Four public buckets recorded with the Go lister the same day (native `swath/gcs-
 | `gcp-public-data-landsat`, `LC08/01/001/` (13:10Z) | 314,390 | 86 of 110 | 54 / 31 (30) | 124 / 0 | 1,942 |
 | `gcp-public-data-nexrad-l2`, `1991/06/` (13:11Z) | 12 | 83 of 110 (r/ on a reduced shape) | 54 / 28 (27) | 36 / 0 | 278 |
 
+A fifth bucket, recorded at 22:25Z by a lister that lists `timeCreated` (the dataset holds `time_created`;
+`swath list gs://gatk-best-practices --gcs-anonymous`, without the proxy), compared the same way with the walks
+comparing `timeCreated` as an instant: `gatk-best-practices`, whole bucket, 1,954 objects, 86 of 110 cases sent,
+54 / 31 (30), walks 48 / 0, 1,478 requests; scope `cnn-h38/` (6 objects), 26 / 24 (23), walks 4 / 0. 120 of its
+objects have metageneration 2 and a `timeCreated` before `updated`. Walking the whole bucket on the replay's S3
+route (`list-type=2`, `max-keys=1000`, `fetch-owner=true`, flat and with `/`) against Cloud Storage's XML API
+for the same bucket, every `Contents` field agreed on all 1,954 objects (`LastModified` included; the server
+before `time_created` was read sent `updated` and differed on those 120), and the GCS route's `timeCreated`
+and `updated` agreed with the JSON API's on every object.
+
 `gcs-07v` (a decoded byte of an issued token flipped) is skipped on every run: the replay's `gcs1.` token is not
 base64 as a whole, the pinned "no analogue" of the evidence. On `nexrad-l2` no directory holds six objects, so a
 directory of three stands in for `r/`; those cases are listed as run on a reduced shape (`REDUCED SHAPE`).
@@ -604,7 +614,7 @@ refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `v
 
 | Case | Bucket | Request | Live GCS | Replay |
 |---|---|---|---|---|
-| `gcs-11h` | all four | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
+| `gcs-11h` | all five | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
 | `gcs-07r` | sentinel-2 | an issued token with its last character changed | accepted (the changed character only touched unused bits) and resumes at the token's position | the altered `gcs1.` token decodes to another position |
 
 ### Live capture
