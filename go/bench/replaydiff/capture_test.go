@@ -312,6 +312,73 @@ func TestCaptureLimits(t *testing.T) {
 	wantErr("tokens", rep, 1, "-capture-max-tokens")
 }
 
+// TestCaptureReportIsBounded: a capture full of resets, exchanges over
+// the recorder's limit and changed answers keeps every count exact but
+// details at most -capture-max-details failures and as many skips, each
+// quoting at most a clipped query, and says how many it does not show.
+func TestCaptureReportIsBounded(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	const n = 30
+	var stream []capturedExchange
+	long := "list-type=2&prefix=" + strings.Repeat("p", 64<<10)
+	for i := range n {
+		reset := xs[0]
+		reset.Response.Status, reset.Response.Body = 0, nil
+		reset.Request.Query = long
+		over := xs[0]
+		over.LimitExceeded, over.Response.Body = "the answer's body is over 1000 bytes", nil
+		changed := xs[0]
+		body := strings.Replace(*xs[0].Response.Body, "data/", "date/", 1)
+		changed.Response.Body = &body
+		for j, x := range []capturedExchange{reset, over, changed} {
+			x.Seq = uint64(3*i + j + 1)
+			stream = append(stream, x)
+		}
+	}
+	for i, x := range xs {
+		x.Seq = uint64(3*n + i + 1)
+		stream = append(stream, x)
+	}
+	for _, max := range []int{0, 5} {
+		lim := testLimits
+		lim.maxDetails = max
+		d := &driver{o: options{bucket: "bkt"}, got: got, rep: &report{}, countPasses: true}
+		replayCapture(d, "s3", gcsSynthetic, exchangeItems(stream), lim)
+		rep := d.rep
+		shown, skips := 2*n, n
+		if max > 0 {
+			shown, skips = max, max
+		}
+		if rep.Failed != 2*n || rep.Passed != len(xs) || rep.SkippedCount != n ||
+			len(rep.Results) != shown || len(rep.Skipped) != skips ||
+			rep.FailuresNotShown != 2*n-shown || rep.SkipsNotShown != n-skips {
+			t.Fatalf("max %d: %d failed (%d shown, %d not), %d passed, %d skipped (%d shown, %d not)", max, rep.Failed, len(rep.Results),
+				rep.FailuresNotShown, rep.Passed, rep.SkippedCount, len(rep.Skipped), rep.SkipsNotShown)
+		}
+		for _, sk := range rep.Skipped {
+			if len(sk) > 2<<10 || !strings.Contains(sk, fmt.Sprintf("(%d bytes)", len(long))) {
+				t.Errorf("max %d: a skip of %d bytes: %.200s", max, len(sk), sk)
+			}
+		}
+		text := string(d.summary())
+		for _, want := range []string{
+			fmt.Sprintf("%d failed, %d skipped", 2*n, n),
+			fmt.Sprintf("%d more failures not shown (-capture-max-details %d)\n", 2*n-shown, max),
+			fmt.Sprintf("%d more skips not shown (-capture-max-details %d)\n", n-skips, max),
+			fmt.Sprintf("(%d failures and %d skips not shown)\n", 2*n-shown, n-skips),
+		} {
+			if strings.Contains(text, want) != (max > 0 || strings.HasPrefix(want, fmt.Sprint(2*n))) {
+				t.Errorf("max %d: the summary has %q: %v\n%s", max, want, strings.Contains(text, want), text)
+			}
+		}
+		if c := strings.Count(text, "\nFAIL "); c != shown {
+			t.Errorf("max %d: %d failures in the summary, want %d", max, c, shown)
+		}
+	}
+}
+
 // TestCaptureStreams: the replay reads a capture one exchange at a time:
 // the first exchange reaches the Go server before the second line is
 // written.
