@@ -5,6 +5,7 @@ package sortedparquet_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,11 +29,7 @@ func TestFileCacheBoundsHandles(t *testing.T) {
 		if err := os.WriteFile(path, bytes.Repeat([]byte{byte('a' + i)}, 64), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		opened, err := os.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, err := cache.Add(path, opened)
+		f, err := cache.Open(context.Background(), path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +73,7 @@ func TestFileCacheBoundsHandles(t *testing.T) {
 		t.Fatal("a replaced file was read")
 	}
 	_ = files[1].Close()
-	if _, err := files[1].ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) {
+	if _, err := files[1].ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) || !errors.Is(err, sortedparquet.ErrClosed) {
 		t.Fatalf("read after close: %v", err)
 	}
 	for _, f := range files {

@@ -17,15 +17,21 @@
 // current-object schema under an id of its own, since a converted capture
 // is not a listing by the Go lister.
 //
-// The capture is read whole into one array, sized from the footers, sorted
-// in place and written from it in batches: 136 bytes per object row on a
-// 64-bit platform plus its key and string values (each its own allocation,
-// rounded up to the allocator's size class), the key of every other row,
-// and the writer's buffers. Measured on the synthetic 1M-row capture of
-// go/bench/replay/make-fixtures.sh (44-byte keys, a 32-byte etag and a
-// storage class per row; linux/amd64, GOMAXPROCS 4, 4 vCPU): 309 MiB peak
-// resident, about 300 bytes per row, 3 s. A few million rows is the
-// intended scope. The Go lister writes sorted datasets directly; this
+// The capture is read whole into memory, its objects into one array sized
+// from their count (row_type statistics, or a pass over the row_type
+// column), which is sorted in place and written from in batches. On a
+// 64-bit platform that costs, besides the writer's buffers:
+//
+//   - per OBJECT row, 136 bytes plus its key and each non-null string value
+//     (each its own allocation, rounded up to the allocator's size class);
+//   - per other row (COMMON_PREFIX, DELETE_MARKER), a 16-byte string header
+//     plus its key, kept only for the duplicate rule.
+//
+// Measured with go/bench/replay/make-fixtures.sh's synthetic 1M-row capture
+// (44-byte keys, a 32-byte etag and a storage class per row; linux/amd64,
+// GOMAXPROCS 4, 4 vCPU): 309 MiB peak resident, about 300 bytes per row,
+// 3 s; TestSortFixtureMemory repeats it and an all-COMMON_PREFIX capture of
+// as many rows. A few million rows is the intended scope. The Go lister writes sorted datasets directly; this
 // command exists for captures recorded before it.
 package sortfixture
 
@@ -35,13 +41,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
@@ -109,6 +118,11 @@ var ErrRowType = errors.New("sort-fixture: invalid row_type")
 // wrong path.
 var ErrNoParts = errors.New("sort-fixture: no *.parquet parts")
 
+// ErrMalformedCapture reports a capture part whose footer does not parse,
+// or whose row counts are negative, disagree with its row groups, or
+// exceed what can be held.
+var ErrMalformedCapture = errors.New("sort-fixture: malformed capture footer")
+
 // rowTypes are the canonical row_type values; only objectRowType rows are
 // written.
 var rowTypes = [...]string{objectRowType, "COMMON_PREFIX", "DELETE_MARKER"}
@@ -137,10 +151,20 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if opts.Capture == "" || opts.Output == "" {
 		return stats, errors.New("sort-fixture: a capture and an output are required")
 	}
-	// Refuse an output that is not new or empty before the capture is
-	// read; the check is repeated under the output lock.
+	// Ownership first, as the lister takes it: an output that is not new
+	// or empty is refused before anything is created there, then the
+	// output lock is held from before the capture is read until Run
+	// returns; Prepare repeats the check under it.
 	if _, err := dataset.Usable(opts.Output, "", SchemaID, false); err != nil {
 		return stats, fmt.Errorf("sort-fixture: output: %w", err)
+	}
+	lock, err := journal.TakeLock(opts.Output)
+	if err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
+	}
+	defer lock.Release()
+	if err := lock.Verify(); err != nil {
+		return stats, fmt.Errorf("sort-fixture: %w", err)
 	}
 	files, err := javaera.Resolve(opts.Capture)
 	if err != nil {
@@ -149,13 +173,16 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	if len(files) == 0 {
 		return stats, fmt.Errorf("%w in %s", ErrNoParts, opts.Capture)
 	}
-	// One array, sized from the footers: the rows are sorted in place and
-	// written from it in batches, never copied whole.
-	total, err := countRows(files)
+	// One array of the objects, sized from their count: they are sorted in
+	// place and written from it in batches, never copied whole.
+	objectRows, otherRows, err := countRows(ctx, files)
 	if err != nil {
 		return stats, fmt.Errorf("sort-fixture: %w", err)
 	}
-	c := captured{objects: make([]schema.Row[Object], 0, total)}
+	c := captured{
+		objects: make([]schema.Row[Object], 0, min(objectRows, maxPrealloc)),
+		others:  make([]string, 0, min(otherRows, maxPrealloc)),
+	}
 	for _, file := range files {
 		if err := readCapture(ctx, file, &c); err != nil {
 			return stats, fmt.Errorf("sort-fixture: %s: %w", file, err)
@@ -181,7 +208,7 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	}
 	sch := newSchema(limit)
 	stats.SchemaID = sch.ID
-	parts, err := write(ctx, opts, sch, objects, start)
+	parts, err := write(ctx, opts, lock, sch, objects, start)
 	if err != nil {
 		return stats, err
 	}
@@ -198,22 +225,14 @@ func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	return stats, nil
 }
 
-// write publishes objects, sorted, through the dataset writer. It owns
-// the output as the lister does: nothing in it is created, removed or
-// renamed before this process holds the output lock (journal.TakeLock),
-// each removal and the publication follow a check that the output is still
-// the directory locked, and the lock file stays in the workspace, as the
-// lister leaves it. An output another process owns is refused
-// (journal.ErrLocked) without a change.
-func write(ctx context.Context, opts Options, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
-	lock, err := journal.TakeLock(opts.Output)
-	if err != nil {
-		return nil, fmt.Errorf("sort-fixture: %w", err)
-	}
-	defer lock.Release()
-	if err := lock.Verify(); err != nil {
-		return nil, fmt.Errorf("sort-fixture: %w", err)
-	}
+// write publishes objects, sorted, through the dataset writer, under lock.
+// It owns the output as the lister does: the router checks the output is
+// still the directory locked before it creates each part, and creates it
+// through that directory (os.Root), not its pathname; each removal, and
+// the manifest's installation, follow the same check; the lock file stays
+// in the workspace, as the lister leaves it. An output another process
+// owns was refused (journal.ErrLocked) by Run without a change.
+func write(ctx context.Context, opts Options, lock *journal.Lock, sch *schema.Schema[Object], objects []schema.Row[Object], start time.Time) ([]dataset.Part, error) {
 	if err := dataset.Prepare(opts.Output, "", sch.ID, false); err != nil {
 		return nil, fmt.Errorf("sort-fixture: output: %w", err)
 	}
@@ -223,7 +242,25 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 			dataset.Cleanup(opts.Output)
 		}
 	}
-	router, err := parquetout.NewRouter(parquetout.Options{Out: opts.Output, PartSize: partSize, Encoders: 1}, sch)
+	root, err := os.OpenRoot(opts.Output)
+	if err != nil {
+		return nil, fmt.Errorf("sort-fixture: output: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := lock.Verify(); err != nil { // the root is the directory locked
+		return nil, fmt.Errorf("sort-fixture: %w", err)
+	}
+	router, err := parquetout.NewRouter(parquetout.Options{
+		Out: opts.Output, PartSize: partSize, Encoders: 1,
+		Verify: lock.Verify,
+		Open: func(path string) (*os.File, error) {
+			rel, err := filepath.Rel(opts.Output, path)
+			if err != nil {
+				return nil, err
+			}
+			return root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		},
+	}, sch)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("sort-fixture: %w", err)
@@ -251,7 +288,15 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 		Scope:    dataset.Scope{Kind: "whole"},
 		Coverage: dataset.Coverage{Complete: true, StopReason: "completed", ListingStartedAt: start.UTC(), ListingFinishedAt: time.Now().UTC()},
 	}
-	if err := dataset.Publish(opts.Output, meta, parts, nil); err != nil {
+	// The manifest is the commit: it is installed only while the output is
+	// still the directory locked.
+	commit := func(install func() error) error {
+		if err := lock.Verify(); err != nil {
+			return err
+		}
+		return install()
+	}
+	if err := dataset.Publish(opts.Output, meta, parts, commit); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("sort-fixture: publish: %w", err)
 	}
@@ -259,27 +304,153 @@ func write(ctx context.Context, opts Options, sch *schema.Schema[Object], object
 	return parts, nil
 }
 
-// countRows returns the rows the parts' footers declare.
-func countRows(files []string) (int64, error) {
+// countRows returns the OBJECT rows and the other rows of the parts,
+// refusing a footer that does not parse or whose counts are negative,
+// disagree with its row groups or add up to more rows than one array of
+// them can hold (ErrMalformedCapture). A row group's row_type statistics
+// decide it when they prove it all OBJECT or all another type; otherwise
+// its row_type column is read and counted. The counts size the arrays the
+// capture is read into; readCapture validates every row.
+func countRows(ctx context.Context, files []string) (objects, others int64, err error) {
 	var total int64
 	for _, name := range files {
-		f, err := os.Open(name)
+		o, n, err := countPart(ctx, name)
+		if err != nil {
+			return 0, 0, fmt.Errorf("%s: %w", name, err)
+		}
+		if total > maxRows-n {
+			return 0, 0, fmt.Errorf("%w: the parts declare more than %d rows", ErrMalformedCapture, maxRows)
+		}
+		total += n
+		objects += o
+	}
+	return objects, total - objects, nil
+}
+
+// countPart returns one part's OBJECT rows and all its rows.
+func countPart(ctx context.Context, name string) (objects, rows int64, err error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, 0, err
+	}
+	file, err := parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true))
+	if err != nil {
+		return 0, 0, fmt.Errorf("%w: %v", ErrMalformedCapture, err)
+	}
+	if rows, err = footerRows(file.Metadata()); err != nil {
+		return 0, 0, err
+	}
+	leaf, ok := file.Schema().Lookup(captureColumns[cRowType])
+	if !ok {
+		return 0, rows, nil // readCapture refuses the part
+	}
+	for i, rg := range file.Metadata().RowGroups {
+		switch rowTypes := rg.Columns[leaf.ColumnIndex].MetaData.Statistics; {
+		case rg.NumRows == 0:
+		case provenAll(rowTypes, true):
+			objects += rg.NumRows
+		case provenAll(rowTypes, false):
+		default:
+			n, err := countObjects(ctx, file.RowGroups()[i].ColumnChunks()[leaf.ColumnIndex])
+			if err != nil {
+				return 0, 0, fmt.Errorf("row group %d: count row types: %w", i, err)
+			}
+			objects += n
+		}
+	}
+	return objects, rows, nil
+}
+
+// provenAll reports whether a row group's row_type statistics prove every
+// value OBJECT (object) or every value another type: a minimum and maximum
+// both OBJECT, or a range that excludes it.
+func provenAll(st format.Statistics, object bool) bool {
+	lo, hi := st.MinValue, st.MaxValue
+	if lo == nil && hi == nil {
+		lo, hi = st.Min, st.Max
+	}
+	if lo == nil || hi == nil {
+		return false
+	}
+	if object {
+		return string(lo) == objectRowType && string(hi) == objectRowType
+	}
+	return string(hi) < objectRowType || string(lo) > objectRowType
+}
+
+// countObjects reads a row_type column chunk and counts its OBJECT values.
+func countObjects(ctx context.Context, chunk parquet.ColumnChunk) (int64, error) {
+	pages := chunk.Pages()
+	defer func() { _ = pages.Close() }()
+	values := make([]parquet.Value, 1024)
+	var n int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		page, err := pages.ReadPage()
+		if errors.Is(err, io.EOF) {
+			return n, nil
+		}
 		if err != nil {
 			return 0, err
 		}
-		info, err := f.Stat()
-		if err == nil {
-			var file *parquet.File
-			if file, err = parquet.OpenFile(f, info.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true)); err == nil {
-				total += file.NumRows()
+		reader := page.Values()
+		for {
+			k, err := reader.ReadValues(values)
+			for _, v := range values[:k] {
+				if !v.IsNull() && string(v.ByteArray()) == objectRowType {
+					n++
+				}
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				parquet.Release(page)
+				return 0, err
+			}
+			if k == 0 {
+				break
 			}
 		}
-		_ = f.Close()
-		if err != nil {
-			return 0, fmt.Errorf("%s: %w", name, err)
-		}
+		parquet.Release(page)
 	}
-	return total, nil
+}
+
+// maxRows bounds the rows of one capture: an array of them must be
+// representable.
+const maxRows = math.MaxInt / int64(unsafe.Sizeof(schema.Row[Object]{}))
+
+// maxPrealloc bounds the array allocated from the footers' counts before
+// a row is read: 2^24 rows (2.2 GiB) on 64-bit platforms, a quarter of the
+// address space on 32-bit ones. A capture within it, the intended scope,
+// is held in exactly one array; a larger one grows it as rows are read, so
+// a forged count cannot reserve more than this.
+const maxPrealloc = min(1<<24, maxRows/4)
+
+// footerRows returns a footer's row count once it agrees with its row
+// groups, each non-negative, summed without overflow.
+func footerRows(meta *format.FileMetaData) (int64, error) {
+	if meta.NumRows < 0 {
+		return 0, fmt.Errorf("%w: the footer declares %d rows", ErrMalformedCapture, meta.NumRows)
+	}
+	var sum int64
+	for i, rg := range meta.RowGroups {
+		if rg.NumRows < 0 || sum > math.MaxInt64-rg.NumRows {
+			return 0, fmt.Errorf("%w: row group %d declares %d rows", ErrMalformedCapture, i, rg.NumRows)
+		}
+		sum += rg.NumRows
+	}
+	if sum != meta.NumRows {
+		return 0, fmt.Errorf("%w: the footer declares %d rows, its row groups %d", ErrMalformedCapture, meta.NumRows, sum)
+	}
+	return sum, nil
 }
 
 // duplicate returns a key two rows share: adjacent sorted objects, adjacent
