@@ -619,13 +619,13 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	// A slow frontier (not held: a held one and a spill cap wait for each
 	// other by design): drained certificates, never retired without K,
 	// fill the cap behind it.
-	f := &fencedTree{ranges: 30, pages: 4, rows: func(int, int) int { return 200 }, slow: 5 * time.Millisecond}
+	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 }, slow: 30 * time.Millisecond}
 	c, _, _ := newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
 	sink := &collect{}
 	// The spill cap holds a few ranges: the rest refuse, and wait or evict.
-	st, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 40 << 10})
+	st, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,25 +640,44 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	t.Logf("refused %d, evicted %d, unlinked %d, sealed %d", st.SpillRefused, rep.Retired["evicted"], c.st.Unlinked.Load(), rep.SealedFiles)
 }
 
-// TestDurableEviction: a spill cap below the retained certificates evicts
-// drained ones (never undrained), and the run progresses.
+// TestDurableEviction: a frame refused by the spill cap while a drained
+// certificate is retained evicts that certificate (never an undrained
+// file): its unlink returns the credit, through the flusher, and the waiter
+// can retry. (TestDurableLedgerFailureEvicts runs the same path in a run.)
 func TestDurableEviction(t *testing.T) {
-	// A slow frontier (not held: a held one and a spill cap wait for each
-	// other by design): drained certificates, never retired without K,
-	// fill the cap behind it.
-	f := &fencedTree{ranges: 30, pages: 4, rows: func(int, int) int { return 200 }, slow: 5 * time.Millisecond}
-	c, _, _ := newDurable(t)
-	c.Start(1000, 0, nil)
-	defer c.Close()
-	sink := &collect{}
-	if _, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 40 << 10}); err != nil {
+	h := newHarness(t)
+	h.e.Span("r0001", "r0002", false)
+	h.rows(t, 0, 0, 100)
+	h.e.Fence("r0001/000000-99999", false)
+	h.publish(t, true)
+	h.e.Fence("r0002", false)
+	if err := h.e.complete(); err != nil {
 		t.Fatal(err)
 	}
-	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
-		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
+	d := h.n.spill.d
+	sp := h.o.sp
+	undrained := sp.file() // an undrained disposable file: never evicted
+	sp.max = sp.live.Load() // the next frame is refused
+	if err := sp.write(undrained, []schema.Row[tp]{{Key: "r0003/a"}}, false); err != errSpillFull {
+		t.Fatalf("not refused while nothing is drained: %v", err)
 	}
-	if c.st.RetiredEvicted.Load() == 0 {
-		t.Fatalf("nothing evicted: %+v", c.Report())
+	if h.c.st.RetiredEvicted.Load() != 0 {
+		t.Fatal("an undrained file evicted")
+	}
+	h.c.drainedFile(d)
+	live := sp.live.Load()
+	if err := sp.write(undrained, []schema.Row[tp]{{Key: "r0003/a"}}, false); err != errSpillFull {
+		t.Fatalf("not refused: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for sp.live.Load() >= live && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if h.c.st.RetiredEvicted.Load() != 1 || sp.live.Load() >= live || sp.full.Load() {
+		t.Fatalf("evicted %d, live %d (was %d), full %v", h.c.st.RetiredEvicted.Load(), sp.live.Load(), live, sp.full.Load())
+	}
+	if _, err := h.root.Stat(filepath.Join(DurableDir, d.name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the evicted file stays: %v", err)
 	}
 }
 
