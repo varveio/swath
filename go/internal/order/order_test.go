@@ -213,3 +213,69 @@ func TestWorkerFailureNeverSucceeds(t *testing.T) {
 		}
 	}
 }
+
+// siblings is a root with two children: "a" emits a row and fails after
+// "b", its right sibling, has finished listing.
+type siblings struct{ bDone chan struct{} }
+
+func (s *siblings) Root() rng { return rng{} }
+
+func (s *siblings) Expand(_ context.Context, r rng, e source.Emitter[rng, tp]) error {
+	switch r.prefix {
+	case "":
+		if err := e.Child(rng{prefix: "a"}); err != nil {
+			return err
+		}
+		return e.Child(rng{prefix: "b"})
+	case "a":
+		<-s.bDone
+		if err := e.Rows([]schema.Row[tp]{{Key: "a1"}}); err != nil {
+			return err
+		}
+		return errors.New("provider failed")
+	}
+	defer close(s.bDone)
+	return e.Rows([]schema.Row[tp]{{Key: "b1"}, {Key: "b2"}})
+}
+
+// TestFailedRangeStopsTheStream: when a range fails, nothing after it
+// reaches the sink, however soon after the failure the drainer passes its
+// node: the rows handed on stay a prefix of the keyspace with no gap, the
+// prefix a resume continues after. The drainer must not pass a failed
+// node before it sees the run stopped. Every run forces the window with
+// barriers, not sleeps: the drainer starts only after the workers have
+// expanded the root and both siblings ("a" failed after "b" finished;
+// hookAfterExpand counts the three), and the context's stop callback is
+// held until Run has returned (hookStopCallback), so only the latch taken
+// with the failure can stop the drainer at the failed node. It covers a
+// failed leaf next to a finished sibling, not nested split failures,
+// cancellation mid-drain or spill-trailer errors.
+func TestFailedRangeStopsTheStream(t *testing.T) {
+	defer func() { hookBeforeDrain, hookAfterExpand, hookStopCallback = nil, nil, nil }()
+	for i := range 100 {
+		var expanded atomic.Int32
+		allExpanded, release := make(chan struct{}), make(chan struct{})
+		hookAfterExpand = func() {
+			if expanded.Add(1) == 3 { // the root, "b", then "a"
+				close(allExpanded)
+			}
+		}
+		hookBeforeDrain = func() {
+			select {
+			case <-allExpanded:
+			case <-time.After(10 * time.Second):
+				t.Error("the workers did not expand the three ranges")
+			}
+		}
+		hookStopCallback = func() { <-release }
+		c := &collect{}
+		_, err := Run[rng, tp](context.Background(), &siblings{bDone: make(chan struct{})}, c, &testSchema, Options{Workers: 2, Budget: 1 << 20})
+		close(release)
+		if err == nil || err.Error() != "provider failed" {
+			t.Fatalf("run %d: err = %v", i, err)
+		}
+		if slices.ContainsFunc(c.keys, func(k string) bool { return k[0] == 'b' }) {
+			t.Fatalf("run %d: the sink received %q after the range before them failed", i, c.keys)
+		}
+	}
+}
