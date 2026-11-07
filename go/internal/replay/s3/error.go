@@ -23,4 +23,6 @@ var (
 	errListType         = &Error{Status: 400, Code: "InvalidArgument", Message: "only ListObjectsV2 is supported"}
 	errMaxKeysNegative  = &Error{Status: 400, Code: "InvalidArgument", Message: "max-keys must be non-negative"}
 	errMaxKeysInteger   = &Error{Status: 400, Code: "InvalidArgument", Message: "max-keys must be an integer"}
+	// The answers below are live S3's code and message.
+	errEncodingType = &Error{Status: 400, Code: "InvalidArgument", Message: "Invalid Encoding Method specified in Request"}
 )

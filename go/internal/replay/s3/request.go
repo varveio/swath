@@ -29,6 +29,9 @@ type Request struct {
 	TokenSet    bool
 	MaxKeys     int32
 	EncodingURL bool
+	// EncodingType is the encoding-type value as sent ("url" in any case),
+	// echoed as it came; "" renders as "url".
+	EncodingType string
 	FetchOwner  bool
 }
 
@@ -86,8 +89,9 @@ func (q query) text(name string) (string, bool) {
 }
 
 // ParseRequest parses a ListObjectsV2 query (the raw query string, as sent)
-// for bucket. It enforces list-type=2 and a non-negative integer max-keys;
-// every other parameter is accepted as it is.
+// for bucket. It refuses what live S3 refuses, in S3's order: anything but
+// list-type=2, a max-keys that is not a non-negative integer, an
+// encoding-type other than url, and a continuation-token that is not one.
 func ParseRequest(bucket, rawQuery string) (*Request, error) {
 	q := parseQuery(rawQuery)
 	if lt, _ := q.text("list-type"); lt != "2" {
@@ -106,13 +110,19 @@ func ParseRequest(bucket, rawQuery string) (*Request, error) {
 		return nil, err
 	}
 	r.MaxKeys = mk
+	if enc, ok := q.text("encoding-type"); ok {
+		// S3 takes the value in any case and refuses anything else, the
+		// empty value included (TestLiveEncodingTypeIsChecked).
+		if !strings.EqualFold(enc, "url") || len(enc) != 3 {
+			return nil, errEncodingType
+		}
+		r.EncodingURL, r.EncodingType = true, enc
+	}
 	if r.TokenSet {
 		if _, _, err := DecodeToken(r.Token); err != nil {
 			return nil, err
 		}
 	}
-	enc, _ := q.text("encoding-type")
-	r.EncodingURL = enc == "url"
 	owner, _ := q.text("fetch-owner")
 	r.FetchOwner = strings.EqualFold(owner, "true")
 	return r, nil

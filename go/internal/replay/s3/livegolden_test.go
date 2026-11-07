@@ -244,3 +244,21 @@ func TestLiveFlatTokenWithDelimiterRelistsItsPrefix(t *testing.T) {
 		}
 	}
 }
+
+// encoding-type takes "url" in any case and echoes it as sent; anything
+// else is refused: S3 answered encoding-type=bogus and encoding-type= with
+// 400 InvalidArgument "Invalid Encoding Method specified in Request", and
+// encoding-type=URL with <EncodingType>URL</EncodingType>. The refusal
+// comes after a bad max-keys and before a bad continuation-token.
+func TestLiveEncodingTypeIsChecked(t *testing.T) {
+	const msg = "Invalid Encoding Method specified in Request"
+	for _, v := range []string{"bogus", "", "urlx", "ur"} {
+		wantLiveError(t, "list-type=2&prefix=r/&max-keys=2&encoding-type="+v, 400, "InvalidArgument", msg)
+	}
+	wantLivePage(t, "list-type=2&prefix=r/&max-keys=2&encoding-type=URL",
+		"<Name>bkt</Name><Prefix>r/</Prefix><NextContinuationToken>T</NextContinuationToken>"+
+			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><EncodingType>URL</EncodingType><IsTruncated>true</IsTruncated>",
+		"O:r/k01 O:r/k02")
+	wantLiveError(t, "list-type=2&max-keys=abc&encoding-type=bogus", 400, "InvalidArgument", "max-keys must be an integer")
+	wantLiveError(t, "list-type=2&continuation-token=&encoding-type=bogus", 400, "InvalidArgument", msg)
+}

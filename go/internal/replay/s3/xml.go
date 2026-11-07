@@ -72,7 +72,11 @@ func RenderList(o *output.Output, res *Result) {
 		byteElement(o, "Delimiter", req.Delimiter, req.EncodingURL)
 	}
 	if req.EncodingURL {
-		textElement(o, "EncodingType", "url")
+		enc := req.EncodingType
+		if enc == "" {
+			enc = "url"
+		}
+		textElement(o, "EncodingType", enc)
 	}
 	if res.Truncated {
 		fixedElement(o, "IsTruncated", "true")
