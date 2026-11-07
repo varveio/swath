@@ -739,16 +739,22 @@ writes to the exchange (`annotations`) and removes before forwarding, so the pro
 would be asked directly (`TestRecordAnnotations`): `X-Record-Case`, the matrix case; `X-Record-Token`, how a token
 the driver formed itself was made: `verbatim` (the tampered constant, a scripted invented token: issued by no
 answer, sent to the replay as it was) or the alteration (`flip`, `truncate`, `flip-decoded`) and the issued token
-it was applied to; and `X-Record-Token-From`, the walk a token case takes its token from. The replay sends an
-altered token as the Go server's token for the same issued one, altered the same way, and applies `-live-pins` by
-the annotated case. The driver also drops the `X-Content-Type-Options` the proxy adds to every answer it releases
+it was applied to; and `X-Record-Token-From`, the walk a token case takes its token from. An annotation is a claim
+the replay holds to the captured request, never acted on unchecked: the alteration applied to the named issued
+token must give exactly the token the request carried, and a `verbatim` token must be one no earlier captured answer
+issued; otherwise the exchange fails (`annotation does not match the captured token`,
+`TestCaptureMutationAnnotationIsVerified`). The replay sends an altered token as the Go server's token for the same
+issued one, altered the same way, and applies `-live-pins` to the annotated case only where the request and answers
+are the pinned ones (above). The driver also drops the `X-Content-Type-Options` the proxy adds to every answer it releases
 (the file keeps the provider's headers as sent).
 
 A provider may issue the same token from requests of different scope (a GCS token names the object its page ends
 at, whatever the query asked), while the Go server's tokens carry their scope and are refused with another. The
-replay therefore keeps one Go token per issuing request: a request continues the token its own walk was issued
-(the same query without the token), else the one the annotated source walk was issued, else the latest
-(`TestCaptureTokenIssuedByTwoScopes`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
+replay therefore keeps one Go token per issuing request. A request annotated with its source walk sends that walk's
+Go token, or fails when that walk issued no such token, whatever its own query was issued; only a request without a
+source continues the token an earlier request of its own query was issued (its own case's where several were).
+Where the candidates would send different Go tokens the request fails as ambiguous; none is chosen by recency
+(`TestCaptureTokenIssuedByTwoScopes`, `TestCaptureTokenFromNamedWalk`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
 live run's verdicts: no failure the live run did not have, every documented difference documented again, and a
 second replay gives the same report (`TestLiveMatrixRecordedReplaysOffline`,
 `TestPinnedDifferencesAreDocumentedInBoth`).
