@@ -249,7 +249,11 @@ type report struct {
 	// page tokens differ in bytes: a wire difference, reported apart
 	// from the walk's verdict.
 	TokenBytes []string `json:"token_byte_differences,omitempty"`
-	Results    []result `json:"results"`
+	// Residuals are the documented differences the driver sends anyway so
+	// they stay visible (Compare "residual"), with what each server
+	// answered; they are neither passes nor failures.
+	Residuals []string `json:"documented_residuals,omitempty"`
+	Results   []result `json:"results"`
 }
 
 func run(o options) error {
@@ -393,6 +397,19 @@ func (d *driver) compareOne(r request) (*response, diff, error) {
 	return a, narrow(r.Compare, d.comp.compare(a, b), a, b), nil
 }
 
+// noteResidual records what the two servers answered to a documented
+// residual.
+func (d *driver) noteResidual(name string, df diff, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case err != nil:
+		d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: %v", name, err))
+	default:
+		d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: reference %d, go %d", name, df.Status[0], df.Status[1]))
+	}
+}
+
 // narrow applies a request's Compare mode to a verdict: "headers" sets the
 // body aside and adds Cache-Control to the compared headers; "status"
 // keeps the status alone.
@@ -438,7 +455,12 @@ func (d *driver) runCases(kind string, cases []request) {
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
 					a, df, err := d.compareOne(c)
-					if err != nil {
+					if c.Compare == "residual" {
+						// A documented difference: shown in the report,
+						// never counted as a failure.
+						d.noteResidual(c.Name, df, err)
+						res.Pass = true
+					} else if err != nil {
 						res.Error = err.Error()
 					} else {
 						res.Pass, res.diff = df.OK, &df
@@ -646,6 +668,9 @@ func (d *driver) write() error {
 	}
 	for _, s := range rep.TokenBytes {
 		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
+	}
+	for _, s := range rep.Residuals {
+		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
 	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped))
 	os.Stdout.Write(text.Bytes())

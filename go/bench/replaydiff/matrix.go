@@ -39,7 +39,9 @@ type request struct {
 	// not the HTML error page (this server's page is its own); "status"
 	// compares the status only, for request lines Go's HTTP parser refuses
 	// before the server sees them (its page and Content-Type are the
-	// parser's). Empty compares everything.
+	// parser's); "residual" sends a documented difference and reports what
+	// each server answered without passing or failing it. Empty compares
+	// everything.
 	Compare string `json:"compare,omitempty"`
 	// Wire, when set, builds the whole byte stream sent on a connection of
 	// its own (several requests, odd line endings); the last answer is the
@@ -276,6 +278,19 @@ func rawTargets() []request {
 			Wire: func(b, h string) string {
 				return "POST /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nContent-Length: 0\r\n\r\n\r\n\r\n" + getHead(b, h, "\r\n", "\r\n", 8192)
 			}})
+	// The two parser-level differences the user page documents, sent so
+	// they show in every report: more than four CR or LF after a bodyless
+	// POST (the reference serves the next request, Go's parser answers
+	// 400 and closes), and a CRLF before a GET with nothing in front (the
+	// reference counts it and answers 431 at the limit, Go answers 400).
+	out = append(out,
+		request{Name: "raw GET [residual] after a bodyless POST and five LF", Method: "GET", Compare: "residual",
+			Wire: func(b, h string) string {
+				return "POST /" + b + "?list-type=2 HTTP/1.1\r\nHost: " + h + "\r\nContent-Length: 0\r\n\r\n\n\n\n\n\n" +
+					getHead(b, h, "\r\n", "\r\n", 200)
+			}},
+		request{Name: "raw GET [residual] CRLF before the request line, head at the limit", Method: "GET", Compare: "residual",
+			Wire: func(b, h string) string { return "\r\n" + getHead(b, h, "\r\n", "\r\n", 8192) }})
 	add("GET", "status",
 		"/{bucket}%zz?list-type=2", "/{bucket}%?list-type=2", "/{bucket}%u0041?list-type=2", "{bucket}?list-type=2",
 		"/{bucket}?list-type=2&prefix=a b&max-keys=1", "/{bucket}?list-type=2&prefix=\x01&max-keys=1",
