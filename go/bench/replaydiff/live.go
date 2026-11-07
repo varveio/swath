@@ -402,7 +402,6 @@ func (lr *liveRun) finish(res *result, j judgement, err error) {
 		res.Pass = df.OK
 		if !df.OK {
 			res.diff = &df
-			res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 		}
 	}
 	lr.d.record(*res)
@@ -456,7 +455,6 @@ func (lr *liveRun) walk(c liveCase) {
 				res.Error = err.Error()
 			} else {
 				res.diff = &df
-				res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 			}
 			break
 		}

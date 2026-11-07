@@ -96,7 +96,7 @@ func main() {
 	flag.BoolVar(&o.liveScripted, "live-scripted", false, "live: also send the driver's own scripted matrix")
 	flag.BoolVar(&o.liveRecord, "live-record", false, "live: the endpoint is a bench/faultproxy -record proxy in front of the provider; "+
 		"each request names its case and how its token was formed in X-Record-* headers the proxy records and strips, for replaydiff -capture")
-	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
+	flag.StringVar(&o.pins, "live-pins", "", "live and capture: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is a documented difference")
 	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
 	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
@@ -287,9 +287,6 @@ type result struct {
 	// answer had none, keeps it out of the results: it was not sent, and
 	// the report lists it under skipped, neither passed nor failed.
 	Skipped string `json:"skipped,omitempty"`
-	// Pinned marks a live difference that reproduces, message for
-	// message, the mismatch the provider evidence pins for its case.
-	Pinned bool `json:"pinned_mismatch,omitempty"`
 	*diff
 }
 
@@ -831,11 +828,7 @@ func (d *driver) summary() []byte {
 		if r.Pass {
 			continue
 		}
-		pinned := ""
-		if r.Pinned {
-			pinned = " PINNED"
-		}
-		fmt.Fprintf(&text, "FAIL%s %s %q %s %s", pinned, r.Kind, r.Name, r.Method, r.Target)
+		fmt.Fprintf(&text, "FAIL %s %q %s %s", r.Kind, r.Name, r.Method, r.Target)
 		if r.FailAt > 0 {
 			fmt.Fprintf(&text, " (page %d)", r.FailAt)
 		}
@@ -881,9 +874,6 @@ func (d *driver) summary() []byte {
 		fmt.Fprintf(&text, "%d documented divergences (answered as live S3), %d requests whose answers differ only in token bytes\n",
 			len(rep.Divergences), len(rep.TokenBytes))
 	}
-	if pinned := countPinned(rep.Results); pinned > 0 {
-		fmt.Fprintf(&text, "%d of the %d differences reproduce the provider evidence's pinned mismatch for their case\n", pinned, rep.Failed)
-	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals",
 		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.SkippedCount, len(rep.Residuals)+rep.ResidualsNotShown)
 	if n := rep.FailuresNotShown + rep.SkipsNotShown; n > 0 {
@@ -891,14 +881,4 @@ func (d *driver) summary() []byte {
 	}
 	text.WriteByte('\n')
 	return text.Bytes()
-}
-
-func countPinned(rs []result) int {
-	n := 0
-	for _, r := range rs {
-		if r.Pinned {
-			n++
-		}
-	}
-	return n
 }

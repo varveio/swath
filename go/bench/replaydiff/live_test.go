@@ -372,7 +372,7 @@ func TestReadPins(t *testing.T) {
 	other := result{Name: "gcs-03p"}
 	lr.finish(&other, judgement{protocol: "gcs", caseID: "gcs-03p", ref: ref, got: got,
 		df: diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}}, nil)
-	if r := lr.d.rep.Results; len(r) != 1 || r[0].Pinned || r[0].Pass || lr.d.rep.Failed != 1 {
+	if r := lr.d.rep.Results; len(r) != 1 || r[0].Pass || lr.d.rep.Failed != 1 {
 		t.Errorf("%+v", r)
 	}
 	if r := lr.d.rep.Residuals; len(r) != 1 || !strings.Contains(r[0], "pins this mismatch for gcs-03p") {
