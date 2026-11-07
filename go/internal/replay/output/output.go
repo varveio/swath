@@ -19,6 +19,7 @@ package output
 import (
 	"math"
 	"strconv"
+	"sync"
 	"sync/atomic"
 )
 
@@ -136,6 +137,7 @@ type Output struct {
 	cap        int
 	chunkBytes int
 	alloc      func(int) []byte
+	pooled     bool // full-size chunks go back to chunkPool at Close
 
 	chunks    [][]byte // each chunk's len is its bytes used, its cap its size
 	reserved  int      // reservation not yet consumed by a chunk
@@ -148,6 +150,23 @@ type Output struct {
 
 	onePass, fallback int
 	scratch           [20]byte
+}
+
+// chunkPool keeps full-size chunks between responses: a page of a thousand
+// keys renders into a fresh 256 KiB chunk otherwise, which the runtime
+// clears before handing it out, at a thousand pages a second. A chunk is
+// reused only after Close, when the response's write is over; its old
+// bytes lie past its length, where nothing reads. The budget charges a
+// chunk whichever way it was allocated.
+var chunkPool sync.Pool
+
+func allocChunk(n int) []byte {
+	if n == ChunkBytes {
+		if c, ok := chunkPool.Get().(*[]byte); ok {
+			return (*c)[:0]
+		}
+	}
+	return make([]byte, 0, n)
 }
 
 // New reserves initial bytes of budget for a response of at most cap bytes,
@@ -163,13 +182,14 @@ func NewChunked(b *Budget, initial, cap, chunkBytes int, alloc func(int) []byte)
 	if cap <= 0 || initial <= 0 || initial > cap || chunkBytes <= 0 {
 		panic("output: invalid response output bounds")
 	}
-	if alloc == nil {
-		alloc = func(n int) []byte { return make([]byte, 0, n) }
+	pooled := alloc == nil
+	if pooled {
+		alloc = allocChunk
 	}
 	if !b.TryCharge(int64(initial)) {
 		return nil, ErrBudget
 	}
-	return &Output{budget: b, cap: cap, chunkBytes: chunkBytes, alloc: alloc, reserved: initial, hint: initial}, nil
+	return &Output{budget: b, cap: cap, chunkBytes: chunkBytes, alloc: alloc, pooled: pooled, reserved: initial, hint: initial}, nil
 }
 
 // Standalone is an Output with no shared budget and no cap, for rendering
@@ -231,6 +251,14 @@ func (o *Output) Close() {
 		return
 	}
 	o.closed = true
+	if o.pooled {
+		for _, c := range o.chunks {
+			if cap(c) == ChunkBytes {
+				c = c[:0]
+				chunkPool.Put(&c)
+			}
+		}
+	}
 	o.chunks = nil
 	o.budget.Release(int64(o.allocated + o.reserved))
 	o.allocated, o.reserved = 0, 0
