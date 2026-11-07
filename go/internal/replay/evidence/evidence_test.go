@@ -173,8 +173,9 @@ type caseRecord struct {
 
 type evidenceIndex struct {
 	Captures map[string]struct {
-		File string
-		Kind string
+		File       string
+		Kind       string
+		SDKOptions sdkOptions `json:"sdk_options"`
 	}
 	Cases     []caseRecord
 	Manifests map[string]struct{ File string }
@@ -387,6 +388,7 @@ type endpoint struct {
 	port   int
 	cases  map[string]caseRecord
 	mutate mutation
+	index  *evidenceIndex
 }
 
 // send is one HTTP/1.1 exchange with the request target as given, byte
@@ -463,9 +465,9 @@ func (e *endpoint) verify(id, path string) (err error) {
 	case "exchange":
 		e.verifyExchange(c, record)
 	case "walk":
-		e.verifyWalk(c, false)
+		e.verifyWalk(c)
 	case "sdk_run":
-		e.verifyWalk(c, true)
+		e.verifySDK(c, e.index.Captures[id].SDKOptions)
 	default:
 		// A retry run is replayed attempt by attempt, not as a fresh
 		// walk; there is no such verifier, so it is refused.
@@ -559,11 +561,9 @@ func (e *endpoint) sourceToken(caseID *string, page int) *string {
 	return token
 }
 
-// verifyWalk re-walks a walk or an SDK run with the replay's own tokens
-// and compares the two complete walks. An SDK run is re-walked with the
-// run's request scope and client headers, the token placed where the
-// client library places it (parameters in name order).
-func (e *endpoint) verifyWalk(c capture, sdk bool) {
+// verifyWalk re-walks a walk with the replay's own tokens and compares
+// the two complete walks.
+func (e *endpoint) verifyWalk(c capture) {
 	first := c.steps[0].request
 	base := first.query
 	headers := sortedHeaders(first)
@@ -572,11 +572,7 @@ func (e *endpoint) verifyWalk(c capture, sdk bool) {
 	for page := 0; page < maxWalkPages; page++ {
 		query := base
 		if token != nil {
-			if sdk {
-				query = insertSorted(base, "pageToken="+encode(*token))
-			} else {
-				query = base + "&pageToken=" + encode(*token)
-			}
+			query = base + "&pageToken=" + encode(*token)
 		}
 		resp := e.send("GET", query, headers)
 		replay = append(replay, step{"walk", request{method: "GET", path: gcsReplayPath, query: query, headers: headerMap(headers)}, resp})
@@ -608,24 +604,10 @@ func headerMap(h [][2]string) map[string][]string {
 	return m
 }
 
-func insertSorted(query, part string) string {
-	parts := strings.Split(query, "&")
-	name, _, _ := strings.Cut(part, "=")
-	i := 0
-	for i < len(parts) {
-		n, _, _ := strings.Cut(parts[i], "=")
-		if n > name {
-			break
-		}
-		i++
-	}
-	return strings.Join(slices.Insert(parts, i, part), "&")
-}
-
-// verifyRun is the receipt check of a walk or SDK run: every replay
+// verifyRun is the receipt check of a walk: every replay
 // request carries the captured scope, then the walks are compared.
 func verifyRun(c capture, replay []step) {
-	require(c.kind != "exchange", "GCS run receipt needs typed run capture")
+	require(c.kind == "walk", "GCS walk receipt needs a walk capture")
 	require(len(replay) > 0, "replay run is empty")
 	nativeFirst := c.steps[0].request
 	scope := withoutField(nativeFirst.query, "pageToken")
@@ -639,9 +621,6 @@ func verifyRun(c capture, replay []step) {
 		require(nativeFirst.method == s.request.method && s.request.path == gcsReplayPath, "replay request method/path differs from captured probe")
 		require(withoutField(s.request.query, "pageToken") == scope, "replay request query differs from captured probe")
 		require(noUnexpectedDuplicates(s.request.query, duplicateQueryProbes[c.probeID]), "duplicate query field outside duplicate-parameter probe")
-		if c.kind == "sdk_run" {
-			assertSDKHeaders(nativeFirst, s.request)
-		}
 	}
 	var nativePages, replayPages []capturedPage
 	for _, s := range c.steps {
@@ -651,35 +630,10 @@ func verifyRun(c capture, replay []step) {
 		replayPages = append(replayPages, capturedPage{receiptToken(s.request.query), s.exchange})
 	}
 	full := false
-	if p := queryValue(nativeFirst.query, "projection"); c.kind == "sdk_run" || p != nil && *p == "full" {
+	if p := queryValue(nativeFirst.query, "projection"); p != nil && *p == "full" {
 		full = true
 	}
 	assertGCSWalk(nativePages, replayPages, "{bucket}", replayBucket, full, 1024, 1_000_000)
-}
-
-// assertSDKHeaders requires every product/version token of the native
-// client headers in the replay request's (gl-java/ by product only: it
-// carries the JVM's version).
-func assertSDKHeaders(native, replay request) {
-	classified := 0
-	for _, name := range []string{"user-agent", "x-goog-api-client"} {
-		nv := native.header(name)
-		if nv == nil {
-			continue
-		}
-		classified++
-		rv := replay.header(name)
-		require(rv != nil, "replay SDK header "+name+" is missing")
-		have := strings.Fields(*rv)
-		for _, tok := range strings.Fields(*nv) {
-			ok := slices.Contains(have, tok)
-			if strings.HasPrefix(tok, "gl-java/") {
-				ok = slices.ContainsFunc(have, func(h string) bool { return strings.HasPrefix(h, "gl-java/") })
-			}
-			require(ok, "replay SDK product/version token differs")
-		}
-	}
-	require(classified > 0, "native SDK run lacks classified product/version header")
 }
 
 // expectations are the pins replay must meet: the archive's, with an
@@ -851,7 +805,7 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 	pins := expectations(t, archived, updates)
 	for name, fixture := range ev.fixtures(t, root) {
 		t.Run(name, func(t *testing.T) {
-			e := &endpoint{port: serve(t, fixture), cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+			e := &endpoint{port: serve(t, fixture), cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
 			outcomes := map[string]string{}
 			for id, c := range ev.index.Captures {
 				if err := e.verify(id, filepath.Join(ev.root, c.File)); err != nil {
@@ -1009,13 +963,14 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 		{"gcs-01a", "drop-first"}, {"gcs-01a", "duplicate-last"}, {"gcs-04a", "swap-order-pair"},
 		{"gcs-05o", "double-decode"}, {"gcs-07q", "terminate-early"}, {"gcs-07c", "repeat-prefix"},
 		{"gcs-07g", "wrong-status"}, {"gcs-07g", "wrong-error"}, {"gcs-04a", "invalid-utf8"},
+		{"gcs-09a", "drop-first"}, {"gcs-09b", "repeat-prefix"}, {"gcs-09c", "terminate-early"},
 	} {
 		path := filepath.Join(ev.root, ev.index.Captures[c[0]].File)
-		clean := &endpoint{port: port, cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+		clean := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
 		if err := clean.verify(c[0], path); err != nil {
 			t.Fatalf("%s: %v", c[0], err)
 		}
-		bad := &endpoint{port: port, cases: ev.cases, mutate: corruption(c[1])}
+		bad := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: corruption(c[1])}
 		if err := bad.verify(c[0], path); err == nil {
 			t.Errorf("%s with %s was accepted", c[0], c[1])
 		}
@@ -1024,11 +979,11 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 	// even though the new message contains the pinned one.
 	const pin = "GCS error reason differs: expected=invalidParameter actual=invalid"
 	path := filepath.Join(ev.root, ev.index.Captures["gcs-06f"].File)
-	clean := &endpoint{port: port, cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+	clean := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
 	if err := clean.verify("gcs-06f", path); err == nil || !atPin(pin, "mismatch: "+err.Error()) {
 		t.Fatalf("gcs-06f: %v", err)
 	}
-	extended := &endpoint{port: port, cases: ev.cases, mutate: onFirst(func(b string) string {
+	extended := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: onFirst(func(b string) string {
 		return strings.Replace(b, `"reason":"invalid"`, `"reason":"invalidFoo"`, 1)
 	})}
 	if err := extended.verify("gcs-06f", path); err == nil || atPin(pin, "mismatch: "+err.Error()) {

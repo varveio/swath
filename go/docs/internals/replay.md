@@ -230,12 +230,14 @@ GCS evidence corpus (1,051 compared), synthetic 10k (2,065), synthetic 1M rolled
 `giab` (2,119 + 1,569).
 
 `internal/replay/evidence` ports the conformance comparison: `compare_test.go` is the GCS field policy and
-exchange comparator with the suite's messages (the pins match on message prefixes, `TestComparatorMessages`), a
-small order-keeping JSON node with duplicate-member and trailing-token refusal stands in for the suite's strict
-parser, and `evidence_test.go` is the capture replay (token mapping and mutation, receipt checks of the request
-scope, walks, SDK runs). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped,
-repeated or reordered item, a decoded name, an early end, a repeated prefix, a wrong status or reason) and
-requires each to be rejected.
+exchange comparator with the suite's messages (`TestComparatorMessages`; a pin is the whole message,
+`TestPinsMatchWholeMessages`), a small order-keeping JSON node that refuses ill-formed UTF-8, repeated members
+and trailing tokens stands in for the suite's strict parser, `evidence_test.go` is the capture replay (token
+mapping and mutation, receipt checks of the request scope, walks), and `sdk_test.go` runs the SDK captures
+through the Go client library with a recording transport (`TestSDKMakesOneAttempt` holds it to one attempt per
+call). `TestEvidenceRejectsCorruptedReplayResults` corrupts matched answers (a dropped, repeated or reordered
+item, a decoded name, an early end, a repeated prefix, a wrong status or reason, an ill-formed UTF-8 byte, and
+the same corruptions of SDK runs) and requires each to be rejected.
 
 | Contract | Test |
 |---|---|

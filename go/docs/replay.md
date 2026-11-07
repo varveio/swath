@@ -274,13 +274,17 @@ against this server. With `SWATH_REPLAY_FIXTURES=ROOT` it extracts the archive i
 serves the capture corpus (from `ROOT/fixtures/evidence-gcs/sorted` when present, and always from the same
 corpus written in the test and sorted by sort-fixture) under the bucket `replay-bucket`, and replays every
 `gcs/captures/*.json`: an exchange as captured with the bucket placeholder mapped and a native page token
-replaced by the replay's token for the same position (or its tampered, flipped or truncated form), a walk and
-an SDK run re-walked with the replay's own tokens (an SDK run with the run's captured query scope and client
-headers). Each answer is compared with the provider's under the conformance field policy: status, classified
+replaced by the replay's token for the same position (or its tampered, flipped or truncated form), and a walk
+re-walked with the replay's own tokens. An SDK run is executed by an official client library, the Go one
+(`google.golang.org/api/storage/v1`; the captures were made with the Java one): pointed at the server with its
+endpoint override, anonymous, auto-paginating, one attempt per call. Its requests must carry the captured
+scope as decoded parameters (its own `alt=json` and `prettyPrint=false` aside) and identify the Go client,
+its answers are compared as a walk, and its own decoded inventory must equal the provider's. Each answer is compared with the provider's under the conformance field policy: status, classified
 headers, then the page (items field by field, prefixes, terminal pagination; walks as merged inventories with
 unbroken token chains) or the error envelope's first reason. Each outcome must be its pin in
 `gcs/replay-expectations.json` (with `docs/replay-provider-expectations.json` applied) or better: a pinned
-mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
+mismatch must be reproduced as the whole message (only a replay token's body after a pin ending at the token's
+prefix is open), and a pinned mismatch that now matches is logged as an improvement. `SWATH_PROVIDER_REPORT=DIR` writes the per-capture
 outcomes to `DIR/<fixture>/gcs-outcomes.json`, in the shape of the Java suite's `-PproviderReport` file.
 
 ```bash
