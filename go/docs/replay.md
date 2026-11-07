@@ -435,8 +435,10 @@ inputs changed (or on a manual run); `ci-gate` needs both.
   `go vet`, `go test -race`, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
   darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
   built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
-  smoked. The smoke's fixture is written in the job: `bench/s3fake` serves 2,000 keys and the Go lister's
-  dataset of that bucket is the fixture, so the smoke needs no network, Java or recording.
+  smoked twice on fixtures written in the job, so neither needs network, Java or a recording: the Go
+  lister's dataset of a `bench/s3fake` bucket of 2,000 keys (sorted, served as it is), and an unsorted
+  capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
+  refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.
 - `go-fixtures` (inputs: `go/`, the workflow, the Java `swath-replay`, `swath-core` and `swath-model` modules,
   the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
   `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,

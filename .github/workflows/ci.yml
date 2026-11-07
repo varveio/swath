@@ -395,10 +395,12 @@ jobs:
           build-args: SWATH_REVISION=${{ github.sha }}
           cache-from: type=gha,scope=swath-replay-go
 
-      # The fixture is the Go lister's dataset of a fake bucket (bench/s3fake), written here, so
-      # the smoke needs no network, no Java and no recording; the dataset is sorted, so the
-      # server opens it as it is.
-      - name: Smoke — Go replay image serves a Go lister dataset
+      # Two smokes, both on fixtures written here, so they need no network, no Java and no
+      # recording. The Go lister's dataset of a fake bucket (bench/s3fake) is sorted, so the
+      # server opens it as it is. The unsorted capture from bench/replay/capture is refused as
+      # not servable sorted, so the smoke's fallback sorts it with the image's own sort-fixture
+      # first; the step requires that the fallback ran.
+      - name: Smoke — Go replay image serves a Go lister dataset and a sorted capture
         if: steps.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
@@ -414,6 +416,10 @@ jobs:
           "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke -endpoint http://127.0.0.1:19400 -path-style -anonymous \
             -o "$smoke/dataset"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/dataset" sorted
+          go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
+          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |
+            tee "$smoke/capture-smoke.log"
+          grep -q "sorting it with the image's sort-fixture" "$smoke/capture-smoke.log"
 
   # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
   # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
