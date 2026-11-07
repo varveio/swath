@@ -105,7 +105,8 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A blank token is absent. A malformed token is `400 InvalidArgument`
   even when a `start-after` could have served. Replay tokens (`v2:...`) and S3's are not interchangeable.
-- `encoding-type=url` percent-encodes every byte but `A-Z a-z 0-9 - _ . /` with upper-case hex, as S3 does.
+- `encoding-type=url` percent-encodes every byte but `A-Z a-z 0-9 - _ . /` with upper-case hex (live S3 writes a
+  space as `+`: [Live conformance](#live-conformance)).
   Without it, key bytes are rendered as UTF-8 text with malformed sequences replaced.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
   `Owner` appears only with `fetch-owner=true`.
@@ -350,6 +351,100 @@ go build -o /tmp/replaydiff ./bench/replaydiff
   -fixture /data/sorted -bucket bkt -report /tmp/diff.json     # exit 1 and FAIL lines on a difference
 /tmp/replaydiff -protocol azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
 ```
+
+## Live conformance
+
+`bench/replaydiff -live-endpoint` compares the Go server with the provider itself: anonymous requests to live S3
+or GCS, and the same requests to the Go server serving a recording of the same bucket. A live bucket changes, so
+`-live-prefix` keeps every request inside one scope (a request of the matrix that names no prefix is given the
+scope as its prefix) and `-live-stable-before` refuses to run unless every recorded name there was last modified
+before the given time (the recording's start).
+
+```bash
+/tmp/replaydiff -live-endpoint https://s3.us-east-1.amazonaws.com -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/noaa-normals-pds/dataset/data -bucket noaa-normals-pds -report /tmp/live.json
+/tmp/replaydiff -live-endpoint https://s3.eu-central-1.amazonaws.com -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/gleif/dataset/data -bucket gleif -live-prefix data/csv/lei/date=2025- \
+  -live-stable-before 2026-11-06T22:00:33Z -report /tmp/live-gleif.json
+/tmp/replaydiff -live-endpoint https://storage.googleapis.com -protocol gcs -go ./swath-replay \
+  -fixture /data/rec/gcs/BUCKET/dataset/data -bucket BUCKET -live-prefix PREFIX -report /tmp/live-gcs.json
+```
+
+The S3 endpoint is path-style (`https://s3.REGION.amazonaws.com`) or virtual-host
+(`https://BUCKET.s3.REGION.amazonaws.com`). Outbound requests honour `HTTPS_PROXY`; no `Accept-Encoding` is sent.
+
+**Requests.** The provider conformance matrix of `scripts/provider-conformance` (97 S3 and 110 GCS cases, the
+cases the native evidence was captured with), each bound to names under the scope that keep the corpus name's
+part in the question, then token walks of the scope and of each of its directories (up to `-max-top`), flat and
+with `/`, at each `-walks` page size (default 7 and 1,000) whose walk takes at most `-live-walk-pages` pages
+(300). Each side follows its own tokens; a token case takes each side's own token from its source walk and
+alters it as the campaign did. `-live-scripted` adds the driver's own scripted matrix (the requests that mean the
+same against the provider). A public bucket cannot answer every case: 25 S3 and 24 GCS cases need an owned
+bucket's corpus (names across the surrogate block and the supplementary planes, NFC/NFD and case pairs;
+reserved and escape-like characters whose presence the spelling probe decides; control, XML-invalid and
+dot-segment names; names at the length limits) or an official client library, and some need a shape the
+recording lacks (a directory of exactly 1,000 names, of six objects, a name that is a byte prefix of another).
+The report lists every case with its query or the reason it was not sent.
+
+**Comparison.** The conformance suite's field policy (the Java `ProviderExchangeComparator` with its S3 and GCS
+profile comparators, and the campaign's `evidence.py` normalizations): the same status; on each side only the
+classified headers (S3: `Content-Type`, `Date`, `x-amz-request-id`, `x-amz-id-2`, `x-amz-bucket-region`,
+`Content-Length`, `Server`, `Transfer-Encoding`, `Connection`, `x-swath-replay-error`; GCS: `Content-Type`,
+`Date`, `x-goog-request-id`, `Content-Length`, `Server`, `Cache-Control`, `Vary`, `Transfer-Encoding`,
+`x-swath-replay-error`, `x-guploader-uploadid`, `x-goog-gcs-base-ts`, `Expires`, `Alt-Svc`, `Pragma`), the media
+type, a `Content-Length` equal to the body and a padded GMT `Date`, their values not compared; then for a
+listing every element or field in order (S3: the top-level element sequence, `Prefix`, `Delimiter`,
+`StartAfter`, `EncodingType`, `KeyCount`, `MaxKeys`, `IsTruncated`, `Marker`, each `Contents` field with
+`LastModified` as an instant, `CommonPrefixes`; GCS: each item's name, size, `updated` as an instant, then the
+metadata below, the prefixes, whether the page is the last) and for an error the S3 `Code` or the GCS error's
+first `reason`. Set aside, and only these: request ids, dates, the tokens' values (a token is compared by its
+presence and by where it leads; an S3 page's `ContinuationToken` must echo its own side's), and the S3 owner's
+values (its element sequence is compared; the replay's are synthetic). GCS item metadata is compared exactly
+(`etag`, `generation`, `metageneration`, `storageClass`, `contentType`, `md5Hash`, `crc32c`) when the fixture is
+a `swath/gcs-objects/v1` dataset, and held to the synthetic profile otherwise (`-gcs-metadata`, default auto);
+`timeCreated`, `id`, `selfLink` and the rest are not stored, so not compared. A header outside the classified
+set fails the comparison, as it fails the suite.
+
+### Live S3, 2026-11-07
+
+The recordings of 2026-11-06 (`swath list ... --no-sign-request --sort`, recorded 21:58 to 22:13 UTC), the Go
+server at this commit, anonymous path-style requests through the session's proxy, `-parallel 4`, default walk
+sizes 7 and 1,000.
+
+| Bucket, region | Scope (newest recorded name) | Matrix cases sent | Matrix cases passed / differing | Walks passed / differing | HTTP requests |
+|---|---|---|---|---|---|
+| `noaa-normals-pds`, us-east-1 | whole bucket (2026-11-04T13:05Z) | 72 of 97 | 54 / 17 (+1 skipped) | 10 / 0 | 1,906 (with `-live-scripted -max-prefixes 40`: 312 / 25) |
+| `giab`, us-east-1 | whole bucket (2026-11-01T19:06Z) | 72 of 97 | 55 / 16 (+1 skipped) | 30 / 2 | 736 |
+| `gleif`, eu-central-1 | `data/csv/lei/date=2025-` (2025-12-31) | 44 of 97 | 37 / 7 | 204 / 0 | 3,830 |
+| `gleif`, eu-central-1 | `data/xml/rr/date=2024-` (2024-12-31) | 44 of 97 | 37 / 7 | 204 / 0 | 3,836 |
+
+`gleif` gains date partitions every day, so its runs are scoped to closed years. Its partitions hold three
+objects each, so the cases that need a directory of six objects or a name that is a byte prefix of another are
+not sent there. `s3-07x` (a decoded byte of an issued token flipped) is skipped where either side's token is
+not base64: the replay's S3 token is `v2:` and base64url, so it has no analogue on this route.
+
+Every difference, by matrix case (the same on each bucket where the case was sent). None is a difference between
+this server and the Java server: both answer as described in the S3 route above, which no live capture had
+checked before (the S3 rows of `docs/replay-provider-conformance.md` are `UNMEASURED`). They are findings about
+the wire contract, not fixed here:
+
+| Case | Request | Live S3 | Replay |
+|---|---|---|---|
+| `s3-01c`, `s3-01g` | `start-after=` (empty) | echoes an empty `<StartAfter></StartAfter>` | omits `StartAfter` |
+| `s3-05e`, `s3-05f` | `prefix=...a%ZZ`, `prefix=...pct%` (malformed escape) | drops the prefix: lists the bucket from its first key, `<Prefix></Prefix>` | lists the literal prefix (empty) |
+| `s3-05i` | `prefix` twice with different values | the first | the last |
+| `s3-06m` | `max-keys=1&max-keys=2` | the first | the last |
+| `s3-06k` | `max-keys=+2` (raw `+`) | `400 InvalidArgument` (the `+` read as a space) | accepts the sign: 2 |
+| `s3-07w` | `continuation-token=` (empty) | `400 InvalidArgument` ("The continuation token provided is incorrect") | blank is absent: the first page |
+| `s3-07r`, `s3-07s` | an issued token with its last character changed, or cut by four | `400 InvalidArgument` | the altered `v2:` token still decodes to a position: a page |
+| `s3-07k` | a token from a flat walk sent with `delimiter=/` | resumes at the token's key and lists the common prefix that holds it again | resumes after that whole prefix |
+| `s3-08d` | `encoding-type=bogus` | `400 InvalidArgument` | ignored |
+| `s3-12e` | `marker` with `list-type=2` | `400 InvalidArgument` ("Marker unsupported ... in list-type=2") | ignored |
+| `s3-12a`, `s3-12b`, `s3-12c` | ListObjects V1 (no `list-type`, or `list-type=3`) | a V1 listing | `400` (V2 only, see Limits) |
+| walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | `%20` |
+| scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | a listing |
+| scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | the byte as sent |
+| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
 
 ## Measurements
 

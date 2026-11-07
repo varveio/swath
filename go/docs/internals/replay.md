@@ -226,8 +226,26 @@ and sends both servers the same requests:
 `x-swath-replay-*` header, and the same body bytes. `Date`, `Server` and framing (`Content-Length` against
 chunked) are not compared. A difference is reported with the first differing body byte and the bytes around it.
 The request set is data (a `request` list and a `comparator`), so another route adds its matrix and, where byte
-identity cannot hold, a structural comparator; `-live-endpoint` uses one (leaf elements, tokens masked, error
-codes only) to compare the Go server with live S3, where the bucket may have changed since it was recorded.
+identity cannot hold, a structural comparator.
+
+With `-live-endpoint` the reference is the provider itself (S3 or GCS, anonymous) and the Go server serves a
+recording of the same bucket. The requests are then the provider conformance matrix of
+`scripts/provider-conformance` (`providermatrix.go`): each case's query is a template over the campaign corpus's
+names, bound either to the corpus (where it renders the campaign's own query byte for byte,
+`TestProviderMatrixMatchesTheCampaign`, which runs the campaign's Python) or to names of the recording chosen to
+keep each name's part (`deriveRoles`: a directory of six objects and a gap between two of them, a name that is a
+byte prefix of the next, a directory with two subtrees, the smallest directory over 1,000 names, ...). A case
+whose question needs names an owned bucket holds (the Unicode, reserved-character, control-character and
+name-limit groups) or an official client library is listed as not sent, with the reason. Token cases take each
+side's own token from the source walk and apply the campaign's mutations (`mutateToken`). The comparison
+(`livecompare.go`) is the conformance suite's field policy (`ProviderExchangeComparator` and the S3 and GCS
+profile comparators): the status; on both sides only classified headers, the media type, a `Content-Length` that
+matches the body and a padded GMT date; then the page field by field, or the S3 error `Code` or the GCS error's
+first `reason`. Request ids, dates, token values (compared by presence and by where they lead) and owner values
+are the only things set aside. `-capture` replays a client's recorded stream (`capture.go`) under the same
+policy, mapping each captured token to the one the Go server issued for the same request
+(`TestCaptureReplaysAClientStream`); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
+stand-in provider with tokens and headers of its own.
 
 In the package's own tests the driver compares two Go servers over the same keys, one whose store answers the
 `/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`), and checks that
