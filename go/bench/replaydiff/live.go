@@ -4,11 +4,13 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -43,7 +45,7 @@ type liveRun struct {
 	// tokens holds each walk case's next tokens per page, per side.
 	tokens map[string][2][]string
 	// pins are the provider evidence's pinned mismatches by case id.
-	pins map[string]string
+	pins map[string]pin
 }
 
 func liveClient(parallel int) *http.Client {
@@ -407,9 +409,15 @@ func (lr *liveRun) finish(res *result, j judgement, err error) {
 	lr.d.record(*res)
 }
 
-// readPins reads a replay-expectations.json: case id to "match" or to
-// {"mismatch": message}.
-func readPins(path string) (map[string]string, error) {
+// readPins reads a replay-expectations.json (case id to "match" or to
+// {"mismatch": message}) and binds each pinned mismatch to the evidence
+// beside it (index.json and the capture it names): the case must be one
+// of the provider's matrix whose template, rendered over the evidence's
+// run prefix, is the captured request's query, and the pin then applies
+// only to requests of that template's shape answered as the captured
+// provider answered (pin.admits). A pin that cannot be bound so is an
+// error: it would document by its label alone.
+func readPins(path string) (map[string]pin, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -418,14 +426,119 @@ func readPins(path string) (map[string]string, error) {
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	pins := map[string]string{}
+	pins := map[string]pin{}
+	var ids []string
+	mismatches := map[string]string{}
 	for id, v := range raw {
 		var m struct{ Mismatch string }
 		if json.Unmarshal(v, &m) == nil && m.Mismatch != "" {
-			pins[id] = m.Mismatch
+			mismatches[id] = m.Mismatch
+			ids = append(ids, id)
 		}
 	}
+	if len(ids) == 0 {
+		return pins, nil
+	}
+	dir := filepath.Dir(path)
+	var index struct {
+		Provider  string `json:"provider"`
+		RunPrefix string `json:"run_prefix"`
+		Captures  map[string]struct {
+			File string `json:"file"`
+			Kind string `json:"kind"`
+		} `json:"captures"`
+	}
+	if err := readEvidenceJSON(filepath.Join(dir, "index.json"), &index); err != nil {
+		return nil, fmt.Errorf("the pins' evidence index: %w", err)
+	}
+	var cases []providerCase
+	switch index.Provider {
+	case "gcs":
+		cases = gcsProviderCases()
+	case "s3":
+		cases = s3ProviderCases()
+	default:
+		return nil, fmt.Errorf("the pins' evidence index names provider %q, not gcs or s3", index.Provider)
+	}
+	tokenParam := tokenParamOf(index.Provider)
+	for _, id := range slices.Sorted(slices.Values(ids)) {
+		i := slices.IndexFunc(cases, func(c providerCase) bool { return c.ID == id })
+		if i < 0 {
+			return nil, fmt.Errorf("pin %s: not a case of the %s matrix", id, index.Provider)
+		}
+		c := cases[i]
+		ce, ok := index.Captures[id]
+		if !ok {
+			return nil, fmt.Errorf("pin %s: the evidence holds no capture of it", id)
+		}
+		if ce.Kind != "exchange" {
+			return nil, fmt.Errorf("pin %s: its capture is a %s; a pin binds one captured exchange", id, ce.Kind)
+		}
+		var doc struct {
+			Request struct {
+				Query string `json:"query"`
+			} `json:"request"`
+			Response struct {
+				Status     int    `json:"status"`
+				BodyBase64 string `json:"body_base64"`
+			} `json:"response"`
+		}
+		if err := readEvidenceJSON(filepath.Join(dir, filepath.FromSlash(ce.File)), &doc); err != nil {
+			return nil, fmt.Errorf("pin %s: %w", id, err)
+		}
+		want, missing := c.render(corpusBinding(index.RunPrefix))
+		_, want, _ = queryToken(want, tokenParam)
+		capTok, captured, _ := queryToken(doc.Request.Query, tokenParam)
+		if len(missing) > 0 || captured != want {
+			return nil, fmt.Errorf("pin %s: the evidence captured %q, which the case's template %q does not render over %q",
+				id, doc.Request.Query, c.Tmpl, index.RunPrefix)
+		}
+		p := pin{mismatch: mismatches[id], shape: templateShape(c.Tmpl, tokenParam), refStatus: doc.Response.Status, mutation: c.Mutation}
+		switch {
+		case c.Mutation == "tampered":
+			p.token, p.mutation = pinTampered, ""
+		case c.TokenFrom != "":
+			p.token = pinSourced
+		case c.Kind == "walk":
+			p.token = pinAnyToken
+		}
+		if p.token == pinSourced && capTok == "" || p.token == pinTampered && capTok != tamperedToken {
+			return nil, fmt.Errorf("pin %s: the evidence captured %q, without the token the case sends", id, doc.Request.Query)
+		}
+		if p.refStatus != 200 {
+			body, err := base64.StdEncoding.DecodeString(doc.Response.BodyBase64)
+			if err != nil {
+				return nil, fmt.Errorf("pin %s: the captured body: %w", id, err)
+			}
+			if p.refReason = errorReason(index.Provider, &response{Status: p.refStatus, Body: body}); p.refReason == "" {
+				return nil, fmt.Errorf("pin %s: the captured %d is not a %s error document", id, p.refStatus, index.Provider)
+			}
+		}
+		pins[id] = p
+	}
 	return pins, nil
+}
+
+// readEvidenceJSON decodes an evidence file; a .gz file is stored
+// compressed.
+func readEvidenceJSON(path string, v any) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if strings.HasSuffix(path, ".gz") {
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		r = zr
+	}
+	if err := json.NewDecoder(r).Decode(v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
 }
 
 // walk follows each side's own tokens to the end, comparing every page.

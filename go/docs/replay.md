@@ -534,7 +534,13 @@ compared as written as well as decoded, so a character reference and the raw cha
 `documented_residuals` (`DOCUMENTED RESIDUAL` in the text), and is neither passed nor failed. Each rule matches
 the request's shape and both answers' shapes, never the case name alone, so the same request answered any other
 way still fails (`TestDocumentedDifferences`): a mismatch the provider evidence pins for its case, message for
-message (`-live-pins`; on a walk, the page that differs ends the walk); S3 ListObjects V1 (`list-type` absent or
+message (`-live-pins`; on a walk, the page that differs ends the walk), for a request of the shape the evidence
+captured for that case, answered with the captured provider status and, where the provider refused, its reason
+(GCS) or code (S3). The shape is the case's query template (its literal parameters exactly, each name any name),
+and the pins file is read with the evidence beside it (`index.json` and the captures): a pin whose case is not in
+the matrix, whose capture is missing, or whose template does not render the captured query over the evidence's run
+prefix is an error, so no pin documents by its case label alone (`TestReadPins`,
+`TestPinsBindTheRecordedRequest`); S3 ListObjects V1 (`list-type` absent or
 not 2) listed by the provider and refused by the replay (V2 only, see Limits); S3 `fetch-owner=true` where the
 provider writes `Owner` and the replay writes none (a recording made without owners), the pages otherwise equal;
 S3, an issued token with a decoded byte flipped (`s3-07x`), served by the provider as if unaltered and refused by

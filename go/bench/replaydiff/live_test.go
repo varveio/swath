@@ -5,6 +5,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +127,7 @@ func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte
 // runFakeLiveThrough is runFakeLive with the provider behind rec, when
 // set (the live driver then runs with -live-record), and with the
 // scripted matrix when scripted is set, and pins as -live-pins.
-func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool, pins map[string]string) *report {
+func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool, pins map[string]pin) *report {
 	t.Helper()
 	keys := liveKeys()
 	protocols := []string{server.ProtocolS3}
@@ -372,29 +374,64 @@ func TestMutateToken(t *testing.T) {
 	}
 }
 
+// TestReadPins: a pinned mismatch is bound to the evidence's capture of
+// its case. It documents the case's request, of the captured shape over
+// other names, answered as the evidence's provider answered; any other
+// message, a request of another shape under the same label, or a
+// provider refusing for another reason fails. A pin the evidence cannot
+// bind (a template that does not render the captured query, a case
+// outside the matrix, no capture) is an error.
 func TestReadPins(t *testing.T) {
-	path := t.TempDir() + "/pins.json"
-	if err := os.WriteFile(path, []byte(`{"gcs-01a":"match","gcs-03p":{"mismatch":"GCS HTTP status differs: expected=200 actual=400"}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	status := "GCS HTTP status differs: expected=200 actual=400"
+	refused := "GCS HTTP status differs: expected=400 actual=200"
+	path := writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-01a": {query: "prefix=probe/r1/r/&startOffset=probe/r1/r/k02", status: 200, body: `{"kind":"storage#objects"}`},
+		"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, body: `{"kind":"storage#objects"}`, mismatch: status},
+		"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: gcsRefusalBody(400, "invalidParameter"), mismatch: refused},
+	})
 	pins, err := readPins(path)
-	if err != nil || len(pins) != 1 || pins["gcs-03p"] != "GCS HTTP status differs: expected=200 actual=400" {
-		t.Errorf("%v %v", pins, err)
+	if err != nil || len(pins) != 2 || pins["gcs-03p"].mismatch != status || pins["gcs-11c"].refReason != "invalidParameter" {
+		t.Fatalf("%v %v", pins, err)
 	}
-	// A pinned mismatch is a documented difference, listed apart; any
-	// other difference of the same case fails.
 	lr := &liveRun{d: &driver{rep: &report{}}, protocol: "gcs", pins: pins}
-	res := result{Name: "gcs-03p"}
-	ref, got := &response{Status: 200}, &response{Status: 400}
-	lr.finish(&res, judgement{protocol: "gcs", caseID: "gcs-03p", ref: ref, got: got, df: diff{Detail: pins["gcs-03p"]}}, nil)
-	other := result{Name: "gcs-03p"}
-	lr.finish(&other, judgement{protocol: "gcs", caseID: "gcs-03p", ref: ref, got: got,
-		df: diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}}, nil)
-	if r := lr.d.rep.Results; len(r) != 1 || r[0].Pass || lr.d.rep.Failed != 1 {
-		t.Errorf("%+v", r)
+	page := &response{Status: 200}
+	for _, c := range []struct {
+		name, caseID, query, detail string
+		ref, got                    *response
+		documented                  bool
+	}{
+		{"pinned", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true", status, page, &response{Status: 400}, true},
+		{"another message", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true",
+			"GCS HTTP status differs: expected=200 actual=500", page, &response{Status: 500}, false},
+		{"another shape", "gcs-03p", "prefix=data/tree/&delimiter=/", status, page, &response{Status: 400}, false},
+		{"a value changed", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=True", status, page, &response{Status: 400}, false},
+		{"pinned refusal", "gcs-11c", "prefix=data/small/&projection=bogus", refused,
+			&response{Status: 400, Body: []byte(gcsRefusalBody(400, "invalidParameter"))}, page, true},
+		{"refused for another reason", "gcs-11c", "prefix=data/small/&projection=bogus", refused,
+			&response{Status: 400, Body: []byte(gcsRefusalBody(400, "notFound"))}, page, false},
+		{"a case pinned as a match", "gcs-01a", "prefix=data/small/&startOffset=data/small/f02.csv", status, page, &response{Status: 400}, false},
+	} {
+		before := len(lr.d.rep.Residuals)
+		res := result{Name: c.name}
+		lr.finish(&res, judgement{protocol: "gcs", caseID: c.caseID, query: c.query, ref: c.ref, got: c.got, df: diff{Detail: c.detail}}, nil)
+		if documented := len(lr.d.rep.Residuals) > before; documented != c.documented {
+			t.Errorf("%s: documented %v", c.name, documented)
+		}
 	}
-	if r := lr.d.rep.Residuals; len(r) != 1 || !strings.Contains(r[0], "pins this mismatch for gcs-03p") {
-		t.Errorf("%q", r)
+	for name, ev := range map[string]map[string]evidenceCapture{
+		"another query":  {"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/", status: 200, mismatch: status}},
+		"not a case":     {"gcs-99z": {query: "prefix=probe/r1/d/", status: 200, mismatch: status}},
+		"another prefix": {"gcs-03p": {query: "prefix=probe/r2/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, mismatch: status}},
+		"no reason":      {"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: "{}", mismatch: refused}},
+	} {
+		if _, err := readPins(writeEvidence(t, "gcs", "probe/r1/", ev)); err == nil {
+			t.Errorf("%s: bound", name)
+		}
+	}
+	dir := t.TempDir()
+	writeJSON(t, dir+"/replay-expectations.json", map[string]any{"gcs-03p": map[string]string{"mismatch": status}})
+	if _, err := readPins(dir + "/replay-expectations.json"); err == nil {
+		t.Error("a pin without evidence was bound")
 	}
 }
 
@@ -511,4 +548,54 @@ func TestDocumentedDifferences(t *testing.T) {
 			t.Errorf("%s: %q (%s)", c.name, why, df.Detail)
 		}
 	}
+}
+
+// evidenceCapture is one native exchange of a test evidence tree.
+type evidenceCapture struct {
+	query    string
+	status   int
+	body     string
+	mismatch string // its pin; "" for match
+}
+
+// writeEvidence writes a provider evidence tree as the campaign lays it
+// out (replay-expectations.json beside index.json and captures/) and
+// returns the expectations' path.
+func writeEvidence(t *testing.T, provider, runPrefix string, captures map[string]evidenceCapture) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(dir+"/captures", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expect, index := map[string]any{}, map[string]any{}
+	for id, c := range captures {
+		expect[id] = "match"
+		if c.mismatch != "" {
+			expect[id] = map[string]string{"mismatch": c.mismatch}
+		}
+		index[id] = map[string]string{"file": "captures/" + id + ".json", "kind": "exchange"}
+		doc := map[string]any{"schema_version": "provider-capture-v1", "probe_id": id, "provider": provider,
+			"request":  map[string]any{"method": "GET", "path": "/storage/v1/b/{bucket}/o", "query": c.query, "headers": []any{}},
+			"response": map[string]any{"status": c.status, "headers": []any{}, "body_base64": base64.StdEncoding.EncodeToString([]byte(c.body))}}
+		writeJSON(t, dir+"/captures/"+id+".json", doc)
+	}
+	writeJSON(t, dir+"/index.json", map[string]any{"provider": provider, "run_prefix": runPrefix, "captures": index})
+	writeJSON(t, dir+"/replay-expectations.json", expect)
+	return dir + "/replay-expectations.json"
+}
+
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gcsRefusalBody is a GCS error document with one reason.
+func gcsRefusalBody(status int, reason string) string {
+	return fmt.Sprintf(`{"error":{"code":%d,"message":"m","errors":[{"domain":"global","reason":%q,"message":"m"}]}}`, status, reason)
 }

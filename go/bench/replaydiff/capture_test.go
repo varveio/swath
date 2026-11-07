@@ -570,11 +570,11 @@ func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
 		return body
 	}
 	first := runFakeLiveThrough(t, "s3", edit, &testRecorder{}, false, nil)
-	pins := map[string]string{}
+	pins := map[string]pin{}
 	walks := 0
 	for _, r := range first.Results {
 		if !r.Pass && r.diff != nil {
-			pins[r.Name] = r.Detail
+			pins[r.Name] = testPin(t, "s3", r)
 			if r.Kind == "walk" {
 				walks++
 			}
@@ -597,6 +597,30 @@ func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
 		}
 		t.Errorf("replay: %d failed, documented %q", rep.Failed, rep.Residuals)
 	}
+}
+
+// testPin pins a failed result's mismatch for its case as readPins binds
+// a pin to the evidence, the shape being the request's own query: a
+// matrix case's token and mutation, any token for a walk.
+func testPin(t *testing.T, protocol string, r result) pin {
+	t.Helper()
+	_, q, _ := queryToken(r.Target, tokenParamOf(protocol))
+	p := pin{mismatch: r.Detail, shape: regexp.MustCompile("^" + regexp.QuoteMeta(q) + "$"), refStatus: r.diff.Status[0], token: pinAnyToken}
+	cases := s3ProviderCases()
+	if protocol == "gcs" {
+		cases = gcsProviderCases()
+	}
+	if i := slices.IndexFunc(cases, func(c providerCase) bool { return c.ID == r.Name }); i >= 0 {
+		switch c := cases[i]; {
+		case c.Mutation == "tampered":
+			p.token = pinTampered
+		case c.TokenFrom != "":
+			p.token, p.mutation = pinSourced, c.Mutation
+		case c.Kind != "walk":
+			p.token = pinNoToken
+		}
+	}
+	return p
 }
 
 // TestCaptureTokenIssuedByTwoScopes: a provider can issue the same token
@@ -803,5 +827,49 @@ func TestCaptureTokenFromNamedWalk(t *testing.T) {
 		if rep.Failed != 1 || len(rep.Results) != 1 || rep.Results[0].Error == "" {
 			t.Errorf("%v: %d failed, %+v", notes, rep.Failed, rep.Results)
 		}
+	}
+}
+
+// TestPinsBindTheRecordedRequest: a pin documents its mismatch only for a
+// request of the shape the evidence captured for its case, answered as
+// the evidence's provider answered. Over the Go server, the pinned
+// includeTrailingDelimiter=true question refused against a captured 200
+// is documented, and so is the pinned reason pair of a refused
+// projection; an unrelated request labelled gcs-03p whose refusal gives
+// the same message fails.
+func TestPinsBindTheRecordedRequest(t *testing.T) {
+	pins, err := readPins(writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, body: `{"kind":"storage#objects"}`,
+			mismatch: "GCS HTTP status differs: expected=200 actual=400"},
+		"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: gcsRefusalBody(400, "invalidParameter"),
+			mismatch: "GCS error reason differs: expected=invalidParameter actual=invalid"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := `{"kind":"storage#objects"}`
+	exchange := func(seq uint64, caseID, query string, status int, body string) capturedExchange {
+		var x capturedExchange
+		x.Seq, x.Annotations = seq, []capturedHeader{{recordCaseHeader, caseID}}
+		x.Request.Method, x.Request.Path, x.Request.Query = "GET", "/storage/v1/b/bkt/o", query
+		x.Request.Headers = []capturedHeader{{"Accept", "application/json"}}
+		x.Response.Status, x.Response.Body = status, &body
+		x.Response.Headers = []capturedHeader{{"Content-Type", "application/json; charset=UTF-8"}}
+		return x
+	}
+	xs := []capturedExchange{
+		exchange(1, "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true", 200, page),
+		exchange(2, "gcs-11c", "prefix=data/small/&projection=bogus", 400, gcsRefusalBody(400, "invalidParameter")),
+		exchange(3, "gcs-03p", "prefix=data/tree/&delimiter=/&projection=bogus", 200, page),
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, liveKeys()...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+	if len(rep.Residuals) != 2 || !strings.HasPrefix(rep.Residuals[0], "capture 1 [gcs-03p]") || !strings.HasPrefix(rep.Residuals[1], "capture 2 [gcs-11c]") {
+		t.Errorf("documented %q", rep.Residuals)
+	}
+	if rep.Failed != 1 || len(rep.Results) != 1 || !strings.HasPrefix(rep.Results[0].Name, "capture 3 [gcs-03p]") ||
+		rep.Results[0].Detail != "GCS HTTP status differs: expected=200 actual=400" {
+		t.Errorf("%d failed: %+v", rep.Failed, rep.Results)
 	}
 }

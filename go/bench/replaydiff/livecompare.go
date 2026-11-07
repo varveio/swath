@@ -832,7 +832,10 @@ type judgement struct {
 // too and any other answer to the same request still fails:
 //
 //   - a mismatch the provider evidence pins for the case (pins, from
-//     -live-pins), message for message;
+//     -live-pins), message for message, for a request of the shape the
+//     evidence captured for that case and answered as the evidence's
+//     provider answered it (pin.admits): the case label alone, an
+//     annotation in a recording, documents nothing;
 //   - S3 ListObjects V1 (list-type absent or not 2): the provider lists,
 //     the replay refuses list-type (it serves ListObjectsV2 only);
 //   - S3 fetch-owner=true where the provider writes Owner and the replay
@@ -843,12 +846,16 @@ type judgement struct {
 //     replay refuses every altered token;
 //   - GCS softDeleted=true (gcs-11h): a provider bucket that keeps
 //     soft-deleted objects lists them, the replay refuses the parameter.
-func documentedDifference(j judgement, pins map[string]string) string {
+//
+// The rules after the pins key on the request and the answers alone; the
+// mutation the decoded-byte rule reads is, in a recording, an annotation
+// the replay has verified against the captured token.
+func documentedDifference(j judgement, pins map[string]pin) string {
 	if j.df.OK {
 		return ""
 	}
-	if p := pins[j.caseID]; p != "" && p == j.df.Detail {
-		return "the provider evidence pins this mismatch for " + j.caseID + ": " + p
+	if p, ok := pins[j.caseID]; ok && p.admits(j) {
+		return "the provider evidence pins this mismatch for " + j.caseID + ": " + p.mismatch
 	}
 	if j.protocol == "gcs" {
 		if v, ok := firstParam(j.query, "softDeleted"); ok && v == "true" && j.ref.Status == 200 &&
@@ -907,4 +914,111 @@ func s3Refused(r *response, argument string) bool {
 func gcsReasonIs(r *response, reason string) bool {
 	var got string
 	return profileCheck(r, r, func() { got = gcsErrorReason(r) }).OK && got == reason
+}
+
+// pin is a mismatch the provider evidence pins for a matrix case, bound
+// to what the evidence captured for that case: the request's shape (the
+// case's query template, which readPins holds to the captured query),
+// the provider's status and, where it refused, its first reason (GCS) or
+// error code (S3), and the token the case sends.
+type pin struct {
+	mismatch  string
+	shape     *regexp.Regexp // the query, its token parameter removed
+	refStatus int
+	refReason string
+	mutation  string   // the case's alteration of an issued token ("" for none)
+	token     pinToken // which token the request carries
+}
+
+// pinToken is the token a pinned case's request carries.
+type pinToken int
+
+const (
+	pinNoToken  pinToken = iota // an exchange: no issued token (a template's own empty one aside)
+	pinSourced                  // a token its source walk issued
+	pinTampered                 // the campaign's constant malformed token
+	pinAnyToken                 // a walk: none on its first page, its own on the rest
+)
+
+// admits reports whether j is the pinned mismatch for a request of the
+// pin's shape answered as the evidence's provider answered it.
+func (p pin) admits(j judgement) bool {
+	if j.df.Detail != p.mismatch || j.ref.Status != p.refStatus || j.mutation != p.mutation {
+		return false
+	}
+	switch p.token {
+	case pinNoToken:
+		if j.refTok != "" {
+			return false
+		}
+	case pinSourced:
+		if j.refTok == "" {
+			return false
+		}
+	case pinTampered:
+		if j.refTok != tamperedToken {
+			return false
+		}
+	}
+	if _, q, _ := queryToken(j.query, tokenParamOf(j.protocol)); !p.shape.MatchString(q) {
+		return false
+	}
+	return p.refReason == "" || errorReason(j.protocol, j.ref) == p.refReason
+}
+
+// tokenParamOf is the protocol's continuation parameter.
+func tokenParamOf(protocol string) string {
+	if protocol == "gcs" {
+		return "pageToken"
+	}
+	return "continuation-token"
+}
+
+// errorReason is a refusal's first reason (GCS) or error code (S3), ""
+// when the body is not that protocol's error document.
+func errorReason(protocol string, r *response) string {
+	if protocol == "gcs" {
+		var reason string
+		if !profileCheck(r, r, func() { reason = gcsErrorReason(r) }).OK {
+			return ""
+		}
+		return reason
+	}
+	if m := errorCode.FindSubmatch(r.Body); m != nil {
+		return string(m[1])
+	}
+	return ""
+}
+
+// escapedName matches a template placeholder's value as the campaign
+// escapes it (campaignEscape with '/' safe, or with nothing safe for a
+// {name!} placeholder): whatever name the fixture binds there.
+const (
+	escapedName       = `(?:[A-Za-z0-9_.~/-]|%[0-9A-F]{2})*`
+	escapedNameNoPath = `(?:[A-Za-z0-9_.~-]|%[0-9A-F]{2})*`
+)
+
+// templateShape is the query shape a case's template defines: its
+// literal text exactly, each placeholder any escaped name, the token
+// parameter removed; with the scope's prefix the live driver adds to a
+// template that names none.
+func templateShape(tmpl, tokenParam string) *regexp.Regexp {
+	_, tmpl, _ = queryToken(tmpl, tokenParam)
+	var b strings.Builder
+	b.WriteString("^")
+	parseTemplate(tmpl, func(literal string, p *placeholder) {
+		switch {
+		case p == nil:
+			b.WriteString(regexp.QuoteMeta(literal))
+		case p.slashes:
+			b.WriteString(escapedNameNoPath)
+		default:
+			b.WriteString(escapedName)
+		}
+	})
+	if _, ok := firstParam(tmpl, "prefix"); !ok {
+		b.WriteString("(?:&prefix=" + escapedName + ")?")
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
 }
