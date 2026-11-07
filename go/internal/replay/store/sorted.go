@@ -58,6 +58,9 @@ type Sorted struct {
 	files    *sortedparquet.FileCache
 	meters   Meters
 	prefetch *prefetcher
+	// arenaLimit bounds a packed read's arenas; zero is maxPackedArena.
+	// Tests lower it to reach the overflow path without gigabytes.
+	arenaLimit int
 }
 
 // Meters receives a Sorted store's per-read measurements, for the server's
@@ -186,8 +189,12 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		return packed{}, err
 	}
 	columns := s.objects.columns(proj)
+	// An arena overflow ends the scan: its rows are read again unpacked.
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	// Room for a window up front; a longer read grows as it goes.
-	sink := s.objects.packer(columns, min(limit, DefaultPrefetchWindowRows+limit))
+	sink := s.objects.packer(columns, min(limit, DefaultPrefetchWindowRows+limit), s.arenaLimit)
+	sink.stop = stop
 	err = func() error {
 		defer release()
 		var stats sortedparquet.Stats
@@ -197,10 +204,15 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 			Limit: limit, Columns: columns,
 		}, &stats, sink)
 	}()
+	if sink.overflow {
+		// Not a failed read: the caller reads the range unpacked.
+		_ = s.finished(started, sink.out.n, nil)
+		return packed{}, errPackedOverflow
+	}
 	if err := s.finished(started, sink.out.n, err); err != nil {
 		return packed{}, err
 	}
-	return sink.packed(), nil
+	return sink.packed()
 }
 
 // finished meters a store call that read and counts an error the replay

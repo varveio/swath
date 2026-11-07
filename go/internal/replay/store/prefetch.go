@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"errors"
 	"math"
 	"runtime"
 	"slices"
@@ -207,7 +208,10 @@ func compareLower(a, b []byte) int {
 // windows are immutable, so a hit reads one outside it, and fills run
 // outside it, so concurrent walks never queue on another's fill.
 type prefetcher struct {
-	read       func(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) (packed, error)
+	read func(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) (packed, error)
+	// direct reads unpacked and uncached, for a read whose rows overflow
+	// a packed arena (errPackedOverflow).
+	direct     func(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) ([]Object, error)
 	windowRows int
 	maxWindows int
 	maxRows    int64
@@ -236,7 +240,8 @@ type anchor struct {
 	fill int
 }
 
-func newPrefetcher(cfg Prefetch, read func(context.Context, []byte, bool, []byte, int, Projection) (packed, error)) *prefetcher {
+func newPrefetcher(cfg Prefetch, read func(context.Context, []byte, bool, []byte, int, Projection) (packed, error),
+	direct func(context.Context, []byte, bool, []byte, int, Projection) ([]Object, error)) *prefetcher {
 	rows, windows := cfg.WindowRows, cfg.MaxWindows
 	if rows <= 0 {
 		rows = DefaultPrefetchWindowRows
@@ -246,7 +251,7 @@ func newPrefetcher(cfg Prefetch, read func(context.Context, []byte, bool, []byte
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &prefetcher{
-		read: read, windowRows: rows, maxWindows: windows, maxRows: int64(rows) * int64(windows),
+		read: read, direct: direct, windowRows: rows, maxWindows: windows, maxRows: int64(rows) * int64(windows),
 		maxAnchors: int(min(int64(windows)*anchorsPerWindow, math.MaxInt32)),
 		anchors:    make(map[string]*list.Element), order: list.New(), ahead: make(map[windowKey]chan struct{}),
 		ctx: ctx, cancel: cancel, aheadSlots: make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/2)),
@@ -287,6 +292,9 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 		call(m.Uncached, "request_exceeds_window")
 		call(m.Miss, "cold")
 		filled, err := p.fill(ctx, from, inclusive, to, limit, proj)
+		if errors.Is(err, errPackedOverflow) {
+			return p.direct(ctx, from, inclusive, to, limit, proj)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -366,6 +374,11 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 		call(m.Miss, "cold")
 	}
 	filled, err := p.fill(ctx, from, inclusive, to, requested, proj)
+	if errors.Is(err, errPackedOverflow) {
+		// Rows this large are not kept: the read is served as asked,
+		// unpacked, and its walk fills afresh from its next page.
+		return p.direct(ctx, from, inclusive, to, limit, proj)
+	}
 	if err != nil {
 		return nil, err
 	}
