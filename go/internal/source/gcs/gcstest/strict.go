@@ -123,13 +123,20 @@ func Object(i int, k string) map[string]any {
 	o := leanObject(i, k)
 	for name, v := range map[string]any{
 		"kind": "storage#object", "id": "bkt/" + k + "/17", "selfLink": "https://example.invalid/" + url.PathEscape(k),
-		"bucket": "bkt", "timeCreated": "2026-11-05T00:00:00Z",
+		"bucket": "bkt", "timeCreated": created(i),
 		"metageneration": strconv.Itoa(1 + i%3), "storageClass": []string{"STANDARD", "NEARLINE", "ARCHIVE"}[i%3],
 		"md5Hash": "md5-" + strconv.Itoa(i) + "==", "crc32c": "c" + strconv.Itoa(i), "contentType": "application/x-" + strconv.Itoa(i%5),
 	} {
 		o[name] = v
 	}
 	return o
+}
+
+// created is the i-th object's timeCreated: before its updated time, a
+// distinct instant per object, in the millisecond form GCS writes.
+func created(i int) string {
+	t := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 1001 * time.Millisecond)
+	return t.Format("2006-01-02T15:04:05.000Z07:00")
 }
 
 // leanObject is Object's listing fields: name, size, updated, generation
