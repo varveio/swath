@@ -4,7 +4,14 @@
 package keyrange
 
 import (
+	"cmp"
 	"context"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -12,39 +19,195 @@ import (
 const (
 	seedDelimiter = "/"
 	maxSeeds      = 1000 // the most cuts a seed makes
+	// seedPages caps one folder's delimiter chain. A page holds about 1,000
+	// folders, so 4 pages are 4x the most cuts a seed keeps (maxSeeds) and
+	// 16x the 4×workers of 64 workers; folders past them stay in the last
+	// tile, which splits as any range does.
+	seedPages = 4
+	// seedLevels is the most levels the seed descends below the top: the
+	// single-root date layout (warehouse/events/year=Y/month=M/day=D/)
+	// needs four to reach its day folders.
+	seedLevels = 4
+	// seedRequests caps the seed's requests (also counted in requests): a
+	// level of descent under up to 63 narrow folders, or the four levels of
+	// a date layout (1+1+1+1+12), about one worker's pages for a second.
+	seedRequests = 64
+	// seedRoundTrips caps the seed's waves of requests, each one request
+	// latency on the run's critical path before any range lists: the top
+	// level's page cap plus two levels, or the five waves of the date
+	// layout. Java's serial 256-probe descent spent 13.5 s of a 39 s run on
+	// its chain; a wave here sends its requests at once.
+	seedRoundTrips = 6
 )
 
-// expandSeed sends one delimiter page and tiles the scope at its common
-// prefixes; it emits no rows (the tiles list every key, including the
-// page's own objects).
+// seedStop is why the seed stopped descending.
+type seedStop uint8
+
+const (
+	stopWide       seedStop = iota // a level held >= workers folders
+	stopLeaf                       // a level held no folder to descend into
+	stopLevels                     // seedLevels descended
+	stopRequests                   // the next level, or an empty page's follow-up, would pass seedRequests
+	stopRoundTrips                 // seedRoundTrips spent
+	stopFailed                     // a listing failed, or the run was canceled
+)
+
+// seedNode is one folder the seed lists with the delimiter: its common
+// prefixes are cuts and the next level's folders.
+type seedNode struct {
+	prefix string
+	after  string // start-after inside the folder ("" from its start): a resume's safe start
+}
+
+// seedChain is one folder's delimiter chain as the seed follows it.
+type seedChain struct {
+	q         *Query
+	prefixes  []string
+	pages     int
+	truncated bool // more pages: not yet listed, or the chain stopped at the cap or a budget
+	// From the chain's last page that held an entry: its greatest prefix,
+	// and whether it ends with a prefix (no object after it on that page).
+	lastPrefix string
+	endsPrefix bool
+}
+
+// seedBudget is what the seed has spent: every logical request, the
+// empty continuing pages list follows included, and the round trips on
+// the critical path (a wave costs its longest chain of requests). cut
+// marks a follow-up refused, cutBy the budget it ran into first (its zero,
+// stopWide, is never one).
+type seedBudget struct {
+	mu              sync.Mutex
+	requests, trips int
+	cut             bool
+	cutBy           seedStop
+}
+
+// follow charges one more request to a chain that has sent k in the wave
+// that started after round trip t0, or refuses it when it would pass
+// seedRequests or seedRoundTrips.
+func (b *seedBudget) follow(k *int, t0 int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch {
+	case b.requests >= seedRequests:
+		b.cut, b.cutBy = true, cmp.Or(b.cutBy, stopRequests)
+	case t0+*k >= seedRoundTrips:
+		b.cut, b.cutBy = true, cmp.Or(b.cutBy, stopRoundTrips)
+	default:
+		b.requests++
+		*k++
+		return true
+	}
+	return false
+}
+
+// expandSeed tiles the scope from delimiter listings of its folder
+// hierarchy and emits no rows (the tiles list every key, including the
+// listings' own objects):
+//   - the top level is paginated by its continuation token, up to
+//     seedPages pages;
+//   - while a level holds fewer folders than workers, the next level under
+//     each of them is listed, all at once, within the budgets (seedLevels,
+//     seedRequests, seedRoundTrips);
+//   - every folder found is a cut (each inside its parent folder's tile),
+//     filtered by safe, sorted, and subsampled to min(maxSeeds, 4×workers);
+//   - on a resume after K the listings start after K's safe start, every
+//     folder above K is listed at the top, and only cuts > K are kept: the
+//     first tile is the resume tile (K, c1], which drops keys up to K; a cut
+//     at or below K would list published keys again.
 //
-// Swath's hybrid seed descent (a walk of the folder hierarchy that
-// classified each truncated level, sampled ambiguous folders and cut dense
-// flat folders into radix bands) was ported and measured here and deleted:
-// it gained nothing on any recording and cost 30-60 % more requests on the
-// shallow ones (docs/measurements.md, "Policy switches"). Git keeps it
-// (seedplan.go before its deletion).
+// Swath's hybrid seed descent (a walk that classified each truncated level,
+// sampled ambiguous folders and cut dense flat folders into radix bands)
+// was ported, measured and deleted: it gained nothing on the recordings and
+// cost 30-60 % more requests on the shallow ones (docs/measurements.md,
+// "Policy switches"; seedplan.go in git). This one only paginates and
+// descends narrow levels, in parallel waves, under fixed budgets.
 func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) error {
-	in := p.query()
-	in.Probe, in.Delimiter = true, seedDelimiter
-	out, err := p.list(ctx, in)
-	if err != nil {
-		return err
+	after := ""
+	if p.opt.Resume != nil {
+		after = p.opt.Resume.After
 	}
+	start := p.safeStart(after)
+	nodes := p.seedRoots(after, start)
+	var b seedBudget
 	var cuts []string
-	p.lock()
-	p.c.Set(cSeedPrefixes, int64(len(out.Prefixes)))
-	seedTruncated := out.Truncated
-	if seedTruncated {
-		p.c.Set(cSeedTruncated, 1)
-	}
-	for _, k := range out.Prefixes {
-		if p.safe(k) {
-			cuts = append(cuts, k)
-		} else {
-			p.c.Inc(cSeedUnsafe)
+	var top seedChain
+	var stop seedStop
+	unsafe, levels := 0, 0
+	var perLevel [seedLevels + 1]int64
+	// publish reports what the seed spent and why it stopped, on every
+	// exit: a failed or canceled seed's requests are a resume's runtime too.
+	publish := func() {
+		p.c.Set(cSeedPrefixes, int64(len(top.prefixes)))
+		p.c.Set(cSeedPages, int64(top.pages))
+		p.c.Set(cSeedRequests, int64(b.requests))
+		p.c.Set(cSeedRoundTrips, int64(b.trips))
+		p.c.Set(cSeedLevels, int64(levels))
+		for l, n := range perLevel {
+			p.c.Set(seedLevelCuts[l], n)
+		}
+		p.c.Inc(seedStopBy[stop])
+		p.c.Add(cSeedUnsafe, int64(unsafe))
+		if top.truncated {
+			p.c.Set(cSeedTruncated, 1)
 		}
 	}
+	for level := 0; ; level++ {
+		chains, err := p.seedLevel(ctx, nodes, &b)
+		if level == 0 {
+			top = *chains[0]
+		}
+		if err != nil {
+			stop = stopFailed
+			p.lock()
+			publish()
+			p.unlock()
+			return err
+		}
+		var found []string
+		for _, c := range chains {
+			for _, k := range c.prefixes {
+				switch {
+				case k <= after: // a resume: at or below K
+				case !p.safe(k):
+					unsafe++
+				default:
+					found = append(found, k)
+				}
+			}
+		}
+		slices.Sort(found) // the folders' lists are disjoint, each ascending
+		found = slices.Compact(found)
+		cuts = append(cuts, found...)
+		next := make([]seedNode, len(found))
+		for i, k := range found {
+			next[i] = seedNode{prefix: k}
+		}
+		perLevel[level] = int64(len(next))
+		switch {
+		case b.cut: // an empty page's follow-up: the level is not listed whole
+			stop = b.cutBy
+		case len(next) == 0:
+			stop = stopLeaf
+		case len(next) >= p.opt.Workers:
+			stop = stopWide
+		case level == seedLevels:
+			stop = stopLevels
+		case b.trips >= seedRoundTrips:
+			stop = stopRoundTrips
+		case b.requests+len(next) > seedRequests:
+			stop = stopRequests
+		default:
+			nodes, levels = next, levels+1
+			continue
+		}
+		break
+	}
+	slices.Sort(cuts)
+	cuts = slices.Compact(cuts)
+	p.lock()
+	publish()
 	if limit := min(maxSeeds, 4*p.opt.Workers); len(cuts) > limit {
 		picked := make([]string, 0, limit)
 		for i := range limit {
@@ -54,24 +217,20 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		p.c.Set(cSeedSubsampled, 1)
 	}
 	p.c.Set(cSeedCuts, int64(len(cuts)))
-	// Closing sentinel: when the page holds the whole top level and ends with
-	// a prefix, bound the last tile at prefixCeil(pk) so it is not the open
-	// frontier (the bounded midpoint then applies to it).
+	cuts = detach(cuts) // they become the tiles' bounds: none may pin a seed page
+	// Closing sentinel: when the top level was listed whole and its last
+	// page ends with a prefix pk, bound the last tile at prefixCeil(pk) so it
+	// is not the open frontier (the bounded midpoint then applies to it).
+	// Cuts found under pk lie below that ceiling.
 	var sentinel string
 	if k := len(cuts); k > 0 {
-		pk := cuts[k-1]
-		lastObject := ""
-		if n := len(out.Rows); n > 0 {
-			lastObject = out.Rows[n-1].Key
-		}
-		lastPrefix := out.Prefixes[len(out.Prefixes)-1]
-		u, ok := prefixCeil(pk)
+		u, ok := prefixCeil(top.lastPrefix)
 		switch {
-		case seedTruncated:
+		case top.truncated:
 			p.c.Inc(cSentinelDeclinedTruncated)
-		case lastObject > lastPrefix || pk != lastPrefix:
+		case !top.endsPrefix:
 			p.c.Inc(cSentinelDeclinedObjectLast)
-		case !ok || u <= pk:
+		case !ok || u <= cuts[k-1] || u <= after:
 			p.c.Inc(cSentinelDeclinedNoCeiling)
 		case !p.safe(u):
 			p.c.Inc(cSentinelDeclinedUnsafe)
@@ -81,7 +240,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		}
 	}
 	tiles := make([]Range, 0, len(cuts)+2)
-	lo := ""
+	lo := after
 	for _, c := range cuts {
 		tiles = append(tiles, Range{lo: lo, hi: c, id: p.ids.Add(1), born: fromSeed})
 		lo = c
@@ -91,13 +250,120 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 		lo = sentinel
 	}
 	tiles = append(tiles, Range{lo: lo, open: true, id: p.ids.Add(1), born: fromSeed})
+	// K is a real key and may not be a bound the provider accepts: the
+	// resume tile starts at its longest accepted prefix and drops keys up to
+	// K there.
+	if start != after {
+		tiles[0].lo, tiles[0].after = start, after
+	}
+	if p.opt.Resume != nil {
+		p.c.Set(cResumedRanges, int64(len(tiles)))
+		p.c.Set(cSeedResumed, 1)
+	}
+	p.account(time.Now())
 	p.queued += len(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
-	p.c.Inc(cPages)
 	p.unlock()
 	for _, t := range tiles {
 		if err := e.Child(t); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// seedRoots are the top level's folders: the scope; on a resume after K
+// also every folder above K inside the scope, shallowest first (each lists
+// the siblings after K's branch at its level), as many as the request
+// budget holds. A folder the provider would not accept as a bound is
+// skipped: every folder below it holds it, so none could be a cut.
+func (p *Engine[P]) seedRoots(after, start string) []seedNode {
+	scope := p.opt.Prefix
+	roots := []seedNode{{prefix: scope}}
+	for i := len(scope); i < len(after) && len(roots) < seedRequests; i++ {
+		if after[i] != seedDelimiter[0] {
+			continue
+		}
+		if f := after[:i+1]; p.safe(f) {
+			roots = append(roots, seedNode{prefix: f})
+		}
+	}
+	for i := range roots {
+		if len(start) > len(roots[i].prefix) {
+			roots[i].after = start // K's safe start lies inside the folder
+		}
+	}
+	return roots
+}
+
+// seedLevel lists every node's delimiter chain, wave by wave: a wave sends
+// the next page of every unfinished chain at once (one round trip) through
+// the engine's client and admission. A chain ends at its last page, at
+// seedPages pages, or when the next wave, or the next empty page it
+// follows, would pass a budget. The chains are returned with what they
+// listed also when a page fails, and their pages are counted either way.
+func (p *Engine[P]) seedLevel(ctx context.Context, nodes []seedNode, b *seedBudget) ([]*seedChain, error) {
+	chains := make([]*seedChain, len(nodes))
+	for i, n := range nodes {
+		q := p.query()
+		q.Prefix, q.After, q.Delimiter, q.Probe = n.prefix, n.after, seedDelimiter, true
+		chains[i] = &seedChain{q: q, truncated: true}
+	}
+	var err error
+	for range seedPages {
+		var active []*seedChain
+		for _, c := range chains {
+			if c.truncated {
+				active = append(active, c)
+			}
+		}
+		if len(active) == 0 || b.cut || b.trips >= seedRoundTrips || b.requests+len(active) > seedRequests {
+			break
+		}
+		t0 := b.trips
+		b.requests += len(active)
+		sent := make([]int, len(active)) // each chain's requests in this wave
+		g, gctx := errgroup.WithContext(ctx)
+		for i, c := range active {
+			sent[i] = 1
+			g.Go(func() error {
+				return p.seedPage(gctx, c, func() bool { return b.follow(&sent[i], t0) })
+			})
+		}
+		err = g.Wait()
+		b.trips = t0 + slices.Max(sent)
+		if err != nil {
+			break
+		}
+	}
+	pages := 0
+	for _, c := range chains {
+		pages += c.pages
+	}
+	p.lock()
+	p.c.Add(cPages, int64(pages))
+	p.unlock()
+	return chains, err
+}
+
+// seedPage lists the next page of c's chain; follow charges each empty
+// continuing page list follows.
+func (p *Engine[P]) seedPage(ctx context.Context, c *seedChain, follow func() bool) error {
+	out, err := p.listFollowing(ctx, c.q, follow)
+	if err != nil {
+		return err
+	}
+	if out.Truncated && out.Token == "" {
+		return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+	}
+	c.pages++
+	c.prefixes = append(c.prefixes, out.Prefixes...)
+	c.truncated, c.q.Token = out.Truncated, out.Token
+	if n := len(out.Prefixes); n > 0 || len(out.Rows) > 0 {
+		c.endsPrefix = false
+		if n > 0 {
+			c.lastPrefix = out.Prefixes[n-1]
+			c.endsPrefix = len(out.Rows) == 0 || out.Rows[len(out.Rows)-1].Key < c.lastPrefix
 		}
 	}
 	return nil

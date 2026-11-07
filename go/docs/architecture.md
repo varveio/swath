@@ -21,6 +21,18 @@ sort: no sorted runs staged on disk and no merge pass. What does sit on disk bef
 pipeline state: closed Parquet parts in `.swath/parts/` (claimed while their journal record is written,
 then renamed into `data/`) and, with spill, rows ahead of the frontier, read back in key order.
 
+A dry run (`--count-only`) has no sink that needs order, so `order.Count` takes the place of the order stage
+and everything after it: workers expand the same ranges and the rows are counted and dropped as they arrive,
+with no reorder buffer, no spill and no file ([internals/ordering.md](internals/ordering.md#counting-without-order)).
+
+**The split decision** (range engine, after each full page of a range): the owner places a pivot outside the
+engine's mutex (the further of the anchor reflection and the galloped density step, never a sliver), then,
+under the mutex, splits only if workers are idle (demand), the range ranks among the largest remainders, a
+structure boundary or the pivot passes the guards and, for a bounded range, the admission gates estimate
+that the remainder and both children are worth their requests. It then emits `(cursor, pivot]` and
+`(pivot, hi]` and returns, and the children become claimable
+([internals/providers.md](internals/providers.md#range-engine-internalsourcekeyrange)).
+
 ## Packages
 
 | Package | Role | Imports |
@@ -30,15 +42,15 @@ then renamed into `data/`) and, with spill, rows ahead of the frontier, read bac
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout |
 | `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
-| `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits, safe pivots, guards, probes, requeue, counters; behind a page fetch and a provider description | source, schema, counters, faults |
+| `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits (demand, rank, admission gates), safe pivots, guards, structure probes, requeue, counters; behind a page fetch and a provider description | source, schema, counters, faults |
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
 | `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://` | source, schema, registry, keyrange, s3/client |
 | `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payload `Object` and schema `swath/gcs-objects/v1`; registers `gs://` | source, schema, registry, keyrange, gcs/client |
 | `internal/source/objhttp` | what both object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client counters, route canonicalization; `objhttptest` holds the retry contract both clients pass | counters |
 | `internal/source/s3/client` | ListObjectsV2: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
-| `internal/source/gcs/client` | objects.list: OAuth2 credentials, the JSON API's answers and their classes, the page parser | objhttp |
+| `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, the page parser | objhttp |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
-| `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard | source, schema, dataset |
+| `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]`), `Info` | – |
 | `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
@@ -110,7 +122,9 @@ only; `listing` does the rest.
 
 One `--row-budget`: a byte budget for rows in flight, shared by the order stage's buffers and the encoders'
 queues. Pages being parsed, the encoders' writers (admitted separately), codecs and the garbage collector are
-outside it. See [internals/ordering.md](internals/ordering.md) for what may exceed the budget.
+outside it. A waiting range's bounds are copies, so a queued range never keeps the page it was cut from alive.
+A dry run buffers no rows. See [internals/ordering.md](internals/ordering.md) for what may exceed the
+budget.
 
 ## Further reading
 

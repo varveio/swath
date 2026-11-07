@@ -25,6 +25,7 @@ import (
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
 // rowlessService is a GCS bucket of 20,000 keys that, in mode "empty",
@@ -89,7 +90,9 @@ func readJSON(t *testing.T, path string, v any) []byte {
 
 // TestInfiniteEmptyPagesHonorsDeadline: a service that answers every
 // request with an empty page and a fresh continuation token keeps the stall
-// clock alive (it answers), so only --max-duration stops the run: exit 124,
+// clock alive for the first keyrange.EmptyChainLive pages of the run (at
+// 5 ms a page, over 5 s, past the deadline here; TestEndlessEmptyPagesAreStuck
+// covers what follows), so --max-duration stops the run: exit 124,
 // with the report and error.json naming the same attempt, no manifest and
 // the published parts kept; once the service lists again, swath resume
 // completes the dataset of an uninterrupted run byte for byte, the kept
@@ -147,6 +150,39 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
 		t.Fatal("error.json left after the resume completed")
+	}
+}
+
+// TestEndlessEmptyPagesAreStuck: with no --max-duration, a service that
+// answers every request with an empty page and a fresh continuation token
+// is stopped as stuck (exit 75, cause stuck_empty_chain, resumable) once
+// the run of empty pages passes keyrange.EmptyChainLive and the stall
+// timeout passes after it; before, every answered page kept the watchdog
+// alive and the run went on forever (review R3, 2026-11-06).
+func TestEndlessEmptyPagesAreStuck(t *testing.T) {
+	const stall = time.Second
+	captureStderr(t)
+	s := newRowlessService(t)
+	s.set("empty")
+	dir := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	// A guard only: the run used to go on until this.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := run(ctx, s.args(dir, "--stall-timeout", stall.String(), "--report", report), io.Discard, false)
+	if c := exitCode(t, err); c != exitStuck {
+		t.Fatalf("exit %d (%v) after %d fresh empty pages, want %d", c, err, s.fresh.Load(), exitStuck)
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if rep.Outcome.Cause != stuckEmptyChain || !rep.Outcome.Resumable {
+		t.Fatalf("outcome %+v, want cause %s, resumable", rep.Outcome, stuckEmptyChain)
+	}
+	// The bound's worth of empty pages, then the stall timeout's (one
+	// each 5 ms at most), with slack for the watchdog's tick and the stop.
+	chain := int64(keyrange.EmptyChainLive)
+	if n := s.fresh.Load(); n <= chain || n > chain+2*int64(stall/(5*time.Millisecond)) {
+		t.Fatalf("%d fresh empty pages, want over %d and within the stall timeout after", n, chain)
 	}
 }
 

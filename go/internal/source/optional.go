@@ -116,6 +116,15 @@ type Live interface {
 	Answered() int64
 }
 
+// Advancing sources count their key-space progress, which the watchdog
+// takes in place of Answered: a page that held an entry or ended a chain,
+// and an empty continuing page within a bounded run of them
+// (keyrange.EmptyChainLive); emptyChained counts the empty pages past
+// that bound, which the service answered but which are not progress.
+type Advancing interface {
+	Frontier() (advanced, emptyChained int64)
+}
+
 // Faulted sources count the throttle answers and the attempts past the
 // request timeout their service gave (retried or not): the watchdog names
 // a stuck run's cause from what rose while nothing progressed.

@@ -178,12 +178,29 @@ func Create(out string, id Identity, argv []string) (*Journal, error) {
 	return j, nil
 }
 
+// rel is the journal's path relative to the output.
+var rel = filepath.Join(Dir, Name)
+
 // Reopen continues an existing journal: it truncates a torn tail and
-// appends after the last whole frame.
+// appends after the last whole frame. It is ReopenIn through out opened as
+// a root.
 func Reopen(out string, st *State) (*Journal, error) {
-	f, err := os.OpenFile(Path(out), os.O_WRONLY, 0o644)
+	r, err := os.OpenRoot(out)
 	if err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
+	}
+	defer r.Close()
+	return ReopenIn(r, st)
+}
+
+// ReopenIn is Reopen through r, the output root: the journal must be a
+// regular file, never a link (dataset.OpenRegularIn), so a journal entry
+// replaced by a link to a file elsewhere is refused before it is opened
+// for writing or truncated.
+func ReopenIn(r *os.Root, st *State) (*Journal, error) {
+	f, err := openIn(r, os.O_WRONLY)
+	if err != nil {
+		return nil, err
 	}
 	end, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -249,8 +266,23 @@ func (l *Lock) Verify() error {
 	return nil
 }
 
-// TakeLock creates out if needed and takes its lock (non-blocking).
+// TakeLock creates out if needed and takes its lock (non-blocking). An
+// existing workspace must be a directory, and an existing journal and lock
+// file regular files, none a link (dataset.ErrUnsafeLayout), all checked
+// before anything is created: nothing is created through a link to
+// somewhere else, and an output a resume or a settlement would refuse for
+// its journal gets no lock file. A replacement after that check is not
+// excluded.
 func TakeLock(out string) (*Lock, error) {
+	if _, err := dataset.Need(out, dataset.Workspace, true, true); err != nil {
+		return nil, fmt.Errorf("output: %w", err)
+	}
+	if _, err := dataset.Need(out, rel, false, true); err != nil {
+		return nil, fmt.Errorf("output journal: %w", err)
+	}
+	if _, err := dataset.Need(out, LockName, false, true); err != nil {
+		return nil, fmt.Errorf("output lock: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Join(out, dataset.Workspace), 0o755); err != nil {
 		return nil, fmt.Errorf("output: %w", err)
 	}
@@ -426,19 +458,43 @@ var (
 // from a torn append is ErrCorrupt; ErrNoJournal means no journal file, or
 // a header that never became durable in an output with no part anywhere.
 func Read(out string) (*State, error) {
-	f, err := os.Open(Path(out))
+	r, err := os.OpenRoot(out)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNoJournal
 	}
 	if err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
+	defer r.Close()
+	return ReadIn(r)
+}
+
+// ReadIn is Read through r, the output root: the workspace must be a
+// directory, checked first, and the journal a regular file, neither a link
+// (dataset.ErrUnsafeLayout otherwise, whatever the link names).
+func ReadIn(r *os.Root) (*State, error) {
+	fi, err := dataset.NeedIn(r, dataset.Workspace, true, true)
+	switch {
+	case err != nil && !errors.Is(err, dataset.ErrUnsafeLayout):
+		return nil, fmt.Errorf("journal: %w", err)
+	case err != nil:
+		return nil, err
+	case fi == nil:
+		return nil, ErrNoJournal
+	}
+	f, err := openIn(r, os.O_RDONLY)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNoJournal
+	}
+	if err != nil {
+		return nil, err
+	}
 	defer f.Close()
 	st, err := decode(bufio.NewReader(f))
 	if errors.Is(err, errTornHeader) {
 		// Create syncs the header before any part exists, so a part on
 		// disk proves the header was durable and has been damaged since.
-		if n := partFiles(out); n > 0 {
+		if n := partFiles(r); n > 0 {
 			return nil, fmt.Errorf("%w: the header is damaged but %d part files exist", ErrCorrupt, n)
 		}
 		return nil, ErrNoJournal
@@ -446,11 +502,26 @@ func Read(out string) (*State, error) {
 	return st, err
 }
 
-// partFiles counts the files in data/ and in the temporary parts directory.
-func partFiles(out string) int {
+// openIn opens the journal through r (dataset.OpenRegularIn).
+func openIn(r *os.Root, flag int) (*os.File, error) {
+	f, err := dataset.OpenRegularIn(r, rel, flag)
+	if err != nil && !errors.Is(err, dataset.ErrUnsafeLayout) {
+		err = fmt.Errorf("journal: %w", err)
+	}
+	return f, err
+}
+
+// partFiles counts the entries in data/ and in the temporary parts
+// directory, through r.
+func partFiles(r *os.Root) int {
 	n := 0
-	for _, d := range []string{filepath.Join(out, dataset.DataDir), filepath.Join(out, dataset.Workspace, dataset.PartsDir)} {
-		ents, _ := os.ReadDir(d)
+	for _, d := range []string{dataset.DataDir, filepath.Join(dataset.Workspace, dataset.PartsDir)} {
+		f, err := r.Open(d)
+		if err != nil {
+			continue
+		}
+		ents, _ := f.ReadDir(-1)
+		f.Close()
 		n += len(ents)
 	}
 	return n
@@ -576,9 +647,19 @@ func wholeUnder(b []byte, sum uint32) bool {
 // before acting on them: a whole frame that survived a crash may never
 // have been synced.
 func Sync(out string) error {
-	f, err := os.Open(Path(out))
+	r, err := os.OpenRoot(out)
 	if err != nil {
 		return fmt.Errorf("journal: %w", err)
+	}
+	defer r.Close()
+	return SyncIn(r)
+}
+
+// SyncIn is Sync through r, the output root (the journal a regular file).
+func SyncIn(r *os.Root) error {
+	f, err := openIn(r, os.O_RDONLY)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 	if err := f.Sync(); err != nil {

@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/bits"
 	"math/rand/v2"
 	"net"
 	"strings"
@@ -348,6 +350,15 @@ type Counts struct {
 	// InflightNs over the listing's wall time is the mean in flight.
 	InflightMax int64 `json:"inflight_max"`
 	InflightNs  int64 `json:"inflight_ns"`
+	// P50Ns, P90Ns and P99Ns are attempt latency percentiles (send to body
+	// read, every attempt), from a log-spaced histogram (latencyHist): the
+	// upper edge of the percentile's bucket, at most 25% above it, or
+	// LatencyOpen when the percentile falls among the attempts at or past
+	// the histogram's range (2^40 ns), which LatencyOverflow counts.
+	P50Ns           int64 `json:"p50_ns"`
+	P90Ns           int64 `json:"p90_ns"`
+	P99Ns           int64 `json:"p99_ns"`
+	LatencyOverflow int64 `json:"latency_overflow"`
 	// Limiter is the admission's engagements (zero without a limiter).
 	Limiter LimiterCounts `json:"limiter"`
 	// Rate is the --request-rate cap's (zero without one).
@@ -359,6 +370,81 @@ type Counters struct {
 	attempts, retries, throttles, timeouts, parseFailures atomic.Int64
 	answered                                              atomic.Int64
 	inflight, inflightMax, inflightNs                     atomic.Int64
+	latency                                               latencyHist
+}
+
+// latencyHist is a fixed log-spaced histogram of durations in ns: four
+// buckets per power of two (each at most a quarter of its lower edge
+// wide), from 1 ns to 2^40 ns (about 18 minutes 20 s: past any page a
+// healthy route serves, and an attempt that long is reported, not
+// resolved), then one open-ended overflow bucket for longer attempts. One
+// atomic per bucket: recording takes no lock.
+type latencyHist struct{ b [latencyBuckets]atomic.Int64 }
+
+const (
+	latencyMaxBits  = 40
+	latencyFinite   = (latencyMaxBits-2)*4 + 4 // buckets with a finite upper edge, the last one's 2^40-1 ns
+	latencyOverflow = latencyFinite            // the open bucket: 2^40 ns and longer
+	latencyBuckets  = latencyFinite + 1
+)
+
+// LatencyOpen is the percentile reported when it falls in the overflow
+// bucket: its upper edge is unbounded, so the gauge carries the largest
+// value it can rather than a finite edge that would read as a bound.
+const LatencyOpen = math.MaxInt64
+
+// latencyBucket is d's bucket: d itself below 4, else 4·(octave-2) plus
+// the two bits after the leading one; latencyOverflow at 2^40 ns and up.
+func latencyBucket(d int64) int {
+	if d < 4 {
+		return int(max(d, 0))
+	}
+	n := bits.Len64(uint64(d))
+	if n > latencyMaxBits {
+		return latencyOverflow
+	}
+	return (n-2)*4 + int((d>>(n-3))&3)
+}
+
+// latencyUpper is bucket i's upper edge (inclusive), LatencyOpen for the
+// overflow bucket.
+func latencyUpper(i int) int64 {
+	if i == latencyOverflow {
+		return LatencyOpen
+	}
+	if i < 4 {
+		return int64(i)
+	}
+	n, sub := i/4+2, int64(i%4)
+	return (5+sub)<<(n-3) - 1
+}
+
+func (h *latencyHist) record(d time.Duration) { h.b[latencyBucket(int64(d))].Add(1) }
+
+// quantiles are the upper edges of the buckets holding the qs quantiles
+// (0 without samples).
+func (h *latencyHist) quantiles(qs ...float64) []int64 {
+	var counts [latencyBuckets]int64
+	var total int64
+	for i := range counts {
+		counts[i] = h.b[i].Load()
+		total += counts[i]
+	}
+	out := make([]int64, len(qs))
+	if total == 0 {
+		return out
+	}
+	for j, q := range qs {
+		rank := int64(math.Ceil(q * float64(total)))
+		var seen int64
+		for i, c := range counts {
+			if seen += c; seen >= rank {
+				out[j] = latencyUpper(i)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // Attempt counts an HTTP request sent, and in flight until the returned
@@ -370,8 +456,10 @@ func (c *Counters) Attempt() (done func()) {
 	for m := c.inflightMax.Load(); n > m && !c.inflightMax.CompareAndSwap(m, n); m = c.inflightMax.Load() {
 	}
 	return func() {
+		d := time.Since(t0)
 		c.inflight.Add(-1)
-		c.inflightNs.Add(int64(time.Since(t0)))
+		c.inflightNs.Add(int64(d))
+		c.latency.record(d)
 	}
 }
 
@@ -400,9 +488,10 @@ func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
 
 // Load returns the counts so far.
 func (c *Counters) Load() Counts {
+	q := c.latency.quantiles(0.50, 0.90, 0.99)
 	return Counts{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(),
 		Timeouts: c.timeouts.Load(), ParseFailures: c.parseFailures.Load(), InflightMax: c.inflightMax.Load(),
-		InflightNs: c.inflightNs.Load()}
+		InflightNs: c.inflightNs.Load(), P50Ns: q[0], P90Ns: q[1], P99Ns: q[2], LatencyOverflow: c.latency.b[latencyOverflow].Load()}
 }
 
 // ClientCounter names a client counter: its offset in CounterDefs and in
@@ -419,6 +508,10 @@ const (
 	CParseFailures
 	CInflightMax
 	CInflightNs
+	CInflightP50
+	CInflightP90
+	CInflightP99
+	CLatencyOverflow
 	CLimiterDecreases
 	CLimiterFloorThrottles
 	CLimiterIncreases
@@ -453,6 +546,10 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
 	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}
+	for id, q := range map[ClientCounter]string{CInflightP50: "50", CInflightP90: "90", CInflightP99: "99"} {
+		d[id] = counters.Def{Key: "inflight.p" + q + "_ns", Kind: counters.Gauge, Unit: "ns", Help: "attempt latency (send to body read), " + q + "th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns"}
+	}
+	d[CLatencyOverflow] = counters.Def{Key: "inflight.latency_overflow", Kind: counters.Count, Unit: "attempts", Help: "attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket"}
 	d[CLimiterDecreases] = counters.Def{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"}
 	d[CLimiterFloorThrottles] = counters.Def{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"}
 	d[CLimiterIncreases] = counters.Def{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"}
@@ -482,6 +579,10 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 	put(CParseFailures, n.ParseFailures)
 	put(CInflightMax, n.InflightMax)
 	put(CInflightNs, n.InflightNs)
+	put(CInflightP50, n.P50Ns)
+	put(CInflightP90, n.P90Ns)
+	put(CInflightP99, n.P99Ns)
+	put(CLatencyOverflow, n.LatencyOverflow)
 	put(CLimiterDecreases, l.Decreases)
 	put(CLimiterFloorThrottles, l.FloorThrottles)
 	put(CLimiterIncreases, l.Increases)

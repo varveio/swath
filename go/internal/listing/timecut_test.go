@@ -138,9 +138,12 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 	}
 	// run lists keys; with slow, the source holds before key 10 until a
 	// part is closed (with 10 rows, far below the part size, only the
-	// interval closes one), at most 10 s, then lists fast: a slow start
-	// that does not depend on the host's timing. hook, if set, sees every
-	// fault point too.
+	// interval closes one), then lists fast: a slow start that does not
+	// depend on the host's timing. The 10 rows reach the sink before the
+	// hold whichever goroutine lists key 10 (the drainer hands on what it
+	// batched before it lists a range itself), so the cut comes one
+	// interval into the hold; 30 s without it is a failure, not a pass
+	// without a time cut. hook, if set, sees every fault point too.
 	run := func(out string, resume bool, slow bool, interval time.Duration, hook func(string) error) (Report, error) {
 		p := &scripted{keys: keys, chunk: 1}
 		cut := make(chan struct{})
@@ -150,7 +153,8 @@ func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
 				if i == 10 {
 					select {
 					case <-cut:
-					case <-time.After(10 * time.Second):
+					case <-time.After(30 * time.Second):
+						t.Error("no part closed during the hold: the rows before it never reached the sink")
 					}
 				}
 				return 0

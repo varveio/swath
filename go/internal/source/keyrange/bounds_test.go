@@ -160,7 +160,7 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
 		for i, opt := range []Options{
 			{Workers: 8},
-			{Workers: 16, Seed: true, Structure: true},
+			{Workers: 16, Seed: true, Structure: StructureOn},
 			{Workers: 4, Seed: true, Floors: true},
 		} {
 			for _, vetoed := range []bool{false, true} {
@@ -257,7 +257,7 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 	}
 	for i, opt := range []Options{
 		{Workers: 8},
-		{Workers: 16, Seed: true, Structure: true},
+		{Workers: 16, Seed: true, Structure: StructureOn},
 		{Workers: 4, Seed: true, Floors: true, Resume: &Resume{After: keys[len(keys)/3]}},
 		{Workers: 1, Sequential: true},
 	} {
@@ -318,7 +318,7 @@ func TestProviderBoundPolicy(t *testing.T) {
 	} {
 		for i, opt := range []Options{
 			{Workers: 8},
-			{Workers: 8, Seed: true, Structure: true},
+			{Workers: 8, Seed: true, Structure: StructureOn},
 			{Workers: 8, Resume: &Resume{After: keys[len(keys)/4]}}, // a key holding '%'
 		} {
 			f := &inclusive{keys: keys, bounded: true, acceptEnd: c.acceptEnd, pageCap: 9,

@@ -27,6 +27,10 @@ type API interface {
 
 type counted interface{ Counters() client.Counters }
 
+// pooled is implemented by clients that spread requests over a transport
+// pool (client.Client).
+type pooled interface{ Transports() int }
+
 // live is implemented by clients that count their attempts live
 // (source.Requested).
 type live interface{ Live() objhttp.Live }
@@ -143,7 +147,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
 		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
-			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout})
+			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
 		if err != nil {
 			return nil, fmt.Errorf("GCS client: %w", err)
 		}
@@ -204,6 +208,9 @@ func (p *Provider) Restart(after string) {
 func (p *Provider) Stats() Stats {
 	if c, ok := p.client.(counted); ok {
 		c.Counters().Store(p.Set(), p.ID(0))
+	}
+	if c, ok := p.client.(pooled); ok {
+		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}

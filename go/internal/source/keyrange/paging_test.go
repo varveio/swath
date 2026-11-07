@@ -169,7 +169,7 @@ func TestPageSize(t *testing.T) {
 			for i, opt := range []Options{
 				{Sequential: true},
 				{Workers: 8},
-				{Workers: 8, Seed: true, Floors: true, Structure: true},
+				{Workers: 8, Seed: true, Floors: true, Structure: StructureOn},
 				{Workers: 8, Seed: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)
@@ -339,5 +339,42 @@ func TestFreshEmptyTokensUseBoundedMemory(t *testing.T) {
 	p, _ = New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, cycle)
 	if err := p.Expand(context.Background(), Range{open: true, id: 1}, &direct{&collect{}}); !errors.Is(err, ErrInvalidPage) || calls != emptyTokenWindow+1 {
 		t.Fatalf("a cycle within the window: %v after %d pages", err, calls)
+	}
+}
+
+// TestEmptyChainFrontier: the empty continuing pages of a run count as
+// key-space progress (Frontier) only up to EmptyChainLive; the pages past
+// it are followed and counted in empty_chain_pages, so the watchdog can
+// stop a service that answers forever with fresh tokens (review R3,
+// 2026-11-06). A page that holds an entry ends the run: the next run
+// counts again.
+func TestEmptyChainFrontier(t *testing.T) {
+	const extra = 100
+	var calls int
+	pages := func(_ context.Context, q *Query) (*Page[Object], error) {
+		calls++
+		switch {
+		case calls <= EmptyChainLive+extra: // one run past the bound
+			return &Page[Object]{Truncated: true, Token: fmt.Sprintf("a%d", calls)}, nil
+		case calls == EmptyChainLive+extra+1:
+			return &Page[Object]{Rows: []Row{{Key: "k1"}}, Truncated: true, Token: "after-k1"}, nil
+		case calls <= EmptyChainLive+extra+11: // a short run
+			return &Page[Object]{Truncated: true, Token: fmt.Sprintf("b%d", calls)}, nil
+		}
+		return &Page[Object]{Rows: []Row{{Key: "k2"}}}, nil
+	}
+	p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Expand(context.Background(), Range{open: true, id: 1}, &direct{&collect{}}); err != nil {
+		t.Fatal(err)
+	}
+	// Frontier: the first run's bounded pages, its page with k1, the short
+	// run and the last page.
+	advanced, chained := p.Frontier()
+	st := p.Stats()
+	if want := int64(EmptyChainLive + 1 + 10 + 1); advanced != want || chained != extra || st.Get(cEmptyChainPages) != extra {
+		t.Fatalf("frontier %d, empty_chain_pages %d; want %d, %d", advanced, chained, want, extra)
 	}
 }

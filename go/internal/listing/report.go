@@ -199,14 +199,16 @@ type Timings struct {
 	// verification and publication included.
 	SessionMs int64 `json:"session_ms"`
 	ListingMs int64 `json:"listing_ms"` // to the end of the order stage
-	UserCPUMs int64 `json:"user_cpu_ms"`
-	SysCPUMs  int64 `json:"sys_cpu_ms"`
+	// UserCPUMs and SysCPUMs are the process's CPU times: absent (nil)
+	// where the platform does not measure them (Resources.RusageAvailable).
+	UserCPUMs *int64 `json:"user_cpu_ms,omitempty"`
+	SysCPUMs  *int64 `json:"sys_cpu_ms,omitempty"`
 }
 
 // Output is the row and part accounting: this invocation versus the
 // dataset.
 type Output struct {
-	RowsListed    int64 `json:"rows_listed"`    // listed and ordered by this invocation (after the filters)
+	RowsListed    int64 `json:"rows_listed"`    // listed and ordered (a dry run: counted) by this invocation, after the filters
 	RowsFiltered  int64 `json:"rows_filtered"`  // listed by this invocation and dropped by the filters (--include, ...)
 	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
@@ -234,11 +236,26 @@ type TextOutput struct {
 
 // Resources the run used. Wait times sum over goroutines.
 type Resources struct {
-	PeakRSSBytes     int64 `json:"peak_rss_bytes"`
+	// PeakRSSBytes is the process's peak resident set (Windows: peak
+	// working set): absent (nil) where it is not measured.
+	PeakRSSBytes *int64 `json:"peak_rss_bytes,omitempty"`
+	// RusageAvailable says whether this platform measured the CPU times and
+	// peak RSS; false leaves them out rather than reporting zeros.
+	RusageAvailable  bool  `json:"rusage_available"`
 	RowBudgetBytes   int64 `json:"row_budget_bytes"`   // rows in flight: reorder storage and encoder queues
 	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage
-	FrontierWaitNs   int64 `json:"frontier_wait_ns"`
-	BudgetWaitNs     int64 `json:"budget_wait_ns"`
+	// PeakHeapLiveBytes is the peak live heap while listing (the bytes a
+	// garbage collection marked reachable, sampled every 100 ms): beside
+	// row_budget_bytes, the memory the budget does not see.
+	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
+	// PeakAheadRows is the most rows listed and not yet handed on at once
+	// (ahead of the publish frontier, in memory or spilled);
+	// FrontierStuckMaxNs the longest interval in which the order stage
+	// handed nothing on. Both 0 for a dry run, which does not order.
+	PeakAheadRows      int64 `json:"peak_ahead_rows"`
+	FrontierStuckMaxNs int64 `json:"frontier_stuck_max_ns"`
+	FrontierWaitNs     int64 `json:"frontier_wait_ns"`
+	BudgetWaitNs       int64 `json:"budget_wait_ns"`
 	// EncoderWaitNs is the time the order stage waited for an encoder (nil
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`
@@ -285,13 +302,22 @@ func (r *Report) finish() {
 	now := time.Now()
 	r.Timings.FinishedAt = now.UTC()
 	r.Timings.WallMs = now.Sub(r.Timings.StartedAt).Milliseconds()
-	u, sys := cpuTimes()
-	r.Timings.UserCPUMs, r.Timings.SysCPUMs = u.Milliseconds(), sys.Milliseconds()
-	r.Resources.PeakRSSBytes = peakRSS()
+	r.setRusage(rusage())
 	if r.Attempt != nil {
 		r.Timings.SessionMs = now.Sub(r.Attempt.Started).Milliseconds()
 	}
 	r.requests()
+}
+
+// setRusage records the process's measurements, or that there are none.
+func (r *Report) setRusage(user, sys time.Duration, peak int64, ok bool) {
+	r.Resources.RusageAvailable = ok
+	if !ok {
+		r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = nil, nil, nil
+		return
+	}
+	u, s := user.Milliseconds(), sys.Milliseconds()
+	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = &u, &s, &peak
 }
 
 // requests fills Cost and Efficiency from the source's request account.

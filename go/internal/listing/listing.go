@@ -152,6 +152,11 @@ type Spill struct {
 	MaxBytes     int64 `json:"max_bytes"`
 	ReserveBytes int64 `json:"reserve_bytes"`
 	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+	// Dir is the spill directory; FSType the filesystem it is on (Linux:
+	// tmpfs, ext4, xfs, ...; empty where it is not read). A spill on tmpfs
+	// is held in memory, outside peak_rss_bytes.
+	Dir    string `json:"dir"`
+	FSType string `json:"fs_type,omitempty"`
 }
 
 // spillMax is the live spill cap for spill under dir: the configured one,
@@ -164,17 +169,22 @@ func spillMax(l SpillLimits, dir string) int64 {
 	case l.Max < 0:
 		return 0
 	}
-	for {
-		if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
-			break
-		}
-		dir = filepath.Dir(dir)
-	}
-	free := order.FreeBytes(dir)
+	free := order.FreeBytes(existing(dir))
 	if free == order.Unlimited {
 		return 0
 	}
 	return max(1, (free-l.Reserve)/2)
+}
+
+// existing is dir or its nearest existing ancestor: the filesystem a
+// directory not yet created will be on.
+func existing(dir string) string {
+	for {
+		if _, err := os.Stat(dir); err == nil || filepath.Dir(dir) == dir {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 // spillReserve is the free space spill leaves on its filesystem when none
@@ -434,6 +444,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if cfg.Output.Dir != "" {
 		env.Router = routerOptions(cfg, jr, shared, cancel)
 	}
+	// A dry run counts: nothing consumes its rows in order, so it holds
+	// no reorder storage and never spills (order.Count).
+	env.Count = dryRun(cfg)
 	a := &attempt{cfg: cfg, jr: jr, sum: sum}
 	oopt, err := orderOptions(cfg, jr, sum.Resources.RowBudgetBytes, shared)
 	if err != nil {
@@ -450,7 +463,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		text, env.Text = t, t
 	}
+	heap := sampleHeap()
 	ost, router, err := src.Run(ctx, env)
+	a.sum.Resources.PeakHeapLiveBytes = heap()
 	a.router = router
 	if text != nil {
 		err = a.settleText(text, err)
@@ -512,6 +527,10 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 	if l, ok := src.(source.Live); ok {
 		answered := l.Answered
 		pr.answered.Store(&answered)
+	}
+	if a, ok := src.(source.Advancing); ok {
+		frontier := a.Frontier
+		pr.frontier.Store(&frontier)
 	}
 	if f, ok := src.(source.Faulted); ok {
 		faults := f.Faults
@@ -590,14 +609,21 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 				oopt.SpillVerify = jr.lock.Verify
 			}
 		}
-	} else if !cfg.Limits.Spill.Off {
+	} else if !cfg.Limits.Spill.Off && !dryRun(cfg) {
 		oopt.SpillDir = os.TempDir()
 	}
 	if oopt.SpillDir != "" {
 		oopt.SpillMax = spillMax(cfg.Limits.Spill, oopt.SpillDir)
+		if fs := order.FSType(existing(oopt.SpillDir)); order.InMemory(fs) && cfg.Warn != nil {
+			cfg.Warn(fmt.Sprintf("the spill directory %s is on %s: rows spilled behind a slow frontier are held in memory (outside the peak RSS); set TMPDIR to a disk", oopt.SpillDir, fs))
+		}
 	}
 	return oopt, nil
 }
+
+// dryRun reports whether cfg writes nothing (no dataset, no text): its
+// rows are only counted (--count-only).
+func dryRun(cfg Config) bool { return cfg.Output.Dir == "" && cfg.Output.Text == nil }
 
 // attempt is one pipeline run's report and the state its failure and
 // commit paths share.
@@ -632,11 +658,15 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res := &a.sum.Resources
 	res.MaxBufferedBytes, a.sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
 	a.sum.Output.RowsFiltered = filtered
-	res.Features = map[string]bool{"spill": oopt.SpillDir != ""}
+	// order: false for a dry run, which counts rows without ordering them
+	// (order.Count: no reorder storage, max_buffered_bytes 0).
+	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
-			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders}
+			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
+			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir))}
 	}
+	res.PeakAheadRows, res.FrontierStuckMaxNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
 	res.FrontierWaitNs, res.BudgetWaitNs = int64(ost.FrontierWait), int64(ost.BudgetWait)
 	if a.router != nil {

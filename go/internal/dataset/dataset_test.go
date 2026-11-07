@@ -181,3 +181,42 @@ func TestOverwriteInterruptedUnjournaled(t *testing.T) {
 		t.Fatalf("data/ without a mark of ours: %v, want ErrNotDataset", err)
 	}
 }
+
+// TestManaged: a directory is this tool's by its lock, its journal or a
+// manifest that parses as this tool's (format and coverage); an unrelated
+// data/ beside a _SUCCESS, or another tool's manifest with a schema id, is
+// not.
+func TestManaged(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  bool
+	}{
+		{"empty", nil, false},
+		{"_SUCCESS beside data/", map[string]string{legacySuccess: "", DataDir + "/x": ""}, false},
+		{"data/ alone", map[string]string{DataDir + "/x": ""}, false},
+		{"another tool's manifest with a schema id", map[string]string{ManifestName: `{"schema_id":"other/v1"}`}, false},
+		{"a schemaId manifest", map[string]string{ManifestName: `{"schemaId":"other"}`}, false},
+		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + Format + `"}`}, false},
+		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":null}`}, false},
+		{"another format with coverage", map[string]string{ManifestName: `{"format":"other","coverage":{}}`}, false},
+		{"not JSON", map[string]string{ManifestName: `{`}, false},
+		{"our manifest", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":{"complete":true}}`}, true},
+		{"a lock", map[string]string{Workspace + "/" + LockName: ""}, true},
+		{"a journal", map[string]string{JournalDir + "/journal": ""}, true},
+	} {
+		dir := t.TempDir()
+		for name, body := range tc.files {
+			p := filepath.Join(dir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := Managed(dir); got != tc.want {
+			t.Errorf("%s: Managed = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

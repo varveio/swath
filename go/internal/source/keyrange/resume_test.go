@@ -76,6 +76,7 @@ func TestBoundVetoOnEveryRequest(t *testing.T) {
 	}{
 		{"resume/sequential", resumed, Options{Sequential: true, Resume: &Resume{After: "a5"}}},
 		{"resume/parallel", resumed, Options{Resume: &Resume{After: "a5"}}},
+		{"resume/seeded", resumed, Options{Seed: true, Resume: &Resume{After: "a5"}}},
 		{"seed page, capped top", seeded, Options{Seed: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

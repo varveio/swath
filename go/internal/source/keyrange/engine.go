@@ -151,15 +151,15 @@ func ExclusiveEnd(through string, accept func(string) bool) (string, bool) {
 
 // Options configure an Engine.
 type Options struct {
-	Prefix     string  // the scope
-	Sequential bool    // one continuation-token chain, no ranges (the oracle)
-	Seed       bool    // parallel: tile the scope from delimiter probes first
-	Structure  bool    // pivot on folder boundaries from structure probes sent alongside pages
-	Workers    int     // parallel: the order stage's worker count (split demand)
-	MaxKeys    int64   // stop after this many objects (sequential only; 0 = all)
-	Resume     *Resume // continue after a journaled run's last published key
-	Floors     bool    // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
-	PageSize   int     // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
+	Prefix     string    // the scope
+	Sequential bool      // one continuation-token chain, no ranges (the oracle)
+	Seed       bool      // parallel: tile the scope (or a resumed (K, ⊤]) from delimiter listings of its folders first
+	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages (zero: off)
+	Workers    int       // parallel: the order stage's worker count (split demand)
+	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
+	Resume     *Resume   // continue after a journaled run's last published key
+	Floors     bool      // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	PageSize   int       // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
@@ -194,7 +194,11 @@ type Engine[P any] struct {
 	fetch   Fetch[P]
 	objects atomic.Int64
 	ids     atomic.Uint64
-	start   time.Time
+	// frontier counts key-space progress for the watchdog (Frontier): a
+	// page that held an entry or ended its chain, and an empty continuing
+	// page within the first EmptyChainLive of its run.
+	frontier atomic.Int64
+	start    time.Time
 
 	c       *counters.Set       // the tally (Counters, then the provider's)
 	mu      sync.Mutex          // the decision mutex: taken through lock and unlock, which time it
@@ -275,14 +279,25 @@ func (p *Engine[P]) Stats() Stats {
 // also the page that held only the key at an inclusive bound) is followed
 // by its token here, for every path (ranges, the sequential chain, the
 // probes): each token of such a run must differ from the last
-// emptyTokenWindow ones, or the page is invalid. A service that sends fresh
-// tokens forever is followed until the run's deadline (--max-duration), in
-// bounded memory.
+// emptyTokenWindow ones, or the page is invalid. Only the first
+// EmptyChainLive pages of a run count as progress (Frontier); past them a
+// service that sends fresh tokens forever is followed, in bounded memory,
+// until the command's watchdog stops the run as stuck (--stall-timeout,
+// cause stuck_empty_chain) or its deadline (--max-duration).
 func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
+	return p.listFollowing(ctx, in, nil)
+}
+
+// listFollowing is list whose following of empty continuing pages asks
+// follow first (nil: always follow): when follow refuses, the empty page
+// is returned as it is, truncated, with its token. The seed charges each
+// followed page to its budgets this way.
+func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() bool) (*Page[P], error) {
 	p.lock()
 	p.c.Inc(cRequests)
 	p.unlock()
 	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
+	empties := 0          // the run's length
 	// chainStart: no page of this chain has held an entry yet, so its first
 	// row may be the key at an inclusive start bound (also after empty
 	// pages followed here).
@@ -318,6 +333,7 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 					p.c.Inc(cPrefixesNormalized)
 					p.unlock()
 				}
+				p.frontier.Add(1)
 				return out, nil
 			}
 			if out.Token == "" {
@@ -332,13 +348,22 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 			if ctx.Err() != nil {
 				return nil, context.Cause(ctx)
 			}
+			if follow != nil && !follow() {
+				return out, nil
+			}
 			next := *in
 			next.Token = out.Token
 			in, wait = &next, requeueBase
 			p.lock()
 			p.c.Inc(cRequests)
 			p.c.Inc(cEmptyPages)
+			if empties++; empties > EmptyChainLive {
+				p.c.Inc(cEmptyChainPages)
+			}
 			p.unlock()
+			if empties <= EmptyChainLive {
+				p.frontier.Add(1)
+			}
 			continue
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -467,8 +492,27 @@ func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 // emptyTokenWindow is how many of the latest tokens of a run of empty
 // continuing pages are kept to detect a token that makes no progress: a
 // cycle within it is an invalid page; a longer one, like a chain of ever
-// fresh tokens, is bounded by the run's deadline, not by memory.
+// fresh tokens, is bounded by EmptyChainLive and the watchdog, not by
+// memory.
 const emptyTokenWindow = 1024
+
+// EmptyChainLive is how many empty continuing pages in a run (one
+// request's chain of them, before a page with an entry or the chain's end)
+// count as progress for the watchdog (Frontier). It is the token window:
+// the engine cannot tell a fresh token from a cycle longer than that
+// window, so a longer run proves neither progress nor its absence. Past it
+// the pages are still followed (a legitimate one ends when the service
+// reaches an entry), counted in empty_chain_pages, and the watchdog stops
+// the run as stuck when nothing else progresses for --stall-timeout.
+const EmptyChainLive = emptyTokenWindow
+
+// Frontier is the engine's key-space progress, for the watchdog: pages
+// that held an entry or ended a chain, plus empty continuing pages within
+// the first EmptyChainLive of their run; emptyChained is the empty pages
+// past that bound (followed, but not progress).
+func (p *Engine[P]) Frontier() (advanced, emptyChained int64) {
+	return p.frontier.Load(), p.c.Load(cEmptyChainPages)
+}
 
 // tokenWindow holds the latest emptyTokenWindow tokens of a run.
 type tokenWindow struct {

@@ -8,8 +8,11 @@
 package dataset
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // Format identifies the dataset format in the manifest and the footers.
@@ -55,9 +58,45 @@ const (
 	StampIndexBound = "swath.index_bound_bytes"
 )
 
-// PartName is the published name of part ordinal i: dense, zero-based, %05d,
-// so lexical name order is key order.
+// PartName is the published name of part ordinal i: dense, zero-based,
+// five digits (%05d), so a dataset holds at most MaxParts parts and name
+// order is ordinal order, which is key order. Code still compares ordinals
+// (PartOrdinal), and readers take the order from the manifest's explicit
+// part list.
 func PartName(i int) string { return fmt.Sprintf("part-%05d.parquet", i) }
+
+// MaxParts is the most parts a dataset holds: ordinals 0 to 99,999, the
+// five digits of PartName. The router refuses to open another
+// (ErrPartLimit).
+const MaxParts = 100_000
+
+// ErrPartLimit: the run would open part MaxParts, past the five-digit
+// ordinals a dataset has. Every earlier part is published first. The part
+// size and row cap are frozen in a resume's identity, so a resume would
+// reach the limit again: the run is not resumable (exit 1, class fatal,
+// cause part_limit), and starts over with a larger --part-size or without
+// --part-rotation-max-rows.
+var ErrPartLimit = errors.New("the dataset reached its limit of 100,000 parts")
+
+// PartOrdinal is the ordinal of a name PartName makes (ok false for any
+// other name: another shape, a sign, extra leading zeros, an ordinal past
+// MaxParts).
+func PartOrdinal(name string) (i int, ok bool) {
+	digits, found := strings.CutPrefix(name, "part-")
+	if digits, found = strings.CutSuffix(digits, ".parquet"); !found || digits == "" {
+		return 0, false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	i, err := strconv.Atoi(digits)
+	if err != nil || i >= MaxParts || PartName(i) != name {
+		return 0, false
+	}
+	return i, true
+}
 
 // TempPath is where part i is written before publication.
 func TempPath(out string, i int) string {

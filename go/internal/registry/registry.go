@@ -49,6 +49,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
+	// so its rows cannot be written as text; the command refuses a text run
+	// of it before opening it.
+	BinaryKeys bool
 	// Classify, if set, names the class of a failure the provider caused
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.
@@ -82,6 +86,9 @@ type Env struct {
 	Order order.Options
 	// Router, if set, routes the rows into parts; nil discards them.
 	Router *parquetout.Options
+	// Count counts the rows without ordering them (order.Count): a dry
+	// run, whose rows nothing consumes; Router and Text must be nil.
+	Count bool
 	// Empty lists nothing: a resume whose final part is durable.
 	Empty bool
 	// Ordered, if set, counts rows the order stage has handed on.
@@ -136,7 +143,11 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if env.Empty {
 		p = source.Empty[P]{}
 	} else if keep != nil {
-		p = newFiltered(p, keep, env.Filtered)
+		p = newFiltered(p, keep, b.s, env.Filtered)
+	}
+	if env.Count {
+		st, err := order.Count(ctx, p, env.Ordered, env.Order)
+		return st, nil, err
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)
 	return st, enc, err

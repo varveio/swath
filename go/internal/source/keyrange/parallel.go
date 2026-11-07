@@ -4,13 +4,16 @@
 package keyrange
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"github.com/varveio/swath/go/internal/faults"
 	"math"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -28,8 +31,8 @@ type kind uint8
 const (
 	interval kind = iota
 	whole         // sequential oracle: the scope as one continuation chain
-	seed          // one delimiter page that emits the first tiling
-	resume        // (after, ⊤] after a journaled run's last published key
+	seed          // delimiter listings of the folder hierarchy that emit the first tiling (of (after, ⊤] on a resume)
+	resume        // (after, ⊤] after a journaled run's last published key, without the seed
 )
 
 type origin uint8
@@ -41,6 +44,23 @@ const (
 	fromUpper
 )
 
+// pivotSource is the synthesis that made a split's pivot; srcBound marks a
+// bound no split made (a seed cut, the scope's end, ⊤, a resume key).
+type pivotSource uint8
+
+const (
+	srcBound     pivotSource = iota
+	srcReflect               // forwardReflect: the cursor reflected from its chain's anchor
+	srcMidpoint              // between: a safe scalar between the cursor and hi
+	srcSliver                // between: c + " ", or capFallback just above c (refused: never a split's pivot)
+	srcDensity               // the galloped density step (gallop)
+	srcStructure             // a folder boundary from a structure probe
+)
+
+func (s pivotSource) String() string {
+	return [...]string{"bound", "reflect", "midpoint", "sliver", "density", "structure"}[s]
+}
+
 // Range is one unit of listing work.
 type Range struct {
 	kind   kind
@@ -50,6 +70,47 @@ type Range struct {
 	after  string    // on resume: keys <= after are already published; lo is a safe start-after at or below it
 	id     uint64
 	born   origin
+	depth  int64       // splits between the root or a seed tile and this range
+	pivot  pivotSource // the pivot source of the split that made this range (srcBound: none)
+	hiSrc  pivotSource // what made hi: the source of the pivot it is, or srcBound
+	// handout: the range lies inside the lower child of a frontier split
+	// (it is that child or one of its descendants).
+	handout bool
+	// gen is the gallop generation: consecutive upper children along the
+	// chain (a lower child is 0, an upper child its parent's + 1, at most
+	// gallopMaxGen).
+	gen uint8
+	// zeroes is the structure probes in a row, along the range's ancestry,
+	// that found no folder (structureZeroLimit stops probing).
+	zeroes uint8
+	// stall: the split that made this upper child kept its pivot inside
+	// the cursor's own folder, the evidence on which a bounded range
+	// probes structure (StructureAuto).
+	stall bool
+	// anchor is where the chain's reflection measures the covered
+	// distance from (propose): on the open frontier a seed or resume
+	// tile's lo, or the chain's first pivot when it started at ⊥; on a
+	// bounded chain the first key its first range listed. "": the range
+	// starts a chain (a lower child, a tile, or after a reflection reached
+	// the ceiling).
+	anchor string
+	// est is the keys the split that made the range estimated in it, from
+	// the parent's last page (estOK false: none, as for a tile): its
+	// remainder until its own first page gives one (running.rem).
+	est   float64
+	estOK bool
+}
+
+// estimate is the range's remainder before its first page: +Inf on the
+// frontier, its split's estimate, or NaN (unknown).
+func (r Range) estimate() float64 {
+	switch {
+	case r.open:
+		return math.Inf(1)
+	case r.estOK:
+		return r.est
+	}
+	return math.NaN()
 }
 
 // running is the split bookkeeping of a range in Expand (under p.mu).
@@ -57,24 +118,28 @@ type running struct {
 	keys         int64
 	open         bool
 	continuing   bool // last page full and not at the bound
-	unsplittable bool
+	unsplittable bool // proven: no pivot exists above a safe cursor
+	ended        bool // the range listed through its bound (a leaf)
+	split        bool // the range split and handed on its rest
 	id           uint64
 	dens         density        // page density, for the floors
 	sb           structure      // known folder boundaries (structure probes)
 	pending      chan structure // a structure probe in flight
-	zeroes       int            // consecutive structure probes that found no folder
+	zeroes       uint8          // consecutive structure probes that found no folder, the ancestry's included
+	rem          float64        // estimated keys left in (cursor, hi]: +Inf on the frontier, NaN unknown (the rank)
+	refused      int            // consecutive split decisions the admission gates refused
 }
 
-// Root is the scope: the sequential chain, a resumed tiling, the seed, or
-// (⊥, ⊤].
+// Root is the scope: the sequential chain, the seed (which tiles a
+// resumed scope (K, ⊤] too), a resumed (K, ⊤], or (⊥, ⊤].
 func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
-	case p.opt.Resume != nil:
-		return Range{kind: resume}
 	case p.opt.Seed:
 		return Range{kind: seed}
+	case p.opt.Resume != nil:
+		return Range{kind: resume}
 	}
 	return Range{kind: interval, open: true}
 }
@@ -93,7 +158,8 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 }
 
 // expandResume hands on (after, ⊤], the rest of the scope after a
-// journaled run's last published key; splits ramp it up as on a fresh run.
+// journaled run's last published key, when the seed is off (with it,
+// expandSeed tiles the same scope); splits ramp it up as on a fresh run.
 // It lists nothing itself.
 func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	after := p.opt.Resume.After
@@ -104,6 +170,7 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	if s := p.safeStart(after); s != after {
 		t.lo, t.after = s, after
 	}
+	p.account(time.Now())
 	p.queued++
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.c.Set(cResumedRanges, 1)
@@ -111,9 +178,15 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	return e.Child(t)
 }
 
-// account integrates the active count over time; mu held.
+// account integrates the active count over time, and the idle demand
+// (max(0, hunger)) while a range is in Expand; mu held. Every change of
+// running or queued is preceded by a call.
 func (p *Engine[P]) account(now time.Time) {
-	p.area += float64(len(p.running)) * now.Sub(p.areaAt).Seconds()
+	dt := now.Sub(p.areaAt)
+	p.area += float64(len(p.running)) * dt.Seconds()
+	if hunger := p.opt.Workers - len(p.running) - p.queued; hunger > 0 && len(p.running) > 0 {
+		p.c.Add(cIdleDemandNs, int64(hunger)*int64(dt))
+	}
 	p.areaAt = now
 }
 
@@ -124,7 +197,7 @@ func (p *Engine[P]) enter(r Range) *running {
 	if r.born != fromRoot {
 		p.queued--
 	}
-	st := &running{id: r.id, open: r.open, sb: r.sb}
+	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate()}
 	p.running[r.id] = st
 	p.c.Max(cMaxActive, int64(len(p.running)))
 	return st
@@ -136,13 +209,38 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
 	p.account(time.Now())
 	delete(p.running, r.id)
 	p.c.Add(cBusyNs, int64(time.Since(start)))
-	if st.keys == 0 {
-		switch r.born {
-		case fromLower:
+	child := r.born == fromLower || r.born == fromUpper
+	if child && st.keys == 0 {
+		upper := 0
+		if r.born == fromLower {
 			p.c.Inc(cChildEmptyLower)
-		case fromUpper:
+		} else {
 			p.c.Inc(cChildEmptyUpper)
+			upper = 1
 		}
+		p.c.Inc(emptyBy[r.pivot][upper])
+		if r.hiSrc == srcBound {
+			p.c.Inc(cChildEmptyHiBound)
+		} else {
+			p.c.Inc(cChildEmptyHiPivot)
+		}
+	}
+	if !st.ended && !st.split {
+		return // failed or cancelled: no realized outcome
+	}
+	if child && st.keys < int64(p.opt.PageSize) {
+		if r.born == fromLower {
+			p.c.Inc(cChildSmallLower)
+		} else {
+			p.c.Inc(cChildSmallUpper)
+		}
+	}
+	if r.handout {
+		p.c.Add(cFrontierHandoutKeys, st.keys)
+	}
+	if st.ended {
+		p.c.Inc(cLeaves)
+		p.c.Add(cLeafDepthSum, r.depth)
 	}
 }
 
@@ -169,6 +267,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
+	head := "" // the first key this range listed
 	p.maybeProbe(pctx, st, r, c)
 	for {
 		out, err := p.list(ctx, in)
@@ -201,6 +300,15 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 			c = k
 		}
+		// The page's strings are views of its parser arena (S3), and c
+		// outlives the page: the next page's order check, a structure
+		// probe's start and, at a split, the lower child's lo, which stays
+		// queued, or done ahead of the drain, for as long as the frontier
+		// takes. One clone per page keeps a retained range from pinning the
+		// whole page through its bound.
+		if kept > 0 || skipped > 0 {
+			c = strings.Clone(c)
+		}
 		truncated := out.Truncated
 		if truncated && out.Token == "" {
 			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
@@ -215,12 +323,24 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		var first, last string
 		if kept > 0 {
 			first, last = out.Rows[0].Key, out.Rows[kept-1].Key
+			if head == "" {
+				// Kept for the range's life and handed on as an upper
+				// child's anchor: a copy, not a view of this page.
+				head = strings.Clone(first)
+			}
 		}
 		var page []string
+		var g *gauge
+		rem := math.NaN()
 		if !done {
 			page = make([]string, kept)
 			for i := range page {
 				page[i] = out.Rows[i].Key
+			}
+			// The remainder estimate (the rank's, and the first of the
+			// admission gates') is read here, outside the decision mutex.
+			if g = newGauge(page); g != nil && !r.open {
+				rem = g.keys(c, r.hi)
 			}
 		}
 		overfetch := len(out.Rows) - kept
@@ -230,16 +350,34 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		p.lock()
 		p.c.Add(cOverfetchKeys, int64(overfetch))
 		st.keys += int64(kept)
+		if st.unsplittable {
+			p.c.Add(cUnsplittableKeys, int64(kept))
+		}
+		st.ended = done
 		if kept > 0 {
 			st.dens.observe(first, last, r.lo, r.hi, kept)
 		}
+		if !math.IsNaN(rem) {
+			st.rem = rem
+		}
+		hunger := p.opt.Workers - len(p.running) - p.queued
+		wanted := !done && !st.unsplittable && (hunger > 0 || p.opt.SplitCoin != nil)
 		p.unlock()
 		if done {
 			p.covered(r.lo, r.hi, r.open)
 			return faults.At("range-done")
 		}
-		if m, ext, ok := p.decide(st, r, page, c); ok {
-			lower, upper := p.commit(st, r, c, m, ext)
+		// The pivot is placed outside the decision mutex, on this snapshot
+		// of the demand (the density step's big-number arithmetic is the
+		// costly part of a decision); decide takes the decision under it.
+		var pr proposal
+		if wanted {
+			ceil, bounded := p.ceiling(r)
+			pr = propose(r, page, head, c, ceil, bounded, hunger)
+			pr.gauge, pr.rem = g, rem
+		}
+		if pv, ok := p.decide(st, r, c, pr); ok {
+			lower, upper := p.commit(st, r, c, pv)
 			if err := faults.At("split"); err != nil {
 				return err
 			}
@@ -260,15 +398,101 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 	}
 }
 
+// ceiling is what a pivot in r must stay below: hi for a bounded range;
+// on the open frontier the scope's prefixCeil, or nothing (bounded false).
+func (p *Engine[P]) ceiling(r Range) (string, bool) {
+	if r.open {
+		return prefixCeil(p.opt.Prefix)
+	}
+	return r.hi, true
+}
+
+// proposal is a split's pivot as the policy places it (propose), computed
+// outside the decision mutex from the page and a snapshot of the demand,
+// with what it observed; decide counts and applies it under the mutex.
+type proposal struct {
+	ready    bool // propose ran for this page
+	m        string
+	src      pivotSource
+	found    bool      // a pivot exists (else the guard's no_pivot)
+	sliver   bool      // only a sliver lies between: refused, not split
+	why      extReason // the density step's refusal (extOK: it gave a pivot)
+	halvings int       // the density step's stride halvings
+	anchored bool      // the reflection had an anchor (not ⊥)
+	ceiling  bool      // the reflection reached the ceiling: the midpoint between(c, ceil) instead
+	shrink   bool      // the density step lay nearer than the reflection and was not taken
+	anchor   string    // the anchor the reflection measured from ("": ⊥)
+	gauge    *gauge    // the page's gauge (nil: no estimate), for the admission gates and the children's estimates
+	rem      float64   // the gauge's remainder (c, hi] of a bounded range
+}
+
+// propose places the pivot of a split of r at cursor c below ceil
+// (bounded false: none), with demand hunger; head is the first key r
+// listed. Two steps, the further of which is the pivot:
+//   - the reflection of c from its chain's anchor (forwardReflect at the
+//     scalar where they diverge): the chain's covered distance doubles per
+//     split, and climbs folder levels by itself (day=03, 05, 09, then the
+//     next month), where a page's density cannot reach. A reflection at or
+//     past the ceiling (hi, or the scope's prefixCeil on the frontier)
+//     falls back to the safe midpoint between(c, ceil), and the upper child
+//     starts a new chain, measured from its own keys;
+//   - the galloped density step (gallop): max(4, hunger) << gen page spans
+//     in the page's alphabet, at most halfway to hi. It may move the pivot
+//     further, never nearer: on the frontier the reflection is what grows.
+//
+// A sliver (c + " ", or the cap's bump just above c) leaves the lower
+// child nearly certain to be empty: it is refused, and the range keeps
+// listing and decides again after its next page. A folder boundary known
+// from a structure probe takes precedence over all of this (decide).
+func propose(r Range, page []string, head, c, ceil string, bounded bool, hunger int) proposal {
+	pr := proposal{ready: true}
+	e, why, halvings := gallop(page, c, ceil, bounded, hunger, r.gen)
+	pr.why, pr.halvings = why, halvings
+	anchor := r.anchor
+	if anchor == "" {
+		anchor = head
+		if r.open {
+			anchor = r.lo // a tile's lo; ⊥ at the root
+		}
+	}
+	pr.m, pr.found = forwardReflect(anchor, c)
+	if !pr.found && anchor != "" {
+		// An anchor that is not UTF-8 (a first key) measures nothing: the
+		// reflection is taken from ⊥, and the upper child anchors anew.
+		anchor = ""
+		pr.m, pr.found = forwardReflect(anchor, c)
+	}
+	pr.anchor, pr.anchored = anchor, anchor != ""
+	pr.src = srcReflect
+	if bounded && (!pr.found || pr.m >= ceil) {
+		// The midpoint below the ceiling; when it fails too, only a sliver
+		// lies there: the one proof that (c, ceil) holds no pivot.
+		pr.ceiling = pr.found
+		pr.m, pr.src, pr.found = betweenFrom(c, ceil)
+	}
+	if why == extOK {
+		switch {
+		case !pr.found || pr.src == srcSliver || e > pr.m:
+			pr.m, pr.src, pr.found = e, srcDensity, true
+		case e < pr.m && pr.src == srcReflect:
+			pr.shrink = true
+		}
+	}
+	pr.sliver = pr.found && pr.src == srcSliver
+	return pr
+}
+
 // decide runs after a full (continuing) page of r with cursor c: split iff
-// workers are idle (hunger = workers - active - queued > 0) and r ranks
-// among the hunger largest eligible ranges (the open frontier first, then by
-// keys listed). The pivot is the spec's: the safe midpoint of (c, hi], or a
-// forward reflection for the open frontier, refined by the last page's
-// density (see below). On success the two children are
-// reserved in the demand count; the caller then commits the split.
-// commits or releases the split.
-func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m string, extrapolated, ok bool) {
+// workers are idle (hunger = workers - active - queued > 0), r ranks among
+// the hunger largest eligible ranges (the open frontier first, then by
+// estimated remainder), the guard allows the pivot and, for a bounded
+// range, the admission gates do: by the page's gauge the remainder (c, hi]
+// holds at least admitRemainderPages and each child, (c, m] and (m, hi],
+// at least admitChildPages. The pivot is a structure boundary when one is
+// known inside (c, hi), else the proposal's (propose). On success the two
+// children are reserved in the demand count; the caller then commits the
+// split.
+func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivot, ok bool) {
 	p.lock()
 	defer p.unlock()
 	st.continuing = true
@@ -292,7 +516,7 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 	}
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	if p.opt.SplitCoin == nil {
-		if hunger <= 0 {
+		if hunger <= 0 || !pr.ready { // !ready: the demand rose after the page's snapshot
 			p.c.Inc(cSplitSkippedNoDemand)
 			return
 		}
@@ -308,43 +532,61 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 			return
 		}
 	}
-	ceil, bounded := r.hi, !r.open
-	if r.open {
-		ceil, bounded = prefixCeil(p.opt.Prefix)
-	}
+	ceil, bounded := p.ceiling(r)
 	var found, structural bool
-	if p.opt.Structure && !r.open {
+	var m string
+	if p.opt.Structure != StructureOff {
 		p.absorb(st)
 		m, structural = boundary(st.sb, c, r.hi)
+		// On the frontier a folder boundary is taken when it lies further
+		// than the policy's pivot: both are far moves, and the real
+		// boundary's lower child halves on the boundaries it inherits.
+		if structural && r.open && pr.found && !pr.sliver && m <= pr.m {
+			structural = false
+		}
 		found = structural
 	}
-	switch {
-	case structural:
-	case r.open:
-		m, found = forwardReflect(r.lo, c)
-	default:
-		m, found = between(c, r.hi)
-	}
-	if found && m > c && !structural {
-		// Refinement from the page's density (span·max(4, hunger) past the
-		// cursor, at most halfway to hi): taken when it is nearer the cursor
-		// than the spec pivot, or when the spec pivot is within one page span
-		// of the cursor, where its lower child would be empty. The probe
-		// below catches a refinement that overshoots the data.
-		e, eok := extrapolate(page, c, ceil, bounded, int64(max(4, hunger)))
-		one, ook := extrapolate(page, c, ceil, bounded, 1)
-		if eok && c < e && (e < m || (ook && m < one)) {
-			m, extrapolated = e, true
+	if structural {
+		pv.src, pv.anchored = srcStructure, pr.anchored // the chain keeps its anchor either way
+	} else {
+		if pr.why != extOK {
+			p.c.Inc(extRefused[pr.why])
 		}
+		p.c.Add(cGallopHalvings, int64(pr.halvings))
+		if pr.ceiling {
+			p.c.Inc(cReflectCeiling)
+		}
+		if pr.shrink {
+			p.c.Inc(cDensityShrinkPrevented)
+		}
+		if pr.sliver {
+			p.c.Inc(cSplitSliverRefused)
+			return
+		}
+		m, found, pv.src, pv.anchored = pr.m, pr.found, pr.src, pr.anchored
 	}
+	// The upper child keeps the chain's anchor; a chain from ⊥ anchors at
+	// its first pivot; after a reflection reached the ceiling it starts anew.
+	if !pr.ceiling {
+		pv.chain = cmp.Or(pr.anchor, m)
+	}
+	pv.m = m
 	switch guard(c, m, found, ceil, bounded, false, p.safe) {
 	case clauseNoPivot:
 		p.c.Inc(cSplitRejectedNoPivot)
-		st.unsplittable = true
+		// No pivot after a safe cursor is a fact about the interval: a later
+		// cursor only narrows (c, hi]. After an unsafe one it is the
+		// cursor's, as below.
+		if p.safe(c) {
+			st.unsplittable = true
+			p.c.Inc(cUnsplittable)
+		}
 		return
 	case clauseUnsafeCursor:
+		// The cursor cannot be the lower child's start-after: decline this
+		// page's split only. The next page ends at another key, usually a
+		// safe one, and is evaluated afresh.
 		p.c.Inc(cSplitRejectedUnsafeCursor)
-		st.unsplittable = true
 		return
 	case clauseCursor:
 		p.c.Inc(cSplitRejectedCursor)
@@ -359,39 +601,110 @@ func (p *Engine[P]) decide(st *running, r Range, page []string, c string) (m str
 		p.c.Inc(cSplitRejectedDone)
 		return
 	}
+	// Admission (bounded ranges; the frontier's remainder is unbounded, and
+	// a frontier refused for a near pivot would keep its anchor at ⊥ and
+	// could stay unsplit). A refusal declines this page's split only: the
+	// range decides again after its next page, and after admitRefusals
+	// refusals in a row with demand the split is taken: the policy can
+	// propose the same pivot page after page (e11bio-prism: ".../0/1>", in
+	// the gap past ".../0/19..." below hi ".../0/2"), whose upper child the
+	// gauge rightly reads as empty while the lower holds a million keys;
+	// refused for the range's life, they went to one worker (4 to 13 wide).
+	if !r.open {
+		if g := pr.gauge; g == nil {
+			p.c.Inc(cSplitEstimateNone)
+		} else {
+			// Pages as this range's pages come: a provider may return fewer
+			// keys than asked for.
+			page := float64(len(g.page))
+			refuse := counters.ID(0) // the refusing gate; 0 (cObjects) for none
+			switch {
+			case pr.rem < admitRemainderPages*page:
+				refuse = cSplitSkippedRemainder
+			case g.keys(c, m) < admitChildPages*page:
+				refuse = cSplitSkippedLowerTiny
+			case g.keys(m, r.hi) < admitChildPages*page:
+				refuse = cSplitSkippedUpperTiny
+			}
+			switch {
+			case refuse != 0 && st.refused >= admitRefusals:
+				p.c.Inc(cSplitAdmittedPersistent)
+			case refuse != 0:
+				p.c.Inc(refuse)
+				st.refused++
+				return pivot{}, false
+			}
+		}
+	}
+	st.refused = 0
+	if g := pr.gauge; g != nil {
+		pv.lower, pv.upper, pv.estOK = g.keys(c, m), g.keys(m, r.hi), true
+	}
 	// Child-tail floor: the upper child must realize more than two pages.
 	if p.opt.Floors && !r.open {
 		f := pivotFraction(c, m, r.lo, r.hi)
 		if tailBelowFloor(est, f, st.dens.ratio(c, r.lo, r.hi, st.keys), int64(p.opt.PageSize)) {
 			p.c.Inc(cSkippedTailFloor)
-			return "", false, false
+			return pivot{}, false
 		}
 	}
+	p.account(time.Now())
 	p.queued += 2 // the children, reserved until commit hands them out
-	if structural {
-		p.c.Inc(cSplitPivotStructure)
-	}
-	return m, extrapolated, true
+	return pv, true
 }
 
-// commit accepts a decided split: children, counters, boundaries for the
-// journal.
-func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated bool) (lower, upper Range) {
+// pivot is a decided split's pivot m and the synthesis that made it;
+// anchored: the reflection had an anchor; chain: the upper child's anchor.
+type pivot struct {
+	m        string
+	src      pivotSource
+	anchored bool
+	chain    string
+	// lower, upper: the children's estimated keys (estOK: from the page's
+	// gauge), their remainders until their own first pages.
+	lower, upper float64
+	estOK        bool
+}
+
+// commit accepts a decided split: the two children and the counters.
+// Splits are not journaled: a resume restarts above the last published key
+// and splits afresh.
+func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upper Range) {
 	p.lock()
 	defer p.unlock()
-	if extrapolated {
-		p.c.Inc(cSplitExtrapolated)
+	m := pv.m
+	st.split = true
+	switch {
+	case pv.src != srcDensity:
+		p.c.Inc(pivotBy[pv.src])
+	case r.open:
+		p.c.Inc(cSplitPivotDensityFrontier)
+	default:
+		p.c.Inc(cSplitPivotDensityBounded)
 	}
 	if r.open {
 		p.c.Inc(cSplitAcceptedFrontier)
+		if pv.src == srcStructure {
+			p.c.Inc(cStructureFrontierPivots)
+		}
+		if pv.anchored {
+			p.c.Inc(cFrontierAnchored)
+		}
 	} else {
 		p.c.Inc(cSplitAcceptedBounded)
 	}
+	p.c.Max(cGallopMaxGen, int64(r.gen))
 	p.c.Max(cMaxQueued, int64(p.queued))
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower,
-		sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper,
-		sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped}}
+	depth := r.depth + 1
+	p.c.Max(cSplitMaxDepth, depth)
+	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src,
+		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
+	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc,
+		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
+		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
+		stall: stalled(c, m, r, len(p.opt.Prefix))}
+	lower.est, lower.estOK = pv.lower, pv.estOK
+	upper.est, upper.estOK = pv.upper, pv.estOK && !r.open
 	// A resumed range split before its cursor passed the resume key hands
 	// the key on: keys up to it are already published.
 	if r.after > c {
@@ -401,25 +714,47 @@ func (p *Engine[P]) commit(st *running, r Range, c, m string, extrapolated bool)
 		upper.after = r.after
 	}
 	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d\n", r.id, r.lo, c, m, r.hi, r.open, st.keys)
+		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d src=%s depth=%d g=%d anchor=%q\n",
+			r.id, r.lo, c, m, r.hi, r.open, st.keys, pv.src, depth, r.gen, pv.chain)
 	}
 	return lower, upper
 }
 
-// outranks reports whether a is a larger remainder than b: the open
-// frontier first, then more keys listed, then the older range.
+// stalled is the evidence that a bounded chain peels one folder at a time
+// (Range.stall): the pivot m of its split at cursor c stayed inside the
+// cursor's own folder below the scope while hi lies beyond that folder, so
+// the remainder holds folders the pivot could not reach.
+func stalled(c, m string, r Range, floor int) bool {
+	f := folder(c)
+	return !r.open && len(f) > floor && folder(m) == f && !strings.HasPrefix(r.hi, f)
+}
+
+// outranks is a strict total order of remainders, largest first: the open
+// frontier, then bounded ranges whose page could not read their bound
+// (+Inf: a bound in another folder, likely far), then the finite estimates
+// by size; the older range within a class and on ties. It must be
+// transitive: a cycle (by size, then by age across classes) gave every
+// range a rank of one, and with one idle worker none split.
 func outranks(a, b *running) bool {
-	sa, sb := float64(a.keys), float64(b.keys)
-	if a.open {
-		sa = math.Inf(1)
+	if a.open != b.open {
+		return a.open
 	}
-	if b.open {
-		sb = math.Inf(1)
-	}
+	sa, sb := a.remainder(), b.remainder()
 	if sa != sb {
-		return sa > sb
+		return sa > sb // +Inf above every finite estimate
 	}
 	return a.id < b.id
+}
+
+// remainder is the rank's estimate of the keys left in the range: its
+// last page's gauge over (cursor, hi], before that its split's estimate,
+// +Inf on the frontier; without either (a page with no span), the keys it
+// has listed, as a range that has listed k keys is not done.
+func (st *running) remainder() float64 {
+	if math.IsNaN(st.rem) {
+		return float64(st.keys)
+	}
+	return st.rem
 }
 
 type clause uint8

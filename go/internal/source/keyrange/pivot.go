@@ -5,6 +5,7 @@ package keyrange
 
 import (
 	"math/big"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -145,33 +146,57 @@ func with(base []int, cp int) []int {
 
 // between returns a safe key m with a < m < b (valid UTF-8, at most 1024
 // bytes), or ok=false when only a control or non-character sliver lies
-// between them. a must be < b and both valid UTF-8.
+// between them. a must be < b and valid UTF-8; b need not be (validCeil).
 func between(a, b string) (string, bool) {
-	if a >= b || !utf8.ValidString(a) || !utf8.ValidString(b) {
-		return "", false
+	m, _, ok := betweenFrom(a, b)
+	return m, ok
+}
+
+// betweenFrom is between with the synthesis that made m: srcMidpoint for a
+// safe scalar between the keys' first difference, srcSliver for a + " " or
+// capFallback (a pivot just above a).
+func betweenFrom(a, b string) (string, pivotSource, bool) {
+	if !utf8.ValidString(a) {
+		return "", srcBound, false
 	}
-	ca, cb := scalars(a), scalars(b)
+	ca := scalars(a)
+	if !utf8.ValidString(b) {
+		v, ok := validCeil(b)
+		if !ok { // every valid key above a lies below b
+			if m := encode(with(ca, safeHigh)); len(m) <= maxKeyLen {
+				return m, srcMidpoint, true
+			}
+			m, ok := capFallbackAfter(ca)
+			return m, srcSliver, ok
+		}
+		b = v
+	}
+	if a >= b {
+		return "", srcBound, false
+	}
+	cb := scalars(b)
 	i := commonPrefix(ca, cb)
 	if i == len(ca) { // a is a scalar prefix of b
 		if v := safeBetween(below, cb[i]); v != noScalar {
 			if m := encode(with(ca, v)); len(m) <= maxKeyLen {
-				return m, true
+				return m, srcMidpoint, true
 			}
-			return encode(with(ca, minSafe)), true
+			return encode(with(ca, minSafe)), srcSliver, true
 		}
 		if isSafe(cb[i]) && len(cb) > len(ca)+1 {
-			return encode(with(ca, cb[i])), true
+			return encode(with(ca, cb[i])), srcSliver, true // cb[i] is ' ': a + " "
 		}
-		return "", false
+		return "", srcBound, false
 	}
 	if v := safeBetween(ca[i], cb[i]); v != noScalar {
 		if m := encode(with(ca[:i], v)); len(m) <= maxKeyLen {
-			return m, true
+			return m, srcMidpoint, true
 		}
 	} else if m := encode(with(ca, minSafe)); len(m) <= maxKeyLen {
-		return m, true
+		return m, srcSliver, true
 	}
-	return capFallback(ca, b)
+	m, ok := capFallback(ca, b)
+	return m, srcSliver, ok
 }
 
 // capFallback bumps a's right-most bumpable scalar and drops the tail, for
@@ -205,7 +230,10 @@ func capFallbackAfter(cc []int) (string, bool) {
 
 // forwardReflect picks m > c for the open frontier (no upper bound): it
 // reflects the scalar where c leaves lo forward by the distance already
-// covered, snapped up to a safe scalar.
+// covered, snapped up to a safe scalar. The frontier passes its chain's
+// anchor as lo, so the covered distance doubles per split. From ⊥ (lo "")
+// there is no distance at the first scalar, and the last scalar is
+// reflected instead.
 func forwardReflect(lo, c string) (string, bool) {
 	if !utf8.ValidString(c) || !utf8.ValidString(lo) {
 		return "", false
@@ -215,7 +243,7 @@ func forwardReflect(lo, c string) (string, bool) {
 		return "", false
 	}
 	i := commonPrefix(cl, cc)
-	if i >= len(cc) || i == 0 {
+	if i >= len(cc) || len(cl) == 0 {
 		i = len(cc) - 1
 	}
 	jc, jl := idx(cc[i]), -1
@@ -258,6 +286,42 @@ func prefixCeil(p string) (string, bool) {
 	return string(b), true
 }
 
+// validCeil is the least valid UTF-8 string at or above b; ok=false when
+// none exists. For every valid s, s < b exactly when s < validCeil(b), so a
+// bound that is not UTF-8 (prefixCeil("ÿ") is c3 c0) is replaced by it
+// where scalars are synthesized ("Ā" there), and pivots below it are the
+// pivots below b.
+func validCeil(b string) (string, bool) {
+	i := 0
+	for i < len(b) {
+		r, n := utf8.DecodeRuneInString(b[i:])
+		if r == utf8.RuneError && n == 1 {
+			break
+		}
+		i += n
+	}
+	if i == len(b) {
+		return b, true
+	}
+	v, rest := b[:i], b[i:]
+	// rest starts with no scalar's encoding, so the least valid string at
+	// or above it is a single scalar: the least whose encoding sorts there.
+	top := idx(0x10FFFF)
+	if j := sort.Search(top+1, func(j int) bool { return string(rune(cpOf(j))) >= rest }); j <= top {
+		return v + string(rune(cpOf(j))), true
+	}
+	// None: the least valid string above every string with prefix v.
+	cs := scalars(v)
+	for len(cs) > 0 {
+		last := idx(cs[len(cs)-1])
+		cs = cs[:len(cs)-1]
+		if last < top {
+			return encode(with(cs, cpOf(last+1))), true
+		}
+	}
+	return "", false
+}
+
 // extrapolate picks a pivot from the observed key density. Keys are read as
 // numbers in the alphabet seen on the last page (its distinct bytes, all
 // safe ASCII, plus an end-of-string digit below them, which preserves
@@ -267,15 +331,34 @@ func prefixCeil(p string) (string, bool) {
 // alphabet is not safe ASCII, or the result is not a safe key strictly
 // inside (c, hi); the caller then uses between/forwardReflect.
 func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string, bool) {
+	m, why := extrapolateWhy(page, c, hi, bounded, jump)
+	return m, why == extOK
+}
+
+// extReason is why extrapolate refused (extOK: it did not).
+type extReason uint8
+
+const (
+	extOK       extReason = iota
+	extShort              // fewer than 2 keys on the page
+	extAlphabet           // a byte on the page or the cursor is not safe ASCII
+	extZeroSpan           // the page spans no distance in the alphabet's numbers
+	extPastTop            // the target is past the top of the representable keys
+	extHole               // the target has an end-of-string digit inside it: not a string
+	extOutside            // the key is not a safe key strictly inside (c, hi)
+)
+
+// extrapolateWhy is extrapolate with the reason for a refusal.
+func extrapolateWhy(page []string, c, hi string, bounded bool, jump int64) (string, extReason) {
 	if len(page) < 2 {
-		return "", false
+		return "", extShort
 	}
 	var seen [128]bool
 	for _, k := range append(page, c) {
 		for i := 0; i < len(k); i++ {
 			b := k[i]
 			if b >= 0x80 || !isSafe(int(b)) {
-				return "", false
+				return "", extAlphabet
 			}
 			seen[b] = true
 		}
@@ -308,7 +391,7 @@ func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string,
 	vf, _ := value(page[0])
 	span := new(big.Int).Sub(vc, vf)
 	if span.Sign() <= 0 {
-		return "", false
+		return "", extZeroSpan
 	}
 	target := new(big.Int).Add(vc, span.Mul(span, big.NewInt(jump)))
 	if bounded {
@@ -327,7 +410,7 @@ func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string,
 		digits[i] = r.Int64()
 	}
 	if t.Sign() != 0 {
-		return "", false // past the top of the representable keys
+		return "", extPastTop
 	}
 	var m []byte
 	for i := 0; i < n; i++ {
@@ -336,7 +419,7 @@ func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string,
 			cd = rank[c[i]]
 		}
 		if digits[i] == 0 {
-			return "", false // a hole: not a string
+			return "", extHole
 		}
 		m = append(m, alphabet[digits[i]-1])
 		if digits[i] != cd {
@@ -345,7 +428,34 @@ func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string,
 	}
 	key := string(m)
 	if key <= c || len(key) > maxKeyLen || (bounded && key >= hi) {
-		return "", false
+		return "", extOutside
 	}
-	return key, true
+	return key, extOK
+}
+
+// The gallop: the density step's stride, in page spans, is
+// max(gallopMin, hunger) << g, where g counts the consecutive upper
+// children along the range's chain (Range.gen), so a remainder that keeps
+// splitting off its upper side hands out twice as much per round trip, up
+// to the midpoint of (c, hi], instead of peeling the same few pages each
+// time. An unusable target is halved down to gallopMin within the
+// decision.
+const (
+	gallopMin    = 4  // the least stride, in page spans
+	gallopMaxGen = 16 // the generation's clamp
+)
+
+// gallop is the density step with the stride max(gallopMin, hunger) << g,
+// halved down to gallopMin while the target is unusable (past the
+// representable keys, a hole, or outside (c, hi)); halvings counts them.
+func gallop(page []string, c, hi string, bounded bool, hunger int, g uint8) (m string, why extReason, halvings int) {
+	jump := int64(max(gallopMin, hunger)) << min(g, gallopMaxGen)
+	for {
+		m, why = extrapolateWhy(page, c, hi, bounded, jump)
+		if why == extOK || jump <= gallopMin || (why != extPastTop && why != extHole && why != extOutside) {
+			return m, why, halvings
+		}
+		jump = max(gallopMin, jump/2)
+		halvings++
+	}
 }

@@ -158,8 +158,10 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
 - *Retry exhaustion never fails a run.* After its attempts, the client returns a `*client.ExhaustedError`; the
   provider asks the same page again after a jittered backoff (2 s doubling, capped at 60 s), for as long as
   the run lives, and counts `requeues`. Only the command's watchdog decides that a run cannot go on (no
-  progress and no answered request for `--stall-timeout`: exit 75, resumable; `objhttp.Counters.Answered`,
-  through `source.Live`, counts the attempts that returned a usable answer, never a failed one). Every request, including probes and the seed page,
+  progress in key space for `--stall-timeout`: exit 75, resumable; the engine's `Frontier`, through
+  `source.Advancing`, counts the pages that held an entry or ended a chain and empty continuing pages within
+  the first 1,024 of their run, never a failed request; `objhttp.Counters.Answered`, through `source.Live`, is
+  the fallback for a source without it). Every request, including probes and the seed page,
   goes through the same path.
 - *Shared with GCS* (`internal/source/objhttp`): the retry loop (`objhttp.Do`: attempts, backoff, exhaustion),
   the class vocabulary, transport classification, `CredentialError` (an S3 credential refresh that fails is one:
@@ -216,9 +218,9 @@ ListObjectsV2 (`start-after` is exclusive, there is no end bound, so the engine 
 fetch owners), its description adds the client's counters (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), requeues a transient failure whose retries were exhausted, and wraps contract breaks in
 `client.ErrInvalidPage`. `TestDecisionsGolden` (`internal/source/s3`) pins the engine's decisions through
-the S3 adapter: for every fixture and hostile keyspace and six deterministic configurations, a hash of the
+the S3 adapter: for every fixture and hostile keyspace and four deterministic configurations, a hash of the
 covered intervals, the requests sent, the output and the non-zero counters, against
-`testdata/decisions.golden`, which was generated before the engine left the S3 package.
+`testdata/decisions.golden`.
 
 ## GCS (`internal/source/gcs`)
 
@@ -270,7 +272,15 @@ client requests it; scheme and host case are the only equivalence) and the bille
 (`--gcs-user-project` for the built-in client); credentials may change. A run with `--max-keys`, or through a
 supplied client that does not name its route and billed project (`gcs.Routed`), cannot resume.
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
-`parse_failures`) and `end_offset_omitted`.
+`parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
+`Options.Client` that does not report one).
+
+**Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
+transports, one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
+connection only at the server's stream limit (about 100), so a single transport would carry all 64 workers on
+one connection, which caps throughput once the engine keeps many requests in flight
+(`TestTransportPoolSpreadsConnections`). A supplied `Config.HTTPClient` is used alone (a pool of 1). There is
+no flag; the pool follows `--workers`.
 
 ## Range engine (`internal/source/keyrange`)
 
@@ -301,7 +311,7 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 
-The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure`, `Probe`,
+The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
 seed requests ask for it, structure probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
@@ -319,22 +329,104 @@ after `lo`, later pages follow the continuation token. Keys past `hi` are trimme
 whose last key equals `hi` ends the range without another request; a page that is not truncated ends it. A truncated
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
-**Root and seed.** The root is `(⊥, ⊤]`. With `-seed` the root is a seed that emits no rows and tiles the
-scope at cut points `(⊥,c1], …, (ck, ⊤]`. The seed is one delimiter page (`/`, 1,000 entries, never
-paginated): its common prefixes are the cuts, at most `min(1000, 4 × workers)` evenly subsampled
-(`seed.subsampled`), with the closing sentinel `(pk, prefixCeil(pk)], (prefixCeil(pk), ⊤]` when the page was
-complete and ended with its greatest prefix `pk`. Unusable start-after values are dropped (`seed.unsafe`).
+**Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `--seed=false` turns it
+off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points
+`(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, 1,000 entries a page,
+`Probe` set):
+- *Pagination.* The top level follows its continuation token up to 4 pages (`seed.pages`), so a top level of
+  up to about 4,000 folders is tiled whole; past that it is `seed.truncated`. Four pages are already four
+  times the most cuts a seed keeps.
+- *Descent.* While a level holds fewer folders than `--workers`, the next level is listed under every one of
+  them, all at once: one *wave* of independent requests, through the provider's client and admission like
+  any request. Each folder's chain is paginated the same way, one wave per page. The descent stops
+  (`seed.stop.<reason>`) when a level holds at least `--workers` folders (`wide`) or none (`leaf`), or at a
+  budget: 4 levels below the top (`levels`; the single-root date layout
+  `warehouse/events/year=Y/month=M/day=D/` needs four to reach its day folders), 64 requests (`requests`; a
+  level is listed whole or not at all) or 6 round trips (`round_trips`; each wave is one request latency on the
+  run's critical path before any range lists). An empty continuing page that `list` follows by its token is a
+  request and, on its chain, a round trip: the seed charges each one before it is sent (a wave costs its
+  longest chain), and when one would pass a budget the chain stops there, truncated, with that budget's stop
+  reason; without that charge, a delimiter chain behind empty pages would run unbudgeted inside one seed page.
+  Java's serial 256-probe descent spent 13.5 s of a 39 s run on its chain; here a wave sends its requests at once, so the cost is the number of waves: 1 for a wide top level, 2
+  for a narrow one, 5 for the date layout.
+- *Cuts.* Every folder found at every level is a cut (a descended folder stays one, and its children lie
+  inside its tile), sorted, filtered by the provider's bound predicate (`seed.unsafe`) and evenly subsampled to
+  at most `min(1000, 4 × workers)` (`seed.subsampled`). `seed.level.<n>.cuts` counts the folders found at each
+  level, `seed.requests` and `seed.round_trips` what the seed spent, `seed.levels` how deep it went. They are
+  published on every exit: a seed whose listing fails or is canceled counts `seed.stop.failed` and reports
+  what it spent until then, which on a resume can be most of the run.
+- *Sentinel.* When the top level was listed whole and its last page ends with a folder `pk`, the last tiles are
+  `(…, prefixCeil(pk)], (prefixCeil(pk), ⊤]`, so the folder holding the end of the top level is bounded and
+  not the open frontier (a page ending with an object declines it, `seed.sentinel_declined.*`). With the
+  descent, a bucket whose mass sits under its last top-level folder is tiled inside that folder too.
+- *A resumed scope.* After `Restart(K)` the seed tiles `(K, ⊤]` instead: every folder above `K` inside the scope
+  is listed at the top, after `K`'s longest accepted prefix (each lists the siblings after `K`'s branch at its
+  level, so a resume inside one day folder still tiles the rest of the month and year), and only cuts strictly
+  above `K` are kept: a cut at or below `K` would list published keys again, and the drop of keys up to `K`
+  covers only the first tile, `(K, c1]`. An inclusive-start provider returns the folder at or below the bound,
+  which the engine drops (`bound_drops`). `seed.resumed` marks it and `resumed_ranges` counts the tiles.
 
-Swath's hybrid seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classified truncated
-levels, sampled ambiguous folders and cut dense flat folders into radix bands) was ported, measured and
-deleted: no gain on any recording, 30-60 % more requests on the shallow ones ([measurements](../measurements.md#policy-switches)). Git keeps it: `internal/source/keyrange/seedplan.go` and its tests, removed after `ba2abb2`.
+The seed is a serial pre-phase of 1 to 6 waves: on a bucket of a few pages it is paid on the critical path
+for little gain, which is why `--seed=false` remains. The default is measured against `--seed=false` on
+production key lists of 1M objects and more ([measurements](../measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms));
+its cost on a bucket of a few pages is not measured.
+
+The seed only paginates and descends narrow levels, in parallel waves, under fixed budgets. Java swath's hybrid
+seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classifies truncated levels, samples
+ambiguous folders and cuts dense flat folders into radix bands) has no counterpart: measured on the replayed
+recordings it gave no gain on any of them and 30-60 % more requests on the shallow ones
+([measurements](../measurements.md#policy-switches)).
 
 **Splits are owner-side.** A range's children become claimable only when its `Expand` returns, so there are
 no thieves. After each full page the owner takes the provider mutex and computes demand,
-`hunger = workers − active − queued`. If `hunger > 0` and the range ranks among the `hunger` largest eligible
-ranges (open frontier first, then keys listed, then age), it emits `Child((c, m])` and `Child((m, hi])` and
+`hunger = workers − active − queued`. If `hunger > 0`, the range ranks among the `hunger` largest eligible
+ranges, the guards allow the pivot and admission does, it emits `Child((c, m])` and `Child((m, hi])` and
 returns, where `c` is the last key emitted. `(lo, hi] = (lo, c] ∪ (c, m] ∪ (m, hi]`, disjoint and in order.
 Every split feeds an idle worker and no LIST is repeated.
+
+**Admission** (`admission.go`): demand is the only trigger (no rate limit, no feedback loop); what admission
+adds is whether a split is worth its requests. Each child pays a first request, and on S3, which has no end
+bound, a child's last page overfetches up to a page past its `hi`; the split saves at most the page latencies
+the owner would spend on the rest alone. Without the gates a small list splits about once per page and half
+the children come back empty (measured without them on os-climate-physical-risk: 674 splits, 426 empty
+children, 1.82 requests per 1,000 keys). One estimate serves both the rank and the gates:
+- *The gauge.* The keys in an interval `(x, y]` are estimated from the range's last page, from its run of keys
+  under the prefix `x` and `y` share (a page that crosses folders would otherwise measure the density of
+  folder names). Keys are read as numbers in the run's own alphabet: the distinct bytes past the run's shared
+  prefix, a byte outside it rounding up to the next one in it, the end of a key below them all. The run's
+  keys per unit scale the interval. The page's alphabet, not base 256, keeps decimal counters in proportion
+  (base 256 reads a remainder one decimal digit above the page 25 times too long), and a synthesized pivot
+  past the run's digits (`logs/p/00001l` after `logs/p/000019999`) reads as the end of them. Where the run
+  cannot read the interval the estimate is +∞ and no gate engages: no run of two keys under the prefix, or a
+  difference above the run's varying digits at a position whose byte in the run is not one of its digits (a
+  bound in another folder). A folder gap still reads as keys (a page cannot know that a folder ended), so on
+  hierarchical keys the estimate errs long, where the gates stay out of the way.
+- *The gates,* on bounded ranges only, after the guards, in pages of the range's own page length (a
+  provider may return fewer keys than asked): no split when the remainder `(c, hi]` is under 2 pages (the
+  owner lists it in at most two more requests; `split.skipped.remainder`), or when either child, `(c, m]` or
+  `(m, hi]`, is under 1 page (the owner's next request covers a small lower child anyway; a small upper child
+  leaves the lower one nearly the whole remainder, and an empty one overfetches a full page;
+  `split.skipped.lower_tiny`, `split.skipped.upper_tiny`). The frontier's remainder is unbounded, and a
+  frontier refused for a near pivot would keep its anchor at ⊥. A refusal declines that page's split only:
+  the range decides again after its next page (`TestAdmissionRedecides`), and after 4 refusals in a row, each
+  with demand, the next split is taken (`split.admission.overridden`, `TestAdmissionOverride`). The policy can
+  propose one refused pivot page after page: on e11bio-prism the midpoint `…/0/1>` lies in the gap past
+  `…/0/19…` below `hi` `…/0/2`, its upper child is truly empty, and its lower child holds a million keys;
+  refused for the range's life, those went to one worker and the run fell to 4–13 wide (66 s against 7 s on a
+  6M-key slice). A page of fewer than two keys gives no estimate (`split.estimate_none`).
+- *The rank* is by estimated remainder: the open frontier first, then the larger remainder `(c, hi]` by the
+  range's last page, ranges whose page could not read their bound (+∞, a bound in another folder) above every
+  finite estimate, and age within a class and on ties: a strict total order (`TestRank`), as a cyclic one gave
+  every range a rank of one and with one idle worker none split. A child starts with its share of the parent's estimate, `(c, m]` or
+  `(m, hi]`, until its own first page; without either, the keys it has listed. The keys listed alone reset in
+  every child, so a rank by them is a rank by age, blind to an upper child holding most of a remainder.
+
+The pivot is not touched by admission; the gates refuse, they do not move a pivot, and they apply to a
+structure boundary as to the policy's pivot. On the 4.1M-key noaa-nws-fourcastnetgfs-pds list and synthetic
+1-2M-key lists the gates cut requests per 1,000 keys by 2-15 % with no wall increase
+([measurements](../measurements.md#split-admission-on-small-lists)); a flat million-key list ends in about 250
+ranges where it ends in 630-810 without them (`TestAdmissionMillionFlat`). What remains are empty upper children of pivots placed in a folder
+gap (a date's `day=32`-`day=99`, a letter after a counter's digits), which only a structure probe can see.
 
 **Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
 [measurements](../measurements.md#policy-switches)).
@@ -352,55 +444,123 @@ at most 16 pages listed, however deep its keys' shared prefix.
   thinning keyspace (`ρ < 1`) shrinks the credited tail (`split.skipped.tail_floor`).
 The open frontier's remainder is unbounded, so neither gate applies to it.
 
-**Structure probes** (after Swath's thief structure probes; behind `swath diag list --structure`, off by
-default). A bounded range whose cursor has a folder below the scope prefix sends, alongside its next
-page and only while a worker is idle, one delimiter request (`max-keys` 32, start-after the cursor) per
-folder level: the folder where the cursor and `hi` diverge, then the next folder below it on the cursor's
-path. The coarsest level with a folder inside `(c, hi)` gives the range its boundaries. At a later split
-decision, if the result has arrived, the pivot is the median boundary inside `(c, hi)`, or the furthest when
-that level's page was full; the byte pivot is used otherwise. A split never waits for a probe
-(`structure.late` counts decisions taken while one was in flight). A probe still in flight when its range's `Expand` returns is cancelled. Children inherit the boundaries inside
-their bounds, so one probe serves several generations of splits. Eight probes in a row that find no folder
-at any level stop probing in that range (`structure.suppressed`). Swath sends these probes serially, coarse
-to fine, after a 1-key probe found the upper child empty (Java); here the levels go at once and nothing waits.
+**Structure probes** (on their evidence by default; `swath diag list --structure=on` probes every range in a
+folder, `--structure=off`, or `=false`, none; a library caller's zero `Options` has none). A page's density is
+leaf-local and the anchor reflection overshoots into gaps between sparse folder names, so neither can place a
+pivot on a distant folder boundary; a delimiter listing can. A probe is one delimiter request per folder level
+(`max-keys` 32, start-after the cursor), all levels at once, alongside the range's next page, only while a
+worker is idle and with at most one probe in flight per range; it takes its admission permit from the same pool
+as pages. Who probes, and why (`structure.sent.*`):
+- *the open frontier* (`frontier`), while its cursor has a folder below the scope: the scope root and the two
+  folders above the cursor's own (its own folder lists the cursor's siblings, rarely a folder). The furthest
+  boundary of the coarsest level that has any is the frontier's pivot when it lies further than the policy's
+  pivot (`structure.frontier_pivots`); the lower child inherits the other boundaries and halves on them. One
+  probe moves a date-partitioned frontier from `month=01/day=02` to `month=12/`;
+- *a bounded range on evidence of a stall* (`stall`): the split that made it kept its pivot inside the cursor's
+  own folder while `hi` lies beyond that folder, the shape where a chain peels one folder per round trip. Its
+  levels are the folder where the cursor and `hi` diverge, then the next folder below it on the cursor's path.
+  A flat keyspace inside one folder never shows that evidence, since its `hi` shares the cursor's folder;
+- *every bounded range in a folder* with `--structure=on` (`forced`), a diagnostic.
+The coarsest level with a folder inside `(c, hi)` gives the range its boundaries (`structure.boundaries`). At a
+later split decision, if the result has arrived, a bounded range pivots on the median boundary inside
+`(c, hi)`, or the furthest when that level's page was full; the policy's pivot is used otherwise. A split never
+waits for a probe (`structure.late` counts decisions taken while one was in flight). A probe still in flight
+when its range's `Expand` returns is cancelled. Children inherit the boundaries inside their bounds, so one
+probe serves several generations of splits, and they inherit the count of consecutive probes that found no
+folder at any level: eight in a row along a range's ancestry stop probing there and below
+(`structure.suppressed`; `structure.suppressed_inherited` when the eight were all an ancestor's), so a flat
+keyspace pays at most eight probes along any chain.
 
 **Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
-range), `unsafe_cursor` (`c` must be a usable start-after), `cursor` (`m > c`), `bound` (`m < hi`, or below
-`prefixCeil(scope)` on the frontier), `no_pivot` (the owner keeps listing).
+range), `no_pivot` (the owner keeps listing), `unsafe_cursor` (`c` must be a usable start-after), `cursor`
+(`m > c`), `unsafe_pivot` (the provider's `AcceptBound` vetoes `m`), `bound` (`m < hi`, or below
+`prefixCeil(scope)` on the frontier). Each declines only that page's
+split, and the next continuing page is evaluated afresh, except `no_pivot` after a safe cursor: a later cursor only
+narrows `(c, hi]`, so the range stops considering splits (`TestSingleUnsafeCursorDoesNotDisableLaterSplits`: one
+unsafe or vetoed page-ending key among 100,000 still leaves 98 splits). That `no_pivot` is reached only when the
+midpoint `between(c, ceiling)` finds neither a safe scalar nor a sliver, so it is a fact about the interval, never
+a synthesis step that could not run on its inputs (`TestInvalidScopeCeiling`).
 
-**Pivots.** Two steps:
-1. **The spec's pivot is the default:** swath's `ByteMidpoint`, i.e. the safe midpoint of `(c, hi]`, or
-   `ForwardReflect` on the open frontier, with the 1,024-byte cap.
-2. **A density refinement from the last page.** Keys are read as numbers in the alphabet seen on that page.
-   The target is `c + page span × max(4, hunger)`, at most halfway to `hi`, cut after its first character
-   that differs from `c`. It is taken only when it lies between the cursor and the spec pivot (nearer the
-   cursor), or when the spec pivot is within one page span of the cursor. In that second case the spec
-   pivot would leave the lower child empty: reflection from ⊥ moves only the last character.
-The split's demand slot is reserved in the same decision, so concurrent owners do not split for the same idle
-worker. Every pivot is safe (I12).
+**Pivots.** A split waits for a page, so a chain of `d` dependent splits costs at least `d` page latencies:
+the pivot policy is judged by the depth of the split tree it builds (`split.max_depth`), which a balanced tree
+keeps near `log2(pages)`. A pivot that peels a few pages off the cursor and leaves the remainder in the upper
+child makes the depth linear in the range's size. So the pivot is the further of two steps (`propose`):
+1. **The anchor reflection.** Each chain of upper children carries an anchor: on the open frontier a seed or
+   resume tile's `lo`, or, for a chain that started at ⊥, its first pivot (⊥ itself measures nothing); on a
+   bounded chain the first key its first range listed. The cursor is reflected from the anchor at the scalar
+   where they diverge, by `idx(c[i]) − idx(anchor[i])` (`forwardReflect`). The covered distance then doubles
+   per split (δ, 3δ, 7δ, …) and climbs folder levels by itself: from `day=01` the frontier reaches `day=03`,
+   `05`, `09`, then `day=A`, which sorts after `day=31`, and the next month; reflecting from the previous
+   pivot instead would cover one page per split, since the upper child's cursor is one page past it. A
+   reflection at or past the range's ceiling (`hi`, or `prefixCeil(scope)` on the frontier) falls back to the
+   safe midpoint `between(c, ceiling)`, and the upper child starts a new chain measured from its own keys
+   (`split.reflect.ceiling`): the remainder is then shorter than the distance already covered. A ceiling
+   that is not UTF-8 (`prefixCeil("ÿ")` is `c3 c0`) is replaced by the least valid string at or above it
+   (`Ā`), which bounds exactly the same valid keys, so a scope ending in a multi-byte scalar still has a
+   midpoint. An anchor that is not UTF-8 (a first key) measures nothing, and the reflection is taken from ⊥.
+2. **The galloped density step.** Keys are read as numbers in the alphabet seen on the last page (safe ASCII
+   only); the target is `c + page span × (max(4, hunger) << g)`, at most halfway to `hi`, cut after its first
+   character that differs from `c`. `g`, the gallop generation, counts the consecutive upper children along the
+   chain (a lower child is 0, at most 16), so a remainder that keeps splitting hands out twice as much per
+   round trip. A target past the representable keys, with a hole, or outside `(c, hi)` is halved within the
+   decision, down to 4 page spans (`split.gallop.halvings`). The step is leaf-local: one page's span lives in
+   the last folder's digits, so it cannot reach a parent folder; that is the reflection's job. It may move the
+   pivot further than the reflection, never nearer (`split.density.shrink_prevented`), on the frontier and in
+   bounded ranges alike: a nearer pivot would make the frontier crawl one folder per round trip.
+A folder boundary known from a structure probe inside `(c, hi)` takes precedence over both in a bounded range; on
+the frontier it is taken when it lies further. A sliver, the
+only pivot when nothing safe lies between the cursor and the ceiling and the density step is refused
+(`cursor + " "`, or the 1,024-byte cap's bump), leaves the lower child all but certain to be empty: it is
+refused (`split.sliver_refused`). The range is not made unsplittable; it keeps listing and decides again after
+its next page. The split's demand slot is reserved in the same decision, so concurrent owners do not split for
+the same idle worker. Every pivot is safe (I12); `FuzzPropose` checks it over the policy's inputs.
 
-Java's 1-key pivot probe (one `max-keys=1` request after the pivot, moving an empty upper child's pivot
-toward the cursor) was ported behind `-probe` and deleted: on the deep replayed recordings
-([measurements](../measurements.md#policy-switches)) it cost more than the empty children it saved, a serial
-round trip before each split that lowered concurrency: 27–31 % more requests and 2.2–2.3× the wall. Git keeps it (`probe` in `keyrange/parallel.go`, removed after
-`ba2abb2`).
+The pivot is placed outside the decision mutex, from the page and a snapshot of the demand taken with the
+page's bookkeeping: the density step's big-number arithmetic, up to one evaluation per halving, is the costly
+part of a decision. The decision itself (demand, rank, a structure boundary, the guards, the reservation) stays
+under the mutex; a page whose snapshot saw no demand is not split even if demand arose since
+(`split.skipped.no_demand`). Generation and anchor live on the immutable `Range`; nothing persists them (a
+resume starts new chains).
 
-**Why.** Before the probe, the density estimate was the first choice and could reach far past the data on
-skewed shapes. On a replay of noaa-nws-fourcastnetgfs-pds, 1,362 of 2,927 splits left an empty upper child,
-and the run used about 1 of 64 workers (an early build, before the pivot change).
+There is no 1-key pivot probe (Java's `max-keys=1` request after the pivot, moving an empty upper child's
+pivot toward the cursor): on the deep replayed recordings ([measurements](../measurements.md#policy-switches))
+it cost more than the empty children it saved, a serial round trip before each split that lowered
+concurrency: 27–31 % more requests and 2.2–2.3× the wall.
 
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
-(prefixes, cuts, unsafe, subsampled, sentinel and why declined); splits (considered, extrapolated, accepted
-bounded and frontier, rejected per guard clause, skipped for no demand, outranked or not continuing);
-`child_empty.{lower,upper}`; the floors' skips; structure probes and their pivots; `max_active`, `max_queued`, `mean_active`; busy and
-sink-wait time.
+(prefixes, pages, requests, round trips, levels, cuts per level, why it stopped, cuts, unsafe, subsampled,
+sentinel and why declined, resumed); splits (considered, accepted bounded and
+frontier, rejected per guard clause, skipped for no demand, outranked, not continuing, or by an admission
+gate), each accepted
+split's pivot source, the density refinement's refusals by reason; `child_empty.{lower,upper}` and by pivot
+source and kind of `hi`; small children; depth; unsplittable ranges; the floors' skips; structure probes and
+their pivots; `max_active`, `max_queued`, `mean_active`; busy, idle-with-demand and sink-wait time.
+
+**Reading a split chain from the report.** Every accepted split counts one pivot source:
+`split.pivot.reflect` (the anchor reflection), `split.pivot.midpoint` (a safe scalar between the cursor and the
+ceiling, after a reflection reached it), `split.pivot.density.bounded` and `.frontier` (the galloped density
+step lay further), and `split.pivot.structure`. `split.frontier.anchored` counts frontier splits whose chain had
+an anchor, `split.gallop.max_generation` the longest run of upper children that split, and
+`split.reflect.ceiling`, `split.density.shrink_prevented`, `split.gallop.halvings` and `split.sliver_refused` the
+decisions where those rules engaged. When the density step is refused, `split.density.refused.*` says why
+(`alphabet` is a non-ASCII or `%` page: issue-shaped keys turn density off, and only the reflection and the
+midpoint remain). A child carries its parent's pivot source, so an empty child is attributed
+(`child_empty.by.<source>.<lower|upper>`) and classed by its `hi` (`child_empty.hi.pivot`: a pivot; `.bound`: a
+seed cut, the scope's end or ⊤). The chain's length is `split.max_depth`, its mean over the leaves
+`split.leaf_depth_sum` / `split.leaves`; at one page latency per step, depth times `inflight.p50_ns` is a floor
+under the wall time. Children ending under one page (`child_small.*`) and the keys a frontier split handed to
+its lower side (`split.frontier_handout_keys` / `split.accepted_frontier`) show the balance of the splits;
+`idle_demand_ns` is worker time idle while work was wanted, the cost of a policy that cannot hand work out fast
+enough; `split.unsplittable` and `split.unsplittable_keys` are ranges a guard made unsplittable and the keys one
+worker then drained alone. `SWATH_SPLIT_TRACE=1` prints each split with its pivot source, depth, gallop
+generation and the anchor its upper child carries.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** `Restart(K)` makes the root one range `(K, ⊤]`, split as on a fresh run; S3 is
-`source.Resumable` through it ([durability.md](durability.md)).
+**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with the seed it is tiled as above, without it the root is
+one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
 
 ## Registry and optional interfaces
 

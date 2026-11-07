@@ -304,7 +304,8 @@ func sameParts(t *testing.T, at, ref, out string) {
 // return do not. With the limiter at one permit (four workers, three
 // throttle answers first) the root range's first pages come back empty
 // with a continuation for longer than twice the stall timeout before any
-// row: the run completes (before, it stopped as stuck with 75 while the
+// row (--seed=false: the seed would stop following them at its budgets,
+// TestSeedChargesEmptyPages): the run completes (before, it stopped as stuck with 75 while the
 // service answered every request). A source that hangs, or answers only
 // 503, still stops as stuck (durability review).
 func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
@@ -363,7 +364,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
-		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "4",
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "4", "--seed=false",
 			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, &out, true)
 		if m == "healthy" {
 			if err != nil {

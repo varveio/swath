@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/signal"
 	"runtime"
@@ -300,6 +299,7 @@ type options struct {
 	overwrite              bool
 	countOnly              bool
 	reportFormat, report   string
+	cpuProfile, memProfile string // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
@@ -307,7 +307,8 @@ type options struct {
 	spillMax, spillReserve zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
-	sources                map[string]any // each provider's options value, by scheme
+	sources                map[string]any      // each provider's options value, by scheme
+	owners                 map[string][]string // a provider flag's name: the schemes it applies to
 	term                   termOptions
 	format                 string
 	text                   *textout.Config // resolved: a text run's destination
@@ -365,7 +366,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
 	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
 	o.partSize = listing.DefaultPartSize
-	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (suffixes KiB, MiB, GiB, KB, MB, GB)")
+	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
 	o.rowBudget = listing.DefaultRowBudget
 	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
 	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
@@ -401,21 +402,88 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
-	o.sources = map[string]any{}
-	shared := map[string]any{}
+	// owners records which providers each provider flag applies to (the
+	// flags a registration adds), so a flag given for another provider is
+	// refused rather than ignored (foreignFlags).
+	o.sources, o.owners = map[string]any{}, map[string][]string{}
+	shared, groupFlags := map[string]any{}, map[string][]string{}
+	added := func(register func()) []string {
+		before := map[string]bool{}
+		f.VisitAll(func(fl *flag.Flag) { before[fl.Name] = true })
+		register()
+		var names []string
+		f.VisitAll(func(fl *flag.Flag) {
+			if !before[fl.Name] {
+				names = append(names, fl.Name)
+			}
+		})
+		return names
+	}
 	for _, p := range registry.Factories() {
 		var g any
 		if p.Shared != "" {
 			var ok bool
 			if g, ok = shared[p.Shared]; !ok {
-				g = p.SharedFlags(f, diag)
+				groupFlags[p.Shared] = added(func() { g = p.SharedFlags(f, diag) })
 				shared[p.Shared] = g
 			}
+			for _, n := range groupFlags[p.Shared] {
+				o.owners[n] = append(o.owners[n], p.Scheme)
+			}
 		}
-		o.sources[p.Scheme] = p.Flags(f, diag, g)
+		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, g) }) {
+			o.owners[n] = append(o.owners[n], p.Scheme)
+		}
 	}
 	f.SetOutput(io.Discard)
 	return f
+}
+
+// nonNegativeDurations refuses a negative value of any duration flag given
+// (the command's and every provider's): a negative deadline or timeout
+// would otherwise read as "off". Zero keeps its documented meaning.
+func nonNegativeDurations(f *flag.FlagSet) (err error) {
+	f.Visit(func(fl *flag.Flag) {
+		g, ok := fl.Value.(flag.Getter)
+		if !ok {
+			return
+		}
+		if d, ok := g.Get().(time.Duration); ok && d < 0 && err == nil {
+			err = fmt.Errorf("--%s %s: negative", fl.Name, d)
+		}
+	})
+	return err
+}
+
+// foreignFlags refuses a provider flag given explicitly for a root of
+// another provider (gs://... --anonymous: S3's flag, which GCS would
+// ignore; GCS's is --gcs-anonymous). A root no provider takes is left to
+// the lookup's own refusal.
+func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
+	pf, lerr := registry.Lookup(root)
+	if lerr != nil {
+		return nil
+	}
+	f.Visit(func(fl *flag.Flag) {
+		own, ok := owners[fl.Name]
+		if !ok || slices.Contains(own, pf.Scheme) || err != nil {
+			return
+		}
+		names := make([]string, len(own))
+		for i, s := range own {
+			names[i] = schemeName(s)
+		}
+		err = fmt.Errorf("--%s applies to %s sources, not to %s", fl.Name, strings.Join(names, " and "), schemeName(pf.Scheme))
+	})
+	return err
+}
+
+// schemeName names a provider by its root form.
+func schemeName(scheme string) string {
+	if scheme == "" {
+		return "local"
+	}
+	return scheme + "://"
 }
 
 // rateFitsStall refuses a --request-rate whose spacing between attempts
@@ -448,9 +516,14 @@ func usage(w io.Writer, f *flag.FlagSet, diag bool) {
 	}
 	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
 	fmt.Fprintln(w)
-	f.SetOutput(w)
+	// PrintDefaults indents each usage with four spaces and a tab; eight
+	// spaces look the same and leave no space before a tab in the
+	// generated docs/cli.md.
+	var defaults strings.Builder
+	f.SetOutput(&defaults)
 	f.PrintDefaults()
 	f.SetOutput(io.Discard)
+	fmt.Fprint(w, strings.ReplaceAll(defaults.String(), "\n    \t", "\n        "))
 	fmt.Fprintln(w, "\nswath resume DIR [--workers N ...] continues an interrupted run with its recorded command;")
 	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" (runtime) and")
 	fmt.Fprintln(w, strings.Join(operationalFlags, ", ")+" (operational) may change.")
@@ -488,6 +561,12 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	case o.reportFormat != "text" && o.reportFormat != "json":
 		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
 	}
+	if err := nonNegativeDurations(f); err != nil {
+		return o, "", usageError{err}
+	}
+	if err := foreignFlags(f, o.owners, root); err != nil {
+		return o, "", usageError{err}
+	}
 	if err := rateFitsStall(f, o.stall); err != nil {
 		return o, "", usageError{err}
 	}
@@ -504,7 +583,14 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	if err != nil {
 		return o, "", usageError{err}
 	}
-	if o.text = text; text != nil && text.Path == "" {
+	o.text = text
+	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
+		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset) or --count-only: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
+	}
+	if err := checkSidePaths(&o); err != nil {
+		return o, "", usageError{err}
+	}
+	if text != nil && text.Path == "" {
 		text.Stdout = stdout
 		if o.reportFormat == "json" {
 			return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
@@ -557,7 +643,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
 	}
-	stopProfile, err := profile()
+	stopProfile, err := profile(o.cpuProfile, o.memProfile)
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, err)
 	}
@@ -677,10 +763,20 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if t := sum.Output.Text; t != nil {
 		parts, outBytes = 1, t.Bytes // one text file
 	}
-	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%.2fs sys=%.2fs peak_rss=%.1fMiB max_buffered=%d\n",
+	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%s sys=%s peak_rss=%s max_buffered=%d\n",
 		sum.Output.RowsListed, parts, outBytes, float64(sum.Timings.WallMs)/1000,
-		float64(sum.Timings.UserCPUMs)/1000, float64(sum.Timings.SysCPUMs)/1000, float64(sum.Resources.PeakRSSBytes)/(1<<20), sum.Resources.MaxBufferedBytes)
+		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
+		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"), sum.Resources.MaxBufferedBytes)
 	return nil
+}
+
+// measured formats a measurement divided by unit, or "-" where the
+// platform did not measure it.
+func measured(v *int64, unit float64, format string) string {
+	if v == nil {
+		return "-"
+	}
+	return fmt.Sprintf(format, float64(*v)/unit)
 }
 
 // explain adds command-line advice to the errors a user can act on; the
@@ -691,6 +787,10 @@ func explain(err error) error {
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
+	case errors.Is(err, dataset.ErrPartLimit):
+		return fmt.Errorf("%w (the published parts stay, but a resume would stop at the same limit: start over with --overwrite and a larger --part-size, or without --part-rotation-max-rows)", err)
+	case errors.Is(err, listing.ErrUnsafeLayout):
+		return fmt.Errorf("%w (refused before swath created, renamed or removed anything through that path; parts, journal and suspects are as they were, and the outcome is in the report, and in error.json when swath could take the output lock to settle it (a refused workspace or journal can leave error.json as it was, so --report carries the refusal); inspect the output, or start over with swath list --overwrite)", err)
 	case errors.Is(err, listing.ErrInterrupted):
 		return fmt.Errorf("%w (swath resume DIR continues it; --overwrite starts over)", err)
 	case errors.Is(err, dataset.ErrNotEmpty):
@@ -705,12 +805,13 @@ func explain(err error) error {
 	return err
 }
 
-// profile starts the CPU profile and arranges the allocation profile named
-// by the environment, for development.
-func profile() (stop func(), err error) {
+// profile starts the CPU profile and arranges the allocation profile, the
+// files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths
+// resolved them), for development.
+func profile(cpu, mem string) (stop func(), err error) {
 	stops := []func(){}
-	if path := os.Getenv("SWATH_CPUPROFILE"); path != "" {
-		f, err := os.Create(path)
+	if path := cpu; path != "" {
+		f, err := createNoFollow(path)
 		if err != nil {
 			return nil, err
 		}
@@ -719,10 +820,10 @@ func profile() (stop func(), err error) {
 		}
 		stops = append(stops, func() { pprof.StopCPUProfile(); f.Close() })
 	}
-	if path := os.Getenv("SWATH_MEMPROFILE"); path != "" {
+	if path := mem; path != "" {
 		runtime.MemProfileRate = 64 << 10
 		stops = append(stops, func() {
-			if f, err := os.Create(path); err == nil {
+			if f, err := createNoFollow(path); err == nil {
 				_ = pprof.Lookup("allocs").WriteTo(f, 0)
 				f.Close()
 			}
@@ -735,7 +836,21 @@ func profile() (stop func(), err error) {
 	}, nil
 }
 
-// size is a byte count flag accepting binary and decimal suffixes.
+// createNoFollow creates or truncates the profile file path, refusing a
+// symbolic link at its name (the Lstat; on Unix O_NOFOLLOW too, so a link
+// planted after the Lstat fails the open): checkSidePaths checked where the
+// link pointed then, and a link is not followed to where it points now.
+// The report needs no such open: dataset.Replace renames a temporary file
+// over the name, which replaces a link there and never writes its target.
+func createNoFollow(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symbolic link: a profile is not written through one", path)
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNoFollow, 0o644)
+}
+
+// size is a byte count flag, positive, parsed as the size filters are
+// (filter.ParseSize: binary units, any case, an exact decimal quantity).
 type size int64
 
 // zsize is a size that may also be 0 (off).
@@ -744,35 +859,25 @@ type zsize size
 func (s *zsize) String() string { return (*size)(s).String() }
 
 func (s *zsize) Set(v string) error {
-	if strings.TrimSpace(v) == "0" {
-		*s = 0
-		return nil
+	n, err := filter.ParseSize(v)
+	if err != nil {
+		return err
 	}
-	return (*size)(s).Set(v)
+	*s = zsize(n)
+	return nil
 }
 
 func (s *size) String() string { return strconv.FormatInt(int64(*s), 10) }
 
 func (s *size) Set(v string) error {
-	units := []struct {
-		suffix string
-		mult   int64
-	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"B", 1}}
-	mult := int64(1)
-	for _, u := range units {
-		if n, ok := strings.CutSuffix(v, u.suffix); ok {
-			v, mult = n, u.mult
-			break
-		}
+	n, err := filter.ParseSize(v)
+	if err != nil {
+		return err
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-	if err != nil || n <= 0 {
-		return fmt.Errorf("invalid size %q", v)
+	if n <= 0 {
+		return fmt.Errorf("invalid size %q: must be positive", v)
 	}
-	if n > math.MaxInt64/mult {
-		return fmt.Errorf("invalid size %q: too large", v)
-	}
-	*s = size(n * mult)
+	*s = size(n)
 	return nil
 }
 

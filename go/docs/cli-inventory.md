@@ -51,7 +51,7 @@ decision to add it later).
 | `last_modified` `...Z` with 0, 3 or 6 fraction digits | `LastModified` as the AWS CLI prints it: `+00:00`, 6 fraction digits only when not zero | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
 | TSV/table escaping: a control byte as `\xNN`, backslash unescaped | JSON's string escapes (`\\ \b \f \n \r \t \u00xx`) in all three formats | renamed | 2026-11-06 (owner: text output in the shapes people already know): reversible (the old rule was not: a key containing `\x09` read back as a tab) and one rule instead of two |
 | Table: size in 14, time in 24, key | the `aws s3 ls` line: `YYYY-MM-DD HH:MM:SS`, size in 10, key (UTC) | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
-| `--format discard` | `--count-only` | renamed | – |
+| `--format discard` | `--count-only` (rows counted as they arrive, never ordered, buffered or spilled) | renamed | – |
 | `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o`: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
 | `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
@@ -108,7 +108,7 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | `--max-duration DURATION` (exit 124, resumable) | `--max-duration` (0: none; exit 124, resumable) | kept | – |
-| `--idle-timeout` (120 s, no activity) | `--stall-timeout` (10 min, no progress and no answered request) | renamed | one watchdog owns liveness, 2026-11-05 |
+| `--idle-timeout` (120 s, no activity) | `--stall-timeout` (10 min, no progress in key space; an empty continuing page counts within the first 1,024 of its run) | renamed | one watchdog owns liveness, 2026-11-05 |
 | `--no-progress-timeout` (10 min, no committed progress) | `--stall-timeout` | renamed | one watchdog owns liveness, 2026-11-05 |
 | `--object-listing-queue-size N` (50,000 entries) | `--row-budget` (bytes of rows in flight, default 128 MiB) | renamed | one byte budget instead of the weighted channel, 2026-11-05; `--memory` (twice the row budget) renamed 2026-11-06 to name what it bounds |
 
@@ -158,7 +158,7 @@ decision to add it later).
 | 1: unexpected failure; resumable sorted-disk guard (`sort_disk_exhausted`) | 1 `fatal` (not resumable) or `incomplete` (partial coverage); a full disk is 74 | kept | – |
 | 2: bad argument, URI, config, changed resume identity, guarded output refusal | 2 `usage` (malformed command line, unknown scheme) or `refused` (guarded output refusal, changed resume identity, nothing to resume) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `309e562`) |
 | 74: output filesystem full | 74 `disk_full`, cause `no_space`, resumable (a part, the journal or the manifest) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `0f5fb48`) |
-| 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows` | kept (causes renamed) | – |
+| 75: stuck, resumable; `error_class` `stuck_api_timeouts`, `stuck_throttle`, `stuck_unknown` | 75 `stuck`, resumable; `cause` `stuck_timeouts`, `stuck_throttle`, `stuck_no_rows`, `stuck_empty_chain` | kept (causes renamed) | `stuck_empty_chain` added 2026-11-06 (review R3): Java rejects a continuing empty page at once; Go follows them, bounded |
 | 124: `--max-duration` elapsed | 124 `deadline` | kept | – |
 | 130: SIGINT | 130 `interrupted` | kept | – |
 | 143: SIGTERM | 143 `terminated` | kept | – |
@@ -173,8 +173,9 @@ decision to add it later).
 | `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q`, `--quiet` (no warnings, no automatic progress or statistics); `-qq` also no error line | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
-| `--tune KEY=VALUE` (non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`seed.mode`, `summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
+| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
+| `--tune seed.mode=none\|shallow` | `--seed=false`, `--seed` (on by default) | renamed | – |
+| `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |
 | Stuck: a snapshot of thread stacks and in-flight counts to the log before interrupting | goroutine stacks and progress counts to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt`, else stderr | kept | – |

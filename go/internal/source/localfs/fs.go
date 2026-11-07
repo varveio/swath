@@ -206,8 +206,11 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		}
 		// The child is taken from the row before the rows are handed over:
 		// the emitter owns them then, and a filter may clear the DIR row.
+		// The key is a view of the directory's key arena: the child's
+		// prefix is a copy, so a queued subdirectory does not keep its
+		// parent's names alive.
 		key := row.Key
-		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: key}
+		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
 		if err := e.Rows(rows[start:end]); err != nil {
 			return err
 		}

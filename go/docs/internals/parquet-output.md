@@ -35,8 +35,9 @@ per invocation, and `started`; `error.json` carries the same, so a reader holdin
 `invocation` (argv, source, output, schema, workers, encoders, row budget and part size), `outcome` (`committed`,
 `listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
 `exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md), and `unrecorded`: why `error.json` does not hold this outcome, when it does not), `timings` (timestamps and
-integer `*_ms` durations, wall, listing, user and system CPU), `output` (rows this invocation listed, rows
-retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (peak RSS,
+integer `*_ms` durations, wall, listing, user and system CPU; the CPU times, like peak RSS, are optional: present
+where the platform measures them, `resources.rusage_available` false and all three left out where it does not), `output` (rows this invocation listed, rows
+retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (`rusage_available` and, where true, peak RSS,
 row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under
 its name: `s3`, `local`; requests and attempts are this invocation's). It is operational: written after the
 commit (a failure to write it is a warning, the dataset stands) and never part of acceptance, which reads the
@@ -61,22 +62,28 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
   parts are all closed by time keeps the 0.1 estimate). Its measured ratio is frozen (the journal records it); every later part is cut at
   `PartSize / ratio`. Without the interval that is part 0. A part the interval closed small does not
   calibrate: its encoded size is more footer, and its ratio would freeze a limit far below the part size
-  for the whole run and its resumes (`TestTimeCutPartDoesNotCalibrate`: 546 parts against a clean run's 12
-  before; now at most the clean run's count plus the parts the interval closed, plus two).
+  for the whole run and its resumes (`TestTimeCutPartDoesNotCalibrate`: such a ratio cut 546 parts where a
+  clean run cuts 12; the test allows at most the clean run's count plus the parts the interval closed, plus two).
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 
 The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
 part interval cuts (below).
 
+**The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. The router refuses to open part 100,000
+(`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
+journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
+(`TestRouterRefusesPartPastLimit`). `dataset.PartOrdinal` refuses a six-digit name.
+
 **The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) bounds the
 age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
 and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
-whole part's worth (the default is Java's rotation interval, 30 s; a cut part can be far below its target
-size). The order stage hands on its batch before the drainer waits on the frontier, so the
+whole part's worth. It bounds the frontier's age only: rows listed past the frontier (buffered, spilled, or in
+parts not yet recorded) are lost and relisted whatever the interval ([durability.md](durability.md)). The
+default is Java's rotation interval, 30 s; a cut part can be far below its target size. The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
-the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (a negative
-value), boundaries depend only on the rows and the byte-identity guarantees above hold
+the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (zero;
+`--part-interval` refuses a negative value), boundaries depend only on the rows and the byte-identity guarantees above hold
 (`TestIntervalClosesAnAgedPart`, `TestPartIntervalBoundsRecoveryPointAge`: a 2 s trickle keeps the recovery
 point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a
 claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at the claimed part's row count
@@ -111,7 +118,8 @@ cancellation removes the unpublished parts and writes no manifest.
 
 ```text
 out/
-  data/part-00000.parquet ...   dense, zero-based %05d; name order == key order; parts strictly disjoint
+  data/part-00000.parquet ...   dense, zero-based, five digits (at most 100,000 parts); name order == ordinal
+                                order == key order (the manifest's part list is the order); parts strictly disjoint
   manifest.json                 format 2: source, scope, coverage, ordered parts with exact bounds (the commit)
   run.json                      the run report (operational, written after the commit)
   error.json                    the outcome of a run that did not complete (removed when one completes)

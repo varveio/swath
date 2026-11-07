@@ -58,7 +58,7 @@ func TestRetriesAndThrottles(t *testing.T) {
 		t.Fatalf("%+v", pg)
 	}
 	got := c.Counters()
-	got.InflightMax, got.InflightNs = 0, 0
+	got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
 	if got != (Counters{Attempts: 4, Retries: 3, Throttles: 1}) {
 		t.Fatalf("%+v", got)
 	}
