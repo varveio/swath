@@ -251,7 +251,8 @@ type report struct {
 	TokenBytes []string `json:"token_byte_differences,omitempty"`
 	// Residuals are the documented differences the driver sends anyway so
 	// they stay visible (Compare "residual"), with what each server
-	// answered; they are neither passes nor failures.
+	// answered. They are not in Compared, Passed or Failed; a residual
+	// request that gets no answer is a failure, not a residual.
 	Residuals []string `json:"documented_residuals,omitempty"`
 	Results   []result `json:"results"`
 }
@@ -398,16 +399,11 @@ func (d *driver) compareOne(r request) (*response, diff, error) {
 }
 
 // noteResidual records what the two servers answered to a documented
-// residual.
-func (d *driver) noteResidual(name string, df diff, err error) {
+// residual. It is neither compared, passed nor failed.
+func (d *driver) noteResidual(name string, df diff) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	switch {
-	case err != nil:
-		d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: %v", name, err))
-	default:
-		d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: reference %d, go %d", name, df.Status[0], df.Status[1]))
-	}
+	d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: reference %d, go %d", name, df.Status[0], df.Status[1]))
 }
 
 // narrow applies a request's Compare mode to a verdict: "headers" sets the
@@ -455,12 +451,15 @@ func (d *driver) runCases(kind string, cases []request) {
 					}
 					res := result{Kind: kind, Name: c.Name, Method: c.Method, Target: d.got.url(d.o.bucket, c)}
 					a, df, err := d.compareOne(c)
-					if c.Compare == "residual" {
-						// A documented difference: shown in the report,
-						// never counted as a failure.
-						d.noteResidual(c.Name, df, err)
-						res.Pass = true
-					} else if err != nil {
+					if c.Compare == "residual" && err == nil {
+						// A documented difference: listed with what each
+						// server answered, outside the verdict counts. A
+						// transport error is not a documented residual: it
+						// falls through and fails the run.
+						d.noteResidual(c.Name, df)
+						continue
+					}
+					if err != nil {
 						res.Error = err.Error()
 					} else {
 						res.Pass, res.diff = df.OK, &df
@@ -672,7 +671,8 @@ func (d *driver) write() error {
 	for _, s := range rep.Residuals {
 		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped))
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
+		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
 	os.Stdout.Write(text.Bytes())
 	if d.o.report != "" {
 		j, err := json.MarshalIndent(rep, "", " ")
