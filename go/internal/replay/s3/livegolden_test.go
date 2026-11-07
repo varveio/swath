@@ -490,10 +490,10 @@ func TestLiveErrorDocuments(t *testing.T) {
 		{"GET", "/bkt", "list-type=2&start-after=a%00b", invalid(null, "key-marker", "a&#0;b")},
 		{"GET", "/bkt", "list-type=2&start-after=a%00%01%3C", invalid(null, "key-marker", "a&#0;&#1;&lt;")},
 		{"GET", "/bkt", "list-type=2&start-after=a%00&encoding-type=url", invalid(null, "key-marker", "a&#0;")},
-		{"GET", "/swath-no-such-bucket-b11-zq9x7", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
-			"<BucketName>swath-no-such-bucket-b11-zq9x7</BucketName>" + tail},
-		{"GET", "/swath-no%2Dsuch-b11", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
-			"<BucketName>swath-no-such-b11</BucketName>" + tail},
+		{"GET", "/no-such-bucket-zq9x7", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
+			"<BucketName>no-such-bucket-zq9x7</BucketName>" + tail},
+		{"GET", "/no%2Dsuch-bucket", "list-type=2", "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>" +
+			"<BucketName>no-such-bucket</BucketName>" + tail},
 		{"PATCH", "/bkt", "list-type=2", "<Error><Code>MethodNotAllowed</Code><Message>The specified method is not allowed against this resource.</Message>" +
 			"<Method>PATCH</Method><ResourceType>BUCKET</ResourceType>" + tail},
 	} {
