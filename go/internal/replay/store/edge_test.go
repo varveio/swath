@@ -66,8 +66,12 @@ func TestDisorderReasonMatchesJava(t *testing.T) {
 		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) || !errors.Is(err, sortedparquet.ErrCorrupt) {
 			t.Fatalf("%s: %v (reason %q)", how, err, Refusal(err))
 		}
-		if filepath.Base(disorder.Part) != "part-00001.parquet" || disorder.RowGroup != 0 || disorder.Row != 2 {
-			t.Fatalf("%s: located at %s group %d row %d", how, disorder.Part, disorder.RowGroup, disorder.Row)
+		if filepath.Base(disorder.Part) != "part-00001.parquet" || disorder.RowGroup != 0 || disorder.Row != 2 || string(disorder.Key) != "b" {
+			t.Fatalf("%s: located at %s group %d row %d key %q", how, disorder.Part, disorder.RowGroup, disorder.Row, disorder.Key)
+		}
+		// The replay server's detail text, byte for byte: the key in hex.
+		if want := "its keys must be in strictly ascending unsigned order, but row 2 (62) is at or below its predecessor"; disorder.Detail != want {
+			t.Fatalf("%s: detail %q, want %q", how, disorder.Detail, want)
 		}
 	}
 	_, err := s.Rows(context.Background(), nil, true, nil, 10, Projection{})
