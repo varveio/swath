@@ -63,6 +63,12 @@ type options struct {
 	random, parallel, walkLimit, maxPrefixes, maxTop               int
 	seed                                                           uint64
 	acceptSegments                                                 bool
+	livePrefix, stableBefore, gcsMeta                              string
+	liveScripted                                                   bool
+	liveWalkPages                                                  int
+	capture                                                        string
+	maskMetadata                                                   bool
+	pins                                                           string
 }
 
 func main() {
@@ -76,7 +82,16 @@ func main() {
 	flag.StringVar(&o.javaArgs, "java-args", "--parquet-connections 2", "extra serve flags for the Java server")
 	flag.StringVar(&o.goArgs, "go-args", "--parquet-connections 2", "extra serve flags for the Go server")
 	flag.StringVar(&o.report, "report", "", "write the JSON report here and the text summary next to it (.txt)")
-	flag.StringVar(&o.live, "live-endpoint", "", "compare with live S3 at this virtual-host endpoint instead of Java")
+	flag.StringVar(&o.live, "live-endpoint", "", "compare with the live provider at this endpoint instead of Java: "+
+		"https://s3.REGION.amazonaws.com (path-style) or https://BUCKET.s3.REGION.amazonaws.com for S3, https://storage.googleapis.com for GCS")
+	flag.StringVar(&o.livePrefix, "live-prefix", "", "live: the scope every request stays under (the fixture's recorded prefix)")
+	flag.StringVar(&o.stableBefore, "live-stable-before", "", "live: refuse to run unless every fixture name under the scope was modified before this RFC 3339 time")
+	flag.StringVar(&o.gcsMeta, "gcs-metadata", "auto", "live gcs: compare item metadata as native (exact) or synthetic (masked); auto reads the fixture")
+	flag.BoolVar(&o.liveScripted, "live-scripted", false, "live: also send the driver's own scripted matrix")
+	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
+	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
+	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
+	flag.IntVar(&o.liveWalkPages, "live-walk-pages", 300, "live: walk a prefix at a page size only when the walk takes at most this many pages")
 	flag.StringVar(&o.dumpTSV, "dump-tsv", "", "write the reference listing as a TSV fixture here and exit")
 	flag.StringVar(&o.logDir, "log-dir", os.TempDir(), "where the servers' stderr logs go")
 	flag.StringVar(&o.walkSizes, "walks", "1,7,1000", "page sizes of the token walks; empty for none")
@@ -141,6 +156,11 @@ func (t *target) do(bucket string, r request) (*response, error) {
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
+	if len(resp.TransferEncoding) > 0 {
+		// The framing Go's client lifts out of the header map, put back
+		// for the live modes' header classification.
+		resp.Header["Transfer-Encoding"] = []string{strings.Join(resp.TransferEncoding, ", ")}
+	}
 	return &response{Status: resp.StatusCode, Header: resp.Header, Body: body}, err
 }
 
@@ -225,6 +245,9 @@ type result struct {
 	// answer had none, keeps it out of the results: it was not sent, and
 	// the report lists it under skipped, neither passed nor failed.
 	Skipped string `json:"skipped,omitempty"`
+	// Pinned marks a live difference that reproduces, message for
+	// message, the mismatch the provider evidence pins for its case.
+	Pinned bool `json:"pinned_mismatch,omitempty"`
 	*diff
 }
 
@@ -258,10 +281,29 @@ type report struct {
 	// answered. They are not in Compared, Passed or Failed; a residual
 	// request that gets no answer is a failure, not a residual.
 	Residuals []string `json:"documented_residuals,omitempty"`
-	Results   []result `json:"results"`
+	// Scope, Newest and Coverage are the live modes': the prefix every
+	// request stayed under, the newest modification time the fixture
+	// holds there, and each provider matrix case with its query or why it
+	// was not sent.
+	Scope    string   `json:"scope,omitempty"`
+	Newest   string   `json:"newest_modified,omitempty"`
+	Coverage []string `json:"coverage,omitempty"`
+	Results  []result `json:"results"`
 }
 
 func run(o options) error {
+	if o.capture != "" {
+		return runCapture(o)
+	}
+	if o.live != "" && o.dumpTSV == "" {
+		if o.walkSizes == "1,7,1000" {
+			o.walkSizes = "7,1000"
+		}
+		if o.walkLimit == 0 {
+			o.walkLimit = 2000 // a role bound to a large directory walks at most this far
+		}
+		return runLive(o)
+	}
 	if o.protocol == "gcs" {
 		return runGCS(o)
 	}
@@ -281,8 +323,7 @@ func run(o options) error {
 	var ref *target
 	var comp comparator = bytesComparator{}
 	if o.live != "" {
-		ref = &target{name: "live", base: strings.TrimSuffix(o.live, "/"), vhost: true, client: client}
-		comp = liveComparator{}
+		ref = &target{name: "live", base: strings.TrimSuffix(o.live, "/"), vhost: true, client: liveClient(o.parallel)}
 	} else {
 		java, err := startServer(ctx, "java", o.java, serveArgs(o.fixture, o.bucket, o.javaArgs), filepath.Join(o.logDir, "replaydiff-java.log"))
 		if err != nil {
@@ -318,18 +359,8 @@ func run(o options) error {
 		rep.Seconds = time.Since(rep.Started).Seconds()
 		return d.write()
 	}
-	cases := append(s3Matrix(keys, rng, o.maxPrefixes), s3DivergenceCases(keys)...)
-	if o.live != "" {
-		live := cases[:0]
-		for _, c := range cases {
-			if c.Live {
-				live = append(live, c)
-			}
-		}
-		cases = live
-	}
-	d.runCases("case", cases)
-	if o.live == "" {
+	d.runCases("case", append(s3Matrix(keys, rng, o.maxPrefixes), s3DivergenceCases(keys)...))
+	{
 		var sizes []int
 		for _, s := range strings.Split(o.walkSizes, ",") {
 			if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > 0 {
@@ -642,7 +673,23 @@ func (d *driver) write() error {
 		}
 		kinds[r.Kind] = k
 	}
-	for _, kind := range []string{"case", "walk", "random"} {
+	if rep.Coverage != nil {
+		sent := 0
+		for _, c := range rep.Coverage {
+			if strings.Contains(c, ": sent ") {
+				sent++
+			}
+		}
+		fmt.Fprintf(&text, "  scope %q (newest name modified %s): %d of %d provider matrix cases sent\n", rep.Scope, rep.Newest, sent, len(rep.Coverage))
+		for _, c := range rep.Coverage {
+			if !strings.Contains(c, ": sent ") {
+				fmt.Fprintf(&text, "  NOT SENT %s\n", c)
+			} else if strings.Contains(c, " [reduced shape: ") {
+				fmt.Fprintf(&text, "  REDUCED SHAPE %s\n", c)
+			}
+		}
+	}
+	for _, kind := range []string{"provider", "case", "walk", "random"} {
 		if k, ok := kinds[kind]; ok {
 			fmt.Fprintf(&text, "  %-6s %6d passed %6d failed\n", kind, k[0], k[1])
 		}
@@ -655,7 +702,11 @@ func (d *driver) write() error {
 		if r.Pass {
 			continue
 		}
-		fmt.Fprintf(&text, "FAIL %s %q %s %s", r.Kind, r.Name, r.Method, r.Target)
+		pinned := ""
+		if r.Pinned {
+			pinned = " PINNED"
+		}
+		fmt.Fprintf(&text, "FAIL%s %s %q %s %s", pinned, r.Kind, r.Name, r.Method, r.Target)
 		if r.FailAt > 0 {
 			fmt.Fprintf(&text, " (page %d)", r.FailAt)
 		}
@@ -692,6 +743,9 @@ func (d *driver) write() error {
 		fmt.Fprintf(&text, "%d documented divergences (answered as live S3), %d requests whose answers differ only in token bytes\n",
 			len(rep.Divergences), len(rep.TokenBytes))
 	}
+	if pinned := countPinned(rep.Results); pinned > 0 {
+		fmt.Fprintf(&text, "%d of the %d differences reproduce the provider evidence's pinned mismatch for their case\n", pinned, rep.Failed)
+	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals\n",
 		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped), len(rep.Residuals))
 	os.Stdout.Write(text.Bytes())
@@ -711,4 +765,14 @@ func (d *driver) write() error {
 		return fmt.Errorf("%d differences", rep.Failed)
 	}
 	return nil
+}
+
+func countPinned(rs []result) int {
+	n := 0
+	for _, r := range rs {
+		if r.Pinned {
+			n++
+		}
+	}
+	return n
 }

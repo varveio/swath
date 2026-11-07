@@ -5,12 +5,9 @@ package main
 
 import (
 	"bytes"
-	"encoding/xml"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -113,94 +110,4 @@ func firstDiff(a, b []byte) int {
 func excerpt(b []byte, offset int) string {
 	lo, hi := max(0, offset-80), min(len(b), offset+80)
 	return fmt.Sprintf("%q", b[lo:hi])
-}
-
-// liveComparator compares the replay server with live S3, structurally:
-// the same status; for an error the same <Code>; for a listing the same
-// sequence of leaf elements, with continuation tokens (opaque and
-// server-specific) masked and the ListBucketResult's formatting ignored.
-// Request-id headers are not compared. Live S3 drifts (new response
-// elements, changed objects), so a difference here is a lead, not a
-// verdict.
-type liveComparator struct{}
-
-var tokenRe = regexp.MustCompile(`<(Next)?ContinuationToken>[^<]*</(Next)?ContinuationToken>`)
-
-func (liveComparator) compare(ref, got *response) diff {
-	d := diff{Status: [2]int{ref.Status, got.Status}, Offset: -1}
-	d.HeaderDiffs = headerDiffs(ref.Header, got.Header, func(n string) bool {
-		n = strings.ToLower(n)
-		return n != "content-type" // S3's own x-amz-* headers are per request
-	})
-	if ref.Status != got.Status {
-		return d
-	}
-	a, errA := leaves(tokenRe.ReplaceAll(ref.Body, []byte("<NextContinuationToken>T</NextContinuationToken>")))
-	b, errB := leaves(tokenRe.ReplaceAll(got.Body, []byte("<NextContinuationToken>T</NextContinuationToken>")))
-	if errA != nil || errB != nil {
-		d.Detail = fmt.Sprintf("unparsable body: %v / %v", errA, errB)
-		return d
-	}
-	if ref.Status != 200 {
-		a, b = codeOnly(a), codeOnly(b)
-	}
-	if !slices.Equal(a, b) {
-		i := 0
-		for i < min(len(a), len(b)) && a[i] == b[i] {
-			i++
-		}
-		d.Offset = i
-		d.RefExcerpt, d.GotExcerpt = at(a, i), at(b, i)
-		d.Detail = "leaf element sequences differ at element " + fmt.Sprint(i)
-	}
-	d.OK = d.Offset < 0 && len(d.HeaderDiffs) == 0
-	return d
-}
-
-func at(s []string, i int) string {
-	if i < len(s) {
-		return s[i]
-	}
-	return "<end>"
-}
-
-func codeOnly(l []string) []string {
-	for _, s := range l {
-		if strings.HasPrefix(s, "Error/Code=") {
-			return []string{s}
-		}
-	}
-	return nil
-}
-
-// leaves flattens an XML document to "path=text" for every leaf element.
-func leaves(b []byte) ([]string, error) {
-	dec := xml.NewDecoder(bytes.NewReader(b))
-	var path []string
-	var text strings.Builder
-	var out []string
-	leaf := false
-	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			return out, nil
-		}
-		if err != nil {
-			return out, err
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			path = append(path, t.Name.Local)
-			text.Reset()
-			leaf = true
-		case xml.CharData:
-			text.Write(t)
-		case xml.EndElement:
-			if leaf {
-				out = append(out, strings.Join(path, "/")+"="+text.String())
-			}
-			leaf = false
-			path = path[:len(path)-1]
-		}
-	}
 }

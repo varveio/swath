@@ -218,3 +218,28 @@ func TestTwoEntryPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestGCSMaskMetadata: with -gcs-mask-metadata an item's native metadata
+// against the synthetic profile compares equal, a different name or size
+// still differs.
+func TestGCSMaskMetadata(t *testing.T) {
+	h := http.Header{"Content-Type": {"application/json; charset=utf-8"}}
+	item := func(name, size, meta string) *response {
+		return &response{200, h, []byte(`{"kind":"storage#objects","items":[{"kind":"storage#object","bucket":"b","name":"` + name +
+			`","size":"` + size + `","updated":"2026-01-01T00:00:00.000000Z"` + meta + `}]}`)}
+	}
+	synthetic := `,"etag":"swath-gcs-synthetic-v1","generation":"1","metageneration":"1","storageClass":"STANDARD","contentType":"application/octet-stream"`
+	native := `,"etag":"CJ\"x","generation":"17","metageneration":"2","storageClass":"NEARLINE","md5Hash":"bWQ=","crc32c":"AAAA"`
+	c := gcsComparator{maskMetadata: true}
+	if d := c.compare(item("a", "1", synthetic), item("a", "1", native)); !d.OK {
+		t.Errorf("masked metadata differs: %+v", d)
+	}
+	if d := (gcsComparator{}).compare(item("a", "1", synthetic), item("a", "1", native)); d.OK {
+		t.Error("unmasked metadata compared equal")
+	}
+	for _, other := range []*response{item("b", "1", native), item("a", "2", native)} {
+		if d := c.compare(item("a", "1", synthetic), other); d.OK {
+			t.Errorf("a different item compared equal: %s", other.Body)
+		}
+	}
+}

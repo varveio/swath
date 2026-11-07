@@ -410,6 +410,183 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 /tmp/replaydiff -protocol azure -walk-limit 300 ...                   # the Azure route, both servers on s3,azure
 ```
 
+## Live conformance
+
+`bench/replaydiff -live-endpoint` compares the Go server with the provider itself: anonymous requests to live S3
+or GCS, and the same requests to the Go server serving a recording of the same bucket. A live bucket changes, so
+`-live-prefix` keeps every request inside one scope (a request of the matrix that names no prefix is given the
+scope as its prefix) and `-live-stable-before` refuses to run unless every recorded name there was last modified
+before the given time (the recording's start).
+
+```bash
+/tmp/replaydiff -live-endpoint https://s3.us-east-1.amazonaws.com -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/noaa-normals-pds/dataset/data -bucket noaa-normals-pds -report /tmp/live.json
+/tmp/replaydiff -live-endpoint https://s3.eu-central-1.amazonaws.com -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/gleif/dataset/data -bucket gleif -live-prefix data/csv/lei/date=2025- \
+  -live-stable-before 2026-11-06T22:00:33Z -report /tmp/live-gleif.json
+/tmp/replaydiff -live-endpoint https://storage.googleapis.com -protocol gcs -go ./swath-replay \
+  -fixture /data/rec/gcs/BUCKET/dataset/data -bucket BUCKET -live-prefix PREFIX -report /tmp/live-gcs.json
+```
+
+The S3 endpoint is path-style (`https://s3.REGION.amazonaws.com`) or virtual-host
+(`https://BUCKET.s3.REGION.amazonaws.com`). Outbound requests honour `HTTPS_PROXY`; no `Accept-Encoding` is sent.
+
+**Requests.** The provider conformance matrix of `scripts/provider-conformance` (97 S3 and 110 GCS cases, the
+cases the native evidence was captured with), each bound to names under the scope that keep the corpus name's
+part in the question, then token walks of the scope and of each of its directories (up to `-max-top`), flat and
+with `/`, at each `-walks` page size (default 7 and 1,000) whose walk takes at most `-live-walk-pages` pages
+(300). Each side follows its own tokens; a token case takes each side's own token from its source walk and
+alters it as the campaign did. `-live-scripted` adds the driver's own scripted matrix (the requests that mean the
+same against the provider). A public bucket cannot answer every case: 25 S3 and 24 GCS cases need an owned
+bucket's corpus (names across the surrogate block and the supplementary planes, NFC/NFD and case pairs;
+reserved and escape-like characters whose presence the spelling probe decides; control, XML-invalid and
+dot-segment names; names at the length limits) or an official client library, and some need a shape the
+recording lacks (a directory of exactly 1,000 names, of six objects, a name that is a byte prefix of another).
+The report lists every case with its query or the reason it was not sent.
+
+**Comparison.** The conformance suite's field policy (the Java `ProviderExchangeComparator` with its S3 and GCS
+profile comparators, and the campaign's `evidence.py` normalizations): the same status; on each side only the
+classified headers (S3: `Content-Type`, `Date`, `x-amz-request-id`, `x-amz-id-2`, `x-amz-bucket-region`,
+`Content-Length`, `Server`, `Transfer-Encoding`, `Connection`, `x-swath-replay-error`; GCS: `Content-Type`,
+`Date`, `x-goog-request-id`, `Content-Length`, `Server`, `Cache-Control`, `Vary`, `Transfer-Encoding`,
+`x-swath-replay-error`, `x-guploader-uploadid`, `x-goog-gcs-base-ts`, `Expires`, `Alt-Svc`, `Pragma`), the media
+type, a `Content-Length` equal to the body and a padded GMT `Date`, their values not compared; then for a
+listing every element or field in order (S3: the top-level element sequence, `Prefix`, `Delimiter`,
+`StartAfter`, `EncodingType`, `KeyCount`, `MaxKeys`, `IsTruncated`, `Marker`, each `Contents` field with
+`LastModified` as an instant, `CommonPrefixes`; GCS: each item's name, size, `updated` as an instant, then the
+metadata below, the prefixes, whether the page is the last) and for an error the S3 `Code` or the GCS error's
+first `reason`. Set aside, and only these: request ids, dates, the tokens' values (a token is compared by its
+presence and by where it leads; an S3 page's `ContinuationToken` must echo its own side's), and the S3 owner's
+values (its element sequence is compared; the replay's are synthetic). GCS item metadata is compared exactly
+(`etag`, `generation`, `metageneration`, `storageClass`, `contentType`, `md5Hash`, `crc32c`) when the fixture is
+a `swath/gcs-objects/v1` dataset, and held to the synthetic profile otherwise (`-gcs-metadata`, default auto);
+`timeCreated`, `id`, `selfLink` and the rest are not stored, so not compared. A header outside the classified
+set fails the comparison, as it fails the suite.
+
+### Live S3, 2026-11-07
+
+The recordings of 2026-11-06 (`swath list ... --no-sign-request --sort`, recorded 21:58 to 22:13 UTC), the Go
+server at this commit, anonymous path-style requests through the session's proxy, `-parallel 4`, default walk
+sizes 7 and 1,000.
+
+| Bucket, region | Scope (newest recorded name) | Matrix cases sent | Matrix cases passed / differing | Walks passed / differing | HTTP requests |
+|---|---|---|---|---|---|
+| `noaa-normals-pds`, us-east-1 | whole bucket (2026-11-04T13:05Z) | 72 of 97 | 54 / 17 (+1 skipped) | 10 / 0 | 1,906 (with `-live-scripted -max-prefixes 40`: 312 / 25) |
+| `giab`, us-east-1 | whole bucket (2026-11-01T19:06Z) | 72 of 97 | 55 / 16 (+1 skipped) | 30 / 2 | 736 |
+| `gleif`, eu-central-1 | `data/csv/lei/date=2025-` (2025-12-31) | 44 of 97 | 37 / 7 | 204 / 0 | 3,830 |
+| `gleif`, eu-central-1 | `data/xml/rr/date=2024-` (2024-12-31) | 44 of 97 | 37 / 7 | 204 / 0 | 3,836 |
+
+`gleif` gains date partitions every day, so its runs are scoped to closed years. Its partitions hold three
+objects each, so the cases that need a directory of six objects or a name that is a byte prefix of another are
+not sent there. `s3-07x` (a decoded byte of an issued token flipped) is skipped where either side's token is
+not base64 (live S3's own token is skipped on `giab`).
+
+Every difference the first runs found, by matrix case (the same on each bucket where the case was sent). The
+Java server answers each as the replay first did; the S3 route now answers twelve of them as live S3 does
+(The S3 route, above), each a documented divergence from the Java server in the differential driver. The S3
+rows of `docs/replay-provider-conformance.md` are `UNMEASURED`.
+
+| Case | Request | Live S3 | Replay |
+|---|---|---|---|
+| `s3-01c`, `s3-01g` | `start-after=` (empty) | echoes an empty `<StartAfter></StartAfter>` | Java server: omits `StartAfter`; replay: as live S3 |
+| `s3-05e`, `s3-05f` | `prefix=...a%ZZ`, `prefix=...pct%` (malformed escape) | drops the prefix: lists the bucket from its first key, `<Prefix></Prefix>` | Java server: lists the literal prefix (empty); replay: as live S3 |
+| `s3-05i` | `prefix` twice with different values | the first | Java server: the last; replay: as live S3 |
+| `s3-06m` | `max-keys=1&max-keys=2` | the first | Java server: the last; replay: as live S3 |
+| `s3-06k` | `max-keys=+2` (raw `+`) | `400 InvalidArgument` (the `+` read as a space) | Java server: accepts the sign: 2; replay: as live S3 |
+| `s3-07w` | `continuation-token=` (empty) | `400 InvalidArgument` ("The continuation token provided is incorrect") | Java server: blank is absent: the first page; replay: as live S3 |
+| `s3-07r`, `s3-07s` | an issued token with its last character changed, or cut by four | `400 InvalidArgument` | Java server: the altered `v2:` token still decodes to a position: a page; replay: as live S3 |
+| `s3-07k` | a token from a flat walk sent with `delimiter=/` | resumes at the token's key and lists the common prefix that holds it again | Java server: resumes after that whole prefix; replay: as live S3 |
+| `s3-08d` | `encoding-type=bogus` | `400 InvalidArgument` | Java server: ignored; replay: as live S3 |
+| `s3-12e` | `marker` with `list-type=2` | `400 InvalidArgument` ("Marker unsupported ... in list-type=2") | Java server: ignored; replay: as live S3 |
+| `s3-12a`, `s3-12b`, `s3-12c` | ListObjects V1 (no `list-type`, or `list-type=3`) | a V1 listing | `400` (V2 only, see Limits) |
+| walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | Java server: `%20`; replay: as live S3 |
+| scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | Java server: a listing; replay: as live S3 |
+| scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | Java server: the byte as sent; replay: as live S3 |
+| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
+
+Rerun after the change (same recordings and flags): `noaa-normals-pds` with `-live-scripted -max-prefixes 40`,
+provider cases 67 passed and 5 differing, scripted 336 / 1, walks 10 / 0 (1,908 requests); `giab` 67 / 4, walks
+32 / 0 (766 requests). The differences left are ListObjects V1 (`s3-12a` to `s3-12c`), `fetch-owner` over a
+recording without owners (`s3-11a` and its scripted twin), and `s3-07x`, now sent because the replay's token is
+base64 as a whole: live S3 serves its own token with the last decoded byte flipped as if unaltered, while the
+replay refuses every alteration (The S3 route).
+
+### Live GCS, 2026-11-07
+
+Four public buckets recorded with the Go lister the same day (native `swath/gcs-objects/v1` datasets, anonymous
+`--gcs-anonymous`, through `faultproxy -record`; below), each served by the Go server and compared with live
+`storage.googleapis.com` inside the recorded prefix, `-live-pins` set to the evidence archive's
+`gcs/replay-expectations.json`, item metadata compared exactly (native).
+
+| Bucket and scope (recorded) | Objects | Matrix cases sent | Matrix passed / differing (of them pinned) | Walks passed / differing | HTTP requests |
+|---|---|---|---|---|---|
+| `cloud-samples-data`, whole bucket (13:09Z) | 164,869 | 87 of 110 | 56 / 30 (29) | 166 / 0 | 2,024 |
+| `gcp-public-data-sentinel-2`, `L2/tiles/32/T/NS/` (13:09Z) | 284,292 | 86 of 110 | 54 / 31 (29) | 202 / 0 | 7,274 |
+| `gcp-public-data-landsat`, `LC08/01/001/` (13:10Z) | 314,390 | 86 of 110 | 54 / 31 (30) | 124 / 0 | 1,942 |
+| `gcp-public-data-nexrad-l2`, `1991/06/` (13:11Z) | 12 | 83 of 110 (r/ on a reduced shape) | 54 / 28 (27) | 36 / 0 | 278 |
+
+`gcs-07v` (a decoded byte of an issued token flipped) is skipped on every run: the replay's `gcs1.` token is not
+base64 as a whole, the pinned "no analogue" of the evidence. On `nexrad-l2` no directory holds six objects, so a
+directory of three stands in for `r/`; those cases are listed as run on a reduced shape (`REDUCED SHAPE`).
+
+Pinned differences: every difference but the ones below reproduces, message for message, the mismatch the
+owned-bucket evidence pins for its case (`docs/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
+refused), `gcs-05e` to `gcs-05i` (malformed escapes, invalid UTF-8 and duplicate parameters refused; live GCS
+serves them), `gcs-06a`, `06b`, `06l`, `06m` (`maxResults` 0, leading zeros and duplicates refused), `gcs-06e`
+(live GCS returns 1,001 items for `maxResults=1001`; the replay caps at 1,000), `gcs-06f`, `06g`, `06i`, `06j`, `06k`,
+`06n`, `11c` (error reason `invalid` where live says `invalidParameter`), `gcs-07i`, `07k`, `07l`, `07o`, `07t`, `07u`
+(a token sent with another scope: refused by the replay, honoured by GCS), `gcs-07r`, `07s` (an altered token: GCS
+refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `versions`, `matchGlob`,
+`includeFoldersAsPrefixes` refused). The differences the evidence does not pin:
+
+| Case | Bucket | Request | Live GCS | Replay |
+|---|---|---|---|---|
+| `gcs-11h` | all four | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
+| `gcs-07r` | sentinel-2 | an issued token with its last character changed | accepted (the changed character only touched unused bits) and resumes at the token's position | the altered `gcs1.` token decodes to another position |
+
+### Live capture
+
+`bench/faultproxy -record FILE` writes every exchange it forwards as a JSON line (the campaign's raw-exchange
+shape: method, URL, raw path and query, request headers with credentials redacted, status, response headers, body,
+timestamps). Running the lister through it against the provider records the listing and the client's whole
+request stream in one go; `replaydiff -capture FILE` then replays every captured request, in order, against the Go
+server serving the dataset that same run wrote, maps each captured token to the token the Go server issued for the
+same request, and compares each answer with the captured one under the policy above (a gzip-coded captured body is
+decoded first):
+
+```bash
+go build -o /tmp/faultproxy ./bench/faultproxy
+/tmp/faultproxy -target https://s3.us-east-1.amazonaws.com -listen 127.0.0.1:19401 -record /tmp/capture.jsonl &
+./swath list s3://noaa-normals-pds/ -o /tmp/rec --anonymous --endpoint http://127.0.0.1:19401 --region us-east-1 --workers 16
+kill -INT %1
+/tmp/replaydiff -capture /tmp/capture.jsonl -go ./swath-replay -fixture /tmp/rec -bucket noaa-normals-pds
+# GCS: -target https://storage.googleapis.com and swath list gs://B/P --gcs-anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
+```
+
+On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lister):
+
+| Capture | Exchanges | Passed | Differing |
+|---|---|---|---|
+| `s3://noaa-normals-pds` (whole bucket) | 233 | 233 | 0 |
+| `gs://cloud-samples-data` (whole bucket) | 274 | 274 | 0 |
+| `gs://gcp-public-data-sentinel-2/L2/tiles/32/T/NS/` | 417 | 417 | 0 |
+| `gs://gcp-public-data-landsat/LC08/01/001/` | 509 | 509 | 0 |
+| `gs://gcp-public-data-nexrad-l2/1991/06/` | 1 | 1 | 0 |
+
+The first replay of `cloud-samples-data` found the one difference this check has found: an object stored without a
+content type is listed by GCS without `contentType`, which the native rendering filled with
+`application/octet-stream`; the native rendering now omits it (`TestNativeNullContentTypeIsOmitted`).
+
+### The native rendering against the Java server
+
+The Java server does not read `swath/gcs-objects/v1`, so the cross-check on real names is the `cloud-samples-data`
+rows written into the S3 capture columns and sorted by the Java `sort-fixture`: `replaydiff -protocol gcs` with
+both servers on that fixture compared 2,343 requests (matrix 1,558, walks 285 with `-walk-limit 300`, random 500)
+with no difference; with the Go server on the native dataset (`-go-fixture`) and `-gcs-mask-metadata`, every
+name, size, time, prefix, status and page boundary agreed, and the only differences were the page tokens' bytes
+(453 pages; each token is bound to its fixture's identity) and the 8 token cases that send the Java server's token
+to the Go server, which refuses a token of another fixture (`invalid_page_token`).
+
 ## Measurements
 
 Configuration, unless a table says otherwise. Host: a 4 vCPU session container (Intel Xeon @ 2.10 GHz) shared
@@ -627,7 +804,7 @@ fixture's declared schema id:
 | `etag` | exact (`swath-gcs-synthetic-v1` when null) | synthetic: `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) |
 | `generation`, `metageneration` | exact (`1` when null) | synthetic: `1` |
 | `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
-| `contentType` | exact (`application/octet-stream` when null) | synthetic: `application/octet-stream` |
+| `contentType` | exact, absent when null (as live GCS lists an object stored without one) | synthetic: `application/octet-stream` |
 | `md5Hash`, `crc32c` | exact, absent when null | absent |
 | `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
 | `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |

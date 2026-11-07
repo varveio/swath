@@ -113,9 +113,13 @@ var rowFastPath = true
 // the room left in the current chunk it is built in scratch and appended
 // at once: every unit would then be admitted without an allocation, so the
 // bytes, the chunks and the percent-encoding counts are the same as unit
-// by unit (TestRowFastPathMatchesUnits). It returns scratch for reuse.
+// by unit (TestRowFastPathMatchesUnits). An element whose values alone
+// exceed the room is not built: its escaped form could be several times
+// the room, allocated outside the response budget
+// (TestOversizedContentsAllocatesWithinTheCap). It returns scratch for
+// reuse.
 func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps, scratch []byte) []byte {
-	if room := o.Room(); room > 0 && rowFastPath {
+	if room := o.Room(); room > 0 && rowFastPath && contentsFloor(obj, req) <= room {
 		var onePass, fallback int
 		scratch, onePass, fallback = appendContents(scratch[:0], obj, req, ts, room)
 		if len(scratch) <= room {
@@ -125,6 +129,31 @@ func contents(o *output.Output, obj *store.Object, req *Request, ts *timestamps,
 	}
 	contentUnits(o, obj, req, ts)
 	return scratch
+}
+
+// contentsFloor is a lower bound on the length of the Contents element
+// appendContents builds: the raw lengths of its variable values. Escaping
+// and percent-encoding never shorten a value, and decoding malformed
+// UTF-8 replaces at most three bytes by a three-byte U+FFFD; a bound that
+// were ever too high would only send an element down the unit path,
+// which renders the same bytes. An element within it is at most six
+// times it (an escaped '"') plus its tags, so the scratch built for a fit
+// check stays a small multiple of the chunk's room.
+func contentsFloor(obj *store.Object, req *Request) int {
+	n := len(obj.Key)
+	for _, s := range [...]*string{obj.ETag, obj.ChecksumAlgorithm, obj.ChecksumType, obj.StorageClass} {
+		if s != nil {
+			n += len(*s)
+		}
+	}
+	if req.FetchOwner {
+		for _, s := range [...]*string{obj.OwnerID, obj.OwnerDisplayName} {
+			if s != nil {
+				n += len(*s)
+			}
+		}
+	}
+	return n
 }
 
 // appendContents appends the Contents element contentUnits renders, and

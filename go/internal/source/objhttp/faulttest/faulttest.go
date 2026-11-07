@@ -105,11 +105,13 @@ type Proxy struct {
 	stats    Stats
 }
 
-// New builds a proxy that forwards to target (http://host:port).
+// New builds a proxy that forwards to target (http://host:port, or an
+// https:// provider endpoint, which is sent its own host name as Host:
+// a virtual-hosted service routes and signs by it).
 func New(target string, plan Plan) (*Proxy, error) {
 	u, err := url.Parse(target)
-	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("faulttest: target %q: want http://host:port", target)
+	if err != nil || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("faulttest: target %q: want http://host:port or https://host", target)
 	}
 	if plan.Dialect == "" {
 		plan.Dialect = "s3"
@@ -121,6 +123,13 @@ func New(target string, plan Plan) (*Proxy, error) {
 	t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
 	rp := httputil.NewSingleHostReverseProxy(u)
 	rp.Transport = t
+	if u.Scheme == "https" {
+		direct := rp.Director
+		rp.Director = func(r *http.Request) {
+			direct(r)
+			r.Host = u.Host
+		}
+	}
 	return &Proxy{plan: plan, next: rp, now: time.Now}, nil
 }
 

@@ -4,9 +4,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -293,5 +295,109 @@ func TestWindowCacheReadsAhead(t *testing.T) {
 	if counts.cold.Load() != 1 || counts.continuation.Load() != 1 || counts.hits.Load() != 58 || fills.Load() < 7 {
 		t.Fatalf("cold %d continuation %d hits %d fills %d; want 1, 1, 58 and the read-aheads' fills",
 			counts.cold.Load(), counts.continuation.Load(), counts.hits.Load(), fills.Load())
+	}
+}
+
+// syntheticKeys serves a prefetcher's fills from the keys k00000000 up,
+// packed key only. A fill whose context lacks walkCtx (a read-ahead,
+// under the store's context) blocks until release is closed or the
+// context ends; blocked counts those waiting.
+type syntheticKeys struct {
+	rows    int
+	release chan struct{}
+	blocked atomic.Int64
+}
+
+type walkCtxKey struct{}
+
+func (k *syntheticKeys) read(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, _ Projection) (packed, error) {
+	if ctx.Value(walkCtxKey{}) == nil {
+		k.blocked.Add(1)
+		select {
+		case <-k.release:
+		case <-ctx.Done():
+		}
+		k.blocked.Add(-1)
+		if err := ctx.Err(); err != nil {
+			return packed{}, err
+		}
+	}
+	start := 0
+	if from != nil {
+		start = sort.Search(k.rows, func(i int) bool {
+			c := bytes.Compare([]byte(fmt.Sprintf("k%08d", i)), from)
+			return c > 0 || c == 0 && inclusive
+		})
+	}
+	sink := s3Objects.packer(nil, limit, 0)
+	for i := start; i < k.rows && i-start < limit; i++ {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		if to != nil && bytes.Compare(key, to) >= 0 {
+			break
+		}
+		sink.Keys([][]byte{key})
+	}
+	return sink.packed()
+}
+
+// TestReadAheadsPendingStayWithinTheirBound advances 40 disjoint walks
+// to their read-ahead thresholds while every read-ahead's fill is
+// blocked: the read-aheads registered (and their goroutines) never
+// exceed maxAhead (lowered to 5 here; 500 windows would allow 500), the
+// fills under way never exceed the decoding slots, the walks' own pages
+// are not held up, and evicting the windows the blocked read-aheads read
+// on from cancels them, waiting or decoding.
+func TestReadAheadsPendingStayWithinTheirBound(t *testing.T) {
+	keys := &syntheticKeys{rows: 1_000_000, release: make(chan struct{})}
+	p := newPrefetcher(Prefetch{WindowRows: 100, MaxWindows: 1000}, keys.read, nil)
+	defer p.close()
+	defer close(keys.release)
+	p.maxAhead = 5
+	slots := cap(p.aheadSlots)
+	ctx := context.WithValue(context.Background(), walkCtxKey{}, true)
+	const walks = 40
+	for w := range walks {
+		// A cold page, a continuation that ramps to a 40-row window, and
+		// two hits that leave its last quarter: the read-ahead threshold.
+		from, inclusive := []byte(fmt.Sprintf("k%08d", w*10_000)), true
+		for page := range 4 {
+			rows, err := p.serve(ctx, from, inclusive, nil, 10, Projection{})
+			if err != nil || len(rows) != 10 {
+				t.Fatalf("walk %d page %d: %d rows, %v", w, page, len(rows), err)
+			}
+			from, inclusive = rows[len(rows)-1].Key, false
+		}
+		p.mu.Lock()
+		pending := len(p.ahead)
+		p.mu.Unlock()
+		if pending > p.maxAhead || keys.blocked.Load() > int64(slots) {
+			t.Fatalf("after %d walks: %d read-aheads pending (bound %d), %d fills under way (slots %d)",
+				w+1, pending, p.maxAhead, keys.blocked.Load(), slots)
+		}
+	}
+	p.mu.Lock()
+	pending := len(p.ahead)
+	p.mu.Unlock()
+	if pending != p.maxAhead {
+		t.Fatalf("%d read-aheads pending, want the bound, %d", pending, p.maxAhead)
+	}
+	// Evicting every window abandons the blocked read-aheads.
+	p.mu.Lock()
+	for i := range p.maxWindows {
+		p.publish(&window{key: windowKey{lower: fmt.Sprint("evict", i), hasLower: true}})
+	}
+	p.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.mu.Lock()
+		pending = len(p.ahead)
+		p.mu.Unlock()
+		if pending == 0 && keys.blocked.Load() == 0 && len(p.aheadSlots) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after eviction: %d read-aheads pending, %d fills blocked, %d slots taken", pending, keys.blocked.Load(), len(p.aheadSlots))
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
