@@ -421,9 +421,7 @@ func TestOversizedResponseStopsAtTheCap(t *testing.T) {
 	if r := get(t, s, "/bucket?list-type=2&max-keys=5"); r.status != 200 {
 		t.Errorf("a small page after the refusal: %d", r.status)
 	}
-	if s.budget.Charged() != 0 {
-		t.Errorf("charged %d", s.budget.Charged())
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 }
 
 func TestValidate(t *testing.T) {
@@ -788,9 +786,7 @@ func TestRoutesShareTheResponseCeiling(t *testing.T) {
 			t.Errorf("%s after: %d", target, resp.StatusCode)
 		}
 	}
-	if s.budget.Charged() != 0 {
-		t.Errorf("charged %d", s.budget.Charged())
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 }
 
 // pipelinedReader opens a connection with a small receive buffer and

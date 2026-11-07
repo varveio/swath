@@ -54,9 +54,7 @@ func TestAzureEscapingHeavyPageStopsAtTheCap(t *testing.T) {
 	if alloc > 16<<20 {
 		t.Errorf("allocated %d bytes to refuse a page over a 4 KiB cap", alloc)
 	}
-	if n := s.budget.Charged(); n != 0 {
-		t.Errorf("%d bytes still charged", n)
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 }
 
 // TestAzureConcurrentBudgetExhaustion sends escaping-heavy pages at once
@@ -95,9 +93,7 @@ func TestAzureConcurrentBudgetExhaustion(t *testing.T) {
 	if peak := s.budget.Peak(); peak > cfg.ResponseBufferBudget {
 		t.Errorf("peak %d over the budget %d", peak, cfg.ResponseBufferBudget)
 	}
-	if n := s.budget.Charged(); n != 0 {
-		t.Errorf("%d bytes still charged", n)
-	}
+	waitFor(t, "the budget to come back", func() bool { return s.budget.Charged() == 0 })
 	if statuses[503] > 0 && count(s, metrics.ResponseAdmissionRefused, ProtocolAzure, "response_budget_exhausted") != int64(statuses[503]) {
 		t.Error("refusals not counted")
 	}

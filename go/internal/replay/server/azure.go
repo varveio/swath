@@ -191,7 +191,8 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	a := s.azure
 	release, ok := s.admit()
 	defer release()
-	w = releasing(w, release)
+	rw := releasing(w, release)
+	w = rw
 	if !ok {
 		s.azureRefuse(w, r, arrived, azureStopping)
 		return
@@ -213,7 +214,9 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		s.azureRefuse(w, r, arrived, azureCount)
 		return
 	}
-	defer s.responses.Add(-1)
+	hold := &responseHold{s: s}
+	defer hold.drop()
+	rw.hold = hold
 	// The response's memory: reserved for a full page before it is read,
 	// then the chunks the rendered page needs (output.Output).
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, azure.EstimateSize(req.PageSize)), s.cfg.MaxResponseBytes)
@@ -221,7 +224,7 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 		s.azureRefuse(w, r, arrived, azureBudget)
 		return
 	}
-	defer out.Close()
+	hold.out = out
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -311,6 +314,7 @@ func (s *Server) azureRefuse(w http.ResponseWriter, r *http.Request, arrived tim
 // sent once and is valid, whatever else the request got wrong; a HEAD
 // answer carries the headers and no body.
 func (s *Server) azureWriteError(w http.ResponseWriter, r *http.Request, arrived time.Time, e *azure.Error) {
+	dropResponse(w)
 	var body []byte
 	if r.Method != http.MethodHead {
 		body = azure.AppendError(nil, e.Code())

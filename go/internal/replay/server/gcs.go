@@ -234,7 +234,8 @@ func (s *Server) serveEnvelope(w http.ResponseWriter, r *http.Request, status in
 	arrived := time.Now()
 	release, ok := s.admit()
 	defer release()
-	w = releasing(w, release)
+	rw := releasing(w, release)
+	w = rw
 	header := ""
 	if !ok {
 		s.reg.Get(metrics.ResponseAdmissionRefused, protocolReplay, "shutdown").Inc()
@@ -256,8 +257,10 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 	rt := s.routes
 	release, ok := s.admit()
 	defer release()
-	w = releasing(w, release)
+	rw := releasing(w, release)
+	w = rw
 	fail := func(kind gcs.Kind, reason string) {
+		dropResponse(w)
 		var body []byte
 		if r.Method != http.MethodHead {
 			body = gcs.AppendError(nil, kind)
@@ -303,7 +306,9 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		refuse(gcs.Overload, "response_count_exhausted")
 		return
 	}
-	defer s.responses.Add(-1)
+	hold := &responseHold{s: s}
+	defer hold.drop()
+	rw.hold = hold
 	// The response's memory: reserved for a full page before it is read,
 	// then the chunks the rendered page needs (output.Output).
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, gcs.EstimateSize(req.PageSize)), s.cfg.MaxResponseBytes)
@@ -311,7 +316,7 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, path, rawQuery
 		refuse(gcs.Overload, "response_budget_exhausted")
 		return
 	}
-	defer out.Close()
+	hold.out = out
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()

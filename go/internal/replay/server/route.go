@@ -73,7 +73,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// given back as the answer starts, whatever the answer.
 	release, ok := s.admit()
 	defer release()
-	w = releasing(w, release)
+	rw := releasing(w, release)
+	w = rw
 	if !ok {
 		s.refuse(w, r, path, arrived, errStopping)
 		return
@@ -90,7 +91,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, path, arrived, errCount)
 		return
 	}
-	defer s.responses.Add(-1)
+	hold := &responseHold{s: s}
+	defer hold.drop()
+	rw.hold = hold
 	// Reserve for a full page before reading it; the reservation shrinks
 	// to what the page needs once it is rendered.
 	out, err := output.New(s.budget, min(s.cfg.MaxResponseBytes, s3.EstimateSize(req.PageSize())), s.cfg.MaxResponseBytes)
@@ -98,7 +101,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, path, arrived, errBudget)
 		return
 	}
-	defer out.Close()
+	hold.out = out
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -225,6 +228,7 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, path string, arr
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, path string, arrived time.Time, e *s3.Error) {
+	dropResponse(w)
 	s.write(w, r, e.Status, [][]byte{s3.AppendError(nil, e, path)}, e.Reason, arrived)
 }
 
@@ -273,10 +277,41 @@ func viewsLen(body [][]byte) int {
 type releasingWriter struct {
 	http.ResponseWriter
 	release func()
+	hold    *responseHold
 }
 
-func releasing(w http.ResponseWriter, release func()) http.ResponseWriter {
+func releasing(w http.ResponseWriter, release func()) *releasingWriter {
 	return &releasingWriter{ResponseWriter: w, release: release}
+}
+
+// responseHold is a request's response permit and, once reserved, its
+// output. A successful answer drops it when the handler returns, after the
+// flush; an error answer drops it before it is written (dropResponse), as
+// the contract closes the output and returns the permit before sending its
+// small, unbudgeted error.
+type responseHold struct {
+	s       *Server
+	out     *output.Output
+	dropped bool
+}
+
+func (h *responseHold) drop() {
+	if h.dropped {
+		return
+	}
+	h.dropped = true
+	if h.out != nil {
+		h.out.Close()
+	}
+	h.s.responses.Add(-1)
+}
+
+// dropResponse drops the response hold of the request w answers, if it
+// has one: an error answer holds neither permit nor output.
+func dropResponse(w http.ResponseWriter) {
+	if rw, ok := w.(*releasingWriter); ok && rw.hold != nil {
+		rw.hold.drop()
+	}
 }
 
 func (w *releasingWriter) WriteHeader(code int) {
