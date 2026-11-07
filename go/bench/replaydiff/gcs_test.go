@@ -5,8 +5,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,14 @@ func TestGCSComparator(t *testing.T) {
 	items := &response{200, ref.Header, []byte(strings.Replace(body, `"a"`, `"b"`, 1))}
 	if d := (gcsComparator{}).compare(ref, items); d.OK || d.Detail != "documents differ" {
 		t.Errorf("an item difference: %+v", d)
+	}
+	// Only the token's value is masked: spacing, order and escapes still
+	// count, with or without a token.
+	if equalMaskedTokens([]byte(`{"kind":"storage#objects"}`), []byte(`{"kind": "storage#objects"}`)) ||
+		equalMaskedTokens([]byte(`{"a":"x","nextPageToken":"t1"}`), []byte(`{"nextPageToken":"t2","a":"x"}`)) ||
+		equalMaskedTokens([]byte(`{"a":"\u00e9","nextPageToken":"t1"}`), []byte(`{"a":"é","nextPageToken":"t2"}`)) ||
+		!equalMaskedTokens([]byte(`{"a":"x","nextPageToken":"t1"}`), []byte(`{"a":"x","nextPageToken":"gcs1.AB-_"}`)) {
+		t.Error("token masking")
 	}
 	allow := &response{405, h("Content-Type", "application/json; charset=utf-8", "Allow", "GET"), nil}
 	if d := (gcsComparator{}).compare(allow, &response{405, h("Content-Type", "application/json; charset=utf-8"), nil}); d.OK {
@@ -98,6 +108,9 @@ func TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 		return rep
 	}
 	rep := run(&target{name: "rollup", base: start(true, keys), client: client})
+	if len(rep.Skipped) != 0 {
+		t.Errorf("skipped over %d keys: %v", len(keys), rep.Skipped)
+	}
 	if rep.Failed != 0 || rep.Passed < 700 {
 		for _, r := range rep.Results {
 			if !r.Pass {
@@ -109,5 +122,99 @@ func TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 	}
 	if rep := run(&target{name: "short", base: start(true, keys[1:]), client: client}); rep.Failed == 0 {
 		t.Error("a server missing a key compared equal")
+	}
+
+	// Over one key no source page truncates: every token case is
+	// reported skipped, none is compared.
+	one := &target{name: "one", base: start(false, []string{"a"}), client: client}
+	rep = &report{}
+	d := &driver{o: o, ref: one, got: &target{name: "one-rollup", base: start(true, []string{"a"}), client: client}, comp: gcsComparator{}, rep: rep}
+	d.runGCSCases("case", gcsMatrix([][]byte{[]byte("a")}, rand.New(rand.NewPCG(1, 1)), 10))
+	tokenCases := 0
+	for _, c := range gcsMatrix([][]byte{[]byte("a")}, rand.New(rand.NewPCG(1, 1)), 10) {
+		if c.TokenFrom != "" {
+			tokenCases++
+		}
+	}
+	for _, r := range rep.Results {
+		if strings.HasPrefix(r.Name, "token page 2") || strings.HasPrefix(r.Name, "delimiter token page 2") {
+			t.Errorf("%q ran without a token", r.Name)
+		}
+	}
+	if len(rep.Skipped) != tokenCases || tokenCases < 10 {
+		t.Errorf("%d skipped of %d token cases: %v", len(rep.Skipped), tokenCases, rep.Skipped)
+	}
+}
+
+// TestGCSWalkSeparatesTokenBytesFromSemantics: a walk page that differs
+// only in spacing fails; one that differs only in its token's value
+// passes, the token followed, and is listed as a token byte difference.
+func TestGCSWalkSeparatesTokenBytesFromSemantics(t *testing.T) {
+	serve := func(pages map[string]string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			io.WriteString(w, pages[r.URL.Query().Get("pageToken")])
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	walkOf := func(ref, got map[string]string) (result, *report) {
+		rep := &report{}
+		d := &driver{o: options{bucket: "bkt"}, ref: &target{name: "ref", base: serve(ref), client: &http.Client{}},
+			got: &target{name: "got", base: serve(got), client: &http.Client{}}, comp: gcsComparator{}, rep: rep}
+		return d.gcsWalkOne(walk{Name: "w", Query: "maxResults=1"}), rep
+	}
+	res, rep := walkOf(map[string]string{"": `{"kind":"storage#objects"}`}, map[string]string{"": `{"kind": "storage#objects"}`})
+	if res.Pass || len(rep.TokenBytes) != 0 {
+		t.Errorf("spacing difference passed: %+v", res)
+	}
+	res, rep = walkOf(
+		map[string]string{"": `{"kind":"storage#objects","nextPageToken":"r1"}`, "r1": `{"kind":"storage#objects","items":[{"name":"b"}]}`},
+		map[string]string{"": `{"kind":"storage#objects","nextPageToken":"g1"}`, "g1": `{"kind":"storage#objects","items":[{"name":"b"}]}`})
+	if !res.Pass || res.Pages != 2 || len(rep.TokenBytes) != 1 {
+		t.Errorf("token-only difference: %+v %v", res, rep.TokenBytes)
+	}
+}
+
+// TestCompetingFeaturesCompareAllButTheChosenFeature: a competing-feature
+// case passes when the servers name different refused features, and
+// fails on any other difference or a feature the query did not refuse.
+func TestCompetingFeaturesCompareAllButTheChosenFeature(t *testing.T) {
+	c := request{Name: "competing features versions softDeleted", Query: gcsCompetingFeatures["competing features versions softDeleted"]}
+	answer := func(reason string) *response {
+		return &response{400, http.Header{"Content-Type": {"application/json; charset=utf-8"}, "X-Swath-Replay-Error": {reason}}, []byte(`{"error":{}}`)}
+	}
+	for _, x := range []struct {
+		ref, got string
+		name     string
+		ok       bool
+	}{
+		{"feature_versions", "feature_softDeleted", c.Name, true},
+		{"feature_softDeleted", "feature_versions", c.Name, true},
+		{"feature_versions", "feature_filter", c.Name, false},
+		{"feature_versions", "feature_softDeleted", "maxResults=0", false},
+	} {
+		cc := c
+		cc.Name = x.name
+		a, b := answer(x.ref), answer(x.got)
+		if got := competingFeatureOK(cc, a, b, (gcsComparator{}).compare(a, b)); got != x.ok {
+			t.Errorf("%+v: %v", x, got)
+		}
+	}
+}
+
+func TestTwoEntryPrefix(t *testing.T) {
+	for want, keys := range map[string][]string{
+		"":        {"a", "b/1"},
+		"logs/":   {"logs/a/1", "logs/b/1"},
+		"logs/a/": {"logs/a/1", "logs/a/2"},
+	} {
+		var b [][]byte
+		for _, k := range keys {
+			b = append(b, []byte(k))
+		}
+		if got := twoEntryPrefix(b); got != want {
+			t.Errorf("%v: %q, want %q", keys, got, want)
+		}
 	}
 }

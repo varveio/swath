@@ -173,8 +173,9 @@ type caseRecord struct {
 
 type evidenceIndex struct {
 	Captures map[string]struct {
-		File string
-		Kind string
+		File       string
+		Kind       string
+		SDKOptions sdkOptions `json:"sdk_options"`
 	}
 	Cases     []caseRecord
 	Manifests map[string]struct{ File string }
@@ -387,6 +388,7 @@ type endpoint struct {
 	port   int
 	cases  map[string]caseRecord
 	mutate mutation
+	index  *evidenceIndex
 }
 
 // send is one HTTP/1.1 exchange with the request target as given, byte
@@ -463,9 +465,9 @@ func (e *endpoint) verify(id, path string) (err error) {
 	case "exchange":
 		e.verifyExchange(c, record)
 	case "walk":
-		e.verifyWalk(c, false)
+		e.verifyWalk(c)
 	case "sdk_run":
-		e.verifyWalk(c, true)
+		e.verifySDK(c, e.index.Captures[id].SDKOptions)
 	default:
 		// A retry run is replayed attempt by attempt, not as a fresh
 		// walk; there is no such verifier, so it is refused.
@@ -559,11 +561,9 @@ func (e *endpoint) sourceToken(caseID *string, page int) *string {
 	return token
 }
 
-// verifyWalk re-walks a walk or an SDK run with the replay's own tokens
-// and compares the two complete walks. An SDK run is re-walked with the
-// run's request scope and client headers, the token placed where the
-// client library places it (parameters in name order).
-func (e *endpoint) verifyWalk(c capture, sdk bool) {
+// verifyWalk re-walks a walk with the replay's own tokens and compares
+// the two complete walks.
+func (e *endpoint) verifyWalk(c capture) {
 	first := c.steps[0].request
 	base := first.query
 	headers := sortedHeaders(first)
@@ -572,11 +572,7 @@ func (e *endpoint) verifyWalk(c capture, sdk bool) {
 	for page := 0; page < maxWalkPages; page++ {
 		query := base
 		if token != nil {
-			if sdk {
-				query = insertSorted(base, "pageToken="+encode(*token))
-			} else {
-				query = base + "&pageToken=" + encode(*token)
-			}
+			query = base + "&pageToken=" + encode(*token)
 		}
 		resp := e.send("GET", query, headers)
 		replay = append(replay, step{"walk", request{method: "GET", path: gcsReplayPath, query: query, headers: headerMap(headers)}, resp})
@@ -608,24 +604,10 @@ func headerMap(h [][2]string) map[string][]string {
 	return m
 }
 
-func insertSorted(query, part string) string {
-	parts := strings.Split(query, "&")
-	name, _, _ := strings.Cut(part, "=")
-	i := 0
-	for i < len(parts) {
-		n, _, _ := strings.Cut(parts[i], "=")
-		if n > name {
-			break
-		}
-		i++
-	}
-	return strings.Join(slices.Insert(parts, i, part), "&")
-}
-
-// verifyRun is the receipt check of a walk or SDK run: every replay
+// verifyRun is the receipt check of a walk: every replay
 // request carries the captured scope, then the walks are compared.
 func verifyRun(c capture, replay []step) {
-	require(c.kind != "exchange", "GCS run receipt needs typed run capture")
+	require(c.kind == "walk", "GCS walk receipt needs a walk capture")
 	require(len(replay) > 0, "replay run is empty")
 	nativeFirst := c.steps[0].request
 	scope := withoutField(nativeFirst.query, "pageToken")
@@ -639,9 +621,6 @@ func verifyRun(c capture, replay []step) {
 		require(nativeFirst.method == s.request.method && s.request.path == gcsReplayPath, "replay request method/path differs from captured probe")
 		require(withoutField(s.request.query, "pageToken") == scope, "replay request query differs from captured probe")
 		require(noUnexpectedDuplicates(s.request.query, duplicateQueryProbes[c.probeID]), "duplicate query field outside duplicate-parameter probe")
-		if c.kind == "sdk_run" {
-			assertSDKHeaders(nativeFirst, s.request)
-		}
 	}
 	var nativePages, replayPages []capturedPage
 	for _, s := range c.steps {
@@ -651,35 +630,10 @@ func verifyRun(c capture, replay []step) {
 		replayPages = append(replayPages, capturedPage{receiptToken(s.request.query), s.exchange})
 	}
 	full := false
-	if p := queryValue(nativeFirst.query, "projection"); c.kind == "sdk_run" || p != nil && *p == "full" {
+	if p := queryValue(nativeFirst.query, "projection"); p != nil && *p == "full" {
 		full = true
 	}
 	assertGCSWalk(nativePages, replayPages, "{bucket}", replayBucket, full, 1024, 1_000_000)
-}
-
-// assertSDKHeaders requires every product/version token of the native
-// client headers in the replay request's (gl-java/ by product only: it
-// carries the JVM's version).
-func assertSDKHeaders(native, replay request) {
-	classified := 0
-	for _, name := range []string{"user-agent", "x-goog-api-client"} {
-		nv := native.header(name)
-		if nv == nil {
-			continue
-		}
-		classified++
-		rv := replay.header(name)
-		require(rv != nil, "replay SDK header "+name+" is missing")
-		have := strings.Fields(*rv)
-		for _, tok := range strings.Fields(*nv) {
-			ok := slices.Contains(have, tok)
-			if strings.HasPrefix(tok, "gl-java/") {
-				ok = slices.ContainsFunc(have, func(h string) bool { return strings.HasPrefix(h, "gl-java/") })
-			}
-			require(ok, "replay SDK product/version token differs")
-		}
-	}
-	require(classified > 0, "native SDK run lacks classified product/version header")
 }
 
 // expectations are the pins replay must meet: the archive's, with an
@@ -851,7 +805,7 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 	pins := expectations(t, archived, updates)
 	for name, fixture := range ev.fixtures(t, root) {
 		t.Run(name, func(t *testing.T) {
-			e := &endpoint{port: serve(t, fixture), cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+			e := &endpoint{port: serve(t, fixture), cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
 			outcomes := map[string]string{}
 			for id, c := range ev.index.Captures {
 				if err := e.verify(id, filepath.Join(ev.root, c.File)); err != nil {
@@ -876,7 +830,7 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 					t.Errorf("%s: pinned match, now %s", id, got)
 				case strings.HasPrefix(pin, "mismatch:") && got == "match":
 					improvements = append(improvements, id)
-				case strings.HasPrefix(pin, "mismatch:") && !strings.Contains(got, strings.TrimPrefix(pin, "mismatch:")):
+				case strings.HasPrefix(pin, "mismatch:") && !atPin(strings.TrimPrefix(pin, "mismatch:"), got):
 					t.Errorf("%s: pinned %q, now %s", id, strings.TrimPrefix(pin, "mismatch:"), got)
 				}
 			}
@@ -888,6 +842,37 @@ func TestGCSNativeCapturesMatchReplay(t *testing.T) {
 			t.Logf("%s: %d captures, %d match (%d pinned match), improvements: %v", name, len(outcomes), matches, countMatch(pins), improvements)
 		})
 	}
+}
+
+// tokenSpan is the per-run part a pin may leave open: a replay token's
+// body after its prefix.
+var tokenSpan = regexp.MustCompile(`^[A-Za-z0-9_=-]*`)
+
+// replayTokenPrefixes are the prefixes of the replay's own tokens. A pin
+// that ends with one stops where a token issued during the run begins
+// (it differs on every run), so that span, and only that span, is a
+// wildcard.
+var replayTokenPrefixes = []string{"gcs1.", "az1.", "v2:"}
+
+// atPin reports whether outcome is the pinned mismatch: the whole message,
+// equal, except that a pin ending at a replay token's prefix accepts the
+// token body there and nothing after it. A message that merely contains
+// the pin (a longer reason, an extra clause) is not at the pin.
+func atPin(pin, outcome string) bool {
+	rest, ok := strings.CutPrefix(outcome, "mismatch: ")
+	if !ok {
+		return false
+	}
+	if rest == pin {
+		return true
+	}
+	for _, prefix := range replayTokenPrefixes {
+		if strings.HasSuffix(pin, prefix) && strings.HasPrefix(rest, pin) {
+			tail := rest[len(pin):]
+			return len(tokenSpan.FindString(tail)) == len(tail)
+		}
+	}
+	return false
 }
 
 func countMatch(pins map[string]string) int {
@@ -967,8 +952,8 @@ func jsonText(s string) string {
 
 // TestEvidenceRejectsCorruptedReplayResults corrupts replay answers that
 // matched their captures: a lost, repeated or reordered item, a decoded
-// name, an early end, a repeated prefix, a wrong status and a wrong error
-// reason must each be rejected, so a comparator that tolerates them is
+// name, an early end, a repeated prefix, a wrong status, a wrong error
+// reason and an ill-formed UTF-8 byte in a name must each be rejected, so a comparator that tolerates them is
 // caught here.
 func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 	fixtureRoot(t)
@@ -977,17 +962,32 @@ func TestEvidenceRejectsCorruptedReplayResults(t *testing.T) {
 	for _, c := range [][2]string{
 		{"gcs-01a", "drop-first"}, {"gcs-01a", "duplicate-last"}, {"gcs-04a", "swap-order-pair"},
 		{"gcs-05o", "double-decode"}, {"gcs-07q", "terminate-early"}, {"gcs-07c", "repeat-prefix"},
-		{"gcs-07g", "wrong-status"}, {"gcs-07g", "wrong-error"},
+		{"gcs-07g", "wrong-status"}, {"gcs-07g", "wrong-error"}, {"gcs-04a", "invalid-utf8"},
+		{"gcs-09a", "drop-first"}, {"gcs-09b", "repeat-prefix"}, {"gcs-09c", "terminate-early"},
 	} {
 		path := filepath.Join(ev.root, ev.index.Captures[c[0]].File)
-		clean := &endpoint{port: port, cases: ev.cases, mutate: func(p []exchange) []exchange { return p }}
+		clean := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
 		if err := clean.verify(c[0], path); err != nil {
 			t.Fatalf("%s: %v", c[0], err)
 		}
-		bad := &endpoint{port: port, cases: ev.cases, mutate: corruption(c[1])}
+		bad := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: corruption(c[1])}
 		if err := bad.verify(c[0], path); err == nil {
 			t.Errorf("%s with %s was accepted", c[0], c[1])
 		}
+	}
+	// A pinned mismatch whose reason is changed is no longer at its pin,
+	// even though the new message contains the pinned one.
+	const pin = "GCS error reason differs: expected=invalidParameter actual=invalid"
+	path := filepath.Join(ev.root, ev.index.Captures["gcs-06f"].File)
+	clean := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: func(p []exchange) []exchange { return p }}
+	if err := clean.verify("gcs-06f", path); err == nil || !atPin(pin, "mismatch: "+err.Error()) {
+		t.Fatalf("gcs-06f: %v", err)
+	}
+	extended := &endpoint{port: port, cases: ev.cases, index: ev.index, mutate: onFirst(func(b string) string {
+		return strings.Replace(b, `"reason":"invalid"`, `"reason":"invalidFoo"`, 1)
+	})}
+	if err := extended.verify("gcs-06f", path); err == nil || atPin(pin, "mismatch: "+err.Error()) {
+		t.Errorf("gcs-06f with an extended reason is at its pin: %v", err)
 	}
 }
 
@@ -1039,6 +1039,13 @@ func corruption(name string) mutation {
 			}
 			return []exchange{{s, p[0].headers, p[0].body}}
 		}
+	case "invalid-utf8":
+		// A name's U+FFFD replaced by a raw 0xFF byte: a decoder that
+		// repairs ill-formed UTF-8 would read the name back unchanged.
+		return onFirst(func(b string) string {
+			require(strings.Contains(b, "\uFFFD"), "mutation target U+FFFD is absent")
+			return strings.Replace(b, "\uFFFD", "\xff", 1)
+		})
 	case "wrong-error":
 		return onFirst(func(b string) string {
 			return regexp.MustCompile(`"reason":"[A-Za-z]+"`).ReplaceAllLiteralString(b, `"reason":"conflict"`)
@@ -1129,5 +1136,32 @@ func TestComparatorMessages(t *testing.T) {
 	}
 	if got := javaString(time.Date(2026, 1, 2, 3, 4, 5, 296_000_000, time.UTC)); got != "2026-01-02T03:04:05.296Z" {
 		t.Errorf("%s", got)
+	}
+}
+
+func TestPinsMatchWholeMessages(t *testing.T) {
+	const pin = "GCS error reason differs: expected=invalidParameter actual=invalid"
+	for outcome, want := range map[string]bool{
+		"mismatch: " + pin:                 true,
+		"mismatch: " + pin + "Foo":         false,
+		"mismatch: " + pin + " | and more": false,
+		"mismatch: prefix " + pin:          false,
+		"match":                            false,
+		"mismatch: GCS HTTP status differs: expected=200 actual=400": false,
+	} {
+		if got := atPin(pin, outcome); got != want {
+			t.Errorf("%q: %v", outcome, got)
+		}
+	}
+	const tokenPin = "replay marker echo differs: expected=token-sha256-96 actual=az1."
+	for outcome, want := range map[string]bool{
+		"mismatch: " + tokenPin + "AbC_-9":        true,
+		"mismatch: " + tokenPin:                   true,
+		"mismatch: " + tokenPin + "AbC and more":  false,
+		"mismatch: " + tokenPin[:len(tokenPin)-1]: false,
+	} {
+		if got := atPin(tokenPin, outcome); got != want {
+			t.Errorf("%q: %v", outcome, got)
+		}
 	}
 }

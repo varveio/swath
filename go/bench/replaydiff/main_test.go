@@ -95,8 +95,8 @@ func TestDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 		random = append(random, randomRequest(all, rng, directoryPrefixes(all)))
 	}
 	d.runCases("random", random)
-	if rep.Skipped != 0 {
-		t.Errorf("%d requests skipped on a fixture that truncates every seed page", rep.Skipped)
+	if len(rep.Skipped) != 0 {
+		t.Errorf("requests skipped on a fixture that truncates every seed page: %v", rep.Skipped)
 	}
 	if rep.Failed != 0 || rep.Passed < 500 {
 		for _, r := range rep.Results {
@@ -168,8 +168,8 @@ func TestTokenCasesSkipWithoutAToken(t *testing.T) {
 			}
 		}
 		d.runCases("case", tokenCases)
-		if rep.Skipped != c.skipped || rep.Failed != 0 || rep.Passed+rep.Skipped != len(tokenCases) {
-			t.Errorf("%v: %d passed, %d failed, %d skipped; want %d skipped", c.keys, rep.Passed, rep.Failed, rep.Skipped, c.skipped)
+		if len(rep.Skipped) != c.skipped || rep.Failed != 0 || rep.Passed+len(rep.Skipped) != len(tokenCases) {
+			t.Errorf("%v: %d passed, %d failed, %d skipped; want %d skipped", c.keys, rep.Passed, rep.Failed, len(rep.Skipped), c.skipped)
 		}
 	}
 }

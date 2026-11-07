@@ -185,8 +185,9 @@ type result struct {
 	Error   string `json:"error,omitempty"`
 	FailAt  int    `json:"fail_at_page,omitempty"`
 	Partial bool   `json:"partial,omitempty"` // a walk stopped by -walk-limit
-	// Skipped is a request that depends on another's token when that
-	// answer had none: it was not sent, and it neither passes nor fails.
+	// Skipped, set by a case that depends on another's token when that
+	// answer had none, keeps it out of the results: it was not sent, and
+	// the report lists it under skipped, neither passed nor failed.
 	Skipped string `json:"skipped,omitempty"`
 	*diff
 }
@@ -204,8 +205,15 @@ type report struct {
 	Compared  int       `json:"compared"`
 	Passed    int       `json:"passed"`
 	Failed    int       `json:"failed"`
-	Skipped   int       `json:"skipped"`
-	Results   []result  `json:"results"`
+	// Skipped names the cases that could not run as designed (a token
+	// case whose source page issued no token), with the reason: missing
+	// coverage, never a pass.
+	Skipped []string `json:"skipped,omitempty"`
+	// TokenBytes names the walk pages that agree in meaning but whose
+	// page tokens differ in bytes: a wire difference, reported apart
+	// from the walk's verdict.
+	TokenBytes []string `json:"token_byte_differences,omitempty"`
+	Results    []result `json:"results"`
 }
 
 func run(o options) error {
@@ -316,11 +324,11 @@ type driver struct {
 func (d *driver) record(r result) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.rep.Results = append(d.rep.Results, r)
 	if r.Skipped != "" {
-		d.rep.Skipped++
+		d.rep.Skipped = append(d.rep.Skipped, fmt.Sprintf("%s %q: %s", r.Kind, r.Name, r.Skipped))
 		return
 	}
+	d.rep.Results = append(d.rep.Results, r)
 	d.rep.Compared++
 	if r.Pass {
 		d.rep.Passed++
@@ -553,32 +561,25 @@ func (d *driver) write() error {
 	rep := d.rep
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "replaydiff: reference=%s fixture=%s bucket=%s keys=%d seed=%d\n", rep.Reference, rep.Fixture, rep.Bucket, rep.Keys, rep.Seed)
-	kinds := map[string][3]int{}
+	kinds := map[string][2]int{}
 	for _, r := range rep.Results {
 		k := kinds[r.Kind]
-		switch {
-		case r.Skipped != "":
-			k[2]++
-		case r.Pass:
+		if r.Pass {
 			k[0]++
-		default:
+		} else {
 			k[1]++
 		}
 		kinds[r.Kind] = k
 	}
 	for _, kind := range []string{"case", "walk", "random"} {
 		if k, ok := kinds[kind]; ok {
-			fmt.Fprintf(&text, "  %-6s %6d passed %6d failed %4d skipped\n", kind, k[0], k[1], k[2])
+			fmt.Fprintf(&text, "  %-6s %6d passed %6d failed\n", kind, k[0], k[1])
 		}
 	}
 	partial := 0
 	for _, r := range rep.Results {
 		if r.Partial {
 			partial++
-		}
-		if r.Skipped != "" {
-			fmt.Fprintf(&text, "SKIP %s %q: %s\n", r.Kind, r.Name, r.Skipped)
-			continue
 		}
 		if r.Pass {
 			continue
@@ -604,7 +605,13 @@ func (d *driver) write() error {
 	if partial > 0 {
 		fmt.Fprintf(&text, "%d walks stopped at -walk-limit %d pages\n", partial, d.o.walkLimit)
 	}
-	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.Skipped)
+	for _, s := range rep.Skipped {
+		fmt.Fprintf(&text, "SKIP %s\n", s)
+	}
+	for _, s := range rep.TokenBytes {
+		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
+	}
+	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped\n", rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, len(rep.Skipped))
 	os.Stdout.Write(text.Bytes())
 	if d.o.report != "" {
 		j, err := json.MarshalIndent(rep, "", " ")

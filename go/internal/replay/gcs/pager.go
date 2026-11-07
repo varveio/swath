@@ -100,18 +100,19 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Page, error) {
 	if r.Clamped {
 		p.record("page_limit_clamped", "requested_above_1000")
 	}
-	binding := tokenBinding(r, p.fixtureIdentity)
+	ts := tokenState{binding: tokenBinding(r, p.fixtureIdentity)}
 	lower := boundary{inclusive: true}
 	if len(r.Prefix) > 0 {
 		lower.key = r.Prefix
 	}
 	lower = later(lower, boundary{r.StartOffset, true})
 	if r.PageToken != "" {
-		c, err := decodeToken(r.PageToken, binding)
+		c, err := decodeToken(r.PageToken, ts.binding)
 		if err != nil {
 			return nil, &Failure{Reason: "invalid_page_token"}
 		}
 		lower = later(lower, boundary{c.boundary, c.inclusive})
+		ts.progress = c.progress
 	}
 	upper := minUpper(r.Prefix, r.EndOffset)
 	if lower.key != nil && upper != nil && bytes.Compare(lower.key, upper) >= 0 {
@@ -119,9 +120,9 @@ func (p *Pager) List(ctx context.Context, r *Request) (*Page, error) {
 		return &Page{}, nil
 	}
 	if len(r.Delimiter) == 0 {
-		return p.flat(ctx, lower, upper, binding, r.PageSize)
+		return p.flat(ctx, lower, upper, ts, r.PageSize)
 	}
-	return p.delimited(ctx, r, lower, upper, binding)
+	return p.delimited(ctx, r, lower, upper, ts)
 }
 
 // minUpper is the tighter of the prefix's upper bound and endOffset; nil
@@ -141,7 +142,7 @@ func minUpper(prefix, endOffset []byte) []byte {
 
 // flat reads one row past the page: its presence is the truncation
 // signal, and the token resumes exclusive at the last item returned.
-func (p *Pager) flat(ctx context.Context, lower boundary, upper, binding []byte, pageSize int) (*Page, error) {
+func (p *Pager) flat(ctx context.Context, lower boundary, upper []byte, ts tokenState, pageSize int) (*Page, error) {
 	if upper == nil {
 		p.record("flat", "open_upper")
 	} else {
@@ -154,7 +155,7 @@ func (p *Pager) flat(ctx context.Context, lower boundary, upper, binding []byte,
 	count := min(pageSize, len(rows))
 	page := &Page{Items: rows[:count]}
 	if len(rows) > count {
-		page.Token = encodeToken(false, rows[count-1].Key, binding)
+		page.Token = ts.encode(false, rows[count-1].Key)
 	}
 	return page, nil
 }
@@ -164,7 +165,7 @@ func (p *Pager) flat(ctx context.Context, lower boundary, upper, binding []byte,
 // when the lower bound falls inside it (startOffset in the middle of a
 // subtree), and a page that ends on a prefix resumes inclusive at its
 // successor, past the whole subtree.
-func (p *Pager) delimited(ctx context.Context, r *Request, lower boundary, upper, binding []byte) (*Page, error) {
+func (p *Pager) delimited(ctx context.Context, r *Request, lower boundary, upper []byte, ts tokenState) (*Page, error) {
 	reason := func(plain, offset string) string {
 		if r.StartOffset != nil {
 			return offset
@@ -177,7 +178,7 @@ func (p *Pager) delimited(ctx context.Context, r *Request, lower boundary, upper
 	}
 	if ok {
 		p.record("delimiter_indexed", reason("native_skip_scan", "start_offset_intersection"))
-		return indexedPage(r.PageSize, entries, binding), nil
+		return indexedPage(r.PageSize, entries, ts), nil
 	}
 	p.record("delimiter_walk", reason("store_declined", "start_offset_store_declined"))
 	page := &Page{}
@@ -194,7 +195,7 @@ func (p *Pager) delimited(ctx context.Context, r *Request, lower boundary, upper
 		}
 		for i := 0; i < len(rows); {
 			if emitted == r.PageSize {
-				page.Token = encodeToken(last.inclusive, last.key, binding)
+				page.Token = ts.encode(last.inclusive, last.key)
 				return page, nil
 			}
 			rolled := rollup(rows[i].Key, r.Prefix, r.Delimiter)
@@ -233,7 +234,7 @@ func prefixBytes(prefix []byte) []byte {
 // indexedPage cuts a rollup answer of up to pageSize+1 entries into a
 // page; the token resumes after the last entry kept, and a prefix with no
 // successor (all 0xFF) ends the listing.
-func indexedPage(pageSize int, entries []Entry, binding []byte) *Page {
+func indexedPage(pageSize int, entries []Entry, ts tokenState) *Page {
 	page := &Page{}
 	count := min(pageSize, len(entries))
 	var last boundary
@@ -249,7 +250,7 @@ func indexedPage(pageSize int, entries []Entry, binding []byte) *Page {
 		}
 	}
 	if len(entries) > count && !end {
-		page.Token = encodeToken(last.inclusive, last.key, binding)
+		page.Token = ts.encode(last.inclusive, last.key)
 	}
 	return page
 }
