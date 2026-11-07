@@ -238,3 +238,29 @@ func TestClosedStore(t *testing.T) {
 		t.Fatalf("read after close: %v", err)
 	}
 }
+
+// TestClosedStoreWithWarmWindows reads a one-row fixture with limit two,
+// which keeps a final window, and requires the same read after Close to
+// fail with ErrClosed as the cache-off store's does, the windows and
+// anchors released.
+func TestClosedStoreWithWarmWindows(t *testing.T) {
+	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a")})
+	ctx := context.Background()
+	for range 2 {
+		if rows, err := s.Rows(ctx, nil, true, nil, 2, Projection{}); err != nil || len(rows) != 1 {
+			t.Fatalf("before close: %d rows, %v", len(rows), err)
+		}
+	}
+	if stats, _ := s.PrefetchStats(); stats.Windows == 0 {
+		t.Fatal("the read kept no window")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := s.Rows(ctx, nil, true, nil, 2, Projection{}); !errors.Is(err, sortedparquet.ErrClosed) {
+		t.Fatalf("read after close: %d rows, %v", len(rows), err)
+	}
+	if stats, _ := s.PrefetchStats(); stats.Windows != 0 || stats.Anchors != 0 || stats.Rows != 0 {
+		t.Fatalf("after close: %+v held", stats)
+	}
+}

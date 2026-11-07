@@ -4,6 +4,8 @@
 package store
 
 import (
+	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -46,20 +48,39 @@ func textFields(o *Object) [6]**string {
 // packer is the sortedparquet.ColumnSink that packs a read for the
 // projection: the Objects it unpacks are those objectProjection.object
 // makes of the same rows (a column the read did not project, or a null
-// value, is a nil field). The keys and any one text field must total at
-// most math.MaxUint32 bytes, which a window's rows are far below.
+// value, is a nil field). Offsets are uint32 to keep a window's index
+// arrays half the size of int offsets; the keys and any one text field
+// can still outgrow them (long keys or text values, a read past the
+// window size), so the packer stops at limit bytes per arena and reports
+// errPackedOverflow, and the read is served unpacked instead.
 type packer struct {
 	out packed
 	// slots maps each read column to its packed field: 0 and 1 the ints,
 	// 2 to 7 the texts.
 	slots []int
 	texts [6]strings.Builder
+	// limit bounds each arena (at most maxPackedArena); overflow reports
+	// a row was refused, and stop (when set) ends the read early.
+	limit    int
+	overflow bool
+	stop     func()
 }
 
+// maxPackedArena is the most bytes a uint32 offset addresses.
+const maxPackedArena = math.MaxUint32
+
+// errPackedOverflow is a read whose keys or one text field exceed the
+// packer's arena limit.
+var errPackedOverflow = errors.New("packed arena limit exceeded")
+
 // packer returns a packer for a read of columns (p.columns of a
-// projection) expected to return about n rows.
-func (p objectProjection) packer(columns []string, n int) *packer {
-	k := &packer{slots: make([]int, len(columns))}
+// projection) expected to return about n rows, its arenas bounded by
+// limit bytes (maxPackedArena when limit is not in (0, maxPackedArena]).
+func (p objectProjection) packer(columns []string, n, limit int) *packer {
+	if limit <= 0 || limit > maxPackedArena {
+		limit = maxPackedArena
+	}
+	k := &packer{slots: make([]int, len(columns)), limit: limit}
 	fields := [8]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType}
 	for c, name := range columns {
 		k.slots[c] = slices.Index(fields[:], name)
@@ -79,8 +100,24 @@ func (p objectProjection) packer(columns []string, n int) *packer {
 	return k
 }
 
+// fits reports whether an arena of have bytes takes add more, and marks
+// the read overflowed when not.
+func (k *packer) fits(have, add int) bool {
+	if k.overflow || add > k.limit-have {
+		if !k.overflow && k.stop != nil {
+			k.stop()
+		}
+		k.overflow = true
+		return false
+	}
+	return true
+}
+
 func (k *packer) Keys(keys [][]byte) {
 	for _, key := range keys {
+		if !k.fits(len(k.out.keys), len(key)) {
+			return
+		}
 		k.out.keys = append(k.out.keys, key...)
 		k.out.keyEnd = append(k.out.keyEnd, uint32(len(k.out.keys)))
 	}
@@ -89,7 +126,7 @@ func (k *packer) Keys(keys [][]byte) {
 
 func (k *packer) Values(c int, values []parquet.Value) {
 	switch slot := k.slots[c]; {
-	case slot < 0:
+	case slot < 0 || k.overflow:
 	case slot < 2:
 		col := &k.out.ints[slot]
 		for _, v := range values {
@@ -99,6 +136,9 @@ func (k *packer) Values(c int, values []parquet.Value) {
 	default:
 		col, arena := &k.out.texts[slot-2], &k.texts[slot-2]
 		for _, v := range values {
+			if !k.fits(arena.Len(), len(v.ByteArray())) {
+				return
+			}
 			arena.Write(v.ByteArray())
 			col.end = append(col.end, uint32(arena.Len()))
 			col.null = append(col.null, v.IsNull())
@@ -110,7 +150,7 @@ func (k *packer) Values(c int, values []parquet.Value) {
 // a value or a null already.
 func (k *packer) Missing(c int) {
 	switch slot := k.slots[c]; {
-	case slot < 0:
+	case slot < 0 || k.overflow:
 	case slot < 2:
 		col := &k.out.ints[slot]
 		for len(col.null) < k.out.n {
@@ -126,12 +166,15 @@ func (k *packer) Missing(c int) {
 	}
 }
 
-// packed returns the rows packed.
-func (k *packer) packed() packed {
+// packed returns the rows packed, or errPackedOverflow.
+func (k *packer) packed() (packed, error) {
+	if k.overflow {
+		return packed{}, errPackedOverflow
+	}
 	for f := range k.texts {
 		k.out.texts[f].arena = k.texts[f].String()
 	}
-	return k.out
+	return k.out, nil
 }
 
 func (p *packed) len() int { return p.n }

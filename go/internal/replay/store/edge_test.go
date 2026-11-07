@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -361,4 +362,39 @@ func TestPageDisorderReasonMatchesJava(t *testing.T) {
 	check("rows", err)
 	_, _, err = s.DelimitedRollup(context.Background(), nil, true, nil, nil, []byte("/"), 10, Projection{}, true)
 	check("rollup", err)
+}
+
+// TestRowsHugeLimitsThroughTheWindowCache reads a one-row fixture through
+// the window cache with limit math.MaxInt and with a limit of four
+// million: both return the row, as the cache-off store does, the second
+// allocates for the rows found rather than the rows asked for, and no
+// reader slot is left taken. The packed read's initial capacity was the
+// limit plus a window (negative at math.MaxInt, a panic that also left
+// the reader slot held).
+func TestRowsHugeLimitsThroughTheWindowCache(t *testing.T) {
+	s := openParts(t, Options{Readers: 2}, sortedparquettest.Part{Rows: objects("a")})
+	ctx := context.Background()
+	for _, limit := range []int{math.MaxInt, 4 << 20} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := func() (rows []Object, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic: %v", r)
+				}
+			}()
+			return s.Rows(ctx, nil, true, nil, limit, Projection{})
+		}()
+		runtime.ReadMemStats(&after)
+		if err != nil || len(got) != 1 || string(got[0].Key) != "a" {
+			t.Fatalf("limit %d: %d rows, %v", limit, len(got), err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 8<<20 {
+			t.Fatalf("limit %d: a one-row read allocated %d bytes", limit, n)
+		}
+		if !s.sem.TryAcquire(int64(s.Readers())) {
+			t.Fatalf("limit %d: a reader slot was left taken", limit)
+		}
+		s.sem.Release(int64(s.Readers()))
+	}
 }
