@@ -153,3 +153,27 @@ func TestAnsweredRequestLeavesTheCount(t *testing.T) {
 		})
 	}
 }
+
+// TestHTTPSTargetIsSentItsOwnHost: a request forwarded to an https
+// provider endpoint carries the endpoint's host, not the proxy's, so a
+// virtual-hosted service routes it; a plain http target keeps the
+// client's Host as before.
+func TestHTTPSTargetIsSentItsOwnHost(t *testing.T) {
+	for _, c := range []struct{ target, host string }{
+		{"https://s3.us-east-1.amazonaws.com", "s3.us-east-1.amazonaws.com"},
+		{"http://127.0.0.1:9", "127.0.0.1:19091"},
+	} {
+		p, err := New(c.target, Plan{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("GET", "http://127.0.0.1:19091/b?list-type=2", nil)
+		p.next.Director(r)
+		if r.Host != c.host || r.URL.Scheme+"://"+r.URL.Host != c.target {
+			t.Errorf("%s: forwarded to %s://%s with Host %q", c.target, r.URL.Scheme, r.URL.Host, r.Host)
+		}
+	}
+	if _, err := New("ftp://host", Plan{}); err == nil {
+		t.Error("an ftp target was accepted")
+	}
+}
