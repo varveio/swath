@@ -690,6 +690,7 @@ class GoReceiptTest(unittest.TestCase):
         later = self.commit("change the replay")
         # The binary is recomputed at the receipt commit, so a later commit keeps the receipt valid.
         self.validate(self.row(self.receipt()), later)
+        self.assertEqual(evidence.go_matrix_cell(self.row(self.receipt())), "`json-v1:TestGCSNativeCapturesMatchReplay`")
 
     def test_changed_binary_hash_is_refused(self):
         with self.assertRaisesRegex(ValueError, "binary differs"):

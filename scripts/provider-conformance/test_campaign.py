@@ -670,6 +670,66 @@ class SanitizeRunTest(unittest.TestCase):
             self.assertEqual(promoted["rows"][0]["status"], "UNMEASURED")
 
 
+class GoReceiptPromotionTest(unittest.TestCase):
+    """A Go receipt is attached to its version's proof beside the Java one; only Java receipts set
+    the row's state, and a receipt filed under the other producer's folder is refused."""
+
+    def evidence_dir(self, root: Path) -> dict:
+        body = json.dumps({"kind": "storage#objects", "items": [{"bucket": "private-bucket", "name": RUN + "a"}]})
+        exchange = {"captured_at": "2026-10-21T12:00:00Z",
+                    "request": {"method": "GET", "url": "https://example.invalid/storage/v1/b/private-bucket/o"
+                                "?prefix=" + quote(RUN, safe=""), "headers": []},
+                    "response": {"status": 200, "headers": [{"name": "Content-Type", "value": "application/json"}],
+                                 "body_base64": base64.b64encode(body.encode()).decode("ascii")}}
+        capture = evidence.canonical(evidence.sanitize_exchange(exchange, "gcs", {"bucket": "private-bucket"},
+                                                                "a" * 64, "gcs-x"))
+        (root / "gcs" / "captures").mkdir(parents=True)
+        (root / "gcs" / "captures" / "gcs-x.json").write_bytes(capture)
+        sha = __import__("hashlib").sha256(capture).hexdigest()
+        campaign.write_json(root / "gcs" / "index.json", {
+            "provider": "gcs", "run_prefix": RUN, "receipt": {"status": campaign.COMPLETE},
+            "captures": {"gcs-x": {"file": "captures/gcs-x.json", "sha256": sha, "kind": "exchange"}}})
+        return {"id": "gcs-x", "provider": "gcs", "api_versions": ["json-v1"], "status": "UNMEASURED",
+                "evidence_kind": "exchange", "feature": "a feature", "profile_promise": "a promise"}
+
+    def receipt(self, root: Path, folder: str, **fields) -> None:
+        (root / "gcs" / folder).mkdir(parents=True, exist_ok=True)
+        campaign.write_json(root / "gcs" / folder / "gcs-x.json",
+                            {"status": "PASS", "test": "aTest", "test_path": "a/Test", **fields})
+
+    def test_go_receipt_is_attached_beside_the_java_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            row = self.evidence_dir(root)
+            self.receipt(root, "receipts/go", producer="go", test="TestGo", test_path="go/x_test.go")
+            go_receipts = promotion.load_receipts(root, "go")
+            promoted = promotion.promote({"rows": [dict(row)]}, root, promotion.load_receipts(root), go_receipts)
+            proof = promoted["rows"][0]["evidence"]["json-v1"]
+            self.assertEqual(promoted["rows"][0]["status"], "OBSERVED")
+            self.assertNotIn("replay_test", proof)
+            self.assertEqual(proof["go_replay"]["replay_test"], "TestGo")
+            self.assertEqual(proof["go_replay"]["replay_result_file"], "gcs/receipts/go/gcs-x.json")
+            self.assertEqual(evidence.go_matrix_cell(promoted["rows"][0]), "`json-v1:TestGo`")
+            self.receipt(root, "receipts")
+            promoted = promotion.promote({"rows": [dict(row)]}, root, promotion.load_receipts(root), go_receipts)
+            proof = promoted["rows"][0]["evidence"]["json-v1"]
+            self.assertEqual(promoted["rows"][0]["status"], "REPLAY_MATCH")
+            self.assertEqual((proof["replay_test"], proof["go_replay"]["replay_test"]), ("aTest", "TestGo"))
+            line = promotion.matrix_lines(promoted["rows"])[2]
+            self.assertTrue(line.endswith("| `json-v1:aTest` | `json-v1:TestGo` | REPLAY_MATCH |"), line)
+
+    def test_a_receipt_in_the_other_producers_folder_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.evidence_dir(root)
+            self.receipt(root, "receipts/go")
+            with self.assertRaisesRegex(ValueError, "not a go receipt"):
+                promotion.load_receipts(root, "go")
+            self.receipt(root, "receipts", producer="go")
+            with self.assertRaisesRegex(ValueError, "not a java receipt"):
+                promotion.load_receipts(root)
+
+
 class EvidenceStorageTest(unittest.TestCase):
     def test_gzip_evidence_is_checksummed_over_its_decompressed_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

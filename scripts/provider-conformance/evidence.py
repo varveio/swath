@@ -1082,9 +1082,9 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
         if not line.startswith(("| gcs-", "| azure-", "| s3-")):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 7:
+        if len(cells) != 8:
             raise ValueError("matrix row has wrong column count")
-        row_id, provider_display, feature, promise, checksum, replay_test, status = cells
+        row_id, provider_display, feature, promise, checksum, replay_test, go_test, status = cells
         if row_id not in rows or row_id in seen:
             raise ValueError("matrix row missing from ledger or repeated")
         seen.add(row_id)
@@ -1098,8 +1098,10 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
         if row["provider"] != provider or row["feature"] != feature \
                 or row["profile_promise"] != promise or row["status"] != status:
             raise ValueError("matrix differs from evidence ledger")
-        if status == "UNMEASURED" and (checksum != "—" or replay_test != "—"):
+        if status == "UNMEASURED" and (checksum != "—" or replay_test != "—" or go_test != "—"):
             raise ValueError("unmeasured matrix row claims capture or replay test")
+        if go_test != go_matrix_cell(row):
+            raise ValueError("matrix Go replay test differs from ledger")
         if status != "UNMEASURED":
             proofs = row["evidence"]
             expected_checksum = "; ".join(
@@ -1115,6 +1117,15 @@ def validate_matrix(matrix: str, ledger: dict) -> None:
                     raise ValueError("matrix replay test differs from ledger")
     if seen != rows.keys():
         raise ValueError("matrix and ledger have different row sets")
+
+
+def go_matrix_cell(row: dict) -> str:
+    """The matrix's Go cell: each service version whose capture has a Go receipt, with its test.
+    Unlike the Java column it names a version of a row that is not matched at every version."""
+    proofs = row.get("evidence") or {}
+    tests = [f"{version}:{proofs[version]['go_replay']['replay_test']}" for version in row["api_versions"]
+             if "go_replay" in proofs.get(version, {})]
+    return "`" + "; ".join(tests) + "`" if tests else "—"
 
 
 def main() -> None:
