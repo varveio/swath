@@ -114,27 +114,64 @@ func startServer(ctx context.Context, name, bin string, args []string, logPath s
 	return s, nil
 }
 
-// stop sends SIGTERM to the server's process group, kills the group if
-// the server has not exited ten seconds later, and waits for it. It is
-// safe to call more than once.
+// stop stops the server and every process of its group, whether or not
+// the launcher has already exited: SIGTERM to the group, a ten-second
+// grace in which the launcher must have exited and the group emptied,
+// then SIGKILL to the group, and a wait until no member remains (at most
+// ten seconds more). A launcher that exits on SIGTERM while a child
+// ignores it is not taken as the group having stopped. It is safe to
+// call more than once.
 func (s *process) stop() {
 	if s == nil || s.cmd.Process == nil {
 		return
 	}
-	select {
-	case <-s.exited:
-		return
-	default:
+	p := s.cmd.Process
+	if signalGroup(p, syscall.SIGTERM) != nil {
+		p.Signal(syscall.SIGTERM)
 	}
-	if signalGroup(s.cmd.Process, syscall.SIGTERM) != nil {
-		s.cmd.Process.Signal(syscall.SIGTERM)
-	}
-	select {
-	case <-s.exited:
-	case <-time.After(10 * time.Second):
-		if signalGroup(s.cmd.Process, syscall.SIGKILL) != nil {
-			s.cmd.Process.Kill()
+	stopped := func() bool {
+		select {
+		case <-s.exited:
+			return !groupAlive(p)
+		default:
+			return false
 		}
-		<-s.exited
 	}
+	if waitFor(stopped, 10*time.Second) {
+		return
+	}
+	if signalGroup(p, syscall.SIGKILL) != nil {
+		p.Kill()
+	}
+	waitFor(stopped, 10*time.Second)
+}
+
+// waitFor polls done until it holds or within passes.
+func waitFor(done func() bool, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for !done() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
+}
+
+// runBounded runs a one-shot command (the Java sort-fixture) as the
+// servers are run: in a process group of its own, the whole group killed
+// when ctx ends, Wait bounded when a descendant keeps the output pipe
+// open, and any member left after the command returns killed and waited
+// for, so neither a stuck command nor its descendants outlive the caller.
+func runBounded(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	detach(cmd)
+	cmd.Cancel = func() error { return signalGroup(cmd.Process, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
+	if cmd.Process != nil {
+		signalGroup(cmd.Process, syscall.SIGKILL)
+		waitFor(func() bool { return !groupAlive(cmd.Process) }, 10*time.Second)
+	}
+	return out, err
 }
