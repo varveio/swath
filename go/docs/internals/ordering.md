@@ -337,8 +337,8 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   started at its closing fence certifies nothing and is abandoned (`empty`); rows after the last fence
   (`unfenced`), or a stop or failed ledger at the seal (`stopping`) abandon too.
 - **File format.** Version-2 frames (the journal's envelope: length, CRC-32C over the length and the
-  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID,
-  the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
+  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID
+  and its version, the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
   decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
   captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the
   trailer's offset and the magic). Files are named by their random ID; nothing depends on a path or inode.
@@ -377,10 +377,11 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   every unlink): K from part records only; the ledger's prefix (at most 10,000 live
   certificates, the largest cap any attempt has); the directory streamed, every file no record names
   unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
-  CRC, the header (run UUID, file ID, identity), every rows frame's claimed rows and storage within the
+  CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
+  `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the
   header's limits and the hard ones before anything sized by them is allocated (zstd frames decoded under
   the bound), one `C` equal to the record's `cs`, a certified trailer equal to the record, and the tail
-  (`TestDurableCorruption`). Then: `ce <= K`, missing, corrupt, foreign or overlapping certificates are
+  (`TestDurableCorruption`). Then: `ce <= K`, missing, corrupt, foreign, other-codec or overlapping certificates are
   retired (`retired.recovery`, `rejected.*`); recovery appends and syncs those records, unlinks, syncs the
   directory, and only then does the attempt start its flusher, after applying its own caps (the
   highest-keyed beyond the slots or the spill cap: `rejected.budget`). A crash anywhere in it reclassifies
@@ -399,7 +400,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
   `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
   `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
-  resume `resume.{ledger_dropped_bytes, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,overlap,budget},
+  resume `resume.{ledger_dropped_bytes, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},
   orphans, replayed_rows, replay_skipped_rows, gaps, requests_saved_est}` (requests saved at the engine's
   1,000-key page). `spill.durable_off` says why durable spill was off when it could have run. The engine's
   counters add `reuse.ranges`, `reuse.gaps` and `reuse.boundary_overfetch_keys` (keys a gap listed past its

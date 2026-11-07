@@ -142,7 +142,7 @@ func newDurable(t *testing.T) (*Cache, *os.Root, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { root.Close() })
-	c, err := CreateDurable(root, nil, testUUID, "ident")
+	c, err := CreateDurable(root, nil, testUUID, "ident", "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func ledgerOrder(t *testing.T) {
 func recoverAll(t *testing.T, c *Cache, root *os.Root, k *string) *Cache {
 	t.Helper()
 	c.Close()
-	r, err := RecoverDurable(root, nil, testUUID, "ident", k)
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestDurableReplayAboveK(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	probe, _ := RecoverDurable(root, nil, testUUID, "ident", nil)
+	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	probe.Start(64, 0, nil)
 	spans := probe.Spans()
 	probe.Close()
@@ -297,7 +297,7 @@ func TestDurableReplayAboveK(t *testing.T) {
 	// K: a key inside the first certificate.
 	inside := f.keys(inSpans(spans[:1], ""))
 	k := inside[len(inside)/2]
-	r, err := RecoverDurable(root, nil, testUUID, "ident", &k)
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", &k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,7 +760,7 @@ func TestDurableLedgerPrefix(t *testing.T) {
 			os.WriteFile(path, b, 0o644)
 			var classes []string
 			for attempt := range 2 {
-				r, err := RecoverDurable(root, nil, testUUID, "ident", nil)
+				r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -837,7 +837,7 @@ func TestDurableCorruption(t *testing.T) {
 			}
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			r, err := RecoverDurable(root, nil, testUUID, "ident", nil)
+			r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 			runtime.ReadMemStats(&after)
 			if err != nil {
 				t.Fatal(err)
@@ -896,14 +896,14 @@ func sealedSpill(t *testing.T, ranges int) (*os.Root, *fencedTree) {
 // the highest-keyed certificates first (rejected_budget) and keeps the rest.
 func TestDurableReducedCap(t *testing.T) {
 	root, _ := sealedSpill(t, 12)
-	probe, _ := RecoverDurable(root, nil, testUUID, "ident", nil)
+	probe, _ := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	probe.Start(1000, 0, nil)
 	all := probe.Spans()
 	probe.Close()
 	if len(all) < 4 {
 		t.Fatalf("%d certificates", len(all))
 	}
-	r, err := RecoverDurable(root, nil, testUUID, "ident", nil)
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,7 +931,7 @@ func TestDurableHistoryAcrossAttempts(t *testing.T) {
 	}
 	lf.Write(buf)
 	lf.Close()
-	r, err := RecoverDurable(root, nil, testUUID, "ident", nil)
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1058,7 +1058,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 				return nil
 			})()
 			top := "~" // K above every certificate: recovery retires them all
-			_, err := RecoverDurable(root, verify, testUUID, "ident", &top)
+			_, err := RecoverDurable(root, verify, testUUID, "ident", "test", &top)
 			if !errors.Is(err, replaced) {
 				t.Fatalf("recovery after the replacement: %v", err)
 			}
@@ -1066,5 +1066,37 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 				t.Fatalf("%d of %d entries left: unlinked after the replacement", files(), before)
 			}
 		})
+	}
+}
+
+// TestDurableCodecRejected: files of a row codec the resuming run does not
+// replay, untouched (every frame, trailer and whole-file checksum valid),
+// are rejected by recovery (rejected.codec), retired and unlinked: never
+// accepted into the reuse plan, so replay never meets them.
+func TestDurableCodecRejected(t *testing.T) {
+	root, _ := sealedSpill(t, 6)
+	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Start(1000, 0, nil)
+	n := len(probe.Spans())
+	probe.Close()
+	if n == 0 {
+		t.Fatal("nothing sealed")
+	}
+	r, err := RecoverDurable(root, nil, testUUID, "ident", "test-v2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Start(1000, 0, nil)
+	defer r.Close()
+	rep := r.Report().Resume
+	if rep.Rejected["codec"] != int64(n) || rep.Accepted != 0 || rep.Rejected["corrupt"] != 0 || len(r.Spans()) != 0 {
+		t.Fatalf("%d certificates of another codec: %+v", n, rep)
+	}
+	ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
+	if len(ents) != 1 { // the ledger
+		t.Fatalf("%d entries left in the durable directory", len(ents))
 	}
 }

@@ -34,8 +34,8 @@ var ErrDurableUnavailable = errors.New("durable spill unavailable")
 // record can follow) and an empty ledger, synced. An error other than the
 // output's replacement (verify's) wraps ErrDurableUnavailable: the run
 // goes on without durable spill.
-func CreateDurable(root *os.Root, verify func() error, uuid, ident string) (*Cache, error) {
-	c, err := newCache(root, verify, uuid, ident)
+func CreateDurable(root *os.Root, verify func() error, uuid, ident, codec string) (*Cache, error) {
+	c, err := newCache(root, verify, uuid, ident, codec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
@@ -166,8 +166,8 @@ type entry struct {
 // spill file is unlinked). An error is the output's replacement or an
 // unsafe layout (a run failure), or ErrDurableUnavailable (the run goes on
 // without durable spill and relists).
-func RecoverDurable(root *os.Root, verify func() error, uuid, ident string, k *string) (*Cache, error) {
-	c, err := newCache(root, verify, uuid, ident)
+func RecoverDurable(root *os.Root, verify func() error, uuid, ident, codec string, k *string) (*Cache, error) {
+	c, err := newCache(root, verify, uuid, ident, codec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDurableUnavailable, err)
 	}
@@ -395,6 +395,7 @@ const (
 	rejectMissing
 	rejectCorrupt
 	rejectForeign
+	rejectCodec
 )
 
 // classify validates every entry's file and settles it: accepted, or
@@ -421,6 +422,8 @@ func (c *Cache) classify(entries map[[16]byte]*entry) error {
 			c.st.RejectedCorrupt.Add(1)
 		case rejectForeign:
 			c.st.RejectedForeign.Add(1)
+		case rejectCodec:
+			c.st.RejectedCodec.Add(1)
 		}
 		switch {
 		case why != accepted:
@@ -582,10 +585,11 @@ func (c *Cache) RetainedBytes() int64 {
 	return c.retained.Load()
 }
 
-// validate checks d's file against its record, without the row codec:
+// validate checks d's file against its record, without decoding rows:
 // a regular file of the recorded length and CRC-32C, every frame's CRC,
-// the header (magic, version, run UUID, file ID, identity digest; its
-// frame limits within the hard ones), every rows frame's claimed rows and
+// the header (magic, version, run UUID, file ID, identity digest, the row
+// codec ID and version this run replays; its frame limits within the hard
+// ones), every rows frame's claimed rows and
 // decoded bytes within the limits (checked before allocation, zstd frames
 // decoded under the bound), one capture start equal to the record's cs, and
 // a certified trailer equal to the record, then the tail. It records the
@@ -722,6 +726,7 @@ func (v *validator) header(body []byte) rejection {
 	}
 	dd := schema.NewDecoder(b[32:])
 	ident, codec := dd.Str(), strings.Clone(dd.Str())
+	codecVer := dd.Uvarint()
 	maxRows, maxDecode := dd.Uvarint(), dd.Uvarint()
 	lo, hi := strings.Clone(dd.Str()), strings.Clone(dd.Str())
 	open := dd.Byte()
@@ -731,12 +736,19 @@ func (v *validator) header(body []byte) rejection {
 	if ident != v.c.ident {
 		return rejectForeign
 	}
+	if codec != v.c.codec || codecVer != rowCodecVersion {
+		// A row codec this build cannot replay (another schema's, or a
+		// later encoding): no coverage, the interval is a live gap. It is
+		// settled here, before the file joins the reuse plan, never at
+		// replay (where it would refuse every resume).
+		return rejectCodec
+	}
 	if maxRows == 0 || maxRows > publishRows || maxDecode == 0 || maxDecode > maxSpillFrame {
 		return rejectCorrupt // a limit above the hard one rejects the file
 	}
 	v.maxRows, v.maxDecode = maxRows, min(maxDecode, maxSpillDecoded)
 	v.d.lo, v.d.hi, v.d.open = lo, hi, open == 1
-	v.d.codec = codec
+	v.d.codec, v.d.codecVer = codec, codecVer
 	return accepted
 }
 

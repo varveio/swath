@@ -307,7 +307,7 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		if !cfg.Limits.Spill.Off {
 			r, err := jr.rooted()
 			if err == nil {
-				jr.cache, err = order.CreateDurable(r, lock.Verify, j.RunUUID(), id.Hash())
+				jr.cache, err = order.CreateDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID)
 			}
 			if err := jr.durableOff(cfg, err); err != nil {
 				jr.j.Close()
@@ -392,7 +392,7 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 		jr.off = "journal version 7"
 	default:
 		// The durable spill's recovery, after the parts': K is theirs.
-		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), jr.after())
+		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID, jr.after())
 		if err := jr.durableOff(cfg, err); err != nil {
 			j.Close()
 			return nil, err

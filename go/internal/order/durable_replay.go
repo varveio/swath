@@ -140,8 +140,10 @@ func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
 	if k := o.opt.After; k != nil && *k > low {
 		low = *k
 	}
-	if d.codec != sp.codecID {
-		return &dataset.InvariantError{Reason: fmt.Sprintf("durable spill: %s holds rows of codec %q, the run's is %q", d.name, d.codec, sp.codecID)}
+	if d.codec != sp.codecID || d.codecVer != rowCodecVersion {
+		// Recovery accepts only the run's codec (rejected.codec): a
+		// difference here is a broken invariant, not a stale file.
+		return &dataset.InvariantError{Reason: fmt.Sprintf("durable spill: %s holds rows of codec %q version %d, the run's is %q version %d", d.name, d.codec, d.codecVer, sp.codecID, rowCodecVersion)}
 	}
 	if err := faults.At("spill-replay"); err != nil {
 		return err

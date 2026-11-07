@@ -78,6 +78,12 @@ const (
 	// replayPageKeys is the page size requests_saved_est divides by: the
 	// engine's default page (keyrange.PageKeys).
 	replayPageKeys = 1000
+	// rowCodecVersion is the version of the rows frames' encoding under a
+	// codec ID (the schema ID): the disposable spill's plain, delta and
+	// zstd frame bodies as spill.go writes them. A durable file whose
+	// header names another codec ID or version is not replayable by this
+	// build: recovery rejects it (rejected.codec) and lists its interval.
+	rowCodecVersion = 1
 )
 
 // DurableDir is the durable spill directory, relative to the output.
@@ -121,6 +127,7 @@ type Cert struct {
 	drained     bool   // its reader closed
 	retiring    bool   // queued for retirement or unlink
 	codec       string // recovery: the header's row codec ID
+	codecVer    uint64 // recovery: the header's row codec version
 }
 
 // fileName is the durable file's name for id.
@@ -151,6 +158,7 @@ type Cache struct {
 	verify func() error
 	uuid   [16]byte
 	ident  string
+	codec  string // the run's row codec ID (the schema ID): recovery accepts only files of it
 	k      string // K, the published prefix (mu)
 	hasK   bool
 
@@ -218,6 +226,7 @@ type durableStats struct {
 	RejectedMissing     atomic.Int64
 	RejectedCorrupt     atomic.Int64
 	RejectedForeign     atomic.Int64
+	RejectedCodec       atomic.Int64
 	RejectedOverlap     atomic.Int64
 	RejectedBudget      atomic.Int64
 	Orphans             atomic.Int64
@@ -289,7 +298,7 @@ func (c *Cache) Report() *DurableReport {
 	if c.resumed {
 		r.Resume = &DurableResume{LedgerDroppedBytes: s.LedgerDroppedBytes.Load(), Accepted: s.Accepted.Load(), AcceptedBytes: s.AcceptedBytes.Load(),
 			Rejected: map[string]int64{"missing": s.RejectedMissing.Load(), "corrupt": s.RejectedCorrupt.Load(), "foreign": s.RejectedForeign.Load(),
-				"overlap": s.RejectedOverlap.Load(), "budget": s.RejectedBudget.Load()},
+				"codec": s.RejectedCodec.Load(), "overlap": s.RejectedOverlap.Load(), "budget": s.RejectedBudget.Load()},
 			Orphans: s.Orphans.Load(), ReplayedRows: s.ReplayedRows.Load(), ReplaySkippedRows: s.ReplaySkippedRows.Load(),
 			Gaps: s.Gaps.Load(), RequestsSavedEst: s.RequestsSavedEst.Load()}
 	}
@@ -307,8 +316,8 @@ var retireCode = map[string]byte{retirePublished: 1, retireEvicted: 2, retireRec
 
 // newCache is a cache over root's durable directory, before its ledger is
 // opened.
-func newCache(root *os.Root, verify func() error, uuid, ident string) (*Cache, error) {
-	c := &Cache{root: root, verify: verify, ident: ident, kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+func newCache(root *os.Root, verify func() error, uuid, ident, codec string) (*Cache, error) {
+	c := &Cache{root: root, verify: verify, ident: ident, codec: codec, kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	if c.verify == nil {
 		c.verify = func() error { return nil }
 	}
@@ -859,15 +868,16 @@ func check2(hdr [8]byte, payload []byte) bool {
 }
 
 // headerBody is a durable file's H body: magic, format version, run UUID,
-// file ID, the journal identity's digest, the row codec ID (the schema ID),
-// the writer's largest frame rows and decoded bytes, the node's logical
-// bounds.
+// file ID, the journal identity's digest, the row codec ID (the schema ID)
+// and version, the writer's largest frame rows and decoded bytes, the
+// node's logical bounds.
 func (c *Cache) headerBody(d *Cert, codec string) []byte {
 	b := append([]byte(durableMagic), durableVersion)
 	b = append(b, c.uuid[:]...)
 	b = append(b, d.id[:]...)
 	b = schema.AppendString(b, c.ident)
 	b = schema.AppendString(b, codec)
+	b = binary.AppendUvarint(b, rowCodecVersion)
 	b = binary.AppendUvarint(b, publishRows)
 	b = binary.AppendUvarint(b, maxSpillDecoded)
 	b = schema.AppendString(b, d.lo)

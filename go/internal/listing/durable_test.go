@@ -4,8 +4,10 @@
 package listing
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -356,7 +358,7 @@ func TestDurableChangedSource(t *testing.T) {
 	}
 	root, _ := os.OpenRoot(cp)
 	defer root.Close()
-	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), k)
+	c, err := order.RecoverDurable(root, nil, st.Header.RunUUID, st.Header.Identity.Hash(), st.Header.Identity.SchemaID, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,4 +532,95 @@ func TestDurableOverwrite(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, order.DurableDir)); !os.IsNotExist(err) {
 		t.Fatalf("the durable spill survived: %v", err)
 	}
+}
+
+// TestDurableUnknownCodec: durable files whose header names a row codec
+// this run does not replay, every checksum valid (the header frame's, the
+// trailer's prior-bytes CRC, the whole file's CRC in its ledger record), so
+// the codec check itself decides: recovery rejects them (rejected.codec)
+// and the resume lists their intervals as gaps, instead of refusing at
+// replay; the dataset is the uninterrupted one.
+func TestDurableUnknownCodec(t *testing.T) {
+	url, _, ref, out := durableFixture(t)
+	files := durableFiles(t, out)
+	if len(files) == 0 {
+		t.Fatal("no durable file after the crash")
+	}
+	recorded := 0
+	for _, name := range files {
+		if recodec(t, out, name) {
+			recorded++
+		}
+	}
+	if recorded == 0 {
+		t.Fatal("no durable file has a ledger record")
+	}
+	sum, err := Run(context.Background(), durableConfig(url, out, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameDataset(t, "unknown codec", ref, out)
+	r := sum.Resources.Spill.Durable.Resume
+	if r.Rejected["codec"] == 0 || r.Accepted != 0 || r.Rejected["corrupt"] != 0 {
+		t.Fatalf("resume %+v", r)
+	}
+}
+
+// recodec rewrites durable file name in out to name another row codec (the
+// codec ID's last byte changed, its length kept), with every checksum made
+// valid again: the header frame's CRC, the trailer's CRC of the bytes
+// before it, and the whole file's CRC in its ledger record. False: no
+// record names the file (an orphan the resume unlinks).
+func recodec(t *testing.T, out, name string) bool {
+	t.Helper()
+	tab := crc32.MakeTable(crc32.Castagnoli)
+	reseal := func(fr []byte) {
+		binary.LittleEndian.PutUint32(fr[4:8], crc32.Update(crc32.Checksum(fr[:4], tab), tab, fr[8:]))
+	}
+	path := filepath.Join(out, order.DurableDir, name)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n0 := int(binary.LittleEndian.Uint32(b))
+	body := b[9 : 8+n0]    // the H frame's body
+	pos := 8 + 1 + 16 + 16 // magic, version, run UUID, file ID
+	for range 2 {          // the identity digest, then the codec ID
+		l, k := binary.Uvarint(body[pos:])
+		pos += k
+		if l == 0 {
+			t.Fatal("empty header string")
+		}
+		pos += int(l)
+	}
+	body[pos-1] ^= 0x20 // the codec ID's last byte
+	reseal(b[:8+n0])
+	off := int(binary.LittleEndian.Uint64(b[len(b)-16:]))
+	nt := int(binary.LittleEndian.Uint32(b[off:]))
+	tr := b[off : off+8+nt]
+	binary.LittleEndian.PutUint32(tr[len(tr)-4:], crc32.Checksum(b[:off], tab))
+	reseal(tr)
+	sum := crc32.Checksum(b, tab)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := hex.DecodeString(strings.TrimSuffix(name, ".spill"))
+	lp := filepath.Join(out, order.DurableDir, "ledger")
+	lb, _ := os.ReadFile(lp)
+	found := false
+	for at := 0; at+8 <= len(lb); {
+		n := int(binary.LittleEndian.Uint32(lb[at:]))
+		if at+8+n > len(lb) {
+			break
+		}
+		fr := lb[at : at+8+n]
+		if fr[8] == 'S' && bytes.Equal(fr[9:25], id) {
+			binary.LittleEndian.PutUint32(fr[len(fr)-4:], sum)
+			reseal(fr)
+			found = true
+		}
+		at += 8 + n
+	}
+	os.WriteFile(lp, lb, 0o644)
+	return found
 }
