@@ -51,13 +51,14 @@ time the epoch, a null ETag, storage class, checksum or owner field an absent el
   starting with P; the two are separate functions because an all-0xFF input means "no upper bound, read to the
   end" for one and "nothing follows, the listing is over" for the other, and mixing them up either drops keys or
   restarts a finished listing.
-- The resume boundary is the token's (exclusive or inclusive at its key) if the request has a non-blank token,
-  else `start-after` exclusive; the read starts at whichever of it and the prefix is later.
+- The resume boundary is the token's (exclusive or inclusive at its key) if the request has a token (a
+  present token that does not decode is refused before the pager), else `start-after` exclusive; the read starts at whichever of it and the prefix is later.
 - Without a delimiter one read of `pageSize + 1` rows answers the page; the extra row is the truncation signal,
   and the token resumes exclusive at the last key returned.
 - With a delimiter the store's rollup answers when it accepts. Otherwise the pager walks: it reads batches of
   4,096 rows; an object is emitted; a key with the delimiter after the prefix rolls up to its common prefix P,
-  emitted unless it is at or before the request's boundary, and the walk resumes at `Successor(P)` inclusive,
+  emitted unless it is at or before the request's `start-after` (after a token it is always emitted, see
+  Tokens), and the walk resumes at `Successor(P)` inclusive,
   past P's whole subtree. Short runs of P's keys already in the batch are skipped in place (up to 32), a long
   run reads again from the successor: the threshold changes the number of reads, never the output. After a full
   page one more one-row read decides truncation. A page that ends on a prefix resumes inclusive at its
@@ -70,11 +71,25 @@ equal to the listing computed directly.
 
 ## Tokens
 
-`v2:` + unpadded base64url of a flag byte (0 exclusive, 1 inclusive) and the boundary key; `v1:` + the key
-decodes as exclusive. Decoding checks the shape only: there is no signature, because a forged token chooses a
-resume point the client could already choose with `start-after`. The encoding is exactly the Java server's, so
-a token from either server resumes on the other and the differential driver can compare bodies that contain
-them byte for byte (`TestTokenGolden` holds a token the Java server issued).
+Unpadded base64url of a flag byte (0 exclusive, 1 inclusive), the boundary key and the big-endian CRC-32
+(IEEE) of the two. The decoder is strict (no padding, no stray bits after the last byte, no line breaks), so any
+change to the text changes the decoded bytes or fails to decode, and a changed payload fails the checksum: an
+altered token is `400 InvalidArgument`, as live S3 answers its own altered tokens
+(`TestLiveAlteredTokenIsRefused`, `TestTokenProperties`). It is a checksum, not a signature: a forged token
+chooses a resume point the client could already choose with `start-after`.
+
+The Java server's tokens (`v2:` + base64url of flag and boundary, `v1:` + the key) carry no check and are
+refused here; for the same boundary this server issues different bytes (`TestTokenGolden` records both). The
+differential driver therefore hands the Go server each Java token translated to the Go form and compares the
+pages with token values masked, listing the requests whose answers differ only in token bytes. The injected
+latency jitter of a continuation page hashes the token text, so it differs from the Java server's for the same
+walk.
+
+A token resumes a delimiter listing differently from a `start-after`: after a `start-after` a common prefix at
+or before it is suppressed (the client has passed it), after a token the walk rolls up whatever key comes next
+(the store's rollup gets `suppressPrefixAtOrBeforeFloor` false), so a flat page's token that ends inside a
+common prefix lists that prefix again, as live S3 does (`TestLiveFlatTokenWithDelimiterRelistsItsPrefix`). A
+delimiter page's own token resumes at the prefix's successor, so its walk repeats nothing.
 
 ## Text and the wire
 
@@ -220,7 +235,8 @@ and sends both servers the same requests:
 - token walks to the end at each page size (`-walks`, default 1, 7, 1000) over the bucket and each top-level
   prefix, with and without the delimiter, and walks that begin with a `start-after` at, inside and at the
   successor of a few directory prefixes (at the root and inside the parent prefix), carrying the token and the
-  `start-after` together on every later page; each follows the reference's tokens and compares every page;
+  `start-after` together on every later page; each follows the reference's tokens (handed to the Go server in its own form on the S3 route) and
+  compares every page;
 - a seeded random walk (`-random`, `-seed`).
 
 "Identical" is: the same status, the same `Content-Type` and the same value for every `x-amz-*` and
@@ -229,6 +245,19 @@ chunked) are not compared. A difference is reported with the first differing bod
 The request set is data (a `request` list and a `comparator`), so another route adds its matrix and, where byte
 identity cannot hold, a structural comparator; `-live-endpoint` uses one (leaf elements, tokens masked, error
 codes only) to compare the Go server with live S3, where the bucket may have changed since it was recorded.
+
+On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server
+does not (the form reading of the query, the first of duplicates, key parameters as UTF-8, the empty
+`start-after` echo, `encoding-type` checked and echoed, `marker`, NUL and token refusals, checksummed tokens, a
+flat token's relisting, and the `+`/`*` encoding table). Against the Java launcher every S3 request goes
+through `compareS3` (`s3_divergences.go`): `planS3` reads the request as the route does (the driver's own
+reading) and derives the Go answer from the Java server's, either a probed refusal or the Java answer to the
+equivalent request with the probed echo and encoding rules applied; the Go answer must equal it with token
+values masked, and a request whose Java answer as sent differs is listed under `documented_divergences` with
+both answers and the rules involved, counted as passed or failed on the Go side. `s3DivergenceCases` adds one
+case per rule with a pin from the live probe. Tests: `TestS3PlanRules`, `TestS3PlanFixes`,
+`TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
+`TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
 
 In the package's own tests the driver compares two Go servers over the same keys, one whose store answers the
 `/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`), and checks that

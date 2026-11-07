@@ -100,15 +100,37 @@ cancellation to finish on its own. A failure to close the fixture is logged (`re
 `encoding-type=url` and `fetch-owner`. The bucket is the first segment of the path as sent (later segments are
 ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte order.
 
+- The query is read as a form, as live S3 reads it: `+` is a space, `%XX` a byte, and a parameter whose name or
+  value holds a malformed escape (`%ZZ`, a trailing `%`) is dropped, so `prefix=a%ZZ` lists from the bucket's
+  first key with an empty `Prefix`. Of a repeated parameter the first value counts. `prefix`, `delimiter` and
+  `start-after` are read as UTF-8, each malformed sequence one U+FFFD (`start-after=%FF` bounds and echoes as
+  U+FFFD).
 - `max-keys` is echoed as asked; a page holds at most 1,000 entries, objects and common prefixes together.
-  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument`. An integer is an optional sign
-  and decimal digits from any script of the Basic Multilingual Plane (`١٢` is 12); a digit outside it (such as
-  U+1D7D9) is not an integer.
+  Missing or blank is 1,000; negative or not an integer is `400 InvalidArgument` (`max-keys=+2` is " 2", not an
+  integer). An integer is an optional sign and decimal digits from any script of the Basic Multilingual Plane
+  (`١٢` is 12); a digit outside it (such as U+1D7D9) is not an integer.
+- Refusals, each `400 InvalidArgument` with live S3's message, checked in S3's order after `max-keys`: a `marker`
+  (ListObjects V1's, even empty); an `encoding-type` other than `url` in any case (the empty one included); a
+  `continuation-token` that is empty, blank or not a token this server issued unaltered; a NUL in `prefix`, or
+  in a `start-after` that is used (a token wins over it).
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
-  omits the ignored `StartAfter`. A blank token is absent. A malformed token is `400 InvalidArgument`
-  even when a `start-after` could have served. Replay tokens (`v2:...`) and S3's are not interchangeable.
-- `encoding-type=url` percent-encodes every byte but `A-Z a-z 0-9 - _ . /` with upper-case hex, as S3 does.
-  Without it, key bytes are rendered as UTF-8 text with malformed sequences replaced.
+  omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
+  flipped or dropped character is refused as S3 refuses it. A flat page's token sent with a delimiter resumes
+  at its key and rolls up what follows, the common prefix that key falls in included; a `start-after` inside a
+  common prefix passes it. Replay tokens and S3's are not interchangeable, and neither are the Java server's
+  (`v2:...`), which this server refuses.
+- An empty `start-after` bounds nothing and is echoed as `<StartAfter></StartAfter>`.
+- `encoding-type=url` writes letters, digits, `-`, `_`, `.`, `/` and `*` as they are, a space as `+`, and every
+  other byte as `%XX` with upper-case hex; `EncodingType` echoes the value as sent (`URL`). Without it, key
+  bytes are rendered as UTF-8 text with malformed sequences replaced (control characters as the raw byte,
+  where S3 writes a character reference such as `&#x1;`).
+- The rules in the three items above, the form reading and the refusals answer as live S3 does (probed on
+  2026-11-07 against a public `us-east-1` bucket, anonymous) and differ from the Java server, which keeps `+`
+  and malformed escapes as bytes, takes the last of duplicates, treats a blank token or `encoding-type` value
+  as absent, ignores `marker`, serves a NUL, reads key parameters as raw bytes, escapes a space and `*`, and
+  issues and accepts unchecked tokens. ListObjects V1 (no `list-type`) and `list-type=3` stay refused
+  (`400 InvalidArgument`), as on the Java server, where S3 serves them; `fetch-owner=true` renders `Owner` only
+  where the fixture holds owner columns.
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
   `Owner` appears only with `fetch-owner=true`.
 - Errors are S3's XML error document with `Code`, `Message`, `Resource` (the path as sent) and `RequestId`:
@@ -501,6 +523,11 @@ Every run exited 0. The scripts behave the same on either server; nothing in the
 - Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
   subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
+- The S3 route's live-S3 answers above differ from the Java server's by decision. The differential driver holds
+  the Go answer to what the Java server's answers imply under those rules (the Java answer to the equivalent
+  request, or the probed refusal), lists each request whose Java answer differs as a `DOCUMENTED DIVERGENCE`
+  line with both answers, and follows each server's own tokens through a walk, listing the requests whose
+  answers differ only in token bytes.
 - Five request cases are not byte-identical with the Java server, by decision. The differential driver compares
   the first three on the status and the headers the Java server sets, sends the last two and reports what each
   server answered (`DOCUMENTED RESIDUAL` lines and a count of their own, outside the compared, passed and failed
