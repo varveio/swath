@@ -70,6 +70,12 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
 part interval cuts (below).
 
+After listing, the order stage may write the rest as segments: consecutive parts opened in order and written
+by several goroutines at once (`Router.Plan`, `OpenSegment`; [ordering](ordering.md#segments-parts-written-in-parallel-after-listing)).
+It cuts them with the router's own rule once part 0 has frozen the ratio, so the parts are the same; the
+interval closes no part from then on. Publication stays in ordinal order with the adjacency check, and the
+abort closes every segment's queue unpublished.
+
 **The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. The router refuses to open part 100,000
 (`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
 journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable

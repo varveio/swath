@@ -838,6 +838,9 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 			CappedWaits: ra.Capped, ReadNs: int64(ra.Read), DecodeNs: int64(ra.Decode), MaxReads: ra.MaxReads}
 	}
 	if a.router != nil {
+		s := ost.Segments
+		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, MaxRows: s.MaxRows, Seams: s.Seams,
+			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan)}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
 		switch {

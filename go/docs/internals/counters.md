@@ -72,6 +72,9 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.read_ahead.drainer_waits`, `drain.read_ahead.capped_waits` | waits | the drainer waiting for a frame being read; workers waiting at the read-ahead's share of the row budget |
 | `drain.read_ahead.read_ns`, `drain.read_ahead.decode_ns` | ns | the workers' read-ahead time, and the part of it spent decoding |
 | `drain.read_ahead.max_reads` | reads | reads allowed at once: 8, at most `GOMAXPROCS` - 1; 0 is off (one processor: the drainer replays alone) |
+| `drain.segments.reason` | reason | the segment-parallel replay after listing: `engaged`, or why not: `one_processor` (GOMAXPROCS 2 or less), `one_encoder`, `single_part`, `not_planned` (the router's rule not stated before the drain ended), `listing_active` (absent without a dataset) |
+| `drain.segments.segments`, `.workers`, `.rows`, `.max_rows`, `.seam_checks` | parts, workers, rows, rows, seams | segments written (one part each), the workers writing them, their rows and the largest segment's, the seams checked |
+| `drain.segments.time_ns`, `.max_time_ns`, `.plan_ns` | ns | segments' time summed (open to close) and the longest; cutting the rest into segments |
 | `drain.encoders_at_start`, `drain.encoders_after_listing`, `drain.encoder_admission` | encoders, reason | Parquet encoders admitted at the start and once listing ended (`listing.admitAfterListing`); why: `listing_done`, `explicit` (`--encoders` given), `at_cap`, `not_reached` (absent without a dataset) |
 | `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 

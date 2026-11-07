@@ -152,7 +152,9 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   the outcome in an older `error.json`.
 - **`--part-interval`** (default 30 s; 0: size only) closes an open part once it is that old, so the durable
   recovery point (what a resume keeps) is never much older than that on a slow frontier. With 0, part
-  boundaries do not depend on timing.
+  boundaries do not depend on timing. Once listing is done and the rest of a sorted run is written as parallel
+  segments (`resources.drain.segments.reason` `engaged`), the interval closes no part: the tail is cut by
+  size and row count only ([ordering](internals/ordering.md#segments-parts-written-in-parallel-after-listing)).
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 

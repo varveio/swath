@@ -353,3 +353,47 @@ the workers' idle time before and after listing ended, and the drainer's time: `
 `replay_decode_ns`, `ahead_wait_ns`, `order_check_ns`, `sink_write_ns` (with `frontier_wait_ns`). On one
 processor the drainer may replay every frame before an idle worker is scheduled: `drainer_frames` then counts
 them all.
+
+### Segments: parts written in parallel after listing
+
+The read-ahead removes the replay from the drain, but on Batch (16 cores) the tail stayed at half the wall:
+the drainer hands rows to one open part at a time, and one part encodes one page at a time, so more encoders
+did not help (`sink_write_ns` 86 % of the tail, unchanged from 5 to 16 encoders). Queuing a later part's rows
+while an earlier one encodes would hold a whole part's rows in memory (a median 13.9M rows). So once listing
+is done, the order stage cuts the rest of the stream into parts itself and writes several at once
+(`order/segments.go`, `parquetout/segments.go`):
+
+- **When.** Listing is done (every range finished, so the rest is immutable), the sink states its cut rule
+  (`order.Segmenter`: the Parquet router once part 0 has frozen its size ratio, and no recovered boundary,
+  `parquetout.Options.Cut`, lies ahead), at least two encoders are admitted and two processors are spare
+  beside the drainer's. Workers: the encoders admitted, at most one per spare processor and at most 8
+  (`spareReaders`). With two processors or one nothing changes. Before listing is done nothing changes either: the drainer walks the tree as
+  always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
+- **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
+  (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
+  listed. The cut follows the router's rule exactly: a part closes after the row whose logical bytes bring it
+  to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
+  to find the row; the others pass whole. The first segment continues the open part. So the parts are the
+  ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
+  2, 3 and 8 workers against the serial drain, with and without a row cap).
+- **The part interval stops.** Once segments begin, the rest is cut by size and row count only:
+  `--part-interval` closes no part in the tail. Its purpose, a recent durable point behind a slow frontier,
+  does not arise there: every row is listed, and the parts publish as fast as they encode. With
+  `--part-interval 0` the parts are identical either way; with it on, boundaries already depend on timing.
+- **Order.** A worker takes the next segment, opens its part in order (ordinals stay dense), reads its
+  frames on its own descriptor, checks every row against the one before (the first segment also against the
+  drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
+  the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
+  earlier one; the order stage checks each seam again. A seam that descends stops the run before the first
+  row of the later segment is published (`TestSegmentsSeamError`). Each spill file's trailer is checked
+  against the rows the segments and the drainer replayed from it.
+- **Failure.** Any failure stops every worker. A segment that did not finish leaves its part unclosed, and
+  the router's abort discards it: no partial part is published (`TestSegmentsFailureClosesNoPart`). The
+  parts before it that finished may publish, in order: a durable prefix, as always.
+- **Memory.** No rows are queued beyond the serial drain's: each worker holds one decoded frame, one batch
+  and its part's queue (16 batches), and the tree's in-memory rows stay where they were until the drain
+  ends (`TestSegmentsMemoryIsBounded`). The read-ahead stops when segments begin.
+
+The report's `resources.drain.segments` carries `reason` (`engaged`, `one_processor`, `one_encoder`,
+`single_part`, `not_planned`, `listing_active`), `segments`, `workers`, `rows`, `max_rows`, `seam_checks`,
+`time_ns` (summed, open to close), `max_time_ns` and `plan_ns`.

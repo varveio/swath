@@ -334,6 +334,9 @@ type Drain struct {
 	SinkWriteNs    int64 `json:"sink_write_ns"`
 	// ReadAhead is the spill read-ahead (nil: spill off).
 	ReadAhead *ReadAhead `json:"read_ahead,omitempty"`
+	// Segments is the segment-parallel replay after listing (nil without
+	// a dataset).
+	Segments *Segments `json:"segments,omitempty"`
 	// The Parquet encoders admitted at the start and once listing ended,
 	// and why the second is what it is (EncoderAdmission*); absent without
 	// a dataset.
@@ -368,6 +371,23 @@ type ReadAhead struct {
 	// MaxReads is the reads allowed at once (8, at most one fewer than
 	// GOMAXPROCS): 0 is off, the drainer replaying alone (one processor).
 	MaxReads int `json:"max_reads"`
+}
+
+// Segments is the segment-parallel replay: once listing was done, the rest
+// of the stream cut into parts by the order stage and written by several
+// workers at once (order.SegmentStats).
+type Segments struct {
+	// Reason: engaged, one_processor, one_encoder, single_part,
+	// not_planned or listing_active.
+	Reason   string `json:"reason"`
+	Segments int    `json:"segments"`
+	Workers  int    `json:"workers"`
+	Rows     int64  `json:"rows"`
+	MaxRows  int64  `json:"max_rows"`
+	Seams    int64  `json:"seam_checks"`
+	TimeNs   int64  `json:"time_ns"`     // summed over segments, open to close
+	MaxNs    int64  `json:"max_time_ns"` // the longest segment
+	PlanNs   int64  `json:"plan_ns"`     // cutting the rest into segments (boundary frames decoded)
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

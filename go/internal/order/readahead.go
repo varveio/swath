@@ -84,6 +84,7 @@ type readAhead[R, P any] struct {
 	// starved: a worker waits for the read-ahead to drop below its share;
 	// waiting: the drainer waits for a frame being read.
 	starved, waiting bool
+	off              bool // stopped for good (the segments read for themselves)
 	st               ReadAheadStats
 }
 
@@ -95,7 +96,7 @@ func (o *run[R, P]) aheadShare() int64 { return max(1, o.opt.Budget/4) }
 // their cap, with capped set when the read-ahead holds its share.
 func (o *run[R, P]) claimAhead() (*fetch[P], bool) {
 	ra := o.ra
-	if ra == nil || ra.reads >= ra.maxReads {
+	if ra == nil || ra.off || ra.reads >= ra.maxReads {
 		return nil, false
 	}
 	for ra.next < len(ra.q) && ra.q[ra.next].state != pending {
@@ -281,3 +282,8 @@ func (o *run[R, P]) replayMarker(it *item[R, P]) error {
 	o.sp.skip(it.spill, ft.at.size, int64(len(rows)))
 	return o.send(rows)
 }
+
+// spareReaders is how many reads may run beside the drainer's: one per
+// spare processor, at most aheadReads (the read-ahead's and the segments'
+// cap, and the extra zstd decoders); 0 on one processor.
+func spareReaders() int { return min(aheadReads, max(0, aheadProcs()-1)) }

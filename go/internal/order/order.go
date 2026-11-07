@@ -124,6 +124,9 @@ type Stats struct {
 	IdleBefore, IdleAfter time.Duration
 	Drainer               DrainerTimes
 	ReadAhead             ReadAheadStats
+	// Segments is the segment-parallel replay after listing (segments.go;
+	// zero when the sink is no Segmenter).
+	Segments SegmentStats
 }
 
 // DrainerTimes is the drainer's time by what it did (Stats.FrontierWait is
@@ -223,8 +226,10 @@ type item[R, P any] struct {
 }
 
 // spillAt locates a spilled frame in its file, and what its rows count
-// against the budget once decoded (the units they were published with).
-type spillAt struct{ off, size, units int64 }
+// against the budget once decoded (the units they were published with);
+// rows and logical are its rows and their logical bytes
+// (schema.LogicalBytes), for cutting the stream into parts (segments.go).
+type spillAt struct{ off, size, units, rows, logical int64 }
 
 type node[R, P any] struct {
 	r       R
@@ -280,8 +285,13 @@ type run[R, P any] struct {
 	path         []drainFrame[R, P]
 	releaseEvery int64
 	ra           *readAhead[R, P] // nil without spill
-	dt           DrainerTimes     // drainer only
-	drainEnd     time.Time
+	seg          *segState[P]     // nil: the sink is no Segmenter
+	schema       *schema.Schema[P]
+	// listedNotified: listing is done and ListingDone has returned (the
+	// encoders it admits are counted by the time segments are planned).
+	listedNotified atomic.Bool
+	dt             DrainerTimes // drainer only
+	drainEnd       time.Time
 
 	// open counts the ranges created and not yet done: the listing is done
 	// when it reaches zero (listedAt, under mu). idleBefore and idleAfter
@@ -529,6 +539,16 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	st.ListingDone, st.DrainEnd, st.IdleBefore, st.IdleAfter = o.listedAt, o.drainEnd, o.idleBefore, o.idleAfter
 	st.Drainer = o.dt
+	if o.seg != nil {
+		st.Segments = o.seg.st
+		switch {
+		case st.Segments.Reason != "":
+		case o.listedAt.IsZero():
+			st.Segments.Reason = SegmentNotListedDone
+		default:
+			st.Segments.Reason = SegmentNotPlanned
+		}
+	}
 	if o.ra != nil {
 		st.ReadAhead = o.ra.st
 		st.ReadAhead.MaxReads = o.ra.maxReads
@@ -551,7 +571,10 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 // returned function releases it.
 func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s *schema.Schema[P], opt Options) (*run[R, P], func(), error) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes}
+	o := &run[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, sink: sink, measure: s.RowsBytes, schema: s}
+	if sg, ok := sink.(Segmenter[P]); ok {
+		o.seg = &segState[P]{sg: sg, waitRows: -1}
+	}
 	o.work = sync.NewCond(&o.mu)
 	o.drain = sync.NewCond(&o.mu)
 	o.g = opt.Gauges
@@ -589,11 +612,11 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		sp.wake, sp.verify = wake, opt.SpillVerify
 		sp.g = o.g
 		o.sp = sp
-		if n := aheadProcs() - 1; n > 0 {
+		if n := spareReaders(); n > 0 {
 			// The read-ahead needs a processor beside the drainer's: on
 			// one, its reads only take turns with the drainer
 			// (ReadAheadStats.MaxReads 0).
-			o.ra = &readAhead[R, P]{maxReads: min(aheadReads, n)}
+			o.ra = &readAhead[R, P]{maxReads: n}
 		}
 	}
 	if opt.Shared != nil {
@@ -681,8 +704,11 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 	err := o.p.Expand(o.ctx, n.r, e)
 	listed := false
 	defer func() { // after the unlock below
-		if listed && o.opt.ListingDone != nil {
-			o.opt.ListingDone()
+		if listed {
+			if o.opt.ListingDone != nil {
+				o.opt.ListingDone()
+			}
+			o.listedNotified.Store(true)
 		}
 	}()
 	o.mu.Lock()
@@ -911,7 +937,7 @@ func (e *emitter[R, P]) spill() error {
 		f := e.n.spill
 		e.rows -= len(e.items[i].rows)
 		e.units -= e.items[i].units - markerUnits()
-		e.items[i] = item[R, P]{spill: f, units: markerUnits(), at: spillAt{off: f.lastOff, size: f.lastSize, units: e.items[i].units}}
+		e.items[i] = item[R, P]{spill: f, units: markerUnits(), at: spillAt{off: f.lastOff, size: f.lastSize, units: e.items[i].units, rows: f.lastRows, logical: f.lastLogical}}
 	}
 	return nil
 }
@@ -970,6 +996,17 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			o.mu.Unlock()
 			o.stalled()
 			return st, context.Cause(o.ctx)
+		}
+		if o.segmentsDue() {
+			done, err := o.trySegments()
+			if err != nil {
+				o.mu.Unlock()
+				o.stalled()
+				return st, err
+			}
+			if done {
+				break
+			}
 		}
 		f := &o.path[len(o.path)-1]
 		n := f.n
@@ -1031,6 +1068,9 @@ func (o *run[R, P]) drainFinished(f *drainFrame[R, P], releaseEvery int64) (*nod
 	var child *node[R, P]
 	var err error
 	for f.i < len(items) && err == nil {
+		if o.segmentsDue() {
+			break // the loop tries the segments
+		}
 		it := items[f.i]
 		items[f.i] = item[R, P]{}
 		f.i++

@@ -124,9 +124,11 @@ func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress boo
 	if compress {
 		// A decoded frame is bounded like a raw one: a damaged or hostile
 		// frame cannot claim more memory than any frame written.
-		// One decoder for the drainer and one per read-ahead read (DecodeAll
-		// blocks past the concurrency).
-		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1+aheadReads), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
+		// One decoder for the drainer and one per concurrent read (the
+		// read-ahead's, or the segments', at most one per spare
+		// processor: DecodeAll blocks past the concurrency); one alone on
+		// one processor.
+		if s.dec, err = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1+spareReaders()), zstd.WithDecoderMaxMemory(maxSpillDecoded)); err != nil {
 			return nil, err
 		}
 	}
@@ -264,9 +266,12 @@ type spillFile struct {
 	read    int64 // rows replayed (drainer only)
 	pos     int64 // bytes replayed: where a closed reader reopens (drainer only)
 	used    uint64
-	// lastOff and lastSize locate the last rows frame written (owner
-	// only): its marker records them, so the frame can be read on its own.
-	lastOff, lastSize int64
+	// lastOff and lastSize locate the last rows frame written, lastRows
+	// and lastLogical its rows and their logical bytes (owner only): its
+	// marker records them, so the frame can be read, and the stream cut
+	// into parts, on its own. trailerAt is where the trailer starts, once
+	// written (0 before).
+	lastOff, lastSize, lastRows, lastLogical, trailerAt int64
 	// most is the row count of the largest frame written, and mostOwned
 	// the largest storage a delta frame written declared: a frame read
 	// back that claims more is malformed, refused before any allocation.
@@ -382,7 +387,10 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 		return fmt.Errorf("spill: %w", err)
 	}
 	if len(rows) > 0 {
-		f.lastOff, f.lastSize = f.size, framed
+		f.lastOff, f.lastSize, f.lastRows, f.lastLogical = f.size, framed, int64(len(rows)), logical
+	}
+	if final {
+		f.trailerAt = f.size + framed
 	}
 	f.size += n
 	f.written += int64(len(rows))
@@ -583,6 +591,33 @@ func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], tim
 	t := time.Now()
 	rows, _, err := s.decodeFrame(f, payload[0], payload[1:], nil) // its own buffers: it runs beside the drainer
 	return rows, time.Since(t), err
+}
+
+// trailerRows reads f's trailer on its own descriptor (any goroutine,
+// once the file is complete): the row count its owner wrote.
+func (s *spiller[P]) trailerRows(f *spillFile) (int64, error) {
+	size := f.size - f.trailerAt
+	if f.trailerAt <= 0 || size <= 9 || size > 32 {
+		return 0, errSpillFrame
+	}
+	fh, err := os.Open(f.path)
+	if err != nil {
+		return 0, fmt.Errorf("spill: %w", err)
+	}
+	defer fh.Close()
+	buf := make([]byte, size)
+	if _, err := fh.ReadAt(buf, f.trailerAt); err != nil {
+		return 0, fmt.Errorf("spill: %w", err)
+	}
+	payload := buf[8:]
+	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(buf[4:8]) || payload[0] != frameTrailer {
+		return 0, errSpillFrame
+	}
+	n, k := binary.Uvarint(payload[1:])
+	if k <= 0 {
+		return 0, errSpillFrame
+	}
+	return int64(n), nil
 }
 
 // skip passes over the frame of size bytes holding rows rows that the

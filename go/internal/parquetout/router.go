@@ -137,6 +137,11 @@ type Router[P any] struct {
 	ticked   sync.WaitGroup
 	timeCuts atomic.Int64 // parts closed by the interval
 	rowCuts  atomic.Int64 // parts closed by MaxRows
+
+	// segmented: the rest of the stream goes to segments (segments.go),
+	// not Write; segRows counts the rows they routed.
+	segmented bool
+	segRows   atomic.Int64
 }
 
 type part[P any] struct {
@@ -151,6 +156,7 @@ type part[P any] struct {
 	pinned    bool  // its boundary is Options.Cut
 	bySize    bool  // closed because it reached the size target
 	final     bool
+	closed    bool  // its queue is closed (r.mu)
 	limit     int64 // logical bytes per part in effect after this part
 	rows      int64 // rows in parts 0..ordinal
 	info      dataset.Part
@@ -253,6 +259,9 @@ func (r *Router[P]) EncoderWait() time.Duration { return time.Duration(r.waitNs.
 func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.segmented {
+		return errors.New("parquet router: written after its segments began")
+	}
 	var batch [][]schema.Row[P]
 	for _, seg := range segs {
 		start := 0
@@ -307,6 +316,11 @@ type batch[P any] struct {
 }
 
 func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
+	return r.sendTo(ctx, r.cur, segs)
+}
+
+// sendTo queues segs to part p's encoder (the open part, or a segment's).
+func (r *Router[P]) sendTo(ctx context.Context, p *part[P], segs [][]schema.Row[P]) error {
 	if len(segs) == 0 {
 		return nil
 	}
@@ -318,18 +332,18 @@ func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
 		r.opt.Account(b.bytes)
 	}
 	select {
-	case r.cur.segs <- b:
+	case p.segs <- b:
 		return nil
 	default: // the part's queue is full: the encoder is the bottleneck
 	}
 	t := time.Now()
 	defer func() { r.waitNs.Add(int64(time.Since(t))) }()
 	select {
-	case r.cur.segs <- b:
+	case p.segs <- b:
 		return nil
-	case <-r.cur.done: // the encoder stopped early
+	case <-p.done: // the encoder stopped early
 		r.done1(b)
-		return r.cur.err
+		return p.err
 	case <-ctx.Done():
 		r.done1(b)
 		return context.Cause(ctx)
@@ -495,9 +509,9 @@ func adjacent(before *dataset.Part, ordinal int, info dataset.Part) error {
 // Routed is the rows routed into parts by this run (not the resumed ones).
 func (r *Router[P]) Routed() int64 {
 	if res := r.opt.Resume; res != nil {
-		return r.rows - res.Rows
+		return r.rows + r.segRows.Load() - res.Rows
 	}
-	return r.rows
+	return r.rows + r.segRows.Load()
 }
 
 // initialTarget is the logical bytes per part before calibration.
@@ -508,6 +522,7 @@ func (r *Router[P]) initialTarget() int64 { return int64(float64(r.opt.PartSize)
 func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p := r.cur
 	p.final = final
+	p.closed = true
 	close(p.segs)
 	r.cur, r.full = nil, false
 	if r.limit == 0 && !final {
@@ -570,10 +585,11 @@ func (r *Router[P]) Close() ([]dataset.Part, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	if len(out) == 0 && r.rows == 0 {
+	rows := r.rows + r.segRows.Load()
+	if len(out) == 0 && rows == 0 {
 		return out, nil
 	}
-	if err := dataset.Check(out, r.rows); err != nil {
+	if err := dataset.Check(out, rows); err != nil {
 		return nil, fmt.Errorf("publication gate: %w", err)
 	}
 	return out, nil
@@ -594,10 +610,13 @@ func (r *Router[P]) abort() {
 	}
 	r.closed = true
 	r.aborted.Store(true)
-	if r.cur != nil {
-		close(r.cur.segs)
-		r.cur = nil
+	for _, p := range r.parts { // the open part, and every segment's
+		if !p.closed {
+			p.closed = true
+			close(p.segs)
+		}
 	}
+	r.cur = nil
 	for _, p := range r.parts {
 		<-p.done
 	}

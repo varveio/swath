@@ -128,7 +128,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		if err != nil {
 			return order.Stats{}, nil, err
 		}
-		sink, enc = r, r
+		sink, enc = segSink[P]{r, env.Ordered}, r
 	} else if env.Text != nil {
 		t, err := textout.NewSink(env.Text, b.s)
 		if err != nil {
@@ -136,7 +136,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		}
 		sink = t
 	}
-	if env.Ordered != nil {
+	if _, seg := sink.(segSink[P]); env.Ordered != nil && !seg { // segSink counts its own rows
 		sink = countSink[P]{sink, env.Ordered}
 	}
 	p := b.p
@@ -163,6 +163,52 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	}
 	st, err := order.Run(ctx, p, sink, b.s, opt)
 	return st, enc, err
+}
+
+// segSink is the Parquet router as the order stage's sink: rows through
+// Write, and once listing is done the rest as parallel segments
+// (order.Segmenter), both counted in n when set (progress).
+type segSink[P any] struct {
+	r *parquetout.Router[P]
+	n *atomic.Int64
+}
+
+func (s segSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	s.count(segs)
+	return s.r.Write(ctx, segs)
+}
+
+func (s segSink[P]) count(segs [][]schema.Row[P]) {
+	if s.n != nil {
+		for _, seg := range segs {
+			s.n.Add(int64(len(seg)))
+		}
+	}
+}
+
+func (s segSink[P]) Plan() (order.SegmentPlan, bool) {
+	p, ok := s.r.Plan()
+	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full, Encoders: p.Encoders}, ok
+}
+
+func (s segSink[P]) BeginSegments() { s.r.BeginSegments() }
+
+func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
+	seg, err := s.r.OpenSegment(ctx, continueOpen)
+	if err != nil {
+		return nil, err
+	}
+	return segPart[P]{seg, s}, nil
+}
+
+type segPart[P any] struct {
+	*parquetout.Segment[P]
+	s segSink[P]
+}
+
+func (p segPart[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	p.s.count(segs)
+	return p.Segment.Write(ctx, segs)
 }
 
 type countSink[P any] struct {
