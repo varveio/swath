@@ -126,6 +126,7 @@ type Invocation struct {
 	Encoders       int      `json:"encoders"`
 	RowBudgetBytes int64    `json:"row_budget_bytes"`
 	PartSizeBytes  int64    `json:"part_size_bytes"`
+	Prior          *Prior   `json:"prior,omitempty"` // the --seed-from prior the range engine started from
 }
 
 // The outcome vocabulary, in one place. Three separate dimensions:

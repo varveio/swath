@@ -100,6 +100,17 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.stop.round_trips` | count | seeds | seed | the seed stopped: 6 round trips spent (a wave costs its longest chain of requests, empty pages followed included) |
 | `seed.stop.failed` | count | seeds | seed | the seed stopped: a listing failed or the run was canceled (the seed counters are what it spent until then) |
 | `seed.resumed` | flag |  | seed | the seed tiled a resumed scope (K, ⊤] |
+| `seed.from.parts` | count | parts | seed_from | parts of the --seed-from dataset (0 for a cut file) |
+| `seed.from.indexed_parts` | count | parts | seed_from | parts whose key page index was read for finer cuts |
+| `seed.from.index_failed` | count | parts | seed_from | parts whose key page index could not be read: their part bounds were cut at instead |
+| `seed.from.cuts` | count | cuts | seed_from | cut keys the prior offered (before the merge into tiles) |
+| `seed.from.unsafe` | count | cuts | seed_from | cuts the provider does not accept as a bound: cut at their longest accepted prefix, or merged into the next |
+| `seed.from.tiles` | count | ranges | seed_from | ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers)) |
+| `seed.from.expected_keys` | count | keys | seed_from | keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth |
+| `seed.from.error.within_2x` | count | ranges | seed_from | prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included) |
+| `seed.from.error.grown` | count | ranges | seed_from | prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out) |
+| `seed.from.error.shrunk` | count | ranges | seed_from | prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied |
+| `seed.from.error.max_grown` | max | x | seed_from | the largest ratio of a prior tile's listed keys to the prior's expectation, rounded |
 | `seed.sentinel_declined.truncated` | count | decisions | seed | sentinel declined: the top level had more pages than the seed followed |
 | `seed.sentinel_declined.object_last` | count | decisions | seed | sentinel declined: the top level's last page ended with an object |
 | `seed.sentinel_declined.no_ceiling` | count | decisions | seed | sentinel declined: no prefix ceiling above the last cut (and a resume key) |

@@ -28,7 +28,7 @@ marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manife
 (a profile is opened, never through a link; the report replaces its name by a rename, which replaces a link
 there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, the diagnostic `--spill-reserve` and `--spill-compress`,
-`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
+`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
 authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
@@ -163,6 +163,8 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
         bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
         ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
+  -seed-from path
+        ranges: start from a previous listing's key distribution instead of the delimiter seed: a committed dataset path of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively
   -spill-max bytes
         the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
   -stall-timeout duration
@@ -180,7 +182,7 @@ usage: swath list SOURCE [--output DIR|FILE|-] [flags]
         listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -302,6 +304,8 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
         bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
   -seed
         ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
+  -seed-from path
+        ranges: start from a previous listing's key distribution instead of the delimiter seed: a committed dataset path of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively
   -sequential
         ranges: list with one continuation-token chain (no ranges; the reference)
   -spill-compress
@@ -327,7 +331,7 @@ usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
         listing goroutines (default 64, whatever the CPU count)
 
 swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
 swath show [--journal] DIR shows a dataset or an interrupted run.
 
@@ -420,6 +424,19 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   name `--endpoint-url`) selects an S3-compatible store, addressed path-style by default, as Java's
   `--force-path-style` default with a custom endpoint; `--path-style=false` uses virtual-host addressing there. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
+- **Warm start:** `--seed-from PATH` (S3 and GCS) starts the range engine from a previous listing's key
+  distribution instead of the delimiter seed: no seed request, and the scope tiled into up to
+  `min(1000, 4 × --workers)` ranges of about equal expected keys. PATH is either a committed dataset directory of
+  the same source and scope (the manifest's bucket and prefix must be the run's; its parts' bounds, row counts and
+  key page index give the cuts) or a cut file: one key per line, ascending bytewise without repeats, each inside the
+  scope, optionally followed by a tab and the keys expected since the previous cut (every line or none). Anything
+  else is refused before any request (exit 2, class `refused`): another bucket or prefix, an unsorted or repeated
+  cut, a cut outside the scope, the output directory itself, `--sequential`, a filesystem source. Production should
+  seed from the previous dataset, which carries identity and counts; a cut file is for priors from elsewhere (an
+  S3 Inventory, a prefix list, another tool's segments). A prior changes only how the work is first divided: the
+  splits stay adaptive, the rows are the same. It is a runtime flag: `swath resume` reads it again and may change
+  or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without it. Counters
+  `seed.from.*`; the report's `invocation.prior` ([internals/providers.md](internals/providers.md)).
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that

@@ -208,7 +208,7 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	cuts = slices.Compact(cuts)
 	p.lock()
 	publish()
-	if limit := min(maxSeeds, 4*p.opt.Workers); len(cuts) > limit {
+	if limit := Tiles(p.opt.Workers); len(cuts) > limit {
 		picked := make([]string, 0, limit)
 		for i := range limit {
 			picked = append(picked, cuts[(i*len(cuts)+limit/2)/limit])

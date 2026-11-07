@@ -202,6 +202,10 @@ func (o *opened) Restart(after string) error {
 	return nil
 }
 
+// SeedFrom starts the listing from a prior's cuts instead of the seed
+// (source.Seeded, --seed-from).
+func (o *opened) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
+
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
@@ -210,6 +214,7 @@ func (o *opened) Report() source.Report {
 var (
 	_ source.Identified = (*opened)(nil)
 	_ source.Resumable  = (*opened)(nil)
+	_ source.Seeded     = (*opened)(nil)
 	_ source.Capable    = (*opened)(nil)
 	_ source.Reporter   = (*opened)(nil)
 )
