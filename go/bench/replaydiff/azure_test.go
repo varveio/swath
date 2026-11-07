@@ -89,7 +89,8 @@ func TestMarkerCasesRunOrSkip(t *testing.T) {
 	for _, c := range []struct {
 		keys    []string
 		skipped bool
-	}{{[]string{"a", "b", "c"}, false}, {[]string{"d/1", "d/2", "e"}, false}, {[]string{"a"}, true}} {
+	}{{[]string{"a", "b", "c"}, false}, {[]string{"d/1", "d/2", "e"}, false}, {[]string{"c\ufffe/1", "c\ufffe/2", "d/1", "d/2"}, false},
+		{[]string{"a"}, true}} {
 		client := &http.Client{}
 		rep := &report{}
 		d := &driver{o: options{bucket: "bkt"}, ref: &target{name: "a", base: azureServer(t, false, c.keys...), client: client},

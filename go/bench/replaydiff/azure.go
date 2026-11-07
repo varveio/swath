@@ -270,11 +270,25 @@ func pagingPrefix(keys [][]byte) string {
 		}
 	}
 	for _, p := range directoryPrefixes(keys) {
-		if count[p] >= 2 {
+		if count[p] >= 2 && echoable(p) {
 			return p
 		}
 	}
 	return ""
+}
+
+// echoable reports whether the route accepts p as a prefix: valid UTF-8
+// without a control character other than TAB and LF, U+FFFE or U+FFFF.
+func echoable(p string) bool {
+	if !utf8.ValidString(p) {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 && r != '\t' && r != '\n' || r == 0xfffe || r == 0xffff {
+			return false
+		}
+	}
+	return true
 }
 
 // rolledPrefix is the first prefix ("" or a directory) under which a "/"
@@ -282,6 +296,9 @@ func pagingPrefix(keys [][]byte) string {
 // marker; "" when none does.
 func rolledPrefix(keys [][]byte) string {
 	for _, p := range append([]string{""}, directoryPrefixes(keys)...) {
+		if !echoable(p) {
+			continue
+		}
 		seen := map[string]bool{}
 		for _, k := range keys {
 			rest, ok := bytes.CutPrefix(k, []byte(p))
