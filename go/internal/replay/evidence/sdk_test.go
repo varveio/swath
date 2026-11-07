@@ -212,7 +212,8 @@ func verifySDKRun(c capture, replay []step) {
 	for _, s := range replay {
 		replayPages = append(replayPages, capturedPage{sdkToken(s.request.query), s.exchange})
 	}
-	assertGCSWalk(nativePages, replayPages, "{bucket}", replayBucket, true, 1024, 1_000_000)
+	p := queryValue(nativeFirst.query, "projection")
+	assertGCSWalk(nativePages, replayPages, "{bucket}", replayBucket, p != nil && *p == "full", 1024, 1_000_000)
 }
 
 // TestSDKMakesOneAttempt: the client the SDK runs use sends one request

@@ -247,4 +247,19 @@ the same corruptions of SDK runs) and requires each to be rejected.
 | GCS native metadata | `gcs` `TestNativeSchemaRendersTheBucketsMetadata` |
 | GCS serving | `server` `TestServesGCSObjectsList`, `TestGCSErrorsAreJSONEnvelopes`, `TestRouteClassification`, `TestGCSAdmissionRefusals`, `TestGCSFixtureAndStoreFailures`, `TestGCSInjectedDelayUsesTheSharedShapes`, `TestValidateProtocols`; `cmd/swath-replay` `TestProtocolSelection`, `TestServeGCSEndToEnd` |
 | GCS driver | `replaydiff` `TestGCSComparator`, `TestGCSMatrixNamesAreUnique`, `TestGCSDriverFindsNoDifferenceBetweenRollupAndWalk` |
-| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults`, `TestExpectationRules`, `TestComparatorMessages` (with `SWATH_REPLAY_FIXTURES`) |
+| GCS evidence | `evidence` `TestGCSNativeCapturesMatchReplay`, `TestEvidenceRejectsCorruptedReplayResults` (with `SWATH_REPLAY_FIXTURES`), `TestExpectationRules`, `TestComparatorMessages`, `TestPinsMatchWholeMessages`, `TestSDKMakesOneAttempt`, `TestProfileComparatorAcceptsAndRefuses`, `TestFullProjectionRequiresEmptyACLAndNoACLForbidsIt`, `TestWalksCompareInventoriesAcrossPageBoundaries`, `TestExchangeHeadersAreClassified`, `TestSDKRunReceiptNeedsEveryStep`, `TestRetryRunCapturesAreRefusedRatherThanWalked` |
+| GCS ports of the Java unit tests | `gcs` `TestTimestampsMatchAnIndependentFormatter`, `TestRendersProfileTypes`, `TestRawEscapesAndOmitsEmptyArrays`, `TestCompleteWireGolden`, `TestRefusesTooLongAndReservedNamesAndNegativeSize`, `TestClampedPageLimitReportsItsPath`, `TestDelimiterWalkReadsInBatches`, `TestIndexedDelimiterMatchesWalkAcrossRowGroups`; `server` `TestGCSShapeCountsAndRejectionMeter`, `TestOfficialClientUsesHierarchyOffsetsAndUnicode`, `TestOfficialClientDecodesAReplayFault` |
+
+The Java route's and conformance suite's own unit tests are held against this code where a Go counterpart
+exists (`gcs` `ported_test.go`, `server` `TestGCSShapeCountsAndRejectionMeter` and `gcs_sdk_test.go`,
+`evidence` `ported_test.go`). Not ported, with the reason:
+
+| Java test | Reason |
+|---|---|
+| `GcsJsonTest.rendersProfileTypesAndKeepsOutputLeaseOpen` (the lease half) | the output lease is the Java response sink's; the profile types are `TestRendersProfileTypes` |
+| `GcsPagerTest.optInEmptyAndShortPagesCarryBoundedProgressInToken` | the injected empty and short pages are a Java constructor-only test profile with no Go counterpart; the progress byte they set is held by `TestTokenProgressIsRetained` |
+| `GcsSdkTest.officialSdkDecodesReplayFixtureFaultAndRecordsNormalRetries` (the retry half) | the Go client makes one attempt per call; the decoded fault is `TestOfficialClientDecodesAReplayFault` |
+| `ProviderMatchReceiptRunTest.sdkHeadersIgnoreOnlyTheJvmVersionToken` | it compares the Java client's identity tokens; SDK runs here use the Go client, whose identity `TestSDKRunReceiptNeedsEveryStep` checks |
+| `ProviderEvidenceTest.gcsKeepsObjectAndPrefixArraysSeparateAndChecksWireTypes`, `tokenWalkerFollowsEachEndpointsOwnOpaqueTokensAndRejectsCycles` | they test the Java capture tool's page parser and inventory walker, which have no Go counterpart; the wire-type and repeated-token refusals are in `TestProfileComparatorAcceptsAndRefuses` and `TestWalksCompareInventoriesAcrossPageBoundaries` |
+| `ProviderCaptureRoundTripTest.sanitizedGcsErrorStillHasTypedEnvelope` | the capture sanitization pipeline is the capture tool's, not replay's |
+| `GcsPagerTest.fixtureIdentitySurvivesRelocationAndInvalidatesChangedManifest` | the identity half is `store` `TestIdentity`; the token half `TestTokenRejectsAnotherScopeOrFixture` |
