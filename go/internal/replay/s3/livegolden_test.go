@@ -205,3 +205,42 @@ func TestLiveAlteredTokenIsRefused(t *testing.T) {
 			"<KeyCount>2</KeyCount><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated>",
 		"O:r/k03 O:r/k04")
 }
+
+// A flat walk's token sent with a delimiter resumes at the token's key and
+// rolls up what follows, the prefix the key falls in included: S3 answered
+// a token issued after the second key of D/access/ (no delimiter) by
+// listing D/access/ and D/archive/ as common prefixes, truncated before
+// D/doc/. A delimiter walk's own token does not repeat a prefix.
+func TestLiveFlatTokenWithDelimiterRelistsItsPrefix(t *testing.T) {
+	for _, rollup := range []bool{false, true} {
+		p := &Pager{Store: memstore.Keys(memstore.Options{Rollup: rollup}, liveKeys...)}
+		page := func(query string) *Result {
+			req, err := ParseRequest("bkt", query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := p.List(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return res
+		}
+		flat := page("list-type=2&prefix=t/&max-keys=2")
+		if render(flat) != "O:t/a/k1 O:t/a/k2" {
+			t.Fatalf("flat page %s", render(flat))
+		}
+		next := page("list-type=2&prefix=t/&delimiter=/&max-keys=2&continuation-token=" + url.QueryEscape(flat.NextToken))
+		if render(next) != "P:t/a/ P:t/b/" || !next.Truncated {
+			t.Errorf("rollup=%v: %s truncated=%v, want P:t/a/ P:t/b/ truncated", rollup, render(next), next.Truncated)
+		}
+		delim := page("list-type=2&prefix=t/&delimiter=/&max-keys=1")
+		next = page("list-type=2&prefix=t/&delimiter=/&max-keys=2&continuation-token=" + url.QueryEscape(delim.NextToken))
+		if render(delim) != "P:t/a/" || render(next) != "P:t/b/ P:t/c/" || next.Truncated {
+			t.Errorf("rollup=%v: delimiter walk %s then %s", rollup, render(delim), render(next))
+		}
+		// A start-after inside a prefix still passes it.
+		if sa := page("list-type=2&prefix=t/&delimiter=/&start-after=t/a/k2"); render(sa) != "P:t/b/ P:t/c/" {
+			t.Errorf("rollup=%v: start-after inside t/a/: %s", rollup, render(sa))
+		}
+	}
+}

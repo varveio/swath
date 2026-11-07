@@ -82,6 +82,14 @@ type Pager struct {
 type bound struct {
 	key       []byte
 	inclusive bool
+	// token says the bound came from a continuation token, not a
+	// start-after. A delimiter listing suppresses a common prefix at or
+	// before a start-after, which the client has passed; after a token it
+	// rolls up whatever key comes next, so a flat walk's token that ends
+	// inside a prefix lists that prefix again, as live S3 does
+	// (TestLiveFlatTokenWithDelimiterRelistsItsPrefix). A delimiter walk's
+	// own token resumes past the prefix's subtree, so nothing repeats.
+	token bool
 }
 
 // List serves one page.
@@ -110,7 +118,7 @@ func resolveBoundary(req *Request) (*bound, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &bound{key: t.Boundary, inclusive: t.Inclusive}, nil
+		return &bound{key: t.Boundary, inclusive: t.Inclusive, token: true}, nil
 	}
 	if req.StartAfter != nil {
 		return &bound{key: req.StartAfter}, nil
@@ -123,7 +131,7 @@ func resolveBoundary(req *Request) (*bound, error) {
 func lowerBound(prefix []byte, b *bound) bound {
 	if b != nil {
 		if len(prefix) > 0 && bytes.Compare(prefix, b.key) > 0 {
-			return bound{key: prefix, inclusive: true}
+			return bound{key: prefix, inclusive: true, token: b.token}
 		}
 		return *b
 	}
@@ -159,7 +167,7 @@ func (p *Pager) listDelimited(ctx context.Context, req *Request, b *bound, pageS
 	// The store may answer the whole rollup in one pass; it declines shapes
 	// it has no fast path for, and the range walk below serves those.
 	rollup, ok, err := p.Store.DelimitedRollup(ctx, cur.key, cur.inclusive, upper, prefix, delimiter, pageSize,
-		store.Projection{Owner: req.FetchOwner}, true)
+		store.Projection{Owner: req.FetchOwner}, !cur.token)
 	if err != nil {
 		return nil, err
 	}
@@ -195,9 +203,9 @@ func (p *Pager) listDelimited(ctx context.Context, req *Request, b *bound, pageS
 				i++
 				continue
 			}
-			// A prefix at or before the request's boundary was on an
+			// A prefix at or before the request's start-after was on an
 			// earlier page.
-			if b == nil || bytes.Compare(cp, b.key) > 0 {
+			if b == nil || b.token || bytes.Compare(cp, b.key) > 0 {
 				res.Entries = append(res.Entries, Entry{CommonPrefix: cp})
 			}
 			next, end := Successor(cp)
