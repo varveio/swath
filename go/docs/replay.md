@@ -266,11 +266,19 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 - Three routes (S3 `ListObjectsV2`, path-style, the GCS JSON `objects.list` and the Azure flat `List Blobs`
   subset below) and one serving mode (sorted). Version listing, object data and
   authentication are not served.
-- Two request-target cases differ from the Java server: a request line Go's HTTP parser refuses itself
-  (whitespace or a control byte in the target, a malformed `%` escape in the path, a target with neither a
-  leading `/` nor a scheme) gets its `400` with a `text/plain` page; and an absolute target whose host differs
-  from the `Host` header, which the Java server refuses, is served, because Go's HTTP layer ignores the `Host`
-  header for an absolute target as RFC 9112 section 3.2.2 has an origin server do.
+- Three request-target cases are not byte-identical with the Java server, by decision; the differential driver
+  compares them on the status and the headers the Java server sets, and says which in each case's name:
+  - The error page of a target refused before routing (above). Status `400`, `Content-Type:
+    text/html;charset=iso-8859-1` and `Cache-Control: must-revalidate,no-cache,no-store` match; the HTML body is
+    this server's own page naming the problem, not a copy of the Java server's HTTP layer's page.
+  - A request line Go's HTTP parser refuses before any handler runs: whitespace or a control byte in the target,
+    a malformed `%` escape (`%zz`, a lone `%`, `%uXXXX`) in the path, a target with neither a leading `/` nor a
+    scheme. Both servers answer `400`; this one with Go's `text/plain; charset=utf-8` page and no
+    `Cache-Control`.
+  - An absolute target whose authority differs from the `Host` header (`GET http://other.invalid/bucket?...`
+    with `Host: localhost`). The Java server refuses it with `400`; this server serves it, because Go's HTTP
+    layer drops the `Host` header for an absolute target, as RFC 9112 section 3.2.2 has an origin server
+    ignore it, so the disagreement cannot be seen. The driver does not send this case.
 - Timer `max_ms` is the all-time maximum and percentiles cover the last 4,096 samples; the Java registry decays
   both over a time window, so the two servers' timer fields agree on counts and sums, not on those.
 - One process does not reproduce distributed service capacity or network faults; put `bench/faultproxy` in

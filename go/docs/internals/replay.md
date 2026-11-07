@@ -187,7 +187,8 @@ and sends both servers the same requests:
 - raw request targets, sent byte for byte on their own connection: the ones the contract's HTTP layer refuses
   (compared on status, the compared headers and `Cache-Control`, since each server's error page is its own),
   unusual ones it lets through (compared in full), and request lines Go's HTTP parser refuses itself (status
-  only, see the user page's limits);
+  only); each case's name carries its comparison (`[headers]`, `[full]`, `[status]`), and the user page's limits
+  list these residuals;
 - token walks to the end at each page size (`-walks`, default 1, 7, 1000) over the bucket and each top-level
   prefix, with and without the delimiter, and walks that begin with a `start-after` at, inside and at the
   successor of a few directory prefixes (at the root and inside the parent prefix), carrying the token and the
