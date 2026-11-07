@@ -108,7 +108,8 @@ held-up first range) bounds the peak live heap by the budget and the pages in fl
 **What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
 worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
-approximates), compression scratch, open spill readers (at most 8 × 64 KiB), the encoders' writers (budgeted
+approximates), compression scratch, open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
+largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
 at `parquetout.EncoderBytes`, 24 MiB each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
 by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
@@ -203,13 +204,50 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
 - **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
-  Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`swath diag list --spill-compress`, level 1),
-  or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
-  its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its
-  size, time and six strings); the encoding is private to one run. The trailer is written when the range ends and checked after replay.
-  Children have their own files, so a parent's trailer says nothing about them.
+  Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
+  payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
+  uncompressed (`--spill-compress=false`), `Z` and `R` plain rows, compressed and not
+  (`--spill-plain`, the comparison arm; both flags are runtime flags of `swath list`, and a resume may
+  change them: spill is disposable, removed when a run starts, so a resume never reads another run's frames), and `T` the trailer with the row count. A run writes
+  one rows type and its reader refuses every other, so a frame of an unknown or foreign format is never
+  decoded. The trailer is written when the range ends and checked after replay. Children have their own
+  files, so a parent's trailer says nothing about them.
+- **Delta rows.** Within a range rows are sorted, so neighbours share long key prefixes, times cluster and
+  storage classes and owners repeat. A delta frame's body is the row count, the storage its decoded rows may
+  own (the keys' bytes plus the payloads' `Heap`, an upper bound on what decoding copies), the payload coding
+  (contextual or stateless), then per row: the length of the prefix its key shares with the previous key
+  (bytes, not UTF-8 units: keys are bytes), the rest of the key, length-prefixed, and the payload. A producer
+  with a `schema.DeltaCodec[P]` (S3) codes its payload against the previous row's: `s3.Object` writes a flags
+  byte, its size as a signed varint (as the plain codec does), its time as the signed (zigzag) varint of its
+  difference from the previous time, or the time itself when the difference overflows int64, its ETag as 16
+  raw bytes when it is exactly 32 lowercase hex digits (an MD5, as `s3.Object` carries it, quotes stripped),
+  as a flag when it repeats the previous one and as the string itself otherwise (uppercase, multipart
+  `hex-N`, quoted or empty: only a spelling that round-trips byte for byte is taken raw), and each other
+  string as a flag when it repeats the previous row's, else the string. GCS and localfs keep their
+  stateless `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values) inside
+  delta frames: their keys are prefix-coded all the same. A plain frame holds each key whole and the
+  payload through `schema.Codec[P]`. The previous row is the frame's own, reset at every frame: a frame
+  decodes alone, without the file before it, which reopening an evicted reader at its position needs (and a
+  durable spill will), and the codecs hold no state, so one serves every emitter at once (`Schema.Detach`
+  uses the stateless codec too). On the fake S3 fixture of `TestSpillFormatsIdentical` delta frames take
+  24 B/row against 67 B/row plain (zstd: 22 and 21); the measured runs are in
+  [measurements.md](../measurements.md#delta-coded-spill-frames).
+- **Compressed by default.** zstd level 1 runs over the delta frames: what delta coding leaves are the
+  bytes it cannot predict (raw ETags, key suffixes, sizes), and zstd still finds repeats among them,
+  while its input is already a few times smaller than a plain frame's, so its CPU cost is bounded by
+  the coded bytes, not the rows' logical size. The numbers that justify the default are in
+  [measurements.md](../measurements.md#delta-coded-spill-frames).
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
-  the reader is closed on every error path.
+  the reader is closed on every error path. A delta frame decodes into storage of its own (an owning
+  `schema.Decoder`, 64 KiB chunks): no decoded key or string views the read buffers, which the drainer
+  therefore reuses from frame to frame (`TestDeltaFramesRoundTrip` overwrites them after each frame). Its
+  header is checked before anything is allocated: at most as many rows as the largest frame its file was
+  given, at most as much declared storage as the largest declared, and at most 256 MiB. Every byte the rows
+  own is charged to the declared storage, because a few encoded bytes can stand for a 1,024-byte key (a
+  shared prefix) or a 32-byte ETag: a frame expanding past it is refused (`spill.decode_refused`). Prefix
+  lengths longer than the previous key, lengths past the frame, an unknown ETag form, a foreign payload
+  coding and trailing bytes are refused too (`TestDeltaFrameMalformed`), and the stream-wide order guard
+  checks every replayed row as before.
 - **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 readers
   (a descriptor and a 64 KiB buffer each, `order.MaxSpillReaders`) are open; past that the least recently
   used one is closed and reopened at its position when the drainer comes back to it

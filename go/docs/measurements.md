@@ -632,6 +632,54 @@ goroutines, one ordered stream), on the local fake above, box shared and loaded,
 Mean active at 256 workers rose from 105-114 (before) to 132-137. The output equals the serial path's byte
 for byte.
 
+## Delta-coded spill frames
+
+**Synthetic, frame layer** (`BenchmarkSpillFormats`: 50 frames of 4,096 S3 rows written to a spill file and
+replayed, the keys 204,800 consecutive keys of a prod list, the payload what a real bucket lists: a random MD5
+ETag per row, sizes over decades, times a few seconds apart, `STANDARD`, a checksum; page cache, 4-core host,
+10 iterations). CPU is a write plus a replay per row:
+
+| Keys | Arm | Bytes/row | CPU ns/row | Allocated B/row |
+|---|---|---:|---:|---:|
+| `aws-public-blockchain` (103 B/key) | plain | 181.7 | 322 | 331 |
+| | plain+zstd | 40.0 | 1,069 | 456 |
+| | delta | 54.4 | 313 | 284 |
+| | **delta+zstd** (default) | **30.3** | 657 | 354 |
+| `idc-open-data` (77 B/key) | plain | 155.5 | 277 | 300 |
+| | plain+zstd | 55.2 | 1,302 | 436 |
+| | delta | 65.5 | 254 | 249 |
+| | **delta+zstd** | **53.2** | 733 | 306 |
+| `nara-1950-census` (80 B/key) | plain | 158.1 | 324 | 303 |
+| | plain+zstd | 36.3 | 911 | 401 |
+| | delta | 32.7 | 253 | 257 |
+| | **delta+zstd** | **25.2** | 542 | 325 |
+
+Delta coding costs no CPU against plain frames (it writes and reads a third to a fifth of the bytes), and
+delta+zstd takes 55-60 % of plain+zstd's CPU for fewer bytes: zstd's input is already a few times smaller. What zstd still finds after delta is in the key suffixes (the ETags' 16 raw
+bytes are incompressible): 24 B/row on blockchain, 7 on nara, 12 on idc, whose suffixes are random UIDs.
+Against plain frames, the production default before this change, delta+zstd saves 100 to 150 B/row of
+disk traffic for 220 to 460 ns/row of CPU; delta alone saves 90 to 125 B/row for none. On one core the
+zstd share is the open question (the Batch arms answer it).
+
+**Synthetic, end to end** (keyfake: the first 2,500,000 keys of `aws-public-blockchain`, 50 ms per request,
+64 workers, sorted Parquet, `--row-budget 128KiB` so nearly every row spills; the fake's payload is constant
+(one ETag, time, size), so its payload bytes are an underestimate for every arm; one or two runs per arm on
+the shared host). "Before" is `go/engine-campaign` at 7b05605:
+
+| Arm | Spilled rows | Spill bytes | B/row | Peak spill | CPU s | Peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| before, plain | 2.21-2.27 M | 325-334 MB | 147 | 217-226 MB | 9.5-10.0 | 111-125 MiB |
+| before, `--spill-compress` | 2.20-2.26 M | 9.6-9.7 MB | 4.3 | 6.4-6.6 MB | 9.9-10.3 | 198-228 MiB |
+| plain (`--spill-plain --spill-compress=false`) | 2.24-2.35 M | 330-347 MB | 147 | 218-221 MB | 8.9-9.4 | 108-119 MiB |
+| plain+zstd (`--spill-plain`) | 2.21-2.26 M | 9.6-9.7 MB | 4.3 | 6.2-6.4 MB | 8.8-9.2 | 166-179 MiB |
+| delta (`--spill-compress=false`) | 2.24-2.27 M | 58-59 MB | 26 | 38-40 MB | 8.7-9.0 | 110-117 MiB |
+| **delta+zstd** (default) | 2.17-2.30 M | 6.5-6.6 MB | 2.9 | 4.5 MB | 8.9-9.2 | 128-142 MiB |
+
+Wall time (12-24 s, against 203 s with `--no-spill`) is the fake's latency and the frontier, noise at this
+size. The Parquet parts of every arm, with `--part-interval 0`, are byte-identical to the `--no-spill` run's.
+The plain+zstd arm's RSS is its fresh decode buffer per frame; delta frames reuse theirs. The production
+lists, at 16 cores and 1 core, are the orchestrator's Batch arms.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured
