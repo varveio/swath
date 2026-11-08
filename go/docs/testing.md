@@ -32,12 +32,12 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly. Release | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf`; `release.yml` `deep-tests` |
 | Java perf tier | PERF-1, PERF-2, SORT-PERF | nightly; dispatch `jobs=all` or `deep-and-perf` | ubuntu-latest | `nightly.yml` `deep-and-perf` |
 | Java image check | both Java images build for 2 architectures and start | PR; Java change | ubuntu-latest | `ci.yml` `docker-check` |
-| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | main with a Java change, dispatch. Release | ubuntu-latest | `ci.yml` `docker-publish`; `release.yml` `publish` |
+| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | main with a Java change, dispatch. Release, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `ci.yml` `docker-publish`; `release.yml` `publish` |
 | OSV scan | Java jar closures and images against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
-| Release guards | tag SHA and ancestry, release notes, assets, signatures | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
+| Release guards | tag SHA and ancestry (`source`), version and release notes (`fast-tests`), assets and signatures (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `fast-tests`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
-| CodeQL | static analysis of actions, Go, Java/Kotlin, JavaScript/TypeScript and Python | PR, push to `main`, weekly | GitHub-hosted | code-scanning default setup (no workflow file); not in `ci-gate` |
-| CodeRabbit | review comments | PR | CodeRabbit app | none; advisory |
+| CodeQL (external check) | static analysis; languages and schedule are repository settings | as the setting says (on 2026-11-08: PR, push to `main`, weekly) | GitHub-hosted | code-scanning default setup, not configured in this repository (`gh api repos/varveio/swath/code-scanning/default-setup`); not in `ci-gate` |
+| CodeRabbit (external check) | review comments | pull requests, by the installed app | CodeRabbit | not configured in this repository (no `.coderabbit.yaml`); not in `ci-gate` |
 
 ## Running tests locally
 
@@ -57,7 +57,7 @@ test through one lock, so two runs never contend for the cores and skew each oth
 flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB go test -race -count=1 -p 1 -run '^TestCrashMatrix$' ./internal/listing
 ```
 
-To rerun one race shard exactly as CI does (from `go/`):
+What a `go-race` leg runs, from `go/` (runner instructions: a whole shard belongs on a runner or `go-stress.yml`, not a development host):
 
 ```bash
 mapfile -t args < <(../scripts/ci/go-race-shards.sh crash)
@@ -98,7 +98,7 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
-No per-push job runs `internal/listing` or `cmd/swath` on linux/amd64: they are raced on arm64 per push and on
+No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on
 amd64 nightly, and run without `-race` on macOS and Windows.
 
 ### Race shards
@@ -189,7 +189,8 @@ before and after the change when it fixes a flake, as #300 does.
 
 `release.yml` runs on a `v*` tag and is Java-only: `source` (release guard self-tests, tag SHA and `main`
 ancestry), `fast-tests` (`./gradlew verifyReleaseVersion build -PnoIntegration ...` and the license gate),
-`integration-tests`, `deep-tests`, then `publish` (images smoked by digest, assets signed and verified). It
+`integration-tests`, `deep-tests`, then `publish` (images smoked by digest, assets signed and verified), which runs
+only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`. It
 builds and tests nothing under `go/`; the Go release pipeline is #284.
 
 ## Flakes
@@ -197,10 +198,12 @@ builds and tests nothing under `go/`; the Go release pipeline is #284.
 **Policy.** A per-push test asserts structure (keys, order, bytes, counts, the events a barrier waits for),
 not time or heap. Where a timing or memory number is the point, the bound sits about ten times from the
 measured value, with the measurement beside it in the test, so it fails on an order-of-magnitude regression
-and never on runner variance; the shape suite's bounds follow this rule. Heap is measured only without
-`-race`, behind `SWATH_HEAP_GATES` in `go-nonrace`. A test that flakes is fixed in the test: a barrier or a
+and never on runner variance; the shape suite's bounds follow this rule. A heap bound that `-race` distorts
+runs without it, behind `SWATH_HEAP_GATES` in `go-nonrace`; lighter heap checks (`listing` `memory_test.go`,
+the default arm of `TestWriterAdmissionCoversHeap`) run in every tier. A test that flakes is fixed in the test: a barrier or a
 deterministic assertion replaces the sleep or the ratio (#276, #291, #296, #300), not a retry or a silently
-widened bound. Every `go test` in CI passes an explicit `-timeout`, so a hang ends in a goroutine dump.
+widened bound. The test runs of `go-race`, `go-nonrace`, `go-xos`, `go-race-nightly` and `go-stress.yml` pass an
+explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the shard check's `go test -list` do not.
 
 **Triage a red leg.**
 
@@ -217,10 +220,11 @@ widened bound. Every `go test` in CI passes an explicit `-timeout`, so a hang en
 
 | Method | Where | What it does | When it runs |
 |---|---|---|---|
-| `TestCrashMatrix` | `internal/listing` | an injected crash at every `faults.Points` occurrence, S3 and GCS, then resume: byte-identical to an uninterrupted run | `go-race (crash)`; `go-race-nightly`; `go-xos (macos-latest)`; skips on Windows |
+| `TestCrashMatrix` | `internal/listing` | an injected crash at selected occurrences of each `faults.Points` point (S3: 1st, 4th, 12th; GCS: 1st, 3rd, 7th), then resume: byte-identical to an uninterrupted run, row-identical in the arms with time cuts on | `go-race (crash)`; `go-race-nightly`; `go-xos (macos-latest)`; skips on Windows |
 | `TestDurable*`, `TestDiskFaultMatrix` | `internal/listing` | the durable spill's kill matrix (torn writes, lost unsynced state), repeated recovery, ledger damage, ENOSPC and EIO at each write and fsync | `go-race (durable)`; nightly; macOS; skip on Windows |
 | `TestVersionsDurableSpill`, `TestDurableVersions` | `internal/listing` | the durable spill with `--all-versions`: kills at a seal, a ledger append, an unlink, a part claim, mid recovery | `go-race (listing-rest)` and `(durable)`; nightly; macOS |
-| `TestSIGKILL*`, `TestForcedExit*` | `cmd/swath` | the real process SIGKILLs itself at 13 points, in the durable spill and in the segment tail, then `swath resume` | `go-race (cmd-kill)`; nightly; macOS; not built on Windows |
+| `TestSIGKILL*` | `cmd/swath` | the real process SIGKILLs itself at 13 points, in the durable spill and in the segment tail, then `swath resume` | `go-race (cmd-kill)`; nightly; macOS; not built on Windows |
+| `TestForcedExit*` | `cmd/swath` | a run that cannot stop gracefully is forced out after the grace with the right exit code, report and error record | `go-race (cmd-kill)`; nightly; macOS; `forcedexit_test.go` not built on Windows, `TestForcedExitCode` (`forensics_test.go`) skips there |
 | `TestSegmentsReplayDurableFiles` | `cmd/swath` | a sorted run whose segments read durable spill files, killed and resumed | `go-race (cmd)`; nightly; macOS; not built on Windows |
 | Request-log oracle | `internal/listing` `TestDurableSpillResume`, `TestVersionsDurableSpill`; `cmd/swath` campaign | no data request of a resume starts inside a live certificate's `[max(cs, K), ce)` | in-process: with the tests' shards; campaign: [manual](#durable-spill-campaign-opt-in) |
 | Durable spill campaign | `cmd/swath` `TestDurableMinIO`, `TestDurableCorpus` | the kill schedule through the real binary on MinIO and production key lists | manual; skips without its endpoint |
@@ -244,8 +248,8 @@ only the two named.
 | `SWATH_CLIENT_COST=N` | the client-cost measurement `TestListClientCost` (Linux) | `internal/source/gcs` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/listing` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/listing` | never |
-| `UPDATE=1` | rewrites the goldens: `docs/cli.md`'s flag block, `docs/internals/counters.md`, the report schema | `cmd/swath`, `internal/source/s3`, `internal/listing` | never; the comparisons run in every tier |
-| `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in every tier |
+| `UPDATE=1` | rewrites the goldens: `docs/cli.md`'s flag block, `docs/internals/counters.md`, the report schema | `cmd/swath`, `internal/source/s3`, `internal/listing` | never; the comparisons run in the default suite |
+| `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |
 
 The heap tier exists because the full arms allocate hundreds of MiB and measure the live heap, which `-race`
 distorts and slows (over three of the listing package's six and a half minutes under `-race` at two
@@ -288,7 +292,7 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
 | GCS connections | `gcs/client` `TestTransportPoolSpreadsConnections`: an HTTP/2 TLS server sees exactly `PoolSize(workers)` connections, with equal shares, at 1, 16, 64 and 128 workers |
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation`, `TestFailedRangeStopsTheStream` (a failed range stops the drainer before it is seen as done: rows of later ranges already listed never reach the sink past the gap its dropped children leave; every run holds the drainer until the workers have expanded both siblings and holds the context's stop callback until the run returns, barriers rather than sleeps, so it fails on every run without the latch), `TestInterruptedRunReportsStall` (a run canceled, or failed by its provider, after 200 ms with nothing handed on reports that stall as `FrontierStuck`), `TestFinalFlushReportsStall` (one row batched until the final flush, a sink blocked until the deadline: the wait is the stall), `TestSegmentsSizedToBudget` (the segment tail with 1,000-byte keys among 220-byte ones, spilled, into stalled encoders, at a budget that holds exactly two workers: two are planned, by `row_budget`, they wait fewer than 16 times and hold within the budget), `TestSegmentsStayWithinBudget` (the same with the plan's share understated: the safety gate alone keeps the encoders' queues within a 4 MiB budget, 19 MB before), `TestRunBytes`, `TestSegmentsReleaseSpanStorage` (a span of a spilled frame is copied: eight segments read 28-row spans of one spilled 1,000-row frame, one after another on the test's goroutine, each decoding its own copy, every batch kept: the live heap grows within 2 MiB, about 7 without the copy), `TestSegmentUnitsDroppedByLastReader` (an in-memory unit read by three segments keeps its rows and tree charge until the last has read it, then drops both, once; no span shares its row array), `TestSegReserveIgnoresTree` (beside a tree at the full budget, reservations that fit the segments' budget are granted at once: the tree is not the segments' to wait for), `TestSegmentsCompletedPartsReleaseStorage` (finished segments keep nothing of their rows: seam keys copied, units dropped by their last reader; about 1,200 parts, spilled and in memory, within two budgets when the last segment finishes); `parquetout` `TestSegmentPastLimitCancels` (a segment refused at the part ceiling stops waiting on cancellation and returns its encoder slot; it hung before), `TestRouterAdmitIsByteIdentical` (encoders admitted mid-run change no part's bytes, and the shared codec makes no more zstd states than encoders admitted, before and after `Admit`), `TestCodecLeasesFollowLimit` (leases held at once make states up to the limit, a lease past it waits, `setLimit` admits more; the overlap is forced, so it holds at GOMAXPROCS 1, and a lease that should wait is observed for 50 ms), `TestLowerEncoderMemIsByteIdentical`, `TestValueLimits` (a value over its column's `MaxBytes` is the typed `schema.ErrValueTooLong`); `listing` `TestWriterAdmissionCoversHeap` (with `SWATH_HEAP_GATES=1`: four writers, 24 pages each, at the S3 schema's longest keys, one alone, and four at the filesystem schema's declared widths, binary, 24 pages each, with six encoders before `Admit`, stay within their admission, `parquetout.EncoderBytes`; 326 MiB against 96 before the shared codec) |
 | deterministic output | `parquetout` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
-| publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
+| publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoManifest`; `listing` cancellation and encoder-failure tests |
 | crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`, for S3 and GCS (a fake JSON API, `gcs/gcstest`): an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence (GCS: 1st, 3rd, 7th; spill on and off for S3; a first occurrence never reached fails the test, except the points not on a provider's path, later ones skip), and the first part's journal append (`journal-append#2`: the calibrating part claimed, unrecorded), then resume (the durable spill's points, `faults.SpillPoints` and `faults.RecoveryPoints`, have their own matrices on a fixture that reaches them, failing if one is not reached: `TestDurableKillMatrix` with torn writes and lost unsynced state, `TestDurableRepeatedRecovery`, `TestSIGKILLDurableSpill`): the dataset is byte-identical to an uninterrupted run (row-identical in the arms with the part interval on, whose time cuts depend on timing). `cmd/swath` `TestSIGKILLAtEveryPoint`, for S3 and GCS (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it, and at `journal-append:2`; every first occurrence must be reached except `split` in the seeded arms, whose ranges never split (S3 runs seeded and unseeded, the unseeded arm crossing it); byte-identical with `--part-interval=0`, since a 30 s time cut under load moves part boundaries, and row-identical in a 1 ms interval arm), `TestSegmentsReplayDurableFiles` (a journaled sorted run whose segments read durable spill files, segment boundaries inside their frames; killed after a seal, after a ledger append, and in a resume's recovery replay, each resumed: rows reconcile, fetched − filtered + replayed = emitted, and the dataset is the clean run's byte for byte; a resume that reuses certificates engages segments only once the drainer has passed its last replay range; with the offset reader's durable path disabled the clean run fails), `TestSIGKILLInSegments` (the real process SIGKILLs itself inside the segment-parallel tail, at `faults.SegmentPoints`: the segments committed and none opened, the 1st and 2nd segment part published with later ones open, every row handed on with the last part held before the router's `Close`; the clean run must report `resources.drain.segments` engaged with two workers or more and every point must be reached, so a fixture that stops reaching the tail fails; GOMAXPROCS 4 in the child, `--encoders 4`, spill on, `--part-interval=0`; the resumed parts are byte-identical and the manifest identical but for its observation times; an arm with the rest in memory, three workers, and one spilled, whose segments read spill frames), `TestGCSOutageThenResume` (503 to every request from three quarters through a run: exit 75, resumable, then `swath resume` byte-identical), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed with `swath resume` (a frozen flag on resume is a usage error, exit 2). `TestCalibratingClaimRecoversRepeatedly`: the calibrating part claimed and unrecorded, the resume killed again (before and at the reproduction's claim, after the next record, and inside recovery while syncing the suspect directory it was moved to), a second resume byte-identical; `parquetout` `TestPinnedCalibratingPartCalibrates`. `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run. `TestGCSResumeRefusesAnotherRoute`: refusal of a GCS resume through another route or billed project. `TestCredentialRotationResumes`: a signed run resumes with rotated keys (credentials are not identity), rotated keys with another region are refused; `TestGCSCredentialRotationResumes` the same on GCS (bearer tokens from a rotated authorized-user credential resume; another billed project is refused). `cmd/swath` `TestGCSCappedRunIsIncomplete`: a GCS run capped by `--max-keys` commits with incomplete coverage, exits 1 (`incomplete`, not resumable), keeps no journal, and `swath resume` refuses it unchanged. `listing` `TestDiskFaultMatrix`: a part file, a journal record and the manifest each fail at a write (half its bytes, then `ENOSPC`) and at its fsync (`EIO`): the run fails without a manifest, published parts stay, and a resume is byte-identical. `TestWatchdogWriteInFlightAtRelease`: a watchdog write under way at the end of a run keeps the lock held and the run waiting; a later write is refused. `TestClaimedPartKeepsItsColumns`: a GCS run by a build without `time_created` stopped with part 1 claimed (at `journal-append`, and as a torn record) is resumed by a build with it: part 1 is reproduced byte for byte with the claimed part's columns, the later parts carry the column (`parquetout` `TestCutReproducesClaimedFooter`: the claimed part's columns and `created_by` are each needed) |
 | compositions | `listing` `TestResumeChangesPriorWorkersEncodersAndSpillFormat`: a run seeded from a cut file, spilling delta-coded zstd frames with 8 workers and 2 encoders, killed (after its third record, or with the calibrating part claimed), resumed with the prior removed or stale, 3 workers, 1 encoder and plain uncompressed frames: byte-identical to the unseeded clean run. `TestPriorSlowSplitPercentThrottleCompose`: a cut-file prior over folders named with `%`, slow-split on, one slow folder and a 503 SlowDown every seventh request: every key once, in order, with tiles from the prior, `%` bounds sent and throttles met (the slow-range reason itself does not fire on that shape). `TestTextFormattersShareTheSpillingBudget`: four formatters on the 128 KiB budget the spilling order stage shares: the file equals the one-formatter run's; a write failure is the run's error; a cancellation with spill live is the cancellation; the destination untouched and nothing left beside it |
 | resume after K (I4) | `source/keyrange` `TestResumeAfterKey`: random keyspaces, split coins and K; the resume lists exactly the keys after K and its ranges tile (K, ⊤]. `TestResumeWithSplitKills`: K inside a date folder, also a `%` and a control-character key (listed from K's safe prefix), killed at random split points (`faults` "split") and resumed after the last key that reached the sink until done: exactly the keys after K, once each |
@@ -494,9 +498,9 @@ keyspaces, key lists and service behaviors), `shapes` (bucket shapes, below) and
 
 | Fake | Serves | Used by | CI |
 |---|---|---|---|
-| gofakes3 (`s3test`, `bench/s3fake`) | a real S3 implementation: small buckets with object bodies | protocol, oracle and run-level tests; the `go-build` image smoke | every tier |
-| `gcstest` | the GCS JSON API with opaque page tokens bound to their query | GCS protocol and run-level tests, the GCS arms of `TestCrashMatrix` | every tier |
-| `scalefake` | lazy keyspaces and key files up to billions of keys, with service behaviors | the shape suite, `listing` memory and spill-format tests, measurements | every tier; full scale in `go-shapes` |
+| gofakes3 (`s3test`, `bench/s3fake`) | a real S3 implementation: small buckets with object bodies | protocol, oracle and run-level tests; the `go-build` image smoke | the default suite: `go-race`, `go-xos`, `go-race-nightly` |
+| `gcstest` | the GCS JSON API with opaque page tokens bound to their query | GCS protocol and run-level tests, the GCS arms of `TestCrashMatrix` | the default suite |
+| `scalefake` | lazy keyspaces and key files up to billions of keys, with service behaviors | the shape suite, `listing` memory and spill-format tests, measurements | the default suite, `go-nonrace`; full scale in `go-shapes` |
 | `keyfake` | a sorted production key list as ListObjectsV2 at a fixed page latency | measurements and the durable spill campaign; private, not in this repository | never |
 
 ## Fault injection
@@ -552,8 +556,8 @@ go test -run XXX -fuzz FuzzParseFields -fuzztime 1m ./internal/source/s3/client
 go test -run XXX -fuzz FuzzPropose -fuzztime 1m ./internal/source/keyrange   # pivot policy
 ```
 
-Failing inputs land in `testdata/fuzz/` and run as regular tests from then on. CI never fuzzes: every tier runs
-each target's seeds and `testdata/fuzz/` inputs as ordinary tests. A fuzzing session is a manual tier.
+Failing inputs land in `testdata/fuzz/` and run as regular tests from then on. CI never fuzzes: the default suite (`go-race`,
+`go-xos`, `go-race-nightly`) runs each target's seeds and `testdata/fuzz/` inputs as ordinary tests. A fuzzing session is a manual tier.
 
 ### Replay server targets
 

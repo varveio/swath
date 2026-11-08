@@ -111,7 +111,8 @@ code emits.
 
 A **Java change** is any changed path outside `go/` and `Dockerfile.replay-go*` (`ci.yml` `changes`), so a
 documentation or script change counts; a pull request that changes only the Go port runs these jobs with
-their steps skipped. A manual dispatch of `ci.yml` runs everything.
+their steps skipped. A manual dispatch of `ci.yml` sets both change flags and runs every job a dispatch is
+eligible for (`docker-check` is pull-request-only).
 
 | Tier | Command | Pull request push | Merge to `main` | Nightly (07:00 UTC) | Release tag `v*` |
 | --- | --- | --- | --- | --- | --- |
@@ -120,14 +121,14 @@ their steps skipped. A manual dispatch of `ci.yml` runs everything.
 | Deep and the `kill -9` ITs | `./gradlew test -Pdeep -PtestMaxParallelForks=1`; `HardCrashSigkillResume{Process,Matrix}IT` with `-Dswath.it.sigkill=true` | — | `ci.yml` `deep-tests` (Java change) | `nightly.yml` `deep-and-perf` | `release.yml` `deep-tests` |
 | Perf | `./gradlew test -PonlyPerf` | — | — | `nightly.yml` `deep-and-perf` | — |
 | Image build check | multi-arch `docker build`, `--help` smoke | `ci.yml` `docker-check` (Java change) | — | — | — |
-| Image smoke and publish | `scripts/ci/smoke-container.sh` (a public bucket, anonymous), `smoke-replay-container.sh` | — | `ci.yml` `docker-publish` (Java change) | — | `release.yml` `publish` |
+| Image smoke and publish | `scripts/ci/smoke-container.sh` (a public bucket, anonymous), `smoke-replay-container.sh` | — | `ci.yml` `docker-publish` (Java change) | — | `release.yml` `publish` (public repository and `PUBLIC_RELEASE_ENABLED`) |
 | OSV scan | `scripts/ci/osv-scan.sh` | — | — | `nightly.yml` `osv-scan` | — |
 
 All run on `ubuntu-latest`. `ci-gate`, the one required check, needs `fast-tests`, `integration-tests` and
 `docker-check`; `deep-tests` gates `docker-publish` instead. The nightly jobs run with no path filter;
 `gh workflow run nightly.yml -f jobs=deep-and-perf` (or `osv-scan`) runs one on demand, and the Go
-`go-race-nightly` job runs with every dispatch. `report-test-counts.sh` after each deep, `kill -9` and perf step fails
-the job when the tier executed no test.
+`go-race-nightly` job runs with every dispatch. In `ci.yml` and `nightly.yml`, `report-test-counts.sh` after each deep, `kill -9` and perf step fails
+the job when the tier executed no test; `release.yml` `deep-tests` has no such check.
 
 ### Before pushing an engine change
 
@@ -153,7 +154,7 @@ or moves a seed cut count should assume the default build cannot see it.
 ## Finalization pipeline harness
 
 `ParallelMergeBenchmark` measures the production finalization pipeline over page-run staging;
-every result is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never
+every result is labeled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never
 evidence for live `swath list --sort` listing throughput.
 
 By default it generates and validates a non-empty corpus. To use external staging, create it through
