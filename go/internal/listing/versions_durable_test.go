@@ -54,7 +54,7 @@ type hotVersions struct {
 // ahead have sealed eight certificates (order's "sealed" events): K stays
 // at the bottom while they seal, so the kills find certificates live above
 // it. A run that fails while held (a kill) ends the request with its
-// context. No release within two minutes is a failure of the fixture
+// context. Resumes are not held (hotVersionsConfig). No release within two minutes is a failure of the fixture
 // (hotVersions.late), not a release by time.
 type versionsGate struct {
 	release chan struct{}
@@ -142,7 +142,13 @@ func (p *hotVersions) ListObjectVersions(ctx context.Context, in *client.Version
 }
 
 func hotVersionsConfig(api *hotVersions, out string, resume bool) Config {
-	api.gate.Store(&versionsGate{release: make(chan struct{})})
+	// Only a fresh run is held: a resume replays the certificates and may
+	// seal fewer than eight, so a gate would wait for a signal that never
+	// comes (the 5 s hold this replaced passed it on time).
+	api.gate.Store(nil)
+	if !resume {
+		api.gate.Store(&versionsGate{release: make(chan struct{})})
+	}
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: true, Policy: keyrange.Policy{PageSize: 7}}},
 		Output: OutputConfig{Dir: out, Resume: resume},
 		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: minRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
