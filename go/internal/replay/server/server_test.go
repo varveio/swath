@@ -811,6 +811,10 @@ func pipelinedReader(t *testing.T, s *Server, target string, n int) net.Conn {
 // sixteen permits end up held by stalled flushes, every further request
 // (on the stalled connections or a fresh one) is refused
 // response_count_exhausted, and everything comes back on disconnect.
+// Sixteen permits held is not yet that state: until every holder's socket
+// is full, a holder still finishes its flush and frees its permit for the
+// next request (a fresh one included), so the fresh request is retried
+// until the ceiling refuses it; it is never answered past the ceiling.
 func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("receive buffer sizing")
@@ -841,17 +845,23 @@ func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 			count(s, metrics.ResponseAdmissionRefused, "s3", "response_count_exhausted") > 0
 	})
 	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1", s.Port()))
-	if err != nil {
-		t.Fatalf("a request past the ceiling was not answered: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" {
-		t.Errorf("%d %v", resp.StatusCode, resp.Header)
-	}
-	if n := s.responses.Load(); n > int64(cfg.MaxResponses()) {
-		t.Errorf("%d responses outstanding", n)
-	}
+	waitFor(t, "a request past the ceiling to be refused", func() bool {
+		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/bucket?list-type=2&max-keys=1", s.Port()))
+		if err != nil {
+			t.Fatalf("a request past the ceiling was not answered: %v", err)
+		}
+		resp.Body.Close()
+		if n := s.responses.Load(); n > int64(cfg.MaxResponses()) {
+			t.Fatalf("%d responses outstanding", n)
+		}
+		if resp.StatusCode == 200 {
+			return false // a holder's flush finished first
+		}
+		if resp.StatusCode != 503 || resp.Header.Get("x-swath-replay-error") != "response_count_exhausted" {
+			t.Fatalf("%d %v", resp.StatusCode, resp.Header)
+		}
+		return true
+	})
 	for _, c := range conns {
 		c.Close()
 	}
