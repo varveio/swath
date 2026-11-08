@@ -325,6 +325,11 @@ does, stated as the contract rather than as its code:
   per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
   is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The reserved Java-era version columns are absent from the current-object S3 schema;
   `row_type` is absent from both Go S3 schemas. Readers dispatch on the schema id before reading them.
+  `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
+  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and
+  ordered row sequences for both versions schemas, preserving nulls and within-key order; it refuses
+  mismatched or unknown schema ids. `--ts-ms` is refused for versions so timestamps remain exact.
+  Reader fixtures: `python3 -m unittest test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB.
 
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
 - **Part footers.** Every part carries `swath.profile`, `swath.profile_version` 2, a `swath.schema_id` equal

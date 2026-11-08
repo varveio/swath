@@ -3,24 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Verify a swath dataset (format 2) with DuckDB, independently of the Go writer.
 
-Checks: manifest.json is format 2 (format, format_version, schema_id, source, scope, coverage, parts) and
-is the commit (no _SUCCESS, no symlink.txt); data/ holds exactly the manifest's parts; the run report
-(run.json) exists; for S3, every column against the
-current-object schema and every row a current object; per part: DuckDB row count == manifest rows,
-first/last key == manifest min_key_base64/max_key_base64 (exact bytes), keys strictly ascending (unsigned bytes) within and
-across parts; footer stamps (profile, profile version, schema id, index bound) and nothing else under
-swath.*. Prints the schema as DuckDB sees it (the parts' columns united by name: an optional column, such as
-the GCS schema's time_created, may be absent from parts written before it existed) and min/max key per part.
+Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
+versions keys are nondecreasing within a part and strict across parts. Checks
+S3 version nullability and GCS generation ordering, manifest row counts,
+byte-exact bounds and footer stamps. Optional reference-dir compares ordered
+whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
 import base64
 import json
 import os
 import sys
 
-import duckdb
+from dataset_schema import schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT, GCS_VERSIONS, VERSION_IDS
 
 
-def main(out):
+def main(out, reference=None):
+    import duckdb
     ok = True
 
     def check(cond, msg):
@@ -37,7 +35,15 @@ def main(out):
           f"coverage complete={cov.get('complete')} skipped={cov.get('skipped_entries')} scope={m.get('scope')}")
     for gone in ("_SUCCESS", "symlink.txt"):
         check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
-    s3 = m["source"]["kind"] == "s3"
+    try:
+        sid = schema_id(m)
+    except ValueError as err:
+        check(False, str(err))
+        return 1
+    groups = sid in VERSION_IDS
+    s3 = sid in (S3_CURRENT, S3_VERSIONS)
+    check(m["source"]["kind"] == ("s3" if s3 else "gcs" if sid in (GCS_CURRENT, GCS_VERSIONS) else "local-fs"),
+          "source kind agrees with schema id")
     report = "run.json"
     check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
     files = [f["path"] for f in m["parts"]]
@@ -61,8 +67,12 @@ def main(out):
             ("owner_id", "BYTE_ARRAY", "OPTIONAL", "String"), ("owner_display_name", "BYTE_ARRAY", "OPTIONAL", "String"),
             ("checksum_algorithm", "BYTE_ARRAY", "OPTIONAL", "String"), ("checksum_type", "BYTE_ARRAY", "OPTIONAL", "String"),
         ]
+        if sid == S3_VERSIONS:
+            contract += [("version_id", "BYTE_ARRAY", "OPTIONAL", "String"),
+                         ("is_latest", "BOOLEAN", "REQUIRED", None),
+                         ("is_delete_marker", "BOOLEAN", "REQUIRED", None)]
         got = con.execute(f"SELECT name, type, repetition_type, logical_type FROM parquet_schema('{paths[0]}') WHERE name <> 'swath_listing'").fetchall()
-        print("\nColumn-by-column against the current-object schema:")
+        print("\nColumn-by-column against the selected S3 schema:")
         for i, want in enumerate(contract):
             g = got[i] if i < len(got) else (None, None, None, None)
             logical = None if g[3] is None else str(g[3])
@@ -72,9 +82,20 @@ def main(out):
                 good = good and "isAdjustedToUTC=1" in (logical or "") and "MICROS=MicroSeconds" in (logical or "")
             check(good, f"  {want[0]}: {g[1]} {g[2]} {logical}")
         check(len(got) == len(contract), f"  {len(got)} columns, contract has {len(contract)}")
-        bad = con.execute(f"""SELECT count(*) FROM read_parquet('{glob}', union_by_name = true) WHERE size IS NULL OR last_modified IS NULL
-                              OR etag LIKE '"%'""").fetchone()[0]
-        check(bad == 0, "every row is a current object: size and mtime set, etag unquoted")
+        if sid == S3_CURRENT:
+            invalid = 'size IS NULL OR last_modified IS NULL OR etag LIKE \'"%\''
+        else:
+            invalid = """last_modified IS NULL OR is_latest IS NULL OR is_delete_marker IS NULL
+                OR (is_delete_marker AND (size IS NOT NULL OR etag IS NOT NULL OR storage_class IS NOT NULL
+                    OR checksum_algorithm IS NOT NULL OR checksum_type IS NOT NULL))
+                OR (NOT is_delete_marker AND size IS NULL) OR etag LIKE '"%'"""
+        bad = con.execute(f"SELECT count(*) FROM read_parquet('{glob}', union_by_name=true) WHERE {invalid}").fetchone()[0]
+        check(bad == 0, "every row agrees with the selected S3 schema and nullability")
+
+    if sid == GCS_VERSIONS:
+        have = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true)").fetchall())
+        check(have.get("generation") == "BIGINT" and "time_deleted" in have,
+              "generations have exact int64 generation and nullable time_deleted")
 
     print("\nSchema as DuckDB sees it (DESCRIBE):")
     for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)").fetchall():
@@ -92,20 +113,28 @@ def main(out):
     print("\nPer part:")
     prev_max = None
     for i, (f, p) in enumerate(zip(m["parts"], paths)):
+        key_violation = ">" if groups else ">="
         # Strict ascending within the file, comparing raw key bytes (BLOB compare is unsigned bytewise).
         r = con.execute(f"""
             WITH t AS (SELECT {kb}::BLOB AS b, file_row_number AS n
                        FROM read_parquet('{p}', file_row_number = true))
             SELECT count(*), min(b), max(b), first(b ORDER BY n), last(b ORDER BY n),
-                   count(*) FILTER (WHERE prev IS NOT NULL AND prev >= b)
+                   count(*) FILTER (WHERE prev IS NOT NULL AND prev {key_violation} b)
             FROM (SELECT b, n, lag(b) OVER (ORDER BY n) AS prev FROM t)
         """).fetchone()
         cnt, bmin, bmax, first, last, bad = r
         bmin, bmax, first, last = bytes(bmin), bytes(bmax), bytes(first), bytes(last)
+        if sid == GCS_VERSIONS:
+            bad_generations = con.execute(f"""SELECT count(*) FROM (
+                SELECT key, generation, lag(key) OVER (ORDER BY file_row_number) AS pk,
+                lag(generation) OVER (ORDER BY file_row_number) AS pg
+                FROM read_parquet('{p}', file_row_number=true))
+                WHERE generation IS NULL OR (key = pk AND generation <= pg)""").fetchone()[0]
+            check(bad_generations == 0, "  generations strictly ascend within each name")
         lo, hi = base64.b64decode(f["min_key_base64"]), base64.b64decode(f["max_key_base64"])
         print(f"  {f['path']}: rows={cnt} bytes={f['bytes']} min_key={first!r} max_key={last!r}")
         check(cnt == f["rows"], f"  rows {f['rows']}")
-        check(bad == 0, "  keys strictly ascending within part (file row order)")
+        check(bad == 0, "  keys nondecreasing within part" if groups else "  keys strictly ascending within part")
         check(first == lo and last == hi, "  first/last key == manifest min_key_base64/max_key_base64 (decoded bytes)")
         check(bmin == first and bmax == last, "  first/last are byte min/max")
         if prev_max is not None:
@@ -119,11 +148,15 @@ def main(out):
                 "swath.index_bound_bytes": "1024"}
         check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: profile, version, schema id, index bound")
         check(not [k for k in kv if k.startswith("swath.") and k not in want], "  no other swath.* stamps")
+    if reference is not None:
+        from bench.diffds import compare
+        result = compare(out, reference)
+        check(result["identical"], "whole-row ordered sequence and multiset match reference: " + json.dumps(result))
     print("\nRESULT:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: verify.py <output-dir>")
-    sys.exit(main(sys.argv[1]))
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: verify.py <output-dir> [reference-dir]")
+    sys.exit(main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else None))

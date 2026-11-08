@@ -1,0 +1,61 @@
+{
+  "schema_id": "swath/gcs-generations/v1",
+  "rows": [
+    {
+      "key": "k",
+      "size": 1,
+      "last_modified": 100,
+      "etag": "e",
+      "generation": 1,
+      "metageneration": 1,
+      "storage_class": "STANDARD",
+      "md5": "m",
+      "crc32c": null,
+      "content_type": "text/plain",
+      "time_created": 90,
+      "time_deleted": 200
+    },
+    {
+      "key": "k",
+      "size": 0,
+      "last_modified": 90,
+      "etag": null,
+      "generation": 2,
+      "metageneration": 1,
+      "storage_class": "STANDARD",
+      "md5": null,
+      "crc32c": "c",
+      "content_type": null,
+      "time_created": null,
+      "time_deleted": 180
+    },
+    {
+      "key": "k",
+      "size": 3,
+      "last_modified": 80,
+      "etag": "old",
+      "generation": 3,
+      "metageneration": 1,
+      "storage_class": "STANDARD",
+      "md5": null,
+      "crc32c": null,
+      "content_type": null,
+      "time_created": 70,
+      "time_deleted": null
+    },
+    {
+      "key": "z",
+      "size": 4,
+      "last_modified": 70,
+      "etag": null,
+      "generation": 1,
+      "metageneration": 1,
+      "storage_class": "NEARLINE",
+      "md5": null,
+      "crc32c": null,
+      "content_type": null,
+      "time_created": 60,
+      "time_deleted": 75
+    }
+  ]
+}
