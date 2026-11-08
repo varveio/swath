@@ -129,12 +129,11 @@ type Stats struct {
 	// zero if it never did; DrainEnd when the drainer handed on its last
 	// row. The drain tail is the interval between them.
 	ListingDone, DrainEnd time.Time
-	// IdleBefore and IdleAfter are the workers' idle time (nothing queued
-	// to list, read-ahead waits included), summed over workers, before and
-	// after ListingDone.
-	IdleBefore, IdleAfter time.Duration
-	Drainer               DrainerTimes
-	ReadAhead             ReadAheadStats
+	// IdleAfter is the workers' idle time (nothing queued to list,
+	// read-ahead waits included), summed over workers, after ListingDone.
+	IdleAfter time.Duration
+	Drainer   DrainerTimes
+	ReadAhead ReadAheadStats
 	// Segments is the segment-parallel replay after listing (segments.go;
 	// zero when the sink is no Segmenter).
 	Segments SegmentStats
@@ -311,11 +310,11 @@ type run[R, P any] struct {
 	drainEnd       time.Time
 
 	// open counts the ranges created and not yet done: the listing is done
-	// when it reaches zero (listedAt, under mu). idleBefore and idleAfter
-	// are the workers' idle time on either side of it (mu).
-	open                  atomic.Int64
-	listedAt              time.Time
-	idleBefore, idleAfter time.Duration
+	// when it reaches zero (listedAt, under mu). idleAfter is the workers'
+	// idle time after it (mu).
+	open      atomic.Int64
+	listedAt  time.Time
+	idleAfter time.Duration
 	// replay is the provider's replay ranges (source.Replaying), nil
 	// without durable spill.
 	replayFn func(r R) (int, bool)
@@ -563,7 +562,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.sp != nil && o.sp.cache != nil
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
-	st.ListingDone, st.DrainEnd, st.IdleBefore, st.IdleAfter = o.listedAt, o.drainEnd, o.idleBefore, o.idleAfter
+	st.ListingDone, st.DrainEnd, st.IdleAfter = o.listedAt, o.drainEnd, o.idleAfter
 	st.Drainer = o.dt
 	if o.seg != nil {
 		st.Segments = o.seg.st

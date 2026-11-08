@@ -371,10 +371,9 @@ type Drain struct {
 	// TailNs is from listing_done_at to the drain's last row: the part of
 	// the run in which only the drain was left (0: listing never finished).
 	TailNs int64 `json:"tail_ns"`
-	// The workers' idle time (nothing queued to list; read-ahead waits
-	// included), summed over workers, before and after listing_done_at.
-	WorkerIdleBeforeNs int64 `json:"worker_idle_before_listing_done_ns"`
-	WorkerIdleAfterNs  int64 `json:"worker_idle_after_listing_done_ns"`
+	// The workers' idle time after listing_done_at (nothing queued to
+	// list; read-ahead waits included), summed over workers.
+	WorkerIdleAfterNs int64 `json:"worker_idle_after_listing_done_ns"`
 	// The drainer's time beside frontier_wait_ns: reading spilled frames
 	// itself (decoding included, and counted again in ReplayDecodeNs),
 	// waiting for a frame the read-ahead was reading, the order guard, and

@@ -371,7 +371,7 @@ func TestSegmentsMemoryIsBounded(t *testing.T) {
 
 // TestSegmentWorkersCap: Options.SegmentWorkers caps the workers; and
 // ListingDone is called once, when the last range is expanded, before the
-// drain ends, the workers' idle time split at it.
+// drain ends.
 func TestSegmentWorkersCap(t *testing.T) {
 	withProcs(t, 9)
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
@@ -394,9 +394,6 @@ func TestSegmentWorkersCap(t *testing.T) {
 	}
 	if calls.Load() != 1 || st.ListingDone.IsZero() || at.Before(st.ListingDone) || st.DrainEnd.Before(st.ListingDone) {
 		t.Fatalf("calls %d, listing done %v (called at %v), drain end %v", calls.Load(), st.ListingDone, at, st.DrainEnd)
-	}
-	if st.IdleBefore <= 0 {
-		t.Fatalf("idle before %v: the workers waited for the held frontier's children", st.IdleBefore)
 	}
 }
 

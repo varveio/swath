@@ -149,19 +149,16 @@ func (o *run[R, P]) readFrame(ft *fetch[P], drainer bool) ([]schema.Row[P], time
 	return o.sp.readAt(ft.f, ft.at.off, ft.at.size)
 }
 
-// idle accounts a worker's idle wait that began at t (mu held), split at
-// the moment the listing finished.
+// idle accounts the part of a worker's idle wait, begun at t (mu held),
+// after the listing finished.
 func (o *run[R, P]) idle(t time.Time) {
-	now := time.Now()
-	switch {
-	case o.listedAt.IsZero():
-		o.idleBefore += now.Sub(t)
-	case o.listedAt.After(t):
-		o.idleBefore += o.listedAt.Sub(t)
-		o.idleAfter += now.Sub(o.listedAt)
-	default:
-		o.idleAfter += now.Sub(t)
+	if o.listedAt.IsZero() {
+		return
 	}
+	if o.listedAt.After(t) {
+		t = o.listedAt
+	}
+	o.idleAfter += time.Since(t)
 }
 
 // planAhead queues the spill markers ahead of the drainer (mu held, on the

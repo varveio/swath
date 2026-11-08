@@ -1068,7 +1068,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 // read-ahead, and the encoders admitted.
 func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 	dt := ost.Drainer
-	d := &Drain{WorkerIdleBeforeNs: int64(ost.IdleBefore), WorkerIdleAfterNs: int64(ost.IdleAfter),
+	d := &Drain{WorkerIdleAfterNs: int64(ost.IdleAfter),
 		ReplayReadNs: int64(dt.ReplayRead), ReplayDecodeNs: int64(dt.ReplayDecode), AheadWaitNs: int64(dt.AheadWait),
 		OrderCheckNs: int64(dt.OrderCheck), SinkWriteNs: int64(dt.SinkWrite)}
 	if !ost.ListingDone.IsZero() && !ost.DrainEnd.IsZero() {

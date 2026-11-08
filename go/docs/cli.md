@@ -729,7 +729,7 @@ began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (
 `accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
 `requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
 drain's tail once listing is done ([internals/ordering.md](internals/ordering.md), every field in
-[internals/counters.md](internals/counters.md)): `tail_ns`, `worker_idle_before_listing_done_ns`,
+[internals/counters.md](internals/counters.md)): `tail_ns`,
 `worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
 `order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,

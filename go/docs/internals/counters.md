@@ -68,7 +68,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
 | `timings.listing_done_at` | time | the provider finished: every range expanded, none in flight (absent if it never did); `listing_finished_at` is the order stage's end, after the drain |
 | `drain.tail_ns` | ns | from `listing_done_at` to the drain's last row: the part of the run in which only the drain was left |
-| `drain.worker_idle_before_listing_done_ns`, `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time (nothing queued to list, read-ahead waits included), summed over workers, on either side of `listing_done_at` |
+| `drain.worker_idle_after_listing_done_ns` | ns | the workers' idle time after `listing_done_at` (nothing queued to list, read-ahead waits included), summed over workers |
 | `drain.replay_read_ns`, `drain.replay_decode_ns` | ns | the drainer reading spilled frames itself, and the part of it spent decoding (trailers included) |
 | `drain.ahead_wait_ns`, `drain.order_check_ns`, `drain.sink_write_ns` | ns | the drainer waiting for a frame the read-ahead was reading; the stream-wide order guard; handing batches to the sink (`encoder_wait_ns` included) |
 | `drain.read_ahead.frames`, `drain.read_ahead.rows` | frames, rows | spilled frames idle workers read and decoded ahead of the drainer (feature: `spill`) |
