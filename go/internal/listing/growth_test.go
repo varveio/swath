@@ -103,7 +103,7 @@ func TestPartCountGrowth(t *testing.T) {
 		}
 		p := point{n, jbytes.Load(), fi.Size(), live.Load()}
 		t.Logf("parts=%d rows=%d wall=%s journal=%d B manifest=%d B live at the last publication=%.1f MiB peak heap=%.1f MiB (base %.1f)",
-			n, sum.Output.RowsListed, wall.Round(time.Millisecond), p.journal, p.manifest, float64(p.live)/(1<<20),
+			n, sum.Output.RowsEmitted, wall.Round(time.Millisecond), p.journal, p.manifest, float64(p.live)/(1<<20),
 			float64(peak.Load())/(1<<20), float64(base.HeapAlloc)/(1<<20))
 		if limit := int64(growthBase + growthBytes*n); p.journal > limit || p.manifest > limit {
 			t.Fatalf("%d parts: journal %d B, manifest %d B, ceiling %d B", n, p.journal, p.manifest, limit)

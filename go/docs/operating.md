@@ -21,7 +21,7 @@ GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
 ./swath --version        # swath-go VERSION (REVISION)
 ```
 
-`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …listing.revision=REV'` with REV the
+`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Revision=REV'` with REV the
 checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its commit). A plain
 `go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
 git worktree may lack (`--version` then shows none).
@@ -55,7 +55,7 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
   wrong region is an error that names the bucket's region. Redirects are not followed. STS calls use the
   environment's or profile's region, not `--region`.
 - Requester-pays buckets: `--request-payer`. Endpoint variants: `--fips`, `--dualstack`; S3-compatible stores:
-  `--endpoint URL` (or `--endpoint-url`), addressed path-style unless `--path-style=false`.
+  `--endpoint URL`, addressed path-style unless `--path-style=false`.
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
   `--bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
   (`--bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
@@ -81,14 +81,23 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
-| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. A warning names a shortfall |
-| Spill disk | `--spill-max` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/` (a text output's under `$TMPDIR`; `--count-only` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Encoders | `--encoders` | GOMAXPROCS | the default is admitted: each encoder against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. An explicit count is kept as given, with a warning when the resources cannot carry it. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
+| Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath count` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
-filesystem (spill lives under the output directory). Estimate the dataset from a representative prefix: the
-report's `output.bytes` over `output.rows_committed`. If the dataset outgrows the disk the run stops with exit
-74 and resumes once there is space; spill alone never fails a run.
+filesystem (spill lives under the output directory, or beside a text file). The spill cap includes the
+durable spill a journaled run keeps for a resume (`DIR/.swath/spill/durable/`): a certified file stays on
+disk, charged to the cap, until the published dataset covers its keys, and when the cap is reached the
+oldest file already consumed is evicted (its keys are then relisted after a crash); the report's
+`resources.spill.durable.retained_bytes` and `peak_retained_bytes` show it. A text file's scratch directory
+is its attempt's own (created exclusively, named for the file and the attempt), so two runs writing sibling
+files, or the same one, never share or remove each other's; the attempt removes it when it ends, after
+success or failure. Only a killed run leaves one behind, with its `.NAME.*.tmp`: delete both. Estimate the dataset from a representative prefix: the
+report's `output.output_bytes` over `output.rows_committed`; `resources.free_disk_min_bytes` is the least free space the run saw. If the dataset outgrows the disk the run stops with exit
+74 and resumes once there is space. Spill backs off rather than fail when a frame does not fit (the run
+waits), but not always: a range's closing trailer that does not fit, or any other spill I/O error, stops the
+run (resumable; [ordering](internals/ordering.md#spill)).
 
 **Memory.** A run holds three things:
 
@@ -100,16 +109,26 @@ report's `output.bytes` over `output.rows_committed`. If the dataset outgrows th
   the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers (24 MiB each),
   compression scratch, and the garbage collector's headroom (with the default `GOGC`, up to about twice
   the live heap).
-- **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-max`. On tmpfs (a
+- **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
+  (default GOMAXPROCS, lowered to what 16 MiB each of an allowance equal to `--row-budget` carries; one
+  job compresses synchronously on the order stage). A job is a 4 MiB input section (four 1 MiB windows:
+  sorted listings match between neighbouring keys, and a 1 MiB window measured the ratio and speed of
+  the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
+  encoder; measured at 5 to 13 MiB a job. Gzip is one stream. The report's `output.text.compressor`
+  names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`). A file's
+  rows are also formatted by `--encoders` goroutines (`output.text.formatters`) into one ordered stream;
+  their queued batches are rows in flight, charged to `--row-budget`, and the chunks they format are about
+  the same size.
+- **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
   report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
 
-`--count-only` holds only pages in flight and the ranges queued for a worker: it counts rows as they
+`swath count` holds only pages in flight and the ranges queued for a worker: it counts rows as they
 arrive and never orders, buffers or spills them (`resources.features.order` false, `max_buffered_bytes` 0, no `spill`).
 
 Read the actual figure from the report's `resources.peak_rss_bytes` on a representative run, and size the
 host from that, not from `--row-budget`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
-sampled every 100 ms) against `row_budget_bytes` shows how much memory the budget does not see;
+sampled every 100 ms) against `invocation.row_budget_bytes` shows how much memory the budget does not see;
 `peak_ahead_rows` is the most rows listed and not yet handed on at once (in memory or spilled), and
 `frontier_stuck_max_ns` the longest stretch in which nothing was handed on (a held-up frontier).
 Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it with the CPU times; on another
@@ -124,22 +143,27 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
 ```
 
 - **Output directory.** `-o DIR` must be empty or absent. A non-empty directory is refused (exit 2) unless
-  `--overwrite`, which replaces only a previous dataset of this tool. The output may not be the listed root or
-  inside it.
+  `--overwrite`, which replaces only a previous dataset of this tool. For a local source the output may not be
+  the listed root or contain it; a new or empty directory inside the root is accepted (the listing skips it),
+  but `--overwrite` of an output inside the root is refused.
 - **The outcome of record** is the exit code plus the report written to `--report FILE` when the attempt ends,
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
   the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
   `--report-format json` also prints the report on stdout; the default prints one line.
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
-  It is the only stop for a service that keeps answering without rows. Give every unattended attempt one.
+  The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
+  that keeps returning rows or pages forever. Give every unattended attempt one.
 - **Process deadline.** A stop is graceful; if the run has not stopped 15 s later the process writes its
   outcome and exits, at most 20 s after the stop. A supervisor's own kill deadline belongs above
   `--max-duration` plus 20 s. An attempt killed that way may have no report: treat it as unavailable, never as
   the outcome in an older `error.json`.
-- **`--part-interval`** (default 30 s; 0: size only) closes an open part once it is that old, so the durable
-  recovery point (what a resume keeps) is never much older than that on a slow frontier. With 0, part
-  boundaries do not depend on timing.
+- **`--part-interval`** (default 30 s; 0: size only) closes an open part that holds rows once it is that old.
+  It bounds how long rows wait in an open part, not the age of the durable recovery point (what a resume
+  keeps): a closed part is still encoded, synced and published in order, and when no rows reach the output
+  (a stalled frontier) nothing is open to close. `part_age_ms` in the progress file is the time since a part was
+  last published; it says nothing about how old the rows in the newest part are, nor how much listed work
+  a resume would repeat. With 0, part boundaries do not depend on timing.
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 
@@ -156,33 +180,25 @@ estimate, files, bytes and peak RSS); `--stats` forces it (also for a supervisor
 An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
 The one-line summary stays on stdout. Colour: `--color auto|always|never`, auto honouring `NO_COLOR`.
 
-`DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output.
-
-Its fields are listed once, under "Progress file" in [cli.md](cli.md).
-
-`progress.json` also carries the live request account: `requests` (attempts sent), `retries`, `inflight` (now)
-and `limit` (the adaptive limiter's current limit), and `cost_usd` on AWS S3 or GCS. The totals are in the
-report, under
-`source.stats.counters.values`: `attempts`, `requests`, `retries`, `throttles`, `timeouts`, `inflight.max_active`,
-`inflight.busy_ns` (divided by the listing time, `timings.listing_ms`, it is the mean in flight), the attempt
-latency percentiles `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns` (9223372036854775807 when the
-percentile falls among attempts of 2^40 ns, about 18 min 20 s, or longer, which `inflight.latency_overflow`
-counts), `limiter.decreases`,
-`limiter.increases`, `limiter.max_depth`, `limiter.waits`, and `source.stats.mean_active` (mean active ranges). The
-report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stuck_max_ns`, `peak_nodes`,
-`peak_markers`, `peak_ahead_rows`, `peak_heap_live_bytes`, `part_time_cuts` and `spill.peak_bytes`,
-`spill.peak_readers`, `spill.max_bytes`, `spill.reserve_bytes`, `spill.dir`, `spill.fs_type`.
+`DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
+counts, the request account (`requests`, `retries`, `inflight`, the limiter's `limit`, `cost_usd`) and the order
+stage's resources. The report written at the end keeps the curve (`history`, up to 300 samples), the phase times
+(`timings.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
+resources and the provider's counters (`source.stats.counters.values`: attempt latency percentiles, the
+limiter's steps, the split counters). Both schemas are listed once, under "Progress file" and "Run report" in
+[cli.md](cli.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
 
 | Signal | Healthy | Act when |
 |---|---|---|
-| `part_age_ms` | under a minute | several minutes: durable progress has stalled and a crash now loses all of it |
+| `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
 | `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
-| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-max`, not by `--row-budget`; a count-only run holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
-| `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (at `--spill-max` 2 × the row budget, 56 of 64 large lists did not finish in 900 s) |
+| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--row-budget`; `swath count` holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
+| `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
 | `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
-| `resources.peak_heap_live_bytes` against `row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
-| `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; point `TMPDIR` (or the output) at a disk |
+| `resources.peak_heap_live_bytes` against `invocation.row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
+| `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
+| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
 | `objects` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
@@ -197,24 +213,27 @@ report's `resources` carries `budget_wait_ns`, `frontier_wait_ns`, `frontier_stu
 ## Throttling
 
 By default (S3 and GCS) every HTTP attempt (pages, probes, retries, requeues) takes a permit from an adaptive
-limit. It starts at `--workers`, is multiplied by 0.7 on each throttle answer (S3 429, 503, `SlowDown`; GCS 429
-and rate-limit reasons; floor 1), and grows by one per second after 10 s without one. Growth is held while
+limit. It starts at `--workers` and is multiplied by 0.7 on a throttle answer (S3 429, 503, `SlowDown`; GCS 429
+and rate-limit reasons; floor 1), at most once per round trip and only while 15 % or more of the last
+4 × `--workers` answers (at least 256) are throttles; a background under that is tolerated (`limiter.cuts_suppressed.tolerated`).
+It grows by one per second while under 7.5 % are, or after 10 s without a throttle answer. Growth is held while
 attempt latency is above twice its baseline or three or more timeouts fell in the last 10 s.
 
-- `--limiter=false` keeps a fixed `--workers` requests in flight.
-- `--limiter-slow-start` starts the limit at 4 and doubles it each second up to `--workers` until the first
-  throttle answer or timeout.
+- `--limiter=false` removes the limit: each of the `--workers` listing workers waits on one page at a time,
+  and the seed's delimiter listings and the structure probes run beside them, so more than `--workers` requests
+  can be in flight (a seeded run with one worker reaches two).
+- `swath diag list --limiter-slow-start` (an experiment, unmeasured) starts the limit at 4 and doubles it each second up to `--workers` until the first
+  cut or timeout.
 - `--request-rate N` caps all HTTP attempts at N per second, after the limiter's permit; for a quota shared
   across a fleet.
 - Each request is retried up to 9 attempts (backoff 100 ms doubling to 5 s); after that the page is asked
   again (2 s doubling to 60 s) for as long as the run lives. Retry exhaustion never fails a run; only the stall
   watchdog does.
 
-Measured on replay with injected faults (synthetic,
-[measurements](measurements.md#throttling-through-the-fault-proxy)): a 5 s storm of 50 % SlowDown drops the limit from 64 to 1 in under 0.1 s, and full concurrency
-returned about 68 s after the storm; the run sent 11-38 % fewer requests and took 1.5-3.5x the wall time of a
-fixed 64. Under a sustained 20 % throttle rate the limit stays at 1-2 for the whole run (about 23x the wall
-time of `--limiter=false` on replay). If a run crawls with `throttles` rising and the report's
+Measured on the red team's fake ([measurements](measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
+throttle answers no longer move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
+throttling have been measured only under the earlier per-answer rule ([history](measurements.md#throttling-through-the-fault-proxy)).
+If a run crawls with `throttles` rising and the report's
 `limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), that is this rule; `--limiter=false` with `--request-rate` is the fixed-rate alternative.
 
 ## Stopping and resuming
@@ -237,17 +256,33 @@ again in a new or empty directory (`--overwrite` refuses an interrupted filesyst
 OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
 
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
-value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--spill-compress`,
-`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and `--profile`,
+value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
+`--spill-reserve`, `--spill-compress` and `--spill-plain`, `--part-interval`, `--report-format`, `--report`,
+`--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and `--profile`,
 `--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`,
-`--limiter`, `--limiter-slow-start`, `--request-rate`. Any other flag is a usage error. `--max-duration` and the
+`--limiter`, `--limiter-slow-start`, `--request-rate`, `--bearer-token-command`, `--bearer-token-refresh-interval`
+(`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
 The resume keeps every published part, verifies each against its journal record (size and MD5: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
-roughly 30-45 minutes; progress shows as `verified_bytes`), then lists again after the last published key.
-Rows listed but not yet in a published part are listed again.
+roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
+Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
+a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
+as listed), and the resume replays each certificate it can validate instead of listing it, then lists only
+the gaps between them ([internals/ordering.md](internals/ordering.md#durable-spill)). The report says what it
+reused: `resources.spill.durable.resume` (`accepted`, `replayed_rows`, `gaps`, `requests_saved_est`,
+`rejected` by reason).
+
+**Retained observation.** A replayed certificate serves its rows as the interrupted attempt listed them: a key
+deleted from the bucket since stays in the dataset, one added inside a certified interval is missed, and
+metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
+during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
+that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8
+(a run interrupted under an older build resumes as before, relisting), spill on, `--spill-budget` of at least
+16 MiB, and the range engine (S3 and GCS; not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
 billed project), `--fetch-owner`, the schema and the part size are frozen. A resume whose environment or
@@ -276,6 +311,26 @@ Where readers must always find a dataset (a periodic refresh), write each run to
 overwrite it. Switch readers through a pointer outside the datasets (a generation file, a database row, a
 symlink swapped by rename) once the new directory's `manifest.json` exists, and delete an old generation only
 when no reader uses it.
+
+### Seeding a refresh from the previous dataset
+
+A scheduled relisting of the same bucket should pass the previous generation as `--seed-from`:
+
+```bash
+swath list s3://bucket/logs/ -o /data/logs-2026-11-08 --seed-from /data/logs-2026-11-07
+```
+
+The previous dataset's parts and key page index divide the scope into ranges of about equal expected keys, so the
+run skips the delimiter seed and most early splits, and its requests approach one page per 1,000 keys. The prior
+must be the same source and scope: the manifest's bucket and prefix are compared with the run's (exit 2 on a
+mismatch; a dataset of `logs/` does not seed `logs/2026/`), and the endpoint and region are not recorded in it, so
+point it only at a dataset of the same store. It cannot be the output directory, and `--overwrite` of the prior's
+own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
+changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
+`seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
+them), and `seed.from.expected_keys` against `objects` is the growth. A cut file (one sorted key per line,
+optionally a tab and a count) seeds from anything else that knows the keys, but carries no identity; prefer the
+dataset.
 
 ## Reading the output
 
@@ -306,7 +361,12 @@ The S3 schema is `swath/s3-objects/v1` (`key`, `size`, `last_modified`, `etag`, 
 `owner_display_name`, `checksum_algorithm`, `checksum_type`); GCS is `swath/gcs-objects/v1` (`key`, `size`,
 `last_modified`, `etag`, `generation`, `metageneration`, `storage_class`, `md5`, `crc32c`, `content_type`,
 and the optional `time_created`, absent from parts written before it was listed: read the parts by name, as
-`read_parquet(..., union_by_name = true)` does, to see it). `python3
+`read_parquet(..., union_by_name = true)` does, to see it). S3's `checksum_algorithm` is the first algorithm S3
+lists for the object. On GCS, `last_modified` also changes when only the object's metadata changes
+(`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
+and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
+encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Both datasets list current
+objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.
 
@@ -321,9 +381,9 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
-- **Scale:** 256 and 512 workers and lists of up to 150M keys were measured through a key-list fake at 50 ms
-  and the scale study's replay fixtures, not against a live bucket; billions of keys and runs of hours are
-  unmeasured ([measurements](measurements.md#known-gaps)).
+- **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
+  of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
+  ([measurements](measurements.md#known-gaps)).
 
 ## When it goes wrong
 
@@ -337,8 +397,16 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
    whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time), else to stderr,
    cut at 1 MiB.
 4. **`.swath/`**: `lock` (one process per output), `journal` (`swath show --journal`), `parts/` (encoded parts
-   not yet published), `spill/` (disposable; removed by the next run), `suspect/` (a part a resume must
-   reproduce), `progress.json`. Do not edit the journal or its parts by hand.
+   not yet published), `spill/` (disposable spill, removed by the next run, and `spill/durable/`: the
+   certified spill files and their `ledger`, kept for the resume and removed when the dataset commits),
+   `suspect/` (a part a resume must reproduce), `progress.json`. Do not edit the journal or its parts by
+   hand; removing `spill/durable/` only costs a resume the relisting it would have saved.
+
+**What a kill leaves on disk.** A SIGKILL (or an OOM kill, a power loss) leaves the published parts, the
+journal, encoded parts not yet published, the disposable spill (removed by the next run) and the durable
+spill: certified files with their ledger records, and files whose record never reached the ledger. The
+resume validates every recorded file (size, checksums, every frame, its certificate) and unlinks every
+other file; a missing or damaged one is relisted, never an error.
 5. **Profiles:** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` write pprof files.
 
 For a report to the maintainers include `swath --version`, the `--report` file (redact bucket names and keys),

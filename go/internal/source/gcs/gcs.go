@@ -98,7 +98,7 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 func (p *Provider) Requests() source.Requests {
 	if c, ok := p.client.(live); ok {
 		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Inflight: l.Inflight,
+		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
 			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
 	}
 	return source.Requests{}

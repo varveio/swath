@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Tabulate run reports into one TSV row per run: Java swath's _swath_summary.json and the Go tool's run.json
-(report_version 1), mapped onto the same columns (the Java-to-Go mapping lives here, see docs/upgrade.md).
+(report_version 2, and 1: output.rows_emitted or rows_listed, output.output_bytes or bytes; the request
+count is the provider's counters either way), mapped onto the same columns (the Java-to-Go mapping lives
+here, see docs/upgrade.md).
 
 usage: summaries.py PATH... > runs.tsv     (files, or directories searched recursively)
 
@@ -43,12 +45,12 @@ def go_row(path, d):
     r = {
         "file": path, "producer": d["build"]["tool"], "bucket": inv["source"], "version": d["build"].get("revision", ""),
         "concurrency": inv["workers"], "seed_mode": "shallow" if feats.get("seed") else "none",
-        "toggles_off": ",".join(sorted(k for k, v in feats.items() if not v)), "completed": d["outcome"]["complete"], "objects": out["rows_listed"],
+        "toggles_off": ",".join(sorted(k for k, v in feats.items() if not v)), "completed": d["outcome"]["complete"], "objects": out.get("rows_emitted", out.get("rows_listed")),
         "duration_ms": t["wall_ms"], "listing_duration_ms": t["listing_ms"], "api_calls": src.get("attempts", src.get("requests")),
         "pages": src.get("pages"), "splits": sum(v for k, v in src.items() if k.startswith("split.accepted")),
         "steals": 0, "peak_in_flight": src.get("inflight.max", src.get("max_active")),
         "avg_in_flight": src["inflight.ns"] / (t["listing_ms"] * 1e6) if src.get("inflight.ns") and t["listing_ms"] else src.get("mean_active"),
-        "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out["bytes"],
+        "files_out": out["parts_written"] + out["parts_retained"], "bytes_out": out.get("output_bytes", out.get("bytes")),
         "retries": src.get("retries", ""), "throttle_events": src.get("throttles", ""),
         "overfetch_keys": src.get("overfetch_keys"),
         "empty_children": src.get("child_empty.lower", 0) + src.get("child_empty.upper", 0),

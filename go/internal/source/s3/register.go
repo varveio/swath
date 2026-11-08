@@ -64,7 +64,6 @@ func flags(f *flag.FlagSet, diag bool, shared any) any {
 	common, _ := shared.(*keyrange.Common)
 	o := &flagged{common: common}
 	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store (path-style addressing unless --path-style=false)")
-	f.StringVar(&o.Endpoint, "endpoint-url", "", "S3: Java swath's name for --endpoint")
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.Anonymous, "anonymous", false, "S3: send unsigned requests, ignoring any credentials")
@@ -141,6 +140,9 @@ func (o *opened) Frontier() (advanced, emptyChained int64) { return o.p.Frontier
 // Requests is the live request account (source.Requested).
 func (o *opened) Requests() source.Requests { return o.p.Requests() }
 
+// SeedTime is the engine's seed time (source.SeedTimed).
+func (o *opened) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
+
 // Tariff is the reference list rate the report labels its estimate with
 // (source.Priced): only on the provider's own service; a custom endpoint
 // has no known tariff, and the report then gives no figure.
@@ -202,6 +204,17 @@ func (o *opened) Restart(after string) error {
 	return nil
 }
 
+// SeedFrom starts the listing from a prior's cuts instead of the seed
+// (source.Seeded, --seed-from).
+func (o *opened) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
+
+// Reuse lists around a resume's reused coverage certificates
+// (source.Reusing): the engine replays them, lists the gaps.
+func (o *opened) Reuse(spans []source.Span) { o.p.Reuse(spans) }
+
+// Fences reports the engine's coverage fences (source.Fencing).
+func (o *opened) Fences() bool { return o.p.Fences() }
+
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
@@ -210,6 +223,8 @@ func (o *opened) Report() source.Report {
 var (
 	_ source.Identified = (*opened)(nil)
 	_ source.Resumable  = (*opened)(nil)
+	_ source.Seeded     = (*opened)(nil)
+	_ source.Reusing    = (*opened)(nil)
 	_ source.Capable    = (*opened)(nil)
 	_ source.Reporter   = (*opened)(nil)
 )

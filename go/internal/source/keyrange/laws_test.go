@@ -43,6 +43,9 @@ func TestMetamorphicLaws(t *testing.T) {
 		pageCap int
 		coin    bool // forced random splits
 		resume  bool // resume after the key a third of the way in
+		// accept is the provider's bound policy (nil: Safe); SafeKey sends
+		// real keys' '%' as bounds, as S3 does.
+		accept func(string) bool
 	}
 	variants := []variant{
 		{name: "sequential", opt: Options{Sequential: true}, workers: 1, budget: 500},
@@ -66,6 +69,16 @@ func TestMetamorphicLaws(t *testing.T) {
 		// Pages of 3 make the seed paginate and descend in several waves.
 		{name: "w64/seed-descent", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 3},
 		{name: "w16/seed-descent/resume", opt: Options{Seed: true}, workers: 16, budget: 500, pageCap: 3, coin: true, resume: true},
+		{name: "w64/seed/percent-bounds", opt: Options{Seed: true}, workers: 64, budget: 500, accept: SafeKey},
+		// The seed's first data page (the command's default): a scope of
+		// one page is listed by it alone; a larger one's first tile starts
+		// after its last key.
+		{name: "w16/slow-split/seed-first-page/short", opt: Options{Seed: true, SeedFirstPage: true, SlowSplit: true}, workers: 16, budget: 500, short: true},
+		{name: "w64/seed-first-page", opt: Options{Seed: true, SeedFirstPage: true}, workers: 64, budget: 500},
+		{name: "w16/seed-first-page/page=3/resume", opt: Options{Seed: true, SeedFirstPage: true}, workers: 16, budget: 500, pageCap: 3, coin: true, resume: true},
+		{name: "w8/seed-first-page/percent-bounds/short", opt: Options{Seed: true, SeedFirstPage: true, Structure: StructureAuto}, workers: 8, budget: 500, short: true, accept: SafeKey},
+		{name: "w8/percent-bounds/forced-splits/page=7", workers: 8, budget: 500, pageCap: 7, coin: true, accept: SafeKey},
+		{name: "w16/seed-descent/percent-bounds/resume", opt: Options{Seed: true, Structure: StructureAuto}, workers: 16, budget: 500, pageCap: 3, resume: true, accept: SafeKey},
 	}
 	spaces := keyspaces()
 	for k, v := range hostile() {
@@ -98,7 +111,7 @@ func TestMetamorphicLaws(t *testing.T) {
 				opt.Resume = &Resume{After: want[len(want)/3]}
 				want = want[len(want)/3+1:]
 			}
-			got, _, _ := runBudget(t, api, opt, v.workers, v.budget)
+			got, _, _ := runPolicy(t, api, opt, v.workers, v.budget, v.accept)
 			if !slices.Equal(got, want) {
 				t.Fatalf("%s %s: %d keys, want %d", name, v.name, len(got), len(want))
 			}

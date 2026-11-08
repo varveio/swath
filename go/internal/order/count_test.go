@@ -160,3 +160,39 @@ func TestCountStopsAChildOnlyRange(t *testing.T) {
 		}
 	}
 }
+
+// empties is one range that emits only empty Rows batches, never checking
+// its context, until an emit fails; the first batch cancels the run.
+type empties struct {
+	cancel  context.CancelFunc
+	batches atomic.Int64
+}
+
+func (e *empties) Root() int { return 0 }
+
+func (e *empties) Expand(_ context.Context, _ int, em source.Emitter[int, tp]) error {
+	for i := 0; i < 1_000_000; i++ {
+		if i == 1 {
+			e.cancel()
+		}
+		if err := em.Rows(nil); err != nil {
+			return err
+		}
+		e.batches.Add(1)
+	}
+	return errors.New("empty batches never stopped")
+}
+
+// TestCountStopsOnEmptyBatches: after a stop an empty Rows batch returns
+// the cause, so a range that only sends empty batches stops at its next
+// one.
+func TestCountStopsOnEmptyBatches(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &empties{cancel: cancel}
+	if _, err := Count(ctx, p, nil, Options{Workers: 1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v", err)
+	}
+	if n := p.batches.Load(); n > 1 {
+		t.Fatalf("%d empty batches accepted, after the stop %d", n, n-1)
+	}
+}

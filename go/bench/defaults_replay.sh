@@ -6,8 +6,9 @@
 # usage: defaults_replay.sh BUCKET LATENCY_MS PORT REPS OUTDIR
 #   Per rep, per CPU setting (CPUS, default "all 1"), the arms (ARMS, default "default measured java")
 #   run in order:
-#     default   swath list with no policy flags: no --seed, the default 64 workers, the limiter on
-#     measured  swath list --seed --workers 64 (every headline arm's argv)
+#     default   swath list with no policy flags: the default 64 workers, the limiter on (the seed is on
+#               by default since the policy campaign; --seed was a swath list flag then)
+#     measured  swath list --workers 64 (every headline arm's argv, without the --seed it then needed)
 #     java      Java swath list with no tuning flags (--concurrency defaults to 64)
 #   A CPU setting N other than "all" runs each arm under `taskset -c 0-(N-1)` and, for Go, GOMAXPROCS=N
 #   (the default arm's workers stay 64; only the encoders follow N). Every arm lists s3://BUCKET anonymous,
@@ -51,7 +52,7 @@ for rep in $(seq 1 "$REPS"); do
       case $arm in
         default|measured)
           af=""
-          [ "$arm" = measured ] && af="--seed --workers 64"
+          [ "$arm" = measured ] && af="--workers 64"
           # shellcheck disable=SC2086
           "${gmp[@]}" "${pin[@]}" /usr/bin/time -f '%e %U %S' -o "$W/t" "$SW" list "s3://$B" --endpoint "$EP" --path-style \
             --anonymous --region us-east-1 -o "$out" --report-format json $af $GO_FLAGS \

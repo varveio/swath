@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
@@ -64,6 +65,11 @@ type runJournal struct {
 	// verified: part files are created and renamed relative to it, never
 	// by a pathname that may name another directory by then.
 	root *os.Root
+	// cache is the attempt's durable spill (a version 8 journal with spill
+	// on; nil otherwise), owned here and closed after the router; off is
+	// why it is off when it could not be set up.
+	cache *order.Cache
+	off   string
 }
 
 // rooted opens jr.root (once, before the router starts) and checks the
@@ -299,7 +305,18 @@ func openLocked(ctx context.Context, cfg Config, path string, id journal.Identit
 		if err != nil {
 			return nil, err
 		}
-		return &runJournal{out: cfg.Output.Dir, lock: lock, j: j}, nil
+		jr := &runJournal{out: cfg.Output.Dir, lock: lock, j: j}
+		if !cfg.Limits.Spill.Off {
+			r, err := jr.rooted()
+			if err == nil {
+				jr.cache, err = order.CreateDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID)
+			}
+			if err := jr.durableOff(cfg, err); err != nil {
+				jr.j.Close()
+				return nil, err
+			}
+		}
+		return jr, nil
 	}
 	if dataset.Committed(cfg.Output.Dir) {
 		return nil, ErrComplete
@@ -368,7 +385,40 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 	if err != nil {
 		return nil, err
 	}
-	return &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus, root: r}, nil
+	jr := &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus, root: r}
+	switch {
+	case cfg.Limits.Spill.Off:
+	case j.RunUUID() == "":
+		// A version 7 journal resumes as version 7: no durable spill, and
+		// nothing of version 8 is written.
+		jr.off = "journal version 7"
+	default:
+		// The durable spill's recovery, after the parts': K is theirs.
+		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID, jr.after())
+		if err := jr.durableOff(cfg, err); err != nil {
+			j.Close()
+			return nil, err
+		}
+	}
+	return jr, nil
+}
+
+// durableOff settles a durable spill set-up error: one that leaves the run
+// able to go on (order.ErrDurableUnavailable) turns durable spill off with
+// a warning; any other (the output replaced, an unsafe layout) is the
+// run's.
+func (jr *runJournal) durableOff(cfg Config, err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, order.ErrDurableUnavailable):
+		jr.cache, jr.off = nil, err.Error()
+		if cfg.Warn != nil {
+			cfg.Warn("durable spill is off for this run (spill files are relisted after a crash): " + err.Error())
+		}
+		return nil
+	}
+	return err
 }
 
 // ErrUnsafeLayout is dataset.ErrUnsafeLayout: recovery checks every path
@@ -816,19 +866,21 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 }
 
 // verifyOption makes the router check the output's identity before it
-// creates each part file.
-func (jr *runJournal) verifyOption(o *parquetout.Options) {
-	if jr != nil && jr.lock != nil {
-		o.Verify = jr.lock.Verify
-		// Opened here, before any encoder runs (they share it).
-		r, err := jr.rooted()
-		o.Open = func(path string) (*os.File, error) {
-			if err != nil {
-				return nil, err
-			}
-			return r.OpenFile(jr.rel(path), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		}
+// creates each part file. The output root is opened here, before any
+// encoder runs (they share it); a failure is the run's setup error.
+func (jr *runJournal) verifyOption(o *parquetout.Options) error {
+	if jr == nil || jr.lock == nil {
+		return nil
 	}
+	r, err := jr.rooted()
+	if err != nil {
+		return err
+	}
+	o.Verify = jr.lock.Verify
+	o.Open = func(path string) (*os.File, error) {
+		return r.OpenFile(jr.rel(path), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	}
+	return nil
 }
 
 // publish is commit-before-emit at part granularity: the record (the part
@@ -864,6 +916,9 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 	jr.acked.parts.Add(1)
 	jr.acked.bytes.Add(p.Bytes)
 	jr.acked.rows.Store(rows)
+	// K moved: drained certificates it covers are retired (queued, never a
+	// wait on the flusher).
+	jr.cache.SetK(string(p.MaxKey))
 	if sus != nil && ordinal == sus.ordinal {
 		// Reproduced and recorded: the copy set aside is redundant (a
 		// later recovery removes it if this does not).
@@ -893,6 +948,11 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 func (jr *runJournal) close(cfg Config, rep Report, err error) {
 	if jr == nil {
 		return
+	}
+	// A durable spill no attempt closed (the run failed before one
+	// started) releases its ledger's descriptor; this writes nothing.
+	if c := jr.cache; c != nil {
+		c.Close()
 	}
 	if jr.j != nil {
 		if errors.Is(err, source.ErrProtocol) {
@@ -960,6 +1020,55 @@ func (jr *runJournal) after() *string {
 	return &k
 }
 
+// closeCache ends the durable spill after the router's Close or Abort (the
+// shutdown's steps 4 and 5): the K callback detached, the flusher drained
+// and joined, the ledger closed; on a commit (its manifest installed) the
+// durable directory is removed. It returns the flusher's fatal error, if
+// any. Repeated calls do nothing more.
+func (jr *runJournal) closeCache(committed bool) error {
+	if jr == nil || jr.cache == nil {
+		return nil
+	}
+	c := jr.cache
+	c.DetachK()
+	c.Close()
+	if err := c.Err(); err != nil {
+		return err
+	}
+	if committed {
+		if err := c.RemoveDir(); err != nil {
+			return err
+		}
+		_ = jr.root.Remove(filepath.Dir(order.DurableDir)) // only if empty
+	}
+	return nil
+}
+
 // journaled reports whether the run keeps a journal (and so leaves its
 // temporary parts for -resume to reconcile after a failure).
 func (jr *runJournal) journaled() bool { return jr != nil && jr.j != nil }
+
+// ackedRows is the rows in parts the journal has acknowledged so far,
+// retained ones included (0 before the first, or without a journal).
+func (jr *runJournal) ackedRows() int64 {
+	if !jr.journaled() {
+		return 0
+	}
+	return jr.acked.rows.Load()
+}
+
+// cacheOf is the attempt's durable spill (nil without one).
+func (jr *runJournal) cacheOf() *order.Cache {
+	if jr == nil {
+		return nil
+	}
+	return jr.cache
+}
+
+// offReason is why durable spill is off when it could have run ("").
+func (jr *runJournal) offReason() string {
+	if jr == nil {
+		return ""
+	}
+	return jr.off
+}

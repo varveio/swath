@@ -39,19 +39,24 @@ func TestExtrapolateReasons(t *testing.T) {
 		c, hi   string
 		bounded bool
 		want    extReason
+		m       string // the pivot, when want is extOK and it is pinned
 	}{
-		{[]string{"a"}, "a", "", false, extShort},
-		{[]string{"a%1", "a%2"}, "a%2", "", false, extAlphabet},
-		{[]string{"aé", "aë"}, "aë", "", false, extAlphabet},
-		{[]string{"x", "x"}, "x", "", false, extZeroSpan},
-		{[]string{"a", "b"}, "b", "", false, extPastTop},
-		{[]string{"abb", "b"}, "b", "", false, extHole},
-		{[]string{"ab", "ac"}, "ac", "ad", true, extOutside},
-		{[]string{"k0001", "k0100"}, "k0100", "", false, extOK},
+		{[]string{"a"}, "a", "", false, extShort, ""},
+		{[]string{"a\x011", "a\x012"}, "a\x012", "", false, extAlphabet, ""},
+		{[]string{"aé", "aë"}, "aë", "", false, extAlphabet, ""},
+		{[]string{"x", "x"}, "x", "", false, extZeroSpan, ""},
+		{[]string{"a", "b"}, "b", "", false, extPastTop, ""},
+		{[]string{"abb", "b"}, "b", "", false, extHole, ""},
+		{[]string{"ab", "ac"}, "ac", "ad", true, extOutside, ""},
+		{[]string{"k0001", "k0100"}, "k0100", "", false, extOK, ""},
+		// '%' is a digit: copied from the cursor ("a%" here), never
+		// synthesized: a target whose first new character is '%' takes '&'.
+		{[]string{"a%1", "a%2"}, "a%2", "", false, extOK, "a%a"},
+		{[]string{"!!", "!%"}, "!%", "", false, extOK, "&"},
 	} {
 		m, why := extrapolateWhy(c.page, c.c, c.hi, c.bounded, 1)
-		if why != c.want {
-			t.Fatalf("extrapolateWhy(%q, %q, %q) = %q, reason %d; want %d", c.page, c.c, c.hi, m, why, c.want)
+		if why != c.want || (c.m != "" && m != c.m) {
+			t.Fatalf("extrapolateWhy(%q, %q, %q) = %q, reason %d; want %q, %d", c.page, c.c, c.hi, m, why, c.m, c.want)
 		}
 		if m2, ok := extrapolate(c.page, c.c, c.hi, c.bounded, 1); m2 != m || ok != (why == extOK) {
 			t.Fatalf("extrapolate disagrees: %q %v", m2, ok)

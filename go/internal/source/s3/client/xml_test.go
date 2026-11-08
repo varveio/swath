@@ -179,6 +179,9 @@ func TestParseError(t *testing.T) {
 	if !ok || code != "SlowDown" || msg != "Please & reduce" || id != "R1" {
 		t.Fatal(code, msg, id, ok)
 	}
+	if code, _, _, ok := parseError([]byte(`<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Code>NoSuchBucket</Code></Error>`)); !ok || code != "NoSuchBucket" {
+		t.Fatal("namespaced error:", code, ok)
+	}
 	if _, _, _, ok := parseError([]byte("<html>busy</html>")); ok {
 		t.Fatal("html accepted as an S3 error")
 	}

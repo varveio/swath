@@ -16,6 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/smithy-go/encoding/httpbinding"
+
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
@@ -65,15 +68,17 @@ type Client struct {
 	buffers sync.Pool // *bytes.Buffer
 }
 
-// New resolves the region and credentials and builds the client.
-func New(cfg Config) (*Client, error) {
+// New resolves the region and credentials and builds the client; ctx bounds
+// the configuration load and the first credential lookup, not later
+// refreshes (each request's own context bounds those).
+func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	a, err := loadAuth(cfg)
+	a, err := loadAuth(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +179,9 @@ func (c *Client) url(in *ListInput) *url.URL {
 		}
 		q.WriteString(k)
 		q.WriteByte('=')
-		q.WriteString(queryEscape(v))
+		// SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~ is
+		// percent-encoded with upper-case hex, "/" included.
+		q.WriteString(httpbinding.EscapePath(v, true))
 	}
 	if in.ContinuationToken != "" {
 		add("continuation-token", in.ContinuationToken)
@@ -249,7 +256,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 		return nil, err
 	}
 	req.Host = u.Host
-	req.Header.Set("User-Agent", "swath-go")
+	req.Header.Set("User-Agent", buildinfo.Tool)
 	if c.cfg.RequestPayer {
 		req.Header.Set("X-Amz-Request-Payer", "requester") // before signing: it is a signed header
 	}
@@ -314,35 +321,6 @@ func responseError(resp *http.Response, body []byte) *Error {
 		e.Region = resp.Header.Get("X-Amz-Bucket-Region")
 	}
 	return e
-}
-
-// queryEscape is SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~
-// is percent-encoded with upper-case hex. The query is sent exactly as the
-// signer canonicalises it.
-func queryEscape(s string) string {
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if !unreserved(s[i]) {
-			n++
-		}
-	}
-	if n == 0 {
-		return s
-	}
-	b := make([]byte, 0, len(s)+2*n)
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if unreserved(c) {
-			b = append(b, c)
-		} else {
-			b = append(b, '%', "0123456789ABCDEF"[c>>4], "0123456789ABCDEF"[c&15])
-		}
-	}
-	return string(b)
-}
-
-func unreserved(c byte) bool {
-	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
 }
 
 func joinNotes(a, b string) string {

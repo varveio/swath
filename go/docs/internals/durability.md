@@ -15,6 +15,7 @@ the rename into `data/` (a record is synced before its part is renamed), and rec
 |---|---|---|
 | fetched | a response body in the client | fetched again |
 | emitted | rows in the order stage (memory, or a disposable spill file) | listed again from the durable frontier |
+| certified | rows in a sealed durable spill file whose ledger record survived ([ordering.md](ordering.md#durable-spill)) | replayed from the file (rows above K only), not listed |
 | encoded | an open or closed part in `.swath/parts/` | discarded unless its journal record is durable; a claimed part is set aside (below) |
 | durable | a synced journal record for a synced part | kept; the part is renamed if the rename was lost |
 | published | renamed into `data/` (early, part by part; not yet a dataset) | kept |
@@ -29,7 +30,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, not claimed (`part-closed`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`), and writes it with the claimed part's columns and `created_by`, so a build that adds an optional column reproduces it (`TestClaimedPartKeepsItsColumns`, also for a torn record) |
+| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`), and writes it with the claimed part's columns and `created_by`, so a build that adds an optional column reproduces it (`TestClaimedPartKeepsItsColumns`, also for a torn record). A reproduced part that reaches the size target at that boundary was closed by size, and when it is the first such part it calibrates the size ratio as the original did, before its successor is routed (`TestCalibratingClaimRecoversRepeatedly`, `journal-append#2` in both crash matrices) |
 | record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its claimed part is set aside and must be reproduced exactly (below) |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
 | record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
@@ -45,6 +46,42 @@ there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKIL
 resume and compare with an uninterrupted run: byte for byte with the part interval off, and row for row (no
 refusal) with it on, where parts are closed by time (a trickling source in `TestCrashMatrix`, a slower bucket
 with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
+
+The durable spill has crash points of its own. `faults.SpillPoints`: the sync of each directory the run
+creates, a durable file's first write (its header, with the capture start at a range's start), later frames
+and trailer writes, its seal's fsync, the flusher's directory sync, ledger append, ledger sync and unlink.
+`faults.RecoveryPoints`: a resume's ledger truncation, the moment after it (truncated, not yet synced), its
+retirements' append and sync, an unlink, the directory sync, a recovery replay's start and each captured
+frame it replays. `TestDurableKillMatrix` (in process: each point's 1st and 4th occurrence; writes torn at
+an explicit offset inside a header, a capture start, a rows frame, a trailer, a tail and a ledger record;
+lost unsynced state) and `TestSIGKILLDurableSpill` (the real process) run them on a slow-frontier fixture
+and fail if a point is not reached. In process the fixture is gated, not timed: each seal waits until the seal
+before it has a ledger append of its own (so four seals are four appends for the fourth-occurrence ledger
+points), and the torn-ledger test holds the frontier until its tear, so the part records it needs follow.
+`TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
+damaged snapshot, with the truncation or the retirements' append lost where the schedule says so. Each
+then resumes to the uninterrupted dataset. In the real process the same seal gating is
+`SWATH_TEST_SERIAL_SEALS`, a test hook beside `SWATH_TEST_KILL_AT`: each seal waits until the earlier seals'
+records were appended by ledger cycles of their own, so `TestSIGKILLDurableSpill` reaches its fourth-cycle
+arms by construction. Its recovery arms seed their damaged ledger from a run whose first part's close is held
+(`SWATH_TEST_HANG_AT=part-closed:1`: no part published, K at ⊥) and killed at the sixth ledger sync, so certificates stay live above K for the recovery
+replay.
+
+The same schedule also runs, opt-in, against MinIO and against production key lists, through the real
+binary: SIGKILLs at the durable steps, after a part record, mid recovery replay, with unsynced state lost,
+and at 40 % and 70 % of the keys. Each resume is checked for oracle equality, reconciliation, and that no
+data request starts inside a replayed certificate ([testing.md](../testing.md#durable-spill-campaign-opt-in)).
+The results, and the full-scale Batch runs (64 lists of 20 to 150 million keys, killed at 40 % and 70 %), are
+in [measurements.md](../measurements.md#durable-spill).
+
+**Priors and certificates.** A prior (`--seed-from`: a previous dataset's or a cut file's keys used as seed
+tiles), like `--seed`, only shapes the tiling of the live gaps. On a resume with reused certificates the
+prior's tiles of `(K, ⊤]` are cut around the certificates (`keyrange.aroundReuse`, as for the seed and the
+plain resume tiling). A certificate becomes a reused range that the order stage replays, and no data request
+starts inside its `[max(cs, K), ce)`. A prior confers no coverage: no key range is skipped or certified because
+a prior listed it. Coverage above K comes only from certificates that this run's ledger and files prove, and
+a certificate never depends on a prior. The tests are `keyrange` `TestPriorTilesOnlyGaps` (prior cuts inside
+and around spans; without the cut the resume listed every key) and the campaign's `seed-from` arm.
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
 target or, on a slow frontier, once it has been open for the part interval (default 30 s,
@@ -91,12 +128,12 @@ that is the commit. The run reports follow it.
 Every JSON file swath replaces goes through one primitive, `dataset.Replace`, with a temporary file of its
 own beside the target (`.NAME.*.tmp`, so concurrent writers never share one; an overwrite removes leftovers)
 and a stated durability: `Durable` (file synced before the rename, directory after) for `manifest.json` and
-`run.json`; `Atomic` (never torn, not synced) for the files rewritten as the run goes or read only by its
-supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
+`run.json`, and for the outcome files a supervisor acts on, `error.json` and the `--report` file; `Atomic`
+(never torn, not synced) for the file rewritten as the run goes, `.swath/progress.json`.
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`; `--limiter-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--limiter-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
@@ -161,8 +198,8 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    equivalence allowed beyond the client's own folding of one trailing endpoint slash: another endpoint, path
    or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), or the run declines resume. Workers, encoders,
-   row budget, `-seed` and
-   credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
+   row budget and credentials may change; so may the seed for a library caller (`-seed` is not part of
+   the identity), but the CLI's `swath resume` replays the recorded `--seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
    lock is taken, for the run or for a refusal's settlement, an existing `.swath/` must be a directory and an
@@ -257,7 +294,7 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 7 (version 3 made the identity provider-neutral, version 4 writes part
+the payload, and the payload (JSON); journal version 8 (version 3 made the identity provider-neutral, version 4 writes part
 bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
 refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
 hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
@@ -265,10 +302,14 @@ record would skip listing; version 7 marks the claimed-part protocol: a version 
 last record at the unclaimed temporary name until the rename into `data/`, and version 7 recovery protects
 only the claimed name, so it would remove that acknowledged part as unrecorded when the last record is torn or
 lost and could then commit a changed replacement; a version 6 journal is refused before recovery reads,
-moves or removes any part or touches the journal).
+moves or removes any part or touches the journal; version 8 adds the run UUID to the header, made when the
+run starts and kept across every resume, and keeps the durable spill across a resume: its part records and
+claimed-part handling are version 7's). A version 7 journal is still read and resumes as version 7: it keeps
+its version, writes nothing of version 8, and resumes with durable spill off (the disposable spill is
+relisted, as before); a version 7 build refuses a version 8 journal.
 An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
-`--overwrite`. The first frame is the header (tool, format, identity, creation time).
+`--overwrite`. The first frame is the header (tool, format, identity, creation time, and from version 8 the run UUID).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
 `fsync`; its one caller is the ordered committer. A record must follow the one before it
 (`journal.Follows`: the next ordinal, no record after the final one, a nonempty part strictly after the last
@@ -347,5 +388,5 @@ tail as JSON lines.
   part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
   What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. The
-  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in the tests
-  (`TestWindowsBuild`), never run natively.
+  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in CI's `go` job,
+  never run natively.

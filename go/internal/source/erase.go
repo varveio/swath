@@ -34,10 +34,39 @@ type erasedDisposer[R, P any] struct {
 
 func (e erasedDisposer[R, P]) Dispose(r any) { e.d.Dispose(r.(R)) }
 
+// Fences forwards the provider's Fencing (false without it).
+func (e erased[R, P]) Fences() bool {
+	f, ok := e.p.(Fencing)
+	return ok && f.Fences()
+}
+
+// Replay forwards the provider's Replaying (none without it).
+func (e erased[R, P]) Replay(r any) (int, bool) {
+	rp, ok := e.p.(Replaying[R])
+	rr, isR := r.(R)
+	if !ok || !isR {
+		return 0, false
+	}
+	return rp.Replay(rr)
+}
+
 type typed[R, P any] struct{ e Emitter[any, P] }
 
 func (t typed[R, P]) Rows(rows []schema.Row[P]) error { return t.e.Rows(rows) }
 func (t typed[R, P]) Child(r R) error                 { return t.e.Child(r) }
+
+// Span and Fence forward to a Fencer emitter.
+func (t typed[R, P]) Span(lo, hi string, open bool) {
+	if f, ok := t.e.(Fencer); ok {
+		f.Span(lo, hi, open)
+	}
+}
+
+func (t typed[R, P]) Fence(x string, top bool) {
+	if f, ok := t.e.(Fencer); ok {
+		f.Fence(x, top)
+	}
+}
 
 // Empty is a source position with nothing left to list: a resume whose
 // final part is already durable.

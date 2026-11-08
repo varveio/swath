@@ -37,6 +37,9 @@ type scripted struct {
 	slow   time.Duration             // before every range after the first: lets parts publish early
 	slowAt func(i int) time.Duration // if set, before the range at key i instead of slow
 	big    string                    // this key's row is larger than any part: a part boundary follows it
+	hold   <-chan struct{}           // if set, the range at key holdAt waits for it (or the run's end)
+	holdAt int
+	held   chan struct{} // if set, closed when the range at holdAt starts waiting
 }
 
 type scriptedRange struct{ i int } // -1: the root; else the range starting at key i
@@ -51,6 +54,16 @@ func (s *scripted) Expand(ctx context.Context, r scriptedRange, e source.Emitter
 			}
 		}
 		return nil
+	}
+	if s.hold != nil && r.i == s.holdAt {
+		if s.held != nil {
+			close(s.held)
+		}
+		select {
+		case <-s.hold:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
 	}
 	if s.slowAt != nil {
 		time.Sleep(s.slowAt(r.i))

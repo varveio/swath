@@ -151,15 +151,23 @@ func ExclusiveEnd(through string, accept func(string) bool) (string, bool) {
 
 // Options configure an Engine.
 type Options struct {
-	Prefix     string    // the scope
-	Sequential bool      // one continuation-token chain, no ranges (the oracle)
-	Seed       bool      // parallel: tile the scope (or a resumed (K, ⊤]) from delimiter listings of its folders first
-	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages (zero: off)
-	Workers    int       // parallel: the order stage's worker count (split demand)
-	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
-	Resume     *Resume   // continue after a journaled run's last published key
-	Floors     bool      // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
-	PageSize   int       // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
+	Prefix     string // the scope
+	Sequential bool   // one continuation-token chain, no ranges (the oracle)
+	Seed       bool   // parallel: tile the scope (or a resumed (K, ⊤]) from delimiter listings of its folders first
+	// SeedFirstPage: with Seed, the scope's first data page is sent with
+	// the seed's first wave and emitted by it; untruncated, it is the
+	// whole listing and the seed stops (Policy sets it with Seed).
+	SeedFirstPage bool
+	// SlowSplit: rank ranges by time left (keys left x their page latency)
+	// and split a latency outlier without an idle worker (slowSplitWanted).
+	SlowSplit bool
+	Structure Structure     // pivot on folder boundaries from structure probes sent alongside pages (zero: off)
+	Workers   int           // parallel: the order stage's worker count (split demand)
+	MaxKeys   int64         // stop after this many objects (sequential only; 0 = all)
+	Resume    *Resume       // continue after a journaled run's last published key
+	Prior     *source.Prior // parallel: tile the scope at a prior's cuts instead of the seed (SeedFrom)
+	Floors    bool          // the gate-chain floors: no split of a range worth a few pages, nor into a tail child below two pages (off by default)
+	PageSize  int           // the nominal page size: data and seed requests, the floors' page unit (0 = PageKeys)
 	// ClientOff names the features of the provider's HTTP client that are
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
@@ -190,6 +198,7 @@ type Stats struct {
 // source.Provider[Range, P].
 type Engine[P any] struct {
 	opt     Options
+	seedNs  atomic.Int64 // the seed's wall time (SeedTime); 0: no seed ran
 	d       Description[P]
 	fetch   Fetch[P]
 	objects atomic.Int64
@@ -205,8 +214,15 @@ type Engine[P any] struct {
 	held    time.Time           // when mu was last acquired; mu held
 	running map[uint64]*running // ranges in Expand
 	queued  int
-	area    float64 // ∫ active dt, for the mean
-	areaAt  time.Time
+	tiles   []tileAccount // the prior's bounded tiles (expandPrior), by Range.tile
+	reuse   []source.Span // reused certificates a resume lists around (Reuse)
+	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
+	// slowQueued: children of slow splits not yet started.
+	latSum     float64
+	latN       int64
+	slowQueued int
+	area       float64 // ∫ active dt, for the mean
+	areaAt     time.Time
 }
 
 // New returns an engine over fetch.
@@ -249,6 +265,13 @@ func (p *Engine[P]) Contention() (wait, maxHold time.Duration) {
 	return time.Duration(p.c.Load(cMutexWait)), time.Duration(p.c.Load(cMutexMaxHold))
 }
 
+// SeedTime is the seed's wall time, from its first delimiter request to
+// its tiles (source.Seeded); ok is false where no seed ran.
+func (p *Engine[P]) SeedTime() (time.Duration, bool) {
+	d := time.Duration(p.seedNs.Load())
+	return d, d > 0
+}
+
 // ID is the counter ID of the provider's i-th counter (Description.Counters).
 func (p *Engine[P]) ID(i int) counters.ID { return counters.ID(len(Counters) + i) }
 
@@ -266,6 +289,7 @@ func (p *Engine[P]) Stats() Stats {
 	p.lock()
 	defer p.unlock()
 	p.account(time.Now())
+	p.priorErrors()
 	s := Stats{Counters: p.c.Snapshot(p.disabled()...)}
 	if el := time.Since(p.start).Seconds(); el > 0 {
 		s.MeanActive = p.area / el
@@ -293,9 +317,7 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 // is returned as it is, truncated, with its token. The seed charges each
 // followed page to its budgets this way.
 func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() bool) (*Page[P], error) {
-	p.lock()
 	p.c.Inc(cRequests)
-	p.unlock()
 	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
 	empties := 0          // the run's length
 	// chainStart: no page of this chain has held an entry yet, so its first
@@ -321,17 +343,13 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 					dropped += n - len(out.Prefixes)
 				}
 				if dropped > 0 {
-					p.lock()
 					p.c.Add(cBoundDrops, int64(dropped))
-					p.unlock()
 				}
 			}
 			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
 				if !strictlyAscending(out.Prefixes) {
 					out.Prefixes = slices.Compact(slices.Sorted(slices.Values(out.Prefixes)))
-					p.lock()
 					p.c.Inc(cPrefixesNormalized)
-					p.unlock()
 				}
 				p.frontier.Add(1)
 				return out, nil
@@ -354,13 +372,11 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 			next := *in
 			next.Token = out.Token
 			in, wait = &next, requeueBase
-			p.lock()
 			p.c.Inc(cRequests)
 			p.c.Inc(cEmptyPages)
 			if empties++; empties > EmptyChainLive {
 				p.c.Inc(cEmptyChainPages)
 			}
-			p.unlock()
 			if empties <= EmptyChainLive {
 				p.frontier.Add(1)
 			}
@@ -444,11 +460,9 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}
-		p.lock()
 		if stop {
 			p.c.Set(cTruncated, 1)
 		}
-		p.unlock()
 		if stop || !out.Truncated {
 			return nil
 		}
@@ -469,12 +483,10 @@ func (p *Engine[P]) emit(rows []schema.Row[P], e source.Emitter[Range, P]) error
 	}
 	t := time.Now()
 	err := e.Rows(rows)
-	p.lock()
 	p.c.Add(cSinkWaitNs, int64(time.Since(t)))
 	p.c.Inc(cPages)
 	p.c.Add(cObjects, int64(len(rows)))
 	p.c.Add(cBytes, bytes)
-	p.unlock()
 	return err
 }
 

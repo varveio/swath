@@ -40,7 +40,7 @@ func TestSlowStartRamp(t *testing.T) {
 		t.Fatalf("ramp counts %+v", n)
 	}
 	// After the ramp the gauge's rules hold: x0.7, 10 s cool-down, +1.
-	l.cycle(Throttled, 0)
+	l.cut()
 	if l.Limit() != 44 {
 		t.Fatalf("throttle after the ramp: limit %d", l.Limit())
 	}
@@ -51,10 +51,19 @@ func TestSlowStartRamp(t *testing.T) {
 	}
 }
 
-// TestSlowStartCongestionLatch: the first throttle answer or attempt
-// timeout ends the ramp for good; growth is then +1 per second after the
-// clean window, never a doubling.
+// TestSlowStartCongestionLatch: the first cut or attempt timeout ends the
+// ramp for good; growth is then +1 per second after the clean window, never
+// a doubling. A tolerated throttle answer leaves the ramp on.
 func TestSlowStartCongestionLatch(t *testing.T) {
+	c0 := &fakeClock{t: time.Unix(1e9, 0)}
+	l0 := newSlowStartLimiter(64, c0.now)
+	l0.cycle(Success, 100*time.Millisecond) // 8
+	l0.cycle(Throttled, 0)                  // 1 of 256: tolerated
+	c0.add(time.Second)
+	l0.cycle(Success, 100*time.Millisecond)
+	if l0.Limit() != 16 || l0.Counts().SlowStartEnd != 0 {
+		t.Fatalf("a tolerated throttle ended the ramp: limit %d %+v", l0.Limit(), l0.Counts())
+	}
 	for _, o := range []Outcome{Throttled, TimedOut} {
 		c := &fakeClock{t: time.Unix(1e9, 0)}
 		l := newSlowStartLimiter(64, c.now)
@@ -62,7 +71,11 @@ func TestSlowStartCongestionLatch(t *testing.T) {
 		c.add(time.Second)
 		l.cycle(Success, 100*time.Millisecond) // 16
 		c.add(500 * time.Millisecond)
-		l.cycle(o, 0)
+		if o == Throttled {
+			l.cut()
+		} else {
+			l.cycle(o, 0)
+		}
 		want := 16
 		if o == Throttled {
 			want = 11

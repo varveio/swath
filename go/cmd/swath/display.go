@@ -87,7 +87,7 @@ type termOptions struct {
 
 // termFlags are the terminal flags' names: runtime flags, which swath resume
 // accepts again.
-var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "v", "vv", "vvv", "q", "qq", "quiet", "color"}
+var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "v", "vv", "vvv", "q", "qq", "color"}
 
 func (t *termOptions) register(f *flag.FlagSet) {
 	f.Var(triFlag{&t.progress, false}, "progress", "print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)")
@@ -99,7 +99,6 @@ func (t *termOptions) register(f *flag.FlagSet) {
 	f.Var(countFlag{&t.verbose, 2}, "vv", "short for -v -v")
 	f.Var(countFlag{&t.verbose, 3}, "vvv", "short for -v -v -v")
 	f.Var(countFlag{&t.quiet, 1}, "q", "quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)")
-	f.Var(countFlag{&t.quiet, 1}, "quiet", "short for -q")
 	f.Var(countFlag{&t.quiet, 2}, "qq", "short for -q -q")
 	f.StringVar(&t.color, "color", "auto", "colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it)")
 }
@@ -531,35 +530,35 @@ func statsLines(r *listing.Report, brokenPipe bool) []string {
 	if r.Efficiency != nil {
 		kps = r.Efficiency.KeysPerSec
 	} else if r.Timings.ListingMs > 0 {
-		kps = float64(r.Output.RowsListed) * 1000 / float64(r.Timings.ListingMs)
+		kps = float64(r.Output.RowsEmitted) * 1000 / float64(r.Timings.ListingMs)
 	}
-	head := count(r.Output.RowsListed) + " objects in " + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
+	head := count(r.Output.RowsEmitted) + " objects in " + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
 	if session-run > time.Second {
 		head += sep + elapsed(session) + " total"
 	}
 	lines = append(lines, head)
-	q := r.Requests()
-	if r.Cost != nil {
+	q := r.Live()
+	if r.Requests != nil {
 		per := 0.0
-		if r.Efficiency != nil && r.Efficiency.APICallsPer1kObjects != nil {
-			per = *r.Efficiency.APICallsPer1kObjects
+		if r.Efficiency != nil && r.Efficiency.HTTPAttemptsPer1kRows != nil {
+			per = *r.Efficiency.HTTPAttemptsPer1kRows
 		}
 		avg := 0.0
 		if ms := r.Timings.ListingMs; ms > 0 {
 			avg = float64(q.InflightNs) / float64(ms*1e6)
 		}
 		lines = append(lines, fmt.Sprintf("%s API calls%s%.2f per 1k objects%sin flight avg %.2f%speak %s",
-			count(r.Cost.APICalls), sep, per, sep, avg, sep, count(q.InflightMax)))
+			count(r.Requests.HTTPAttempts), sep, per, sep, avg, sep, count(q.InflightMax)))
 	}
 	if q.Throttles > 0 || q.Retries > 0 || o.EntryErrors > 0 {
 		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"errors "+count(o.EntryErrors))
 	}
-	if c := r.Cost; c != nil && c.CostUSD != nil && c.Basis != nil && c.APICalls > 0 {
+	if c := r.Cost; c != nil && c.CostUSD != nil && c.Basis != nil && r.Requests != nil && r.Requests.HTTPAttempts > 0 {
 		lines = append(lines, costText(*c.CostUSD, c.Basis.RatePer1kUSD))
 	}
 	var out []string
 	files := int64(r.Output.PartsWritten + r.Output.PartsRetained)
-	written := r.Output.Bytes
+	written := r.Output.OutputBytes
 	if t := r.Output.Text; t != nil && t.Destination != "-" {
 		files, written = 1, t.Bytes
 	}
