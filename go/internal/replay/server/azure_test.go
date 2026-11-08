@@ -148,6 +148,7 @@ func TestValidateAzure(t *testing.T) {
 		{func(c *Config) { c.Host = "0.0.0.0"; c.AdvertisedHost = "replay.local" }, true},
 		{func(c *Config) { c.Protocols = []string{"s3"} }, false}, // an account without the route
 		{func(c *Config) { c.Protocols = []string{"s3"}; c.AzureAccount = "" }, true},
+		{func(c *Config) { c.Protocols = []string{"s3"}; c.AzureAccount = ""; c.AzureHNS = true }, false},
 	} {
 		cfg := azureConfig("s3", "azure")
 		c.mutate(&cfg)
@@ -192,5 +193,73 @@ func TestAzureEngagementMeters(t *testing.T) {
 		if n := count(s, ProviderPath, "azure", c.path, c.reason); n != 1 {
 			t.Errorf("%s %s: %d", c.path, c.reason, n)
 		}
+	}
+}
+
+// TestAzureAccountInformation pins Get Account Information on the account
+// and container paths: 200 with an empty body and the flat account's
+// headers, the HNS answer under AzureHNS, and the route's error envelopes
+// for a wrong container, a wrong method, a missing or unsupported version
+// and a wrong selector.
+func TestAzureAccountInformation(t *testing.T) {
+	const query = "?restype=account&comp=properties"
+	for _, hns := range []bool{false, true} {
+		cfg := azureConfig("s3", "azure")
+		cfg.AzureHNS = hns
+		s := start(t, cfg)
+		for _, path := range []string{"/replay", "/replay/", "/replay/bucket"} {
+			r := azureDo(t, s, "GET", path+query+"&timeout=30", "x-ms-version", "2026-10-06", "x-ms-client-request-id", "c-2")
+			if r.status != 200 || r.body != "" || r.header.Get("Content-Length") != "0" || r.header.Get("Content-Type") != "" ||
+				r.header.Get("x-ms-is-hns-enabled") != fmt.Sprint(hns) || r.header.Get("x-ms-account-kind") != "StorageV2" ||
+				r.header.Get("x-ms-sku-name") != "Standard_LRS" || r.header.Get("x-ms-version") != "2026-10-06" ||
+				r.header.Get("x-ms-client-request-id") != "c-2" || !strings.HasPrefix(r.header.Get("x-ms-request-id"), "replay-") ||
+				r.header.Get("Date") == "" {
+				t.Fatalf("hns=%v %s: %+v", hns, path, r)
+			}
+		}
+	}
+
+	s := start(t, azureConfig("s3", "azure"))
+	for _, c := range []struct {
+		method, target string
+		header         []string
+		status         int
+		code, reason   string
+	}{
+		{"GET", "/replay/other" + query, []string{"x-ms-version", "2026-06-06"}, 404, "ContainerNotFound", "container_not_found"},
+		{"POST", "/replay" + query, []string{"x-ms-version", "2026-06-06"}, 405, "UnsupportedHttpVerb", "wrong_method"},
+		{"PUT", "/replay/bucket" + query, []string{"x-ms-version", "2026-06-06"}, 405, "UnsupportedHttpVerb", "wrong_method"},
+		{"GET", "/replay" + query, nil, 400, "InvalidHeaderValue", "invalid_header_value"},
+		{"GET", "/replay/bucket" + query, []string{"x-ms-version", "2019-12-12"}, 400, "InvalidHeaderValue", "invalid_header_value"},
+		{"GET", "/replay" + query, []string{"x-ms-version", "2026-06-06", "x-ms-version", "2026-06-06"}, 400, "InvalidHeaderValue", "duplicate_header"},
+		{"GET", "/replay?restype=account&comp=list", []string{"x-ms-version", "2026-06-06"}, 400, "InvalidQueryParameterValue", "invalid_selector"},
+		{"GET", "/replay" + query + "&prefix=a", []string{"x-ms-version", "2026-06-06"}, 400, "UnsupportedQueryParameter", "unsupported_query_parameter"},
+		{"GET", "/replay" + query + "&timeout=0", []string{"x-ms-version", "2026-06-06"}, 400, "InvalidQueryParameterValue", "invalid_timeout"},
+		// The list selector on the account path names no container.
+		{"GET", "/replay?restype=container&comp=list", []string{"x-ms-version", "2026-06-06"}, 404, "ContainerNotFound", "container_not_found"},
+	} {
+		r := azureDo(t, s, c.method, c.target, c.header...)
+		if r.status != c.status || r.header.Get("x-ms-error-code") != c.code || r.header.Get("x-swath-replay-error") != c.reason ||
+			!strings.HasPrefix(r.body, bom+"<?xml") || r.header.Get("x-ms-is-hns-enabled") != "" {
+			t.Errorf("%s %s %q: %+v", c.method, c.target, c.header, r)
+		}
+		if c.status == 405 && r.header.Get("allow") != "GET" {
+			t.Errorf("%s %s: no Allow", c.method, c.target)
+		}
+	}
+	head := azureDo(t, s, "HEAD", "/replay"+query, "x-ms-version", "2026-06-06")
+	if head.status != 400 || head.body != "" || head.header.Get("x-swath-replay-error") != "account_head_unsupported" {
+		t.Fatalf("HEAD %+v", head)
+	}
+	if r := azureDo(t, s, "GET", "/replay"+query+"&list-type=2"); r.status != 400 || r.body != `{"error":"replay_ambiguous_request"}` {
+		t.Fatalf("ambiguous %+v", r)
+	}
+	// Without a restype or comp parameter the account path is the S3
+	// route's bucket.
+	if r := azureDo(t, s, "GET", "/replay?list-type=2"); r.header.Get("x-amz-request-id") == "" {
+		t.Fatalf("not the S3 route: %+v", r)
+	}
+	if count(s, ProviderPath, "azure", "request_refused", "wrong_method") != 2 {
+		t.Error("refusal meters")
 	}
 }

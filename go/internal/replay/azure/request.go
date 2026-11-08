@@ -84,43 +84,13 @@ func Parse(method, path, rawQuery string, h http.Header, account, container stri
 	if method != http.MethodGet {
 		return nil, fail(WrongMethod, "wrong_method")
 	}
-	_, _, dupVersion := header(h, "x-ms-version")
-	_, _, dupClient := header(h, "x-ms-client-request-id")
-	if dupVersion || dupClient {
-		return nil, fail(Malformed, "duplicate_header")
+	r, err := parseHeaders(h)
+	if err != nil {
+		return nil, err
 	}
-	version, _, _ := header(h, "x-ms-version")
-	if version != Version20260606 && version != Version20261006 {
-		return nil, fail(Unsupported, "invalid_header_value")
-	}
-	accept, _, _ := header(h, "accept")
-	if !acceptsXMLOnly(accept) {
-		return nil, fail(Unsupported, "unsupported_accept")
-	}
-	clientID, hasClientID, _ := header(h, "x-ms-client-request-id")
-	if hasClientID && !ValidClientRequestID(clientID) {
-		return nil, fail(Malformed, "invalid_client_request_id")
-	}
-	params := map[string]string{}
-	if rawQuery != "" {
-		for _, part := range strings.Split(requestLineText(rawQuery), "&") {
-			name, value, _ := strings.Cut(part, "=")
-			key, err := decodeComponent(name)
-			if err != nil {
-				return nil, err
-			}
-			val, err := decodeComponent(value)
-			if err != nil {
-				return nil, err
-			}
-			if !allowed[key] {
-				return nil, fail(Unsupported, "unsupported_query_parameter")
-			}
-			if _, dup := params[key]; dup {
-				return nil, fail(Malformed, "duplicate_query_parameter")
-			}
-			params[key] = val
-		}
+	params, err := parseQuery(rawQuery, allowed)
+	if err != nil {
+		return nil, err
 	}
 	if params["restype"] != "container" || params["comp"] != "list" {
 		return nil, fail(Malformed, "invalid_selector")
@@ -128,14 +98,10 @@ func Parse(method, path, rawQuery string, h http.Header, account, container stri
 	if params["include"] != "" {
 		return nil, fail(Unsupported, "unsupported_include")
 	}
-	if v, ok := params["timeout"]; ok {
-		t, ok := decimal(v)
-		if !ok || t <= 0 || t > maxTimeoutSeconds {
-			return nil, fail(Malformed, "invalid_timeout")
-		}
+	if err := checkTimeout(params); err != nil {
+		return nil, err
 	}
-	r := &Request{Account: account, Container: container, Version: version, PageSize: DefaultPageSize,
-		ClientRequestID: clientID, HasClientRequestID: hasClientID}
+	r.Account, r.Container, r.PageSize = account, container, DefaultPageSize
 	for _, f := range []struct {
 		name string
 		dst  *string
@@ -173,6 +139,125 @@ func Parse(method, path, rawQuery string, h http.Header, account, container stri
 			r.PageSize = int(n)
 		}
 	}
+	return r, nil
+}
+
+// parseHeaders checks the headers every request of the route carries, in
+// the order the replay wire contract checks them: no repeated x-ms-version
+// or x-ms-client-request-id, a supported x-ms-version, an Accept that
+// allows XML, a valid client request id. It returns a Request holding the
+// version and the client request id.
+func parseHeaders(h http.Header) (*Request, error) {
+	_, _, dupVersion := header(h, "x-ms-version")
+	_, _, dupClient := header(h, "x-ms-client-request-id")
+	if dupVersion || dupClient {
+		return nil, fail(Malformed, "duplicate_header")
+	}
+	version, _, _ := header(h, "x-ms-version")
+	if version != Version20260606 && version != Version20261006 {
+		return nil, fail(Unsupported, "invalid_header_value")
+	}
+	accept, _, _ := header(h, "accept")
+	if !acceptsXMLOnly(accept) {
+		return nil, fail(Unsupported, "unsupported_accept")
+	}
+	clientID, hasClientID, _ := header(h, "x-ms-client-request-id")
+	if hasClientID && !ValidClientRequestID(clientID) {
+		return nil, fail(Malformed, "invalid_client_request_id")
+	}
+	return &Request{Version: version, ClientRequestID: clientID, HasClientRequestID: hasClientID}, nil
+}
+
+// parseQuery decodes the query strictly: every name in known, none
+// repeated, every component a valid escape of UTF-8.
+func parseQuery(rawQuery string, known map[string]bool) (map[string]string, error) {
+	params := map[string]string{}
+	if rawQuery == "" {
+		return params, nil
+	}
+	for _, part := range strings.Split(requestLineText(rawQuery), "&") {
+		name, value, _ := strings.Cut(part, "=")
+		key, err := decodeComponent(name)
+		if err != nil {
+			return nil, err
+		}
+		val, err := decodeComponent(value)
+		if err != nil {
+			return nil, err
+		}
+		if !known[key] {
+			return nil, fail(Unsupported, "unsupported_query_parameter")
+		}
+		if _, dup := params[key]; dup {
+			return nil, fail(Malformed, "duplicate_query_parameter")
+		}
+		params[key] = val
+	}
+	return params, nil
+}
+
+func checkTimeout(params map[string]string) error {
+	if v, ok := params["timeout"]; ok {
+		t, ok := decimal(v)
+		if !ok || t <= 0 || t > maxTimeoutSeconds {
+			return fail(Malformed, "invalid_timeout")
+		}
+	}
+	return nil
+}
+
+// accountAllowed are the query parameters Get Account Information reads.
+var accountAllowed = map[string]bool{"restype": true, "comp": true, "timeout": true}
+
+// SelectsAccountInformation reports whether a query the route claimed
+// asks for Get Account Information (restype=account); ParseAccountInfo
+// then validates it, and any other query goes to Parse.
+func SelectsAccountInformation(rawQuery string) bool {
+	for _, part := range strings.Split(requestLineText(rawQuery), "&") {
+		name, value, _ := strings.Cut(part, "=")
+		key, err := decodeComponent(name)
+		if err != nil || key != "restype" {
+			continue
+		}
+		if val, err := decodeComponent(value); err == nil && val == "account" {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseAccountInfo validates a Get Account Information request
+// (restype=account&comp=properties) on the account path (/{account}, or
+// /{account}/ as a client joins it to the ServiceEndpoint) or the container
+// path /{account}/{container}; any other path is ContainerNotFound. HEAD is refused as on the list route and any other
+// method but GET is UnsupportedHttpVerb; the headers are checked as Parse
+// checks them, then the query, which may carry only restype, comp and
+// timeout.
+func ParseAccountInfo(method, path, rawQuery string, h http.Header, account, container string) (*Request, error) {
+	if path != "/"+account && path != "/"+account+"/" && path != "/"+account+"/"+container {
+		return nil, fail(NotFound, "container_not_found")
+	}
+	if method == http.MethodHead {
+		return nil, fail(Unsupported, "account_head_unsupported")
+	}
+	if method != http.MethodGet {
+		return nil, fail(WrongMethod, "wrong_method")
+	}
+	r, err := parseHeaders(h)
+	if err != nil {
+		return nil, err
+	}
+	params, err := parseQuery(rawQuery, accountAllowed)
+	if err != nil {
+		return nil, err
+	}
+	if params["restype"] != "account" || params["comp"] != "properties" {
+		return nil, fail(Malformed, "invalid_selector")
+	}
+	if err := checkTimeout(params); err != nil {
+		return nil, err
+	}
+	r.Account, r.Container = account, container
 	return r, nil
 }
 

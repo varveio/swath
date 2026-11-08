@@ -171,6 +171,7 @@ type serveFlags struct {
 	maxResponseBytes                                               int
 	responseBufferBudget, slowRequestLogMs                         int64
 	latencyJitter, latencyScale                                    float64
+	azureHNS                                                       bool
 }
 
 // slowLogEnv sets the slow-request log threshold when --slow-request-log-ms
@@ -187,6 +188,7 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.IntVar(&f.port, "port", 0, "bind port; 0 chooses a free port, reported in the startup line")
 	fs.StringVar(&f.protocols, "protocols", "s3", "comma-separated listing routes: s3, gcs, azure")
 	fs.StringVar(&f.azureAccount, "azure-account", "", "Azure account path segment (default replay; needs azure in --protocols)")
+	fs.BoolVar(&f.azureHNS, "azure-hns", false, "answer Azure Get Account Information as a hierarchical-namespace account (needs azure in --protocols)")
 	fs.StringVar(&f.advertisedHost, "advertised-host", "", "host to advertise in native response URLs (the Azure ServiceEndpoint)")
 	fs.StringVar(&f.servingMode, "serving-mode", "sorted", "how to serve the fixture: sorted")
 	fs.IntVar(&f.parquetConnections, "parquet-connections", 0, "concurrent fixture page decodes; 0 is max(8, min(32, GOMAXPROCS))")
@@ -406,7 +408,7 @@ func (f *serveFlags) config() (server.Config, error) {
 	if err := server.ValidateProtocols(protocols, f.bucket); err != nil {
 		return cfg, err
 	}
-	cfg.Protocols, cfg.AzureAccount, cfg.AdvertisedHost = protocols, f.azureAccount, f.advertisedHost
+	cfg.Protocols, cfg.AzureAccount, cfg.AdvertisedHost, cfg.AzureHNS = protocols, f.azureAccount, f.advertisedHost, f.azureHNS
 	if f.azureAccount == "" && slices.Contains(protocols, server.ProtocolAzure) {
 		cfg.AzureAccount = server.DefaultAzureAccount
 	}
