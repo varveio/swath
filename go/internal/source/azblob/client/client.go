@@ -136,13 +136,27 @@ type Client struct {
 	source string
 	note   string
 
+	maxBody          int64 // MaxBody; tests lower it
 	retry            objhttp.Retry
 	counts           objhttp.Counters
 	retryAfterCapped atomic.Int64
+	bodyCapShrinks   atomic.Int64
 }
+
+// MaxBody is the body cap: the memory one in-flight response may hold.
+// Responses are read whole and sit outside the engine's memory budget, so
+// the cap is fixed, not derived from the page size; a page past it is
+// asked again with fewer entries (List).
+const MaxBody = 64 << 20
+
+// errBodyCap is a 200 whose body passed the cap (List halves maxresults).
+var errBodyCap = errors.New("response larger than the body cap")
 
 // New resolves credentials and builds the client.
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
@@ -153,7 +167,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, base: base,
+	c := &Client{cfg: cfg, base: base, maxBody: MaxBody,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
@@ -344,9 +358,10 @@ func onAzureVM() bool {
 }
 
 // tokenHTTP is the HTTP client of token exchanges: the first pooled
-// transport, each exchange bounded by the request timeout.
+// transport. Each exchange is bounded by the token call's context
+// (credentialSource), the one deadline whose expiry is classified.
 func (c *Client) tokenHTTP() *http.Client {
-	return &http.Client{Transport: c.http[0].Transport, Timeout: c.cfg.RequestTimeout}
+	return &http.Client{Transport: c.http[0].Transport}
 }
 
 // shared wraps cred as the client's coalesced token source.
@@ -368,6 +383,11 @@ func (s credentialSource) Token() (*oauth2.Token, error) {
 	defer cancel()
 	t, err := s.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{storageScope}})
 	if err != nil {
+		if ctx.Err() != nil {
+			// azidentity flattens the deadline into its message: the call's
+			// own context says it ran out of time (a timeout, retried).
+			return nil, fmt.Errorf("token call past %s: %w: %w", s.timeout, ctx.Err(), err)
+		}
 		return nil, err
 	}
 	return &oauth2.Token{AccessToken: t.Token, TokenType: "Bearer", Expiry: t.ExpiresOn}, nil
@@ -402,6 +422,9 @@ func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 // response) and an exchange's own timeout may pass; a refused grant and a
 // credential that is unavailable will not.
 func transientToken(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	var af *azidentity.AuthenticationFailedError
 	if errors.As(err, &af) {
 		if af.RawResponse == nil {
@@ -459,6 +482,10 @@ func (c *Client) Live() objhttp.Live {
 	return l
 }
 
+// BodyCapShrinks is the number of times a response past the body cap made
+// List halve maxresults (body_cap_shrinks).
+func (c *Client) BodyCapShrinks() int64 { return c.bodyCapShrinks.Load() }
+
 // RetryAfterCapped is the number of answers whose Retry-After was cut to
 // the request timeout (retry_after_capped).
 func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
@@ -507,12 +534,35 @@ func (c *Client) listURL(in *ListInput) url.URL {
 }
 
 // List sends one List Blobs request, retrying retryable failures
-// (objhttp.Do), and validates the page (ErrInvalidPage).
+// (objhttp.Do), and validates the page (ErrInvalidPage). A response past
+// the body cap is asked again with maxresults halved, the marker and query
+// unchanged (the next page continues from the shorter one's NextMarker),
+// down to 1; only a single entry past the cap is a parse failure. Each
+// List starts again at the caller's page size.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
+	req := *in // sent as the caller set it until a response passes the cap
+	for {
+		p, err := c.list(ctx, &req)
+		if !errors.Is(err, errBodyCap) {
+			return p, err
+		}
+		if req.MaxResults == 1 {
+			c.counts.ParseFailure()
+			return nil, fmt.Errorf("%w: one entry's page is larger than %d bytes", ErrSyntax, c.maxBody)
+		}
+		if req.MaxResults <= 0 || req.MaxResults > MaxPageSize {
+			req.MaxResults = MaxPageSize // what the server answered with
+		}
+		req.MaxResults = max(req.MaxResults/2, 1)
+		c.bodyCapShrinks.Add(1)
+	}
+}
+
+// list is one logical List Blobs request at in's page size.
+func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	u := c.listURL(in)
-	limit := bodyCap(in.MaxResults)
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) {
-		_, body, err := c.attempt(ctx, &u, limit)
+		_, body, err := c.attempt(ctx, &u, c.maxBody)
 		if err != nil {
 			return nil, err
 		}
@@ -609,8 +659,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL, limit int64) (http.Hea
 		return nil, nil, c.responseError(resp, body, u)
 	}
 	if int64(len(body)) > limit {
-		// No valid answer is this large (bodyCap): a corrupt one, retried.
-		return nil, nil, fmt.Errorf("%w: Azure response larger than %d bytes", ErrSyntax, limit)
+		return nil, nil, errBodyCap
 	}
 	return resp.Header, body, nil
 }
