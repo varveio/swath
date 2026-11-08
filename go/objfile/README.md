@@ -5,8 +5,9 @@ one stored version of the object pinned for the file's lifetime. A reader that t
 size (the [SeekParquet](https://github.com/varveio/seekparquet) module's `OpenDataset`, parquet-go's
 `OpenFile`) can then read a remote dataset without seeing two versions of one file.
 
-It is a nested Go module. It does not import the swath lister (`github.com/varveio/swath/go`), so depending
-on it brings in only the SDK of the store you use.
+It is a nested Go module. It does not import the swath lister (`github.com/varveio/swath/go`). Its go.mod
+lists all three SDKs, so they are in a consumer's module graph, but a program links only the SDK of the store
+package it imports.
 
 ## API
 

@@ -76,26 +76,26 @@ func (o opener) getter(name string) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		if out.ContentLength != nil && *out.ContentLength != n {
-			out.Body.Close()
-			return ranged.Response{}, fmt.Errorf("GetObject returned %d bytes for a range of %d", *out.ContentLength, n)
-		}
 		return ranged.Response{
-			Body:  out.Body,
-			Pin:   pinOf(out.ETag, out.VersionId),
-			Total: ranged.Total(aws.ToString(out.ContentRange)),
+			Body:   out.Body,
+			Pin:    pinOf(out.ETag, out.VersionId),
+			Total:  ranged.Total(aws.ToString(out.ContentRange)),
+			Length: lengthOf(out.ContentLength),
 		}, nil
 	}
 }
 
-// pinOf pins an ETag and version id; "null" is the version id of an object
-// written before versioning was enabled, which S3 reads without one.
+// pinOf pins an ETag and version id. A version id of "null" (an object
+// written before versioning was enabled) is kept: S3 reads that version by it.
 func pinOf(etag, versionID *string) ranged.Pin {
-	v := aws.ToString(versionID)
-	if v == "null" {
-		v = ""
+	return ranged.Pin{Version: aws.ToString(versionID), ETag: aws.ToString(etag)}
+}
+
+func lengthOf(n *int64) int64 {
+	if n == nil {
+		return -1
 	}
-	return ranged.Pin{Version: v, ETag: aws.ToString(etag)}
+	return *n
 }
 
 // status returns the HTTP status of an SDK error, or 0.

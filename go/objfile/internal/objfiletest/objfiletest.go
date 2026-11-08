@@ -274,6 +274,19 @@ func runSized(t *testing.T, newStore NewStore) {
 			t.Fatalf("read of an object of another size: %v, want ErrObjectChanged", err)
 		}
 	})
+	t.Run("SizedShort", func(t *testing.T) {
+		// The store clips the range at the object's end: the response is
+		// short, and its total names the real size.
+		s := plain(t, newStore)
+		s.Put(t, "obj", Data(90, 1))
+		f, err := s.Opener.OpenSized(ctx, "obj", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, err := f.ReadAt(make([]byte, 20), 80); !errors.Is(err, objfile.ErrObjectChanged) || n != 0 {
+			t.Fatalf("read past a shorter object's end = %d, %v; want 0, ErrObjectChanged", n, err)
+		}
+	})
 }
 
 // stall serves a ranged GET's headers and half its body, signals stalled,

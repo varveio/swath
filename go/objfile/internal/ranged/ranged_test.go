@@ -44,7 +44,7 @@ func TestBodyRetry(t *testing.T) {
 			if len(offs) <= cuts {
 				body.n = 7
 			}
-			return Response{Body: body, Pin: pin, Total: int64(len(data))}, nil
+			return Response{Body: body, Pin: pin, Total: int64(len(data)), Length: n}, nil
 		}
 		f := New("obj", int64(len(data)), pin, get)
 		p := make([]byte, 50)
@@ -72,7 +72,7 @@ func TestPinCheck(t *testing.T) {
 	served := Pin{ETag: "a"}
 	total := int64(10)
 	get := func(_ context.Context, off, n int64, _ Pin) (Response, error) {
-		return Response{Body: io.NopCloser(bytes.NewReader(make([]byte, n))), Pin: served, Total: total}, nil
+		return Response{Body: io.NopCloser(bytes.NewReader(make([]byte, n))), Pin: served, Total: total, Length: n}, nil
 	}
 	f := New("obj", 10, Pin{}, get)
 	if _, err := f.ReadAt(make([]byte, 2), 0); err != nil || f.Identity() != "a" {

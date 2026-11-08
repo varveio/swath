@@ -74,15 +74,16 @@ func getter(b *blob.Client) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		if out.ContentLength != nil && *out.ContentLength != n {
-			out.Body.Close()
-			return ranged.Response{}, fmt.Errorf("download returned %d bytes for a range of %d", *out.ContentLength, n)
+		res := ranged.Response{
+			Body:   out.Body,
+			Pin:    ranged.Pin{ETag: string(deref(out.ETag))},
+			Total:  ranged.Total(deref(out.ContentRange)),
+			Length: -1,
 		}
-		return ranged.Response{
-			Body:  out.Body,
-			Pin:   ranged.Pin{ETag: string(deref(out.ETag))},
-			Total: ranged.Total(deref(out.ContentRange)),
-		}, nil
+		if out.ContentLength != nil {
+			res.Length = *out.ContentLength
+		}
+		return res, nil
 	}
 }
 

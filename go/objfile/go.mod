@@ -12,7 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.7
 	github.com/johannesboyne/gofakes3 v1.2.0
 	github.com/parquet-go/parquet-go v0.32.0
-	github.com/varveio/seekparquet/go v0.1.1-0.20261108211156-6dba953cc94a
+	github.com/varveio/seekparquet/go v0.1.1-0.20261108212931-929dfa3843f1
 	google.golang.org/api v0.307.0
 )
 

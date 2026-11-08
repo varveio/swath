@@ -101,11 +101,14 @@ func TestDataset(t *testing.T) {
 	}
 	defer want.Close()
 	src := source{objfile.Limit(objfile.Root(s3.New(f.client, bucket), "datasets/ds"), 4)}
-	got, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{VerifyOnOpen: true})
+	got, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer got.Close()
+	if err := got.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	rng := seekparquet.Range{Prefix: []byte("logs/03/"), Start: []byte("logs/03/obj-01000"), Limit: 50, Columns: []string{"key", "size"}}
 	wantRows, err := want.Range(ctx, rng)

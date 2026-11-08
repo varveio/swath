@@ -70,7 +70,7 @@ func (o opener) getter(name string) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		res := ranged.Response{Body: r, Total: r.Attrs.Size}
+		res := ranged.Response{Body: r, Total: r.Attrs.Size, Length: r.Remain()}
 		if r.Attrs.Generation > 0 {
 			res.Pin.Version = strconv.FormatInt(r.Attrs.Generation, 10)
 		}

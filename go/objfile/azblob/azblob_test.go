@@ -75,10 +75,11 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var start, end int
-		if _, err := fmt.Sscanf(r.Header.Get("x-ms-range"), "bytes=%d-%d", &start, &end); err != nil || end >= len(b.data) {
+		if _, err := fmt.Sscanf(r.Header.Get("x-ms-range"), "bytes=%d-%d", &start, &end); err != nil || start >= len(b.data) {
 			fail(w, http.StatusRequestedRangeNotSatisfiable, "InvalidRange")
 			return
 		}
+		end = min(end, len(b.data)-1) // a range past the end is clipped, as the store does
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(b.data)))
 		w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
 		w.WriteHeader(http.StatusPartialContent)

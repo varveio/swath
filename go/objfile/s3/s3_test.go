@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -175,5 +177,41 @@ func TestVersionPinned(t *testing.T) {
 	p := make([]byte, 100)
 	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) {
 		t.Fatalf("ReadAt of the pinned version: %v, same bytes %v", err, bytes.Equal(p, old))
+	}
+}
+
+// TestNullVersion: an object written before versioning was enabled has the
+// version id "null", and the Object reads that version by it after the key is
+// overwritten. gofakes3 never reports "null", so a handler plays S3.
+func TestNullVersion(t *testing.T) {
+	old, current := objfiletest.Data(10, 1), objfiletest.Data(10, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, etag, version := current, `"b"`, "v2"
+		if r.URL.Query().Get("versionId") == "null" || r.Method == http.MethodHead {
+			data, etag, version = old, `"a"`, "null"
+		}
+		if m := r.Header.Get("If-Match"); m != "" && m != etag {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("x-amz-version-id", version)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(data)-1, len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{BaseEndpoint: aws.String(srv.URL), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{}})
+	file, err := s3.New(client, bucket).Open(context.Background(), "obj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 10)
+	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) || file.Identity() != "null" {
+		t.Fatalf("ReadAt of the null version: %v, same bytes %v, Identity %q", err, bytes.Equal(p, old), file.Identity())
 	}
 }

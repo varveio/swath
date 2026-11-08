@@ -30,11 +30,13 @@ type Pin struct {
 func (p Pin) IsZero() bool { return p == Pin{} }
 
 // Response is a ranged read's body and what its headers said: the version
-// served and the object's total size (-1 when not given).
+// served, the object's total size and the body's length (each -1 when not
+// given).
 type Response struct {
-	Body  io.ReadCloser
-	Pin   Pin
-	Total int64
+	Body   io.ReadCloser
+	Pin    Pin
+	Total  int64
+	Length int64
 }
 
 // Getter reads the bytes [off, off+n) of the object; n is at least 1 and
@@ -136,7 +138,8 @@ func (f *file) readAt(ctx context.Context, p []byte, off int64) (int, error) {
 }
 
 // open requests a range and checks the response against the pin, taking the
-// pin from it when the file has none yet, and against the size.
+// pin from it when the file has none yet, and against the size: the total
+// first, so that a range clipped by a shorter object is ErrObjectChanged.
 func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	f.mu.Lock()
 	pin := f.pin
@@ -145,16 +148,19 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := f.check(res); err != nil {
+	if err := f.check(res, n); err != nil {
 		res.Body.Close()
 		return nil, err
 	}
 	return res.Body, nil
 }
 
-func (f *file) check(res Response) error {
+func (f *file) check(res Response, n int64) error {
 	if res.Total >= 0 && res.Total != f.size {
 		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
+	}
+	if res.Length >= 0 && res.Length != n {
+		return fmt.Errorf("the store returned %d bytes for a range of %d", res.Length, n)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
