@@ -811,12 +811,14 @@ func TestDurableLedgerPrefix(t *testing.T) {
 }
 
 // TestDurableCorruption: a recorded file flipped, truncated, with frames
-// swapped, its tail lost, or a frame claiming more rows than the limit, is
+// swapped, its tail lost, a frame claiming more rows than the limit, or a
+// frame of a type this build does not know (R, Z, D and Y are its rows
+// frames), is
 // rejected (corrupt) before anything sized by it is allocated; another
 // run's file renamed into a recorded ID is rejected as foreign; a missing
 // one as missing.
 func TestDurableCorruption(t *testing.T) {
-	for _, damage := range []string{"flipped", "truncated", "swapped", "tail", "claim", "foreign", "missing"} {
+	for _, damage := range []string{"flipped", "truncated", "swapped", "tail", "claim", "frametype", "foreign", "missing"} {
 		t.Run(damage, func(t *testing.T) {
 			f := &fencedTree{ranges: 4, pages: 3, rows: func(int, int) int { return 200 }, hold: make(chan struct{})}
 			c, root, dir := newDurable(t)
@@ -853,6 +855,13 @@ func TestDurableCorruption(t *testing.T) {
 				body := append(binary.AppendUvarint(nil, 2_000_000), make([]byte, 64)...)
 				fr := frame2(nil, frameRows, body)
 				b = append(append(append([]byte(nil), b[:8+n0]...), fr...), b[8+n0:]...)
+			case "frametype":
+				// the frame after the header in a type this build does not
+				// know (a later build's), its frame CRC valid: the file is
+				// not replayable, so its interval is a live gap
+				n1 := int(binary.LittleEndian.Uint32(b[8+n0:]))
+				b[8+n0+8] = 'Q'
+				seal2(b[8+n0 : 16+n0+n1])
 			case "foreign":
 				b[18] ^= 1      // the header's run UUID: another run's file under a recorded ID
 				seal2(b[:8+n0]) // its frame CRC valid

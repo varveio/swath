@@ -464,19 +464,29 @@ func TestDurableNewAncestorsLost(t *testing.T) {
 	}
 }
 
-// TestDurableCompressionFlip: a resume with --spill-compress flipped replays
-// the zstd frames all the same.
+// TestDurableCompressionFlip: the crashed run's durable files hold delta
+// zstd frames (the default, Y); a resume with another frame format
+// (--spill-compress=false: D, --spill-plain: Z, both: R) replays them all
+// the same: a durable file's frames are self-describing, and the header's
+// row codec version covers all four rows frame types.
 func TestDurableCompressionFlip(t *testing.T) {
-	url, _, ref, out := durableFixture(t)
-	cfg := durableConfig(url, out, true)
-	cfg.Limits.Spill.Uncompressed = true
-	sum, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sameDataset(t, "compression flipped", ref, out)
-	if sum.Resources.Spill.Durable.Resume.ReplayedRows == 0 {
-		t.Fatal("nothing replayed")
+	for _, flip := range []struct {
+		name                string
+		plain, uncompressed bool
+	}{{"uncompressed", false, true}, {"plain", true, false}, {"plain-uncompressed", true, true}} {
+		t.Run(flip.name, func(t *testing.T) {
+			url, _, ref, out := durableFixture(t)
+			cfg := durableConfig(url, out, true)
+			cfg.Limits.Spill.Plain, cfg.Limits.Spill.Uncompressed = flip.plain, flip.uncompressed
+			sum, err := Run(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sameDataset(t, flip.name, ref, out)
+			if sum.Resources.Spill.Durable.Resume.ReplayedRows == 0 {
+				t.Fatal("nothing replayed")
+			}
+		})
 	}
 }
 
