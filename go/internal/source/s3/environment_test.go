@@ -6,7 +6,9 @@ package s3
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // proxied puts the fault proxy in front of a fake bucket.
@@ -132,6 +135,12 @@ func TestOneAdmission(t *testing.T) {
 // 1 logical request; a call exhausted by throttles (3 of 3) and requeued
 // counts all 3 throttles, the last included (it was uncounted). In-flight
 // attempts are measured at the send, apart from the active ranges.
+//
+// Each answer waits until the clock has advanced past the request's
+// arrival (clockTicked), so every attempt spans a tick and its measured
+// time in flight is above zero where the clock moves in steps of about a
+// millisecond (Windows): a local attempt could otherwise measure 0 ns
+// (#319).
 func TestAttemptsAreRequestEconomics(t *testing.T) {
 	keys := testKeys()[:50] // one page
 	for _, c := range []struct {
@@ -143,7 +152,7 @@ func TestAttemptsAreRequestEconomics(t *testing.T) {
 		{"exhausted and requeued", 3, 3, 3}, // the requeue repeats the same logical request
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ep := fakeBucket(t, keys, c.fail)
+			ep := s3test.Serve(t, clockTicked(fakeHandler(t, keys, c.fail)))
 			cl, err := client.New(context.Background(), client.Config{Endpoint: ep, PathStyle: true, Anonymous: true, Region: "us-east-1",
 				MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
 			if err != nil {
@@ -184,4 +193,17 @@ func TestSlowStartStartsNarrow(t *testing.T) {
 	if len(tl) == 0 || tl[0].MaxActive > 8 || v("slow_start.doubles") == 0 {
 		t.Fatalf("first 100 ms: %+v; doubles %d", tl[:min(1, len(tl))], v("slow_start.doubles"))
 	}
+}
+
+// clockTicked answers each request with h once the monotonic clock reads
+// later than at the request's arrival: the client measures an attempt from
+// before its send to after its answer, so the attempt spans that tick. On
+// a clock with nanosecond steps the condition holds at once.
+func clockTicked(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for t0 := time.Now(); time.Since(t0) <= 0; {
+			runtime.Gosched()
+		}
+		h.ServeHTTP(w, r)
+	})
 }
