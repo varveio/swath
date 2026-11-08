@@ -328,8 +328,12 @@ func (b badFrontier) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp])
 }
 
 // TestSegmentsSeamError: the order guard refuses the repeated range with
-// segments as without: within a segment, or at a seam between two.
+// segments as without: within a segment, or at a seam between two. The
+// segments must engage where parts are cut (anyShare: the tiny budget
+// otherwise plans one worker, the serial drain, and the test passed
+// without them).
 func TestSegmentsSeamError(t *testing.T) {
+	anyShare(t)
 	for _, procs := range []int{1, 5} {
 		withProcs(t, procs)
 		for _, limit := range []int64{2000, 60_000, 1 << 30} {
@@ -341,6 +345,9 @@ func TestSegmentsSeamError(t *testing.T) {
 			var inv *dataset.InvariantError
 			if !errors.As(err, &inv) {
 				t.Fatalf("procs %d limit %d: err %v, want the order guard's (segments %+v)", procs, limit, err, st.Segments)
+			}
+			if procs > 1 && limit < 1<<30 && st.Segments.Reason != SegmentEngaged {
+				t.Fatalf("procs %d limit %d: segments %+v, want engaged", procs, limit, st.Segments)
 			}
 		}
 	}
