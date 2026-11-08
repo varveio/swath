@@ -674,6 +674,10 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 		if !has[j] {
 			continue
 		}
+		// The seam check is the stage's own: the row guard runs within a
+		// segment only, and Segmenter does not promise to compare its parts.
+		// The Parquet router does (adjacent, before publishing); any other
+		// Segmenter would hand on a descending seam without this.
 		if havePrev && j > 0 { // segment 0's first row was checked against the drainer's last
 			st.Seams++
 			if first[j] <= prev {
