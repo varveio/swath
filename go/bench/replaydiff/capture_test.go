@@ -525,6 +525,10 @@ func TestLiveMatrixRecordedReplaysOffline(t *testing.T) {
 		for _, l := range rep.Residuals {
 			capDoc = append(capDoc, caseOf(l))
 		}
+		// The live run fills its list in worker-completion order, the replay in
+		// recording order: compare them sorted.
+		slices.Sort(liveDoc)
+		slices.Sort(capDoc)
 		if fmt.Sprint(liveDoc) != fmt.Sprint(capDoc) {
 			t.Errorf("%s: documented in the replay %v, in the live run %v", protocol, capDoc, liveDoc)
 		}
