@@ -363,6 +363,11 @@ func waitsAt(t *testing.T, site string) chan string {
 
 // TestFetchWaitWakes: the drainer reaches a frame a worker is still reading
 // and waits (waitFetch); the read completing wakes it, and so does a stop.
+//
+// The slow range is held until every other range is done (Run's
+// "one-range-open"): the read-ahead plans frames only in finished nodes, so
+// a sibling still completing could stop the plan and leave the workers
+// nothing to read (the premise of #325).
 func TestFetchWaitWakes(t *testing.T) {
 	withAhead(t)
 	for _, event := range []string{"read", "cancel"} {
@@ -381,8 +386,13 @@ func TestFetchWaitWakes(t *testing.T) {
 			}
 			t.Cleanup(func() { hookReadAt = nil })
 			f := &frontier{slowPages: 1, siblings: 20, sibPages: 3, rows: 100}
-			f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-			f.left.Store(int64(f.siblings))
+			f.hold = make(chan struct{})
+			var released sync.Once
+			defer SetDurableEvents(func(e string) {
+				if e == "one-range-open" {
+					released.Do(func() { close(f.hold) })
+				}
+			})()
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			done := make(chan error, 1)
