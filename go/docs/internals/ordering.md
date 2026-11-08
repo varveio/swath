@@ -64,8 +64,9 @@ rows in provider order, never against `Options.After`. Segments count their dist
 `Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
 `order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
 `TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
-`TestVersionsTailSeamsAtKeyChanges` (the serial tail) and `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
-engaged, byte-identical to the one-encoder run).
+`TestVersionsTailSeamsAtKeyChanges` (the serial tail), `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
+engaged from memory, byte-identical to the one-encoder run) and `TestVersionsSegmentsReadDurableFiles` (segments
+reading sealed durable files, byte-identical to a serial run).
 
 A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
 marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
