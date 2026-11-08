@@ -133,7 +133,11 @@ the platform behavior as its reason, never silently:
 
 - **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync; #295
   tracks a write-through mode), so tests of journaled runs, crash recovery, resume and the durable spill call
-  `datasettest.RequireJournal` and skip: `TestCrashMatrix`, the `TestDurable*` matrices among them. The
+  `datasettest.RequireJournal` and skip: `TestCrashMatrix`, the `listing` `TestDurable*` matrices among them.
+  The `order` durable-spill unit tests open the cache directly, with no journaled run in between, and run on
+  Windows too. Their directory listings go through the `os.Root`, never `root.FS()`, whose slash-only paths
+  reject `order.DurableDir` there (#301). `TestDurableLedgerFailureEvicts` alone skips on Windows, for its
+  timing premise (#309), not for anything the platform does. The
   process-kill tests (`cmd/swath` `sigkill_test.go`, `forcedexit_test.go`, `segments_durable_test.go`,
   `durable_campaign_test.go`) are not built there (`//go:build !windows`). Replay fixtures that only need a
   dataset list it unjournaled. Windows also refuses to rename a directory holding an open file (a running
