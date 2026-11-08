@@ -1,13 +1,13 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package azure opens blobs of an Azure Blob Storage container as objfile
+// Package azblob opens blobs of an Azure Blob Storage container as objfile
 // Objects with the azblob SDK. Open learns the blob's size and ETag from its
 // properties; OpenSized takes the ETag from the first read. Every later read
 // is a ranged download with If-Match on that ETag. A 412, a 404, or a
 // response naming another ETag or size fails the read with
 // objfile.ErrObjectChanged.
-package azure
+package azblob
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"net/http"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
@@ -27,7 +27,7 @@ import (
 
 // New returns an Opener of the blobs of containerName through client, which
 // carries the caller's credentials, endpoint, transport and retry settings.
-func New(client *azblob.Client, containerName string) objfile.Opener {
+func New(client *azsdk.Client, containerName string) objfile.Opener {
 	return opener{container: client.ServiceClient().NewContainerClient(containerName)}
 }
 

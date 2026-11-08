@@ -7,7 +7,7 @@
 // the Object was opened, or fails with ErrObjectChanged. Nothing else is offered: no
 // listing, caching, read planning or writing.
 //
-// The store packages (objfile/s3, objfile/gcs, objfile/azure) each provide an
+// The store packages (objfile/s3, objfile/gcs, objfile/azblob) each provide an
 // Opener over the caller's own SDK client. An Object satisfies the file
 // interfaces of the SeekParquet module (SourceFile, ContextBinder) and anything
 // else that reads an io.ReaderAt of a known size, such as parquet-go's

@@ -31,7 +31,7 @@ func Limit(o Opener, n int) Opener             // at most n requests in flight
 
 func s3.New(client *s3.Client, bucket string) objfile.Opener           // AWS SDK for Go v2
 func gcs.New(client *storage.Client, bucket string) objfile.Opener     // cloud.google.com/go/storage
-func azure.New(client *azblob.Client, container string) objfile.Opener // azblob
+func azblob.New(client *azsdk.Client, container string) objfile.Opener // azblob SDK
 ```
 
 The caller passes its own SDK client, with its credentials, endpoint, transport and retry settings; objfile

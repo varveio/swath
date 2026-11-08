@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package azure_test
+package azblob_test
 
 import (
 	"fmt"
@@ -15,9 +15,9 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
-	"github.com/varveio/swath/go/objfile/azure"
+	"github.com/varveio/swath/go/objfile/azblob"
 	"github.com/varveio/swath/go/objfile/internal/objfiletest"
 )
 
@@ -93,12 +93,12 @@ func TestOpener(t *testing.T) {
 		f := &fake{blobs: map[string]blobData{}}
 		srv := httptest.NewServer(wrap(f))
 		t.Cleanup(srv.Close)
-		client, err := azblob.NewClientWithNoCredential(srv.URL+"/", &azblob.ClientOptions{ClientOptions: azcore.ClientOptions{
+		client, err := azsdk.NewClientWithNoCredential(srv.URL+"/", &azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{
 			Retry: policy.RetryOptions{MaxRetries: 1, RetryDelay: time.Millisecond, MaxRetryDelay: time.Millisecond},
 		}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return objfiletest.Store{Opener: azure.New(client, containerName), Put: f.put, Delete: f.delete}
+		return objfiletest.Store{Opener: azblob.New(client, containerName), Put: f.put, Delete: f.delete}
 	})
 }
