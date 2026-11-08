@@ -424,6 +424,68 @@ jobs:
             tee "$smoke/capture-smoke.log"
           grep -q "sorting it with the image's sort-fixture" "$smoke/capture-smoke.log"
 
+  # The Go default tier on the other operating systems the port ships for. The go job above
+  # only cross-builds for them; here the suite runs. vet and the tests only: gofmt, the
+  # cross-builds and the Docker image stay in the go job. No -race on macOS and Windows (slow
+  # there, and the Windows race detector needs cgo); linux/arm64 runs it like the go job.
+  # Same always-runs, works-on-change shape as the go job.
+  go-xos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            race: ""
+          - os: windows-latest
+            race: ""
+          - os: ubuntu-24.04-arm
+            race: -race
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Go changes
+        id: changes
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            # As in the go job: capture the list first so a git failure fails the step.
+            changed=$(git diff --name-only "$BASE" HEAD)
+            if grep -E '^(go/|\.github/workflows/ci\.yml$)' >/dev/null <<<"$changed"; then
+              echo "go=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "go=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Set up Go (version from go/go.mod)
+        if: steps.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: go vet
+        if: steps.changes.outputs.go == 'true'
+        run: go vet ./...
+
+      - name: go test ${{ matrix.race }}
+        if: steps.changes.outputs.go == 'true'
+        run: go test ${{ matrix.race }} -timeout 25m ./...
+
   # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
   # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
   # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
@@ -541,14 +603,14 @@ jobs:
           fi
 
   ci-gate:
-    needs: [fast-tests, integration-tests, docker-check, go, go-fixtures]
+    needs: [fast-tests, integration-tests, docker-check, go, go-xos, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
       # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
-      # all five dependencies run, so there `skipped` is not a pass: that is what stops a future
+      # all six dependencies run, so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
         env:
