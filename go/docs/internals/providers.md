@@ -54,6 +54,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   more is sorted in runs of at least 16,384, concurrently (up to GOMAXPROCS), then merged pairwise
   (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
   directory's buffers rather than copies.
+- **A stat-tier count runs with more processors.** A stat that waits on the disk holds its Go processor until
+  the scheduler hands it off, so one processor per CPU leaves CPUs idle on a cold tree. `swath count` at the
+  `stat` or `statx` tier raises GOMAXPROCS to 4 per CPU, at most `--workers`, for the run and restores it
+  (`count_procs` in the report); a count has no encoders, reorder storage or readahead to resize. The names
+  tier, and runs that write output, keep GOMAXPROCS as it is.
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort

@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
@@ -63,6 +65,33 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 type opened struct {
 	registry.Bound[Entry]
 	p *Provider
+}
+
+// countProcsFactor is how many processors a stat-tier count runs with, per
+// CPU the process had. A stat that waits on the disk holds its processor
+// until the scheduler hands it off, so with one processor per CPU a cold
+// tree leaves CPUs idle; more processors keep more stats in flight
+// (measured: cold, 4 CPUs, ~1M entries, 3.97 s at 4 processors, 3.07 s at
+// 16; warm, no slower).
+const countProcsFactor = 4
+
+// Run lists the tree. A count at a stat tier runs with more processors
+// (countProcsFactor per CPU, at most the workers) and restores the setting
+// when it returns; a count has no encoders, reorder storage or readahead,
+// the other readers of GOMAXPROCS. A names-tier count, which does not wait
+// on stats, and every run that writes output keep the setting as it is.
+func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
+	if env.Count && o.p.opt.Fields != Names {
+		prev := runtime.GOMAXPROCS(0)
+		if procs := min(prev*countProcsFactor, max(prev, env.Order.Workers)); procs > prev {
+			runtime.GOMAXPROCS(procs)
+			defer runtime.GOMAXPROCS(prev)
+			o.p.mu.Lock()
+			o.p.stats.CountProcs = int64(procs)
+			o.p.mu.Unlock()
+		}
+	}
+	return o.Bound.Run(ctx, env)
 }
 
 func (o *opened) Locator() source.Locator {
