@@ -17,7 +17,7 @@ and why.
 | `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances, the maximum and percentile windows) and the schema-2 JSON | – |
-| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
+| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`, which opens it lazily and then calls `Dataset.Verify`, so a long-lived replay fails at startup on any bad part rather than on its first touch; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
 | `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts), `format2` (swath-dataset format 2) and `legacytest` (writes both for tests); formerly the public `go/sortedparquet` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
@@ -225,7 +225,7 @@ registers at startup are created when the server starts, so a scrape tells a zer
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
 - **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
   `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
-  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset these meters are absent and the store's page, key, reseek and shortcut counters unset (`Sorted.PageStats` false): the seekparquet module reports no page work, so it is unavailable, not zero) and each
+  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset each module request carries its own `seekparquet.ReadStats`, added to the read's `legacy.Stats`: key and value pages decoded, keys decoded, row groups opened, page-index seeks, groups skipped whole and parts checked on first touch, `PartsOpened`, which stays zero because the store verifies every part at open) and each
   read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
   (`Config.IndexLoad`, `Config.IndexEntries`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on

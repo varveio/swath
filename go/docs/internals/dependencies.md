@@ -21,6 +21,7 @@ Linked into `cmd/swath` unless marked tests.
 | `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock), console VT mode, `GetDiskFreeSpaceEx` (free space for the spill reserve) and the closed-pipe and sharing-violation errors. |
 | `golang.org/x/term` | BSD-3 | Whether stderr is a terminal, and its width, for the progress line. |
 | `github.com/klauspost/compress` (`zstd`, `gzip`) | BSD-3 | zstd for Parquet pages and spill frames, gzip and zstd for text output; the standard library has no zstd, and the same module's gzip is a drop-in for `compress/gzip`. |
+| `github.com/varveio/seekparquet/go` | Apache-2.0 | The SeekParquet format's mechanisms: the part writer (`write`), the manifest's JSON, footer and key-page inspection, and the reader `swath-replay` serves datasets through. Pinned at a pseudo-version of its `main` (bumped deliberately) until it releases. |
 | `github.com/parquet-go/parquet-go` | Apache-2.0 | The Parquet writer and reader. It links protobuf, geometry, brotli and lz4 code the port never calls; see the triggers below. |
 | `google.golang.org/api` | BSD-3 | Tests: Google's generated GCS JSON client, the oracle the GCS list client is compared against. |
 | `github.com/johannesboyne/gofakes3` | MIT | Tests and `bench/s3fake`: an in-process S3 server. |
@@ -41,7 +42,7 @@ Linked into `cmd/swath` unless marked tests.
 | Flags | `cmd/swath` (standard `flag`) | spf13/cobra and pflag | The subcommands and their Java-compatible spellings fit the standard package; cobra adds command machinery the CLI does not need. |
 | Filesystem lister | `internal/source/localfs` | charlievieth/fastwalk, karrick/godirwalk | They are unsorted, allocate per entry and have no `statx` or arena; the lister sorts before it stats. |
 | List clients | `internal/source/s3/client`, `gcs/client` | the S3 SDK's paginator, `cloud.google.com/go/storage` | The page scanner allocates around pages and arenas, and the requests go through the port's own retry and admission; the SDKs supply credentials only. |
-| Parquet part router | `internal/parquetout` | parquet-go's writer alone | It is the part-size, interval and encoder-pool policy over parquet-go's writer, which stays the encoder. |
+| Parquet part router | `internal/parquetout` | the seekparquet module's writer alone (`local.WriteDir`) | It is the part-size, interval, resume-cut and encoder-pool policy over the module's part writer (`write.NewPart`), which is the encoder; the journal and publication stay swath's (the module's `local` package has no fault hooks). |
 
 **Triggers to revisit:** a storage need beyond append-and-scan (mutable tables, queries, compaction) or another
 change to the journal's recovery format (bbolt); a second subsystem that needs generic retries (a retry

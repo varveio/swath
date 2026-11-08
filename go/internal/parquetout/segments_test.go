@@ -125,7 +125,7 @@ func TestSegmentsAreTheSerialParts(t *testing.T) {
 		t.Fatalf("%d parts vs %d", len(parts), len(base))
 	}
 	for i := range parts {
-		if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+		if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
 			t.Fatalf("part %d differs", i)
 		}
 	}

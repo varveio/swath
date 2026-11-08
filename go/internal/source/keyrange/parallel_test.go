@@ -30,14 +30,14 @@ func run(t *testing.T, api *sorted, opt Options, workers int) ([]string, Stats, 
 }
 
 // runBudget runs with a reorder budget in rows (the CLI default is 131,072).
-func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]string, Stats, []span) {
+func runBudget(t *testing.T, api lister, opt Options, workers, budget int) ([]string, Stats, []span) {
 	t.Helper()
 	return runPolicy(t, api, opt, workers, budget, nil)
 }
 
 // runPolicy is runBudget with the provider's bound policy accept (nil: the
 // default, Safe).
-func runPolicy(t *testing.T, api *sorted, opt Options, workers, budget int, accept func(string) bool) ([]string, Stats, []span) {
+func runPolicy(t *testing.T, api lister, opt Options, workers, budget int, accept func(string) bool) ([]string, Stats, []span) {
 	t.Helper()
 	var mu sync.Mutex
 	var leaves []span

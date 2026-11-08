@@ -152,7 +152,7 @@ func TestGroupedPinnedAmbiguousTail(t *testing.T) {
 		if err != nil {
 			t.Fatalf("pinned part %d: %v", at, err)
 		}
-		if got[at].MD5 != cold[at].MD5 {
+		if got[at].SHA256 != cold[at].SHA256 {
 			t.Fatalf("pinned part %d differs", at)
 		}
 	}

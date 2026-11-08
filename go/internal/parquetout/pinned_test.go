@@ -30,8 +30,8 @@ func TestPinnedCalibratingPartCalibrates(t *testing.T) {
 			t.Fatalf("encoders %d: %d parts after the pinned part 0, cold %d", enc, len(got), len(cold))
 		}
 		for i := range got {
-			if got[i].Rows != cold[i].Rows || got[i].MD5 != cold[i].MD5 {
-				t.Fatalf("encoders %d: part %d is %d rows (md5 %s), cold %d rows (md5 %s)", enc, i, got[i].Rows, got[i].MD5, cold[i].Rows, cold[i].MD5)
+			if got[i].Rows != cold[i].Rows || got[i].SHA256 != cold[i].SHA256 {
+				t.Fatalf("encoders %d: part %d is %d rows (sha256 %s), cold %d rows (sha256 %s)", enc, i, got[i].Rows, got[i].SHA256, cold[i].Rows, cold[i].SHA256)
 			}
 		}
 	}

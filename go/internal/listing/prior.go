@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -110,7 +112,7 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 	switch {
 	case !m.Readable():
 		return nil, fmt.Errorf("manifest format %s %d, want %s %d (draft %d) or %s %d", m.Format, m.FormatVersion,
-			dataset.Format, dataset.FormatVersion, dataset.DraftRevision, dataset.LegacyFormat, dataset.LegacyFormatVersion)
+			seekparquet.Format, seekparquet.FormatVersion, seekparquet.DraftRevision, dataset.LegacyFormat, dataset.LegacyFormatVersion)
 	case m.Source.Kind != loc.Kind || m.Source.Container != loc.Container:
 		return nil, fmt.Errorf("the dataset lists %s (%s %q), the run %s (%s %q)", m.Source.URI, m.Source.Kind, m.Source.Container, loc.Root, loc.Kind, loc.Container)
 	}
@@ -147,12 +149,12 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 			cum = end // no cut inside this part
 			continue
 		}
-		pages, err := parquetout.KeyPages(filepath.Join(dir, dataset.DataDir, dataset.PartName(i)))
+		pages, err := parquetout.KeyPages(filepath.Join(dir, dataset.DataDir, dataset.PartName(i)), !m.Current())
 		var sum int64
 		for _, pg := range pages {
 			sum += pg.Rows
 		}
-		if err != nil || sum != p.Rows || len(pages) == 0 || pages[len(pages)-1].Max != string(p.MaxKey) {
+		if err != nil || sum != p.Rows || len(pages) == 0 || string(pages[len(pages)-1].Max) != string(p.MaxKey) {
 			pr.IndexFailed++
 			cum = end
 			cut(string(p.MaxKey))
@@ -162,7 +164,7 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 		for _, pg := range pages {
 			cum += pg.Rows
 			if j < priorCuts && cum >= threshold(j) {
-				cut(pg.Max)
+				cut(string(pg.Max))
 			}
 		}
 	}
