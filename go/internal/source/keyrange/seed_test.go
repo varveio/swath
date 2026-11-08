@@ -663,8 +663,13 @@ func TestSeedFirstPage(t *testing.T) {
 // requests and splits, when the seed emitted its truncated first page and
 // started the first tile after it): a first folder far larger than the
 // rest, whose first 1,000 keys the first page holds. With SeedFirstPage
-// the seed's tiles start at the scope's start, as without it, and the run
-// is as wide.
+// the seed's tiles are those of a seed without the page, from the scope's
+// start (the regression's tiles started after the page), and the run is as
+// wide. The tiles are the assertion; the mean of active ranges is a
+// timing and is held only to a tenth of the run without the page, a
+// tenfold regression (under -race on the ubuntu runner, 40 runs a width:
+// 0.86 to 1.11 of it at 2 CPUs, 0.89 to 1.08 at GOMAXPROCS=1; 0.69 once
+// in the busy race shard, #298).
 func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 	var keys []string
 	for i := range 30000 {
@@ -674,6 +679,25 @@ func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 		for i := range 100 {
 			keys = append(keys, fmt.Sprintf("b%03d/img-%04d.jpg", d, i))
 		}
+	}
+	var tiles [2][]Range
+	for i, first := range []bool{false, true} {
+		opt := Options{Seed: true, SeedFirstPage: first, PageSize: 100, Workers: 64}
+		p, err := New(opt, Description[Object]{Target: "test", Listing: Listing}, fetchFrom(newSorted(keys, false, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := &pageRec{}
+		if err := p.Expand(context.Background(), p.Root(), rec); err != nil {
+			t.Fatal(err)
+		}
+		if len(rec.rows) != 0 || len(rec.tiles) < 2 || rec.tiles[0].lo != "" {
+			t.Fatalf("first=%v: the seed emitted %d rows, %d tiles", first, len(rec.rows), len(rec.tiles))
+		}
+		tiles[i] = rec.tiles
+	}
+	if !reflect.DeepEqual(tiles[1], tiles[0]) {
+		t.Fatalf("%d tiles with the first page, from %q; want the %d of a seed without it", len(tiles[1]), tiles[1][0].lo, len(tiles[0]))
 	}
 	var mean [2]float64
 	for i, first := range []bool{false, true} {
@@ -690,7 +714,7 @@ func TestSeedFirstPageLargeFirstTile(t *testing.T) {
 		mean[i] = st.MeanActive
 		t.Logf("first page %v: mean active %.1f, requests %d, depth %d", first, st.MeanActive, st.Get(cRequests), st.Get(cSplitMaxDepth))
 	}
-	if mean[1] < 0.7*mean[0] {
+	if mean[1] < mean[0]/10 {
 		t.Fatalf("mean active %.1f with the first page, %.1f without", mean[1], mean[0])
 	}
 }
