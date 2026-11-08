@@ -97,6 +97,7 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	least := int64(math.MaxInt64)
 	for i := range runs {
 		srv := httptest.NewServer(slowFirst(scalefake.NewServer(ks, scalefake.Options{}), ks.Key(3000), 3*time.Second, time.Millisecond))
+		t.Cleanup(srv.Close)
 		runtime.GC()
 		base := liveHeap()
 		out := filepath.Join(t.TempDir(), "keys.tsv")
@@ -106,7 +107,7 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 			// Four formatters (beyond what the budget admits, as asked): their
 			// queued batches are charged to the same budget.
 			Limits: Limits{Workers: workers, RowBudget: budget, Encoders: 4}})
-		srv.Close()
+		srv.Close() // before the next run's baseline; the cleanup covers early exits
 		if err != nil {
 			t.Fatal(err)
 		}
