@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -32,7 +33,8 @@ import (
 // keys, every 37th with 40 versions (a group spanning several 7-entry
 // pages, so page boundaries fall inside groups), the rest 1 to 3; a slow
 // frontier (fresh requests below the 10 % key wait), so the ranges ahead
-// spill and seal certificates. It logs each data request (no delimiter)
+// spill and seal certificates, and a gate (versionsGate) on the frontier's
+// second page. It logs each data request (no delimiter)
 // while logging is on: its key-marker and whether it continues a page
 // (a version-id-marker). A fresh request's key-marker is its exclusive
 // start, as start-after is for ListObjectsV2; a continuation lists from
@@ -40,11 +42,33 @@ import (
 type hotVersions struct {
 	rows    []client.Version
 	slow    string
-	sealed  atomic.Int64 // durable seals so far (order's "sealed" events)
-	held    atomic.Int64 // fresh requests from the scope's start this run
+	gate    atomic.Pointer[versionsGate] // the run in progress's (nil: no hold)
+	late    atomic.Bool                  // a gate's signal did not come within its cap
 	logging atomic.Bool
 	mu      sync.Mutex
 	starts  []versionsReq
+}
+
+// versionsGate holds the frontier's second page of one run (in group mode
+// each page starts fresh after the last complete key) until the ranges
+// ahead have sealed eight certificates (order's "sealed" events): K stays
+// at the bottom while they seal, so the kills find certificates live above
+// it. A run that fails while held (a kill) ends the request with its
+// context. No release within two minutes is a failure of the fixture
+// (hotVersions.late), not a release by time.
+type versionsGate struct {
+	release chan struct{}
+	once    sync.Once
+	seen    atomic.Int64 // fresh requests from the scope's start this run
+	sealed  atomic.Int64
+}
+
+// event is the order stage's event hook (order.SetDurableEvents) for the
+// run in progress.
+func (p *hotVersions) event(e string) {
+	if g := p.gate.Load(); g != nil && e == "sealed" && g.sealed.Add(1) == 8 {
+		g.once.Do(func() { close(g.release) })
+	}
 }
 
 // versionsReq is a logged data request: its key-marker, and whether it
@@ -54,7 +78,7 @@ type versionsReq struct {
 	cont   bool
 }
 
-func newHotVersions() *hotVersions {
+func newHotVersions(t *testing.T) *hotVersions {
 	p := &hotVersions{}
 	for i := range 4000 {
 		n := 1 + i%3
@@ -68,6 +92,11 @@ func newHotVersions() *hotVersions {
 		}
 	}
 	p.slow = "k0400"
+	t.Cleanup(func() {
+		if p.late.Load() {
+			t.Error("the frontier's hold was not released by the run within two minutes")
+		}
+	})
 	return p
 }
 
@@ -76,14 +105,14 @@ func (p *hotVersions) ListObjectsV2(context.Context, *client.ListInput) (*client
 	return nil, errors.New("hotVersions lists versions only")
 }
 
-func (p *hotVersions) ListObjectVersions(_ context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
-	if in.Delimiter == "" && in.VersionIDMarker == "" && in.KeyMarker != "" && in.KeyMarker < "k0010" && p.held.Add(1) == 1 {
-		// The frontier's second page (in group mode each page starts fresh
-		// after the last complete key) waits until the ranges ahead have
-		// sealed eight certificates (or 5 s): K stays at the bottom while
-		// they seal, so the kills find certificates live above it.
-		for deadline := time.Now().Add(5 * time.Second); p.sealed.Load() < 8 && time.Now().Before(deadline); {
-			time.Sleep(time.Millisecond)
+func (p *hotVersions) ListObjectVersions(ctx context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
+	if g := p.gate.Load(); g != nil && in.Delimiter == "" && in.VersionIDMarker == "" && in.KeyMarker != "" && in.KeyMarker < "k0010" && g.seen.Add(1) == 1 {
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		case <-time.After(2 * time.Minute):
+			p.late.Store(true)
 		}
 	}
 	if in.Delimiter == "" && p.logging.Load() {
@@ -113,8 +142,7 @@ func (p *hotVersions) ListObjectVersions(_ context.Context, in *client.VersionsI
 }
 
 func hotVersionsConfig(api *hotVersions, out string, resume bool) Config {
-	api.held.Store(0)
-	api.sealed.Store(0)
+	api.gate.Store(&versionsGate{release: make(chan struct{})})
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: true, Policy: keyrange.Policy{PageSize: 7}}},
 		Output: OutputConfig{Dir: out, Resume: resume},
 		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: minRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
@@ -177,12 +205,8 @@ func liveVersionCerts(t *testing.T, out string) []versionCert {
 // so certificates begin and end at complete keys, and a replay accepts a
 // key repeated within its group.
 func TestVersionsDurableSpill(t *testing.T) {
-	api := newHotVersions()
-	defer order.SetDurableEvents(func(e string) {
-		if e == "sealed" {
-			api.sealed.Add(1)
-		}
-	})()
+	api := newHotVersions(t)
+	defer order.SetDurableEvents(api.event)()
 	ref := filepath.Join(t.TempDir(), "ref")
 	cold, err := Run(context.Background(), hotVersionsConfig(api, ref, false))
 	if err != nil {
@@ -298,20 +322,20 @@ func versionsK(t *testing.T, out string) string {
 // TestVersionsTailSeamsAtKeyChanges: the seam rule for the drain tail
 // (go/docs/internals/ordering.md, "Repeated keys"). Behind a slow frontier
 // the ranges ahead finish first and their rows are drained at the end, a
-// serial tail through the router; parts are cut every 5 rows, so most cut
-// points fall inside a hot key's 40 versions. Every cut must move to the
-// next key change: each part's last key is below the next part's first,
-// so no key spans two parts. A segmented drain tail must cut where the
-// router does: its planner moves each segment boundary to the next key
-// change, and its seam check then stays strict.
+// tail through the router; parts are cut every 5 rows, so most cut points
+// fall inside a hot key's 40 versions. Every cut must move to the next key
+// change: each part's last key is below the next part's first, so no key
+// spans two parts. (A row cap never freezes the router's size rule, so this
+// tail is never segmented; TestVersionsSegmentsAtKeyChanges holds the
+// segmented tail to the same rule.)
 func TestVersionsTailSeamsAtKeyChanges(t *testing.T) {
-	api := newHotVersions()
+	api := newHotVersions(t)
 	out := filepath.Join(t.TempDir(), "ds")
 	cfg := hotVersionsConfig(api, out, false)
 	cfg.Limits.Spill = SpillLimits{Off: true}
 	cfg.Limits.PartMaxRows = 5
 	cfg.Limits.RowBudget = 64 << 20 // the tail: every range ahead buffered, drained at the end
-	api.sealed.Store(8)             // no durable spill to wait for: the slow region alone holds the frontier back
+	api.gate.Store(nil)             // no durable spill to wait for: the slow region alone holds the frontier back
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -331,5 +355,61 @@ func TestVersionsTailSeamsAtKeyChanges(t *testing.T) {
 	}
 	if inside == 0 {
 		t.Fatal("no cut was deferred to a key change: no group straddled a 5-row boundary")
+	}
+}
+
+// TestVersionsSegmentsAtKeyChanges: the seam rule on the segment-parallel
+// tail (order's segments.go). Behind the slow region every range ahead is
+// listed and held in memory, so when listing ends the rest of the stream
+// is cut into segments. Parts are cut by size (a row cap never freezes the
+// router's size rule, so it would never plan segments), and planned
+// boundaries fall inside hot keys' 40 versions: the planner moves each to
+// the next key change, as the router defers its own cut
+// (drain.segments.deferred_rows), no key spans two parts, and the dataset
+// is byte-identical to the serial tail's (one encoder: no segments).
+// order's TestSegmentsCutAtKeyChanges covers a spilled tail.
+func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
+	api := newHotVersions(t)
+	run := func(name string, encoders int) (string, Report) {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), name)
+		cfg := hotVersionsConfig(api, out, false)
+		cfg.Limits.Encoders = encoders
+		cfg.Limits.Spill = SpillLimits{Off: true}
+		cfg.Limits.RowBudget = 64 << 20 // every range ahead buffered behind the slow region: the rest of the stream when listing ends
+		api.gate.Store(nil)             // the slow region alone holds the frontier back
+		sum, err := Run(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		m := manifestOf(t, out)
+		for i := 1; i < len(m.Parts); i++ {
+			if a, b := string(m.Parts[i-1].MaxKey), string(m.Parts[i].MinKey); a >= b {
+				t.Fatalf("%s: part %d ends at %q and part %d starts at %q: a key spans a seam", name, i-1, a, i, b)
+			}
+		}
+		if d := sum.Resources.Drain; d == nil || d.Segments == nil {
+			t.Fatalf("%s: no segments in the report", name)
+		}
+		return out, sum
+	}
+	ref, serial := run("serial", 1)
+	if sg := serial.Resources.Drain.Segments; sg.Reason == order.SegmentEngaged {
+		t.Fatalf("serial: segments %+v", *sg)
+	}
+	out, sum := run("segments", 4)
+	sg := sum.Resources.Drain.Segments
+	if sg.Reason != order.SegmentEngaged || sg.Segments < 3 || sg.DeferredRows == 0 {
+		t.Fatalf("segments %+v: want engaged, boundaries deferred to key changes", *sg)
+	}
+	t.Logf("segments: %d of %d rows, %d deferred", sg.Segments, sg.Rows, sg.DeferredRows)
+	sameDataset(t, "segments", ref, out)
+	// The segments' rows are classified and their keys counted as the
+	// serial drain's are.
+	a, b := serial.Output, sum.Output
+	if *a.Versions != *b.Versions || *a.LiveObjects != *b.LiveObjects || *a.DistinctKeys != *b.DistinctKeys || *a.DeleteMarkers != *b.DeleteMarkers || *b.DistinctKeys != 4000 {
+		t.Fatalf("versions %d/%d live %d/%d distinct %d/%d markers %d/%d (serial/segments)",
+			*a.Versions, *b.Versions, *a.LiveObjects, *b.LiveObjects, *a.DistinctKeys, *b.DistinctKeys, *a.DeleteMarkers, *b.DeleteMarkers)
 	}
 }
