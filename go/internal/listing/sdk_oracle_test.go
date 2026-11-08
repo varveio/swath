@@ -38,14 +38,13 @@ func oracleKeys() []string {
 // custom client are byte-identical to datasets listed through the AWS SDK,
 // sequential and parallel, on the same fake bucket.
 func TestDatasetsMatchSDK(t *testing.T) {
-	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	b := s3test.Backend(t, oracleKeys(), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC)}))
 	srvURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 2*time.Millisecond))
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner = srvURL, true, true
-		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
 			t.Fatal(err)
 		}
 		return out

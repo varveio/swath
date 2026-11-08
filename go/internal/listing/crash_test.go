@@ -48,7 +48,7 @@ func crashBackend(t *testing.T) (string, *s3mem.Backend) {
 func crashConfig(url, out string, resume bool) Config {
 	// A small reorder budget (512 rows) keeps listing and publication
 	// interleaved, so crashes during listing find published parts.
-	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+	return Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestCrashMatrix kills the run (an injected crash that skips all cleanup,
@@ -356,7 +356,6 @@ func TestAlteredPartIsRefused(t *testing.T) {
 // TestNoJournalAndCountOnly: without a journal the dataset is the same, and
 // an S3 count-only run works.
 func TestNoJournalAndCountOnly(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
@@ -382,7 +381,6 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 // encoder error) cancels the whole pipeline through one cause: listing
 // stops early and Run returns that error, not a cancellation.
 func TestEncoderFailureStopsListing(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	diskFull := errors.New("disk full")
 	var n atomic.Int64

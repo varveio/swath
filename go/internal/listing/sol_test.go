@@ -70,7 +70,6 @@ func TestCredentialRotationResumes(t *testing.T) {
 // its lock (nor return) until the write finishes, the lock is still held
 // during it, and a write after the run is refused.
 func TestWatchdogWriteInFlightAtRelease(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	out := filepath.Join(t.TempDir(), "ds")
 	pr := &Progress{}

@@ -118,13 +118,12 @@ func checkContract(t *testing.T, out string) []string {
 // seeded) and a local dataset with a name that is not UTF-8 meet the
 // format contract, and the S3 ones hold the same keys.
 func TestDatasetContract(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := fakeS3(t, 3000)
 	var ref []string
 	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
 		o.Endpoint, o.PathStyle = url, true
 		out := filepath.Join(t.TempDir(), "ds")
-		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out},
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()},
 			Limits: Limits{PartSize: 16 << 10, Workers: 8}}); err != nil {
 			t.Fatal(err)
 		}

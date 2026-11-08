@@ -76,9 +76,18 @@ func (s *rowlessService) set(m string) {
 }
 
 func (s *rowlessService) args(dir string, extra ...string) []string {
-	return append([]string{"gs://bkt", "--gcs-endpoint", s.url, "--gcs-anonymous", "--workers", "1", "--part-size", "4KiB",
-		"--row-budget", "512KiB", "-o", dir}, extra...)
+	return append(append([]string{"gs://bkt", "--gcs-endpoint", s.url, "--gcs-anonymous", "--workers", "1", "--part-size", "4KiB",
+		"--row-budget", "512KiB", "-o", dir}, unjournaled...), extra...)
 }
+
+// unjournaled is --no-journal where a journaled run is refused (Windows),
+// for a test that needs only a dataset; empty elsewhere.
+var unjournaled = func() []string {
+	if datasettest.NoJournal() {
+		return []string{"--no-journal"}
+	}
+	return nil
+}()
 
 func readJSON(t *testing.T, path string, v any) []byte {
 	t.Helper()

@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
 )
 
 // TestRequestRateFlag: --request-rate reaches the client: a GCS run at 20
@@ -21,7 +19,6 @@ import (
 // carries the cap's counters with the feature on and its waits counted
 // (at a lower rate if the run was too slow to need one).
 func TestRequestRateFlag(t *testing.T) {
-	datasettest.RequireJournal(t)
 	s := newRowlessService(t)
 	// The cap holds at every rate (the attempts take at least their
 	// spacing) and engages (waits) at a rate the run can outpace: a run

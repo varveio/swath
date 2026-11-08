@@ -20,3 +20,9 @@ func RequireJournal(t testing.TB) {
 		t.Skip("journaled output is refused on Windows: directory entries cannot be synced")
 	}
 }
+
+// NoJournal reports whether a test that needs only a dataset (no resume,
+// no crash recovery) should list without the journal: where a journaled
+// run is refused (Windows) that is the supported way to list an object
+// store; elsewhere false, so the test keeps its journaled run.
+func NoJournal() bool { return !dataset.DirSyncEnforced }

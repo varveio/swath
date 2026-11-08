@@ -21,14 +21,13 @@ import (
 // plain and plain+zstd. The report names the format and the logical bytes
 // the frames stood for.
 func TestSpillFormatsIdentical(t *testing.T) {
-	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	b := s3test.Backend(t, gcstest.Keys(20000))
 	url := s3test.Serve(t, slowFirst(s3test.Handler(b), "d01", 150*time.Millisecond, time.Millisecond))
 	build := func(spill SpillLimits) (string, *Spill) {
 		out := filepath.Join(t.TempDir(), "ds")
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true}},
-			Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: 16, RowBudget: minRowBudget, Spill: spill, PartInterval: -1}})
+			Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 64 << 10, Workers: 16, RowBudget: minRowBudget, Spill: spill, PartInterval: -1}})
 		if err != nil {
 			t.Fatal(err)
 		}

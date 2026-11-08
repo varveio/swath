@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -192,7 +191,6 @@ func TestStatsBlock(t *testing.T) {
 // another prefix); --stats prints the block on stderr, the summary line
 // stays on stdout, and progress.json carries the request account.
 func TestReportContinuity(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := s3test.Bucket(t, []string{"a/1", "a/2", "b/1"})
 	stderr := captureStderr(t)
 	type rep struct {
@@ -218,6 +216,7 @@ func TestReportContinuity(t *testing.T) {
 		var out bytes.Buffer
 		file := filepath.Join(t.TempDir(), "r.json")
 		args := append([]string{src, "--endpoint", url, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
+		args = append(args, unjournaled...)
 		if err := run(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}

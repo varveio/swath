@@ -609,7 +609,6 @@ func TestRefusalsExit2(t *testing.T) {
 // run's report said complete true and stop_reason completed (the source's
 // coverage, final once its listing loop ended).
 func TestReportCompletionFollowsOutcome(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	for status, cause := range map[int]string{403: "access_denied", 401: "auth"} {
@@ -627,8 +626,8 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
-		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, &out, false)
+		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, false)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)
@@ -651,7 +650,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 	for name, extra := range map[string][]string{"complete": nil, "key limit": {"--sequential", "--max-keys", "10"}} {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, extra...), io.Discard, true)
+		err := run(ctx, append(append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
 		if (err == nil) != (extra == nil) {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -664,6 +663,9 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 			if o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason || o.Complete != (extra == nil) {
 				t.Fatalf("%s %s: outcome %+v, manifest coverage %+v", name, how, o, m.Coverage)
 			}
+		}
+		if !dataset.DirSyncEnforced {
+			continue // a resume is refused here (Windows)
 		}
 		// swath resume of the committed dataset reports the same coverage.
 		report = filepath.Join(t.TempDir(), "report.json")

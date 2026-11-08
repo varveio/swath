@@ -313,7 +313,6 @@ func sameParts(t *testing.T, at, ref, out string) {
 // service answered every request). A source that hangs, or answers only
 // 503, still stops as stuck (durability review).
 func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
-	datasettest.RequireJournal(t)
 	const stall = time.Second
 	h := gcstest.Handler(gcstest.Keys(2000), 0)
 	var mode atomic.Value // "healthy", "hung" or "503"
@@ -363,8 +362,8 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
-		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "1", "--seed=false",
-			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, &out, true)
+		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "1", "--seed=false",
+			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, unjournaled...), &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v", err)

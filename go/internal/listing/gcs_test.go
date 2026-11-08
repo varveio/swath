@@ -38,7 +38,7 @@ func gcsBucket(t *testing.T, n int) string {
 
 func gcsConfig(ep, out string, resume bool) Config {
 	return Config{Source: SourceConfig{URI: "gs://bkt", Options: &GCSConfig{Endpoint: ep, Anonymous: true}},
-		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestGCSResumeRefusesAnotherRoute: a GCS run interrupted with parts
@@ -160,7 +160,6 @@ func tree(t *testing.T, dir string) map[string]string {
 // committed a dataset missing those keys; now each is retried and the run
 // completes only when valid pages return, with exactly the reference rows.
 func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
-	datasettest.RequireJournal(t)
 	ep := gcsBucket(t, 8000)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), gcsConfig(ep, ref, false)); err != nil {

@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/journal"
 )
 
@@ -21,7 +20,6 @@ import (
 // all for a run that never owned the output; a refused foreign directory
 // is left untouched (durability review, ownership).
 func TestEveryOutputIsOwned(t *testing.T) {
-	datasettest.RequireJournal(t)
 	src := t.TempDir()
 	mk(t, src, "a", "b", "c")
 	out := filepath.Join(t.TempDir(), "ds")
@@ -73,6 +71,9 @@ func TestEveryOutputIsOwned(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(foreign, dataset.Workspace)); err == nil {
 			t.Fatalf("replace=%v: a refused foreign directory got a workspace", replace)
 		}
+	}
+	if !dataset.DirSyncEnforced {
+		return // a resume is refused before it could find nothing (Windows)
 	}
 	none := filepath.Join(t.TempDir(), "none")
 	s3 := &S3Config{Endpoint: "http://127.0.0.1:1", Anonymous: true}

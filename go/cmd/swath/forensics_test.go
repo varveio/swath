@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strings"
 	"sync/atomic"
@@ -33,7 +34,6 @@ import (
 // goroutines as they hung in DIR/.swath/stacks-stuck.txt (Java recorded
 // stuck_throttle or stuck_api_timeouts and logged a forensic snapshot).
 func TestStuckCause(t *testing.T) {
-	datasettest.RequireJournal(t)
 	captureStderr(t)
 	for _, c := range []struct {
 		mode, want string
@@ -58,6 +58,7 @@ func TestStuckCause(t *testing.T) {
 			report := filepath.Join(t.TempDir(), "report.json")
 			args := append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "2",
 				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
+			args = append(args, unjournaled...)
 			if code := exitCode(t, run(context.Background(), args, io.Discard, false)); code != exitStuck {
 				t.Fatalf("exit %d, want %d", code, exitStuck)
 			}
@@ -83,7 +84,9 @@ func TestStuckCause(t *testing.T) {
 // outcome in error.json and the report (it wrote neither). The graceful
 // codes are TestExitCodes'.
 func TestForcedExitCode(t *testing.T) {
-	datasettest.RequireJournal(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("sends SIGTERM and SIGINT, which Windows cannot deliver to a process")
+	}
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}

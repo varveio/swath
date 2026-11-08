@@ -24,7 +24,7 @@ func listS3(t *testing.T, url, root, out, seedFrom string) (Report, error) {
 	t.Helper()
 	return Run(context.Background(), Config{Source: SourceConfig{URI: root, SeedFrom: seedFrom,
 		Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: true}}},
-		Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10, Workers: 8}})
+		Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}})
 }
 
 func manifestOf(t *testing.T, dir string) dataset.Manifest {
@@ -38,7 +38,6 @@ func manifestOf(t *testing.T, dir string) dataset.Manifest {
 // the same rows into the same parts, from tiles cut at the predecessor's
 // key pages (no delimiter seed request), and its report names the prior.
 func TestSeedFromDataset(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := fakeS3(t, 6000)
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")
@@ -72,7 +71,6 @@ func TestSeedFromDataset(t *testing.T) {
 // counts); one out of order, outside the scope, or mixing counted and
 // uncounted lines is refused before anything is listed.
 func TestSeedFromCutFile(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := fakeS3(t, 3000)
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -122,7 +120,6 @@ func TestSeedFromCutFile(t *testing.T) {
 // larger than 16 MiB, is refused before it is read into memory (ErrPrior,
 // nothing listed); one at the cut bound seeds the run.
 func TestSeedFromCutFileBounded(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := fakeS3(t, 300)
 	dir := t.TempDir()
 	cuts := func(n int) string {
@@ -167,7 +164,6 @@ func TestSeedFromCutFileBounded(t *testing.T) {
 // refused, so is the output directory itself and a source that does not
 // list in key ranges.
 func TestSeedFromIdentity(t *testing.T) {
-	datasettest.RequireJournal(t)
 	url := fakeS3(t, 2000)
 	dir := t.TempDir()
 	scoped := filepath.Join(dir, "scoped")

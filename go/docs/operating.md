@@ -27,8 +27,8 @@ checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI 
 git worktree may lack (`--version` then shows none).
 
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
-on linux/amd64, linux/arm64, macOS (arm64) and Windows (amd64) ([testing](testing.md)); measurements are from
-Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
+on linux/amd64, macOS (arm64) and Windows (amd64), and the `internal/listing` and `cmd/swath` race shards on
+linux/arm64 ([testing](testing.md)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
 `--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the

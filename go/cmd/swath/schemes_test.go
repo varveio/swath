@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -26,7 +25,6 @@ import (
 // the limiter on, no structure probes or floors; swath diag list -seed=false reaches the
 // selected provider, and swath list refuses it (a diagnostic flag).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
-	datasettest.RequireJournal(t)
 	keys := gcstest.Keys(3000)
 	s3url := s3test.Bucket(t, keys)
 	gcs := gcstest.Bucket(t, keys, 0)
@@ -55,6 +53,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		t.Helper()
 		var out bytes.Buffer
 		args = append(args, "--report-format", "json", "-o", filepath.Join(t.TempDir(), "ds"))
+		args = append(args, unjournaled...)
 		if err := run(context.Background(), args, &out, diag); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}

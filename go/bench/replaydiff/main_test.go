@@ -76,10 +76,11 @@ func TestDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 	rng := rand.New(rand.NewPCG(9, 9))
 	cases := s3Matrix(all, rng, o.maxPrefixes)
 	if runtime.GOOS == "windows" {
-		// The residual cases end with the server closing a connection that
-		// has unread input: Windows then resets it, which can discard the 400
-		// before the client reads it.
+		residual := slices.DeleteFunc(slices.Clone(cases), func(r request) bool { return r.Compare != "residual" })
 		cases = slices.DeleteFunc(cases, func(r request) bool { return r.Compare == "residual" })
+		t.Run("residual", func(t *testing.T) {
+			t.Skipf("%d residual cases not sent: they end with the server closing a connection that has unread input, which Windows resets, so the 400 can be lost before the client reads it", len(residual))
+		})
 	}
 	d.runCases("case", cases)
 	d.runWalks(s3Walks(all, []int{1, 7, 1000}, o.maxTop))

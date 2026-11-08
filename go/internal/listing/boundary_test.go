@@ -122,7 +122,7 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 	scriptMu.Lock()
 	scriptNext = p
 	scriptMu.Unlock()
-	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
+	return Run(context.Background(), Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()},
 		Limits: Limits{PartSize: 2 << 10, Workers: 4, RowBudget: 128 << 10, PartInterval: -1}})
 }
 
