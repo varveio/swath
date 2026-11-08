@@ -102,7 +102,7 @@ sustained throttling, use `--limiter=false --request-rate N` ([operating.md](ope
 `swath resume DIR` continues an S3 or GCS run after a signal, a crash, an OOM kill or a full disk. A local
 directory listing keeps no journal and starts over.
 
-- **Kept:** every published part, verified by size and MD5 before listing continues. Verification read
+- **Kept:** every published part, verified by size and SHA-256 before listing continues. Verification read
   247 to 376 MiB/s with a cold page cache and 511 MiB/s warm on a 4-vCPU VM
   ([measurements](measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
   minutes.

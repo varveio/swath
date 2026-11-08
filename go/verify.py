@@ -7,7 +7,7 @@ Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
 versions keys are nondecreasing within a part and strict across parts. Checks
 the manifest's SeekParquet members and key declaration, the swath extension,
 S3 version nullability, per-part GCS schemas, generation ordering, manifest row
-counts, byte-exact bounds, part MD5 digests and footer stamps. Optional reference-dir compares ordered
+counts, byte-exact bounds, part SHA-256 digests and footer stamps. Optional reference-dir compares ordered
 whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
 import base64
@@ -81,10 +81,10 @@ def main(out, reference=None):
           "manifest is SeekParquet format_version 0, draft_revision 1")
     members = {"format", "format_version", "draft_revision", "schema_id", "key", "parts", "extensions"}
     check(set(m) == members, f"manifest has exactly the SeekParquet members (extra: {sorted(set(m) - members)})")
-    check(all(set(f) == {"path", "rows", "bytes", "min_key_base64", "max_key_base64"} for f in m.get("parts", [])),
-          "parts have exactly path, rows, bytes and the base64 key bounds")
+    check(all(set(f) == {"path", "rows", "bytes", "min_key_base64", "max_key_base64", "sha256"} for f in m.get("parts", [])),
+          "parts have exactly path, rows, bytes, the base64 key bounds and sha256")
     ext = m.get("extensions", {}).get("swath", {})
-    for k in ("published_at", "source", "scope", "coverage", "part_md5"):
+    for k in ("published_at", "source", "scope", "coverage"):
         check(k in ext, f"extensions.swath has {k}")
     check(list(m.get("extensions", {})) == ["swath"], "extensions holds the swath namespace only")
     cov = ext.get("coverage", {})
@@ -210,9 +210,8 @@ def main(out, reference=None):
         check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: SeekParquet version, schema id, key")
         check(not [k for k in kv if k.startswith(("swath.", "seekparquet.")) and k not in want], "  no other swath.* or seekparquet.* stamps")
         with open(p, "rb") as part:
-            digest = hashlib.md5(part.read()).hexdigest()
-        md5s = ext.get("part_md5", [])
-        check(i < len(md5s) and md5s[i] == digest, "  part MD5 == extensions.swath.part_md5")
+            digest = hashlib.sha256(part.read()).hexdigest()
+        check(f.get("sha256") == digest, "  part SHA-256 == parts[].sha256")
     if reference is not None:
         from bench.diffds import compare
         result = compare(out, reference)

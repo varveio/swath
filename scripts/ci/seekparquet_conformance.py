@@ -7,8 +7,8 @@ usage: seekparquet_conformance.py --adapter CMD --reference CMD DATASET...
 
 For each dataset (a directory this build wrote), the reference adapter of the SeekParquet
 conformance suite (conformance/harness/reference_adapter.py: a full scan with pyarrow that checks
-every rule it can, page index and page bounds included) must validate it at the full and digest
-levels; then the indexed reader under test (CMD, an adapter speaking conformance/protocol.md, for
+every rule it can, page index and page bounds included) and the adapter under test (the seekparquet
+Go module's validator) must each validate it at the full and digest levels; then the indexed reader under test (CMD, an adapter speaking conformance/protocol.md, for
 example the seekparquet Go module's) must answer a set of range, lookup and delimited-listing
 requests, whole and paginated through their cursors, exactly as the reference adapter does. The
 requests start, end and list at keys taken from the dataset itself, groups of repeated keys
@@ -96,11 +96,14 @@ def check_dataset(path, adapter, reference, failures):
     def fail(what, got, want):
         failures.append(f"{path}: {what}: got {json.dumps(got)[:400]}, reference {json.dumps(want)[:400]}")
 
-    for level in ("full", "digest"):
-        report = reference.ask({"op": "validate", "dataset": path, "level": level})
-        results = {name: lvl.get("result") for name, lvl in report.get("levels", {}).items()}
-        if report.get("status") != "ok" or not results or set(results.values()) != {"complete"}:
-            failures.append(f"{path}: validate {level}: {json.dumps(report)}")
+    if not all(p.get("sha256") for p in manifest["parts"]):
+        failures.append(f"{path}: a part declares no sha256: the digest level would check nothing")
+    for who, label in ((reference, "reference"), (adapter, "adapter")):
+        for level in ("full", "digest"):
+            report = who.ask({"op": "validate", "dataset": path, "level": level})
+            results = {name: lvl.get("result") for name, lvl in report.get("levels", {}).items()}
+            if report.get("status") != "ok" or not results or set(results.values()) != {"complete"}:
+                failures.append(f"{path}: {label}: validate {level}: {json.dumps(report)}")
     for who in (adapter, reference):
         if (response := who.ask({"op": "open", "dataset": path})).get("status") != "ok":
             failures.append(f"{path}: open: {json.dumps(response)}")

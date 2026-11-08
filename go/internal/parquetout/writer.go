@@ -4,19 +4,14 @@
 package parquetout
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
-	"io"
 	"os"
-	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	pq "github.com/parquet-go/parquet-go"
+	seekparquet "github.com/varveio/seekparquet/go"
+	"github.com/varveio/seekparquet/go/write"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
@@ -24,15 +19,13 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 )
 
-// Served-layout geometry (Swath's sorted output).
+// Served-layout geometry (Swath's sorted output), passed to the module's
+// part writer; pageBufferBytes is its fixed page buffer, priced below.
 const (
 	pageRows        = 1024    // rows per page; the byte-target check runs at page boundaries
 	groupBytes      = 8 << 20 // row-group target, on the writer's size estimate
 	groupRows       = 1_000_000
-	dictionaryBytes = 8 << 10 // dictionary limit per column chunk
 	pageBufferBytes = 1 << 20 // parquet-go page buffer
-	writeBuffer     = 4096    // parquet-go output buffer
-	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
 )
 
 // EncoderBytes is the working set admitted per encoder of schema s: one
@@ -76,7 +69,8 @@ const unboundedKeyBytes = 4096
 //     (pageBufferBytes, grown to the page) and its wide values: the key
 //     about two and a half times over (the page being filled, its delta
 //     encoding), a column with Spec.MaxBytes four times (its dictionary
-//     attempt besides). One S3 writer at 1,024-byte keys measured 13 MiB,
+//     attempt besides). The module's page intake (WritePage) borrows the
+//     page's values from the rows and copies nothing. One S3 writer at 1,024-byte keys measured 13 MiB,
 //     four 15 each (19.5 priced); four filesystem writers at binary
 //     4,096-byte keys and link targets, 24 pages each, 170 MiB in all, and
 //     216 to 218 with 800 MB of rows live beside them (244 priced, 61
@@ -109,16 +103,10 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 	return writerBytes(maxKey, wide, columns) + stateBytes(page)
 }
 
-// exactBounds is the ColumnIndex bound length of every column: none, so
-// each page's bounds are its exact minimum and maximum. parquet-go shortens
-// a longer maximum by incrementing its last kept byte, and one whose kept
-// bytes are all 0xFF stays below the value it bounds: not a bound (Parquet,
-// SeekParquet RG-5). Only values over parquet-go's limit (keys and link
-// targets of local paths over 1,024 bytes as this writer set it) differ.
-func exactBounds([]string) int { return 0 }
-
 // Recipe identifies everything about the writer that decides a part's
-// bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
+// bytes apart from the build: the seekparquet module's part writer
+// (write.NewPart, at the version go.mod pins) on parquet-go v0.32.0, with
+// this schema binding and codec: v2 pages of 1,024 rows,
 // 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
 // SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
@@ -127,16 +115,17 @@ func exactBounds([]string) int { return 0 }
 // It is the resume identity's writer field: a resume refuses a journal
 // written under another recipe.
 //
-// Versions are separate: the dataset format (dataset.FormatVersion and
+// Versions are separate: the dataset format (seekparquet.FormatVersion and
 // DraftRevision), the logical schema (schema IDs), the private journal
 // (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
 const Recipe = "swath-go/parquet-r3"
 
-// createdBy is the footer's created_by: the tool, its module version and
-// its VCS revision, from the build itself (buildinfo, the linker's revision
-// included), the revision shortened to 12 hex digits.
-var createdBy, createdVersion, createdBuild = footerBuild(buildinfo.Read())
+// createdApp, createdVersion and createdBuild make the footer's
+// created_by: the tool, its module version and its VCS revision, from the
+// build itself (buildinfo, the linker's revision included), the revision
+// shortened to 12 hex digits.
+var createdApp, createdVersion, createdBuild = footerBuild(buildinfo.Read())
 
 func footerBuild(b buildinfo.Build) (app, version, rev string) {
 	rev, dirty := strings.CutSuffix(b.Revision, "-dirty")
@@ -149,38 +138,30 @@ func footerBuild(b buildinfo.Build) (app, version, rev string) {
 	return b.Tool, b.Version, rev
 }
 
-// creator is the created_by option: this build's, or raw verbatim. A
-// WriterConfig option sets only its non-zero fields.
-func creator(raw string) pq.WriterOption {
-	if raw == "" {
-		return pq.CreatedBy(createdBy, createdVersion, createdBuild)
-	}
-	return &pq.WriterConfig{CreatedBy: raw}
+// writer writes one sorted part through the module's part writer, a page
+// at a time (write.PartWriter.WritePage), which checks the key order
+// (strictly ascending, or with schema.Info.Groups nondecreasing).
+type writer[P any] struct {
+	schema *schema.Schema[P]
+	path   string
+	part   *write.PartWriter
+	fill   func(column int, values []pq.Value) // fillPage, bound once
+	capped []int                               // the columns with a Spec.MaxBytes, enforced as the key's cap is
+	page   []schema.Row[P]                     // the page being filled; the module borrows it during WritePage
+	closed bool
 }
 
-// writer writes one sorted part in strictly ascending key order.
-type writer[P any] struct {
-	schema    *schema.Schema[P]
-	columns   func() int // goroutines encoding one page's columns (>= 1), read per page
-	file      *os.File
-	out       *tracking
-	w         *pq.GenericWriter[any]
-	codec     *codec
-	capped    []int // the columns with a Spec.MaxBytes, enforced as the key's cap is
-	values    [][]pq.Value
-	page      []schema.Row[P]
-	rows      int64
-	groupRows int64
-	baseline  int64
-	minKey    string
-	maxKey    string
-	closed    bool
-}
+// partFile is a part's file as the module writes it: its writes and its
+// sync go through faults.
+type partFile struct{ *os.File }
+
+func (f partFile) Write(b []byte) (int, error) { return faults.Write(f.File, b) }
+func (f partFile) Sync() error                 { return faults.Sync(f.File) }
 
 // create opens path for a part, compressing with c (the router's, shared
-// by its writers; the writer does not close it). createdBy, if not empty, is the footer's created_by verbatim
-// instead of this build's (a reproduced claimed part's own,
-// Cut.CreatedBy).
+// by its writers; the writer does not close it). createdBy, if not empty,
+// is the footer's created_by verbatim instead of this build's (a
+// reproduced claimed part's own, Cut.CreatedBy).
 func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], c *codec, columns func() int, createdBy string) (*writer[P], error) {
 	if open == nil {
 		open = func(path string) (*os.File, error) {
@@ -191,52 +172,71 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	if err != nil {
 		return nil, fmt.Errorf("create part: %w", err)
 	}
-	opts := []pq.WriterOption{
-		nodeOf(s),
-		pq.Compression(c),
-		pq.DataPageVersion(2),
-		pq.DataPageStatistics(false),
-		pq.PageBufferSize(pageBufferBytes),
-		pq.WriteBufferSize(writeBuffer),
-		pq.MaxRowsPerRowGroup(groupRows),
-		pq.DictionaryMaxBytes(dictionaryBytes),
-		pq.ColumnIndexSizeLimit(exactBounds),
-		pq.DefaultEncodingFor(pq.ByteArray, &pq.RLEDictionary),
-		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
-		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
-		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
-		creator(createdBy),
-		pq.KeyValueMetadata(dataset.StampFormatVersion, strconv.Itoa(dataset.FormatVersion)),
-		pq.KeyValueMetadata(dataset.StampDraftRevision, strconv.Itoa(dataset.DraftRevision)),
-		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
-		pq.KeyValueMetadata(dataset.StampKeyColumn, dataset.KeyColumn),
-		pq.KeyValueMetadata(dataset.StampKeyUnique, strconv.FormatBool(!s.Info.Groups)),
-		// Standard Parquet sorting_columns on every row group (metadata only:
-		// rows arrive sorted; GenericWriter does not reorder them).
-		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending("key"))),
+	if createdBy == "" {
+		var cfg pq.WriterConfig
+		pq.CreatedBy(createdApp, createdVersion, createdBuild).ConfigureWriter(&cfg)
+		createdBy = cfg.CreatedBy
 	}
-	out := &tracking{w: faults.Writer(f), digest: md5.New()}
-	w := &writer[P]{
-		schema: s, columns: columns, file: f, out: out, codec: c,
-		w:    pq.NewGenericWriter[any](out, opts...),
-		page: make([]schema.Row[P], 0, pageRows),
+	part, err := write.NewPart(partFile{f}, nodeOf(s), write.PartOptions{
+		Key:      seekparquet.Key{Column: dataset.KeyColumn, Unique: !s.Info.Groups},
+		SchemaID: s.ID, Codec: c, CreatedBy: createdBy, ColumnWorkers: columns,
+		PageRows: pageRows, RowGroupBytes: groupBytes, RowGroupRows: groupRows,
+	})
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("create part: %w", err)
 	}
+	w := &writer[P]{schema: s, path: path, part: part, page: make([]schema.Row[P], 0, pageRows)}
+	w.fill = func(column int, values []pq.Value) { fillPage(s, w.page, column, values) }
 	for i := range s.Columns {
 		if s.Columns[i].MaxBytes > 0 && s.Columns[i].Str != nil {
 			w.capped = append(w.capped, i)
 		}
 	}
-	w.values = make([][]pq.Value, len(s.Columns)+1)
-	for i := range w.values {
-		w.values[i] = make([]pq.Value, pageRows)
-	}
-	w.baseline = w.w.Size()
 	return w, nil
 }
 
-// write appends one row; keys must be strictly ascending, or with
-// schema.Info.Groups nondecreasing (a key's group of rows).
-func (w *writer[P]) write(r *schema.Row[P]) error {
+// fillPage writes column of page into values (WritePage's fill): the key,
+// or schema column column-1.
+func fillPage[P any](s *schema.Schema[P], page []schema.Row[P], column int, values []pq.Value) {
+	if column == 0 {
+		fillKey(values, page)
+	} else {
+		fill(&s.Columns[column-1], column, values, page)
+	}
+}
+
+// write appends rows, after checking each against the schema's value
+// caps, writing each page as it fills.
+func (w *writer[P]) write(rows []schema.Row[P]) error {
+	for i := range rows {
+		if err := w.check(&rows[i]); err != nil {
+			return err
+		}
+		w.page = append(w.page, rows[i])
+		if len(w.page) == pageRows {
+			if err := w.flushPage(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// flushPage hands the buffered page to the module, which encodes it
+// before it returns; the page is reused after.
+func (w *writer[P]) flushPage() error {
+	if len(w.page) == 0 {
+		return nil
+	}
+	err := w.part.WritePage(len(w.page), w.fill)
+	clear(w.page) // drop the rows' strings: the provider's arenas
+	w.page = w.page[:0]
+	return err
+}
+
+// check enforces the key's cap and each capped column's.
+func (w *writer[P]) check(r *schema.Row[P]) error {
 	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
 		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
 	}
@@ -246,191 +246,37 @@ func (w *writer[P]) write(r *schema.Row[P]) error {
 			return fmt.Errorf("%w: %s of %.64q: %d bytes (limit %d)", schema.ErrValueTooLong, col.Name, r.Key, len(v), col.MaxBytes)
 		}
 	}
-	if w.rows > 0 && (r.Key < w.maxKey || r.Key == w.maxKey && !w.schema.Info.Groups) {
-		if w.schema.Info.Groups {
-			return fmt.Errorf("keys not ascending: %q after %q", r.Key, w.maxKey)
-		}
-		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)
-	}
-	if w.rows == 0 {
-		w.minKey = strings.Clone(r.Key) // outlives the part: do not pin the provider's arena
-	}
-	w.maxKey = r.Key
-	w.rows++
-	w.page = append(w.page, *r)
-	if len(w.page) == pageRows {
-		return w.flushPage()
-	}
 	return nil
 }
 
-func (w *writer[P]) flushPage() error {
-	if len(w.page) == 0 {
-		return nil
-	}
-	if err := w.encodePage(); err != nil {
-		return err
-	}
-	w.groupRows += int64(len(w.page))
-	w.page = w.page[:0]
-	if w.w.Size()-w.baseline >= groupBytes || w.groupRows >= groupRows {
-		return w.flushGroup()
-	}
-	return nil
-}
-
-// encodePage fills, writes and flushes every column of the buffered page.
-// parquet-go column writers are independent (own buffers and page state;
-// the shared pools and the codec are concurrency-safe), so several
-// goroutines may take columns; the bytes equal the serial result.
-func (w *writer[P]) encodePage() error {
-	cols := w.w.ColumnWriters()
-	if len(cols) != len(w.schema.Columns)+1 {
-		return fmt.Errorf("column count %d, schema has %d", len(cols), len(w.schema.Columns)+1)
-	}
-	one := func(c int) error {
-		vals := w.values[c][:len(w.page)]
-		if c == 0 {
-			fillKey(vals, w.page)
-		} else {
-			fill(&w.schema.Columns[c-1], c, vals, w.page)
-		}
-		return writeColumn(cols[c], vals)
-	}
-	g := min(w.columns(), len(cols))
-	if g <= 1 {
-		for c := range cols {
-			if err := one(c); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	var next atomic.Int32
-	errs := make([]error, len(cols))
-	var wg sync.WaitGroup
-	for range g {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for c := int(next.Add(1) - 1); c < len(cols); c = int(next.Add(1) - 1) {
-				errs[c] = one(c)
-			}
-		}()
-	}
-	wg.Wait()
-	return errors.Join(errs...)
-}
-
-func writeColumn(cw *pq.ColumnWriter, values []pq.Value) error {
-	for written := 0; written < len(values); {
-		end := written + min(writeQuantum, len(values)-written)
-		n, err := cw.WriteRowValues(values[written:end])
-		if err != nil {
-			return err
-		}
-		if n != end-written {
-			return io.ErrShortWrite
-		}
-		written = end
-	}
-	return cw.Flush()
-}
-
-func (w *writer[P]) flushGroup() error {
-	if w.groupRows == 0 {
-		return nil
-	}
-	if err := w.w.Flush(); err != nil {
-		return err
-	}
-	w.groupRows = 0
-	w.baseline = w.w.Size()
-	return nil
-}
-
-// close flushes, writes the footer, fsyncs and closes the file. Metadata is
-// returned only if all of that succeeded.
+// close seals the part: the last page and row group, the footer, the
+// file's sync and close. Metadata is returned only if all of that
+// succeeded.
 func (w *writer[P]) close() (dataset.Part, error) {
 	if w.closed {
 		return dataset.Part{}, errors.New("writer already closed")
 	}
 	w.closed = true
-	err := w.flushPage()
-	if err == nil {
-		err = w.flushGroup()
-	}
-	if err == nil {
-		err = w.w.Close()
-	}
-	if err == nil {
-		err = faults.Sync(w.file)
-	}
 	// The directory entry is made durable by the committer that claims
 	// the part for its record (listing), not here.
-	err = errors.Join(err, w.file.Close())
-	if err != nil {
-		return dataset.Part{}, fmt.Errorf("close %s: %w", w.file.Name(), err)
+	err := w.flushPage()
+	var info seekparquet.PartInfo
+	if err == nil {
+		info, err = w.part.Seal()
+	} else {
+		_ = w.part.Abort()
 	}
-	return dataset.Part{
-		Path: w.file.Name(), PartInfo: dataset.PartInfo{Rows: w.rows, Bytes: w.out.n,
-			MD5: hex.EncodeToString(w.out.digest.Sum(nil)), MinKey: dataset.Key(w.minKey), MaxKey: dataset.Key(strings.Clone(w.maxKey))},
-	}, nil
+	if err != nil {
+		return dataset.Part{}, fmt.Errorf("close %s: %w", w.path, err)
+	}
+	return dataset.Part{Path: w.path, PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
+		MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}, nil
 }
 
 // abort releases the writer without producing a part.
 func (w *writer[P]) abort() {
 	if !w.closed {
 		w.closed = true
-		_ = w.file.Close()
+		_ = w.part.Abort()
 	}
-}
-
-// tracking counts and hashes the bytes written.
-type tracking struct {
-	w      io.Writer
-	digest hash.Hash
-	n      int64
-}
-
-func (t *tracking) Write(p []byte) (int, error) {
-	n, err := t.w.Write(p)
-	if n > 0 {
-		_, _ = t.digest.Write(p[:n])
-		t.n += int64(n)
-	}
-	if n != len(p) && err == nil {
-		err = io.ErrShortWrite
-	}
-	return n, err
-}
-
-// Footer is what a part file's footer says about how it was written: its
-// row count, its columns in order (the key first) and its created_by.
-type Footer struct {
-	Rows      int64
-	Columns   []string
-	CreatedBy string
-}
-
-// ReadFooter reads a part file's footer. A resume reads it from a claimed
-// part to reproduce that part as it was written (Options.Cut): at the same
-// boundary, with the same columns and created_by, whichever build wrote
-// it. The byte comparison that follows decides, so a damaged footer can
-// only make that comparison fail. f is the part, opened by the caller
-// (recovery opens it through the output root).
-func ReadFooter(f *os.File) (Footer, error) {
-	st, err := f.Stat()
-	if err != nil {
-		return Footer{}, err
-	}
-	pf, err := pq.OpenFile(f, st.Size(), pq.SkipPageIndex(true), pq.SkipBloomFilters(true))
-	if err != nil {
-		return Footer{}, err
-	}
-	ft := Footer{Rows: pf.NumRows(), CreatedBy: pf.Metadata().CreatedBy}
-	for _, c := range pf.Schema().Fields() {
-		ft.Columns = append(ft.Columns, c.Name())
-	}
-	return ft, nil
 }

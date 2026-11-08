@@ -5,7 +5,7 @@ package listing
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"maps"
 	"os"
@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	pq "github.com/parquet-go/parquet-go"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
@@ -34,7 +36,7 @@ func checkContract(t *testing.T, out string) []string {
 	t.Helper()
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.SchemaID == "" || m.PublishedAt.IsZero() {
+	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.SchemaID == "" || m.PublishedAt.IsZero() {
 		t.Fatalf("manifest header %+v", m)
 	}
 	for _, gone := range []string{"_SUCCESS", "symlink.txt"} {
@@ -60,9 +62,9 @@ func checkContract(t *testing.T, out string) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sum := md5.Sum(b)
-		if int64(len(b)) != p.Bytes || hex.EncodeToString(sum[:]) != p.MD5 {
-			t.Fatalf("part %d: bytes or md5 differ from the manifest", i)
+		sum := sha256.Sum256(b)
+		if int64(len(b)) != p.Bytes || hex.EncodeToString(sum[:]) != p.SHA256 {
+			t.Fatalf("part %d: bytes or sha256 differ from the manifest", i)
 		}
 		f, err := os.Open(filepath.Join(out, p.Path))
 		if err != nil {
@@ -76,8 +78,8 @@ func checkContract(t *testing.T, out string) []string {
 		for _, e := range pf.Metadata().KeyValueMetadata {
 			kv[e.Key] = e.Value
 		}
-		want := map[string]string{dataset.StampFormatVersion: strconv.Itoa(dataset.FormatVersion), dataset.StampDraftRevision: strconv.Itoa(dataset.DraftRevision),
-			dataset.StampSchema: m.SchemaID, dataset.StampKeyColumn: m.Key.Column, dataset.StampKeyUnique: strconv.FormatBool(m.Key.Unique)}
+		want := map[string]string{seekparquet.StampFormatVersion: strconv.FormatInt(seekparquet.FormatVersion, 10), seekparquet.StampDraftRevision: strconv.FormatInt(seekparquet.DraftRevision, 10),
+			seekparquet.StampSchemaID: m.SchemaID, seekparquet.StampKeyColumn: m.Key.Column, seekparquet.StampKeyUnique: strconv.FormatBool(m.Key.Unique)}
 		if !m.Current() || m.Key.Column != dataset.KeyColumn {
 			t.Fatalf("manifest %s %d draft %d, key %+v", m.Format, m.FormatVersion, m.DraftRevision, m.Key)
 		}

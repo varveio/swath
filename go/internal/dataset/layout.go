@@ -8,23 +8,23 @@
 package dataset
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// Format identifies the dataset format in the manifest and the footers: a
-// SeekParquet dataset (format 1, draft revision 1, stamped format_version
-// 0), keyed by KeyColumn. swath's own metadata (what was listed, how much
-// of it, the parts' MD5 digests) is the manifest's Extension.
+// A dataset is a SeekParquet dataset (the seekparquet module's Format,
+// FormatVersion and DraftRevision, its footer stamps and its manifest),
+// keyed by KeyColumn. swath's own metadata (what was listed, how much of
+// it, the parts' digests) is the manifest's Extension.
 const (
-	Format        = "seekparquet"
-	FormatVersion = 0
-	DraftRevision = 1
-	KeyColumn     = "key"
-	Extension     = "swath"
+	KeyColumn = "key"
+	Extension = "swath"
 )
 
 // LegacyFormat is the swath-dataset format 2 earlier builds wrote: still
@@ -38,7 +38,7 @@ const (
 // File and directory names inside a dataset.
 const (
 	DataDir      = "data"
-	ManifestName = "manifest.json"
+	ManifestName = seekparquet.ManifestName
 	// ReportName is the run report, operational, written after the commit.
 	ReportName = "run.json"
 	// ErrorName is the outcome of a run that did not complete (class, exit
@@ -60,18 +60,6 @@ const (
 	SuspectDir = "suspect"
 )
 
-// Footer key/value stamps on every part (SeekParquet STAMP-1): they repeat
-// the manifest's version, schema id and key declaration. Order within a
-// part is the standard sorting_columns; order across parts, bounds and
-// completeness are the manifest's.
-const (
-	StampFormatVersion = "seekparquet.format_version" // FormatVersion
-	StampDraftRevision = "seekparquet.draft_revision" // DraftRevision
-	StampSchema        = "seekparquet.schema_id"
-	StampKeyColumn     = "seekparquet.key_column" // KeyColumn
-	StampKeyUnique     = "seekparquet.key_unique" // "true", "false" with repeated keys
-)
-
 // PartName is the published name of part ordinal i: dense, zero-based,
 // five digits (%05d), so a dataset holds at most MaxParts parts and name
 // order is ordinal order, which is key order. Code still compares ordinals
@@ -83,6 +71,19 @@ func PartName(i int) string { return fmt.Sprintf("part-%05d.parquet", i) }
 // five digits of PartName. The router refuses to open another
 // (ErrPartLimit).
 const MaxParts = 100_000
+
+// ManifestLimits bound what swath's readers (show, --seed-from) accept of
+// a manifest (seekparquet.ParseManifest), so that every dataset swath can
+// write reads back: MaxParts parts, each priced at manifestKeyBytes for
+// both bounds (base64) plus 1 KiB for the rest of its entry, and 1 MiB for
+// the rest of the manifest. About 1.1 GiB: the module's default, 64 MiB,
+// refuses 30,000 parts of 1,024-byte keys.
+var ManifestLimits = seekparquet.Limits{Parts: MaxParts,
+	ManifestBytes: MaxParts*(2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes))+1<<10) + 1<<20}
+
+// manifestKeyBytes is the longest key ManifestLimits provides for: the
+// object stores' 1,024-byte cap, and a local path at Linux's PATH_MAX.
+const manifestKeyBytes = 4096
 
 // ErrPartLimit: the run would open part MaxParts, past the five-digit
 // ordinals a dataset has. Every earlier part is published first. The part
