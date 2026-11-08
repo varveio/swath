@@ -284,7 +284,7 @@ func testHooks() {
 	}
 	killAt := os.Getenv("SWATH_TEST_KILL_AT")
 	killed := func() {
-		fmt.Fprintln(os.Stderr, killMarker(killAt)) // the harness tells this kill from its own
+		fmt.Fprintln(os.Stderr, killMarker(os.Getenv("SWATH_TEST_KILL_ID"), killAt)) // the harness tells this kill from its own
 		kill()
 	}
 	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })} {
@@ -303,11 +303,10 @@ func testHooks() {
 	})
 }
 
-// killMarker is the line SWATH_TEST_KILL_AT=spec writes to stderr just
-// before the process kills itself.
-func killMarker(spec string) string {
-	return "swath: test hook: SWATH_TEST_KILL_AT=" + spec + " reached"
-}
+// killMarker is the line SWATH_TEST_KILL_AT=spec writes to stderr, a line
+// of its own, just before the process kills itself: id is the harness's
+// attempt (SWATH_TEST_KILL_ID), so the line names this attempt and point.
+func killMarker(id, spec string) string { return "swath-test-kill " + id + " " + spec }
 
 // atNth is a hook running act the n-th time the process reaches point,
 // for spec "point:n" (nil for another spec).
