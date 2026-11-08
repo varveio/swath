@@ -367,17 +367,31 @@ func (p *Engine[P]) seedFirst(ctx context.Context, nodes []seedNode, b *seedBudg
 func (p *Engine[P]) seedEmit(page *Page[P], start, after string, e source.Emitter[Range, P]) (int, error) {
 	rows := page.Rows
 	c := start
+	if p.d.Groups {
+		// Not truncated: every group on the page is complete.
+		if _, _, err := p.groupOrder(rows, start, false, start, "", true); err != nil {
+			return 0, err
+		}
+		rows = nil
+	}
 	for i := range rows {
 		if (c != "" || i > 0) && rows[i].Key <= c {
 			return 0, fmt.Errorf("%w: listing out of order in (%q, ⊤]: %q after %q", p.d.invalid(), start, rows[i].Key, c)
 		}
 		c = rows[i].Key
 	}
+	rows = page.Rows
 	skip := 0
 	for skip < len(rows) && after != "" && rows[skip].Key <= after {
 		skip++
 	}
 	rows = rows[skip:]
+	if p.d.Groups && skip > 0 && p.d.Detach != nil {
+		rows = p.d.Detach(rows)
+	}
+	if p.d.Groups {
+		p.measureGroups(rows, "", false, 0)
+	}
 	if len(rows) > 0 {
 		if err := p.emit(rows, e); err != nil {
 			return 0, err

@@ -178,7 +178,9 @@ func Compile[P any](s *Spec, sc *schema.Schema[P]) (func(*schema.Row[P]) bool, e
 			return false
 		}
 		if hasSize {
-			if v, _ := size(&r.Data); v < minS || v > maxS {
+			// An absent size (a delete marker's) is no size: it is
+			// neither below nor within a bound, so it never matches.
+			if v, ok := size(&r.Data); !ok || v < minS || v > maxS {
 				return false
 			}
 		}

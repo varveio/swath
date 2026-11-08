@@ -1,0 +1,59 @@
+{
+  "nextPageToken": "ChFHUkNtMzkvUkVBRE1FLnR4dBCF84+1rdH4Ag==",
+  "items": [
+    {
+      "name": "GRCm39/GCF_000001635.27_GRCm39_genomic.fna",
+      "generation": "1656460819096198",
+      "metageneration": "1",
+      "contentType": "application/octet-stream",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "2762330512",
+      "md5Hash": "37S+d8IDG4eEjA3oGXY7kA==",
+      "crc32c": "xwF9Jw==",
+      "etag": "CIbF07Wt0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:19.142Z",
+      "updated": "2022-06-29T00:00:19.142Z",
+      "timeDeleted": "2022-06-29T00:00:22.131Z"
+    },
+    {
+      "name": "GRCm39/GCF_000001635.27_GRCm39_genomic.fna",
+      "generation": "1656460822036957",
+      "metageneration": "1",
+      "contentType": "application/octet-stream",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "2762330512",
+      "md5Hash": "37S+d8IDG4eEjA3oGXY7kA==",
+      "crc32c": "xwF9Jw==",
+      "etag": "CN2Dh7et0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:22.131Z",
+      "updated": "2022-06-29T00:00:22.131Z"
+    },
+    {
+      "name": "GRCm39/GRCm39.primary_assembly.genome.fa.gz",
+      "generation": "1688688028207237",
+      "metageneration": "1",
+      "contentType": "application/octet-stream",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "773873008",
+      "md5Hash": "6pIZLDedfUiVxKgVfmKKhQ==",
+      "crc32c": "ZbiQSQ==",
+      "etag": "CIWRu5Cl+/8CEAE=",
+      "timeCreated": "2023-07-07T00:00:28.244Z",
+      "updated": "2023-07-07T00:00:28.244Z"
+    },
+    {
+      "name": "GRCm39/README.txt",
+      "generation": "1656460817987973",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "39",
+      "md5Hash": "SgDyj6/m+3n32nNFxGjUHQ==",
+      "crc32c": "qgvUGw==",
+      "etag": "CIXzj7Wt0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:18.008Z",
+      "updated": "2022-06-29T00:00:18.008Z",
+      "timeDeleted": "2022-06-29T00:00:19.506Z"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "schema_id": "swath/s3-versions/v1",
+  "rows": [
+    {
+      "key": "k",
+      "size": 0,
+      "last_modified": 100,
+      "etag": "e",
+      "storage_class": "STANDARD",
+      "owner_id": "owner",
+      "owner_display_name": null,
+      "checksum_algorithm": null,
+      "checksum_type": null,
+      "version_id": "null",
+      "is_latest": true,
+      "is_delete_marker": false
+    },
+    {
+      "key": "k",
+      "size": null,
+      "last_modified": 90,
+      "etag": null,
+      "storage_class": null,
+      "owner_id": "owner",
+      "owner_display_name": null,
+      "checksum_algorithm": null,
+      "checksum_type": null,
+      "version_id": "marker",
+      "is_latest": false,
+      "is_delete_marker": true
+    },
+    {
+      "key": "k",
+      "size": 3,
+      "last_modified": 80,
+      "etag": "old",
+      "storage_class": "STANDARD",
+      "owner_id": null,
+      "owner_display_name": null,
+      "checksum_algorithm": null,
+      "checksum_type": null,
+      "version_id": "old",
+      "is_latest": false,
+      "is_delete_marker": false
+    },
+    {
+      "key": "z",
+      "size": null,
+      "last_modified": 70,
+      "etag": null,
+      "storage_class": null,
+      "owner_id": null,
+      "owner_display_name": null,
+      "checksum_algorithm": null,
+      "checksum_type": null,
+      "version_id": "null",
+      "is_latest": true,
+      "is_delete_marker": true
+    }
+  ]
+}

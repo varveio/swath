@@ -69,9 +69,12 @@ type Options struct {
 	Timeout      time.Duration // per request; default 30 s
 	Warn         func(string)  // one-time warnings for the user; may be nil
 	FetchOwner   bool
-	Workers      int     // parallel: the order stage's worker count (split demand)
-	Client       API     // optional; built from the options above when nil
-	Resume       *Resume // continue after a journaled run's last published key
+	// AllVersions lists every version and delete marker
+	// (ListObjectVersions, NewVersions) instead of the current objects.
+	AllVersions bool
+	Workers     int     // parallel: the order stage's worker count (split demand)
+	Client      API     // optional; built from the options above when nil
+	Resume      *Resume // continue after a journaled run's last published key
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -99,7 +102,7 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 
 // Faults are the throttle answers and attempt timeouts so far
 // (source.Faulted); 0 for a supplied client that does not count them.
-func (p *Provider) Faults() (throttles, timeouts int64) {
+func (p *provider[P]) Faults() (throttles, timeouts int64) {
 	if c, ok := p.client.(counted); ok {
 		n := c.Counters()
 		return n.Throttles, n.Timeouts
@@ -109,7 +112,7 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 
 // Requests is the client's live request account (source.Requested); zero
 // for a supplied client that does not count it.
-func (p *Provider) Requests() source.Requests {
+func (p *provider[P]) Requests() source.Requests {
 	if c, ok := p.client.(live); ok {
 		l := c.Live()
 		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
@@ -120,7 +123,7 @@ func (p *Provider) Requests() source.Requests {
 
 // Answered is the requests the service answered usably (source.Live); 0
 // for a supplied client that does not count them.
-func (p *Provider) Answered() int64 {
+func (p *provider[P]) Answered() int64 {
 	if c, ok := p.client.(answering); ok {
 		return c.Answered()
 	}
@@ -144,8 +147,16 @@ func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 
 // Provider lists one bucket (or prefix) on the range engine. It implements
 // source.Provider[Range, Object].
-type Provider struct {
-	*keyrange.Engine[Object]
+type Provider = provider[Object]
+
+// VersionsProvider is the versions listing (Options.AllVersions):
+// ListObjectVersions, rows of schema swath/s3-versions/v1.
+type VersionsProvider = provider[Version]
+
+// provider is an S3 listing with payload P: the client and the range
+// engine over one of its list calls.
+type provider[P any] struct {
+	*keyrange.Engine[P]
 	opt       Options
 	client    API
 	anonymous bool
@@ -157,52 +168,27 @@ type Provider struct {
 // Range is the engine's unit of listing work.
 type Range = keyrange.Range
 
-var _ source.Provider[Range, Object] = (*Provider)(nil)
+var (
+	_ source.Provider[Range, Object]  = (*Provider)(nil)
+	_ source.Provider[Range, Version] = (*VersionsProvider)(nil)
+)
+
+// VersionsAPI is the client of a versions listing.
+type VersionsAPI interface {
+	ListObjectVersions(ctx context.Context, in *client.VersionsInput) (*client.VersionPage, error)
+}
 
 // New builds the client (see package client for credentials and retries)
-// unless Options.Client supplies one.
+// unless Options.Client supplies one, and lists the current objects.
 func New(ctx context.Context, opt Options) (*Provider, error) {
-	if opt.Bucket == "" {
-		return nil, errors.New("no bucket")
+	if opt.AllVersions {
+		return nil, errors.New("s3: Options.AllVersions lists versions: use NewVersions")
 	}
-	if strings.HasSuffix(opt.Bucket, "--x-s3") {
-		// Refused before any request, as Java: a directory bucket lists in
-		// no lexicographic order, which the range engine relies on.
-		return nil, source.Unsupported(fmt.Errorf("S3 directory bucket %q (Express One Zone) is not supported: swath requires the "+
-			"lexicographic listing order of a general-purpose S3 bucket; use a general-purpose bucket", opt.Bucket))
+	p, own, err := connect[Object](ctx, opt)
+	if err != nil {
+		return nil, err
 	}
-	p := &Provider{opt: opt, client: opt.Client}
-	own := p.client == nil
-	if own {
-		lim, rate := opt.Admission.New(opt.Workers)
-		cc := client.Config{Limiter: lim, Rate: rate,
-			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
-			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
-		}
-		if opt.BearerCommand != "" {
-			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
-		}
-		c, err := client.New(ctx, cc)
-		if err != nil {
-			return nil, fmt.Errorf("S3 client: %w", err)
-		}
-		if n := c.Note(); n != "" && opt.Warn != nil {
-			opt.Warn(n)
-		}
-		p.client, p.region = c, c.Region()
-		p.creds, p.anonymous = c.Credentials()
-	}
-	if r, ok := p.client.(Routed); ok {
-		p.route = r.Route(opt.Bucket)
-	}
-	var resume *keyrange.Resume
-	if opt.Resume != nil {
-		resume = &keyrange.Resume{After: opt.Resume.After}
-	}
-	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume = opt.Prefix, opt.Workers, resume
-	eo.ClientOff = opt.Admission.Off(own)
-	e, err := keyrange.New(eo, keyrange.Description[Object]{
+	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
@@ -216,6 +202,90 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	}
 	p.Engine = e
 	return p, nil
+}
+
+// NewVersions is New for a versions listing (ListObjectVersions): every
+// version and delete marker, a key's entries consecutive, newest first.
+// The client must implement VersionsAPI.
+func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
+	opt.AllVersions = true
+	p, own, err := connect[Version](ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+	api, ok := p.client.(VersionsAPI)
+	if !ok {
+		return nil, fmt.Errorf("s3: the client (%T) cannot list versions", p.client)
+	}
+	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Version]{
+		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
+		Listing:     keyrange.Listing,
+		AcceptBound: AcceptBound,
+		Requeue:     requeue,
+		InvalidPage: client.ErrInvalidPage,
+		Groups:      VersionsSchema.Groups,
+		Detach:      VersionsSchema.Detach,
+		Size:        func(v *Version) int64 { return v.Size },
+		Counters:    clientCounters,
+	}, func(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Version], error) {
+		return p.fetchVersions(ctx, api, q)
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.Engine = e
+	return p, nil
+}
+
+// connect builds the client unless Options.Client supplies one (own).
+func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error) {
+	if opt.Bucket == "" {
+		return nil, false, errors.New("no bucket")
+	}
+	if strings.HasSuffix(opt.Bucket, "--x-s3") {
+		// Refused before any request, as Java: a directory bucket lists in
+		// no lexicographic order, which the range engine relies on.
+		return nil, false, source.Unsupported(fmt.Errorf("S3 directory bucket %q (Express One Zone) is not supported: swath requires the "+
+			"lexicographic listing order of a general-purpose S3 bucket; use a general-purpose bucket", opt.Bucket))
+	}
+	p := &provider[P]{opt: opt, client: opt.Client}
+	own := p.client == nil
+	if own {
+		lim, rate := opt.Admission.New(opt.Workers)
+		cc := client.Config{Limiter: lim, Rate: rate,
+			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
+			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
+		}
+		if opt.BearerCommand != "" {
+			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
+		}
+		c, err := client.New(ctx, cc)
+		if err != nil {
+			return nil, false, fmt.Errorf("S3 client: %w", err)
+		}
+		if n := c.Note(); n != "" && opt.Warn != nil {
+			opt.Warn(n)
+		}
+		p.client, p.region = c, c.Region()
+		p.creds, p.anonymous = c.Credentials()
+	}
+	if r, ok := p.client.(Routed); ok {
+		p.route = r.Route(opt.Bucket)
+	}
+	return p, own, nil
+}
+
+// engineOptions is the range engine's options for p.
+func (p *provider[P]) engineOptions(own bool) keyrange.Options {
+	opt := p.opt
+	var resume *keyrange.Resume
+	if opt.Resume != nil {
+		resume = &keyrange.Resume{After: opt.Resume.After}
+	}
+	eo := opt.Policy.Options()
+	eo.Prefix, eo.Workers, eo.Resume = opt.Prefix, opt.Workers, resume
+	eo.ClientOff = opt.Admission.Off(own)
+	return eo
 }
 
 // AcceptBound is S3's bound policy: the pivot alphabet, and '%' where a
@@ -233,13 +303,13 @@ func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 var requeue = objhttp.Requeue(client.Classify)
 
 // Restart continues after the last published key.
-func (p *Provider) Restart(after string) {
+func (p *provider[P]) Restart(after string) {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
 }
 
 // Stats returns the counters so far.
-func (p *Provider) Stats() Stats {
+func (p *provider[P]) Stats() Stats {
 	if c, ok := p.client.(counted); ok {
 		c.Counters().Store(p.Set(), p.ID(0))
 	}
@@ -251,7 +321,7 @@ func (p *Provider) Stats() Stats {
 // exclusive and there is no end bound, so the engine trims at hi. A
 // continuation token carries the chain's start, so start-after is sent on
 // the first request only.
-func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
+func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
 	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
 		ContinuationToken: q.Token, MaxKeys: q.Max, FetchOwner: p.opt.FetchOwner && !q.Probe}
 	if q.Token == "" {
@@ -267,7 +337,7 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 
 // rows converts a page's objects to rows (Swath's mapping). Rows share
 // the page's strings.
-func (p *Provider) rows(out *client.Page) []Row {
+func (p *provider[P]) rows(out *client.Page) []Row {
 	rows := make([]Row, len(out.Contents))
 	for i := range out.Contents {
 		o, r := &out.Contents[i], &rows[i]

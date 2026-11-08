@@ -101,6 +101,8 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
   --gcs-anonymous
@@ -231,6 +233,8 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
   --gcs-anonymous
@@ -333,6 +337,8 @@ Diagnostics:
         ranges: list with one continuation-token chain (no ranges; the reference)
   --max-keys N
         ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
+  --page-size N
+        ranges: ask the service for pages of N entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes
   --limiter-slow-start
         requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
   --spill-plain
@@ -703,6 +709,16 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`).
 
+For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
+rows after filtering at the order stage's handoff (swath count: validated, counted rows).
+`versions` excludes S3 delete markers; S3 also reports `delete_markers`, with
+`rows_emitted` = `versions` + `delete_markers`. GCS reports `noncurrent` among its
+`versions`, with `versions` = `noncurrent` + `live_objects`. A live S3 object has
+`is_latest` true and `is_delete_marker` false; a live GCS generation has null
+`time_deleted`. Zero counts are present. Retained resume rows, held tails, relisting,
+and raw overfetch are excluded. `distinct_keys` comes from `order.Stats.DistinctKeys`
+and excludes pending batches that never reached the sink, including on a failed run.
+
 **Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
 is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,
 `throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,
@@ -736,7 +752,7 @@ drain: its tail once listing is done, and the drainer's times over the whole run
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
-`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`); and `encoders_at_start`, `encoders_after_listing`,
+`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`, `deferred_rows`); and `encoders_at_start`, `encoders_after_listing`,
 `encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one

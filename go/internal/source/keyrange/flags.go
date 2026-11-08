@@ -20,6 +20,7 @@ type Policy struct {
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	Floors     bool      // the gate-chain floors (off by default)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
+	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -28,12 +29,16 @@ type Policy struct {
 type Common struct {
 	Policy    Policy
 	Admission objhttp.Admission
+	// AllVersions lists every version of every key (--all-versions): S3
+	// versions and delete markers, GCS generations, in the providers'
+	// versions schemas.
+	AllVersions bool
 }
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Floors: p.Floors, SlowSplit: p.SlowSplit}
+		MaxKeys: p.MaxKeys, Floors: p.Floors, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
 }
 
 // FlagGroup names the engine's flag group (registry.Factory.Shared).
@@ -57,6 +62,7 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
 	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them")
+	f.BoolVar(&c.AllVersions, "all-versions", false, "list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
 	if diag {
 		f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too")
@@ -65,6 +71,14 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 		f.BoolVar(&p.SlowSplit, "slow-split", p.SlowSplit, "ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
+		f.Func("page-size", "ranges: ask the service for pages of `N` entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes", func(v string) error {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > PageKeys {
+				return fmt.Errorf("want 1 to %d", PageKeys)
+			}
+			p.PageSize = n
+			return nil
+		})
 		f.Int64Var(&p.MaxKeys, "max-keys", p.MaxKeys, "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}
 	return c
