@@ -31,6 +31,7 @@ import (
 	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
 
@@ -124,8 +125,7 @@ func main() {
 			exitAfterGrace(code, sig.String())
 		}
 	}()
-	killAt(os.Getenv("SWATH_TEST_KILL_AT"), kill)
-	killAt(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })
+	testHooks()
 	err := dispatch(ctx, os.Args[1:], os.Stdout)
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return
@@ -272,26 +272,79 @@ SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]. swath
 `)
 }
 
-// killAt is a test hook: "point:n" runs act (SWATH_TEST_KILL_AT: the
-// process SIGKILLs itself; SWATH_TEST_HANG_AT: the goroutine blocks
-// forever, as on stuck I/O) the n-th time the process reaches crash point
-// point (package faults).
-func killAt(spec string, act func()) {
-	point, n, ok := strings.Cut(spec, ":")
-	if !ok {
+// testHooks installs the crash-point test hooks the environment asks for,
+// in this order: SWATH_TEST_SERIAL_SEALS (serialSeals), then
+// SWATH_TEST_KILL_AT (the process SIGKILLs itself) and SWATH_TEST_HANG_AT
+// (the goroutine blocks forever, as on stuck I/O), each "point:n": the
+// n-th time the process reaches crash point point (package faults).
+func testHooks() {
+	var hooks []func(string)
+	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
+		hooks = append(hooks, serialSeals())
+	}
+	for _, h := range []func(string){atNth(os.Getenv("SWATH_TEST_KILL_AT"), kill), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })} {
+		if h != nil {
+			hooks = append(hooks, h)
+		}
+	}
+	if len(hooks) == 0 {
 		return
 	}
-	nth, err := strconv.ParseInt(n, 10, 64)
-	if err != nil {
-		return
-	}
-	var seen atomic.Int64
 	faults.Set(func(p string) error {
-		if p == point && seen.Add(1) == nth {
-			act()
+		for _, h := range hooks {
+			h(p)
 		}
 		return nil
 	})
+}
+
+// atNth is a hook running act the n-th time the process reaches point,
+// for spec "point:n" (nil for another spec).
+func atNth(spec string, act func()) func(string) {
+	point, n, ok := strings.Cut(spec, ":")
+	if !ok {
+		return nil
+	}
+	nth, err := strconv.ParseInt(n, 10, 64)
+	if err != nil {
+		return nil
+	}
+	var seen atomic.Int64
+	return func(p string) {
+		if p == point && seen.Add(1) == nth {
+			act()
+		}
+	}
+}
+
+// serialSeals is SWATH_TEST_SERIAL_SEALS, the real-process ledger barrier
+// (cmd/swath's SIGKILL matrix): each durable seal waits at its crash point
+// until the flusher has taken every earlier seal's record in a cycle of
+// its own (order's "cycle-records" events), so seal n's record is the
+// n-th ledger append and the matrix's fourth-cycle arms are reached by
+// construction, not by how the seals fell in the flusher's 100 ms
+// windows. A wait over 10 s gives up, and the arm it served then fails as
+// unreached (the same gate as listing's in-process sealGate).
+func serialSeals() func(string) {
+	var cycles atomic.Int64
+	order.SetDurableEvents(func(e string) {
+		if e == "cycle-records" {
+			cycles.Add(1)
+		}
+	})
+	var mu sync.Mutex
+	var seals int64 // seals past their crash point (mu)
+	return func(p string) {
+		if p != "spill-seal" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		for deadline := time.Now().Add(10 * time.Second); cycles.Load() < seals && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		seals++
+	}
 }
 
 type options struct {
