@@ -708,7 +708,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 | foreign | `order` `TestDurableCorruption` (another run's file renamed into a recorded ID) |
 | compression | `listing` `TestDurableCompressionFlip` |
 | versions | `listing` `TestDurableVersions` |
-| repeated keys (`--all-versions`) | `listing` `TestVersionsDurableSpill` (hot keys, a page boundary inside a group; killed at a seal, a ledger append, an unlink, a part claim with K inside a live certificate (asserted, not only logged), and mid recovery replay; byte-identical, no fresh request or continuation inside a live certificate; the frontier held by a gate the run's own events release, not by time); `source/keyrange` `TestGroupsFencesAtCompleteKeys` (fences only at complete keys) |
+| repeated keys (`--all-versions`) | `listing` `TestVersionsDurableSpill` (hot keys, a page boundary inside a group; killed at a seal, a ledger append, an unlink, a part claim with K inside a live certificate (required: a kill that leaves K outside every certificate, 5 of 160 under `-race`, is repeated on a fresh output up to six times, then fails), and mid recovery replay; byte-identical, no fresh request or continuation inside a live certificate; the frontier held by a gate the run's own events release, not by time); `source/keyrange` `TestGroupsFencesAtCompleteKeys` (fences only at complete keys) |
 | exclusion | `listing` `TestDurableOverwrite`; a second process: the output lock's tests, not durable-specific |
 | changed source | `listing` `TestDurableChangedSource` |
 | a prior (`--seed-from`) on a resume with certificates (not a §6 row; the contract's priors rule) | `keyrange` `TestPriorTilesOnlyGaps`; campaign `seed-from` |

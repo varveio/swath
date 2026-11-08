@@ -274,36 +274,23 @@ func TestVersionsDurableSpill(t *testing.T) {
 			name += "+" + kill.resumeKill
 		}
 		t.Run(name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "ds")
-			crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
-			if kill.point == "journal-append" {
-				st, err := journal.Read(out)
-				if err != nil {
-					t.Fatal(err)
+			// The journal-append case's point: the claimed part after K
+			// starts inside a live certificate, so the resume reproduces it
+			// from replayed rows and listed ones together. Which ranges have
+			// sealed at the twelfth record is the schedule's (5 of 160 kills
+			// left K outside every certificate under -race on CI), so a run
+			// that misses is killed again on a fresh output, at most
+			// six times, and one that never covers K fails: the case never
+			// passes on listed rows alone.
+			var out string
+			for attempt := 1; ; attempt++ {
+				out = filepath.Join(t.TempDir(), "ds")
+				crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
+				if kill.point != "journal-append" || claimInsideCert(t, out) {
+					break
 				}
-				n := 0
-				for _, r := range st.Records {
-					if r.Type == "part" {
-						n++
-					}
-				}
-				if _, err := os.Stat(dataset.ClaimPath(out, n)); err != nil {
-					t.Fatalf("no claimed part %d to reproduce: %v", n, err)
-				}
-				// The case's point: the claimed part after K starts inside
-				// a live certificate, so the resume reproduces it from
-				// replayed rows and listed ones together. A schedule that
-				// leaves K outside every certificate fails here instead of
-				// passing on listed rows alone.
-				k, inside := versionsK(t, out), false
-				for _, c := range liveVersionCerts(t, out) {
-					if c.cs <= k && (c.open || k < c.ce) {
-						inside = true
-						t.Logf("the claimed part after K %q starts inside the certificate (%q, %q]: replayed", k, c.cs, c.ce)
-					}
-				}
-				if !inside {
-					t.Fatalf("K %q is inside no live certificate: the claimed part would be reproduced from listed rows alone", k)
+				if attempt == 6 {
+					t.Fatalf("K %q is inside no live certificate after %d kills", versionsK(t, out), attempt)
 				}
 			}
 			if kill.resumeKill != "" {
@@ -344,6 +331,35 @@ func TestVersionsDurableSpill(t *testing.T) {
 			}
 		})
 	}
+}
+
+// claimInsideCert reports whether out, killed at a journal append, has a
+// claimed part to reproduce (failing if not) whose start, after K, lies
+// inside a live certificate.
+func claimInsideCert(t *testing.T, out string) bool {
+	t.Helper()
+	st, err := journal.Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range st.Records {
+		if r.Type == "part" {
+			n++
+		}
+	}
+	if _, err := os.Stat(dataset.ClaimPath(out, n)); err != nil {
+		t.Fatalf("no claimed part %d to reproduce: %v", n, err)
+	}
+	k := versionsK(t, out)
+	for _, c := range liveVersionCerts(t, out) {
+		if c.cs <= k && (c.open || k < c.ce) {
+			t.Logf("the claimed part after K %q starts inside the certificate (%q, %q]: replayed", k, c.cs, c.ce)
+			return true
+		}
+	}
+	t.Logf("K %q is inside no live certificate: killed again", k)
+	return false
 }
 
 // versionsK is the last key of the last part the journal in out records.
