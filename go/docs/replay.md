@@ -1066,11 +1066,12 @@ directory and serves that.
 
 ## Continuous integration
 
-Two jobs of `.github/workflows/ci.yml` cover the Go port. Each always runs and does its work only when its
-inputs changed (or on a manual run); `ci-gate` needs both.
+The Go jobs of `.github/workflows/ci.yml` each always run and do their work only when their inputs changed
+(or on a manual run); `ci-gate` needs all of them. `go-lint`, `go-race` and `go-nonrace` are the tests
+([testing.md](testing.md)); two concern the replay:
 
-- `go` (inputs: `go/`, the workflow, `Dockerfile.replay-go` and its ignore file, the replay smoke script):
-  `go vet`, `go test -race`, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
+- `go-build` (inputs: `go/`, the workflow, `Dockerfile.replay-go` and its ignore file, the replay smoke
+  script, the race shard table): the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
   darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
   built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
   smoked twice on fixtures written in the job, so neither needs network or a recording: the Go

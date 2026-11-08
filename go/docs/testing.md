@@ -6,11 +6,41 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same in the `go` job of `.github/workflows/ci.yml` (ubuntu, linux/amd64), plus `CGO_ENABLED=0` builds for
-linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. The `go-xos` job runs `go vet ./...` and the default
-tier on the other platforms, on every push: `go test -race ./...` on linux/arm64 (`ubuntu-24.04-arm`), plain
-`go test ./...` on macOS (`macos-latest`, arm64) and Windows (`windows-latest`, amd64), where the race detector
-is slow or needs cgo. A commit touching `go/` needs both jobs green.
+CI runs the same in five jobs of `.github/workflows/ci.yml`, side by side, each doing its work only when
+`go/`, the workflow, `Dockerfile.replay-go`, the replay smoke script or the shard table changed (the
+`changes` job decides). A commit touching `go/` needs all five green; `ci-gate` requires them.
+
+| job | runs | runner |
+|---|---|---|
+| `go-lint` | `gofmt -l` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
+| `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
+| `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
+
+The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
+`changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
+
+| shard | `go test -race` arguments | runner |
+|---|---|---|
+| `crash` | `-run '^TestCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm |
+| `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm |
+| `listing-rest` | `-skip` the two patterns above, `./internal/listing` | ubuntu-24.04-arm |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm |
+| `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm |
+| `rest` | every package no row names (a new package lands here) | ubuntu-latest |
+
+A package split across rows has a remainder row that `-skip`s the union of its other rows' `-run`
+patterns, so the split is complete and disjoint by construction; `--check` also lists the package's tests
+and fails when a package named has no remainder row or two, a row (pattern or remainder) selects no test,
+or a test is selected twice; packages and tests are discovered with `-race`, as the shards build them. The rule for the race lane: per push,
+`internal/listing` and `cmd/swath` are raced on arm64 only, whose weaker memory model makes it the better
+race target (and where the same `-race` suite took about 30 % less time than on amd64); the nightly full,
+unsharded race run on amd64 (`nightly.yml` `go-race-nightly`, `go test -race ./...`, its JSON stream the
+`go-race-nightly` artifact) covers the other architecture. To find a failure, open the red
+`go-race (SHARD)` leg: its test step prints the exact `go test` command, which reruns that shard locally from
+`go/`; `scripts/ci/go-race-shards.sh SHARD` prints the arguments alone. To repeat one test on a chosen OS,
+use `go-stress.yml`.
 
 Where a platform cannot run a case the test skips with the platform behaviour as its reason, never silently:
 
@@ -32,7 +62,7 @@ S3 writers and one, 24 pages each; four local writers at their declared widths, 
 input retained) only then, and one S3 writer over six pages by default, so the price is still checked. The
 full arms allocate hundreds of MiB and measure the live heap, which `-race` distorts and slows (they took
 over three of the listing package's six and a half minutes under `-race` at two processors): CI runs them in
-the `go` job's heap-gate step, without `-race`, with their own timeout.
+the `go-nonrace` job, without `-race`, with their own timeout.
 
 ## Invariant tests
 
