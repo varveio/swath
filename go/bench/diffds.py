@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Compare two swath sorted datasets (e.g. Go vs Java) with DuckDB.
+# Copyright 2026 Varve Systems Ltd
+# SPDX-License-Identifier: Apache-2.0
+"""Compare swath datasets with DuckDB, dispatching on the manifest schema id.
 
 usage: diffds.py A B [--ts-ms]
 
-Checks: identical row sets on the 13 canonical columns (EXCEPT ALL both ways), both strictly ascending by
-key bytes within and across parts (so identical sets imply identical order), min/max key of the whole
-dataset, row counts. Prints part counts and dataset sizes side by side. --ts-ms truncates last_modified
-to milliseconds on both sides (S3 routes that render milliseconds).
-
-Comparison projection: a dataset with the current-object S3 schema (format 2, swath/s3-objects/v1) has no
-version_id, is_latest, is_delete_marker or row_type. For it the view restores the values every current
-object has in the canonical schema (NULL, NULL, false, 'OBJECT'), so it compares with a Java dataset
-value for value; every other value and null is compared as is.
+Versions compare whole-row multisets (EXCEPT ALL, nulls included) and ordered
+row sequences in manifest part/file-row order. Keys may repeat within a part;
+parts must remain strictly key-disjoint. Current S3 still projects the legacy
+canonical values for Java comparisons. Unknown or incompatible ids are refused.
 """
-import json, os, sys
-import duckdb
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from dataset_schema import (COLUMNS, S3_CURRENT, GCS_CURRENT, VERSION_IDS,
+                            schema_id, sql_string)
 
 COLS = ["key", "size", "last_modified", "etag", "storage_class", "version_id", "is_latest",
         "is_delete_marker", "owner_id", "owner_display_name", "checksum_algorithm", "checksum_type", "row_type"]
@@ -40,61 +43,97 @@ def size(d):
     return sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(os.path.join(d, "data")) for f in fs if f.endswith(".parquet"))
 
 
-def view(con, name, paths, ts_ms):
-    lst = "[" + ",".join("'%s'" % p for p in paths) + "]"
+def view(con, name, paths, ts_ms, sid, cols):
+    lst = "[" + ",".join(sql_string(p) for p in paths) + "]"
     have = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet({lst}, union_by_name=true)").fetchall()}
     sel = []
-    for c in COLS:
-        if c not in have and c in CURRENT_OBJECT:
-            sel.append(f"{CURRENT_OBJECT[c]} AS {c}")
-        elif c == "last_modified":
+    for c in cols:
+        if c not in have:
+            if sid == S3_CURRENT and c in CURRENT_OBJECT:
+                sel.append(f"{CURRENT_OBJECT[c]} AS {c}")
+            elif sid == GCS_CURRENT and c == "time_created":
+                sel.append("NULL::TIMESTAMP AS time_created")
+            else:
+                raise ValueError(f"schema {sid} is missing column {c}")
+        elif c == "last_modified" and sid not in VERSION_IDS:
             sel.append("date_trunc('millisecond', last_modified::TIMESTAMP) AS last_modified" if ts_ms else "last_modified::TIMESTAMP AS last_modified")
         elif c == "size":
             sel.append("size::BIGINT AS size")
         else:
             sel.append(c)
     con.execute(f"CREATE VIEW {name} AS SELECT {', '.join(sel)}, filename, file_row_number FROM read_parquet({lst}, filename=true, file_row_number=true, union_by_name=true)")
-
-
-def ascending(con, name, paths):
-    """Counts adjacent pairs not strictly ascending by key bytes, in part then row order (in DuckDB)."""
-    order = ",".join("('%s', %d)" % (p, i) for i, p in enumerate(paths))
     con.execute(f"CREATE TEMP TABLE {name}_files(filename VARCHAR, idx INTEGER)")
-    con.execute(f"INSERT INTO {name}_files VALUES {order}")
+    con.executemany(f"INSERT INTO {name}_files VALUES (?, ?)", [(p, i) for i, p in enumerate(paths)])
+    con.execute(f"CREATE VIEW {name}_ordered AS SELECT {', '.join(cols)}, row_number() OVER (ORDER BY f.idx, file_row_number) AS ordinal FROM {name} JOIN {name}_files f USING (filename)")
+
+
+def ascending(con, name, paths, groups):
+    """Within-part ordering and strictly disjoint complete groups across parts."""
+    op = ">" if groups else ">="
     bad = con.execute(f"""SELECT count(*) FROM (
-        SELECT encode(key) AS k, lag(encode(key)) OVER (ORDER BY f.idx, file_row_number) AS pk
-        FROM {name} JOIN {name}_files f USING (filename)) WHERE pk IS NOT NULL AND NOT (pk < k)""").fetchone()[0]
+        SELECT encode(key) AS k, lag(encode(key)) OVER (PARTITION BY filename ORDER BY file_row_number) AS pk
+        FROM {name}) WHERE pk IS NOT NULL AND pk {op} k""").fetchone()[0]
+    prev = None
+    for p in paths:
+        lo, hi = con.execute(f"SELECT min(encode(key)), max(encode(key)) FROM {name} WHERE filename = ?", [p]).fetchone()
+        if lo is not None and prev is not None and prev >= lo:
+            bad += 1
+        if hi is not None:
+            prev = hi
     lo, hi = con.execute(f"SELECT min(encode(key)), max(encode(key)) FROM {name}").fetchone()
     return bad, lo, hi
 
 
-def main():
-    a, b = sys.argv[1], sys.argv[2]
-    ts_ms = "--ts-ms" in sys.argv
+def compare(a, b, ts_ms=False):
+    import duckdb
     con = duckdb.connect()
+    con.execute("SET preserve_insertion_order = true")
     ma, pa = parts(a)
     mb, pb = parts(b)
-    view(con, "A", pa, ts_ms)
-    view(con, "B", pb, ts_ms)
-    cols = ", ".join(COLS)
+    sa, sb = schema_id(ma), schema_id(mb)
+    legacy = {"swath/canonical", S3_CURRENT}
+    if sa != sb and not {sa, sb} <= legacy:
+        raise ValueError(f"incompatible schema ids: {sa} and {sb}")
+    if ts_ms and sa in VERSION_IDS:
+        raise ValueError("--ts-ms would discard version metadata precision")
+    columns = COLS if sa in legacy else COLUMNS.get(sa)
+    if columns is None:
+        raise ValueError(f"comparison is not supported for {sa}")
+    view(con, "A", pa, ts_ms, sa, columns)
+    view(con, "B", pb, ts_ms, sb, columns)
+    cols = ", ".join(columns)
     na = con.execute("SELECT count(*) FROM A").fetchone()[0]
     nb = con.execute("SELECT count(*) FROM B").fetchone()[0]
     a_b = con.execute(f"SELECT count(*) FROM (SELECT {cols} FROM A EXCEPT ALL SELECT {cols} FROM B)").fetchone()[0]
     b_a = con.execute(f"SELECT count(*) FROM (SELECT {cols} FROM B EXCEPT ALL SELECT {cols} FROM A)").fetchone()[0]
-    bad_a, mina, maxa = ascending(con, "A", pa)
-    bad_b, minb, maxb = ascending(con, "B", pb)
+    sequence = con.execute(f"SELECT count(*) FROM (SELECT ordinal, {cols} FROM A_ordered EXCEPT ALL SELECT ordinal, {cols} FROM B_ordered)").fetchone()[0]
+    reverse = con.execute(f"SELECT count(*) FROM (SELECT ordinal, {cols} FROM B_ordered EXCEPT ALL SELECT ordinal, {cols} FROM A_ordered)").fetchone()[0]
+    bad_a, mina, maxa = ascending(con, "A", pa, sa in VERSION_IDS)
+    bad_b, minb, maxb = ascending(con, "B", pb, sb in VERSION_IDS)
     percol = {}
-    if a_b or b_a:
-        for c in COLS:
-            percol[c] = con.execute(f"SELECT count(*) FROM A JOIN B USING (key) WHERE A.{c} IS DISTINCT FROM B.{c}").fetchone()[0]
+    if a_b or b_a or sequence or reverse:
+        for c in columns:
+            percol[c] = con.execute(f"SELECT count(*) FROM A_ordered A JOIN B_ordered B USING (ordinal) WHERE A.{c} IS DISTINCT FROM B.{c}").fetchone()[0]
     out = {
-        "rows": [na, nb], "only_in_a": a_b, "only_in_b": b_a, "not_ascending": [bad_a, bad_b],
+        "schema_id": [sa, sb], "rows": [na, nb], "only_in_a": a_b, "only_in_b": b_a,
+        "sequence_differences": [sequence, reverse], "not_ascending": [bad_a, bad_b],
+        "differing_columns_at_same_position": {k: v for k, v in percol.items() if v},
         "min_key_equal": mina == minb, "max_key_equal": maxa == maxb,
         "parts": [len(pa), len(pb)], "bytes": [size(a), size(b)],
         "size_ratio_b_over_a": round(size(b) / max(1, size(a)), 4),
-        "differing_columns_on_shared_keys": {k: v for k, v in percol.items() if v},
-        "identical": na == nb and a_b == 0 and b_a == 0 and bad_a == 0 and bad_b == 0,
+        "identical": na == nb and a_b == 0 and b_a == 0 and sequence == 0 and reverse == 0 and bad_a == 0 and bad_b == 0,
     }
+    con.close()
+    return out
+
+
+def main():
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "--ts-ms"):
+        sys.exit("usage: diffds.py A B [--ts-ms]")
+    try:
+        out = compare(sys.argv[1], sys.argv[2], "--ts-ms" in sys.argv)
+    except ValueError as err:
+        sys.exit(str(err))
     print(json.dumps(out))
     sys.exit(0 if out["identical"] else 1)
 

@@ -28,7 +28,7 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return src.(*opened).p.route
+		return src.(*opened[Object]).p.route
 	}
 	if r := route("--endpoint", "http://store.example:9000"); r != "http://store.example:9000/bkt" {
 		t.Fatalf("default: %s", r)

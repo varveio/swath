@@ -56,7 +56,7 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.common != nil {
-			opt.Policy, opt.Admission = o.common.Policy, o.common.Admission
+			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
 	case *Options: // a library caller
 		opt = *o
@@ -64,53 +64,60 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		return nil, fmt.Errorf("gcs: options are %T, not *gcs.Options", req.Options)
 	}
 	opt.Bucket, opt.Prefix, opt.Workers = bucket, prefix, req.Workers
+	if opt.AllVersions {
+		p, err := NewGenerations(ctx, opt)
+		if err != nil {
+			return nil, err
+		}
+		return &opened[Generation]{Bound: registry.Bind[Range, Generation](p, &GenerationSchema), p: p, root: req.Root}, nil
+	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
 }
 
-type opened struct {
-	registry.Bound[Object]
-	p    *Provider
+type opened[P any] struct {
+	registry.Bound[P]
+	p    *provider[P]
 	root string
 }
 
-func (o *opened) Locator() source.Locator {
+func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "gcs", Root: o.root, Container: o.p.opt.Bucket}
 }
 
-func (o *opened) Listed() int64 { return o.p.Listed() }
+func (o *opened[P]) Listed() int64 { return o.p.Listed() }
 
-func (o *opened) Answered() int64 { return o.p.Answered() }
+func (o *opened[P]) Answered() int64 { return o.p.Answered() }
 
 // Frontier is the engine's key-space progress (source.Advancing).
-func (o *opened) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
+func (o *opened[P]) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
 
 // Requests is the live request account (source.Requested).
-func (o *opened) Requests() source.Requests { return o.p.Requests() }
+func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
 
 // SeedTime is the engine's seed time (source.SeedTimed).
-func (o *opened) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
+func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
 // (source.Priced): only on the provider's own service; a custom endpoint
 // has no known tariff, and the report then gives no figure.
-func (o *opened) Tariff() (usdPer1k float64, basis string) {
+func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
 	if (o.p.opt.Endpoint == "" || o.p.opt.Endpoint == client.DefaultEndpoint) && o.p.opt.Client == nil {
 		return 0.005, "gcs-class-a-reference-rate"
 	}
 	return 0, ""
 }
 
-func (o *opened) Faults() (throttles, timeouts int64) { return o.p.Faults() }
+func (o *opened[P]) Faults() (throttles, timeouts int64) { return o.p.Faults() }
 
 // Contention is the engine's decision-mutex wait and longest hold
 // (source.Contended).
-func (o *opened) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
+func (o *opened[P]) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
 
-func (o *opened) target() string {
+func (o *opened[P]) target() string {
 	t := "gs://" + o.p.opt.Bucket
 	if o.p.opt.Prefix != "" {
 		t += "/" + o.p.opt.Prefix
@@ -122,7 +129,7 @@ func (o *opened) target() string {
 // route requests go to (the JSON API base and the bucket), and the billed
 // project, both as the client sends them. A supplied client must name both
 // (Routed), or the run declines resume.
-func (o *opened) Identity() source.Identity {
+func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
@@ -135,38 +142,38 @@ func (o *opened) Identity() source.Identity {
 // so the range engine applies; --sequential lists one token chain. A run
 // with an object-count cap, or through a supplied client that does not
 // name its route, cannot resume (as for S3).
-func (o *opened) Capabilities() source.Capabilities {
+func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
 }
 
-func (o *opened) Restart(after string) error {
+func (o *opened[P]) Restart(after string) error {
 	o.p.Restart(after)
 	return nil
 }
 
 // SeedFrom starts the listing from a prior's cuts instead of the seed
 // (source.Seeded, --seed-from).
-func (o *opened) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
+func (o *opened[P]) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
 
 // Reuse lists around a resume's reused coverage certificates
 // (source.Reusing): the engine replays them, lists the gaps.
-func (o *opened) Reuse(spans []source.Span) { o.p.Reuse(spans) }
+func (o *opened[P]) Reuse(spans []source.Span) { o.p.Reuse(spans) }
 
 // Fences reports the engine's coverage fences (source.Fencing).
-func (o *opened) Fences() bool { return o.p.Fences() }
+func (o *opened[P]) Fences() bool { return o.p.Fences() }
 
-func (o *opened) Report() source.Report {
+func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("gcs", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
 var (
-	_ source.Identified = (*opened)(nil)
-	_ source.Resumable  = (*opened)(nil)
-	_ source.Seeded     = (*opened)(nil)
-	_ source.Reusing    = (*opened)(nil)
-	_ source.Capable    = (*opened)(nil)
-	_ source.Reporter   = (*opened)(nil)
+	_ source.Identified = (*opened[Object])(nil)
+	_ source.Resumable  = (*opened[Object])(nil)
+	_ source.Seeded     = (*opened[Object])(nil)
+	_ source.Reusing    = (*opened[Object])(nil)
+	_ source.Capable    = (*opened[Object])(nil)
+	_ source.Reporter   = (*opened[Object])(nil)
 )
 
 // classify names the class of a GCS failure (client.Classify) for the

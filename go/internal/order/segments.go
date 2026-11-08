@@ -96,6 +96,9 @@ type SegmentStats struct {
 	// read frames of; DurableBoundaries the segment boundaries that fall
 	// inside one of their frames (a span of it on either side).
 	DurableFiles, DurableBoundaries int
+	// Deferred is the rows a planned boundary moved past, in group mode,
+	// because they continued the group of the key before it (cut).
+	Deferred int64
 }
 
 // What set the segment workers' count (SegmentStats.WorkersBy).
@@ -547,10 +550,20 @@ type segTimes struct{ read, decode, write, budget time.Duration }
 // unit that cannot hold a boundary (its logical bytes and rows do not reach
 // the rule) is passed whole; one that can is walked row by row, a spilled
 // one decoded for it.
+//
+// Group mode (Options.Groups): the sink defers a cut its rule asked for
+// until the first row of a greater key, so the rows that continue the
+// part's last key join it (parquetout's Router.Write). A boundary the rule
+// asks for is moved to the next key change the same way: no segment, and
+// so no part, ends inside a key, and the seams stay strict. While a cut is
+// pending the walk reads every row, a unit's first row compared with the
+// last key walked (the drainer's last for the open part).
 func (o *run[R, P]) cut(units []unit[P], pl dataset.SegmentPlan) ([]segment, error) {
 	segs := []segment{{cont: pl.Open}}
 	logical, rows := pl.Logical, pl.Rows
 	next := pl.Open && pl.Full // the next row opens a new part
+	groups := o.opt.Groups
+	prev, hasPrev := o.last, o.sent // the last key walked (group mode; valid while next)
 	split := func(u, r int) {
 		cur := &segs[len(segs)-1]
 		cur.u1, cur.r1 = u, r
@@ -559,10 +572,10 @@ func (o *run[R, P]) cut(units []unit[P], pl dataset.SegmentPlan) ([]segment, err
 	}
 	for ui := range units {
 		u := &units[ui]
-		if next {
+		if next && !groups {
 			split(ui, 0)
 		}
-		if logical+u.logical < pl.Limit && (pl.MaxRows == 0 || rows+u.n < pl.MaxRows) {
+		if !next && logical+u.logical < pl.Limit && (pl.MaxRows == 0 || rows+u.n < pl.MaxRows) {
 			logical += u.logical
 			rows += u.n
 			continue
@@ -572,17 +585,25 @@ func (o *run[R, P]) cut(units []unit[P], pl dataset.SegmentPlan) ([]segment, err
 			return nil, err
 		}
 		for i := range rs {
-			if next {
+			k := rs[i].Key
+			if next && (!groups || !hasPrev || k != prev) {
 				split(ui, i)
+			} else if next {
+				o.seg.st.Deferred++
 			}
+			prev, hasPrev = k, true
 			rows++
 			logical += o.schema.LogicalBytes(&rs[i])
 			if logical >= pl.Limit {
 				next = true
-			} else if pl.MaxRows > 0 && rows >= pl.MaxRows {
+				segs[len(segs)-1].rowCut = false // the size closes it (Router.Write: bySize)
+			} else if !next && pl.MaxRows > 0 && rows >= pl.MaxRows {
 				next = true
 				segs[len(segs)-1].rowCut = true
 			}
+		}
+		if groups && len(rs) > 0 {
+			prev = strings.Clone(prev) // not a view of a frame decoded here
 		}
 	}
 	last := &segs[len(segs)-1]
@@ -604,6 +625,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 	times := make([]time.Duration, len(segs))
 	parts := make([]segTimes, len(segs))
 	counts := make([]int64, len(segs))
+	keys := make([]int64, len(segs))
 	var wg sync.WaitGroup
 	var failed atomic.Bool
 	fail := func(err error) {
@@ -629,7 +651,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 					fail(err)
 					return
 				}
-				n, f, l, ok, err := o.segment(units, segs[j], j == 0, out, &parts[j])
+				n, d, f, l, ok, err := o.segment(units, segs[j], j == 0, out, &parts[j])
 				if err != nil {
 					fail(err)
 					return
@@ -639,7 +661,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 				} else {
 					out.Close(o.ctx, segs[j].rowCut)
 				}
-				first[j], last[j], has[j], counts[j], times[j] = f, l, ok, n, time.Since(t)
+				first[j], last[j], has[j], counts[j], keys[j], times[j] = f, l, ok, n, d, time.Since(t)
 			}
 		})
 	}
@@ -649,8 +671,10 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 	}
 	st := &o.seg.st
 	prev, havePrev := o.last, o.hasLast
+	var distinct int64
 	for j := range segs {
 		st.Rows += counts[j]
+		distinct += keys[j]
 		st.MaxRows = max(st.MaxRows, counts[j])
 		st.Time += times[j]
 		st.MaxTime = max(st.MaxTime, times[j])
@@ -664,7 +688,12 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 		// The seam check is the stage's own: the row guard runs within a
 		// segment only, and Segmenter does not promise to compare its parts.
 		// The Parquet router does (adjacent, before publishing); any other
-		// Segmenter would hand on a descending seam without this.
+		// Segmenter would hand on a descending seam without this. It is
+		// strict in group mode too: cut moves every boundary to a key
+		// change, so a key equal across a seam is a part ending inside its
+		// group. The one boundary a group may cross is segment 0's first
+		// row after the drainer's last (the open part's group, continued),
+		// which segment checks.
 		if havePrev && j > 0 { // segment 0's first row was checked against the drainer's last
 			st.Seams++
 			if first[j] <= prev {
@@ -674,14 +703,18 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 		prev, havePrev = last[j], true
 	}
 	o.rows += st.Rows
+	o.distinct += distinct
 	o.last, o.hasLast = prev, havePrev
+	o.sent = o.sent || st.Rows > 0
 	return nil
 }
 
 // segment hands one segment's rows to its part in batches, through the
-// order guard (the first segment also after the drainer's last key). It
-// returns the rows, the first and last keys, and whether there were any.
-func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentSink[P], tm *segTimes) (n int64, lo, hi string, any bool, err error) {
+// order guard (the first segment also after the drainer's last key; in
+// group mode a key may repeat the row before it, as in send). It returns
+// the rows, their distinct keys, the first and last keys, and whether
+// there were any.
+func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentSink[P], tm *segTimes) (n, keys int64, lo, hi string, any bool, err error) {
 	// The batch's spilled frames' reserved bytes (held) and the tree bytes
 	// of the in-memory units it finishes (tree): written, the batch's rows
 	// are counted downstream instead.
@@ -702,13 +735,14 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		return err
 	}
 	defer func() { o.segRelease(held, 0) }() // on failure
-	prev, have := "", false
+	prev, have, sent := "", false, false     // sent: prev is a row's key (not Options.After)
 	if first {
-		prev, have = o.last, o.hasLast
+		prev, have, sent = o.last, o.hasLast, o.sent
 	}
+	groups := o.opt.Groups
 	for ui := s.u0; ui < s.u1 || (ui == s.u1 && s.r1 > 0); ui++ {
 		if o.stopped.Load() {
-			return 0, "", "", false, context.Cause(o.ctx)
+			return 0, 0, "", "", false, context.Cause(o.ctx)
 		}
 		u := &units[ui]
 		{
@@ -723,7 +757,7 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 				}
 			}
 			if err != nil {
-				return 0, "", "", false, err
+				return 0, 0, "", "", false, err
 			}
 			held += u.units
 		}
@@ -734,7 +768,7 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 			tm.decode += dec
 		}
 		if err != nil {
-			return 0, "", "", false, err
+			return 0, 0, "", "", false, err
 		}
 		a, b := 0, len(rs)
 		if ui == s.u0 {
@@ -766,11 +800,14 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 			continue
 		}
 		for i := range rs {
-			if k := rs[i].Key; have && k <= prev {
-				return 0, "", "", false, orderError(prev, k, o.rows+n+int64(i), first && n == 0 && i == 0 && o.opt.After != nil)
-			} else {
-				prev, have = k, true
+			k := rs[i].Key
+			if have && (k < prev || k == prev && !(groups && sent)) {
+				return 0, 0, "", "", false, orderError(prev, k, o.rows+n+int64(i), first && n == 0 && i == 0 && o.opt.After != nil)
 			}
+			if !sent || k != prev {
+				keys++
+			}
+			prev, have, sent = k, true, true
 		}
 		if !any {
 			lo, any = strings.Clone(rs[0].Key), true // kept for the seam check: not the rows' storage
@@ -781,16 +818,16 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		batch = append(batch, rs)
 		if batched += len(rs); batched >= batchRows {
 			if err := write(); err != nil {
-				return 0, "", "", false, err
+				return 0, 0, "", "", false, err
 			}
 		}
 	}
 	if err := write(); err != nil {
-		return 0, "", "", false, err
+		return 0, 0, "", "", false, err
 	}
 	// The last key is kept until every segment has finished (the seam
 	// check): a copy, so it does not keep its frame or span alive.
-	return n, lo, strings.Clone(hi), any, nil
+	return n, keys, lo, strings.Clone(hi), any, nil
 }
 
 // checkTrailers checks, for every spill file the segments finished, that
