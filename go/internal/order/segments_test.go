@@ -33,7 +33,7 @@ import (
 type partSink struct {
 	limit, maxRows int64
 	encoders       int
-	queue          int // the plan's queue depth (SegmentPlan.Queue)
+	queue          int // the plan's queue depth (dataset.SegmentPlan.Queue)
 	failAt         int // the segment (1-based, in opening order) whose Write fails (0: none)
 	opened         int
 	failed         *fakePart // the failing segment's part
@@ -86,20 +86,20 @@ func (s *partSink) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	return nil
 }
 
-func (s *partSink) Plan() (SegmentPlan, bool) {
+func (s *partSink) Plan() (dataset.SegmentPlan, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.parts) < 2 || s.segmented {
-		return SegmentPlan{}, false
+		return dataset.SegmentPlan{}, false
 	}
-	pl := SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue}
+	pl := dataset.SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue}
 	if s.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, s.full, s.cur.logical, int64(len(s.cur.keys))
 	}
 	return pl, true
 }
 
-func (s *partSink) BeginSegments() (SegmentPlan, bool) {
+func (s *partSink) BeginSegments() (dataset.SegmentPlan, bool) {
 	pl, ok := s.Plan()
 	if ok {
 		s.mu.Lock()

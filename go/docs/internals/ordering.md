@@ -397,7 +397,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
   (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
   each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
-  gathers, the batch its encoder writes and its part's queue (`SegmentPlan.Queue`, two batches; the open part
+  gathers, the batch its encoder writes and its part's queue (`dataset.SegmentPlan.Queue`, two batches; the open part
   the first continues has the serial part's 16-batch queue, and the router holds that segment to two queued
   batches as well, with tokens returned as its encoder takes them; and a worker closing a part waits until its
   encoder has taken that part's batches, so it holds one part's queue at a time): consecutive rows, priced at the heaviest run of that many

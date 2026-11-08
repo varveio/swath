@@ -35,29 +35,16 @@ import (
 type Segmenter[P any] interface {
 	// Plan is the sink's cut rule now (its encoders, its readiness),
 	// false while it cannot be stated.
-	Plan() (SegmentPlan, bool)
+	Plan() (dataset.SegmentPlan, bool)
 	// BeginSegments ends Sink.Write and stops whatever could still close
 	// the open part (the interval cut), returning the rule in the same
 	// step; false: it cannot be stated, and nothing changed.
-	BeginSegments() (SegmentPlan, bool)
+	BeginSegments() (dataset.SegmentPlan, bool)
 	// AbandonSegments undoes BeginSegments: Sink.Write goes on.
 	AbandonSegments()
 	// OpenSegment opens the next segment's part, in order: the open part
 	// when continueOpen, else a new one.
 	OpenSegment(ctx context.Context, continueOpen bool) (SegmentSink[P], error)
-}
-
-// SegmentPlan is a Segmenter's cut rule (parquetout.SegmentPlan): a part
-// closes after the row whose logical bytes bring it to Limit, or else after
-// MaxRows rows (0: none). Logical and Rows are the open part's (Open); Full:
-// it closes before the next row. Encoders is the encoders admitted; Queue
-// the batches a segment queues to its part.
-type SegmentPlan struct {
-	Limit, MaxRows int64
-	Logical, Rows  int64
-	Open, Full     bool
-	Encoders       int
-	Queue          int
 }
 
 // SegmentSink is one segment's part. Close closes it (not the last) and
@@ -375,7 +362,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 // run of that many consecutive rows weighs (runBytes: a cluster of long
 // keys is priced as such, not at the mean); beside them the largest unit
 // (a spilled frame, or rows in memory) it reads or gathers next.
-func segmentShare[P any](units []unit[P], pl SegmentPlan) int64 {
+func segmentShare[P any](units []unit[P], pl dataset.SegmentPlan) int64 {
 	var frame, rows int64 // the unit it reads or gathers next, beside them; the most rows in one
 	for i := range units {
 		frame = max(frame, units[i].units)
@@ -560,7 +547,7 @@ type segTimes struct{ read, decode, write, budget time.Duration }
 // unit that cannot hold a boundary (its logical bytes and rows do not reach
 // the rule) is passed whole; one that can is walked row by row, a spilled
 // one decoded for it.
-func (o *run[R, P]) cut(units []unit[P], pl SegmentPlan) ([]segment, error) {
+func (o *run[R, P]) cut(units []unit[P], pl dataset.SegmentPlan) ([]segment, error) {
 	segs := []segment{{cont: pl.Open}}
 	logical, rows := pl.Logical, pl.Rows
 	next := pl.Open && pl.Full // the next row opens a new part

@@ -21,35 +21,20 @@ import (
 // in ordinal order, adjacency checked before each). The interval cut stops
 // when segments begin: the rest is cut by size and row count only.
 
-// SegmentPlan is the router's cut rule for the rows still to come: a part
-// closes after the row whose logical bytes (schema.LogicalBytes) bring it
-// to Limit, or else after MaxRows rows (0: no row cap). Logical and Rows
-// are the open part's so far (Open); Full: the open part is closed before
-// the next row. Encoders is the encoders admitted now; Queue the batches
-// a segment queues to its part (segmentQueue; to the open part it
-// continues, whose queue is deeper, as many: Segment.Write's tokens).
-type SegmentPlan struct {
-	Limit, MaxRows int64
-	Logical, Rows  int64
-	Open, Full     bool
-	Encoders       int
-	Queue          int
-}
-
 // Plan is the cut rule for the rows still to come, or false while it
 // cannot be stated: before the size ratio is frozen (part 0 measured),
 // with a recovered boundary (Options.Cut) still ahead, after a failure,
 // or once segments began.
-func (r *Router[P]) Plan() (SegmentPlan, bool) {
+func (r *Router[P]) Plan() (dataset.SegmentPlan, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.plan()
 }
 
 // plan is Plan with mu held.
-func (r *Router[P]) plan() (SegmentPlan, bool) {
+func (r *Router[P]) plan() (dataset.SegmentPlan, bool) {
 	if r.closed || r.segmented || r.limit == 0 || r.firstErr() != nil {
-		return SegmentPlan{}, false
+		return dataset.SegmentPlan{}, false
 	}
 	if c := r.opt.Cut; c != nil {
 		first := len(r.done) + len(r.parts)
@@ -57,10 +42,12 @@ func (r *Router[P]) plan() (SegmentPlan, bool) {
 			first = r.cur.ordinal
 		}
 		if c.Ordinal >= first {
-			return SegmentPlan{}, false
+			return dataset.SegmentPlan{}, false
 		}
 	}
-	pl := SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders(), Queue: segmentQueue}
+	// Queue: to the open part a segment continues, whose queue is deeper,
+	// as many batches as to a new one (Segment.Write's tokens).
+	pl := dataset.SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders(), Queue: segmentQueue}
 	if r.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, r.full, r.cur.logical, r.cur.n
 	}
@@ -72,17 +59,17 @@ func (r *Router[P]) plan() (SegmentPlan, bool) {
 // cut can close the open part after the caller has planned against it.
 // False: the rule cannot be stated, and nothing changed (the interval cut
 // is restarted).
-func (r *Router[P]) BeginSegments() (SegmentPlan, bool) {
+func (r *Router[P]) BeginSegments() (dataset.SegmentPlan, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.plan(); !ok {
-		return SegmentPlan{}, false
+		return dataset.SegmentPlan{}, false
 	}
 	r.stop() // releases mu while the ticker returns
 	pl, ok := r.plan()
 	if !ok {
 		r.startTick()
-		return SegmentPlan{}, false
+		return dataset.SegmentPlan{}, false
 	}
 	r.segmented = true
 	return pl, true
