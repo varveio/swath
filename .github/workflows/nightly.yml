@@ -197,7 +197,7 @@ jobs:
           set -euo pipefail
           json="$RUNNER_TEMP/go-race-nightly.json"
           set +e
-          go test -race -timeout 40m -json ./... | tee "$json" |
+          go test -race -count=1 -timeout 40m -json ./... | tee "$json" |
             jq --unbuffered -rj 'select(.Action == "output" and .Test == null) | .Output'
           status=${PIPESTATUS[0]}
           set -e

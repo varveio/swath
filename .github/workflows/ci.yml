@@ -424,7 +424,8 @@ jobs:
   # one red shard still lets the others report. go test's -timeout is per package binary, so it
   # is set to leave the job's limit room for setup, compiling and the packages queued ahead of
   # the last one (the whole `rest` shard takes ~6 min): a hang ends in go test's goroutine dump,
-  # not a killed runner. The -json stream is kept as the go-race-SHARD artifact (per-test
+  # not a killed runner. -count=1: the restored build cache would otherwise replay a shard's
+  # earlier results as `(cached)` instead of racing it. The -json stream is kept as the go-race-SHARD artifact (per-test
   # starts and times, passing subtests included) for flakes and rebalancing.
   go-race:
     needs: changes
@@ -457,12 +458,12 @@ jobs:
           # Captured first, so a failing script fails the step instead of running no arguments.
           shard_args=$(../scripts/ci/go-race-shards.sh "$SHARD")
           mapfile -t args <<<"$shard_args"
-          printf 'go test -race -timeout 20m'; printf " '%s'" "${args[@]}"; echo
+          printf 'go test -race -count=1 -timeout 20m'; printf " '%s'" "${args[@]}"; echo
           json="$RUNNER_TEMP/go-race.json"
           # The log shows each package's own output live (its ok/FAIL line, a timeout's dump), then
           # the output of every failed test; the full stream is the artifact.
           set +e
-          go test -race -timeout 20m -json "${args[@]}" | tee "$json" |
+          go test -race -count=1 -timeout 20m -json "${args[@]}" | tee "$json" |
             jq --unbuffered -rj 'select(.Action == "output" and .Test == null) | .Output'
           status=${PIPESTATUS[0]}
           set -e

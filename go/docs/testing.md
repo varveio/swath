@@ -13,7 +13,7 @@ CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each 
 | job | runs | runner |
 |---|---|---|
 | `go-lint` | `gofmt -l` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
-| `go-race (SHARD)` | `go test -race -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
+| `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
 | `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 
