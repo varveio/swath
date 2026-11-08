@@ -46,7 +46,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 writer (−5 %), 1,907 against 2,166 with four (−12 %); through the module's row intake (`WriteRows`, which
 checks and copies every row) it was 803 and 914. What remains is the module's key check (KEY-3, each key
 compared with the one before it, on the page's goroutine before the columns go parallel). The digest is not
-the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. Shape suite: [measurements](../measurements.md#the-seekparquet-modules-part-writer-2026-11-08).
+the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. The shape suite's Parquet arms show no difference beyond runner noise ([measurements](../measurements.md#the-seekparquet-modules-part-writer-2026-11-08)).
 
 ## Byte identity
 

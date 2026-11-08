@@ -573,7 +573,7 @@ through the seekparquet Go module, so the format's own conformance suite is a ga
 dependencies):
 
 1. It checks out the seekparquet repository at the commit `go.mod` pins (the revision of the
-   pseudo-version, `v0.1.1-0.20261108212931-929dfa3843f1` = `929dfa38`; a release's `go/vX.Y.Z` tag once
+   pseudo-version, `v0.1.1-0.20261108221443-6401109d1e5d` = `6401109d`; a release's `go/vX.Y.Z` tag once
    there is one) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
    (`internal/cmd/conformance`): every target it claims must qualify, the `reader` and the four validator
    levels (`validator-structural`, `-profile`, `-full`, `-digest`), every core and generated case passing.
