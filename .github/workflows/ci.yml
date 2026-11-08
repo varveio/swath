@@ -22,23 +22,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Shared change detection for the Java tiers. java=false ONLY when every changed file is
-  # Go-only (go/**, Dockerfile.replay-go and its ignore file); anything else -- this workflow,
-  # root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java tiers.
-  # The Java jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so
-  # ci-gate keeps requiring every job on a pull request. A failure here skips its dependants,
-  # which fails ci-gate on a pull request. The go/go-fixtures jobs keep their own detection.
+  # Shared change detection for the Java tiers and the Go jobs. java=false ONLY when every changed
+  # file is Go-only (go/**, Dockerfile.replay-go and its ignore file); anything else -- this
+  # workflow, root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
+  # tiers. go=true when go/**, this workflow, Dockerfile.replay-go (and its ignore file), the
+  # replay smoke script or the race shard table changed. The jobs still RUN and succeed with their
+  # steps skipped (not `skipped` as jobs), so ci-gate keeps requiring every job on a pull request.
+  # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
+  # its own, wider detection. go_shards is the go-race matrix, from the shard table.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       java: ${{ steps.changes.outputs.java }}
+      go: ${{ steps.changes.outputs.go }}
+      go_shards: ${{ steps.shards.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           fetch-depth: 0
 
-      - name: Detect Java-relevant changes
+      - name: Detect Java- and Go-relevant changes
         id: changes
         env:
           EVENT: ${{ github.event_name }}
@@ -47,6 +51,7 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
             echo "java=true" >> "$GITHUB_OUTPUT"
+            echo "go=true" >> "$GITHUB_OUTPUT"
           else
             # Capture the whole list first: a git failure then fails the step (set -e) instead of
             # reading as "Go-only". An empty diff also runs everything.
@@ -58,8 +63,24 @@ jobs:
             else
               echo "java=false" >> "$GITHUB_OUTPUT"
             fi
+            # grep reads every line rather than exiting at the first match while git still writes
+            # (the list is captured above, so no SIGPIPE can turn a match into go=false).
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
+              echo "go=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "go=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
           echo "changes: $(cat "$GITHUB_OUTPUT")"
+
+      # Always computed, even when go=false: go-race expands it before its steps can skip.
+      - name: Go race shard matrix
+        id: shards
+        run: |
+          set -euo pipefail
+          matrix=$(./scripts/ci/go-race-shards.sh --matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "go-race shards: $matrix"
 
   # Fast gate: unit / property / concurrency tiers only (no Docker). First to report on
   # every PR. Integration (Testcontainers/LocalStack) tiers are excluded here via
@@ -345,27 +366,95 @@ jobs:
         if: needs.changes.outputs.java == 'true'
         run: docker run --rm "${{ matrix.image }}" --help
 
-  # The single required status check on `main`, and the only job here that exists for the
-  # branch rule rather than for what it runs.
-  #
-  # GitHub can only require a check by NAME, and a matrix job expands into one context per leg
-  # (`docker-check (Dockerfile, swath:ci, swath)`, ...): a rule naming `docker-check` matches
-  # nothing, and naming the legs individually goes stale the moment a leg is added or renamed.
-  # One aggregate job has a single stable name, and `needs` already collapses every leg of a
-  # matrix into one result — so adding a leg extends the gate for free. Requiring the tiers
-  # individually has a second failure mode this avoids: a single-module `check` once reported a
-  # cross-module change green (08-19), and a rule listing job names cannot notice that.
-  #
-  # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
-  # required check never reports a conclusion, and the pull request waits forever instead of
-  # going red.
-  # Go port (go/, see AGENTS.md "Go port"): vet, race tests, static cross-builds of both
-  # commands, and the Go replay image built and smoked. The job always runs but does its work
-  # only when go/**, this workflow, Dockerfile.replay-go (and its ignore file) or the replay
-  # smoke script changed (or on manual dispatch), so Java-only changes pay a checkout and nothing
-  # else. It feeds ci-gate: a job that did its work and failed, or one skipped on a pull
-  # request, fails the gate.
-  go:
+  # Go port (go/, see AGENTS.md "Go port"), in four jobs that run side by side, so a vet error
+  # reports in a minute and the race tests' wall is their slowest shard instead of their sum
+  # (one serial job took 17.5 min, internal/listing alone ~12 of it). Each always runs and does
+  # its work only when changes.outputs.go is true, so Java-only changes pay a checkout and
+  # nothing else. ci-gate needs every one: a job that did its work and failed, or one skipped on
+  # a pull request, fails the gate.
+
+  # The cheap verdicts first: formatting, vet, and the race shard table's own check (every
+  # package and every test of a split package in exactly one shard).
+  go-lint:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: gofmt
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -l lists files that are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        if: needs.changes.outputs.go == 'true'
+        run: go vet ./...
+
+      - name: Race shards cover every test once
+        if: needs.changes.outputs.go == 'true'
+        run: ../scripts/ci/go-race-shards.sh --check
+
+  # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
+  # table into this matrix, so the table is the one place a shard is added). A leg's name is its
+  # shard; the step prints the exact `go test` command to rerun it locally. fail-fast is off so
+  # one red shard still lets the others report. -timeout stays under the job's limit so a hang
+  # ends in go test's goroutine dump rather than a killed runner.
+  go-race:
+    needs: changes
+    name: go-race (${{ matrix.shard }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.go_shards) }}
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: go test -race (shard ${{ matrix.shard }})
+        if: needs.changes.outputs.go == 'true'
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          # Captured first, so a failing script fails the step instead of running no arguments.
+          shard_args=$(../scripts/ci/go-race-shards.sh "$SHARD")
+          mapfile -t args <<<"$shard_args"
+          printf 'go test -race -timeout 25m'; printf " '%s'" "${args[@]}"; echo
+          go test -race -timeout 25m "${args[@]}"
+
+  # The tests that measure the process and so must not run under -race, which distorts heap and
+  # time: each opted in by its own gate, one step per tier. The heap gates (SWATH_HEAP_GATES)
+  # land here with #281 and the shape suite with #289.
+  go-nonrace:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -373,49 +462,35 @@ jobs:
         working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect Go changes
-        id: changes
-        working-directory: .
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          else
-            # Capture the whole list first: a git failure then fails the step (set -e) instead of
-            # reading as "no Go change", and grep reads every line rather than exiting at the
-            # first match while git still writes (git's SIGPIPE under pipefail would turn a
-            # match into go=false).
-            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
-              echo "go=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "go=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
 
       - name: Set up Go (version from go/go.mod)
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
-      - name: go vet
-        if: steps.changes.outputs.go == 'true'
-        run: go vet ./...
+  # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
+  # Windows test compile, and the Go replay image built and smoked.
+  go-build:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
-      - name: go test -race
-        if: steps.changes.outputs.go == 'true'
-        run: go test -race -timeout 30m ./...
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
       - name: Static cross-builds (CGO_ENABLED=0)
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
           for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
@@ -438,11 +513,11 @@ jobs:
       # cross-compiles and the scratch runtime stage has no RUN, so the arm64 build here also
       # guards against a runtime stage that would need emulation.
       - name: Set up Docker Buildx
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       - name: Build Go replay image (both architectures, no push)
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -455,7 +530,7 @@ jobs:
           cache-to: type=gha,scope=swath-replay-go,mode=max,ignore-error=true
 
       - name: Build Go replay image (builder-native arch) + load for smoke
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -471,7 +546,7 @@ jobs:
       # not servable sorted, so the smoke's fallback sorts it with the image's own sort-fixture
       # first; the step requires that the fallback ran.
       - name: Smoke — Go replay image serves a Go lister dataset and a sorted capture
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
           docker run --rm swath-replay-go:ci --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
@@ -494,8 +569,8 @@ jobs:
   # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
   # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
   # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
-  # the Gradle build runs beside the go job rather than inside its budget. Same always-runs,
-  # works-on-change shape as the go job. Its inputs are wider: the Java replay module and the
+  # the Gradle build runs beside the Go jobs rather than inside its budget. Same always-runs,
+  # works-on-change shape as the Go jobs. Its inputs are wider: the Java replay module and the
   # modules it builds on (swath-core, swath-model), the shared Gradle build and wrapper, the
   # evidence archive and expectations the tests read, and the replay smoke script.
   go-fixtures:
@@ -607,15 +682,29 @@ jobs:
             exit 1
           fi
 
+  # The single required status check on `main`, and the only job here that exists for the
+  # branch rule rather than for what it runs.
+  #
+  # GitHub can only require a check by NAME, and a matrix job expands into one context per leg
+  # (`docker-check (Dockerfile, swath:ci, swath)`, ...): a rule naming `docker-check` matches
+  # nothing, and naming the legs individually goes stale the moment a leg is added or renamed.
+  # One aggregate job has a single stable name, and `needs` already collapses every leg of a
+  # matrix into one result — so adding a leg extends the gate for free. Requiring the tiers
+  # individually has a second failure mode this avoids: a single-module `check` once reported a
+  # cross-module change green (08-19), and a rule listing job names cannot notice that.
+  #
+  # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
+  # required check never reports a conclusion, and the pull request waits forever instead of
+  # going red.
   ci-gate:
-    needs: [changes, fast-tests, integration-tests, docker-check, go, go-fixtures]
+    needs: [changes, fast-tests, integration-tests, docker-check, go-lint, go-race, go-nonrace, go-build, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # A skipped dependency passes the gate only OFF pull_request, where jobs are legitimately
       # event-gated (docker-check is PR-only, so it skips on every main merge). On a pull request
-      # all six dependencies run (the Java tiers do their work only when java=true), so there `skipped` is not a pass: that is what stops a future
+      # every dependency runs (the Java and Go jobs do their work only when their inputs changed), so there `skipped` is not a pass: that is what stops a future
       # `if:` from quietly removing a tier from the gate while the check stays green.
       - name: Every gating job passed
         env:
