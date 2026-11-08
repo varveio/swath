@@ -47,8 +47,12 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 // readScope is the OAuth2 scope a listing needs.
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
-// fields asks only for what a listing reads (sent to DefaultEndpoint).
-const fields = "nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+// fields asks only for what a listing reads (sent to DefaultEndpoint);
+// versionFields adds what a generations listing reads (timeDeleted).
+const (
+	fields        = "nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+	versionFields = "nextPageToken,prefixes,items(name,size,updated,timeCreated,timeDeleted,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+)
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
@@ -86,6 +90,10 @@ type ListInput struct {
 	EndOffset   string
 	PageToken   string
 	MaxResults  int // 0: the server default (1,000)
+	// Versions lists every generation (versions=true): live and
+	// noncurrent, by name ascending and, within a name, generation
+	// ascending, as the API returns them.
+	Versions bool
 }
 
 // Object is one listed object.
@@ -101,6 +109,9 @@ type Object struct {
 	MD5            string // base64, as sent
 	CRC32C         string // base64, as sent
 	ContentType    string
+	// TimeDeleted is when the generation became noncurrent, Unix
+	// microseconds; 0 for a live generation (and outside Versions).
+	TimeDeleted int64
 }
 
 // Page is one objects.list response.
@@ -393,9 +404,16 @@ func (c *Client) requestURL(in *ListInput) string {
 	if c.base.String() == DefaultEndpoint {
 		// Partial responses on Google's endpoint only: emulators and the
 		// replay server refuse or ignore a fields selector.
-		q.Set("fields", fields)
+		if in.Versions {
+			q.Set("fields", versionFields)
+		} else {
+			q.Set("fields", fields)
+		}
 	}
 	q.Set("projection", "noAcl")
+	if in.Versions {
+		q.Set("versions", "true")
+	}
 	if in.Prefix != "" {
 		q.Set("prefix", in.Prefix)
 	}
@@ -505,6 +523,7 @@ type wireObject struct {
 	Size           string `json:"size"`
 	Updated        string `json:"updated"`
 	TimeCreated    string `json:"timeCreated"`
+	TimeDeleted    string `json:"timeDeleted"`
 	ETag           string `json:"etag"`
 	Generation     string `json:"generation"`
 	Metageneration string `json:"metageneration"`
@@ -554,6 +573,9 @@ func parse(body []byte) (*Page, error) {
 		}
 		if x.TimeCreated, err = optTime(o.TimeCreated); err != nil {
 			return nil, fmt.Errorf("%w: timeCreated %q", ErrSyntax, o.TimeCreated)
+		}
+		if x.TimeDeleted, err = optTime(o.TimeDeleted); err != nil {
+			return nil, fmt.Errorf("%w: timeDeleted %q", ErrSyntax, o.TimeDeleted)
 		}
 	}
 	return p, nil

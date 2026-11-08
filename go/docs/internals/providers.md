@@ -321,6 +321,18 @@ Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).
 
+**Generations** (built and unit-tested, not yet wired to a command or the engine). `ListInput.Versions` sends
+`versions=true` and, on Google's endpoint, the field mask with `timeDeleted` (parsed to µs, 0 when absent: a live
+generation; it is not `softDeleteTime`); items stay in wire order, name ascending and generation ascending within
+a name, and pages are native, continued by the API's `pageToken`. The payload `gcs.Generation` is an `Object` and
+`TimeDeleted`; its schema `swath/gcs-generations/v1` is the `gcs-objects/v1` columns in the same order (the same
+accessors; `generation` an exact INT64) and then `time_deleted`, null for the live generation (there is no
+`is_latest`: a name may have no live generation, and the highest generation is not taken to be live), with
+`Info.Groups` set; its delta spill codec codes integers as wrapping differences and repeated strings as flags.
+`gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
+none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
+sends `startOffset = name` and the engine's `StartInclusive` drop removes its rows.
+
 **Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
 transports, one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
 connection only at the server's stream limit (about 100), so a single transport would carry all 64 workers on

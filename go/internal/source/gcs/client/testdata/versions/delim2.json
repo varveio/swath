@@ -1,0 +1,36 @@
+{
+  "nextPageToken": "CiJHUkNtMzkvc2luZ2xlX251Y2xldXNfc21hcnRfc2VxXzIv",
+  "prefixes": [
+    "GRCm39/bwa/",
+    "GRCm39/single_nucleus_smart_seq_2/"
+  ],
+  "items": [
+    {
+      "name": "GRCm39/README.txt",
+      "generation": "1656460819439441",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "39",
+      "md5Hash": "SgDyj6/m+3n32nNFxGjUHQ==",
+      "crc32c": "qgvUGw==",
+      "etag": "CNG+6LWt0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:19.506Z",
+      "updated": "2022-06-29T00:00:19.506Z",
+      "timeDeleted": "2023-07-07T00:00:31.213Z"
+    },
+    {
+      "name": "GRCm39/README.txt",
+      "generation": "1688688031116446",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "772",
+      "md5Hash": "j/Ar7iu2in2wOZry3WZ1Eg==",
+      "crc32c": "o9fmEw==",
+      "etag": "CJ7Z7JGl+/8CEAE=",
+      "timeCreated": "2023-07-07T00:00:31.213Z",
+      "updated": "2023-07-07T00:00:31.213Z"
+    }
+  ]
+}
