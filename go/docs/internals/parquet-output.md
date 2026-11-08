@@ -30,6 +30,32 @@ Go writer meets them.
 | `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | SeekParquet RG-1; generic readers learn the order without the stamps; metadata only, rows already arrive sorted. |
 | `created_by` | `swath-go version <module version or devel> (build <revision>[-dirty])`, from the build itself (`internal/buildinfo`: the revision `build.sh` links in, else the toolchain's VCS stamp; shortened to 12 hex digits) | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath-go/parquet-r3`: r2 was format 2's stamps and shortened key bounds) is promised. A part a resume reproduces (claimed, never recorded) keeps the claimed part's own `created_by` and columns. |
 
+## Byte identity
+
+A build writes byte-identical parts for the same rows on machines that take the same encoder path (the
+exception for parts closed by time is in [contracts.md](contracts.md#execution-and-recovery)). There are two
+such paths, and the architecture alone does not decide which one a machine takes:
+
+- **amd64 with AVX2**: parquet-go v0.32.0 encodes dictionary indexes (the RLE/bit-packed hybrid) with AVX2
+  kernels. The one that decides where a bit-packed run ends (`encodeInt32IndexEqual8ContiguousAVX2`)
+  broadcasts the first index of each 128-bit lane (`VPSHUFD` on a YMM register). So it also stops at a group
+  of eight indexes whose halves are each uniform, such as four 3s followed by four 5s.
+- **Every other platform** (arm64, amd64 without AVX2, a build with the `purego` tag) uses parquet-go's
+  generic code, or on amd64 its SSE kernel. These stop only at a group of eight equal indexes.
+
+Both encodings are valid and decode to the same values. Where a dictionary-encoded column meets such a group,
+its pages, and so the chunk sizes, offsets and part MD5, differ between the two paths. The rows, part
+boundaries, row counts, statistics and the key column's index do not: the key is `DELTA_BYTE_ARRAY`, and
+boundaries are counted in logical bytes. zstd adds no difference: klauspost/compress's encoder has assembly
+only for match lengths, which return the same values, and the `noasm` tag leaves the bytes unchanged.
+`TestFooterOnlyChange` pins a golden for each path (#305). Pinning the generic path everywhere would take the
+`purego` tag, which slows every parquet-go kernel, so swath does not do it.
+
+What depends on it: a resume that must reproduce a claimed part byte for byte ([durability.md](durability.md))
+refuses with `ErrAmbiguousTail` if it runs on the other path and the part's pages differ, even though the
+source is unchanged. It fails loudly and never writes wrong data. Gates and baselines that compare MD5s compare
+runs on one path.
+
 ## Run reports
 
 Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 3); `--report-format json`

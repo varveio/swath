@@ -20,6 +20,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding/thrift"
 	"github.com/parquet-go/parquet-go/format"
+	"golang.org/x/sys/cpu"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
@@ -35,7 +36,7 @@ type partDigests struct{ Data, Meta, Offsets, Values, Keys string }
 
 // footerOnlyGolden are the digests of the parts footerOnlyScenarios write,
 // recorded with the swath-dataset format 2 writer (a1177c7f, parquet-go
-// v0.32.0, klauspost/compress v1.19.1) on footerOnlyPlatform.
+// v0.32.0, klauspost/compress v1.19.1) on linux/amd64 with AVX2.
 var footerOnlyGolden = map[string][]partDigests{
 	"unique": {
 		{Data: "2626b20b48e07c6363f58dae1c974e0d82619aa63834c42467be875eb40bcaea", Meta: "b2831a92f707b173044531061cf4092786ca4709bc79dc9e65c7695519906649", Offsets: "1f6bada2ee2378ea8b24bd445ecf75e188617c4ed5760ea7e764db80e72c4f3a", Values: "0bf0f8858dc591df5a10068543f218217565156794dea437af2363ad1b2975d3", Keys: "ed8e65dd97f16aa43ed9210936b012a947a5ee861776d6d00e75d9de8de9e35c"},
@@ -45,11 +46,28 @@ var footerOnlyGolden = map[string][]partDigests{
 	"long":    {{Data: "fe7141fc6afc1b6346a876813a1d37d9505ce4c97bd12c5039ef95a52848af8a", Meta: "013d49896f6cd4129793134e13d19f4065b6675d3073ea494462c90821b90e03", Offsets: "4ee257c4e5d7e6eec8fdff7343869c5fc3c6bf0bb3fc6fac34a432929d6791ee", Values: "d882cc46a48207f5d6f0396b4aea0873a39c19867e56644bdeda53cbe0bdba68", Keys: "158a647bdd1ebdc4702f242f45572402e657b0079def7cb557c22c28e0b3fc3e"}},
 }
 
+// footerOnlyGeneric are the grouped part's digests on parquet-go's generic
+// RLE path: every platform but amd64 with AVX2 (darwin/arm64, linux/arm64,
+// and amd64 without AVX2 or built with the purego tag; CI #305). parquet-go
+// v0.32.0's AVX2 kernel that ends a bit-packed run
+// (encodeInt32IndexEqual8ContiguousAVX2) broadcasts each 128-bit lane's
+// first value (VPSHUFD on a YMM register), so it also stops at a group of
+// eight dictionary indexes whose two halves are each uniform; the generic
+// code and the SSE kernel stop only at eight equal ones. Both encodings
+// are valid and decode to the same values; the dictionary-encoded kind
+// column of the grouped rows meets such a group, the other scenarios do
+// not. Only the data pages and what locates them differ: Data, Meta (the
+// chunk sizes and offsets) and Offsets.
+var footerOnlyGeneric = partDigests{Data: "90eebb8a485c65eac46604a89805e4fa95c8ef844257463dfc7f56a274138235", Meta: "24abfb0b9b822e39f9be53b2481d8d0dfa53e607981f36cc8435290799cf8ddb", Offsets: "a3bf42f2bdf7dada5977dc185d2e249757a0e72afb6077fc353d85f0527953c7", Values: "090823997d879c764370a4bf56853645ef4465d5eb279a76a1ce5d005a26e63e", Keys: "a33f329a55148003782ad9791913f4898943f88bb8bc143f1ee2756c47773353"}
+
+// rleAVX2 reports whether parquet-go encodes dictionary indexes with its
+// AVX2 kernels here (its rle_amd64.go).
+var rleAVX2 = runtime.GOARCH == "amd64" && cpu.X86.HasAVX2 && !puregoBuild
+
 // footerOnlyScenarios write short string keys (unique and repeated) and
 // binary keys longer than 1,024 bytes, some beginning with more than
 // 1,024 0xFF bytes: the keys whose index maximum
 // parquet-go shortens to an all-0xFF value that is below them.
-const footerOnlyPlatform = "linux/amd64"
 
 var footerOnlySchemaIDs = map[string]string{"unique": testSchema.ID, "grouped": groupedSchema.ID, "long": "test/binary-key"}
 
@@ -164,16 +182,14 @@ func TestFooterOnlyChange(t *testing.T) {
 		}
 		for i := range got {
 			g, w := got[i], want[i]
-			// The page indexes do not depend on the platform; the pages'
-			// compressed bytes did on macOS/arm64 (the grouped parts, CI
-			// #299), so the golden, recorded on linux/amd64, pins them
-			// there only.
-			pinned := runtime.GOOS+"/"+runtime.GOARCH == footerOnlyPlatform
-			if pinned && (g.Data != w.Data || g.Meta != w.Meta || g.Offsets != w.Offsets) || g.Values != w.Values {
-				t.Errorf("%s part %d: %+v, golden %+v", name, i, g, w)
+			if name == "grouped" && !rleAVX2 {
+				w = footerOnlyGeneric
 			}
-			if name != "long" && g.Keys != w.Keys {
-				t.Errorf("%s part %d: key index %s, golden %s", name, i, g.Keys, w.Keys)
+			if name == "long" {
+				g.Keys, w.Keys = "", "" // keys over 1,024 bytes: the bounds are now exact (exactKeyBounds)
+			}
+			if g != w {
+				t.Errorf("%s part %d: %+v, golden %+v", name, i, g, w)
 			}
 			kv := footer(t, parts[i].Path)
 			stamps := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1", dataset.StampSchema: footerOnlySchemaIDs[name],

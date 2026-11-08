@@ -1222,8 +1222,13 @@ over one zstd block included. That is evidence for these inputs, not a general i
 choose its entropy tables differently on other multi-block data. After the review (#299) the value columns'
 bounds are exact too, which changes only values over 1,024 bytes; the pinned digests are unchanged. The digests are recorded on linux/amd64 and pinned there (60 runs at 1, 2 and 8 CPUs agree); on macOS/arm64
 (CI's cross-OS job) the grouped scenario's compressed pages differed while its page indexes matched, so the test
-compares the pages' bytes on linux/amd64 only. Why that platform compresses those pages differently is not
-investigated.
+compared the pages' bytes on linux/amd64 only. The cause (#305) is parquet-go's AVX2 kernel that ends a
+bit-packed run of dictionary indexes, not zstd. It stops at a group of eight indexes whose halves are each
+uniform, so the grouped rows' `kind` column is encoded differently: 2,264 against 2,262 bytes uncompressed.
+The generic digests are the same on darwin/arm64 and linux/arm64 (CI), and on linux/amd64 with
+`GODEBUG=cpu.avx2=off` or `-tags purego`. `-tags noasm`, which removes klauspost/compress's assembly, leaves the
+AVX2 digests unchanged. The test now pins a golden per path
+([internals/parquet-output.md](internals/parquet-output.md#byte-identity)).
 
 ## Downstream reader compatibility
 
