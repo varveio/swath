@@ -274,7 +274,7 @@ func TestReadAheadCancelMidReplay(t *testing.T) {
 	if n := g.readers.n.Load(); n != 0 {
 		t.Fatalf("%d spill descriptors open after the run", n)
 	}
-	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+	if ents := readDir(t, dir); len(ents) != 0 {
 		t.Fatalf("spill files left: %d", len(ents))
 	}
 	deadline := time.Now().Add(5 * time.Second)

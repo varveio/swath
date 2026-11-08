@@ -152,13 +152,18 @@ func TestCountOnlyHoldsNothing(t *testing.T) {
 	}
 	srv := httptest.NewServer(slowFirst(scalefake.NewServer(ks, scalefake.Options{}), ks.Key(3000), time.Second, time.Millisecond))
 	t.Cleanup(srv.Close)
-	stop, seen := make(chan struct{}), make(chan int)
+	stop, seen, listErr := make(chan struct{}), make(chan int), make(chan error, 1)
 	go func() { // anything created under TMPDIR while the run goes
 		n := 0
 		for {
-			if es, _ := os.ReadDir(tmp); len(es) > 0 {
-				n = max(n, len(es))
+			es, err := os.ReadDir(tmp)
+			if err != nil { // a failed listing is not an empty TMPDIR
+				select {
+				case listErr <- err:
+				default:
+				}
 			}
+			n = max(n, len(es))
 			select {
 			case <-stop:
 				seen <- n
@@ -175,6 +180,11 @@ func TestCountOnlyHoldsNothing(t *testing.T) {
 		Limits: Limits{Workers: workers, RowBudget: minRowBudget}})
 	close(stop)
 	created := <-seen
+	select {
+	case err := <-listErr:
+		t.Fatalf("listing TMPDIR: %v", err)
+	default:
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

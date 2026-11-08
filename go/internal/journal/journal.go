@@ -520,7 +520,14 @@ func ReadIn(r *os.Root) (*State, error) {
 	if errors.Is(err, errTornHeader) {
 		// Create syncs the header before any part exists, so a part on
 		// disk proves the header was durable and has been damaged since.
-		if n := partFiles(r); n > 0 {
+		// A directory that cannot be listed proves nothing either way:
+		// the error, never "no journal", which would let a fresh run
+		// take an output whose parts it could not see.
+		n, err := partFiles(r)
+		if err != nil {
+			return nil, fmt.Errorf("journal: the header is damaged and the part directories cannot be listed: %w", err)
+		}
+		if n > 0 {
 			return nil, fmt.Errorf("%w: the header is damaged but %d part files exist", ErrCorrupt, n)
 		}
 		return nil, ErrNoJournal
@@ -538,19 +545,26 @@ func openIn(r *os.Root, flag int) (*os.File, error) {
 }
 
 // partFiles counts the entries in data/ and in the temporary parts
-// directory, through r.
-func partFiles(r *os.Root) int {
+// directory, through r. A directory that does not exist counts none; any
+// other failure to open or list one is the error.
+func partFiles(r *os.Root) (int, error) {
 	n := 0
 	for _, d := range []string{dataset.DataDir, filepath.Join(dataset.Workspace, dataset.PartsDir)} {
 		f, err := r.Open(d)
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		ents, _ := f.ReadDir(-1)
+		if err != nil {
+			return 0, err
+		}
+		ents, err := f.ReadDir(-1)
 		f.Close()
+		if err != nil {
+			return 0, err
+		}
 		n += len(ents)
 	}
-	return n
+	return n, nil
 }
 
 // errTornHeader: the header frame is incomplete (Read decides what it means).

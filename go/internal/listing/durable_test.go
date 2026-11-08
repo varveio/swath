@@ -266,7 +266,10 @@ func durableFixture(t *testing.T) (url string, b *s3mem.Backend, ref, out string
 // durableFiles is the durable spill's files in out, by name.
 func durableFiles(t *testing.T, out string) []string {
 	t.Helper()
-	ents, _ := os.ReadDir(filepath.Join(out, order.DurableDir))
+	ents, err := os.ReadDir(filepath.Join(out, order.DurableDir))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var names []string
 	for _, e := range ents {
 		if strings.HasSuffix(e.Name(), ".spill") {
