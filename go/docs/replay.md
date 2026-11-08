@@ -754,7 +754,9 @@ A provider may issue the same token from requests of different scope (a GCS toke
 at, whatever the query asked), while the Go server's tokens carry their scope and are refused with another. The
 replay therefore keeps one Go token per issuing request. A request annotated with its source walk sends that walk's
 Go token, or fails when that walk issued no such token, whatever its own query was issued; only a request without a
-source continues the token an earlier request of its own query was issued (its own case's where several were).
+source continues the token an earlier request of its own query was issued, else one of the same query but its page
+size (`maxResults`, `max-keys`: a client may change it mid-walk, and both token contracts accept the same scope with
+another page size; `TestCaptureWalkChangesPageSize`), its own case's where several were.
 Where the candidates would send different Go tokens the request fails as ambiguous; none is chosen by recency
 (`TestCaptureTokenIssuedByTwoScopes`, `TestCaptureTokenFromNamedWalk`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
 live run's verdicts: no failure the live run did not have, every documented difference documented again, and a

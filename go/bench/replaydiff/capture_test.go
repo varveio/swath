@@ -701,6 +701,23 @@ func TestTokenMapLookup(t *testing.T) {
 			t.Errorf("lookup %s %s from %q: %q %v", c.query, c.caseID, c.from, got.got, err)
 		}
 	}
+	// Another page size of the same query continues its walk; two such
+	// issuers whose Go tokens differ are ambiguous.
+	tm.pageParam = "maxResults"
+	tm.set("P", capturedToken{got: "p", query: "prefix=p&maxResults=3"})
+	if got, err := tm.lookup("P", "prefix=p&maxResults=2", "", ""); err != nil || got.got != "p" {
+		t.Errorf("another page size: %q %v", got.got, err)
+	}
+	if _, err := tm.lookup("P", "prefix=q&maxResults=2", "", ""); err == nil {
+		t.Error("another prefix continued the walk")
+	}
+	tm.set("P", capturedToken{got: "p4", query: "prefix=p&maxResults=4"})
+	if got, err := tm.lookup("P", "prefix=p&maxResults=2", "", ""); err == nil {
+		t.Errorf("two page sizes with differing Go tokens: %q", got.got)
+	}
+	if got, err := tm.lookup("P", "prefix=p&maxResults=4", "", ""); err != nil || got.got != "p4" {
+		t.Errorf("the exact query: %q %v", got.got, err)
+	}
 	if _, err := tm.lookup("U", "q=a", "", ""); !errors.Is(err, errNotIssued) {
 		t.Errorf("an unknown token: %v", err)
 	}
@@ -915,5 +932,54 @@ func TestSourcedPinNeedsAnIssuedToken(t *testing.T) {
 	}
 	if rep := replay(source, sourced); len(rep.Residuals) != 1 || !strings.HasPrefix(rep.Residuals[0], "capture 2 [gcs-07i]") || rep.Failed != 0 {
 		t.Errorf("mapped token: documented %q, %d failed %+v", rep.Residuals, rep.Failed, rep.Results)
+	}
+}
+
+// TestCaptureWalkChangesPageSize: a client may continue a walk with
+// another page size (the GCS and S3 token contracts accept the same scope
+// with another maxResults or max-keys). An unannotated captured walk
+// whose pages ask 3, then 2, then 4 names replays with each token mapped
+// and passes; two issuers of one token in that scope with different Go
+// tokens still fail as ambiguous (TestTokenMapLookup).
+func TestCaptureWalkChangesPageSize(t *testing.T) {
+	keys := liveKeys()
+	for _, c := range []struct {
+		protocol, path, query, size, param string
+		next                               func([]byte) string
+		re                                 *regexp.Regexp
+	}{
+		{"gcs", "/storage/v1/b/bkt/o", "prefix=data/small/", "maxResults", "pageToken", gcsNextToken, regexp.MustCompile(`("nextPageToken":")([^"]*)"`)},
+		{"s3", "/bkt", "list-type=2&prefix=data/small/", "max-keys", "continuation-token", nextToken, regexp.MustCompile(`(<NextContinuationToken>)([^<]*)<`)},
+	} {
+		protocols, extra := []string{server.ProtocolS3}, http.Header{"X-Amz-Request-Id": {"R1"}, "Server": {"AmazonS3"}}
+		if c.protocol == "gcs" {
+			protocols, extra = []string{server.ProtocolGCS}, http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}}
+		}
+		f := &fakeProvider{backend: startGoProtocols(t, protocols, keys...), tokenParam: c.param, tokenRe: c.re, extra: extra, tokens: map[string]string{}}
+		live := httptest.NewServer(f)
+		defer live.Close()
+		var xs []capturedExchange
+		token := ""
+		for page, size := range []int{3, 2, 4} {
+			q := fmt.Sprintf("%s&%s=%d", c.query, c.size, size)
+			if token != "" {
+				q += "&" + c.param + "=" + campaignEscape(token, "")
+			}
+			x := captureWalk(t, live.URL, c.path, q, c.param, func([]byte) string { return "" }, false)[0]
+			x.Seq = uint64(page + 1)
+			xs = append(xs, x)
+			if token = c.next([]byte(*x.Response.Body)); token == "" && page < 2 {
+				t.Fatalf("%s: page %d issued no token", c.protocol, page+1)
+			}
+		}
+		got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: &http.Client{}}
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, c.protocol, gcsSynthetic, exchangeItems(xs), testLimits)
+		if rep.Passed != 3 || rep.Failed != 0 {
+			for _, r := range rep.Results {
+				t.Errorf("%s: %s: %s %+v", c.protocol, r.Name, r.Error, r.diff)
+			}
+			t.Errorf("%s: %d passed, %d failed", c.protocol, rep.Passed, rep.Failed)
+		}
 	}
 }
