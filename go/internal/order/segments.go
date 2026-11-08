@@ -101,6 +101,10 @@ type SegmentStats struct {
 	// tree, less what the encoders' queues held).
 	WorkersBy       string
 	PerWorker, Free int64
+	// Tree is the budget bytes the tree held when the segments were
+	// planned: what the segments' budget does not count (the serial
+	// drain holds it too).
+	Tree int64
 }
 
 // What set the segment workers' count (SegmentStats.WorkersBy).
@@ -229,6 +233,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	}
 	t := time.Now()
 	units, files, released, releasedMeta, nodes, markers, mem := o.flatten()
+	tree := o.buffered
 	// What the segments may hold is the budget beside the tree: the tree
 	// holds about the budget once listing has ended (spill keeps it
 	// there), and the serial drain adds its frames and its part's queue on
@@ -295,7 +300,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	if len(segs) < k {
 		by = WorkersBySegments
 	}
-	o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free = by, per, free
+	o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free, o.seg.st.Tree = by, per, free, tree
 	// The units are the rows' only reference now: the tree's items drop
 	// theirs, and the last segment to read a unit drops it (segment).
 	for _, it := range mem {

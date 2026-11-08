@@ -413,6 +413,9 @@ type Segments struct {
 	WorkersBy      string `json:"workers_by,omitempty"`
 	PerWorkerBytes int64  `json:"per_worker_bytes"`
 	FreeBytes      int64  `json:"free_bytes"`
+	// TreeBytes is the budget bytes the tree held when the segments were
+	// planned, beside what they may take (two budgets in all, at most).
+	TreeBytes int64 `json:"tree_bytes"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").
