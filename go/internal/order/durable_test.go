@@ -43,7 +43,7 @@ type fencedTree struct {
 	left          atomic.Int64
 	spans         []Span
 	noEnd         bool          // no fence at a range's end
-	slow          time.Duration // range 0's delay per page (a slow frontier without the hold)
+	gate          chan struct{} // range 0 waits for its close before listing (a frontier held until a signal)
 }
 
 const fzWidth = 4
@@ -84,10 +84,14 @@ func (f *fencedTree) Expand(ctx context.Context, r fz, e source.Emitter[fz, tp])
 	}
 	fence := e.(source.Fencer)
 	fence.Span(f.lo(r.i), f.lo(r.i+1), false)
-	for p := range f.pages {
-		if r.i == 0 {
-			time.Sleep(f.slow)
+	if f.gate != nil && r.i == 0 {
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
+	}
+	for p := range f.pages {
 		n := f.rows(r.i, p)
 		rows := make([]schema.Row[tp], n)
 		for j := range rows {
@@ -652,34 +656,56 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 // progresses to the oracle's output. (TestDurableEviction holds the same
 // path deterministically; listing's TestDurableLedgerTornWrite resumes
 // after it.)
+//
+// The frontier is held until the append has been torn and the spill cap
+// has refused a frame, so neither depends on the schedule (#309). Two
+// workers make the seal certain while it is held: each range spills about
+// 8 KiB, so the ranges in flight cannot fill the 24 KiB cap before one of
+// them seals, and the ledger's first append is that seal's record. The
+// cap then fills with certificates and refuses, and the refused emitter
+// waits ("publish") or a worker cannot take a range ("admission"), both
+// only after a refusal. Once released, the certificates are drained and,
+// never retired without K, hold the cap; later frames refuse and evict.
 func TestDurableLedgerFailureEvicts(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		// Not a platform behavior: the torn append needs a seal behind the
-		// slow frontier, a timing premise that fails there under load.
-		t.Skip("#309: the seal this test needs is timing-dependent (3 of 10 failed in the TestDurable suite on Windows)")
-	}
 	ledgerOrder(t)
+	release := make(chan struct{})
+	var torn, refused atomic.Bool
+	var once sync.Once
+	opened := func() {
+		if torn.Load() && refused.Load() {
+			once.Do(func() { close(release) })
+		}
+	}
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
+			torn.Store(true)
+			opened()
 			// Inside the append's first frame: its header and half its
 			// payload (half the buffer could fall on a frame boundary).
 			return 8 + int(binary.LittleEndian.Uint32(b))/2, errors.New("injected EIO")
 		}
 		return 0, nil
 	})()
-	// A slow frontier (not held: a held one and a spill cap wait for each
-	// other by design): drained certificates, never retired without K,
-	// fill the cap behind it.
-	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 }, slow: 30 * time.Millisecond}
+	hookWait = func(site string) {
+		if site == waitPublish || site == waitAdmission {
+			refused.Store(true)
+			opened()
+		}
+	}
+	defer func() { hookWait = nil }()
+	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 }, gate: release}
 	c, _, _ := newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
 	sink := &collect{}
-	// The spill cap holds a few ranges: the rest refuse, and wait or evict.
-	st, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
+	// A hold never released ends at the deadline as a failure of the
+	// fixture, not as a release by time.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	st, err := Run[fz, tp](ctx, f, sink, &testSchema, Options{Workers: 2, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v (append torn %v, a frame refused %v)", err, torn.Load(), refused.Load())
 	}
 	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
 		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
