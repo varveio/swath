@@ -106,11 +106,10 @@ UTF-8 is an invalid page, as are names that do not ascend strictly in UTF-16 cod
 lead bytes F0..F4 before EE..EF, compared in the client) and a `NextMarker` equal to the marker sent; an empty or
 absent `NextMarker` is the end (Azure has no truncation flag). A 200 must be a listing envelope:
 `EnumerationResults` holding a `Blobs` element (empty for an empty page) and no `Error` element, with nothing
-after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is derived
-from the page size: names reach 1,024 UTF-16 units (3,072 bytes of UTF-8), 9,216 bytes Encoded; the five
-uploader-set properties arrive in one request whose headers HTTP.sys bounds at 16,384 bytes, at most 6× that
-escaped; with 2 KiB of fixed properties an entry is at most 109,568 bytes and a 5,000-entry page about 522 MiB (the
-read grows only with the body). A larger body cannot be a valid page and is a retried `parse` failure. Classification takes `x-ms-error-code`
+after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is fixed at 64 MiB, the
+memory one in-flight response may hold (bodies are read whole, outside the engine's memory budget): a page past it
+is asked again with `maxresults` halved, marker and query unchanged, down to 1 (`body_cap_shrinks`), so memory stays
+bounded and a valid page is never refused; only a single entry past the cap is a `parse` failure. Classification takes `x-ms-error-code`
 first, the body's `<Code>` when the header is absent, then the status, because `AuthenticationFailed` arrives as a
 403 and `ServerBusy` as a 503: `auth` (`NoAuthenticationInformation`, `AuthenticationFailed`,
 `InvalidAuthenticationInfo`, 401), `access_denied` (`AuthorizationFailure`, `AuthorizationPermissionMismatch`,

@@ -317,7 +317,7 @@ func TestCaptures(t *testing.T) {
 			}
 			// maxresults above 5,000 is echoed but answered with at most
 			// 5,000 entries, so the body cap holds.
-			if len(p.Items) > MaxPageSize || int64(len(body)) > bodyCap(in.MaxResults) {
+			if len(p.Items) > MaxPageSize || int64(len(body)) > MaxBody {
 				t.Errorf("%s: maxresults %d: %d items in %d bytes", c.id, in.MaxResults, len(p.Items), len(body))
 			}
 			if in.MaxResults > MaxPageSize && len(p.Items) == MaxPageSize && p.NextMarker != "" {

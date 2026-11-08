@@ -42,8 +42,8 @@ type fencedTree struct {
 	hold          chan struct{}
 	left          atomic.Int64
 	spans         []Span
-	noEnd         bool          // no fence at a range's end
-	slow          time.Duration // range 0's delay per page (a slow frontier without the hold)
+	noEnd         bool                  // no fence at a range's end
+	gates         map[int]chan struct{} // range i waits for gates[i] to close before listing (held until a signal)
 }
 
 const fzWidth = 4
@@ -84,10 +84,14 @@ func (f *fencedTree) Expand(ctx context.Context, r fz, e source.Emitter[fz, tp])
 	}
 	fence := e.(source.Fencer)
 	fence.Span(f.lo(r.i), f.lo(r.i+1), false)
-	for p := range f.pages {
-		if r.i == 0 {
-			time.Sleep(f.slow)
+	if g := f.gates[r.i]; g != nil {
+		select {
+		case <-g:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
+	}
+	for p := range f.pages {
 		n := f.rows(r.i, p)
 		rows := make([]schema.Row[tp], n)
 		for j := range rows {
@@ -652,41 +656,61 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 // progresses to the oracle's output. (TestDurableEviction holds the same
 // path deterministically; listing's TestDurableLedgerTornWrite resumes
 // after it.)
+//
+// Two ranges are held, each until the run has reached what the test
+// needs, so nothing depends on the schedule (#309):
+//   - The frontier, until the append is torn. Two workers make the seal
+//     certain while it is held: each range spills about 8 KiB, so the
+//     ranges in flight cannot fill the 24 KiB cap before one of them
+//     seals, and the ledger's first append is that seal's record.
+//   - Range 30, until a certificate has been evicted: the flusher's
+//     unlink ("spill-unlink") finds the cache's eviction count above zero
+//     (an eviction counts before its unlink is queued; any other unlink
+//     does not release it). The drainer stops at range 30 with the
+//     certificates before it drained and, never retired without K,
+//     holding credit; the ranges after it spill until the cap refuses,
+//     and each refusal evicts a drained certificate.
 func TestDurableLedgerFailureEvicts(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		// Not a platform behavior: the torn append needs a seal behind the
-		// slow frontier, a timing premise that fails there under load.
-		t.Skip("#309: the seal this test needs is timing-dependent (3 of 10 failed in the TestDurable suite on Windows)")
-	}
 	ledgerOrder(t)
+	const held = 30
+	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 },
+		gates: map[int]chan struct{}{0: make(chan struct{}), held: make(chan struct{})}}
+	var c *Cache // created after the hooks: the ledger's header is write 1
+	var tornOnce, evictedOnce sync.Once
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
+			tornOnce.Do(func() { close(f.gates[0]) })
 			// Inside the append's first frame: its header and half its
 			// payload (half the buffer could fall on a frame boundary).
 			return 8 + int(binary.LittleEndian.Uint32(b))/2, errors.New("injected EIO")
 		}
 		return 0, nil
 	})()
-	// A slow frontier (not held: a held one and a spill cap wait for each
-	// other by design): drained certificates, never retired without K,
-	// fill the cap behind it.
-	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 }, slow: 30 * time.Millisecond}
-	c, _, _ := newDurable(t)
+	defer faults.Set(func(point string) error {
+		if point == "spill-unlink" && c.st.RetiredEvicted.Load() > 0 {
+			evictedOnce.Do(func() { close(f.gates[held]) })
+		}
+		return nil
+	})()
+	c, _, _ = newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
 	sink := &collect{}
-	// The spill cap holds a few ranges: the rest refuse, and wait or evict.
-	st, err := Run[fz, tp](context.Background(), f, sink, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
+	// A hold never released ends at the deadline as a failure of the
+	// fixture, not as a release by time.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	st, err := Run[fz, tp](ctx, f, sink, &testSchema, Options{Workers: 2, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v (ledger writes %d, evicted %d)", err, writes.Load(), c.st.RetiredEvicted.Load())
 	}
 	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
 		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
 	}
 	c.Close()
 	rep := c.Report()
-	if !rep.LedgerFailed || c.st.Unlinked.Load() == 0 || st.SpillRefused == 0 {
+	if !rep.LedgerFailed || rep.Retired["evicted"] == 0 || c.st.Unlinked.Load() == 0 || st.SpillRefused == 0 {
 		t.Fatalf("ledger failed %v, unlinked %d, refused %d, evicted %d, sealed %d", rep.LedgerFailed, c.st.Unlinked.Load(), st.SpillRefused, rep.Retired["evicted"], rep.SealedFiles)
 	}
 	t.Logf("refused %d, evicted %d, unlinked %d, sealed %d", st.SpillRefused, rep.Retired["evicted"], c.st.Unlinked.Load(), rep.SealedFiles)

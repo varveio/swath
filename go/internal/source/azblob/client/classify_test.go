@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -521,25 +523,89 @@ func TestRequestShape(t *testing.T) {
 	}
 }
 
-// TestBodyCap: the cap follows the page size; a body past it is refused,
-// not parsed, as a parse failure (retried, never terminal).
+// TestBodyCap: a page past the body cap is asked again with maxresults
+// halved, marker and query unchanged, so the walk still lists every key
+// exactly once with bounded memory; only a single entry past the cap is a
+// parse failure. The fake serves entries of 200 KiB (a long Content-Type)
+// against a cap lowered to 1 MiB, so pages hold at most 4 entries.
 func TestBodyCap(t *testing.T) {
-	if got, want := bodyCap(0), int64(64<<10+5000*(9216+6*16384+2048)); got != want || bodyCap(9999) != want {
-		t.Fatalf("bodyCap(0) %d, want %d", got, want)
-	}
-	if bodyCap(5000) < 45_000_000 || bodyCap(1) != 64<<10+9216+6*16384+2048 {
-		t.Fatalf("bodyCap(5000) %d, bodyCap(1) %d", bodyCap(5000), bodyCap(1))
-	}
+	const keys, entry = 30, 200 << 10
+	ct := strings.Repeat("x", entry)
+	var mu sync.Mutex
+	var sizes []int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, listHead+strings.Repeat(" ", int(bodyCap(1)))+listTail)
+		q := r.URL.Query()
+		n, _ := strconv.Atoi(q.Get("maxresults"))
+		from, _ := strconv.Atoi(strings.TrimPrefix(q.Get("marker"), "m"))
+		if q.Get("prefix") != "p/" || n < 0 {
+			t.Errorf("query %s", r.URL.RawQuery)
+		}
+		mu.Lock()
+		sizes = append(sizes, n)
+		mu.Unlock()
+		if q.Get("delimiter") == "huge" {
+			n = 1 // one entry past any cap
+			ct = strings.Repeat("x", 2<<20)
+		}
+		if n == 0 {
+			n = MaxPageSize
+		}
+		var b strings.Builder
+		b.WriteString(listHead)
+		to := min(from+n, keys)
+		for i := from; i < to; i++ {
+			fmt.Fprintf(&b, "<Blob><Name>p/%03d</Name><Properties><Content-Type>%s</Content-Type></Properties></Blob>", i, ct)
+		}
+		next := ""
+		if to < keys {
+			next = fmt.Sprintf("m%d", to)
+		}
+		fmt.Fprintf(&b, "</Blobs><NextMarker>%s</NextMarker></EnumerationResults>", next)
+		fmt.Fprint(w, b.String())
 	}))
 	defer srv.Close()
 	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	if _, err := c.List(context.Background(), &ListInput{Container: "c", MaxResults: 1}); Classify(err) != objhttp.ClassParse || !strings.Contains(err.Error(), "larger than") {
-		t.Fatalf("oversized body: %v", err)
+	c.maxBody = 1 << 20
+	seen := map[string]int{}
+	in := ListInput{Container: "c", Prefix: "p/"}
+	for pages := 0; ; pages++ {
+		if pages > keys {
+			t.Fatal("the walk does not end")
+		}
+		p, err := c.List(context.Background(), &in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range p.Items {
+			seen[it.Name]++
+			if len(it.ContentType) != entry {
+				t.Fatalf("%s: content type of %d bytes", it.Name, len(it.ContentType))
+			}
+		}
+		if p.NextMarker == "" {
+			break
+		}
+		in.Marker = p.NextMarker
 	}
-	if _, err := c.List(context.Background(), &ListInput{Container: "c", MaxResults: 2}); err != nil {
-		t.Fatalf("a body within the cap of 2 entries: %v", err)
+	if len(seen) != keys {
+		t.Fatalf("%d keys listed, want %d", len(seen), keys)
+	}
+	for k, n := range seen {
+		if n != 1 {
+			t.Fatalf("%s listed %d times", k, n)
+		}
+	}
+	// Each page is first asked without maxresults (the server's 5,000),
+	// then halved until it fits: 0, 2500, ..., 9, 4.
+	if sizes[0] != 0 || slices.Min(sizes) != 0 || !slices.Contains(sizes, 4) || slices.Contains(sizes, 2) || c.BodyCapShrinks() == 0 {
+		t.Fatalf("maxresults sent %v, %d shrinks", sizes, c.BodyCapShrinks())
+	}
+	_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "p/", Delimiter: "huge"})
+	if Classify(err) != objhttp.ClassParse || !strings.Contains(err.Error(), "one entry") {
+		t.Fatalf("a single entry past the cap: %v", err)
+	}
+	if MaxBody != 64<<20 {
+		t.Fatalf("MaxBody %d", MaxBody)
 	}
 }
 

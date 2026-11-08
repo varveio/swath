@@ -399,25 +399,34 @@ func TestEntraDiscovery(t *testing.T) {
 			}
 		})
 	}
-	// The caller's context bounds the discovery.
+	// The caller's context bounds New, decided by signals, not timing: an
+	// ended context refuses it at once; one that ends while the discovery
+	// waits for its token ends it with that context's error. The asset tag
+	// is a missing file, so a CI runner that is an Azure VM probes too.
 	clearEntra(t)
-	old := newDefaultCredential
-	t.Cleanup(func() { newDefaultCredential = old })
-	newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-		return blockingCredential{}, nil
+	oldTag, old := azureAssetTagFile, newDefaultCredential
+	t.Cleanup(func() { azureAssetTagFile, newDefaultCredential = oldTag, old })
+	azureAssetTagFile = t.TempDir() + "/none"
+	bc := blockingCredential{started: make(chan struct{})}
+	newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) { return bc, nil }
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	if _, err := New(done, Config{Account: "acct"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("New under an ended context: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	if _, err := New(ctx, Config{Account: "acct"}); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
-		t.Fatalf("New under an expiring context: %v after %s", err, time.Since(start))
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-bc.started; cancel() }()
+	if _, err := New(ctx, Config{Account: "acct"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("New whose context ends during discovery: %v", err)
 	}
 }
 
-// blockingCredential answers only when its context ends.
-type blockingCredential struct{}
+// blockingCredential closes started when asked for a token, then answers
+// only when its context ends.
+type blockingCredential struct{ started chan struct{} }
 
-func (blockingCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+func (b blockingCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	close(b.started)
 	<-ctx.Done()
 	return azcore.AccessToken{}, ctx.Err()
 }
