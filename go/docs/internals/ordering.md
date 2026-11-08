@@ -317,8 +317,9 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   cursor), at a split (the split cursor, before the children) and at its end (`hi`, or ⊤). A fence is
   declared only at a bound the provider accepts or at K, never below K; the seed and resume wrapper ranges
   and the sequential chain declare nothing. The adapters between provider and order stage (`source.Erase`,
-  the filter emitter) forward both calls, and the provider says it fences (`source.Fencing`); durable spill
-  engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
+  the filters, the object-size counter) forward both calls, `Fences` and `Replay`
+  (`registry` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
+  spill engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
   first fence in it and the latest fence (O(1)), so a wholly filtered page costs nothing and fences never
   accumulate (`TestDurableZeroRowCertificate` allocates nothing per fence). A fence after a child certifies
   nothing (`TestFencesHoldTheContract` holds every range to these rules on random keyspaces, splits and
