@@ -24,11 +24,12 @@ on:
     - cron: "0 7 * * *"
   # Manual trigger for on-demand deep/perf runs from any branch; `jobs`
   # picks one job (go-shapes: the Go shape suite alone, which is how its
-  # baseline is regenerated on a branch).
+  # baseline is regenerated on a branch; go-race-nightly: the unsharded amd64
+  # race run alone).
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, deep-and-perf, osv-scan or go-shapes"
+        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly or go-shapes"
         required: false
         default: all
 
@@ -185,6 +186,7 @@ jobs:
   # coverage, and a check that the shards' union still equals `go test -race ./...`. The -json
   # stream is kept as an artifact for flakes and per-test times.
   go-race-nightly:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-race-nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:

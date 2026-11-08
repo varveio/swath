@@ -65,7 +65,7 @@ jobs:
             fi
             # grep reads every line rather than exiting at the first match while git still writes
             # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -213,7 +213,7 @@ jobs:
       - name: Install DuckDB CLI
         if: needs.changes.outputs.java == 'true'
         run: |
-          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
           echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
           unzip -o /tmp/duckdb.zip -d /tmp/duckdb
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
@@ -394,10 +394,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-lint
 
       - name: gofmt
         if: needs.changes.outputs.go == 'true'
@@ -413,6 +412,12 @@ jobs:
       - name: go vet
         if: needs.changes.outputs.go == 'true'
         run: go vet ./...
+
+      # go.mod and go.sum are what the code imports: a dependency added, dropped or moved
+      # between direct and indirect without `go mod tidy` fails here, with the diff.
+      - name: go mod tidy -diff
+        if: needs.changes.outputs.go == 'true'
+        run: go mod tidy -diff
 
       - name: Race shards cover every test once
         if: needs.changes.outputs.go == 'true'
@@ -444,10 +449,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-race-${{ matrix.shard }}
 
       - name: go test -race (shard ${{ matrix.shard }})
         if: needs.changes.outputs.go == 'true'
@@ -498,10 +502,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-nonrace
 
       # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
@@ -539,10 +542,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-build
 
       - name: Static cross-builds (CGO_ENABLED=0)
         if: needs.changes.outputs.go == 'true'
@@ -643,10 +645,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-xos
 
       - name: go vet
         if: needs.changes.outputs.go == 'true'
@@ -690,7 +691,7 @@ jobs:
             # first match while git still writes (git's SIGPIPE under pipefail would turn a
             # match into go=false).
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if grep -E '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
+            if grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -699,10 +700,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: steps.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-fixtures
 
       - name: Set up JDK 25
         if: steps.changes.outputs.go == 'true'
@@ -926,7 +926,7 @@ jobs:
       - name: Install DuckDB CLI
         if: github.event_name == 'workflow_dispatch'
         run: |
-          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
           echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
           unzip -o /tmp/duckdb.zip -d /tmp/duckdb
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb

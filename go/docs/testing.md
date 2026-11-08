@@ -17,7 +17,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Format, vet, shard check | `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-lint` |
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest)` |
-| Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; every `nightly.yml` dispatch | ubuntu-latest | `nightly.yml` `go-race-nightly` |
+| Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
@@ -74,7 +74,7 @@ of the `keyrange` laws. CI never passes `-short`.
 
 `ci.yml` `changes` diffs the pull request's base (or the push's previous commit) against `HEAD`:
 
-- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `Dockerfile.replay-go` or its ignore file,
+- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.replay-go` or its ignore file,
   `scripts/ci/smoke-replay-container.sh` or `scripts/ci/go-race-shards.sh`.
 - **Java change:** any path outside `go/` and `Dockerfile.replay-go*`, so a documentation or script change
   runs the Java tiers.
@@ -91,12 +91,19 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 
 | Job | Runs | Runner |
 |---|---|---|
-| `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
+| `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a Go change, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes` | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows go test -c ./internal/journal`; the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
+
+Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
+version `go.mod` names, with the module and build caches restored from the job's newest cache, keyed per job
+(and race shard), runner OS and architecture, `go.sum` and commit. Only a push to `main` saves, under its
+commit's key, so parallel jobs never overwrite one another's caches with partial ones and a pull request
+restores `main`'s newest without saving. The DuckDB downloads (`integration-tests`, the dispatch-only
+container smoke) retry five times, and the SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on
 amd64 nightly, and run without `-race` on macOS and Windows.
@@ -154,11 +161,11 @@ macOS runs the crash, durable and kill matrices without `-race`.
 
 `nightly.yml` runs at 07:00 UTC on `main` with no path filter, so it also backstops the change detection.
 A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`: `all` (the default),
-`deep-and-perf`, `osv-scan` or `go-shapes`.
+`deep-and-perf`, `osv-scan`, `go-race-nightly` or `go-shapes`.
 
 | Job | Runs | On dispatch |
 |---|---|---|
-| `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | always: the job has no `jobs` condition |
+| `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | `all`, `go-race-nightly` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `deep-and-perf`, `osv-scan` | the Java tiers and the supply-chain scan ([docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, or their own name |
 
@@ -181,12 +188,15 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 | `count` | `50` | `-count` |
 | `race` | `true` | `-race`; ignored on Windows |
 | `gomaxprocs` | empty | `GOMAXPROCS`, unset when empty |
+| `cpu` | empty | `-cpu` list (each test runs once per value, e.g. `1,2,4`), not passed when empty |
+| `shuffle` | `false` | `-shuffle=on`; the seed is in the output, so `-shuffle=SEED` replays an order |
 | `os` | `ubuntu-latest` | `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest` |
 
 It runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
-`go-stress-OS-ARCH` artifact. A long test at a high count can exceed the job's limit: split the count across
-several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
+`go-stress-OS-ARCH` artifact. Stress takes a package pattern and a `-run` pattern, not a race shard: to repeat
+a shard, pass its row's arguments from [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh).
+A long test at a high count can exceed the job's limit: split the count across several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
 ### Release
