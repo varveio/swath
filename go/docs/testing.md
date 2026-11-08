@@ -430,11 +430,13 @@ children, throttles, and for a dataset arm whether its keys are the shape's.
 
 **Default tier.** `TestShapes` lists every shape at about 200,000 keys behind a 5 ms fake to Parquet at 16
 and at 5 workers: both datasets are exactly the shape's keys and their parts are byte-identical. The 16-worker
-run is held to bounds loose enough never to fail on noise and tight enough to fail on a tenfold regression:
-at most 3 requests per 1,000 keys, `split.max_depth` at most 6·log2(pages)+16, and a mean of at least a
-quarter of the workers active (shapes of 100 pages or more). The tiny shapes are held to 8 requests per page
-plus 16 instead. It takes about 40 s; under `-race` it skips (ten times slower, and the code it drives is
-race-tested by its own packages), so the `go` job runs it in a step of its own:
+run is held to bounds an order of magnitude from what it measures, so a tenfold regression fails and no
+change short of that does (the measured values are beside each bound in the test): at most 10 requests per
+1,000 keys (measured 1.1 to 2.0), `split.max_depth` at most 3·(6·log2(pages)+16) (at most 34 against 55 to
+61), and a mean of at least a tenth of the workers active (8.8 to 15 of 16; shapes of 100 pages or more). The
+tiny shapes are held to 50 requests per page plus 50 instead. It takes about 15 s on the ubuntu runner (40 s
+on a busy 4-core box); under `-race` it skips (ten times slower, and the code it drives is race-tested by its
+own packages), so the `go` job runs it in a step of its own:
 
 ```bash
 go test -count=1 -run 'TestShapes$' -v ./internal/shapes
@@ -444,9 +446,11 @@ go test -count=1 -run 'TestShapes$' -v ./internal/shapes
 per shape, 88 arms): every shape at 50 ms and 64 workers; a latency ladder (10 and 200 ms); 256 workers;
 pages capped at 100; at 10, 50 and 200 ms on the reference shape: jitter, 1 % and 5 % throttling (with and
 without the limiter), a 300 request/s cap, a slow prefix over half the keys and over one folder, slow
-continuations, slow seeks and a slow first page; `--slow-split` arms; and Parquet arms whose dataset is
-compared with the shape key for key. It writes one JSON summary (the workflow's `go-shapes-summary`
-artifact) and compares it with `bench/baselines/shapes.json`:
+continuations, slow seeks and a slow first page; `--slow-split` arms; and Parquet arms. Every arm checks its
+output key for key against the shape, in order: a Parquet arm reads its dataset back, every other arm writes
+its rows as an ordered TSV stream compared in memory as it arrives (`shapes.Run`), so an overlap between
+ranges cannot hide behind an equal gap. It writes one JSON summary (the workflow's `go-shapes-summary`
+artifact, `schema_version` 1) and compares it with `bench/baselines/shapes.json`:
 
 ```bash
 go run ./bench/shapes -out shapes.json -baseline bench/baselines/shapes.json   # the nightly
@@ -454,11 +458,12 @@ go run ./bench/shapes -list                                                    #
 go run ./bench/shapes -run 'throttle|pq\.' -scale 200000 -out /tmp/s.json      # a subset, smaller
 ```
 
-A wrong listing (rows that are not the shape's, an arm that fails or runs past `-arm-timeout`) fails the job.
-A number (wall over ideal, requests or attempts per 1,000 keys, depth, mean active) that moved by more than
-20 % against the baseline, and by more than a small absolute floor, is annotated on the run and tabled in its
-summary, and does not fail it. Once the baselines have held steady for about two weeks of nightlies, the
-comparison switches to failing the job.
+Only a wrong listing (rows that are not the shape's, an arm that fails or runs past `-arm-timeout`) fails
+the job. A number (wall over ideal, requests or attempts per 1,000 keys, depth, mean active) that moved by
+more than 20 % against the baseline, and by more than a small absolute floor, is annotated on the run and
+tabled in its summary; so is a baseline that is missing, unreadable, of another schema version or scale, or
+a summary that could not be written. None of these fails the job. Once the baselines have held steady for
+about two weeks of nightlies, the comparison switches to failing the job.
 
 **Baseline policy.** The baseline is the summary of a nightly run on GitHub's ubuntu runner (walls on another
 machine are not comparable): download the `go-shapes-summary` artifact and commit it as

@@ -49,6 +49,8 @@ type Options struct {
 	// and the request's sequence number, as the jitter is.
 	Fail503   float64
 	FaultSeed uint64
+	// Now is the rate cap's clock (tests drive it); nil: time.Now.
+	Now func() time.Time
 	// Log, if set, receives one tab-separated line per listing request:
 	// unix ms, api, status, keys, prefixes, microseconds, prefix, bound.
 	Log io.Writer
@@ -94,10 +96,13 @@ func NewServer(ks *Keyspace, opt Options) *Server {
 	if opt.Bucket == "" {
 		opt.Bucket = "bkt"
 	}
+	if opt.Now == nil {
+		opt.Now = time.Now
+	}
 	s := &Server{ks: ks, opt: opt, started: time.Now()}
 	if opt.Rate > 0 {
 		s.rateBurst = max(1, opt.Rate/10)
-		s.tokens, s.refilled = s.rateBurst, s.started
+		s.tokens, s.refilled = s.rateBurst, opt.Now()
 	}
 	return s
 }
@@ -231,7 +236,7 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request, seq uint64, q Que
 func (s *Server) take() bool {
 	s.rateMu.Lock()
 	defer s.rateMu.Unlock()
-	now := time.Now()
+	now := s.opt.Now()
 	s.tokens = min(s.rateBurst, s.tokens+now.Sub(s.refilled).Seconds()*s.opt.Rate)
 	s.refilled = now
 	if s.tokens < 1 {

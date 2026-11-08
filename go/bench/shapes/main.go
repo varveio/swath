@@ -6,15 +6,18 @@
 // service behaviours (arms.go), and writes one JSON summary. With
 // -baseline it compares the summary with a committed one and reports every
 // number that moved by more than -tolerance as a GitHub annotation (and a
-// table in $GITHUB_STEP_SUMMARY); such moves do not fail the run. A wrong
-// listing (rows that are not the shape's keys, an arm that fails or times
-// out) does.
+// table in $GITHUB_STEP_SUMMARY). Only a wrong listing (rows that are not
+// the shape's keys, in order; an arm that fails or times out) fails the
+// run: a moved number, a baseline that is missing, unreadable or of
+// another schema or scale, and a summary that cannot be written are
+// annotated and leave the run green.
 //
 //	go run ./bench/shapes -out shapes.json -baseline bench/baselines/shapes.json
 //	go run ./bench/shapes -run 'throttle|pq\.' -scale 200000 -out /tmp/s.json
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,15 +38,21 @@ import (
 	"github.com/varveio/swath/go/internal/source/scalefake"
 )
 
+// SchemaVersion is the summary's format: the arms' fields and meaning. It
+// moves when a field is renamed, dropped or redefined; a baseline of
+// another version is reported, not compared.
+const SchemaVersion = 1
+
 // Summary is the suite's output, and the baseline's format.
 type Summary struct {
-	Scale     int             `json:"scale"`
-	GoVersion string          `json:"go_version"`
-	CPUs      int             `json:"cpus"`
-	Started   time.Time       `json:"started"`
-	WallS     float64         `json:"wall_s"`
-	Results   []shapes.Result `json:"results"`
-	Failures  []string        `json:"failures,omitempty"`
+	SchemaVersion int             `json:"schema_version"`
+	Scale         int             `json:"scale"`
+	GoVersion     string          `json:"go_version"`
+	CPUs          int             `json:"cpus"`
+	Started       time.Time       `json:"started"`
+	WallS         float64         `json:"wall_s"`
+	Results       []shapes.Result `json:"results"`
+	Failures      []string        `json:"failures,omitempty"`
 }
 
 func main() {
@@ -87,7 +96,7 @@ func main() {
 	} else if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	sum := Summary{Scale: *scale, GoVersion: runtime.Version(), CPUs: runtime.NumCPU(), Started: time.Now().UTC()}
+	sum := Summary{SchemaVersion: SchemaVersion, Scale: *scale, GoVersion: runtime.Version(), CPUs: runtime.NumCPU(), Started: time.Now().UTC()}
 	sort.SliceStable(arms, func(i, j int) bool { return shapeIndex(arms[i].shape) < shapeIndex(arms[j].shape) })
 	var keys []string
 	var ks *scalefake.Keyspace
@@ -110,8 +119,8 @@ func main() {
 			log.Printf("shape %s: %d keys in %s", shape, len(keys), time.Since(t).Round(time.Millisecond))
 		}
 		r, err := runArm(ks, keys, a, *scale, dir, *timeout)
-		if err == nil && (r.Rows != int64(len(keys)) || (r.Identical != nil && !*r.Identical)) {
-			err = fmt.Errorf("%d rows of %d keys, identical %v", r.Rows, len(keys), r.Identical)
+		if err == nil && (r.Rows != int64(len(keys)) || !r.Identical) {
+			err = fmt.Errorf("%d rows of %d keys: %s", r.Rows, len(keys), r.Mismatch)
 		}
 		if err != nil {
 			msg := fmt.Sprintf("%s: %v", a.name, err)
@@ -124,22 +133,62 @@ func main() {
 			r.Name, r.WallMs, r.IdealMs, r.Ratio, r.RequestsPer1k, r.AttemptsPer1k, r.Depth, r.MeanActive, r.Splits, r.Throttles)
 	}
 	sum.WallS = time.Since(sum.Started).Seconds()
-	b, err := json.MarshalIndent(sum, "", " ")
-	if err != nil {
-		log.Fatal(err)
+	log.Printf("%d arms, %d failed, %.0f s", len(sum.Results), len(sum.Failures), sum.WallS)
+	if b, err := json.MarshalIndent(sum, "", " "); err != nil {
+		warn("shape summary", "not encoded: %v", err)
+	} else if err := os.WriteFile(*out, append(b, '\n'), 0o644); err != nil {
+		warn("shape summary", "not written: %v", err)
+	} else {
+		log.Printf("summary in %s", *out)
 	}
-	if err := os.WriteFile(*out, append(b, '\n'), 0o644); err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("%d arms, %d failed, %.0f s; summary in %s", len(sum.Results), len(sum.Failures), sum.WallS, *out)
 	if *base != "" {
 		if err := compare(*base, sum, *tol); err != nil {
-			log.Fatal(err)
+			warn("shape baseline", "not compared: %v", err)
 		}
 	}
 	if len(sum.Failures) > 0 {
 		os.Exit(1)
 	}
+}
+
+// warn is a GitHub warning annotation (a line on a terminal): reporting
+// never fails the run.
+func warn(title, format string, args ...any) {
+	fmt.Printf("::warning title=%s::%s\n", title, fmt.Sprintf(format, args...))
+}
+
+// readBaseline reads and validates a baseline for sum: the whole file is
+// known fields of the summary's schema version (a renamed or dropped
+// field would otherwise read as zero and move every number), at sum's
+// scale, with named arms. why says what is wrong with one that is not.
+func readBaseline(path string, sum Summary) (Summary, string) {
+	var base Summary
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return base, "no baseline"
+	}
+	if err != nil {
+		return base, err.Error()
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&base); err != nil {
+		return base, "not a summary of this schema: " + err.Error()
+	}
+	switch {
+	case base.SchemaVersion != sum.SchemaVersion:
+		return base, fmt.Sprintf("schema version %d, this run writes %d", base.SchemaVersion, sum.SchemaVersion)
+	case base.Scale != sum.Scale:
+		return base, fmt.Sprintf("scale %d, this run %d", base.Scale, sum.Scale)
+	case len(base.Results) == 0:
+		return base, "no arms"
+	}
+	for i, r := range base.Results {
+		if r.Name == "" || r.Keys == 0 {
+			return base, fmt.Sprintf("arm %d has no name or no keys", i)
+		}
+	}
+	return base, ""
 }
 
 func shapeIndex(name string) int {
@@ -183,22 +232,13 @@ var metrics = []metric{
 }
 
 // compare annotates every metric of every arm that moved by more than tol
-// against the baseline, and lists arms only on one side.
+// against the baseline, and lists arms only on one side. A baseline that
+// cannot be used is reported and the comparison skipped; the error is for
+// a failure of the report itself.
 func compare(path string, sum Summary, tol float64) error {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		fmt.Printf("::notice title=shape baseline::no baseline at %s; commit this run's summary to start one\n", path)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var base Summary
-	if err := json.Unmarshal(b, &base); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if base.Scale != sum.Scale {
-		fmt.Printf("::notice title=shape baseline::baseline scale %d, this run %d: not compared\n", base.Scale, sum.Scale)
+	base, why := readBaseline(path, sum)
+	if why != "" {
+		warn("shape baseline", "%s: %s; commit a summary of this version and scale from a run of the nightly to start one", path, why)
 		return nil
 	}
 	old := map[string]shapes.Result{}

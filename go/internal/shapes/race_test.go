@@ -3,6 +3,6 @@
 
 //go:build race
 
-package shapes_test
+package shapes
 
 const raceOn = true

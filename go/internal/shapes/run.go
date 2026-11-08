@@ -4,6 +4,7 @@
 package shapes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
 	pq "github.com/parquet-go/parquet-go"
@@ -23,6 +25,7 @@ import (
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source/s3"
 	"github.com/varveio/swath/go/internal/source/scalefake"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // Arm is one listing of a shape.
@@ -38,9 +41,11 @@ type Arm struct {
 	// command line (diagnostic ones included: "-seed=false",
 	// "-limiter=false", "-slow-split"); the rest is the command's defaults.
 	Flags []string
-	// Out, if set, is a dataset directory to write (it must not exist);
-	// otherwise the run counts only. Parts are cut by size only, so the
-	// dataset is the same for the same keys at any worker count.
+	// Out, if set, is a dataset directory to write (it must not exist),
+	// whose keys are then read back; otherwise the rows go to an ordered
+	// text stream compared with the keys as it is written. Parts are cut
+	// by size only, so the dataset is the same for the same keys at any
+	// worker count.
 	Out string
 	// RTT is the mean page latency the ideal wall time assumes; 0: the
 	// fake's Latency plus half its Jitter.
@@ -73,8 +78,11 @@ type Result struct {
 	SeedTrips     int64   `json:"seed_round_trips"`
 	Throttles     int64   `json:"throttles"`
 	Rows          int64   `json:"rows"`
-	// Identical: the dataset's keys are the shape's, in order (Out arms).
-	Identical *bool `json:"identical,omitempty"`
+	// Identical: the run's output is exactly the shape's keys, in order:
+	// the dataset's keys for an Out arm, the ordered text stream's for
+	// any other. Mismatch says where they first differ when it is not.
+	Identical bool   `json:"identical"`
+	Mismatch  string `json:"mismatch,omitempty"`
 }
 
 // Run lists keys (the shape's, sorted) as the arm says, through a fake
@@ -101,8 +109,11 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	}
 	cfg := listing.Config{Source: listing.SourceConfig{URI: "s3://bkt", Options: opts},
 		Limits: listing.Limits{Workers: a.Workers, PartInterval: -1}}
+	m := &matcher{keys: keys}
 	if a.Out != "" {
 		cfg.Output.Dir, cfg.Output.NoJournal = a.Out, true
+	} else {
+		cfg.Output.Text = &textout.Config{Format: textout.TSV, Stdout: m}
 	}
 	rep, err := listing.Run(ctx, cfg)
 	if err != nil {
@@ -144,10 +155,132 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 		if err != nil {
 			return r, fmt.Errorf("%s: %w", a.Name, err)
 		}
-		same := slices.Equal(got, keys)
-		r.Identical = &same
+		r.Identical = slices.Equal(got, keys)
+		if !r.Identical {
+			r.Mismatch = fmt.Sprintf("dataset has %d keys, want %d", len(got), len(keys))
+			if i := firstDiff(got, keys); i >= 0 {
+				r.Mismatch = fmt.Sprintf("dataset key %d is %q, want %q", i, at(got, i), at(keys, i))
+			}
+		}
+	} else {
+		r.Identical, r.Mismatch = m.done()
 	}
 	return r, nil
+}
+
+func firstDiff(a, b []string) int {
+	for i := range min(len(a), len(b)) {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	if len(a) != len(b) {
+		return min(len(a), len(b))
+	}
+	return -1
+}
+
+func at(s []string, i int) string {
+	if i < len(s) {
+		return s[i]
+	}
+	return "(none)"
+}
+
+// matcher is the text output's stream: it compares each TSV row's key,
+// unescaped, with the next of keys as the rows arrive, holding nothing
+// but the partial last line. The first line is the TSV header.
+type matcher struct {
+	keys   []string
+	next   int    // keys compared so far
+	rest   []byte // the partial line
+	header bool
+	bad    string // the first mismatch
+}
+
+func (m *matcher) Write(p []byte) (int, error) {
+	m.rest = append(m.rest, p...)
+	for {
+		nl := bytes.IndexByte(m.rest, '\n')
+		if nl < 0 {
+			return len(p), nil
+		}
+		line := m.rest[:nl]
+		m.rest = m.rest[nl+1:]
+		if !m.header {
+			m.header = true
+			continue
+		}
+		if tab := bytes.IndexByte(line, '\t'); tab >= 0 {
+			line = line[:tab]
+		}
+		key := unescape(line)
+		if m.bad == "" {
+			switch {
+			case m.next >= len(m.keys):
+				m.bad = fmt.Sprintf("row %d is %q past the last key", m.next, key)
+			case key != m.keys[m.next]:
+				m.bad = fmt.Sprintf("row %d is %q, want %q", m.next, key, m.keys[m.next])
+			}
+		}
+		m.next++
+	}
+}
+
+// done reports whether every key arrived, in order, and nothing else.
+func (m *matcher) done() (bool, string) {
+	if m.bad != "" {
+		return false, m.bad
+	}
+	if len(m.rest) > 0 {
+		return false, fmt.Sprintf("an unterminated last line of %d bytes", len(m.rest))
+	}
+	if m.next != len(m.keys) {
+		return false, fmt.Sprintf("%d rows, want %d", m.next, len(m.keys))
+	}
+	return true, ""
+}
+
+// unescape reverses the text output's escaping (textout.appendEscaped:
+// JSON's escapes for bytes below 0x20, 0x7f and the backslash; nothing
+// else is touched).
+func unescape(b []byte) string {
+	if bytes.IndexByte(b, '\\') < 0 {
+		return string(b)
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c != '\\' || i+1 >= len(b) {
+			out = append(out, c)
+			continue
+		}
+		i++
+		switch b[i] {
+		case 'b':
+			out = append(out, '\b')
+		case 'f':
+			out = append(out, '\f')
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case 'u':
+			if i+4 < len(b) {
+				if v, err := strconv.ParseUint(string(b[i+1:i+5]), 16, 8); err == nil {
+					out = append(out, byte(v))
+					i += 4
+					continue
+				}
+			}
+			out = append(out, '\\', 'u')
+		default:
+			out = append(out, b[i])
+		}
+	}
+	return string(out)
 }
 
 // DatasetKeys reads the keys of a committed dataset's parts, in the

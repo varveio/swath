@@ -62,8 +62,8 @@ func TestBehaviourDelays(t *testing.T) {
 }
 
 // TestBehaviourAnswers: a page cap shortens pages whatever max-keys asks;
-// a rate cap answers the request past its burst with SlowDown at once and
-// counts it; the 503 fraction is drawn per request number, so two servers
+// a rate cap, on a driven clock, answers the request past its burst with
+// SlowDown at once, counts it, and admits again once the bucket refills; the 503 fraction is drawn per request number, so two servers
 // with one seed fail the same requests.
 func TestBehaviourAnswers(t *testing.T) {
 	keys := make([]string, 50)
@@ -94,20 +94,25 @@ func TestBehaviourAnswers(t *testing.T) {
 	if code, n := get(capped.URL); code != 200 || n != 7 {
 		t.Fatalf("page cap: %d, %d keys", code, n)
 	}
-	// One request a second, a burst of one: the first request is answered
-	// at once (its FirstLatency) and the second, sent at once, is
-	// throttled before its 10 s delay.
-	rated := NewServer(k, Options{Rate: 1, Latency: 10 * time.Second, FirstLatency: time.Nanosecond})
+	// One request a second, a burst of one, on a clock the test drives:
+	// the first request takes the token; the second, at the same instant,
+	// is throttled at once (before any delay); a second later the bucket
+	// has refilled and the third is answered.
+	clock := time.Unix(1_700_000_000, 0)
+	rated := NewServer(k, Options{Rate: 1, Now: func() time.Time { return clock }})
 	rs := httptest.NewServer(rated)
 	defer rs.Close()
 	if code, _ := get(rs.URL); code != 200 {
 		t.Fatalf("rate cap: first request %d", code)
 	}
-	start := time.Now()
-	if code, _ := get(rs.URL); code != http.StatusServiceUnavailable || time.Since(start) > 5*time.Second {
-		t.Fatalf("rate cap: second request %d after %v", code, time.Since(start))
+	if code, _ := get(rs.URL); code != http.StatusServiceUnavailable {
+		t.Fatalf("rate cap: second request %d, want 503", code)
 	}
-	if st := rated.Stats(false); st.Throttled != 1 || st.Requests != 2 {
+	clock = clock.Add(time.Second)
+	if code, _ := get(rs.URL); code != 200 {
+		t.Fatalf("rate cap: third request, a second later, %d", code)
+	}
+	if st := rated.Stats(false); st.Throttled != 1 || st.Requests != 3 || st.Pages != 2 {
 		t.Fatalf("rate cap: stats %+v", st)
 	}
 	f := Options{Fail503: 0.3, FaultSeed: 9}
