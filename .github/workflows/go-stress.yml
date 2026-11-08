@@ -28,6 +28,18 @@ on:
         description: GOMAXPROCS (empty = unset)
         required: false
         default: ""
+      cpu:
+        description: GOMAXPROCS list passed to -cpu (e.g. 1,2,4; empty = not passed)
+        required: false
+        default: ""
+      shuffle:
+        description: Shuffle test order (-shuffle=on; the seed is printed)
+        type: boolean
+        default: false
+      shards:
+        description: Runners, each repeating the test -count times (1 to 8)
+        required: true
+        default: "1"
       os:
         description: Runner
         type: choice
@@ -38,7 +50,27 @@ permissions:
   contents: read
 
 jobs:
+  # The shard numbers the matrix runs: 1..shards, at most 8.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.shards.outputs.list }}
+    steps:
+      - id: shards
+        env:
+          SHARDS: ${{ inputs.shards }}
+        run: |
+          set -euo pipefail
+          [[ "$SHARDS" =~ ^[1-8]$ ]] || { echo "::error::shards must be 1 to 8, got $SHARDS"; exit 1; }
+          echo "list=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+
   stress:
+    needs: plan
+    name: stress (${{ inputs.os }}, shard ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     runs-on: ${{ inputs.os }}
     timeout-minutes: 75
     defaults:
@@ -62,12 +94,16 @@ jobs:
           COUNT: ${{ inputs.count }}
           RACE: ${{ inputs.race }}
           MAXPROCS: ${{ inputs.gomaxprocs }}
+          CPU: ${{ inputs.cpu }}
+          SHUFFLE: ${{ inputs.shuffle }}
           RUNNER_OS_NAME: ${{ runner.os }}
         run: |
           set -uo pipefail
           args=(-run "$RUN" -count "$COUNT" -timeout 60m -json)
           # The race detector needs cgo, which the Windows runner lacks by default.
           if [ "$RACE" = true ] && [ "$RUNNER_OS_NAME" != Windows ]; then args+=(-race); fi
+          if [ -n "$CPU" ]; then args+=(-cpu "$CPU"); fi
+          if [ "$SHUFFLE" = true ]; then args+=(-shuffle=on); fi
           if [ -n "$MAXPROCS" ]; then export GOMAXPROCS="$MAXPROCS"; fi
           go test "${args[@]}" "$PKG" | tee "$RUNNER_TEMP/go-stress.json" >/dev/null
           echo "status=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
@@ -77,6 +113,7 @@ jobs:
         env:
           RUN: ${{ inputs.run }}
           COUNT: ${{ inputs.count }}
+          SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           f="$RUNNER_TEMP/go-stress.json"
@@ -87,7 +124,7 @@ jobs:
           {
             echo "### Go stress"
             echo
-            echo "run \`$RUN\` x $COUNT on $RUNNER_OS: **$pass passed, $fail failed**"
+            echo "run \`$RUN\` x $COUNT on $RUNNER_OS, shard $SHARD: **$pass passed, $fail failed**"
             echo
             jq -r 'select(.Test != null and .Action == "fail") | .Test' "$f" | sort | uniq -c | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -96,7 +133,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: go-stress-${{ runner.os }}-${{ runner.arch }}
+          name: go-stress-${{ runner.os }}-${{ runner.arch }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/go-stress.json
           if-no-files-found: ignore
 

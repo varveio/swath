@@ -102,8 +102,8 @@ Every job above sets up Go through [`.github/actions/setup-go`](../../.github/ac
 version `go.mod` names, with the module and build caches restored from the job's newest cache, keyed per job
 (and race shard), runner OS and architecture, `go.sum` and commit. Only a push to `main` saves, under its
 commit's key, so parallel jobs never overwrite one another's caches with partial ones and a pull request
-restores `main`'s newest without saving. The DuckDB downloads (`integration-tests`, the dispatch-only container smoke) retry five times, and the
-SeekParquet conformance step's `pip install` ten.
+restores `main`'s newest without saving. The DuckDB downloads (`integration-tests`, the dispatch-only
+container smoke) retry five times, and the SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on
 amd64 nightly, and run without `-race` on macOS and Windows.
@@ -184,12 +184,15 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 | `count` | `50` | `-count` |
 | `race` | `true` | `-race`; ignored on Windows |
 | `gomaxprocs` | empty | `GOMAXPROCS`, unset when empty |
+| `cpu` | empty | `-cpu` list (each test runs once per value, e.g. `1,2,4`), not passed when empty |
+| `shuffle` | `false` | `-shuffle=on`; the seed is in the output, so `-shuffle=SEED` replays an order |
+| `shards` | `1` | runners (1 to 8), each running the whole `-count`: a count too long for one job, or more schedules at once |
 | `os` | `ubuntu-latest` | `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest` |
 
-It runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
-F failed` and the failing test names to the step summary, and keeps the JSON stream as the
-`go-stress-OS-ARCH` artifact. A long test at a high count can exceed the job's limit: split the count across
-several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
+Each shard runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS,
+shard S: P passed, F failed` and the failing test names to the step summary, and keeps the JSON stream as the
+`go-stress-OS-ARCH-shard-S` artifact. A long test at a high count can exceed the job's limit: split the count
+across shards. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
 ### Release
