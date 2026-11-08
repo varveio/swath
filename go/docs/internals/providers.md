@@ -65,7 +65,10 @@ credential loading (service-account and authorized-user files, Application Defau
 server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/metadata`).
 
 **Ours.** The one list call per provider (ListObjectsV2; `objects.list`), built and sent by
-`internal/source/s3/client` and `internal/source/gcs/client`; S3's response parser, a hand-written scanner
+`internal/source/s3/client` and `internal/source/gcs/client` (the S3 client also sends ListObjectVersions, for
+versioned listing, on the same path; its parser keeps `<Version>` and `<DeleteMarker>` entries in one slice in
+wire order, decodes keys and the `NextKeyMarker` once, keeps version IDs verbatim, and refuses a truncated page
+without a `NextKeyMarker` as an invalid page); S3's response parser, a hand-written scanner
 over the body that allocates per page, not per object (an `<Error>` body, the cold path, goes through
 `encoding/xml`); GCS's decoding of only the listed fields with
 `encoding/json` into a fixed envelope; bodies read up to 16 MiB; envelope and page validation (a 200 that is
