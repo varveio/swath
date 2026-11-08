@@ -1,6 +1,9 @@
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
-"""Run with python3 -m unittest test_dataset_readers (DuckDB SQL tests optional)."""
+"""Manual reader tier: python3 -m unittest -v test_dataset_readers (requires DuckDB).
+
+The schema-only tests also run without DuckDB; SQL and verifier tests then skip.
+"""
 import copy
 import importlib.util
 import json
@@ -121,6 +124,16 @@ class VerifierSchema(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, proc.stdout)
         self.assertIn("FAIL   size:", proc.stdout)
         self.assertIn("RESULT: FAILED", proc.stdout)
+
+    def test_verifier_runs_from_any_working_directory(self):
+        import subprocess
+        import sys
+        dataset = self.base / "generations/valid"
+        with tempfile.TemporaryDirectory() as cwd:
+            proc = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "verify.py"),
+                                   str(dataset), str(dataset)], cwd=cwd, text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("whole-row ordered sequence and multiset match reference", proc.stdout)
 
     def test_complete_gcs_contract_in_every_part(self):
         for schema in ("current", "generations"):

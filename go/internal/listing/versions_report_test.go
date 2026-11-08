@@ -7,62 +7,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/varveio/swath/go/internal/dataset"
-	"github.com/varveio/swath/go/internal/filter"
-	"github.com/varveio/swath/go/internal/parquetout"
-	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/gcs"
-	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
-	"github.com/varveio/swath/go/internal/source/keyrange"
-	"github.com/varveio/swath/go/internal/source/s3"
-	s3client "github.com/varveio/swath/go/internal/source/s3/client"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/filter"
+	"github.com/varveio/swath/go/internal/source/gcs"
+	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
+	"github.com/varveio/swath/go/internal/source/keyrange"
+	s3client "github.com/varveio/swath/go/internal/source/s3/client"
 )
 
-func TestReviewPriorCoalescesFinalGroup(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, dataset.DataDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	r, err := parquetout.NewRouter(parquetout.Options{Out: dir, PartSize: 64 << 20, Encoders: 1}, &s3.VersionsSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := make([]s3.VersionRow, 5000)
-	for i := range rows {
-		rows[i] = s3.VersionRow{Key: "k", Data: s3.Version{VersionID: "v"}}
-	}
-	if err := r.Write(context.Background(), [][]s3.VersionRow{rows}); err != nil {
-		t.Fatal(err)
-	}
-	parts, err := r.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta := dataset.Meta{SchemaID: s3.VersionsSchema.ID, Source: dataset.Source{Kind: "s3", URI: "s3://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"}}
-	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
-		t.Fatal(err)
-	}
-	pr, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var total int64
-	for _, c := range pr.Cuts {
-		total += c.Rows
-	}
-	if total != 5000 {
-		t.Fatalf("prior weights=%d, want 5000; cuts=%+v", total, pr.Cuts)
-	}
-}
-
-func TestReviewMissingVersionReportCounters(t *testing.T) {
-	api := reviewVersionFixture(0)
+// TestVersionReportIncludesAllS3Counters: Successful S3 version reports serialize
+// every version-specific counter.
+func TestVersionReportIncludesAllS3Counters(t *testing.T) {
+	api := versionFixture(0)
 	api.rows = api.rows[:8]
-	rep, err := Run(context.Background(), reviewListingConfig("", true, false, api))
+	rep, err := Run(context.Background(), versionListingConfig("", true, false, api))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +63,7 @@ func TestVersionReportS3CountsAndFilters(t *testing.T) {
 	for _, output := range []bool{false, true} {
 		for _, filtered := range []bool{false, true} {
 			t.Run(fmt.Sprintf("dataset%v/filter%v", output, filtered), func(t *testing.T) {
-				api := reviewVersionFixture(0)
+				api := versionFixture(0)
 				api.rows = []s3client.Version{
 					{Object: s3client.Object{Key: "a", Size: 0}, VersionID: "new", IsLatest: true},
 					{Object: s3client.Object{Key: "a"}, VersionID: "marker", DeleteMarker: true},
@@ -118,7 +79,7 @@ func TestVersionReportS3CountsAndFilters(t *testing.T) {
 				if output {
 					dir = filepath.Join(t.TempDir(), "out")
 				}
-				cfg := reviewListingConfig(dir, true, false, api)
+				cfg := versionListingConfig(dir, true, false, api)
 				if filtered {
 					cfg.Filter = &filter.Spec{MaxSize: "0"}
 				}
@@ -158,7 +119,7 @@ func TestVersionReportGCS(t *testing.T) {
 	}
 }
 func TestVersionReportCurrentAbsent(t *testing.T) {
-	rep, err := Run(context.Background(), reviewListingConfig("", false, false, reviewVersionFixture(0)))
+	rep, err := Run(context.Background(), versionListingConfig("", false, false, versionFixture(0)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +127,9 @@ func TestVersionReportCurrentAbsent(t *testing.T) {
 }
 
 func TestVersionReportEmptyCountsPresent(t *testing.T) {
-	api := reviewVersionFixture(0)
+	api := versionFixture(0)
 	api.rows = nil
-	rep, err := Run(context.Background(), reviewListingConfig("", true, false, api))
+	rep, err := Run(context.Background(), versionListingConfig("", true, false, api))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -65,7 +65,7 @@ func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Sch
 			s := original
 			s.Columns = slices.Clone(original.Columns)
 			// A valid first part must not hide a malformed later part.
-			// The review's original missing-size reproduction drops it in both.
+			// Omit size from both parts to check a consistently incomplete schema.
 			if i == 1 || name == "missing_size" {
 				mutate(&s)
 			}

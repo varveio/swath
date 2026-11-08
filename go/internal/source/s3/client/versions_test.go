@@ -192,7 +192,7 @@ func kinds(pg *VersionPage) string {
 // markers decoded once, version IDs verbatim ("null" included) and delete
 // markers without size, ETag, storage class or checksums.
 func TestParseVersionsCaptures(t *testing.T) {
-	const owner = "e01fe325f8c2bb75da4bcd369ef31698a6dfd8ce7175afe707b34cf47fd82a80"
+	const owner = "0000000000000000000000000000000000000000000000000000000000000000"
 	for _, c := range []struct {
 		name, kinds, nextKey, nextVID string
 		truncated                     bool

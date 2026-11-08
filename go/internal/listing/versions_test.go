@@ -21,16 +21,16 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
-type reviewVersionAPI struct {
+type versionAPI struct {
 	rows    []client.Version
 	crashAt int
 }
 
-func (p *reviewVersionAPI) Route(string) string { return "https://review.invalid/b" }
-func (p *reviewVersionAPI) ListObjectsV2(context.Context, *client.ListInput) (*client.Page, error) {
+func (p *versionAPI) Route(string) string { return "https://versions.invalid/b" }
+func (p *versionAPI) ListObjectsV2(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}, {Key: "c"}, {Key: "d"}}}, nil
 }
-func (p *reviewVersionAPI) ListObjectVersions(_ context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
+func (p *versionAPI) ListObjectVersions(_ context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
 	i := sort.Search(len(p.rows), func(i int) bool { return p.rows[i].Key > in.KeyMarker })
 	if in.VersionIDMarker != "" {
 		n, _ := strconv.Atoi(in.VersionIDMarker)
@@ -48,8 +48,8 @@ func (p *reviewVersionAPI) ListObjectVersions(_ context.Context, in *client.Vers
 	}
 	return out, nil
 }
-func reviewVersionFixture(crashAt int) *reviewVersionAPI {
-	p := &reviewVersionAPI{crashAt: crashAt}
+func versionFixture(crashAt int) *versionAPI {
+	p := &versionAPI{crashAt: crashAt}
 	for i, n := range []int{3, 5000, 2, 3} {
 		for j := range n {
 			p.rows = append(p.rows, client.Version{Object: client.Object{Key: string(rune('a' + i)), Size: int64(j), Mtime: 1}, VersionID: strconv.Itoa(len(p.rows)), IsLatest: j == 0, DeleteMarker: j%7 == 6})
@@ -57,16 +57,19 @@ func reviewVersionFixture(crashAt int) *reviewVersionAPI {
 	}
 	return p
 }
-func reviewListingConfig(out string, versions, resume bool, api *reviewVersionAPI) Config {
+func versionListingConfig(out string, versions, resume bool, api *versionAPI) Config {
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: versions, Policy: keyrange.Policy{PageSize: 2}}},
 		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{Workers: 1, Encoders: 1, PartSize: 64 << 20, PartMaxRows: 2}}
 }
-func TestReviewOKCrashDuringHotGroup(t *testing.T) {
+
+// TestVersionsResumeAfterCrashDuringHotGroup: A crash inside a hot key retains only
+// complete groups; resume reproduces the clean parts and reports its new rows.
+func TestVersionsResumeAfterCrashDuringHotGroup(t *testing.T) {
 	ref, out := filepath.Join(t.TempDir(), "ref"), filepath.Join(t.TempDir(), "out")
-	if _, err := Run(context.Background(), reviewListingConfig(ref, true, false, reviewVersionFixture(0))); err != nil {
+	if _, err := Run(context.Background(), versionListingConfig(ref, true, false, versionFixture(0))); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Run(context.Background(), reviewListingConfig(out, true, false, reviewVersionFixture(4200)))
+	_, err := Run(context.Background(), versionListingConfig(out, true, false, versionFixture(4200)))
 	if !errors.Is(err, faults.ErrCrash) {
 		t.Fatalf("did not stop mid-group: %v", err)
 	}
@@ -77,7 +80,7 @@ func TestReviewOKCrashDuringHotGroup(t *testing.T) {
 	if len(j.Records) != 1 || string(j.Records[0].Part.MaxKey) != "a" {
 		t.Fatalf("durable prefix after mid-b crash: %+v", j.Records)
 	}
-	rep, err := Run(context.Background(), reviewListingConfig(out, true, true, reviewVersionFixture(0)))
+	rep, err := Run(context.Background(), versionListingConfig(out, true, true, versionFixture(0)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +95,10 @@ func TestReviewOKCrashDuringHotGroup(t *testing.T) {
 		}
 	}
 }
-func TestReviewOKModeSwitchRefused(t *testing.T) {
+
+// TestResumeRefusesVersionModeSwitch: Resume refuses a schema change between current
+// objects and all versions in either direction.
+func TestResumeRefusesVersionModeSwitch(t *testing.T) {
 	for _, versions := range []bool{false, true} {
 		t.Run(fmt.Sprint(versions), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")
@@ -103,12 +109,12 @@ func TestReviewOKModeSwitchRefused(t *testing.T) {
 				}
 				return nil
 			})
-			_, err := Run(context.Background(), reviewListingConfig(out, versions, false, reviewVersionFixture(0)))
+			_, err := Run(context.Background(), versionListingConfig(out, versions, false, versionFixture(0)))
 			restore()
 			if !errors.Is(err, faults.ErrCrash) {
 				t.Fatalf("did not leave interrupted journal: %v", err)
 			}
-			_, err = Run(context.Background(), reviewListingConfig(out, !versions, true, reviewVersionFixture(0)))
+			_, err = Run(context.Background(), versionListingConfig(out, !versions, true, versionFixture(0)))
 			if err == nil || !strings.Contains(err.Error(), "schema") {
 				t.Fatalf("mode switch not refused by schema identity: %v", err)
 			}

@@ -1,9 +1,9 @@
-# Live ListObjectVersions responses, captured byte for byte by anonymous HTTPS GETs
-# against open AWS S3 buckets on 2026-11-08 (the versioned-listing probes; the
-# captures and their index are in the swath-notes repository under
-# notes/explorations/2026-11-08-versioned-listing-evidence/astra/). One line per file:
-# the file, the HTTP status, the request. deleted-folder-v2.xml is the ListObjectsV2
-# answer for the same folder as deleted-folder.xml.
+# ListObjectVersions responses captured by anonymous HTTPS GETs against public
+# AWS open-data S3 buckets on 2026-11-08. Owner IDs were replaced with the fixed
+# 64-hex placeholder 0000000000000000000000000000000000000000000000000000000000000000;
+# no owner display names were present. All other response bytes are unchanged. One line per file: file, HTTP status, request.
+# deleted-folder-v2.xml is the ListObjectsV2 answer for the same folder as
+# deleted-folder.xml.
 deleted-folder-parent.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&prefix=a&delimiter=%2F
 deleted-folder-v2.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?list-type=2&max-keys=3&prefix=ai%2F&delimiter=%2F&encoding-type=url
 deleted-folder.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&prefix=ai%2F&delimiter=%2F

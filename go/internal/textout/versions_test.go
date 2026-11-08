@@ -14,7 +14,9 @@ import (
 	"github.com/varveio/swath/go/internal/textout"
 )
 
-func TestReviewTableVersionBooleans(t *testing.T) {
+// TestVersionsTableIncludesBooleans: The S3 versions table renders both is_latest
+// and is_delete_marker.
+func TestVersionsTableIncludesBooleans(t *testing.T) {
 	var buf bytes.Buffer
 	o, err := textout.Open(textout.Config{Format: textout.Table, Stdout: &buf})
 	if err != nil {
