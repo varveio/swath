@@ -420,29 +420,10 @@ func campaign(t *testing.T, fx campaignFixture) {
 					arm.damage(t, out)
 				}
 				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json", out)
-				// logged runs a resume with the request log on and checks
-				// it: no data request starts inside a certificate live
-				// in the ledger's prefix when it starts.
 				inside := 0
 				logged := func(what, killAt string) (*campaignReport, []ledgerCert, string, []string) {
-					certs, k := liveCerts(t, out), lastKey(t, out)
-					px.mu.Lock()
-					px.starts = nil
-					px.mu.Unlock()
-					px.logging.Store(true)
-					r, err := run(resumeArgs, killAt, 0)
-					px.logging.Store(false)
-					if err != nil {
-						t.Fatalf("%s: %v", what, err)
-					}
-					px.mu.Lock()
-					starts := px.starts
-					px.mu.Unlock()
-					n, first := startsInside(starts, certs, k)
-					if inside += n; n > 0 {
-						t.Errorf("%s: %d data requests start inside live certificates, the first at %q (K %q)", what, n, first, k)
-					}
-					t.Logf("%s: %d live certificates, %d eligible (above K), %d data requests logged", what, len(certs), eligibleCerts(certs, k), len(starts))
+					r, certs, k, starts, n := px.loggedResume(t, rn, what, out, resumeArgs, killAt)
+					inside += n
 					return r, certs, k, starts
 				}
 				if arm.resumeKill != "" {
@@ -528,9 +509,7 @@ func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref
 			t.Fatal(err)
 		}
 		at := fmt.Sprintf("journal-append:%d", n)
-		if _, err := rn.run(append(slices.Clone(resume), try), at, 0); err != nil {
-			t.Fatalf("no part with the composition before the resume ended (%s): %v", at, err)
-		}
+		px.loggedResume(t, rn, "no part with the composition before the resume ended: the try resume killed at "+at, try, append(slices.Clone(resume), try), at)
 		// The part claimed at the kill: the ordinal after the last record.
 		st, err := journal.Read(try)
 		if err != nil {
@@ -541,35 +520,68 @@ func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref
 		if _, err := os.Stat(claimed); err != nil {
 			t.Fatalf("%s: no claimed part %d: %v", at, ord, err)
 		}
-		replayed, gaps, ok := composition(t, claimed, certs, k)
+		from, certRows, gaps, ok := composition(t, claimed, certs, k)
 		if !ok {
-			t.Logf("%s: part %d draws on %d certificates and %d live rows between them: not the composition", at, ord, replayed, gaps)
+			t.Logf("%s: part %d draws on %d certificates and %d live rows between them: not the composition", at, ord, len(from), gaps)
 			continue
 		}
 		want, err := os.ReadFile(claimed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := rn.run(append(slices.Clone(resume), try), "", 0); err != nil {
-			t.Fatalf("the resume after %s: %v", at, err)
+		r, live, kr, _, _ := px.loggedResume(t, rn, "the resume after "+at, try, append(slices.Clone(resume), try), "")
+		// Provenance: the part's certificate rows must come from replay.
+		// The resume rejects none of the certificates live above K when
+		// it starts (so it accepts every one), the part's certificates
+		// are among them, and it replays at least the part's rows from
+		// them. With reuse off (Sol's --spill-max 1MiB overlay) nothing is
+		// accepted and this fails.
+		d := r.Resources.Spill.Durable
+		if d == nil || d.Resume == nil {
+			t.Fatalf("the resume after %s reports no durable spill: its rows were not replayed", at)
 		}
+		var rejected int64
+		for _, n := range d.Resume.Rejected {
+			rejected += n
+		}
+		eligible := map[ledgerCert]bool{}
+		for _, c := range live {
+			if c.open || c.ce > kr {
+				eligible[c] = true
+			}
+		}
+		for i := range from {
+			if !eligible[certs[i]] {
+				t.Fatalf("certificate (%q, %q] of the part is not live above K %q at the resume", certs[i].cs, certs[i].ce, kr)
+			}
+		}
+		if rejected != 0 || d.Resume.Accepted != int64(len(eligible)) || d.Resume.ReplayedRows < certRows {
+			t.Fatalf("the part's %d certificate rows are not replay's: %d eligible certificates, %d accepted, %d rejected, %d rows replayed",
+				certRows, len(eligible), d.Resume.Accepted, rejected, d.Resume.ReplayedRows)
+		}
+		// The suspect-part invariant: the resume reproduces the claimed
+		// file at its ordinal byte for byte (claimed-file reproduction;
+		// cold-part identity is the interval-0 arms', whose parts are
+		// cut alike).
 		got, err := os.ReadFile(filepath.Join(try, "data", dataset.PartName(ord)))
 		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("the suspect part %d (%d bytes) is not reproduced byte for byte: %d bytes, %v", ord, len(want), len(got), err)
+			t.Fatalf("the suspect part %d (%d bytes) is not the claimed file reproduced byte for byte: %d bytes, %v", ord, len(want), len(got), err)
 		}
 		sameRowsStreamed(t, "suspect-composition", ref, try)
-		t.Logf("%s: suspect part %d (rows from %d certificates, %d live rows between them) reproduced byte for byte", at, ord, replayed, gaps)
-		return fmt.Sprintf("%s\tpart %d\t%d certificates\t%d live rows\t%d bytes", at, ord, replayed, gaps, len(want))
+		t.Logf("%s: suspect part %d (rows from %d replayed certificates, %d live rows between them) reproduced from its claimed file byte for byte; %d accepted, %d rows replayed",
+			at, ord, len(from), gaps, d.Resume.Accepted, d.Resume.ReplayedRows)
+		return fmt.Sprintf("%s\tpart %d\t%d certificates\t%d live rows\t%d bytes\t%d accepted\t%d replayed", at, ord, len(from), gaps, len(want), d.Resume.Accepted, d.Resume.ReplayedRows)
 	}
 	t.Fatal("no claimed part with rows from two certificates and live rows between them in 12 tries")
 	return ""
 }
 
-// composition reads the claimed part at path and counts the certificates
-// it draws rows from and its live rows (above K, in no certificate) lying
-// between two of those certificates' rows; ok when both are present: at
-// least two certificates and one live row between them.
-func composition(t *testing.T, path string, certs []ledgerCert, k string) (replayed, gaps int, ok bool) {
+// composition reads the claimed part at path and returns the certificates
+// it draws rows from (indices into certs), how many rows, and its live
+// rows (above K, in no certificate) lying between two of those
+// certificates' rows; ok when both are present: at least two certificates
+// and one live row between them.
+func composition(t *testing.T, path string, certs []ledgerCert, k string) (from map[int]bool, certRows int64, gaps int, ok bool) {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -583,7 +595,7 @@ func composition(t *testing.T, path string, certs []ledgerCert, k string) (repla
 	}
 	r := pq.NewReader(pf)
 	defer r.Close()
-	from := map[int]bool{}
+	from = map[int]bool{}
 	var live []string
 	first, last := "", ""
 	buf := make([]pq.Row, 1024)
@@ -601,6 +613,7 @@ func composition(t *testing.T, path string, certs []ledgerCert, k string) (repla
 			switch {
 			case in >= 0:
 				from[in] = true
+				certRows++
 				if first == "" {
 					first = key
 				}
@@ -618,7 +631,35 @@ func composition(t *testing.T, path string, certs []ledgerCert, k string) (repla
 			gaps++
 		}
 	}
-	return len(from), gaps, len(from) >= 2 && gaps > 0
+	return from, certRows, gaps, len(from) >= 2 && gaps > 0
+}
+
+// loggedResume runs a resume of dir (args, killed at killAt unless "")
+// with the request log on and checks it: no data request starts inside a
+// certificate live in the ledger's prefix when it starts. It returns the
+// report (nil when killed), those certificates and K, the logged starts
+// and how many fell inside.
+func (px *campaignProxy) loggedResume(t *testing.T, rn *campaignRunner, what, dir string, args []string, killAt string) (*campaignReport, []ledgerCert, string, []string, int) {
+	t.Helper()
+	certs, k := liveCerts(t, dir), lastKey(t, dir)
+	px.mu.Lock()
+	px.starts = nil
+	px.mu.Unlock()
+	px.logging.Store(true)
+	r, err := rn.run(args, killAt, 0)
+	px.logging.Store(false)
+	if err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	px.mu.Lock()
+	starts := px.starts
+	px.mu.Unlock()
+	n, first := startsInside(starts, certs, k)
+	if n > 0 {
+		t.Errorf("%s: %d data requests start inside live certificates, the first at %q (K %q)", what, n, first, k)
+	}
+	t.Logf("%s: %d live certificates, %d eligible (above K), %d data requests logged", what, len(certs), eligibleCerts(certs, k), len(starts))
+	return r, certs, k, starts, n
 }
 
 // startsInside counts the request starts inside a certificate's

@@ -228,8 +228,9 @@ the following:
   rows, plus the replayed rows, equal the rows listed.
 - No certificate is rejected.
 - No data request of any resume starts in `[max(cs, K), ce)` of a certificate that is live in the ledger's
-  durable prefix when that resume starts. This includes the killed first resume of the mid-replay arm, and
-  a resume that made requests must have logged some.
+  durable prefix when that resume starts. Every resume is checked: the killed first resume of the mid-replay
+  arm, and each try and the final resume of the suspect-composition arm. A resume that made requests must
+  have logged some.
 - The reuse arms are the unlink, mid-replay, 40 % and 70 % kills, all of which fall after seals. Each needs
   certificates above K, and the resume must accept and replay some. The kills before the first seal are not
   asked to reuse.
@@ -241,9 +242,14 @@ forced, and the reproduction is checked byte for byte.
    are 64 MiB, so the interval closes them.
 2. Copies of that output are resumed, without the slow frontier, and killed at the n-th journal append,
    after the part's claim and before its record. At 1 s, or behind the frontier, MinIO's time-closed parts
-   held one certificate or one gap, never both. This repeats until the claimed part holds rows replayed from two certificates and rows listed
-   live between them.
-3. The next resume must reproduce that part byte for byte.
+   held one certificate or one gap, never both. This repeats until the claimed part holds rows from two
+   certificates' intervals and rows listed live between them.
+3. The next resume must take those rows from replay. It rejects no certificate, accepts every certificate live
+   above K (the part's among them), and replays at least the part's certificate rows. With reuse off, the arm
+   fails.
+4. That resume must also reproduce the claimed file at its ordinal byte for byte. This is the suspect-part
+   invariant, claimed-file reproduction. Identity with the cold run's parts is the interval-0 arms' assertion,
+   whose parts are cut alike.
 
 The reference must list exactly the key file the fixture serves (`SWATH_CAMPAIGN_KEYS`, required), which is an
 oracle independent of swath. Both tiers skip without their endpoint, so CI never runs them. The retained
