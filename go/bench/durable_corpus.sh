@@ -25,11 +25,12 @@ cd "$(dirname "$0")/.."
 failed=0
 for f in "${LISTS[@]}"; do
   name=$(basename "$f" .keys)
+  slice="" kf=""
+  trap '[ -z "$kf" ] || kill "$kf" 2>/dev/null; [ -z "$slice" ] || rm -f "$slice"' EXIT
   slice=$(mktemp "${SLICE_DIR:-${TMPDIR:-/tmp}}/durable-corpus.XXXXXX")
   head -n "$MAX_KEYS" "$f" > "$slice"
   "$KF" -keys "$slice" -addr "127.0.0.1:$PORT" -delay "$DELAY" > /dev/null 2>&1 &
   kf=$!
-  trap 'kill $kf 2>/dev/null; rm -f "$slice"' EXIT
   until curl -s -o /dev/null "http://127.0.0.1:$PORT/bkt?list-type=2&max-keys=1"; do
     kill -0 "$kf" || { echo "the fake did not start for $f" >&2; exit 1; }
     sleep 1
@@ -37,7 +38,7 @@ for f in "${LISTS[@]}"; do
   rc=0
   # shellcheck disable=SC2086
   SWATH_CORPUS_ENDPOINT=http://127.0.0.1:$PORT SWATH_CORPUS_NAME=$name SWATH_CAMPAIGN_RESULTS=$RESULTS \
-    SWATH_CAMPAIGN_KEYS=$f SWATH_CAMPAIGN_MAX_KEYS=$MAX_KEYS \
+    SWATH_CAMPAIGN_KEYS=$slice \
     go test -p 1 -count=1 -timeout 3h ${GOTEST_FLAGS:-} ./cmd/swath -run '^TestDurableCorpus$' -v > "${RESULTS%.*}-$name.log" 2>&1 || rc=$?
   grep -E '^(--- FAIL|ok|FAIL)|durable_campaign_test' "${RESULTS%.*}-$name.log" || true
   [ "$rc" = 0 ] || failed=1

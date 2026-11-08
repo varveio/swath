@@ -218,31 +218,47 @@ or with SIGKILL once a given share of the keys has been served:
   last append torn after a kill at its sync;
 - 40 % and 70 % of the keys served.
 
-The arm then resumes. Each schedule runs with `--part-interval=0` and again with a 1 s interval. Every arm
-asserts the following:
+The arm then resumes. Each schedule runs with `--part-interval=0` and again with a 1 s interval. A kill counts
+only as the fault that was asked for: a hook kill must leave its marker on stderr, and a key-count kill must
+be the harness's. A run that the 20-minute watchdog ends fails (`TestCampaignRunnerFaults`). Every arm asserts
+the following:
 
 - The dataset is byte-identical to the reference (row-identical, every column, with the interval on).
 - Rows reconcile: retained plus listed rows equal the dataset, and the objects emitted, less the filtered
   rows, plus the replayed rows, equal the rows listed.
 - No certificate is rejected.
-- No data request of the resume starts in `[max(cs, K), ce)` of a certificate that is live in the ledger's
-  durable prefix.
+- No data request of any resume starts in `[max(cs, K), ce)` of a certificate that is live in the ledger's
+  durable prefix when that resume starts. This includes the killed first resume of the mid-replay arm, and
+  a resume that made requests must have logged some.
+- The reuse arms are the unlink, mid-replay, 40 % and 70 % kills, all of which fall after seals. Each needs
+  certificates above K, and the resume must accept and replay some. The kills before the first seal are not
+  asked to reuse.
 
-With a key file, the reference must also list exactly that file, an oracle independent of swath. Both
-tiers skip without their environment, so CI never runs them:
+One more arm runs at the 1 s interval, `suspect-composition`. This is §6's "time cuts on" row: the composition is
+forced, and the reproduction is checked byte for byte.
+
+1. A run with serialized seals is killed at its sixth ledger sync, so five certificates are durable. Its parts
+   are 64 MiB, so the interval closes them.
+2. Copies of that output are resumed and killed at the n-th journal append, after the part's claim and before
+   its record. This repeats until the claimed part holds rows replayed from two certificates and rows listed
+   live between them.
+3. The next resume must reproduce that part byte for byte.
+
+The reference must list exactly the key file the fixture serves (`SWATH_CAMPAIGN_KEYS`, required), which is an
+oracle independent of swath. Both tiers skip without their endpoint, so CI never runs them. The retained
+results ([measurements.md](measurements.md#durable-spill)) reproduce with:
 
 ```bash
-# MinIO in Docker, a bucket filled from a key file (one empty object per key; idempotent)
-bench/minio.sh up keys.txt
-SWATH_MINIO_ENDPOINT=http://127.0.0.1:9000 SWATH_CAMPAIGN_KEYS=keys.txt \
-  go test -p 1 ./cmd/swath -run TestDurableMinIO -v -timeout 1h
-bench/minio.sh down
+# MinIO in Docker, 250,000 keys (up, the test, then down, also on failure)
+head -n 250000 noaa-nbm-grib2-pds.keys > nbm250k.keys
+RESULTS=durable-minio.tsv bench/minio.sh campaign nbm250k.keys
 
-# production key lists: each list's first 3,000,000 keys behind the private key-list fake (keyfake) at 5 ms
-KEYFAKE=/path/to/keyfake RESULTS=durable-corpus.tsv bench/durable_corpus.sh A.keys B.keys C.keys
+# three production lists, each list's first 2,000,000 keys behind the private key-list fake (keyfake) at 5 ms
+KEYFAKE=/path/to/keyfake MAX_KEYS=2000000 SLICE_DIR=/dev/shm RESULTS=durable-corpus.tsv \
+  bench/durable_corpus.sh real-changesets.keys noaa-nbm-grib2-pds.keys argoverse-6M.keys
 ```
 
-`SWATH_CAMPAIGN_RESULTS` (which the corpus script sets) collects one line per arm. The retained results are
+`SWATH_CAMPAIGN_RESULTS` (which both wrappers set) collects one line per arm. The retained results are
 in [measurements.md](measurements.md#durable-spill).
 
 ## Measurements
