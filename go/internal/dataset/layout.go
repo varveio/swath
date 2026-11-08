@@ -15,10 +15,24 @@ import (
 	"strings"
 )
 
-// Format identifies the dataset format in the manifest and the footers.
+// Format identifies the dataset format in the manifest and the footers: a
+// SeekParquet dataset (format 1, draft revision 1, stamped format_version
+// 0), keyed by KeyColumn. swath's own metadata (what was listed, how much
+// of it, the parts' MD5 digests) is the manifest's Extension.
 const (
-	Format        = "swath-dataset"
-	FormatVersion = 2
+	Format        = "seekparquet"
+	FormatVersion = 0
+	DraftRevision = 1
+	KeyColumn     = "key"
+	Extension     = "swath"
+)
+
+// LegacyFormat is the swath-dataset format 2 earlier builds wrote: still
+// read where a committed dataset is read (show, --seed-from, Managed), and
+// served by the replay server; never written.
+const (
+	LegacyFormat        = "swath-dataset"
+	LegacyFormatVersion = 2
 )
 
 // File and directory names inside a dataset.
@@ -46,15 +60,18 @@ const (
 	SuspectDir = "suspect"
 )
 
-// Footer key/value stamps on every part. Order within a part is the
-// standard sorting_columns; order across parts, bounds and completeness
-// are the manifest's.
+// Footer key/value stamps on every part (SeekParquet STAMP-1): they repeat
+// the manifest's version, schema id and key declaration. Order within a
+// part is the standard sorting_columns; order across parts, bounds and
+// completeness are the manifest's.
 const (
-	StampProfile        = "swath.profile"         // Format
-	StampProfileVersion = "swath.profile_version" // FormatVersion
-	StampSchema         = "swath.schema_id"
-	// StampIndexBound is the ColumnIndex min/max truncation in bytes: bounds
-	// of longer values are truncated, so readers treat them as conservative.
+	StampFormatVersion = "seekparquet.format_version" // FormatVersion
+	StampDraftRevision = "seekparquet.draft_revision" // DraftRevision
+	StampSchema        = "seekparquet.schema_id"
+	StampKeyColumn     = "seekparquet.key_column" // KeyColumn
+	StampKeyUnique     = "seekparquet.key_unique" // "true", "false" with repeated keys
+	// StampIndexBound is swath's own: the ColumnIndex min/max truncation
+	// of the value columns in bytes. The key column's bounds are exact.
 	StampIndexBound = "swath.index_bound_bytes"
 )
 

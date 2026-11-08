@@ -560,7 +560,7 @@ func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
 // manifestMeta is the manifest's account of the source, the scope and the
 // coverage, from the source's locator and report.
 func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started, listed time.Time) dataset.Meta {
-	m := dataset.Meta{SchemaID: s.ID, Source: dataset.Source{Kind: loc.Kind, URI: loc.Root, Container: loc.Container},
+	m := dataset.Meta{SchemaID: s.ID, Groups: s.Groups, Source: dataset.Source{Kind: loc.Kind, URI: loc.Root, Container: loc.Container},
 		Scope: dataset.Scope{Kind: "whole"}}
 	m.Coverage = dataset.Coverage{ListingStartedAt: started.UTC(), ListingFinishedAt: listed.UTC()}
 	if rep == nil {

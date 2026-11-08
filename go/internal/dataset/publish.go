@@ -100,17 +100,138 @@ func Check(parts []Part, rows int64) error {
 }
 
 // Manifest is manifest.json, the dataset's commit record and the only file
-// a reader needs to accept it: what was listed (source, scope), how much of
-// it (coverage), and the ordered parts with their exact bounds.
+// a reader needs to accept it: a SeekParquet manifest (the version, the
+// schema id, the key declaration and the ordered parts with their exact
+// bounds) whose swath extension says what was listed (source, scope), how
+// much of it (coverage), when it was published and each part's MD5.
+//
+// The fields are flat in Go; the JSON nests swath's under
+// extensions.swath (MarshalJSON). UnmarshalJSON reads that form and the
+// swath-dataset format 2 manifest earlier builds wrote (LegacyFormat), whose
+// fields are top-level and whose parts carry their md5.
 type Manifest struct {
-	Format        string         `json:"format"`         // Format
-	FormatVersion int            `json:"format_version"` // FormatVersion
+	Format        string // Format, or LegacyFormat when read from an earlier build's dataset
+	FormatVersion int    // FormatVersion (LegacyFormatVersion)
+	DraftRevision int    // DraftRevision (0 in format 2)
+	SchemaID      string
+	Key           ManifestKey // KeyColumn (zero in format 2: key, unique)
+	PublishedAt   time.Time
+	Source        Source
+	Scope         Scope
+	Coverage      Coverage
+	Parts         []ManifestPart // in key order; part i is data/part-%05d.parquet
+}
+
+// ManifestKey is the manifest's key declaration: the key column and
+// whether keys are unique (false when a key's rows repeat as a group,
+// schema.Info.Groups).
+type ManifestKey struct {
+	Column string `json:"column"`
+	Unique bool   `json:"unique"`
+}
+
+// seekManifest is a Manifest as JSON: SeekParquet's members, swath's
+// under extensions.swath.
+type seekManifest struct {
+	Format        string      `json:"format"`
+	FormatVersion int         `json:"format_version"`
+	DraftRevision int         `json:"draft_revision,omitempty"`
+	SchemaID      string      `json:"schema_id"`
+	Key           ManifestKey `json:"key"`
+	Extensions    struct {
+		Swath swathExtension `json:"swath"`
+	} `json:"extensions"`
+	Parts []seekPart `json:"parts"`
+}
+
+type seekPart struct {
+	Path   string `json:"path"`
+	Rows   int64  `json:"rows"`
+	Bytes  int64  `json:"bytes"`
+	MinKey Key    `json:"min_key_base64"`
+	MaxKey Key    `json:"max_key_base64"`
+}
+
+// swathExtension is extensions.swath: PartMD5 holds each part's MD5 in
+// lowercase hexadecimal, in manifest order.
+type swathExtension struct {
+	PublishedAt time.Time `json:"published_at"`
+	Source      Source    `json:"source"`
+	Scope       Scope     `json:"scope"`
+	Coverage    Coverage  `json:"coverage"`
+	PartMD5     []string  `json:"part_md5"`
+}
+
+// legacyManifest is the swath-dataset format 2 manifest.
+type legacyManifest struct {
+	Format        string         `json:"format"`
+	FormatVersion int            `json:"format_version"`
 	SchemaID      string         `json:"schema_id"`
 	PublishedAt   time.Time      `json:"published_at"`
 	Source        Source         `json:"source"`
 	Scope         Scope          `json:"scope"`
 	Coverage      Coverage       `json:"coverage"`
-	Parts         []ManifestPart `json:"parts"` // in key order; part i is data/part-%05d.parquet
+	Parts         []ManifestPart `json:"parts"`
+}
+
+// MarshalJSON writes m in the SeekParquet form.
+func (m Manifest) MarshalJSON() ([]byte, error) {
+	w := seekManifest{Format: m.Format, FormatVersion: m.FormatVersion, DraftRevision: m.DraftRevision, SchemaID: m.SchemaID, Key: m.Key,
+		Parts: make([]seekPart, len(m.Parts))}
+	w.Extensions.Swath = swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
+		PartMD5: make([]string, len(m.Parts))}
+	for i, p := range m.Parts {
+		w.Parts[i] = seekPart{Path: p.Path, Rows: p.Rows, Bytes: p.Bytes, MinKey: p.MinKey, MaxKey: p.MaxKey}
+		w.Extensions.Swath.PartMD5[i] = p.MD5
+	}
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads either form, by its format member.
+func (m *Manifest) UnmarshalJSON(b []byte) error {
+	var head struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(b, &head); err != nil {
+		return err
+	}
+	if head.Format == LegacyFormat {
+		var l legacyManifest
+		if err := json.Unmarshal(b, &l); err != nil {
+			return err
+		}
+		*m = Manifest{Format: l.Format, FormatVersion: l.FormatVersion, SchemaID: l.SchemaID, Key: ManifestKey{Column: KeyColumn, Unique: true},
+			PublishedAt: l.PublishedAt, Source: l.Source, Scope: l.Scope, Coverage: l.Coverage, Parts: l.Parts}
+		return nil
+	}
+	var w seekManifest
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	x := w.Extensions.Swath
+	*m = Manifest{Format: w.Format, FormatVersion: w.FormatVersion, DraftRevision: w.DraftRevision, SchemaID: w.SchemaID, Key: w.Key,
+		PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(w.Parts))}
+	if len(x.PartMD5) != len(w.Parts) && len(x.PartMD5) != 0 {
+		return fmt.Errorf("manifest: %d part digests for %d parts", len(x.PartMD5), len(w.Parts))
+	}
+	for i, p := range w.Parts {
+		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: p.MinKey, MaxKey: p.MaxKey}}
+		if len(x.PartMD5) > 0 {
+			m.Parts[i].MD5 = x.PartMD5[i]
+		}
+	}
+	return nil
+}
+
+// Current reports whether m is in the format this build writes.
+func (m *Manifest) Current() bool {
+	return m.Format == Format && m.FormatVersion == FormatVersion && m.DraftRevision == DraftRevision
+}
+
+// Readable reports whether m is a format this build reads: the current one
+// or swath-dataset format 2.
+func (m *Manifest) Readable() bool {
+	return m.Current() || m.Format == LegacyFormat && m.FormatVersion == LegacyFormatVersion
 }
 
 // Source is what was listed.
@@ -152,6 +273,9 @@ type ManifestPart struct {
 // Meta is what Publish needs beyond the parts.
 type Meta struct {
 	SchemaID string
+	// Groups: the schema's keys repeat (schema.Info.Groups); the manifest
+	// declares them not unique, as the footers do.
+	Groups   bool
 	Source   Source
 	Scope    Scope
 	Coverage Coverage
@@ -184,8 +308,8 @@ func WriteReport(out string, v any) error {
 // the same step, or refuses it (an error without calling install).
 func Publish(out string, meta Meta, parts []Part, commit func(install func() error) error) error {
 	data := filepath.Join(out, DataDir)
-	m := Manifest{Format: Format, FormatVersion: FormatVersion, SchemaID: meta.SchemaID,
-		Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
+	m := Manifest{Format: Format, FormatVersion: FormatVersion, DraftRevision: DraftRevision, SchemaID: meta.SchemaID,
+		Key: ManifestKey{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
 	if m.Coverage.Exclusions == nil {
 		m.Coverage.Exclusions = []string{}
 	}

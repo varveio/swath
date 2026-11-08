@@ -230,7 +230,7 @@ func TestDatasetPriorCoalescesFinalVersionGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := dataset.Meta{SchemaID: s3.VersionsSchema.ID, Source: dataset.Source{Kind: "s3", URI: "s3://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"}}
+	meta := dataset.Meta{SchemaID: s3.VersionsSchema.ID, Groups: true, Source: dataset.Source{Kind: "s3", URI: "s3://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"}}
 	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 		t.Fatal(err)
 	}

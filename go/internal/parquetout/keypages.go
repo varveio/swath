@@ -19,9 +19,10 @@ type KeyPage struct {
 // KeyPages reads the key column's page index of a part (1,024-row pages):
 // each page's greatest key from the column index and its row count from the
 // offset index, in key order. Only the footer and the key column's two
-// index sections are read, never a data page. A greatest key longer than
-// the index bound (StampIndexBound, 1,024 bytes) is rounded up, above every
-// key of its page; S3 and GCS keys fit within it.
+// index sections are read, never a data page. The greatest key is exact in
+// a SeekParquet part; a format 2 part (an earlier build's, read by
+// --seed-from) rounded one longer than 1,024 bytes up, above every key of
+// its page (S3 and GCS keys fit within it).
 func KeyPages(path string) ([]KeyPage, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -30,7 +30,7 @@ const (
 	groupBytes      = 8 << 20 // row-group target, on the writer's size estimate
 	groupRows       = 1_000_000
 	dictionaryBytes = 8 << 10 // dictionary limit per column chunk
-	indexBoundBytes = 1024    // column-index min/max truncation
+	indexBoundBytes = 1024    // column-index min/max truncation of the value columns
 	pageBufferBytes = 1 << 20 // parquet-go page buffer
 	writeBuffer     = 4096    // parquet-go output buffer
 	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
@@ -108,20 +108,33 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 	return writerBytes(maxKey, wide, columns) + stateBytes(page)
 }
 
+// indexBound is the ColumnIndex bound length of the column at path: none
+// for the key, whose page bounds are its pages' exact first and last keys
+// (SeekParquet RG-5: parquet-go shortens a maximum by incrementing its last
+// kept byte, and one whose kept bytes are all 0xFF stays below the key it
+// bounds), indexBoundBytes for the value columns.
+func indexBound(path []string) int {
+	if len(path) == 1 && path[0] == dataset.KeyColumn {
+		return 0
+	}
+	return indexBoundBytes
+}
+
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
-// 8 MiB row groups, 8 KiB dictionaries, 1,024-byte index bounds, delta keys
+// 8 MiB row groups, 8 KiB dictionaries, exact key index bounds and
+// 1,024-byte value index bounds, the SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
 // SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
 // then at the frozen ratio. Bump the revision with any change to these.
 // It is the resume identity's writer field: a resume refuses a journal
 // written under another recipe.
 //
-// Versions are separate: the dataset format (dataset.FormatVersion), the
-// logical schema (schema IDs), the private journal (journal.Version) and
-// this recipe. created_by names the real build, so bytes are identical
+// Versions are separate: the dataset format (dataset.FormatVersion and
+// DraftRevision), the logical schema (schema IDs), the private journal
+// (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
-const Recipe = "swath-go/parquet-r2"
+const Recipe = "swath-go/parquet-r3"
 
 // createdBy is the footer's created_by: the tool, its module version and
 // its VCS revision, from the build itself (buildinfo, the linker's revision
@@ -190,15 +203,17 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		pq.WriteBufferSize(writeBuffer),
 		pq.MaxRowsPerRowGroup(groupRows),
 		pq.DictionaryMaxBytes(dictionaryBytes),
-		pq.ColumnIndexSizeLimit(func([]string) int { return indexBoundBytes }),
+		pq.ColumnIndexSizeLimit(indexBound),
 		pq.DefaultEncodingFor(pq.ByteArray, &pq.RLEDictionary),
 		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
 		creator(createdBy),
-		pq.KeyValueMetadata(dataset.StampProfile, dataset.Format),
-		pq.KeyValueMetadata(dataset.StampProfileVersion, strconv.Itoa(dataset.FormatVersion)),
+		pq.KeyValueMetadata(dataset.StampFormatVersion, strconv.Itoa(dataset.FormatVersion)),
+		pq.KeyValueMetadata(dataset.StampDraftRevision, strconv.Itoa(dataset.DraftRevision)),
 		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
+		pq.KeyValueMetadata(dataset.StampKeyColumn, dataset.KeyColumn),
+		pq.KeyValueMetadata(dataset.StampKeyUnique, strconv.FormatBool(!s.Info.Groups)),
 		pq.KeyValueMetadata(dataset.StampIndexBound, strconv.Itoa(indexBoundBytes)),
 		// Standard Parquet sorting_columns on every row group (metadata only:
 		// rows arrive sorted; GenericWriter does not reorder them).

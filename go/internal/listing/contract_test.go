@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -74,15 +75,14 @@ func checkContract(t *testing.T, out string) []string {
 		for _, e := range pf.Metadata().KeyValueMetadata {
 			kv[e.Key] = e.Value
 		}
-		want := map[string]string{dataset.StampProfile: dataset.Format, dataset.StampProfileVersion: strconv.Itoa(dataset.FormatVersion),
-			dataset.StampSchema: m.SchemaID, dataset.StampIndexBound: "1024"}
-		for k, v := range kv {
-			if len(k) > 6 && k[:6] == "swath." && want[k] != v {
-				t.Fatalf("part %d: footer %s=%q", i, k, v)
-			}
+		want := map[string]string{dataset.StampFormatVersion: strconv.Itoa(dataset.FormatVersion), dataset.StampDraftRevision: strconv.Itoa(dataset.DraftRevision),
+			dataset.StampSchema: m.SchemaID, dataset.StampKeyColumn: m.Key.Column, dataset.StampKeyUnique: strconv.FormatBool(m.Key.Unique),
+			dataset.StampIndexBound: "1024"}
+		if !m.Current() || m.Key.Column != dataset.KeyColumn {
+			t.Fatalf("manifest %s %d draft %d, key %+v", m.Format, m.FormatVersion, m.DraftRevision, m.Key)
 		}
-		if len(kv) < len(want) {
-			t.Fatalf("part %d: footer stamps %v", i, kv)
+		if !maps.Equal(kv, want) {
+			t.Fatalf("part %d: footer stamps %v, want %v", i, kv, want)
 		}
 		for _, rg := range pf.Metadata().RowGroups {
 			if len(rg.SortingColumns) != 1 || rg.SortingColumns[0].ColumnIdx != 0 || rg.SortingColumns[0].Descending {

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -137,20 +138,13 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
 				t.Fatalf("enc=%d part %d differs", enc, i)
 			}
-			// The footer carries the profile, the schema and the index
-			// bound; nothing about the part's place in the dataset.
+			// The footer carries the SeekParquet stamps and the value
+			// index bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
-			want := map[string]string{dataset.StampProfile: dataset.Format, dataset.StampProfileVersion: strconv.Itoa(dataset.FormatVersion),
-				dataset.StampSchema: testSchema.ID, dataset.StampIndexBound: "1024"}
-			for k, v := range want {
-				if kv[k] != v {
-					t.Errorf("part %d: %s = %q, want %q", i, k, kv[k], v)
-				}
-			}
-			for k := range kv {
-				if _, ok := want[k]; !ok && strings.HasPrefix(k, "swath.") {
-					t.Errorf("part %d: unexpected stamp %s", i, k)
-				}
+			want := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1",
+				dataset.StampSchema: testSchema.ID, dataset.StampKeyColumn: "key", dataset.StampKeyUnique: "true", dataset.StampIndexBound: "1024"}
+			if !maps.Equal(kv, want) {
+				t.Errorf("part %d: footer %q, want %q", i, kv, want)
 			}
 		}
 		if got := readKeys(t, parts); !slices.Equal(got, keysOf(rows)) {
@@ -344,7 +338,7 @@ func keysOf(rows []row) []string {
 
 // TestKeyLimits: a schema with a 1,024-byte key cap (S3) refuses a key over 1,024 bytes with a typed
 // error; an uncapped schema (filesystem) writes longer keys, and the footer records
-// the bound truncation, sorting_columns and readable truncated bounds.
+// the value bound truncation, sorting_columns and the exact key bounds.
 func TestKeyLimits(t *testing.T) {
 	out := t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
@@ -390,9 +384,10 @@ func TestKeyLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The key's bounds are exact, never truncated (SeekParquet RG-5).
 	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
-	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
-		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
+	if string(lo) != rows[0].Key || string(hi) != rows[1].Key {
+		t.Fatalf("bounds %d/%d bytes, not the page's first and last keys", len(lo), len(hi))
 	}
 }
 

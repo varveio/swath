@@ -4,9 +4,14 @@
 package dataset
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/faults"
@@ -183,7 +188,8 @@ func TestOverwriteInterruptedUnjournaled(t *testing.T) {
 }
 
 // TestManaged: a directory is this tool's by its lock, its journal or a
-// manifest that parses as this tool's (format and coverage); an unrelated
+// manifest that parses as this tool's (format and the swath extension's
+// coverage, or format 2's top-level coverage); an unrelated
 // data/ beside a _SUCCESS, or another tool's manifest with a schema id, is
 // not.
 func TestManaged(t *testing.T) {
@@ -197,11 +203,15 @@ func TestManaged(t *testing.T) {
 		{"data/ alone", map[string]string{DataDir + "/x": ""}, false},
 		{"another tool's manifest with a schema id", map[string]string{ManifestName: `{"schema_id":"other/v1"}`}, false},
 		{"a schemaId manifest", map[string]string{ManifestName: `{"schemaId":"other"}`}, false},
-		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + Format + `"}`}, false},
-		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":null}`}, false},
+		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{}}}`}, false},
+		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":null}}}`}, false},
+		{"our format, coverage outside the extension", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":{}}`}, false},
+		{"another producer's SeekParquet dataset", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"other":{"coverage":{}}}}`}, false},
 		{"another format with coverage", map[string]string{ManifestName: `{"format":"other","coverage":{}}`}, false},
 		{"not JSON", map[string]string{ManifestName: `{`}, false},
-		{"our manifest", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":{"complete":true}}`}, true},
+		{"our manifest", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
+		{"an earlier build's format 2 manifest", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","coverage":{"complete":true}}`}, true},
+		{"format 2 without coverage", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","extensions":{"swath":{"coverage":{}}}}`}, false},
 		{"a lock", map[string]string{Workspace + "/" + LockName: ""}, true},
 		{"a journal", map[string]string{JournalDir + "/journal": ""}, true},
 	} {
@@ -218,5 +228,75 @@ func TestManaged(t *testing.T) {
 		if got := Managed(dir); got != tc.want {
 			t.Errorf("%s: Managed = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestManifestShape: a published manifest has only SeekParquet's
+// top-level members, part members and key declaration, with swath's own
+// under extensions.swath (the parts' MD5 digests included), and reads back
+// as it was written; a format 2 manifest of an earlier build reads with
+// its fields in the same places.
+func TestManifestShape(t *testing.T) {
+	for _, groups := range []bool{false, true} {
+		out := t.TempDir()
+		touch(t, filepath.Join(out, DataDir, "x"))
+		touch(t, TempPath(out, 0))
+		cov := Coverage{Complete: true, StopReason: "completed"}
+		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", MD5: "0123456789abcdef0123456789abcdef"}}
+		if err := Publish(out, Meta{SchemaID: id, Groups: groups, Source: Source{Kind: "s3", URI: "s3://b/", Container: "b"}, Scope: Scope{Kind: "whole"}, Coverage: cov}, []Part{part}, nil); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(out, ManifestName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, b); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(compact.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.Sorted(maps.Keys(raw)); !slices.Equal(got, []string{"draft_revision", "extensions", "format", "format_version", "key", "parts", "schema_id"}) {
+			t.Fatalf("top-level members %q", got)
+		}
+		want := fmt.Sprintf(`{"column":"key","unique":%v}`, !groups)
+		if string(raw["format"]) != `"seekparquet"` || string(raw["format_version"]) != "0" || string(raw["draft_revision"]) != "1" || string(raw["key"]) != want {
+			t.Fatalf("manifest %s", b)
+		}
+		var parts []map[string]json.RawMessage
+		if err := json.Unmarshal(raw["parts"], &parts); err != nil {
+			t.Fatal(err)
+		}
+		if len(parts) != 1 || !slices.Equal(slices.Sorted(maps.Keys(parts[0])), []string{"bytes", "max_key_base64", "min_key_base64", "path", "rows"}) ||
+			string(parts[0]["max_key_base64"]) != `"Yv8="` {
+			t.Fatalf("parts %s", raw["parts"])
+		}
+		var ext map[string]map[string]json.RawMessage
+		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "part_md5", "published_at", "scope", "source"}) {
+			t.Fatalf("extensions %s", raw["extensions"])
+		}
+		var m Manifest
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if !m.Current() || m.Key != (ManifestKey{"key", !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
+			len(m.Parts) != 1 || m.Parts[0].MD5 != part.MD5 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
+			t.Fatalf("read back %+v", m)
+		}
+	}
+	legacy := `{"format":"swath-dataset","format_version":2,"schema_id":"x/v1","published_at":"2026-11-05T18:00:00Z",
+		"source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},"coverage":{"complete":true,"stop_reason":"completed"},
+		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ==","md5":"ab"}]}`
+	var m Manifest
+	if err := json.Unmarshal([]byte(legacy), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MD5 != "ab" || m.Parts[0].MinKey != "a" || !m.Key.Unique {
+		t.Fatalf("format 2 read as %+v", m)
 	}
 }
