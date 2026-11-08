@@ -166,9 +166,9 @@ func TestPriorOracle(t *testing.T) {
 // (Run's "one-range-open"): the split needs demand, idle workers, while
 // the grown tile lists. Draining the other tiles in about 30 page
 // latencies while the grown one holds 100 pages did not guarantee it: on
-// macOS the grown tile finished first, 163 decisions without demand
-// (#332). Released this way, its next page decides with three idle
-// workers and every page after it still to list.
+// macOS 163 split decisions across the run saw no idle worker (#332).
+// Released this way, its next page decides with three idle workers and
+// every page after it still to list.
 func TestPriorStale(t *testing.T) {
 	var base []string
 	for i := range 100000 {
