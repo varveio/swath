@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -193,8 +194,13 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 // ledger arms are reached by construction: those children run with
 // SWATH_TEST_SERIAL_SEALS, each seal waiting for the earlier seals'
 // ledger cycles, so four seals are four appends however they fall in time.
-// The recovery arms' runs do not: serialized seals leave fewer certificates
-// sealed by the first unlink than the damaged ledger needs live.
+// The recovery arms' crashed runs are serialized too, their frontier held
+// (K stays ⊥), and killed at the sixth ledger sync: six seal records are
+// written (five synced), and damageLedger leaves certificates live above K
+// for the recovery replay by construction. Before, they were killed at
+// the first unlink, which fires only once K covers a certificate, and in
+// about one run in six none was left live above K: spill-replay (or its
+// first frame) went unreached.
 func TestSIGKILLDurableSpill(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -204,9 +210,19 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(30000)))
+	// hold, while set, holds the frontier's first request (the first fresh
+	// data listing from the start) until the child dies: no part is
+	// published, K stays ⊥, and every certificate the run seals stays live
+	// above it.
+	var hold atomic.Bool
+	var fromStart atomic.Int64
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if _, ok := q["list-type"]; ok && q.Get("delimiter") == "" && q.Get("continuation-token") == "" && q.Get("start-after") < "d06/" {
+			if hold.Load() && q.Get("start-after") == "" && fromStart.Add(1) == 1 {
+				<-r.Context().Done()
+				return
+			}
 			time.Sleep(50 * time.Millisecond) // the slow frontier
 		}
 		time.Sleep(time.Millisecond)
@@ -253,8 +269,14 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	for _, point := range faults.RecoveryPoints {
 		at := "recovery " + point
 		out := filepath.Join(t.TempDir(), "ds")
-		killed("spill-unlink:1", exec.Command(bin, args(out)...))
+		hold.Store(true)
+		fromStart.Store(0)
+		killed("spill-ledger-sync:6", exec.Command(bin, args(out)...), "SWATH_TEST_SERIAL_SEALS=1")
+		hold.Store(false)
 		damageLedger(t, out)
+		if k, live := lastKey(t, out), liveCerts(t, out); k != "" || eligibleCerts(live, k) == 0 {
+			t.Fatalf("%s: the held frontier left K %q and %d of %d live certificates above it", at, k, eligibleCerts(live, k), len(live))
+		}
 		killed(point+":1", exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...))
 		resume(at, out)
 	}
