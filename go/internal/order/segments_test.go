@@ -629,20 +629,40 @@ func (s *queuedSink) close() {
 // The slow range is held until every other range is done (Run's
 // "one-range-open"), not only listed: listing ends with it, while the
 // drainer still waits at it, so the tail the segments replay is every
-// sibling after the first two parts (about 32,000 rows). Released when the
+// sibling after the first two parts. Released when the
 // last sibling had emitted its rows, the drainer could pass the slow range
 // and drain siblings serially while that sibling was still completing,
 // leaving the segments a few thousand rows that never reach the gate
 // (#313).
-func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
+//
+// gated holds the encoders until a segment worker waits at the safety gate
+// (hookWait at waitSegment): nothing downstream is taken before, so the
+// workers' reservations and queued batches reach the budget and the gate
+// must engage, whatever the schedule. A run that ends before (its
+// deadline) releases them, so no encoder or Close is left waiting.
+func budgetRun(t *testing.T, budget int64, siblings int, gated bool) (Stats, int64, int64) {
 	t.Helper()
 	withProcs(t, 5)
 	countRows = false // the budget in bytes, as the encoders' queues count them
 	defer func() { countRows = true }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var hold chan struct{}
+	var release func()
+	if gated {
+		hold = make(chan struct{})
+		var once sync.Once
+		release = func() { once.Do(func() { close(hold) }) }
+		stop := context.AfterFunc(ctx, release)
+		defer stop()
+	}
 	var waits atomic.Int64
 	hookWait = func(site string) {
 		if site == waitSegment {
 			waits.Add(1)
+			if gated {
+				release()
+			}
 		}
 	}
 	defer func() { hookWait = nil }()
@@ -655,9 +675,7 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 		}
 	})()
 	shared := &Shared{}
-	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond, hold: hold}
 	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
 	if err != nil {
 		t.Fatal(err)
@@ -679,7 +697,7 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 // which then waited tens of thousands of times on Batch.
 func TestSegmentsSizedToBudget(t *testing.T) {
 	const budget = 28 << 20
-	st, peak, waits := budgetRun(t, budget, 200)
+	st, peak, waits := budgetRun(t, budget, 200, false)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers != 2 || sg.WorkersBy != WorkersByRowBudget || st.SpillRows == 0 {
 		t.Fatalf("segments %+v, %d rows spilled: want two workers set by the row budget, spill read", sg, st.SpillRows)
@@ -696,11 +714,13 @@ func TestSegmentsSizedToBudget(t *testing.T) {
 // what the segments hold within it but for one unit, the workers waiting
 // at the segment site. Before (sol review 2, P2) every worker queued
 // four-thousand-row batches into its part's queue (16 deep for the
-// continued part) whatever the budget: 19 MB downstream.
+// continued part) whatever the budget: 19 MB downstream. The encoders are
+// held until a worker waits at the gate (budgetRun's gated), so the wait
+// does not depend on the encoders' stall against the workers' pace.
 func TestSegmentsStayWithinBudget(t *testing.T) {
 	const budget = 4 << 20
 	anyShare(t)
-	st, peak, waits := budgetRun(t, budget, 60)
+	st, peak, waits := budgetRun(t, budget, 60, true)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers < 2 || st.SpillRows == 0 {
 		t.Fatalf("segments %+v", sg)
