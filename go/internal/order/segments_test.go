@@ -489,22 +489,47 @@ func damageTrailer(t *testing.T, path string) {
 // disagrees with its rows is found before any segment closes a part: the
 // run fails, no segment was opened, and no part is final (a part closed
 // could be journaled; the final one would let a resume commit).
+//
+// The trailer is damaged when the drainer tries the segments
+// (hookSegmenter) with the sink's plan ready (two parts), so the attempt
+// goes on to check the trailers and the drainer reads no spilled frame in
+// between: the newest spill file left on disk is undrained, a late
+// sibling's, far from the read-ahead. The slow range is held until every
+// other range is done ("one-range-open"), so listing ends with it and the
+// siblings are all still spilled. Damaged at ListingDone, the file could
+// be reached by the serial drain first (a plain spill error, not the
+// segments' invariant error; #321).
 func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 	withProcs(t, 5)
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	f.hold = make(chan struct{})
+	var released sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			released.Do(func() { close(f.hold) })
+		}
+	})()
 	dir := t.TempDir()
 	s := &partSink{limit: 3000, encoders: 4}
-	opt := Options{Workers: 8, Budget: 500, SpillDir: dir, ListingDone: func() {
+	var damaged bool // the drainer's goroutine alone
+	hookSegmenter = func(*sync.Mutex) {
+		s.mu.Lock()
+		ready := len(s.parts) >= 2 && !s.segmented
+		s.mu.Unlock()
+		if damaged || !ready {
+			return
+		}
+		damaged = true
 		files, _ := filepath.Glob(filepath.Join(dir, "spill-*", "*.spill"))
 		if len(files) == 0 {
 			t.Error("no spill file to damage")
 			return
 		}
 		slices.Sort(files)
-		damageTrailer(t, files[len(files)-1]) // a late sibling's: replayed by the segments
-	}}
+		damageTrailer(t, files[len(files)-1])
+	}
+	t.Cleanup(func() { hookSegmenter = nil })
+	opt := Options{Workers: 8, Budget: 500, SpillDir: dir}
 	_, err := Run[fr, tp](context.Background(), f, s, &testSchema, opt)
 	var inv *dataset.InvariantError
 	if !errors.As(err, &inv) {
