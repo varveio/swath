@@ -6,9 +6,9 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each doing its work only when
+CI runs the same in five jobs of `.github/workflows/ci.yml`, side by side, each doing its work only when
 `go/`, the workflow, `Dockerfile.replay-go`, the replay smoke script or the shard table changed (the
-`changes` job decides). A commit touching `go/` needs all four green; `ci-gate` requires them.
+`changes` job decides). A commit touching `go/` needs all five green; `ci-gate` requires them.
 
 | job | runs | runner |
 |---|---|---|
@@ -16,6 +16,7 @@ CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each 
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
 | `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) and the [shape suite](#shape-suite) at 200,000 keys per shape | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
 
 The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
 `changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
@@ -40,6 +41,18 @@ unsharded race run on amd64 (`nightly.yml` `go-race-nightly`, `go test -race ./.
 `go-race (SHARD)` leg: its test step prints the exact `go test` command, which reruns that shard locally from
 `go/`; `scripts/ci/go-race-shards.sh SHARD` prints the arguments alone. To repeat one test on a chosen OS,
 use `go-stress.yml`.
+
+Where a platform cannot run a case the test skips with the platform behaviour as its reason, never silently:
+
+- **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync), so
+  tests of journaled runs, crash recovery, resume and the durable spill call `datasettest.RequireJournal`
+  and skip; replay fixtures that only need a dataset list it unjournaled there. Windows also refuses to
+  rename a directory holding an open file (a running output cannot be replaced, the sort-fixture
+  replacement cases), resets a connection closed with unread input (the replay diff's residual cases), has
+  no permission bit that hides a directory, refuses `<` and `>` in names, has no SIGTERM to send, and its
+  monotonic clock ticks about every 0.5 ms (a local request can time at 0 ns, which the timing checks allow).
+- **macOS and Windows** refuse names that are not UTF-8 (APFS, NTFS): the byte-for-byte name cases run on
+  Linux only.
 
 `SWATH_PERF=1` is the performance tier: a test whose law holds at a small scale runs that scale by default
 and the full one (seconds, more memory) only then. CI does not set it.

@@ -1176,7 +1176,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   plain TSV row on nbm; the filters, the progress display, bearer tokens and row rotation have not. No consumer
   of the report (the cloud importer included) has read the new fields.
 - **Platforms.** Windows refuses journaled runs (no directory sync,
-  [internals/durability.md](internals/durability.md)); Windows and macOS builds are compiled, not run. Power
+  [internals/durability.md](internals/durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
   loss is untested.
 - **Scale.** Runs of hours and listings past a billion keys are unmeasured. The largest runs are key lists of
   up to 593M keys through the fake and one live bucket of 1.09 billion objects at 256 and 1,024 workers

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
@@ -39,7 +40,7 @@ func TestS3Dataset(t *testing.T) {
 		seed         bool
 	}{{"s3://bkt", "s3://bkt", false}, {"s3://bkt", "s3://bkt", true}, {"s3://bkt/logs/03/", "s3://bkt/logs/03/", false}} {
 		out := filepath.Join(t.TempDir(), "ds")
-		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: tc.seed}}}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10}})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: tc.seed}}}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +104,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle = url, true
-		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +185,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 		return v.(map[string]any)
 	}
 	vals := []string{"source", "stats", "counters", "values"}
-	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true, Floors: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds")}, Limits: Limits{Workers: 4}})
+	on := run(Config{Source: SourceConfig{Options: &S3Config{Policy: keyrange.Policy{Seed: true, Floors: true}}}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "ds"), NoJournal: datasettest.NoJournal()}, Limits: Limits{Workers: 4}})
 	if !has(on, append(vals, "split.skipped.tail_floor")...) || !has(on, append(vals, "seed.cuts")...) || !has(on, "resources", "spill", "rows") || !has(on, "resources", "encoder_wait_ns") {
 		t.Fatalf("enabled policies must report their counters: %v", on)
 	}

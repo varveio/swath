@@ -219,9 +219,6 @@ func stopEarly(report string, argv []string, dir string, att *listing.Attempt, e
 // errText refuses swath resume of a text run.
 var errText = errors.New("text output (table, tsv, jsonl) is not resumable: it keeps no journal; run swath list again")
 
-// brokenPipe reports whether err is the stdout reader closing the stream.
-func brokenPipe(err error) bool { return errors.Is(err, syscall.EPIPE) }
-
 // usageError is a malformed command line.
 type usageError struct{ error }
 

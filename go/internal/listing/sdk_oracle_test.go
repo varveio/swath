@@ -15,6 +15,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
@@ -43,7 +44,7 @@ func TestDatasetsMatchSDK(t *testing.T) {
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner = srvURL, true, true
-		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
 			t.Fatal(err)
 		}
 		return out

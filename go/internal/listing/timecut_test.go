@@ -18,6 +18,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 )
 
@@ -47,6 +48,7 @@ func footerRows(t *testing.T, path string) int64 {
 // refused the unchanged source with ErrAmbiguousTail). A source changed
 // inside the claimed part is still refused, the part kept.
 func TestTimeCutClaimResumes(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 300 {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
@@ -132,6 +134,7 @@ func TestTimeCutClaimResumes(t *testing.T) {
 // same part count. Before, part 0's ratio froze a limit about a fifteenth
 // of the part size for the whole run and every resume of it.
 func TestTimeCutPartDoesNotCalibrate(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 6000 {
 		keys = append(keys, fmt.Sprintf("k%05d", i))

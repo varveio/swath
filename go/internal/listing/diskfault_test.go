@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 )
 
@@ -26,6 +27,7 @@ import (
 // uninterrupted run byte for byte (before, faults were injected only
 // before a write: TestENOSPCOnJournalResumes; durability review).
 func TestDiskFaultMatrix(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

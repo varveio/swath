@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,7 +106,11 @@ func s3Walk(t *testing.T, s *Server, query string) []string {
 // route sent no ETag and no StorageClass.
 func TestLocalRecordingOnTheS3Route(t *testing.T) {
 	mtime := time.Date(2025, 11, 6, 3, 33, 20, 123456789, time.UTC)
-	dir := recordLocal(t, map[string]string{"a/b/x": "x", "a/z.txt": "zzz", "top.txt": "", "c&d<e>.bin": "1234"}, mtime)
+	odd, oddXML := "c&d<e>.bin", "c&amp;d&lt;e&gt;.bin"
+	if runtime.GOOS == "windows" {
+		odd, oddXML = "c&d.bin", "c&amp;d.bin" // NTFS refuses < and > in names
+	}
+	dir := recordLocal(t, map[string]string{"a/b/x": "x", "a/z.txt": "zzz", "top.txt": "", odd: "1234"}, mtime)
 	contents := func(key string, size string) string {
 		return "<Contents><Key>" + key + "</Key><LastModified>2025-11-06T03:33:20.123Z</LastModified>" +
 			"<ETag>&quot;swath-s3-synthetic-v1&quot;</ETag><Size>" + size + "</Size><StorageClass>STANDARD</StorageClass></Contents>"
@@ -123,7 +128,7 @@ func TestLocalRecordingOnTheS3Route(t *testing.T) {
 		contents("a/b/", dirSize("a/b")),
 		contents("a/b/x", "1"),
 		contents("a/z.txt", "3"),
-		contents("c&amp;d&lt;e&gt;.bin", "4"),
+		contents(oddXML, "4"),
 		contents("top.txt", "0"),
 	}
 	for _, opts := range []store.Options{{}, {Prefetch: store.Prefetch{Off: true}}} {

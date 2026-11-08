@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -28,6 +29,7 @@ import (
 // so does the route (a profile that resolves another region is refused by
 // the identity check).
 func TestResumeOperationalOverrides(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	dir0 := t.TempDir()
 	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",

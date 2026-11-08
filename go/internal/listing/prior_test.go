@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -26,7 +27,7 @@ func listS3(t *testing.T, url, root, out, seedFrom string) (Report, error) {
 	t.Helper()
 	return Run(context.Background(), Config{Source: SourceConfig{URI: root, SeedFrom: seedFrom,
 		Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: true}}},
-		Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10, Workers: 8}})
+		Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}})
 }
 
 func manifestOf(t *testing.T, dir string) dataset.Manifest {

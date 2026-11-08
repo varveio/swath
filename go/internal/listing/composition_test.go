@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -83,7 +84,7 @@ func TestPriorSlowSplitPercentThrottleCompose(t *testing.T) {
 	out := filepath.Join(dir, "ds")
 	sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", SeedFrom: cuts,
 		Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: true, SlowSplit: true}}},
-		Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 16 << 10, Workers: 16}})
+		Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 16}})
 	if err != nil {
 		t.Fatal(err)
 	}

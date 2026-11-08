@@ -188,7 +188,9 @@ func TestSlowAndFailingWriter(t *testing.T) {
 	if got, err := d.DecodeAll(slow.Bytes(), nil); err != nil || !bytes.Equal(got, plain.Bytes()) {
 		t.Fatalf("slow writer: %d bytes decoded (%v), want %d", len(got), err, plain.Len())
 	}
-	if st := o.Stats(); st.OutputWait <= 0 {
+	// OutputWait sums each hand-off's wait, and Windows' clock ticks about
+	// every 0.5 ms: short waits read 0 there.
+	if st := o.Stats(); st.OutputWait <= 0 && runtime.GOOS != "windows" {
 		t.Fatalf("no output wait behind a slow writer: %+v", st)
 	}
 	settled(t, base)

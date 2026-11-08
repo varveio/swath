@@ -614,6 +614,41 @@ jobs:
             tee "$smoke/capture-smoke.log"
           grep -q "sorting it with the image's sort-fixture" "$smoke/capture-smoke.log"
 
+  # The Go default tier on the other operating systems the port ships for: plain `go test`
+  # (no -race: slow on macOS, and the Windows race detector needs cgo) on macOS and Windows.
+  # linux/arm64 is covered by the go-race shards. Only vet and the tests: gofmt, the shard
+  # check, the heap gates, the cross-builds and the image stay in the jobs above. Always runs;
+  # its steps work only on a Go-relevant change (the changes job).
+  go-xos:
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: go vet
+        if: needs.changes.outputs.go == 'true'
+        run: go vet ./...
+
+      - name: go test (no -race)
+        if: needs.changes.outputs.go == 'true'
+        run: go test -count=1 -timeout 25m ./...
+
   # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
   # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
   # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
@@ -745,7 +780,7 @@ jobs:
   # required check never reports a conclusion, and the pull request waits forever instead of
   # going red.
   ci-gate:
-    needs: [changes, fast-tests, integration-tests, docker-check, go-lint, go-race, go-nonrace, go-build, go-fixtures]
+    needs: [changes, fast-tests, integration-tests, docker-check, go-lint, go-race, go-nonrace, go-build, go-xos, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

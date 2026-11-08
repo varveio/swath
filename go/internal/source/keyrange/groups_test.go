@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -274,7 +275,8 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 								}
 							case "slow-split":
 								for _, id := range []counterID{cSlowMaxRangeLatency, cSlowRunLatency} {
-									if st.Get(id) == 0 {
+									// Windows' clock ticks about every 0.5 ms: a latency under that reads 0 there.
+									if st.Get(id) == 0 && runtime.GOOS != "windows" {
 										t.Errorf("%s: 0, want engaged", Counters[id].Key)
 									}
 								}

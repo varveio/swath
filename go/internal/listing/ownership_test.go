@@ -72,6 +72,9 @@ func TestEveryOutputIsOwned(t *testing.T) {
 			t.Fatalf("replace=%v: a refused foreign directory got a workspace", replace)
 		}
 	}
+	if !dataset.DirSyncEnforced {
+		return // a resume is refused before it could find nothing (Windows)
+	}
 	none := filepath.Join(t.TempDir(), "none")
 	s3 := &S3Config{Endpoint: "http://127.0.0.1:1", Anonymous: true}
 	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: s3}, Output: OutputConfig{Dir: none, Resume: true}}); !errors.Is(err, ErrNothingToResume) {

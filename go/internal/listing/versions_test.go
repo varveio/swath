@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -59,12 +60,13 @@ func versionFixture(crashAt int) *versionAPI {
 }
 func versionListingConfig(out string, versions, resume bool, api *versionAPI) Config {
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: versions, Policy: keyrange.Policy{PageSize: 2}}},
-		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{Workers: 1, Encoders: 1, PartSize: 64 << 20, PartMaxRows: 2}}
+		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{Workers: 1, Encoders: 1, PartSize: 64 << 20, PartMaxRows: 2}}
 }
 
 // TestVersionsResumeAfterCrashDuringHotGroup: A crash inside a hot key retains only
 // complete groups; resume reproduces the clean parts and reports its new rows.
 func TestVersionsResumeAfterCrashDuringHotGroup(t *testing.T) {
+	datasettest.RequireJournal(t)
 	ref, out := filepath.Join(t.TempDir(), "ref"), filepath.Join(t.TempDir(), "out")
 	if _, err := Run(context.Background(), versionListingConfig(ref, true, false, versionFixture(0))); err != nil {
 		t.Fatal(err)
@@ -99,6 +101,7 @@ func TestVersionsResumeAfterCrashDuringHotGroup(t *testing.T) {
 // TestResumeRefusesVersionModeSwitch: Resume refuses a schema change between current
 // objects and all versions in either direction.
 func TestResumeRefusesVersionModeSwitch(t *testing.T) {
+	datasettest.RequireJournal(t)
 	for _, versions := range []bool{false, true} {
 		t.Run(fmt.Sprint(versions), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")

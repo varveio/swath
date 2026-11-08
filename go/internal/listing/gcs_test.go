@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
@@ -37,13 +38,14 @@ func gcsBucket(t *testing.T, n int) string {
 
 func gcsConfig(ep, out string, resume bool) Config {
 	return Config{Source: SourceConfig{URI: "gs://bkt", Options: &GCSConfig{Endpoint: ep, Anonymous: true}},
-		Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
+		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 6 << 10, Workers: 8, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: -1}}
 }
 
 // TestGCSResumeRefusesAnotherRoute: a GCS run interrupted with parts
 // retained is refused on resume through another route or another billed
 // project (the crash points themselves: TestCrashMatrix).
 func TestGCSResumeRefusesAnotherRoute(t *testing.T) {
+	datasettest.RequireJournal(t)
 	ep := gcsBucket(t, 8000)
 	for name, change := range map[string]func(*GCSConfig){
 		"route":   func(o *GCSConfig) { o.Endpoint = strings.Replace(ep, "127.0.0.1", "localhost", 1) },
@@ -79,6 +81,7 @@ func TestGCSResumeRefusesAnotherRoute(t *testing.T) {
 // cause redirect, no manifest appears and the retained files are untouched;
 // a fresh run through a redirecting endpoint is refused the same way.
 func TestGCSRedirectCannotChangeResumeSource(t *testing.T) {
+	datasettest.RequireJournal(t)
 	b, c := gcsBucket(t, 8000), gcsBucket(t, 5000)
 	var redirect atomic.Bool
 	bu, _ := url.Parse(b)
@@ -225,6 +228,7 @@ func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
 // dataset; the rotated credential together with another billed project is
 // refused for the project. The bucket refuses unsigned requests.
 func TestGCSCredentialRotationResumes(t *testing.T) {
+	datasettest.RequireJournal(t)
 	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		w.Header().Set("Content-Type", "application/json")

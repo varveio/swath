@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -50,7 +51,8 @@ func listInto(t testing.TB, dir, name, uri string, options any) string {
 	out := filepath.Join(dir, name)
 	_, err := listing.Run(context.Background(), listing.Config{
 		Source: listing.SourceConfig{URI: uri, Options: options},
-		Output: listing.OutputConfig{Dir: out},
+		// A dataset is all these tests need: unjournaled where a journaled run is refused (Windows).
+		Output: listing.OutputConfig{Dir: out, NoJournal: !dataset.DirSyncEnforced},
 		Limits: listing.Limits{PartSize: 6 << 10, PartInterval: -1},
 	})
 	if err != nil {

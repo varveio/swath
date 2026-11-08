@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -614,6 +615,7 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 // path deterministically; listing's TestDurableLedgerTornWrite resumes
 // after it.)
 func TestDurableLedgerFailureEvicts(t *testing.T) {
+	datasettest.RequireJournal(t)
 	ledgerOrder(t)
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
@@ -1024,6 +1026,7 @@ var _ = io.EOF
 // unlinked, and the replacement is fatal (the run's cause, recovery's
 // error).
 func TestDurableReplacedMidCycle(t *testing.T) {
+	datasettest.RequireJournal(t)
 	replaced := errors.New("the output directory was moved or replaced")
 	for _, point := range []string{"spill-ledger-append", "spill-ledger-sync", "spill-unlink"} {
 		t.Run(point, func(t *testing.T) {
@@ -1193,6 +1196,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 // are rejected by recovery (rejected.codec), retired and unlinked: never
 // accepted into the reuse plan, so replay never meets them.
 func TestDurableCodecRejected(t *testing.T) {
+	datasettest.RequireJournal(t)
 	root, _ := sealedSpill(t, 6)
 	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {

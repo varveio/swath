@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 )
 
@@ -22,6 +23,7 @@ import (
 // unseeded clean run's, byte for byte: a prior, the workers, the encoders
 // and the spill format change how the work is done, never the parts.
 func TestResumeChangesPriorWorkersEncodersAndSpillFormat(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := crashBucket(t)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {

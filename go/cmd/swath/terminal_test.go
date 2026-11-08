@@ -107,7 +107,12 @@ func TestProgressGating(t *testing.T) {
 		{termOptions{}, true, 80, "dumb", true, false},
 		{termOptions{}, true, 20, "xterm", true, false},
 	} {
+		// A redraw also needs escape sequences to act on stderr: on Windows
+		// a console, which a test's stderr is not.
 		show, redraw := progressPrefs(tc.opt, tc.tty, tc.width, tc.term)
+		if tc.redraw && !enableVT() {
+			tc.redraw = false
+		}
 		if show != tc.show || redraw != tc.redraw {
 			t.Errorf("%d: show %v redraw %v, want %v %v", i, show, redraw, tc.show, tc.redraw)
 		}
@@ -211,7 +216,8 @@ func TestReportContinuity(t *testing.T) {
 		var out bytes.Buffer
 		file := filepath.Join(t.TempDir(), "r.json")
 		args := append([]string{src, "--endpoint", url, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
-		if err := run(context.Background(), args, &out, false); err != nil {
+		args = append(args, unjournaled...)
+		if err := run(context.Background(), args, &out, diagList); err != nil {
 			t.Fatal(err)
 		}
 		var r rep

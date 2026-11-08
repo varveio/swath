@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
@@ -39,6 +40,7 @@ import (
 // outcome is reported, on stderr and in the report (durability
 // review).
 func TestOutcomeIsCurrent(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var hang atomic.Bool // every request waits: no progress
 	hang.Store(true)
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +258,7 @@ func crashRun(t *testing.T, args []string, nth int64) {
 // (--report) names this attempt with the reason in outcome.unrecorded
 // (durability review: the source that does not open gave no reason).
 func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
+	datasettest.RequireJournal(t)
 	good, broken := fakeADC(t)
 	stderr := captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
@@ -341,6 +344,7 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 // lock is created and error.json is not replaced. The same through a run
 // asked to resume directly (the library path the command does not reach).
 func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(100), 0)
 	ctx := context.Background()
@@ -379,6 +383,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 // that compares them never takes the old outcome for the current one; the
 // same for a refusal before the run (durability review).
 func TestAttemptIdentifiesTheOutcome(t *testing.T) {
+	datasettest.RequireJournal(t)
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // no progress: every attempt is stuck
 	}))
@@ -455,6 +460,7 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 // is not in error.json into the report and on stderr (durability
 // review). Before, outcome.unrecorded was empty for these.
 func TestEarlyRefusalSaysWhy(t *testing.T) {
+	datasettest.RequireJournal(t)
 	stderr := captureStderr(t)
 	ctx := context.Background()
 	srv := gcstest.Bucket(t, gcstest.Keys(50), 0)
@@ -484,6 +490,7 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 // the same for a resumed run that finds the dataset committed (another
 // process finished it first). Before, both exited 1 ("already complete").
 func TestResumeCompleteIsIdempotent(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(200), 0)
@@ -542,6 +549,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 // nothing to resume; an unknown scheme is a usage error. Run failures stay
 // 1. Before, every refusal but the malformed command line exited 1.
 func TestRefusalsExit2(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
@@ -618,8 +626,8 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
-		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, &out, false)
+		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, diagList)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)
@@ -642,7 +650,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 	for name, extra := range map[string][]string{"complete": nil, "key limit": {"--sequential", "--max-keys", "10"}} {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, extra...), io.Discard, true)
+		err := run(ctx, append(append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
 		if (err == nil) != (extra == nil) {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -655,6 +663,9 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 			if o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason || o.Complete != (extra == nil) {
 				t.Fatalf("%s %s: outcome %+v, manifest coverage %+v", name, how, o, m.Coverage)
 			}
+		}
+		if !dataset.DirSyncEnforced {
+			continue // a resume is refused here (Windows)
 		}
 		// swath resume of the committed dataset reports the same coverage.
 		report = filepath.Join(t.TempDir(), "report.json")

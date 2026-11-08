@@ -6,6 +6,7 @@ package keyrange
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func TestDecisionMutexCounters(t *testing.T) {
 	if err := q.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, h := q.Contention(); h <= 0 {
+	if _, h := q.Contention(); h <= 0 && runtime.GOOS != "windows" { // Windows' clock ticks about every 0.5 ms: a short hold reads 0
 		t.Fatalf("a listing recorded no hold: %s", h)
 	}
 }

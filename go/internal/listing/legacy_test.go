@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/journal"
 )
 
@@ -81,6 +82,7 @@ func snapshot(t *testing.T, out string) map[string][]byte {
 // no replacement part or record is written and no manifest appears
 // (durability review: version 7 recovery would remove that part as unrecorded).
 func TestLegacyTemporaryProtocolIsRefusedOrRecovered(t *testing.T) {
+	datasettest.RequireJournal(t)
 	for _, damage := range []string{"intact", "five-byte truncation", "whole last frame removed"} {
 		url, b := crashBackend(t)
 		out := filepath.Join(t.TempDir(), "ds")

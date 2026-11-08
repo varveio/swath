@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strings"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -56,7 +58,8 @@ func TestStuckCause(t *testing.T) {
 			report := filepath.Join(t.TempDir(), "report.json")
 			args := append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "2",
 				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
-			if code := exitCode(t, run(context.Background(), args, io.Discard, false)); code != exitStuck {
+			args = append(args, unjournaled...)
+			if code := exitCode(t, run(context.Background(), args, io.Discard, diagList)); code != exitStuck {
 				t.Fatalf("exit %d, want %d", code, exitStuck)
 			}
 			var o outcome
@@ -81,6 +84,9 @@ func TestStuckCause(t *testing.T) {
 // outcome in error.json and the report (it wrote neither). The graceful
 // codes are TestExitCodes'.
 func TestForcedExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sends SIGTERM and SIGINT, which Windows cannot deliver to a process")
+	}
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
@@ -144,6 +150,7 @@ func TestForcedExitCode(t *testing.T) {
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
 func TestOneTerminalAccount(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	same := func(t *testing.T, name string, a, b listing.Outcome) {

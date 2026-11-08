@@ -20,12 +20,17 @@ import (
 // (never journaled) run still work. Before, the journaled run went ahead
 // with a warning and no lock.
 func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
+	defer func(was bool) { dataset.DirSyncEnforced = was }(dataset.DirSyncEnforced)
 	dataset.DirSyncEnforced = false
-	defer func() { dataset.DirSyncEnforced = true }()
 	keys := []string{"a", "b", "c"}
 	out := filepath.Join(t.TempDir(), "ds")
 	for _, resume := range []bool{false, true} {
-		if _, err := runScripted(t, &scripted{keys: keys, chunk: 1}, out, resume); !errors.Is(err, ErrUnenforced) {
+		// Not runScripted: its config lists unjournaled where that is refused.
+		scriptMu.Lock()
+		scriptNext = &scripted{keys: keys, chunk: 1}
+		scriptMu.Unlock()
+		cfg := Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume}, Limits: Limits{PartSize: 2 << 10, Workers: 4, PartInterval: -1}}
+		if _, err := Run(context.Background(), cfg); !errors.Is(err, ErrUnenforced) {
 			t.Fatalf("resume=%v: err = %v, want ErrUnenforced", resume, err)
 		}
 		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {

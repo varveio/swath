@@ -33,6 +33,9 @@ const testRunPrefix = "probe/r20260101t000000z-00000000/"
 // standard library only) and returns its cases for provider.
 func campaignCases(t *testing.T, module, class string) []campaignCase {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the campaign's matrix code imports fcntl (Unix only)")
+	}
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not found: the campaign's matrix cannot be read")
@@ -46,7 +49,11 @@ p = %s.%s.__new__(%s.%s)
 print(json.dumps([matrix.case_record(c) for c in p.cases(%q, "full")]))`, dir, module, module, class, module, class, testRunPrefix)
 	out, err := exec.Command(py, "-I", "-c", script).Output()
 	if err != nil {
-		t.Fatalf("reading the campaign matrix: %v", err)
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		t.Fatalf("reading the campaign matrix: %v\n%s", err, stderr)
 	}
 	var cases []campaignCase
 	if err := json.Unmarshal(out, &cases); err != nil {

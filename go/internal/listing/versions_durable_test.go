@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -150,7 +151,7 @@ func hotVersionsConfig(api *hotVersions, out string, resume bool) Config {
 		api.gate.Store(&versionsGate{release: make(chan struct{})})
 	}
 	return Config{Source: SourceConfig{URI: "s3://b", Options: &s3.Options{Client: api, AllVersions: true, Policy: keyrange.Policy{PageSize: 7}}},
-		Output: OutputConfig{Dir: out, Resume: resume},
+		Output: OutputConfig{Dir: out, Resume: resume, NoJournal: datasettest.NoJournal()},
 		Limits: Limits{Workers: 16, PartSize: 2 << 10, RowBudget: minRowBudget, Spill: SpillLimits{Max: 64 << 20}, PartInterval: -1}}
 }
 
@@ -211,6 +212,7 @@ func liveVersionCerts(t *testing.T, out string) []versionCert {
 // so certificates begin and end at complete keys, and a replay accepts a
 // key repeated within its group.
 func TestVersionsDurableSpill(t *testing.T) {
+	datasettest.RequireJournal(t)
 	api := newHotVersions(t)
 	defer order.SetDurableEvents(api.event)()
 	ref := filepath.Join(t.TempDir(), "ref")

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/replay/store"
 	sourcegcs "github.com/varveio/swath/go/internal/source/gcs"
@@ -83,7 +84,8 @@ func recordGCS(t *testing.T, objects map[string]map[string]any) string {
 	out := filepath.Join(t.TempDir(), "ds")
 	if _, err := listing.Run(context.Background(), listing.Config{
 		Source: listing.SourceConfig{URI: "gs://bkt", Options: &sourcegcs.Options{Endpoint: fake.Serve(t), Anonymous: true}},
-		Output: listing.OutputConfig{Dir: out},
+		// A dataset is all these tests need: unjournaled where a journaled run is refused (Windows).
+		Output: listing.OutputConfig{Dir: out, NoJournal: !dataset.DirSyncEnforced},
 	}); err != nil {
 		t.Fatal(err)
 	}

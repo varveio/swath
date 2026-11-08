@@ -90,7 +90,7 @@ func (p *Pending) Commit(d Durability) error {
 		os.Remove(p.tmp)
 		return fmt.Errorf("write %s: %w", name, err)
 	}
-	if err := os.Rename(p.tmp, p.path); err != nil {
+	if err := replaceFile(p.tmp, p.path); err != nil {
 		os.Remove(p.tmp)
 		return fmt.Errorf("commit %s: %w", name, err)
 	}

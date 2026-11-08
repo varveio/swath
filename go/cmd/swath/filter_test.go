@@ -47,7 +47,7 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "r.json")
-	if err := run(context.Background(), append(src, "-o", dir, "--exclude", "sub1", "--min-size", "1", "--report", report), io.Discard, false); err != nil {
+	if err := run(context.Background(), append(append(src, "-o", dir, "--exclude", "sub1", "--min-size", "1", "--report", report), unjournaled...), io.Discard, diagList); err != nil {
 		t.Fatal(err)
 	}
 	var m dataset.Manifest
@@ -75,6 +75,9 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 		t.Fatalf("narrowed run: %+v", r)
 	}
 	var u usageError
+	if !dataset.DirSyncEnforced {
+		return // the resume cases: a resume is refused here (Windows)
+	}
 	if err := dispatch(context.Background(), []string{"resume", dir, "--exclude", "x"}, io.Discard); !errors.As(err, &u) {
 		t.Fatalf("a filter given to resume: %v", err)
 	}

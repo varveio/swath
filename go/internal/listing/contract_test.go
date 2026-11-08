@@ -17,6 +17,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -122,7 +123,7 @@ func TestDatasetContract(t *testing.T) {
 	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
 		o.Endpoint, o.PathStyle = url, true
 		out := filepath.Join(t.TempDir(), "ds")
-		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out},
+		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()},
 			Limits: Limits{PartSize: 16 << 10, Workers: 8}}); err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +139,7 @@ func TestDatasetContract(t *testing.T) {
 	}
 	src := t.TempDir()
 	names := []string{"a/1", "a/2", "b", "c/d/e"}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" { // NTFS and APFS refuse names that are not UTF-8
 		names = append(names, "z\xff")
 	}
 	mk(t, src, names...)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/replay/store"
@@ -37,6 +38,7 @@ import (
 // their timeCreated, the updated time for the others, on the window cache
 // and off it.
 func TestResumedGCSRecordingMixesParts(t *testing.T) {
+	datasettest.RequireJournal(t)
 	keys := gcstest.Keys(3000)
 	slices.Sort(keys)
 	ep := gcstest.NewStrict(keys).Serve(t)

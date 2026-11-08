@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -265,7 +266,11 @@ func tree(t *testing.T, dir string) string {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&b, "%s %v %d %d\n", path, info.Mode(), info.Size(), info.ModTime().UnixNano())
+		mtime := info.ModTime().UnixNano()
+		if d.IsDir() && runtime.GOOS == "windows" {
+			mtime = 0 // NTFS updates a directory's modification time lazily, after the entry it records
+		}
+		fmt.Fprintf(&b, "%s %v %d %d\n", path, info.Mode(), info.Size(), mtime)
 		return nil
 	})
 	if err != nil {
@@ -287,6 +292,9 @@ func replaceOutput(t *testing.T, out, point string) {
 // holds only its workspace and lock.
 func replaceOutputWith(t *testing.T, out, point string, parts bool) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows refuses to rename a directory while a file in it is open (the run's lock), so a running output cannot be replaced")
+	}
 	var other *journal.Lock
 	restore := faults.Set(func(p string) error {
 		if p != point || other != nil {

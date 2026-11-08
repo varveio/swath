@@ -30,7 +30,7 @@ func TestRequestRateFlag(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		start := time.Now()
-		if err := run(context.Background(), s.args(dir, "--request-rate", fmt.Sprint(rate), "--report", report), io.Discard, false); err != nil {
+		if err := run(context.Background(), s.args(dir, "--request-rate", fmt.Sprint(rate), "--report", report), io.Discard, diagList); err != nil {
 			t.Fatal(err)
 		}
 		el := time.Since(start)
