@@ -22,9 +22,9 @@ import (
 // parts open at once (the open part continued as a segment, three more),
 // four encoders admitted of six (MaxEncoders 6, as the default at 64
 // listing workers, before Admit), values at the schema's longest (1,024-
-// byte keys for S3, 24 pages a writer, and one S3 writer alone; 4,096-byte
-// keys and link targets for a local path) and random so nothing
-// compresses them away; after every page the live heap the writers and
+// byte keys for S3, and one S3 writer alone; binary 4,096-byte keys and
+// link targets, the local path's declared widths), 24 pages a writer,
+// random so nothing compresses them away; after every page the live heap the writers and
 // their codec hold stays within the encoders' admission
 // (parquetout.EncoderBytes each). Before (sol review 2, P2) each writer held a codec of its own with
 // a zstd state per column goroutine, each about 18 MiB once it has
@@ -39,7 +39,7 @@ func TestWriterAdmissionCoversHeap(t *testing.T) {
 	}
 	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24)
 	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24)
-	writerHeap(t, &localfs.Schema, fsRow(4096, 4095), 4, 6, 6)
+	writerHeap(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24)
 }
 
 // s3Row makes S3 rows with random keys of n bytes.
@@ -74,6 +74,31 @@ func randKey(r *rand.Rand, i, n int) string {
 	return string(b)
 }
 
+// randBinary is n random non-NUL bytes with a / every 64, ascending in i:
+// a path's worst case for compression.
+func randBinary(r *rand.Rand, i, n int) string {
+	b := make([]byte, n)
+	for j := range b {
+		b[j] = byte(1 + r.IntN(255))
+		if j%64 == 63 {
+			b[j] = '/'
+		}
+	}
+	copy(b, fmt.Sprintf("%08d", i))
+	return string(b)
+}
+
+// fsBinaryRow makes local-path rows at the schema's widths: binary keys of
+// n bytes and link targets of link bytes.
+func fsBinaryRow(n, link int) func(i int, r *rand.Rand) localfs.Row {
+	return func(i int, r *rand.Rand) localfs.Row {
+		e := localfs.Entry{Size: int64(i), Mtime: int64(i), Ctime: int64(i), Atime: int64(i), Btime: int64(i), Inode: int64(i),
+			Dev: 1, Blocks: 8, Mode: 0o644, UID: 1000, GID: 1000, Nlink: 1, Present: ^localfs.Presence(0), Kind: localfs.KindSymlink}
+		e.LinkTarget = randBinary(r, 0, link)
+		return localfs.Row{Key: randBinary(r, i, n), Data: e}
+	}
+}
+
 // gcHeap is the live heap after a collection (liveHeap).
 func gcHeap() int64 {
 	runtime.GC()
@@ -96,9 +121,14 @@ func writerHeap[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand
 func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) int64 {
 	const page = 1024
 	r0 := rand.New(rand.NewPCG(1, 2))
-	rows := make([]schema.Row[P], writers*pages*page+1)
-	for i := range rows {
-		rows[i] = mk(i, r0)
+	// Rows are made a page at a time, just before they are written: the
+	// heap holds the writers' working sets, not the input.
+	rows := func(from, n int) []schema.Row[P] {
+		out := make([]schema.Row[P], n)
+		for i := range out {
+			out[i] = mk(from+i, r0)
+		}
+		return out
 	}
 	var queued atomic.Int64
 	r, err := parquetout.NewRouter(parquetout.Options{Out: t.TempDir(), PartSize: 1 << 40, Encoders: writers, MaxEncoders: maxEncoders,
@@ -108,7 +138,7 @@ func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand
 	}
 	defer r.Abort()
 	ctx := context.Background()
-	if err := r.Write(ctx, [][]schema.Row[P]{rows[:1]}); err != nil {
+	if err := r.Write(ctx, [][]schema.Row[P]{rows(0, 1)}); err != nil {
 		t.Fatal(err)
 	}
 	base := gcHeap()
@@ -124,7 +154,7 @@ func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand
 	for p := range pages {
 		for w, sg := range segs {
 			at := 1 + (w*pages+p)*page
-			if err := sg.Write(ctx, [][]schema.Row[P]{rows[at : at+page]}); err != nil {
+			if err := sg.Write(ctx, [][]schema.Row[P]{rows(at, page)}); err != nil {
 				t.Fatal(err)
 			}
 		}

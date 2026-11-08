@@ -72,12 +72,14 @@ const unboundedKeyBytes = 4096
 //     1,024 keys, so keys over 128 bytes make every state a big one.
 //   - a writer holds its row group's encoded pages (groupBytes, overshot:
 //     the size is checked between pages), a page buffer per column
-//     (pageBufferBytes, grown to the page) and its wide values (the key,
-//     and columns with Spec.MaxBytes) about two and a half times over:
-//     the page being filled, its encoding, the dictionary attempt. One S3
-//     writer at 1,024-byte keys measured 13 MiB, four 15 each (19.5
-//     priced); the filesystem schema with 4,096-byte keys and link targets
-//     38 (43 priced).
+//     (pageBufferBytes, grown to the page) and its wide values: the key
+//     about two and a half times over (the page being filled, its delta
+//     encoding), a column with Spec.MaxBytes four times (its dictionary
+//     attempt besides). One S3 writer at 1,024-byte keys measured 13 MiB,
+//     four 15 each (19.5 priced); four filesystem writers at binary
+//     4,096-byte keys and link targets, 24 pages each, 170 MiB in all, and
+//     216 to 218 with 800 MB of rows live beside them (244 priced, 61
+//     each: the margin, 12 %, is over that worst case).
 const (
 	bigStateBytes   = 12 << 20
 	smallStateBytes = 2 << 20
@@ -85,8 +87,8 @@ const (
 )
 
 // stateBytes is one codec state's working set for pages of at most page
-// bytes; writerBytes one writer's, of columns columns whose wide values
-// (the key and the Spec.MaxBytes columns) sum to wide bytes a row.
+// bytes; writerBytes one writer's, of columns columns, keys of key bytes
+// and Spec.MaxBytes columns whose widths sum to wide.
 func stateBytes(page int64) int64 {
 	if page > zstdBlockBytes {
 		return bigStateBytes
@@ -94,8 +96,8 @@ func stateBytes(page int64) int64 {
 	return smallStateBytes
 }
 
-func writerBytes(wide, columns int) int64 {
-	return groupBytes + int64(columns)*pageBufferBytes + 5*int64(pageRows)*int64(wide)/2
+func writerBytes(key, wide, columns int) int64 {
+	return groupBytes + int64(columns)*pageBufferBytes + 5*int64(pageRows)*int64(key)/2 + 4*int64(pageRows)*int64(wide)
 }
 
 func encoderBytes(maxKey, wide, columns int) int64 {
@@ -103,7 +105,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 		maxKey = unboundedKeyBytes
 	}
 	page := int64(pageRows) * int64(max(maxKey, wide))
-	return writerBytes(maxKey+wide, columns) + stateBytes(page)
+	return writerBytes(maxKey, wide, columns) + stateBytes(page)
 }
 
 // Recipe identifies everything about the writer that decides a part's
@@ -162,7 +164,8 @@ type writer[P any] struct {
 	out       *tracking
 	w         *pq.GenericWriter[any]
 	codec     *codec
-	ownCodec  bool // created for this writer (else the router's, shared)
+	ownCodec  bool  // created for this writer (else the router's, shared)
+	capped    []int // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	values    [][]pq.Value
 	page      []schema.Row[P]
 	rows      int64
@@ -228,6 +231,11 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		w:    pq.NewGenericWriter[any](out, opts...),
 		page: make([]schema.Row[P], 0, pageRows),
 	}
+	for i := range s.Columns {
+		if s.Columns[i].MaxBytes > 0 && s.Columns[i].Str != nil {
+			w.capped = append(w.capped, i)
+		}
+	}
 	w.values = make([][]pq.Value, len(s.Columns)+1)
 	for i := range w.values {
 		w.values[i] = make([]pq.Value, pageRows)
@@ -240,6 +248,12 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 func (w *writer[P]) write(r *schema.Row[P]) error {
 	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
 		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
+	}
+	for _, c := range w.capped {
+		col := &w.schema.Columns[c]
+		if v, ok := col.Str(&r.Data); ok && len(v) > col.MaxBytes {
+			return fmt.Errorf("%w: %s of %.64q: %d bytes (limit %d)", schema.ErrValueTooLong, col.Name, r.Key, len(v), col.MaxBytes)
+		}
 	}
 	if w.rows > 0 && r.Key <= w.maxKey {
 		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)

@@ -440,3 +440,32 @@ func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
 		}
 	}
 }
+
+// TestValueLimits: a column with a Spec.MaxBytes (a local path's link
+// target, PATH_MAX) is held to it as the key is to its cap: a longer
+// value stops the part with the typed schema.ErrValueTooLong, a value at
+// the limit (any bytes) is taken. Before (sol review 4, P2) the limit
+// only priced admission, and a longer value was written past the price.
+func TestValueLimits(t *testing.T) {
+	s := testSchema
+	s.Columns = slices.Clone(testSchema.Columns)
+	for i := range s.Columns {
+		if s.Columns[i].Name == "link_target" {
+			s.Columns[i].MaxBytes = 16
+		}
+	}
+	write := func(link string) error {
+		w, err := create(nil, filepath.Join(t.TempDir(), "x.parquet"), &s, 0, nil, 1, func() int { return 1 })
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.abort()
+		return w.write(&row{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}})
+	}
+	if err := write(strings.Repeat("\xff", 16)); err != nil {
+		t.Fatalf("a value at the limit: %v", err)
+	}
+	if err := write(strings.Repeat("a", 17)); !errors.Is(err, schema.ErrValueTooLong) {
+		t.Fatalf("a value over the limit: %v", err)
+	}
+}
