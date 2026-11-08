@@ -71,6 +71,11 @@ type Options struct {
 	// After, if set, is a resume's last published key: every row must sort
 	// after it. The stream-wide order guard checks it with every other row.
 	After *string
+	// Groups: the schema's rows may repeat a key, as consecutive rows of
+	// one group (schema.Info.Groups): the guards accept a key equal to the
+	// previous row's, never one equal to After. Stats.DistinctKeys counts
+	// the keys.
+	Groups bool
 	// ListingDone, if set, is called once, without the stage's lock, when
 	// the provider has finished: every range expanded, none in flight
 	// (Stats.ListingDone). The drain may still have rows to hand on. A
@@ -91,14 +96,16 @@ type Options struct {
 
 // Stats describe a run.
 type Stats struct {
-	Rows        int64 // rows handed to the sink
-	Received    int64 // rows the provider's emitters received (== Rows after a successful run)
-	MaxBuffered int64 // peak bytes read but not yet drained (in memory, excluding Shared)
-	SpillRows   int64 // rows written to spill files and replayed
-	SpillFrames int64
-	SpillBytes  int64
-	SpillFiles  int64 // ranges that spilled
-	SpillPeak   int64 // peak live spill bytes
+	Rows int64 // rows handed to the sink
+	// DistinctKeys is the keys of those rows: Rows unless Options.Groups.
+	DistinctKeys int64
+	Received     int64 // rows the provider's emitters received (== Rows after a successful run)
+	MaxBuffered  int64 // peak bytes read but not yet drained (in memory, excluding Shared)
+	SpillRows    int64 // rows written to spill files and replayed
+	SpillFrames  int64
+	SpillBytes   int64
+	SpillFiles   int64 // ranges that spilled
+	SpillPeak    int64 // peak live spill bytes
 	// SpillLogical is the spilled rows' logical bytes (schema.LogicalBytes):
 	// against SpillBytes, what the frame coding saved. SpillFormat names
 	// the frames ("delta", "plain", each optionally "+zstd").
@@ -282,12 +289,18 @@ type run[R, P any] struct {
 	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
+	// Distinct keys validated in the pending batch, transferred at flush.
+	segDistinct int64
 	// released: bytes drained but still counted; releasedMeta: the part
 	// of it held by metadata (drainer only; returned under mu).
 	released, releasedMeta int64
-	// The stream-wide order guard: the last key handed on (drainer only).
+	// The stream-wide order guard: the last validated key (drainer only).
 	last    string
 	hasLast bool
+	// sent: a row has been validated (last is a row's key, not After);
+	// distinct counts the keys handed on.
+	sent     bool
+	distinct int64
 	// advanced is when the drainer last handed rows on (or began), stuck
 	// the longest interval between two such moments (Stats.FrontierStuck).
 	advanced time.Time
@@ -474,10 +487,13 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	start := time.Now()
 	for i := range rows {
 		k := rows[i].Key
-		if o.hasLast && k <= o.last {
+		if o.hasLast && (k < o.last || k == o.last && !(o.opt.Groups && o.sent)) {
 			return orderError(o.last, k, o.rows+int64(o.segRows+i), o.opt.After != nil)
 		}
-		o.last, o.hasLast = k, true
+		if !o.sent || k != o.last {
+			o.segDistinct++
+		}
+		o.last, o.hasLast, o.sent = k, true, true
 	}
 	now := time.Now()
 	o.dt.OrderCheck += now.Sub(start)
@@ -497,10 +513,12 @@ func (o *run[R, P]) flush() error {
 		return nil
 	}
 	o.rows += int64(o.segRows)
+	o.distinct += o.segDistinct
 	t := time.Now()
 	err := o.sink.Write(o.ctx, o.segs)
 	o.dt.SinkWrite += time.Since(t)
 	o.segs, o.segRows = nil, 0
+	o.segDistinct = 0
 	return err
 }
 
@@ -559,6 +577,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	}
 	o.dispose()
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
+	st.DistinctKeys = o.distinct
 	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.sp != nil && o.sp.cache != nil
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck

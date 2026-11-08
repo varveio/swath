@@ -95,6 +95,17 @@ claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at
 `--part-interval` ([../cli.md](../cli.md)). Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
 
+**Group mode** (`schema.Info.Groups`: a versions listing). A part never ends inside a key's rows: the journal
+records its last key as published, and a resume lists after it. A cut the size target, `MaxRows` or the interval
+asks for is latched (`full`, with its reason) and taken before the first row of a greater key, or at `Close`;
+rows that continue the part's last key join it (`Router.DeferredRows`), so a part can pass its targets by one
+key's history. The cut counters count cuts taken, not asked for. The router keeps its own copy of the last
+routed key (never a view of a page). A pinned part (a claimed part reproduced on resume) that reaches its
+recorded row count while the next row repeats its last key fails with `ErrAmbiguousTail` before anything is
+acknowledged: a correct cold run never cut there, so the listing is not the one the part was claimed from. The
+writer accepts repeated keys and refuses a descending one; pages and row groups may split a key's rows
+(`TestGroupedRowCutsWaitForTheGroup`, `TestGroupedIntervalWaitsForTheGroup`, `TestGroupedPinnedAmbiguousTail`).
+
 ## Publication gate and order
 
 Order is checked at three places, each before the step it protects:

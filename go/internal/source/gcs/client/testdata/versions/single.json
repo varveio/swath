@@ -1,0 +1,33 @@
+{
+  "nextPageToken": "ChFHUkNtMzkvUkVBRE1FLnR4dBDRvui1rdH4Ag==",
+  "items": [
+    {
+      "name": "GRCm39/README.txt",
+      "generation": "1656460817987973",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "39",
+      "md5Hash": "SgDyj6/m+3n32nNFxGjUHQ==",
+      "crc32c": "qgvUGw==",
+      "etag": "CIXzj7Wt0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:18.008Z",
+      "updated": "2022-06-29T00:00:18.008Z",
+      "timeDeleted": "2022-06-29T00:00:19.506Z"
+    },
+    {
+      "name": "GRCm39/README.txt",
+      "generation": "1656460819439441",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "39",
+      "md5Hash": "SgDyj6/m+3n32nNFxGjUHQ==",
+      "crc32c": "qgvUGw==",
+      "etag": "CNG+6LWt0fgCEAE=",
+      "timeCreated": "2022-06-29T00:00:19.506Z",
+      "updated": "2022-06-29T00:00:19.506Z",
+      "timeDeleted": "2023-07-07T00:00:31.213Z"
+    }
+  ]
+}

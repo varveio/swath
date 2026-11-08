@@ -29,6 +29,44 @@ same protection as Parquet. The stage also counts the rows its emitters received
 unless it handed on exactly as many (spill, compaction and replay conserve rows); the pipeline compares both
 counts with the provider's and the router's.
 
+**Group mode** (`Options.Groups`, from the schema's `Info.Groups`: a versions listing). A key may repeat, on
+consecutive rows: the guard accepts a key equal to the previous row's, never one below it, and never one equal
+to `Options.After` (a resume continues after a complete key). `Stats.DistinctKeys` counts the keys, and `Count`
+applies the same rule per range (ranges are key-disjoint in group mode too, so their distinct counts sum). That
+no part, split or resume boundary falls inside a key is the engine's and the router's work (providers.md, "Group
+mode"; parquet-output.md).
+
+**Repeated keys and durable spill.** A durable certificate `(cs, ce]` covers keys, and its bounds are fences.
+In group mode the engine declares a fence only at a complete key. A page that ends inside a hot key's group,
+leaving the group open, declares no page-end fence (`groups.fence_deferred`). A range's end fence comes after a key above its bound,
+and its split fence at a complete key. So no certificate bound cuts a version group: every version of `cs` lies
+before the capture, and every version of `ce` inside the certificate. K is a whole key too (no part ends inside
+a key), so recovery replay's rows above `max(cs, K)` drop or repeat no version. Replay accepts a key repeated
+within its group, and only in group mode. With versions a range's fresh data request starts after its
+key-marker, which stands in for `start-after` in the reuse checks; a continuation (key-marker and version-id
+marker) lists the rest of its marker's group, so it lies inside a certificate only when its key-marker is
+above `max(cs, K)`, which the test's request log rules out as well. A claimed part whose record was lost is
+reproduced after K at its claimed row count (parquet-output.md) from the replayed and listed rows; on a
+static source they are the cold run's rows in the cold run's order, so the pinned cut falls where it did
+and does not raise `ErrAmbiguousTail` (`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing`
+`TestVersionsDurableSpill`, including kills at `journal-append` with K inside a live certificate).
+
+**Repeated keys and the drain tail.** The segment-parallel tail ([Segments](#segments-parts-written-in-parallel-after-listing)) cuts the rest of the stream where the
+router would close its parts, and in group mode the router defers a cut its rule asked for until the first row of
+a greater key. The planner (`cut`) does the same: a boundary that falls inside a group moves forward to the next
+key change, the rows it passes counted (`drain.segments.deferred_rows`); while a cut is pending it reads every
+row, comparing a unit's first key with the last key walked (the drainer's last, for the open part the first
+segment continues). With boundaries only at key changes the seam check between segments stays strict: a key equal
+across a seam would be a part ending inside its group, and is refused. The one boundary a group may cross is
+segment 0's first row after the drainer's last (the open part's group, continued), which segment 0's row guard
+checks as `send` does: inside a segment equality is accepted only in group mode, across one group's consecutive
+rows in provider order, never against `Options.After`. Segments count their distinct keys into
+`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
+`order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
+`TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
+`TestVersionsTailSeamsAtKeyChanges` (the serial tail) and `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
+engaged, byte-identical to the one-encoder run).
+
 A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
 marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
 a prefix of the keyspace without a gap, the prefix a resume continues after. The context's stop callback
@@ -421,7 +459,9 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
   to find the row; the others pass whole. The first segment continues the open part. So the parts are the
   ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
-  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap).
+  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap). In group mode a
+  boundary inside a key's group moves to the next key change, as the router's deferred cut does
+  ([Repeated keys and the drain tail](#the-order-guard)).
 - **The part interval stops.** Once segments begin, the rest is cut by size and row count only:
   `--part-interval` closes no part in the tail. Its purpose, a recent durable point behind a slow frontier,
   does not arise there: every row is listed, and the parts publish as fast as they encode. With

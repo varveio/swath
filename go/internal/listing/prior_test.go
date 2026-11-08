@@ -15,7 +15,10 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
+	"github.com/varveio/swath/go/internal/parquetout"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 // listS3 lists root on the fake at url into out (seeded from seedFrom when
@@ -203,5 +206,44 @@ func TestSeedFromIdentity(t *testing.T) {
 	}
 	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: tree, SeedFrom: cuts}, Output: OutputConfig{Dir: filepath.Join(dir, "fs")}}); !errors.Is(err, ErrPrior) {
 		t.Fatalf("a filesystem source: %v, want ErrPrior", err)
+	}
+}
+
+// TestDatasetPriorCoalescesFinalVersionGroup: A final key group crossing row groups
+// contributes all its rows to the prior weights.
+func TestDatasetPriorCoalescesFinalVersionGroup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, dataset.DataDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := parquetout.NewRouter(parquetout.Options{Out: dir, PartSize: 64 << 20, Encoders: 1}, &s3.VersionsSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]s3.VersionRow, 5000)
+	for i := range rows {
+		rows[i] = s3.VersionRow{Key: "k", Data: s3.Version{VersionID: "v"}}
+	}
+	if err := r.Write(context.Background(), [][]s3.VersionRow{rows}); err != nil {
+		t.Fatal(err)
+	}
+	parts, err := r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := dataset.Meta{SchemaID: s3.VersionsSchema.ID, Source: dataset.Source{Kind: "s3", URI: "s3://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"}}
+	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := datasetPrior(dir, source.Locator{Kind: "s3", Root: "s3://b", Container: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, c := range pr.Cuts {
+		total += c.Rows
+	}
+	if total != 5000 {
+		t.Fatalf("prior weights=%d, want 5000; cuts=%+v", total, pr.Cuts)
 	}
 }

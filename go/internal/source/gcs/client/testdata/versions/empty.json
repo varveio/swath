@@ -1,0 +1,45 @@
+{
+  "nextPageToken": "CjZmdW5jb3RhdG9yL2Z1bmNvdGF0b3JfZGF0YVNvdXJjZXMudjEuNC4yMDE4MDYxNS5zaGEyNTYQ7deewfajjAM=",
+  "items": [
+    {
+      "name": "empty.test",
+      "generation": "1646943531464293",
+      "metageneration": "1",
+      "contentType": "application/octet-stream",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "0",
+      "md5Hash": "1B2M2Y8AsgTpgAmY7PhCfg==",
+      "crc32c": "AAAAAA==",
+      "etag": "COXsoeGuvPYCEAE=",
+      "timeCreated": "2022-03-10T20:18:51.507Z",
+      "updated": "2022-03-10T20:18:51.507Z",
+      "timeDeleted": "2022-03-10T20:19:06.000Z"
+    },
+    {
+      "name": "funcotator/README.txt",
+      "generation": "1742860823014043",
+      "metageneration": "1",
+      "contentType": "text/plain",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "3569",
+      "md5Hash": "mwUOX/vKus96nu/tabGMfA==",
+      "crc32c": "mVld9g==",
+      "etag": "CJvV/sH2o4wDEAE=",
+      "timeCreated": "2025-03-25T00:00:23.054Z",
+      "updated": "2025-03-25T00:00:23.054Z"
+    },
+    {
+      "name": "funcotator/funcotator_dataSources.v1.4.20180615.sha256",
+      "generation": "1742860821441517",
+      "metageneration": "1",
+      "contentType": "application/octet-stream",
+      "storageClass": "MULTI_REGIONAL",
+      "size": "110",
+      "md5Hash": "B1Dpp0z07lM03kPjct0Gvg==",
+      "crc32c": "ehy8pg==",
+      "etag": "CO3XnsH2o4wDEAE=",
+      "timeCreated": "2025-03-25T00:00:21.476Z",
+      "updated": "2025-03-25T00:00:21.476Z"
+    }
+  ]
+}

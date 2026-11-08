@@ -1,0 +1,23 @@
+# ListObjectVersions responses captured by anonymous HTTPS GETs against public
+# AWS open-data S3 buckets on 2026-11-08. Owner IDs were replaced with the fixed
+# 64-hex placeholder 0000000000000000000000000000000000000000000000000000000000000000;
+# no owner display names were present. All other response bytes are unchanged. One line per file: file, HTTP status, request.
+# deleted-folder-v2.xml is the ListObjectsV2 answer for the same folder as
+# deleted-folder.xml.
+deleted-folder-parent.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&prefix=a&delimiter=%2F
+deleted-folder-v2.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?list-type=2&max-keys=3&prefix=ai%2F&delimiter=%2F&encoding-type=url
+deleted-folder.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&prefix=ai%2F&delimiter=%2F
+dm-null-pair.xml HTTP 200 https://nasa-heasarc.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=3&key-marker=%2FFTP%2Fcaldb%2Fdata%2Fixpe%2Fgpd%2Fbcf%2Fasiccorr%2Fixpe_d1_20170101_asiccorr_01.fits&version-id-marker=null
+dm-pair.xml HTTP 200 https://bobsrepository.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&key-marker=.bidsignore&version-id-marker=7gOvyuxqXdtVQj6S2EXn8gP5J34SNgz2
+encoded-marker.xml HTTP 200 https://stpubdata.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=1&key-marker=des%2Fpublic%2Fhats%2Fdes_dr2%2Fdes_dr2%2Fdataset%2FNorder%3D4%2FDir%3D0%2FNpix%3D1085.parquet
+key-only.xml HTTP 200 https://openalex.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=3&key-marker=LICENSE.txt
+mixed-max2.xml HTTP 200 https://bobsrepository.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=2
+mixed-next.xml HTTP 200 https://bobsrepository.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=2&key-marker=.bidsignore&version-id-marker=7gOvyuxqXdtVQj6S2EXn8gP5J34SNgz2
+mixed-null-search.xml HTTP 200 https://deepdrug-dpeb.s3.us-west-2.amazonaws.com/?versions=&max-keys=100&encoding-type=url
+null-pair.xml HTTP 200 https://dbcan.s3.us-west-2.amazonaws.com/?versions=&encoding-type=url&max-keys=3&key-marker=CAZy.dmnd&version-id-marker=null
+past-end.xml HTTP 200 https://openalex.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=3&key-marker=zzzzzzzzzzzzzzzzzzzzzzzzzzzz
+prefix-next.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=1&delimiter=%2F&key-marker=ai%2F
+prefix-only.xml HTTP 200 https://covid19-lake.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=1&delimiter=%2F&key-marker=Enigma-JHU.csv
+special-echo.xml HTTP 200 https://openalex.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=3&prefix=absent+space%2B%25%C3%A9%2F&delimiter=%2F&key-marker=absent+space%2B%25%C3%A9%2Fa
+ties.xml HTTP 200 https://bobsrepository.s3.us-east-2.amazonaws.com/?versions=&encoding-type=url&max-keys=100&prefix=.gitattributes
+zero-max.xml HTTP 200 https://openalex.s3.us-east-1.amazonaws.com/?versions=&encoding-type=url&max-keys=0

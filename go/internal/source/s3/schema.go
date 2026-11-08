@@ -52,8 +52,8 @@ func objectHeap(o *Object) int64 {
 	return int64(len(o.ETag) + len(o.StorageClass) + len(o.OwnerID) + len(o.OwnerDisplayName) + len(o.ChecksumAlgorithm) + len(o.ChecksumType))
 }
 
-func nonEmpty(get func(*Object) string) func(*Object) (string, bool) {
-	return func(o *Object) (string, bool) {
+func nonEmpty[P any](get func(*P) string) func(*P) (string, bool) {
+	return func(o *P) (string, bool) {
 		v := get(o)
 		return v, v != ""
 	}
