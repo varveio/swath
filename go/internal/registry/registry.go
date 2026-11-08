@@ -127,6 +127,9 @@ func (b Bound[P]) Schema() schema.Info { return b.s.Info }
 
 // Run implements Source.Run with the provider's row type.
 func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Encoder, error) {
+	// The grouping policy is the schema's: the order stage, Count and the
+	// router (which reads the schema) all take it from there.
+	env.Order.Groups = b.s.Info.Groups
 	keep, err := filter.Compile(env.Filter, b.s)
 	if err != nil {
 		return order.Stats{}, nil, err

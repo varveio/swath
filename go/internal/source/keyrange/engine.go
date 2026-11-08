@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +77,22 @@ type Description[P any] struct {
 	// StartInclusive: the provider's start bound lists keys >= After
 	// (an inclusive start offset), not > After (an exclusive start-after).
 	StartInclusive bool
+	// InclusiveStart, if set, is StartInclusive per request: whether the
+	// start bound the provider sends for After lists keys >= After (GCS
+	// generations send the exclusive successor After+NUL where its bound
+	// policy accepts it, and After itself where not).
+	InclusiveStart func(after string) bool
+	// Groups: rows may repeat a key, as consecutive rows forming the key's
+	// group, in the provider's order within the key (a versions listing).
+	// It must agree with the bound schema's Info.Groups. The engine then
+	// checks pages nondecreasing, holds back each continuing page's
+	// trailing group until a later key or the chain's end proves it
+	// complete, and never splits inside a group (groups.go).
+	Groups bool
+	// Detach copies rows out of their page so they share no memory with
+	// it (the bound schema's Detach); group mode needs it, to emit or hold
+	// a few rows of a page without pinning the rest (groups.go).
+	Detach func([]schema.Row[P]) []schema.Row[P]
 	// AcceptBound is the provider's request admissibility: whether a
 	// string may be sent as a start bound and so split at (pivots, cursors,
 	// seed and structure boundaries, a seed top-up, a resume's start). The
@@ -232,6 +249,9 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 	if !d.Listing.RangeEngine() {
 		return nil, fmt.Errorf("%s: the range engine needs a fabricable seek, byte-ordered pages and no rank oracle (%+v)", d.Target, d.Listing)
 	}
+	if d.Groups && d.Detach == nil {
+		return nil, fmt.Errorf("%s: a grouped listing needs Description.Detach", d.Target)
+	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
 	}
@@ -327,11 +347,16 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 	for {
 		out, err := p.fetch(ctx, in)
 		if err == nil {
-			if p.d.StartInclusive && chainStart && in.After != "" {
+			if chainStart && in.After != "" && p.inclusive(in.After) {
 				dropped := 0
-				if len(out.Rows) > 0 && out.Rows[0].Key == in.After {
-					out.Rows, dropped = out.Rows[1:], 1
+				// One row at the bound, or in group mode the bound key's
+				// whole group, across pages: an empty continuing page left
+				// by the drop is followed below, under the token window,
+				// and the chain is still at its start.
+				for dropped < len(out.Rows) && out.Rows[dropped].Key == in.After && (dropped == 0 || p.d.Groups) {
+					dropped++
 				}
+				out.Rows = out.Rows[dropped:]
 				// A delimiter page from an inclusive start also rolls the
 				// keys at or after the bound up into a common prefix at or
 				// below it (GCS returns "a/" for startOffset "a/" or
@@ -404,6 +429,14 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 	}
 }
 
+// inclusive: the start bound sent for after lists after itself.
+func (p *Engine[P]) inclusive(after string) bool {
+	if p.d.InclusiveStart != nil {
+		return p.d.InclusiveStart(after)
+	}
+	return p.d.StartInclusive
+}
+
 // strictlyAscending: s is sorted without duplicates.
 func strictlyAscending(s []string) bool {
 	for i := 1; i < len(s); i++ {
@@ -430,6 +463,8 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	in := p.query()
 	last := ""
 	skip := ""
+	open := false     // group mode: last's group may continue
+	var grp groups[P] // group mode: the progress window
 	if p.opt.Resume != nil {
 		in.After, skip = p.safeStart(p.opt.Resume.After), p.opt.Resume.After
 	}
@@ -450,11 +485,30 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			}
 		}
 		rows := out.Rows[:n]
-		for i := range rows {
-			if last != "" && rows[i].Key <= last {
-				return fmt.Errorf("%w: listing out of order: %q after %q", p.d.invalid(), rows[i].Key, last)
+		if p.d.Groups {
+			// One chain, no splits: a page is emitted whole, its last
+			// group continued by the next page's first rows (the order
+			// stage and the router keep part cuts out of a group).
+			top := last
+			if _, _, err := p.groupOrder(rows, last, open, "", "", true); err != nil {
+				return err
 			}
-			last = rows[i].Key
+			if n > 0 {
+				last, open = strings.Clone(rows[n-1].Key), true
+			}
+			fresh := n > 0 && (top == "" || last > top)
+			if !stop && out.Truncated {
+				if err := p.progress(&grp, fresh, in.Token, out.Token); err != nil {
+					return err
+				}
+			}
+		} else {
+			for i := range rows {
+				if last != "" && rows[i].Key <= last {
+					return fmt.Errorf("%w: listing out of order: %q after %q", p.d.invalid(), rows[i].Key, last)
+				}
+				last = rows[i].Key
+			}
 		}
 		if err := p.emit(rows, e); err != nil {
 			return err

@@ -23,8 +23,8 @@ import (
 // spill fields are ignored), so memory is the pages in flight and the
 // queued ranges.
 //
-// What it checks: every range's rows strictly ascending (and after
-// Options.After). What it does not: the stream-wide guard across ranges
+// What it checks: every range's rows strictly ascending (nondecreasing
+// with Options.Groups), and after Options.After. What it does not: the stream-wide guard across ranges
 // (Run's send), which catches a provider whose ranges overlap. Coverage
 // and disjointness are the provider's tiling, as in Run. If counted is set
 // it is advanced with every row (the progress file's "ordered").
@@ -56,7 +56,7 @@ func Count[R, P any](ctx context.Context, p source.Provider[R, P], counted *atom
 	wg.Wait()
 	c.dispose()
 	n := c.rows.Load()
-	st := Stats{Rows: n, Received: n, PeakNodes: c.g.nodes.peak.Load()}
+	st := Stats{Rows: n, Received: n, DistinctKeys: c.names.Load(), PeakNodes: c.g.nodes.peak.Load()}
 	if ctx.Err() != nil {
 		return st, context.Cause(ctx)
 	}
@@ -71,6 +71,7 @@ type counter[R, P any] struct {
 	counted *atomic.Int64
 	g       *Gauges
 	rows    atomic.Int64
+	names   atomic.Int64 // distinct keys, summed over ranges (key-disjoint in group mode too)
 	// done is the run context's Done channel, closed by a failure (its
 	// cancel) or the caller's stop: emitters poll it without a lock (ctx.Err
 	// takes the context's mutex).
@@ -138,6 +139,7 @@ type countEmitter[R, P any] struct {
 	kids    []R
 	last    string // the range's last key so far (a view of its page; dropped with the emitter)
 	hasLast bool
+	sent    bool // last is a row's key (not Options.After): in group mode the next may repeat it
 }
 
 func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
@@ -150,13 +152,18 @@ func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
 	if !e.hasLast && e.c.opt.After != nil {
 		e.last, e.hasLast = *e.c.opt.After, true
 	}
+	var names int64
 	for i := range rows {
 		k := rows[i].Key
-		if e.hasLast && k <= e.last {
+		if e.hasLast && (k < e.last || k == e.last && !(e.c.opt.Groups && e.sent)) {
 			return &dataset.InvariantError{Reason: fmt.Sprintf("count: a range's key %q is not after %q", k, e.last)}
 		}
-		e.last, e.hasLast = k, true
+		if !e.sent || k != e.last {
+			names++
+		}
+		e.last, e.hasLast, e.sent = k, true, true
 	}
+	e.c.names.Add(names)
 	n := int64(len(rows))
 	e.c.rows.Add(n)
 	if e.c.counted != nil {

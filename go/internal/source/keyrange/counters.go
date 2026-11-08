@@ -139,6 +139,11 @@ const (
 	cBoundDrops
 	cMutexWait
 	cMutexMaxHold
+	cGroupsOpenPages
+	cGroupsHeldRows
+	cGroupsRelistedRows
+	cGroupsMaxRows
+	cSplitSkippedGroupOpen
 	numCounters
 )
 
@@ -277,6 +282,11 @@ var Counters = table([numCounters]counters.Def{
 	cBoundDrops:                   d("bound_drops", counters.Count, "keys", "keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys)"),
 	cMutexWait:                    d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),
 	cMutexMaxHold:                 d("mutex.max_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
+	cGroupsOpenPages:              d("groups.open_pages", counters.Count, "pages", "pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split)", "groups"),
+	cGroupsHeldRows:               d("groups.held_rows", counters.Count, "rows", "rows of a page's trailing key held back until the next page proved the key complete", "groups"),
+	cGroupsRelistedRows:           d("groups.split_relisted_rows", counters.Count, "rows", "held rows dropped at a split, listed again by the lower child", "groups"),
+	cGroupsMaxRows:                d("groups.max_rows", counters.Max, "rows", "the most rows one key's group held", "groups"),
+	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages) was not split", "groups"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is
@@ -347,6 +357,9 @@ func (p *Engine[P]) disabled() []string {
 	}
 	if p.opt.MaxKeys == 0 {
 		off = append(off, "max_keys")
+	}
+	if !p.d.Groups {
+		off = append(off, "groups")
 	}
 	return append(off, p.opt.ClientOff...)
 }

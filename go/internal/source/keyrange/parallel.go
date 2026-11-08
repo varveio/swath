@@ -14,6 +14,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -139,6 +140,7 @@ type running struct {
 	refused      int            // consecutive split decisions the admission gates refused
 	lat          float64        // page latency, ns: an EWMA of its pages (weight slowLatencyWeight), from its parent's (0: unknown)
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
+	groupOpen    bool           // group mode: its last page was all one key, whose group may continue (no split, unranked)
 }
 
 // slowKeys is st's keys left for the slow-range rule: its remainder, or,
@@ -384,7 +386,8 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
-	head := "" // the first key this range listed
+	head := ""        // the first key this range listed
+	var grp groups[P] // group mode: the chain's held rows and open group
 	p.maybeProbe(pctx, st, r, c)
 	for {
 		t0 := time.Now()
@@ -400,46 +403,77 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 				n++
 			}
 			if n > 0 {
-				c, skipped = out.Rows[n-1].Key, n
+				// In group mode the cursor stays on emitted keys: a skipped
+				// key's group may continue on the next page (suppressed
+				// there too), and the split cursor must be complete.
+				if skipped = n; !p.d.Groups {
+					c = out.Rows[n-1].Key
+				}
 				out.Rows = out.Rows[n:]
 				p.c.Add(cOverfetchKeys, int64(n))
 			}
 		}
-		kept, reached := len(out.Rows), false
-		for i := range out.Rows {
-			k := out.Rows[i].Key
-			if (c != "" || i > 0) && k <= c {
-				return fmt.Errorf("%w: listing out of order in (%q, %q]: %q after %q", p.d.invalid(), r.lo, r.hi, k, c)
+		truncated := out.Truncated
+		if truncated && out.Token == "" {
+			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+		}
+		var kept int
+		var reached, done bool
+		var rows []schema.Row[P] // the rows emitted: the page's, or in group mode its complete groups
+		if p.d.Groups {
+			prev, same := grp.prev(c)
+			kept, reached, err = p.groupOrder(out.Rows, prev, same, r.lo, r.hi, r.open)
+			if err != nil {
+				return err
 			}
-			if !r.open && k > r.hi {
-				kept, reached = i, true
-				break
+			// A bounded range whose last key is hi still lists until a key
+			// above it or the chain's end: hi's group may continue.
+			done = reached || !truncated
+			var fresh bool
+			rows, c, fresh = p.take(&grp, out.Rows[:kept], done, c)
+			if !done {
+				if err := p.progress(&grp, fresh || skipped > 0, in.Token, out.Token); err != nil {
+					return err
+				}
 			}
-			c = k
+		} else {
+			kept, reached = len(out.Rows), false
+			for i := range out.Rows {
+				k := out.Rows[i].Key
+				if (c != "" || i > 0) && k <= c {
+					return fmt.Errorf("%w: listing out of order in (%q, %q]: %q after %q", p.d.invalid(), r.lo, r.hi, k, c)
+				}
+				if !r.open && k > r.hi {
+					kept, reached = i, true
+					break
+				}
+				c = k
+			}
+			done = reached || !truncated || (!r.open && kept > 0 && c == r.hi)
+			rows = out.Rows[:kept]
 		}
 		// The page's strings are views of its parser arena (S3), and c
 		// outlives the page: the next page's order check, a structure
 		// probe's start and, at a split, the lower child's lo, which stays
 		// queued, or done ahead of the drain, for as long as the frontier
 		// takes. One clone per page keeps a retained range from pinning the
-		// whole page through its bound.
-		if kept > 0 || skipped > 0 {
+		// whole page through its bound. (Group mode holds one page's
+		// trailing group back across one page: at most one page more.)
+		if len(rows) > 0 || skipped > 0 {
 			c = strings.Clone(c)
 		}
-		truncated := out.Truncated
-		if truncated && out.Token == "" {
-			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
-		}
-		if truncated && kept == 0 && !reached && skipped == 0 {
+		if truncated && kept == 0 && !reached && skipped == 0 && !(p.d.Groups && len(rows) > 0) {
 			return fmt.Errorf("%w: truncated page with no key in (%q, %q]", p.d.invalid(), r.lo, r.hi)
 		}
 		// The density and split inputs are read before the rows are handed
 		// over: the emitter owns them then, and a filter compacts and clears
-		// them in place.
-		done := reached || !truncated || (!r.open && kept > 0 && c == r.hi)
+		// them in place. In group mode they are the emitted rows' distinct
+		// keys (density is of keys; st.keys counts rows, the work).
+		n := len(rows)
 		var first, last string
-		if kept > 0 {
-			first, last = out.Rows[0].Key, out.Rows[kept-1].Key
+		names := n
+		if n > 0 {
+			first, last = rows[0].Key, rows[n-1].Key
 			if head == "" {
 				// Kept for the range's life and handed on as an upper
 				// child's anchor: a copy, not a view of this page.
@@ -450,29 +484,37 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		var g *gauge
 		rem := math.NaN()
 		if !done {
-			page = make([]string, kept)
-			for i := range page {
-				page[i] = out.Rows[i].Key
+			if p.d.Groups {
+				page = distinct(rows)
+				names = len(page)
+			} else {
+				page = make([]string, n)
+				for i := range page {
+					page[i] = rows[i].Key
+				}
 			}
 			// The remainder estimate (the rank's, and the first of the
 			// admission gates') is read here, outside the decision mutex.
 			if g = newGauge(page); g != nil && !r.open {
 				rem = g.keys(c, r.hi)
 			}
+		} else if p.d.Groups && n > 0 {
+			names = len(distinct(rows))
 		}
 		overfetch := len(out.Rows) - kept
-		if err := p.emit(out.Rows[:kept], e); err != nil {
+		if err := p.emit(rows, e); err != nil {
 			return err
 		}
 		p.lock()
 		p.c.Add(cOverfetchKeys, int64(overfetch))
-		st.keys += int64(kept)
+		st.keys += int64(n)
 		if st.unsplittable {
-			p.c.Add(cUnsplittableKeys, int64(kept))
+			p.c.Add(cUnsplittableKeys, int64(n))
 		}
 		st.ended = done
-		if p.opt.Floors && kept > 0 { // only the tail floor reads it
-			st.dens.observe(first, last, r.lo, r.hi, kept)
+		st.groupOpen = grp.open
+		if p.opt.Floors && n > 0 { // only the tail floor reads it
+			st.dens.observe(first, last, r.lo, r.hi, names)
 		}
 		if !math.IsNaN(rem) {
 			st.rem = rem
@@ -490,7 +532,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		}
 		hunger := p.opt.Workers - len(p.running) - p.queued
 		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
-		wanted := !done && !st.unsplittable && (hunger > 0 || p.opt.SplitCoin != nil || slow)
+		wanted := !done && !st.unsplittable && !st.groupOpen && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		p.unlock()
 		if done {
 			p.covered(r.lo, r.hi, r.open)
@@ -513,6 +555,15 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			pr.gauge, pr.rem = g, rem
 		}
 		if pv, ok := p.decide(st, r, c, pr); ok {
+			if grp.open {
+				// decide refuses a range whose group is open: the lower
+				// child would start after the key, past its other rows.
+				return fmt.Errorf("keyrange: split inside the open group of %q", c)
+			}
+			if len(grp.held) > 0 {
+				p.c.Add(cGroupsRelistedRows, int64(len(grp.held)))
+				grp.held = nil
+			}
 			lower, upper := p.commit(st, r, c, pv)
 			if err := faults.At("split"); err != nil {
 				return err
@@ -635,6 +686,12 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	if st.unsplittable {
 		return
 	}
+	if st.groupOpen {
+		// A hot key's rows run on past the page: no split inside them,
+		// whatever the gate (the coin and structure boundaries included).
+		p.c.Inc(cSplitSkippedGroupOpen)
+		return
+	}
 	if coin := p.opt.SplitCoin; coin != nil {
 		if !coin() {
 			return
@@ -666,7 +723,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			rank := 0
 			run := p.runLatency()
 			for _, o := range p.running {
-				if o == st || !o.continuing || o.unsplittable {
+				if o == st || !o.continuing || o.unsplittable || o.groupOpen {
 					continue
 				}
 				if (p.opt.SlowSplit && outranksTime(o, st, p.timeLeft(o, run), p.timeLeft(st, run))) || (!p.opt.SlowSplit && outranks(o, st)) {
