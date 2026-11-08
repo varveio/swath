@@ -249,13 +249,13 @@ type campaignRunner struct {
 // child die of it. Otherwise the run must succeed, and its report is
 // returned. A run the watchdog ended fails in every case: its SIGKILL is
 // not the requested fault.
-func (c *campaignRunner) run(args []string, killAt string, keys int64) (*campaignReport, error) {
+func (c *campaignRunner) run(args []string, killAt string, keys int64, env ...string) (*campaignReport, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.bin, args...)
-	cmd.Env = c.env
+	cmd.Env = append(slices.Clone(c.env), env...)
 	if killAt != "" {
-		cmd.Env = append(slices.Clone(cmd.Env), "SWATH_TEST_KILL_AT="+killAt)
+		cmd.Env = append(cmd.Env, "SWATH_TEST_KILL_AT="+killAt)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -329,11 +329,12 @@ func campaign(t *testing.T, fx campaignFixture) {
 		src = append(src, "--anonymous")
 	}
 	partSize := "2MiB"
-	listArgs := func(out string, runtime []string) []string {
+	listArgsSized := func(out, size string, runtime []string) []string {
 		a := append([]string{"diag", "list"}, src...) // diag: --spill-reserve
-		a = append(a, "--part-size", partSize, "--row-budget", "1MiB", "--spill-max", "256MiB", "--report-format", "json", "-o", out)
+		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-max", "256MiB", "--report-format", "json", "-o", out)
 		return append(a, runtime...)
 	}
+	listArgs := func(out string, runtime []string) []string { return listArgsSized(out, partSize, runtime) }
 	rn := &campaignRunner{bin: bin, env: append(os.Environ(), fx.env...), keys: &px.keys, timeout: 20 * time.Minute}
 	run := rn.run
 
@@ -468,6 +469,137 @@ func campaign(t *testing.T, fx campaignFixture) {
 			})
 		}
 	}
+	interval := append([]string{"--part-interval", campaignInterval}, common...)
+	t.Run("interval-"+campaignInterval+"/suspect-composition", func(t *testing.T) {
+		status, line := "FAIL", ""
+		defer func() {
+			if !t.Failed() {
+				status = "pass"
+			}
+			appendResult(t, results, fmt.Sprintf("%s\tinterval-%s\tsuspect-composition\t%s\t%s", fx.name, campaignInterval, status, line))
+		}()
+		line = suspectComposition(t, rn, ref, interval, func(out string) []string { return listArgsSized(out, "64MiB", interval) })
+	})
+}
+
+// suspectComposition is contract §6's "time cuts on" row: a part closed by
+// the interval that holds rows replayed from two certificates and rows
+// listed live between them, claimed and then killed before its part
+// record, must be reproduced byte for byte by the next resume. The crashed
+// run seals certificates one ledger cycle each (SWATH_TEST_SERIAL_SEALS)
+// and is killed at its sixth ledger sync, so five are durable; parts are
+// 64 MiB, so the interval closes them. Each try resumes a copy of that
+// output, killed at its n-th journal append (the part claimed, its record
+// not yet written), until the claimed part has that composition; then the
+// resume must reproduce it (its bytes in data/) and the dataset must be
+// the reference's rows.
+func suspectComposition(t *testing.T, rn *campaignRunner, ref string, runtime []string, list func(out string) []string) string {
+	crashed := filepath.Join(t.TempDir(), "crashed")
+	if _, err := rn.run(list(crashed), "spill-ledger-sync:6", 0, "SWATH_TEST_SERIAL_SEALS=1"); err != nil {
+		t.Fatalf("the crashed run: %v", err)
+	}
+	certs, k := liveCerts(t, crashed), lastKey(t, crashed)
+	if n := eligibleCerts(certs, k); n < 2 {
+		t.Fatalf("%d certificates above K after the crash; the composition needs two", n)
+	}
+	resume := append(append([]string{"resume"}, runtime...), "--report-format", "json")
+	for n := 1; n <= 8; n++ {
+		try := filepath.Join(t.TempDir(), "try")
+		if err := os.CopyFS(try, os.DirFS(crashed)); err != nil {
+			t.Fatal(err)
+		}
+		at := fmt.Sprintf("journal-append:%d", n)
+		if _, err := rn.run(append(slices.Clone(resume), try), at, 0); err != nil {
+			t.Fatalf("no part with the composition before the resume ended (%s): %v", at, err)
+		}
+		// The part claimed at the kill: the ordinal after the last record.
+		st, err := journal.Read(try)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ord := len(st.Records)
+		claimed := filepath.Join(try, dataset.Workspace, "parts", dataset.PartName(ord)+dataset.ClaimSuffix)
+		if _, err := os.Stat(claimed); err != nil {
+			t.Fatalf("%s: no claimed part %d: %v", at, ord, err)
+		}
+		replayed, gaps, ok := composition(t, claimed, certs, k)
+		if !ok {
+			t.Logf("%s: part %d draws on %d certificates and %d live rows between them: not the composition", at, ord, replayed, gaps)
+			continue
+		}
+		want, err := os.ReadFile(claimed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rn.run(append(slices.Clone(resume), try), "", 0); err != nil {
+			t.Fatalf("the resume after %s: %v", at, err)
+		}
+		got, err := os.ReadFile(filepath.Join(try, "data", dataset.PartName(ord)))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("the suspect part %d (%d bytes) is not reproduced byte for byte: %d bytes, %v", ord, len(want), len(got), err)
+		}
+		sameRowsStreamed(t, "suspect-composition", ref, try)
+		t.Logf("%s: suspect part %d (rows from %d certificates, %d live rows between them) reproduced byte for byte", at, ord, replayed, gaps)
+		return fmt.Sprintf("%s\tpart %d\t%d certificates\t%d live rows\t%d bytes", at, ord, replayed, gaps, len(want))
+	}
+	t.Fatal("no claimed part with rows from two certificates and live rows between them in 8 tries")
+	return ""
+}
+
+// composition reads the claimed part at path and counts the certificates
+// it draws rows from and its live rows (above K, in no certificate) lying
+// between two of those certificates' rows; ok when both are present: at
+// least two certificates and one live row between them.
+func composition(t *testing.T, path string, certs []ledgerCert, k string) (replayed, gaps int, ok bool) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("the claimed part: %v", err)
+	}
+	defer f.Close()
+	fi, _ := f.Stat()
+	pf, err := pq.OpenFile(f, fi.Size())
+	if err != nil {
+		t.Fatalf("the claimed part: %v", err)
+	}
+	r := pq.NewReader(pf)
+	defer r.Close()
+	from := map[int]bool{}
+	var live []string
+	first, last := "", ""
+	buf := make([]pq.Row, 1024)
+	for {
+		n, err := r.ReadRows(buf)
+		for _, row := range buf[:n] {
+			key := string(row[0].ByteArray())
+			in := -1
+			for i, c := range certs {
+				if key > max(c.cs, k) && (c.open || key <= c.ce) {
+					in = i
+					break
+				}
+			}
+			switch {
+			case in >= 0:
+				from[in] = true
+				if first == "" {
+					first = key
+				}
+				last = key
+			case key > k:
+				live = append(live, key)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	for _, key := range live {
+		if key > first && key < last {
+			gaps++
+		}
+	}
+	return len(from), gaps, len(from) >= 2 && gaps > 0
 }
 
 // startsInside counts the request starts inside a certificate's
