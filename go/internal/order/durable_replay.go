@@ -126,7 +126,8 @@ func (s *spiller[P]) decodeFrame(typ byte, body []byte, most, owned uint64, reus
 // replayCert is a recovery replay: the reused certificate i's captured
 // rows above max(cs, K), in file order, through e (the drainer's direct
 // emitter); pre-capture frames are skipped undecoded. Every key is checked
-// to lie in (cs, ce] and ascend (a *dataset.InvariantError otherwise); the
+// to lie in (cs, ce] and ascend, or with Groups repeat its predecessor (a
+// *dataset.InvariantError otherwise); the
 // frames decode under the bounds validation measured. The file is then
 // handed back to the cache (retired once K covers it).
 func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
@@ -163,7 +164,7 @@ func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
 	}
 	captured, emitted, skipped := int64(0), int64(0), int64(0)
 	capture := false
-	prev := d.cs
+	prev, first := d.cs, true
 	for {
 		var hdr [8]byte
 		if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -218,10 +219,13 @@ func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
 		}
 		for j := range rows {
 			k := rows[j].Key
-			if k <= prev || (!d.ceOpen && k > d.ce) {
+			// Keys ascend; with Groups (versions) a key repeats over its
+			// group's consecutive rows, but never cs's: cs is a complete
+			// key, every row of it before the capture.
+			if k < prev || k == prev && (first || !o.opt.Groups) || (!d.ceOpen && k > d.ce) {
 				return bad("key %q after %q in (%q, %q]", k, prev, d.cs, d.ce)
 			}
-			prev = k
+			prev, first = k, false
 		}
 		skipped += int64(n)
 		if keep := rows[n:]; len(keep) > 0 {
