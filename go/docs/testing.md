@@ -17,7 +17,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Format, vet, shard check | `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-lint` |
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest)` |
-| Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; every `nightly.yml` dispatch | ubuntu-latest | `nightly.yml` `go-race-nightly` |
+| Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
@@ -190,13 +190,13 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 | `gomaxprocs` | empty | `GOMAXPROCS`, unset when empty |
 | `cpu` | empty | `-cpu` list (each test runs once per value, e.g. `1,2,4`), not passed when empty |
 | `shuffle` | `false` | `-shuffle=on`; the seed is in the output, so `-shuffle=SEED` replays an order |
-| `shards` | `1` | runners (1 to 8), each running the whole `-count`: a count too long for one job, or more schedules at once |
 | `os` | `ubuntu-latest` | `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest` |
 
-Each shard runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS,
-shard S: P passed, F failed` and the failing test names to the step summary, and keeps the JSON stream as the
-`go-stress-OS-ARCH-shard-S` artifact. A long test at a high count can exceed the job's limit: split the count
-across shards. To cite a stress run in a pull request, link each run and give its inputs and its tally,
+It runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
+F failed` and the failing test names to the step summary, and keeps the JSON stream as the
+`go-stress-OS-ARCH` artifact. Stress takes a package pattern and a `-run` pattern, not a race shard: to repeat
+a shard, pass its row's arguments from [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh).
+A long test at a high count can exceed the job's limit: split the count across several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
 ### Release

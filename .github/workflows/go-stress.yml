@@ -36,10 +36,6 @@ on:
         description: Shuffle test order (-shuffle=on; the seed is printed)
         type: boolean
         default: false
-      shards:
-        description: Runners, each repeating the test -count times (1 to 8)
-        required: true
-        default: "1"
       os:
         description: Runner
         type: choice
@@ -50,27 +46,7 @@ permissions:
   contents: read
 
 jobs:
-  # The shard numbers the matrix runs: 1..shards, at most 8.
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      shards: ${{ steps.shards.outputs.list }}
-    steps:
-      - id: shards
-        env:
-          SHARDS: ${{ inputs.shards }}
-        run: |
-          set -euo pipefail
-          [[ "$SHARDS" =~ ^[1-8]$ ]] || { echo "::error::shards must be 1 to 8, got $SHARDS"; exit 1; }
-          echo "list=$(jq -cn --argjson n "$SHARDS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
-
   stress:
-    needs: plan
-    name: stress (${{ inputs.os }}, shard ${{ matrix.shard }})
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     runs-on: ${{ inputs.os }}
     timeout-minutes: 75
     defaults:
@@ -113,7 +89,6 @@ jobs:
         env:
           RUN: ${{ inputs.run }}
           COUNT: ${{ inputs.count }}
-          SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           f="$RUNNER_TEMP/go-stress.json"
@@ -124,7 +99,7 @@ jobs:
           {
             echo "### Go stress"
             echo
-            echo "run \`$RUN\` x $COUNT on $RUNNER_OS, shard $SHARD: **$pass passed, $fail failed**"
+            echo "run \`$RUN\` x $COUNT on $RUNNER_OS: **$pass passed, $fail failed**"
             echo
             jq -r 'select(.Test != null and .Action == "fail") | .Test' "$f" | sort | uniq -c | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -133,7 +108,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: go-stress-${{ runner.os }}-${{ runner.arch }}-shard-${{ matrix.shard }}
+          name: go-stress-${{ runner.os }}-${{ runner.arch }}
           path: ${{ runner.temp }}/go-stress.json
           if-no-files-found: ignore
 
