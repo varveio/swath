@@ -625,6 +625,15 @@ func (s *queuedSink) close() {
 // tail replayed into stalled encoders whose queues are the router's (two
 // batches a segment, sixteen the continued part). It returns the stats,
 // the most counted downstream at once and the segment waits seen.
+//
+// The slow range is held until every other range is done (Run's
+// "one-range-open"), not only listed: listing ends with it, while the
+// drainer still waits at it, so the tail the segments replay is every
+// sibling after the first two parts (about 32,000 rows). Released when the
+// last sibling had emitted its rows, the drainer could pass the slow range
+// and drain siblings serially while that sibling was still completing,
+// leaving the segments a few thousand rows that never reach the gate
+// (#313).
 func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 	t.Helper()
 	withProcs(t, 5)
@@ -638,8 +647,13 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 	}
 	defer func() { hookWait = nil }()
 	f := &frontier{slowPages: 4, siblings: siblings, sibPages: 6, rows: 100, long: 3}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	f.hold = make(chan struct{})
+	var once sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			once.Do(func() { close(f.hold) })
+		}
+	})()
 	shared := &Shared{}
 	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
