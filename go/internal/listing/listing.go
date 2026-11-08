@@ -230,7 +230,7 @@ const (
 	minSpillReserve = 1 << 30
 	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
 	// worker's pages at the default 64 workers to queue behind a slow
-	// frontier, and the allowance that admits 3 encoders of the object
+	// frontier, and the allowance that admits 4 encoders of the object
 	// stores' schemas (admitEncoders).
 	DefaultRowBudget = 128 << 20
 	// DefaultWorkers is the default listing concurrency, whatever the CPU
@@ -328,8 +328,8 @@ func admitEncoders(rowBudget, per int64, workers int, fds int64) int {
 // row budget (listingPageBytes each) goes to writers instead, on top of
 // the allowance equal to the row budget; descriptors as admitEncoders
 // (the workers' idle connections stay open). Each encoder costs per
-// (encoderPrice). 128 MiB and 64 workers carry 4 of the object stores'
-// schemas, 256 workers 9.
+// (encoderPrice). 128 MiB and 64 workers carry 6 of the object stores'
+// schemas, 256 workers 12.
 func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
 	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, per, workers, fds)
 }

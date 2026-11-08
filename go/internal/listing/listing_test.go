@@ -216,8 +216,8 @@ func TestResourceAdmission(t *testing.T) {
 		fds     int64
 		want    int
 	}{
-		{128 << 20, 4, 0, 3},                      // 128 MiB / 38.5 MiB (the S3 schema's encoder)
-		{512 << 20, 4, 0, 13},                     // 512 MiB / 38.5 MiB
+		{128 << 20, 4, 0, 4},                      // 128 MiB / 31.5 MiB (the S3 schema's encoder)
+		{512 << 20, 4, 0, 16},                     // 512 MiB / 31.5 MiB
 		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
 		{512 << 20, 64, 100, 1},                   // the floor
 		{minRowBudget, 4, 0, 1},                   // the floor
@@ -227,11 +227,11 @@ func TestResourceAdmission(t *testing.T) {
 		}
 	}
 	// Once listing has ended, each worker's page (1 MiB) joins the
-	// allowance: 128 MiB at 64 workers carries 4, at 256 workers 9.
+	// allowance: 128 MiB at 64 workers carries 6, at 256 workers 12.
 	for _, tc := range []struct {
 		workers int
 		want    int
-	}{{64, 4}, {256, 9}, {4, 3}} {
+	}{{64, 6}, {256, 12}, {4, 4}} {
 		if got := admitAfterListing(128<<20, s3Encoder, tc.workers, 0); got != tc.want {
 			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
 		}

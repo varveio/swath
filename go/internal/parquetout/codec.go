@@ -17,8 +17,9 @@ import (
 // compression enabled. A router's writers share one (a writer made alone
 // owns one). Its states are single-state zstd encoders, made as calls
 // need them up to limit and reused last-in first-out, so a state is only
-// made, and only grows (to the largest page it compressed, about 19 MiB
-// once a page passes one zstd block: EncoderBytes), when that many calls
+// made, and only grows (to the largest page it compressed, about 11 MiB
+// once a page passes one zstd block with lower encoder memory, which
+// changes allocation only, not the bytes: EncoderBytes), when that many calls
 // run at once: a pool that hands its states round in turn warms every one
 // of them. The limit is the encoders admitted (setLimit, from the
 // router's Admit). Each call compresses on one state, so page columns, of
@@ -48,6 +49,7 @@ func newState() (*zstd.Encoder, error) {
 		zstd.WithEncoderCRC(false),
 		zstd.WithZeroFrames(true),
 		zstd.WithAllLitEntropyCompression(true),
+		zstd.WithLowerEncoderMem(true),
 	)
 }
 

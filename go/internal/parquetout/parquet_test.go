@@ -4,6 +4,7 @@
 package parquetout
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -399,5 +401,42 @@ func TestCodecStatesFollowAdmission(t *testing.T) {
 	}
 	if _, base := route(t, rows, 1, 16<<10); !slices.EqualFunc(parts, base, func(a, b dataset.Part) bool { return a.MD5 == b.MD5 }) {
 		t.Fatal("parts differ from one encoder's")
+	}
+}
+
+// TestLowerEncoderMemIsByteIdentical: the codec's states run with zstd's
+// lower encoder memory (a history of one window plus a block instead of
+// two windows: about 8 MiB less per state once a page passes one block),
+// which changes allocation only: every page, of one block or many, random
+// or repetitive, compresses to the same bytes as with the default.
+func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
+	low, err := newState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false),
+		zstd.WithZeroFrames(true), zstd.WithAllLitEntropyCompression(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewSource(3))
+	for _, n := range []int{0, 1, 1000, 100 << 10, 128 << 10, 129 << 10, 1 << 20, 3<<20 + 7, 4 << 20, 8 << 20, 9 << 20} {
+		for _, kind := range []string{"random", "letters", "repeats"} {
+			src := make([]byte, n)
+			for i := range src {
+				switch kind {
+				case "random":
+					src[i] = byte(r.Uint32())
+				case "letters":
+					src[i] = byte('a' + r.Intn(26))
+				default:
+					src[i] = byte(i % 251 / 7)
+				}
+			}
+			a, b := low.EncodeAll(src, nil), def.EncodeAll(src, nil)
+			if !bytes.Equal(a, b) {
+				t.Fatalf("%d bytes %s: %d compressed with lower memory, %d without, or they differ", n, kind, len(a), len(b))
+			}
+		}
 	}
 }

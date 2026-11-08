@@ -65,8 +65,9 @@ const unboundedKeyBytes = 4096
 // an upgrade of either (TestWriterAdmissionCoversHeap, and the probes in
 // docs/internals/parquet-output.md).
 //   - a codec state that has compressed a page larger than one zstd block
-//     (128 KiB) keeps a history of twice the 8 MiB window, plus its match
-//     tables: about 18 MiB measured, 19 priced (bigStateBytes); one that
+//     (128 KiB) keeps a history of one 8 MiB window and a block (zstd's
+//     lower encoder memory: twice the window without it), plus its match
+//     tables: about 10.6 MiB measured, 12 priced (bigStateBytes); one that
 //     only saw smaller pages, about 2 MiB (smallStateBytes). A key page is
 //     1,024 keys, so keys over 128 bytes make every state a big one.
 //   - a writer holds its row group's encoded pages (groupBytes, overshot:
@@ -78,7 +79,7 @@ const unboundedKeyBytes = 4096
 //     priced); the filesystem schema with 4,096-byte keys and link targets
 //     38 (43 priced).
 const (
-	bigStateBytes   = 19 << 20
+	bigStateBytes   = 12 << 20
 	smallStateBytes = 2 << 20
 	zstdBlockBytes  = 128 << 10
 )
