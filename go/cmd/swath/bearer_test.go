@@ -88,3 +88,4 @@ func TestRedactArgv(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+// scratch probe
