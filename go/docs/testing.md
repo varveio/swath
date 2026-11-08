@@ -6,8 +6,23 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same in the `go` job of `.github/workflows/ci.yml`, plus `CGO_ENABLED=0` builds for
-linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/` needs that job green.
+CI runs the same in the `go` job of `.github/workflows/ci.yml` (ubuntu, linux/amd64), plus `CGO_ENABLED=0` builds for
+linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. The `go-xos` job runs `go vet ./...` and the default
+tier on the other platforms, on every push: `go test -race ./...` on linux/arm64 (`ubuntu-24.04-arm`), plain
+`go test ./...` on macOS (`macos-latest`, arm64) and Windows (`windows-latest`, amd64), where the race detector
+is slow or needs cgo. A commit touching `go/` needs both jobs green.
+
+Where a platform cannot run a case the test skips with the platform behaviour as its reason, never silently:
+
+- **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync), so
+  tests of journaled runs, crash recovery, resume and the durable spill call `datasettest.RequireJournal`
+  and skip; replay fixtures that only need a dataset list it unjournaled there. Windows also refuses to
+  rename a directory holding an open file (a running output cannot be replaced, the sort-fixture
+  replacement cases), resets a connection closed with unread input (the replay diff's residual cases), has
+  no permission bit that hides a directory, refuses `<` and `>` in names, has no SIGTERM to send, and its
+  monotonic clock ticks about every 0.5 ms (a local request can time at 0 ns, which the timing checks allow).
+- **macOS and Windows** refuse names that are not UTF-8 (APFS, NTFS): the byte-for-byte name cases run on
+  Linux only.
 
 `SWATH_PERF=1` is the performance tier: a test whose law holds at a small scale runs that scale by default
 and the full one (seconds, more memory) only then. CI does not set it.

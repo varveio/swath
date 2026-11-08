@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
@@ -33,6 +34,7 @@ func fakeS3(t *testing.T, n int) string {
 }
 
 func TestS3Dataset(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 3000)
 	for _, tc := range []struct {
 		root, target string
@@ -91,6 +93,7 @@ func readJSON(t *testing.T, path string, v any) {
 // provider's (Parquet parts and manifest, apart from its creation time) on
 // the same static bucket with request latency.
 func TestS3ParallelEqualsSequential(t *testing.T) {
+	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	keys := make([]string, 12000)
 	for i := range keys {
@@ -145,6 +148,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 // "disabled" and its counters are absent; a policy that was on reports its
 // counters even when they are zero.
 func TestSummaryDistinguishesOffFromZero(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 300)
 	run := func(cfg Config) map[string]any {
 		t.Helper()

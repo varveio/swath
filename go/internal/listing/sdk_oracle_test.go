@@ -15,6 +15,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
@@ -37,6 +38,7 @@ func oracleKeys() []string {
 // custom client are byte-identical to datasets listed through the AWS SDK,
 // sequential and parallel, on the same fake bucket.
 func TestDatasetsMatchSDK(t *testing.T) {
+	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	b := s3test.Backend(t, oracleKeys(), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC)}))
 	srvURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 2*time.Millisecond))

@@ -18,7 +18,7 @@ Linked into `cmd/swath` unless marked tests.
 | `cloud.google.com/go/compute/metadata` | Apache-2.0 | The GCE metadata server's typed error, to tell a transient metadata outage from a refusal. |
 | `golang.org/x/oauth2` (`google`) | BSD-3 | Google application-default credentials and token refresh for GCS; bearer-token reuse (`internal/source/tokensource`). |
 | `golang.org/x/sync` (`singleflight`) | BSD-3 | One token refresh shared by concurrent callers (`tokensource`: S3 bearer tokens and GCS credentials). |
-| `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock) and console VT mode. |
+| `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock), console VT mode, `GetDiskFreeSpaceEx` (free space for the spill reserve) and the closed-pipe and sharing-violation errors. |
 | `golang.org/x/term` | BSD-3 | Whether stderr is a terminal, and its width, for the progress line. |
 | `github.com/klauspost/compress` (`zstd`, `gzip`) | BSD-3 | zstd for Parquet pages and spill frames, gzip and zstd for text output; the standard library has no zstd, and the same module's gzip is a drop-in for `compress/gzip`. |
 | `github.com/parquet-go/parquet-go` | Apache-2.0 | The Parquet writer and reader. It links protobuf, geometry, brotli and lz4 code the port never calls; see the triggers below. |

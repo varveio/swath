@@ -72,6 +72,7 @@ func TestSeedFromDataset(t *testing.T) {
 // counts); one out of order, outside the scope, or mixing counted and
 // uncounted lines is refused before anything is listed.
 func TestSeedFromCutFile(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 3000)
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -121,6 +122,7 @@ func TestSeedFromCutFile(t *testing.T) {
 // larger than 16 MiB, is refused before it is read into memory (ErrPrior,
 // nothing listed); one at the cut bound seeds the run.
 func TestSeedFromCutFileBounded(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 300)
 	dir := t.TempDir()
 	cuts := func(n int) string {
@@ -165,6 +167,7 @@ func TestSeedFromCutFileBounded(t *testing.T) {
 // refused, so is the output directory itself and a source that does not
 // list in key ranges.
 func TestSeedFromIdentity(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 2000)
 	dir := t.TempDir()
 	scoped := filepath.Join(dir, "scoped")

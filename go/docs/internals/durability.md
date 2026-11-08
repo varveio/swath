@@ -387,6 +387,8 @@ tail as JSON lines.
   log to a consistent state that need not include the latest creations and renames, so an acknowledged
   part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
-  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. The
-  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in CI's `go` job,
-  never run natively.
+  What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. CI's
+  `go-xos` job runs the suite on Windows (`TestWindowsLock` included); the journaled-run tests skip there
+  (`datasettest.RequireJournal`). `Replace` retries its rename there for up to two seconds while another
+  handle holds the target (`ERROR_ACCESS_DENIED`, `ERROR_SHARING_VIOLATION`: a reader of the report, a
+  concurrent replacement), which leaves the old file in place until it succeeds.

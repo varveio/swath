@@ -33,6 +33,9 @@ const testRunPrefix = "probe/r20260101t000000z-00000000/"
 // standard library only) and returns its cases for provider.
 func campaignCases(t *testing.T, module, class string) []campaignCase {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the campaign's matrix code imports fcntl (Unix only)")
+	}
 	py, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 not found: the campaign's matrix cannot be read")

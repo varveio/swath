@@ -26,8 +26,9 @@ checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI 
 `go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
 git worktree may lack (`--version` then shows none).
 
-The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. Only Linux has been
-run. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
+The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
+on linux/amd64, linux/arm64, macOS (arm64) and Windows (amd64) ([testing](testing.md)); measurements are from
+Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
 `--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
@@ -374,8 +375,9 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 
 - **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no directory sync, so
   a power loss could lose acknowledged parts. The output lock holds. Filesystem runs work but are not
-  resumable. Built, never run natively.
-- **macOS:** builds; not run.
+  resumable. The test suite runs there in CI; nothing is measured there.
+- **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
+  UTF-8, so a filesystem run never meets one.
 - **Power loss or a kernel crash:** recovery relies on the filesystem honouring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
