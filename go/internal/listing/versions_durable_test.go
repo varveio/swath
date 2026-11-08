@@ -62,12 +62,29 @@ type versionsGate struct {
 	once    sync.Once
 	seen    atomic.Int64 // fresh requests from the scope's start this run
 	sealed  atomic.Int64
+	// last, if set, holds the frontier instead until every other range is
+	// done (order's "one-range-open") and a certificate is sealed: listing
+	// then ends inside the frontier's range, the sealed files ahead of it.
+	last     bool
+	lastSeen atomic.Bool
 }
 
 // event is the order stage's event hook (order.SetDurableEvents) for the
 // run in progress.
 func (p *hotVersions) event(e string) {
-	if g := p.gate.Load(); g != nil && e == "sealed" && g.sealed.Add(1) == 8 {
+	g := p.gate.Load()
+	if g == nil {
+		return
+	}
+	switch e {
+	case "sealed":
+		g.sealed.Add(1)
+	case "one-range-open":
+		g.lastSeen.Store(true)
+	default:
+		return
+	}
+	if g.last && g.lastSeen.Load() && g.sealed.Load() > 0 || !g.last && g.sealed.Load() >= 8 {
 		g.once.Do(func() { close(g.release) })
 	}
 }
@@ -79,9 +96,14 @@ type versionsReq struct {
 	cont   bool
 }
 
-func newHotVersions(t *testing.T) *hotVersions {
+func newHotVersions(t *testing.T) *hotVersions { return newHotVersionsN(t, 4000) }
+
+// newHotVersionsN is newHotVersions with keys keys. Past 10,000 the keys
+// take five digits, so the rows are put in key order (a key's versions
+// keep theirs) and their version IDs, the rows' indexes, renumbered.
+func newHotVersionsN(t *testing.T, keys int) *hotVersions {
 	p := &hotVersions{}
-	for i := range 4000 {
+	for i := range keys {
 		n := 1 + i%3
 		if i%37 == 5 {
 			n = 40
@@ -91,6 +113,10 @@ func newHotVersions(t *testing.T) *hotVersions {
 			p.rows = append(p.rows, client.Version{Object: client.Object{Key: key, Size: int64(j), Mtime: 1, ETag: "e"},
 				VersionID: strconv.Itoa(len(p.rows)), IsLatest: j == 0, DeleteMarker: j%9 == 8})
 		}
+	}
+	sort.SliceStable(p.rows, func(i, j int) bool { return p.rows[i].Key < p.rows[j].Key })
+	for i := range p.rows {
+		p.rows[i].VersionID = strconv.Itoa(i)
 	}
 	p.slow = "k0400"
 	t.Cleanup(func() {
@@ -248,27 +274,23 @@ func TestVersionsDurableSpill(t *testing.T) {
 			name += "+" + kill.resumeKill
 		}
 		t.Run(name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "ds")
-			crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
-			if kill.point == "journal-append" {
-				st, err := journal.Read(out)
-				if err != nil {
-					t.Fatal(err)
+			// The journal-append case's point: the claimed part after K
+			// starts inside a live certificate, so the resume reproduces it
+			// from replayed rows and listed ones together. Which ranges have
+			// sealed at the twelfth record is the schedule's (5 of 160 kills
+			// left K outside every certificate under -race on CI), so a run
+			// that misses is killed again on a fresh output, at most
+			// six times, and one that never covers K fails: the case never
+			// passes on listed rows alone.
+			var out string
+			for attempt := 1; ; attempt++ {
+				out = filepath.Join(t.TempDir(), "ds")
+				crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
+				if kill.point != "journal-append" || claimInsideCert(t, out) {
+					break
 				}
-				n := 0
-				for _, r := range st.Records {
-					if r.Type == "part" {
-						n++
-					}
-				}
-				if _, err := os.Stat(dataset.ClaimPath(out, n)); err != nil {
-					t.Fatalf("no claimed part %d to reproduce: %v", n, err)
-				}
-				k := versionsK(t, out)
-				for _, c := range liveVersionCerts(t, out) {
-					if c.cs <= k && (c.open || k < c.ce) {
-						t.Logf("the claimed part after K %q starts inside the certificate (%q, %q]: replayed", k, c.cs, c.ce)
-					}
+				if attempt == 6 {
+					t.Fatalf("K %q is inside no live certificate after %d kills", versionsK(t, out), attempt)
 				}
 			}
 			if kill.resumeKill != "" {
@@ -309,6 +331,35 @@ func TestVersionsDurableSpill(t *testing.T) {
 			}
 		})
 	}
+}
+
+// claimInsideCert reports whether out, killed at a journal append, has a
+// claimed part to reproduce (failing if not) whose start, after K, lies
+// inside a live certificate.
+func claimInsideCert(t *testing.T, out string) bool {
+	t.Helper()
+	st, err := journal.Read(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range st.Records {
+		if r.Type == "part" {
+			n++
+		}
+	}
+	if _, err := os.Stat(dataset.ClaimPath(out, n)); err != nil {
+		t.Fatalf("no claimed part %d to reproduce: %v", n, err)
+	}
+	k := versionsK(t, out)
+	for _, c := range liveVersionCerts(t, out) {
+		if c.cs <= k && (c.open || k < c.ce) {
+			t.Logf("the claimed part after K %q starts inside the certificate (%q, %q]: replayed", k, c.cs, c.ce)
+			return true
+		}
+	}
+	t.Logf("K %q is inside no live certificate: killed again", k)
+	return false
 }
 
 // versionsK is the last key of the last part the journal in out records.
@@ -409,7 +460,7 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 	out, sum := run("segments", 4)
 	sg := sum.Resources.Drain.Segments
 	if sg.Reason != order.SegmentEngaged || sg.Segments < 3 || sg.DeferredRows == 0 {
-		t.Fatalf("segments %+v: want engaged, boundaries deferred to key changes", *sg)
+		t.Fatalf("spill %+v segments %+v: want engaged, boundaries deferred to key changes", *sum.Resources.Spill, *sg)
 	}
 	t.Logf("segments: %d of %d rows, %d deferred", sg.Segments, sg.Rows, sg.DeferredRows)
 	sameDataset(t, "segments", ref, out)
@@ -419,5 +470,59 @@ func TestVersionsSegmentsAtKeyChanges(t *testing.T) {
 	if *a.Versions != *b.Versions || *a.LiveObjects != *b.LiveObjects || *a.DistinctKeys != *b.DistinctKeys || *a.DeleteMarkers != *b.DeleteMarkers || *b.DistinctKeys != 4000 {
 		t.Fatalf("versions %d/%d live %d/%d distinct %d/%d markers %d/%d (serial/segments)",
 			*a.Versions, *b.Versions, *a.LiveObjects, *b.LiveObjects, *a.DistinctKeys, *b.DistinctKeys, *a.DeleteMarkers, *b.DeleteMarkers)
+	}
+}
+
+// TestVersionsSegmentsReadDurableFiles: the segment-parallel tail over
+// durable spill files under a versions schema. 30,000 keys with hot
+// groups, journaled, the frontier held until every other range is done
+// and a certificate sealed (versionsGate.last): the ranges ahead spill and
+// seal behind it, listing ends inside the frontier's range, and the tail
+// segments with workers reading the sealed files. The row budget is the
+// one that leaves room for several workers (at the minimum budget the
+// planner allows one). The dataset is byte-identical to a serial run held
+// in memory, and no key spans a seam.
+func TestVersionsSegmentsReadDurableFiles(t *testing.T) {
+	datasettest.RequireJournal(t)
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4)) // spare processors for the segment workers
+	api := newHotVersionsN(t, 60000)
+	defer order.SetDurableEvents(api.event)()
+	config := func(out string) Config {
+		cfg := hotVersionsConfig(api, out, false)
+		cfg.Source.Options.(*s3.Options).Policy.PageSize = 100
+		cfg.Limits.RowBudget = 10 << 20
+		return cfg
+	}
+	ref := filepath.Join(t.TempDir(), "serial")
+	cfg := config(ref)
+	cfg.Limits.Encoders, cfg.Limits.Spill = 1, SpillLimits{Off: true}
+	cfg.Limits.RowBudget = 64 << 20
+	api.gate.Store(nil)
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "segments")
+	cfg = config(out)
+	cfg.Limits.Encoders = 4
+	api.gate.Store(&versionsGate{release: make(chan struct{}), last: true})
+	sum, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sg := sum.Resources.Drain.Segments
+	if d := sum.Resources.Spill.Durable; d == nil || d.SealedFiles == 0 || sg == nil {
+		t.Fatalf("no certificate sealed or no segments: spill %+v durable %+v drain %+v", *sum.Resources.Spill, sum.Resources.Spill.Durable, *sum.Resources.Drain.Segments)
+	}
+	if sg.Reason != order.SegmentEngaged || sg.Workers < 2 || sg.DurableFilesRead < 1 || sg.DeferredRows == 0 {
+		t.Fatalf("spill %+v segments %+v: want engaged, two workers or more, durable files read, boundaries deferred to key changes", *sum.Resources.Spill, *sg)
+	}
+	t.Logf("segments: %d over %d workers (%d bytes each of %d free), %d durable files, %d boundaries in them, %d rows deferred; %d rows spilled",
+		sg.Segments, sg.Workers, sg.PerWorkerBytes, sg.FreeBytes, sg.DurableFilesRead, sg.DurableBoundaries, sg.DeferredRows, sum.Resources.Spill.Rows)
+	sameDataset(t, "segments", ref, out)
+	m := manifestOf(t, out)
+	for i := 1; i < len(m.Parts); i++ {
+		if a, b := string(m.Parts[i-1].MaxKey), string(m.Parts[i].MinKey); a >= b {
+			t.Fatalf("part %d ends at %q and part %d starts at %q: a key spans a seam", i-1, a, i, b)
+		}
 	}
 }
