@@ -675,7 +675,7 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	const held = 30
 	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 },
 		gates: map[int]chan struct{}{0: make(chan struct{}), held: make(chan struct{})}}
-	c, _, _ := newDurable(t)
+	var c *Cache // created after the hooks: the ledger's header is write 1
 	var tornOnce, evictedOnce sync.Once
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
@@ -693,6 +693,7 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 		}
 		return nil
 	})()
+	c, _, _ = newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
 	sink := &collect{}
