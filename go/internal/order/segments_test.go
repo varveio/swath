@@ -794,6 +794,27 @@ func TestSegmentUnitsDroppedByLastReader(t *testing.T) {
 	}
 }
 
+// TestSegReserveIgnoresTree: what the segments may take is the budget
+// beside the tree, which holds about the budget once listing ends and
+// which the serial drain holds too. With the tree at the full budget, a
+// reservation that fits beside what the segments hold is granted at once;
+// one past the budget is not. Counting the tree too (2026-11-07) made every
+// worker wait at every frame on Batch: tails up to 3x longer.
+func TestSegReserveIgnoresTree(t *testing.T) {
+	const budget = 1 << 20
+	o := segmentRun(t, nil, budget)
+	o.buffered = budget // the tree, full
+	tm := &segTimes{}
+	for _, tc := range []struct {
+		c    int64
+		want bool
+	}{{600 << 10, true}, {300 << 10, true}, {200 << 10, false}} {
+		if ok, err := o.segReserve(tc.c, false, tm); err != nil || ok != tc.want {
+			t.Fatalf("reserve %d with %d held beside a full tree: %v (%v), want %v", tc.c, o.seg.held, ok, err, tc.want)
+		}
+	}
+}
+
 // gcLive is the live heap after a collection.
 func gcLive() int64 {
 	runtime.GC()
