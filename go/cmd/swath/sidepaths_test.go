@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -77,13 +78,13 @@ func TestReportCannotReplaceManagedOutput(t *testing.T) {
 		{"run.json", []string{src, "-o", out, "--overwrite", "--report", filepath.Join(out, "run.json")}},
 		{"error.json", []string{src, "-o", out, "--overwrite", "--report", filepath.Join(out, "error.json")}},
 		{"the output directory", []string{src, "-o", out, "--overwrite", "--report", out}},
-		{"another dataset", []string{src, "--count-only", "--report", filepath.Join(other, "report.json")}},
-		{"another dataset's manifest", []string{src, "--count-only", "--report", filepath.Join(other, "manifest.json")}},
+		{"another dataset", []string{"count", src, "--report", filepath.Join(other, "report.json")}},
+		{"another dataset's manifest", []string{"count", src, "--report", filepath.Join(other, "manifest.json")}},
 		{"the text output", []string{"s3://bucket", "-o", textOut, "--report", textOut}},
 		{"the text output, unclean", []string{"s3://bucket", "-o", textOut, "--report", filepath.Join(base, ".", "rows.tsv")}},
 	} {
 		buf.Reset()
-		err := run(context.Background(), tc.args, &buf, false)
+		err := listOrCount(tc.args, &buf)
 		if c := exitOf(err); c != exitUsage {
 			t.Errorf("%s: exit %d (%v), want %d", tc.name, c, err, exitUsage)
 		} else if !strings.Contains(err.Error(), "--report") {
@@ -228,9 +229,9 @@ func TestSidePathResolvedAsWritten(t *testing.T) {
 		args []string
 	}{
 		{"the dataset's manifest", []string{src, "-o", out, "--overwrite", "--no-progress", "--no-stats", "--report", via + string(filepath.Separator) + "manifest.json"}},
-		{"inside another dataset", []string{src, "--count-only", "--report", via + string(filepath.Separator) + "report.json"}},
+		{"inside another dataset", []string{"count", src, "--report", via + string(filepath.Separator) + "report.json"}},
 	} {
-		if c := exitOf(run(context.Background(), tc.args, &buf, false)); c != exitUsage {
+		if c := exitOf(listOrCount(tc.args, &buf)); c != exitUsage {
 			t.Errorf("%s: exit %d, want %d", tc.name, c, exitUsage)
 		}
 	}
@@ -248,7 +249,7 @@ func TestSidePathResolvedAsWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := filepath.Join(B, "link") + string(filepath.Separator) + ".." + string(filepath.Separator) + "other" + string(filepath.Separator) + "report.json"
-	if err := run(context.Background(), []string{src, "--count-only", "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(A, "other", "report.json")); err != nil {
@@ -408,7 +409,7 @@ func TestSidePathsCaseInsensitiveAlias(t *testing.T) {
 		{"the output, other case", []string{src, "-o", out, "--overwrite", "--report", filepath.Join(base, "out")}},
 		{"a fresh output's manifest, other case", []string{src, "-o", fresh, "--report", filepath.Join(base, "fresh", "manifest.json")}},
 	} {
-		if c := exitOf(run(context.Background(), tc.args, &buf, false)); c != exitUsage {
+		if c := exitOf(listOrCount(tc.args, &buf)); c != exitUsage {
 			t.Errorf("%s: exit %d, want %d", tc.name, c, exitUsage)
 		}
 	}
@@ -447,7 +448,7 @@ func TestSidePathsBesideUnrelatedDirectories(t *testing.T) {
 	var buf bytes.Buffer
 	for _, dir := range []string{spark, other} {
 		report := filepath.Join(dir, "report.json")
-		if err := run(context.Background(), []string{src, "--count-only", "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+		if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
 			t.Fatalf("--report %s: %v", report, err)
 		}
 		if _, err := os.Stat(report); err != nil {
@@ -544,7 +545,7 @@ func TestDanglingLinkSidePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SWATH_MEMPROFILE", plain)
-	if c := exitOf(run(context.Background(), []string{src, "--count-only"}, &buf, false)); c != exitUsage {
+	if c := exitOf(runCount(context.Background(), []string{src}, &buf, false)); c != exitUsage {
 		t.Errorf("a profile through a link: exit %d, want %d", c, exitUsage)
 	}
 	if f, err := createNoFollow(plain); err == nil {
@@ -643,4 +644,13 @@ func TestFoldsCaseProbeInside(t *testing.T) {
 			t.Errorf("%s: folds(%s) = %v, want %v", tc.name, tc.dir, got, tc.want)
 		}
 	}
+}
+
+// listOrCount runs swath count for args that start with "count", else
+// swath list.
+func listOrCount(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "count" {
+		return runCount(context.Background(), args[1:], stdout, false)
+	}
+	return run(context.Background(), args, stdout, false)
 }

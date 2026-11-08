@@ -55,7 +55,7 @@ var wireShape = scalefake.Shape{Keys: 8000, Fanout: []int{9, 13}, Skew: 1, Segme
 func TestS3ClientPagesMatchKeyspace(t *testing.T) {
 	isolateAWS(t)
 	k, srv, url := serve(t, wireShape, scalefake.Options{})
-	c, err := s3client.New(s3client.Config{Endpoint: url, PathStyle: true, Anonymous: true, Region: "us-east-1"})
+	c, err := s3client.New(context.Background(), s3client.Config{Endpoint: url, PathStyle: true, Anonymous: true, Region: "us-east-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

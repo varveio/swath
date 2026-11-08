@@ -77,11 +77,6 @@ type Options struct {
 	// Admission is the built-in client's (the shared engine flags); a
 	// supplied Client has its own.
 	Admission objhttp.Admission
-
-	// Test hooks: splitCoin replaces the demand gate; trace receives every
-	// interval an Expand covered, (lo, hi] or (lo, ⊤].
-	splitCoin func() bool
-	trace     func(lo, hi string, open bool)
 }
 
 // Resume restarts a listing after the last published key.
@@ -117,7 +112,7 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 func (p *Provider) Requests() source.Requests {
 	if c, ok := p.client.(live); ok {
 		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Inflight: l.Inflight,
+		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
 			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
 	}
 	return source.Requests{}
@@ -187,7 +182,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		if opt.BearerCommand != "" {
 			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
 		}
-		c, err := client.New(cc)
+		c, err := client.New(ctx, cc)
 		if err != nil {
 			return nil, fmt.Errorf("S3 client: %w", err)
 		}
@@ -205,7 +200,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		resume = &keyrange.Resume{After: opt.Resume.After}
 	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume, eo.SplitCoin, eo.Trace = opt.Prefix, opt.Workers, resume, opt.splitCoin, opt.trace
+	eo.Prefix, eo.Workers, eo.Resume = opt.Prefix, opt.Workers, resume
 	eo.ClientOff = opt.Admission.Off(own)
 	e, err := keyrange.New(eo, keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
@@ -223,10 +218,15 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	return p, nil
 }
 
-// AcceptBound is S3's bound policy: the pivot alphabet. S3 refuses control
-// characters in start-after and a verbatim-echo endpoint mishandles '%', so
-// a real key outside the alphabet is never sent as a start bound.
-func AcceptBound(s string) bool { return keyrange.Safe(s) }
+// AcceptBound is S3's bound policy: the pivot alphabet, and '%' where a
+// real key holds it (keyrange.SafeKey). S3 refuses control characters in
+// start-after, so a key holding one is never sent as a start bound. '%' is
+// out of the pivot alphabet for an SDK that decodes a verbatim-echo
+// endpoint's StartAfter (I12); this client percent-encodes the query and
+// parses no echo, and synthesis never adds '%', so a bound holds '%' only
+// copied from a key the service returned (a cursor, a folder, a pivot's
+// shared prefix).
+func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 
 // requeue: a transient failure whose client retries were exhausted is
 // asked again (keyrange.Description.Requeue).

@@ -6,6 +6,8 @@ package objhttp
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 )
@@ -21,34 +23,60 @@ func (l *Limiter) cycle(o Outcome, d time.Duration) {
 	l.Release(o, d)
 }
 
-// TestLimiterRules pins Java's gauge rules: x0.7 per throttle answer down
-// to 1, no growth for 10 s after the last throttle, then +1 per second up
-// to the maximum; every held-back step counted under its brake.
+// cut sends throttle answers at the clock's instant until the limiter
+// cuts (or counts a cut due at the floor): a cut needs cutFraction of the
+// window in throttles.
+func (l *Limiter) cut() {
+	before := l.Counts()
+	for {
+		l.cycle(Throttled, 0)
+		if n := l.Counts(); n.Decreases != before.Decreases || n.FloorThrottles != before.FloorThrottles {
+			return
+		}
+	}
+}
+
+// TestLimiterRules: a throttle answer cuts only once cutFraction of the
+// window (4 x workers answers, at least 256) are throttles; each cut is
+// x0.7 down to 1 and empties the window. Growth then waits for the window
+// to fill again with under growFraction throttles, and is +1 per second up
+// to the maximum; every held-back step is counted under its brake.
 func TestLimiterRules(t *testing.T) {
 	c := &fakeClock{t: time.Unix(1e9, 0)}
-	l := newLimiter(64, c.now)
-	for _, want := range []int{44, 30, 21, 14, 9, 6, 4, 2, 1, 1} {
+	l := newLimiter(64, c.now) // window 256: 39 throttles cut
+	for range 38 {
 		l.cycle(Throttled, 0)
+	}
+	if n := l.Counts(); l.Limit() != 64 || n.Tolerated != 38 || n.Decreases != 0 {
+		t.Fatalf("under 15 %% of the window: limit %d %+v", l.Limit(), n)
+	}
+	l.cycle(Throttled, 0)
+	if l.Limit() != 44 {
+		t.Fatalf("the 39th throttle: limit %d, want 44", l.Limit())
+	}
+	for _, want := range []int{30, 21, 14, 9, 6, 4, 2, 1} {
+		l.cut()
 		if l.Limit() != want {
-			t.Fatalf("after a throttle: limit %d, want %d", l.Limit(), want)
+			t.Fatalf("after a cut: limit %d, want %d", l.Limit(), want)
 		}
 	}
 	if n := l.Counts(); n.Decreases != 9 || n.Depth != 63 {
 		t.Fatalf("counts %+v", n)
 	}
-	for range 9 { // 9 s of successes inside the clean window
-		c.add(time.Second)
+	// Growth waits for a full window since the last cut, under 7.5 %.
+	c.add(time.Second)
+	for range 255 {
 		l.cycle(Success, 100*time.Millisecond)
 	}
-	if l.Limit() != 1 || l.Counts().Cooldown != 9 {
-		t.Fatalf("grew inside the clean window: limit %d, %+v", l.Limit(), l.Counts())
+	if l.Limit() != 1 || l.Counts().Cooldown != 1 {
+		t.Fatalf("grew before the window filled: limit %d, %+v", l.Limit(), l.Counts())
 	}
-	c.add(time.Second + time.Millisecond)
-	for i := range 100 { // many successes per second: still one step per second
+	l.cycle(Success, 100*time.Millisecond) // the 256th: the window is full and clean
+	for range 100 {                        // many successes in one instant: one step per pace
 		l.cycle(Success, 100*time.Millisecond)
-		if i == 99 && l.Limit() != 2 {
-			t.Fatalf("limit %d after the first paced step, want 2", l.Limit())
-		}
+	}
+	if l.Limit() != 2 {
+		t.Fatalf("limit %d after the first paced step, want 2", l.Limit())
 	}
 	for range 70 {
 		c.add(time.Second)
@@ -59,10 +87,130 @@ func TestLimiterRules(t *testing.T) {
 	}
 }
 
+// TestOneCutPerRoundTrip: a round trip whose every answer is a throttle
+// cuts once; the answers to attempts sent before the cut are stale, neither
+// counted in the window nor cut on.
+func TestOneCutPerRoundTrip(t *testing.T) {
+	c := &fakeClock{t: time.Unix(1e9, 0)}
+	l := newLimiter(64, c.now)
+	for range 64 {
+		if err := l.Acquire(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.add(50 * time.Millisecond)
+	for range 64 {
+		l.Release(Throttled, 50*time.Millisecond)
+	}
+	n := l.Counts()
+	if l.Limit() != 44 || n.Decreases != 1 || n.Tolerated != 38 || n.Stale != 25 {
+		t.Fatalf("one round of 64 throttles: limit %d, %+v (Java's rule: 1)", l.Limit(), n)
+	}
+}
+
+// sim drives l through steps round trips of rtt on c: each round sends
+// Limit() attempts at once and answers them together, answer(i, n) for
+// the i-th of n; it returns the limit of each round.
+func sim(l *Limiter, c *fakeClock, steps int, rtt time.Duration, answer func(i, n int) Outcome) []int {
+	limits := make([]int, steps)
+	for s := range steps {
+		n := l.Limit()
+		limits[s] = n
+		for range n {
+			if err := l.Acquire(context.Background()); err != nil {
+				panic(err)
+			}
+		}
+		c.add(rtt)
+		for i := range n {
+			l.Release(answer(i, n), rtt)
+		}
+	}
+	return limits
+}
+
+func meanOf(xs []int) float64 {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+	return float64(t) / float64(len(xs))
+}
+
+// TestLimiterToleratesRandomThrottles: a load-independent background of
+// throttle answers (1 % and 5 %, the red team's -throttle; under Java's
+// rules the limit sat at its floor) leaves the limit at the worker count,
+// at 16 workers as at 64 and over several random streams of 120 s, while
+// a background past the cut fraction (25 %) is still cut on.
+func TestLimiterToleratesRandomThrottles(t *testing.T) {
+	for _, workers := range []int{16, 64} {
+		for _, p := range []float64{0.01, 0.05, 0.25} {
+			for seed := range uint64(4) {
+				c := &fakeClock{t: time.Unix(1e9, 0)}
+				l := newLimiter(workers, c.now)
+				rng := rand.New(rand.NewPCG(seed, uint64(p*1000)))
+				limits := sim(l, c, 2400, 50*time.Millisecond, func(int, int) Outcome { // 120 s
+					if rng.Float64() < p {
+						return Throttled
+					}
+					return Success
+				})
+				n := l.Counts()
+				mean := meanOf(limits[len(limits)/2:])
+				if seed == 0 {
+					t.Logf("workers=%d p=%.2f: mean limit %.1f, cuts %d, tolerated %d, stale %d, increases %d, permille %d", workers, p, mean, n.Decreases, n.Tolerated, n.Stale, n.Increases, n.ThrottlePermille)
+				}
+				switch {
+				case p < cutFraction && (n.Decreases != 0 || mean < float64(workers)):
+					t.Errorf("workers=%d p=%.2f seed=%d: mean limit %.1f after %d cuts, want %d and none", workers, p, seed, mean, n.Decreases, workers)
+				case p > cutFraction && (n.Decreases == 0 || mean > float64(workers)/4):
+					t.Errorf("workers=%d p=%.2f seed=%d: mean limit %.1f, %d cuts: a background past the cut fraction must cut", workers, p, seed, mean, n.Decreases)
+				}
+			}
+		}
+	}
+}
+
+// TestLimiterPlateausUnderRateCap: a real cap (successes per 50 ms round
+// trip, the rest throttled: 15 is the red team's -rps 300) is converged on
+// within 30 s and held: in the last 60 s the limit stays between the cap
+// and where 15 % of answers would be throttles, with no cut (no sawtooth)
+// and the window's throttles under the cut fraction. A cap of 5, where one permit past it is already over 15 %,
+// cuts and regrows instead, but stays within a factor of two of the cap.
+func TestLimiterPlateausUnderRateCap(t *testing.T) {
+	for _, capacity := range []int{5, 15, 40} {
+		c := &fakeClock{t: time.Unix(1e9, 0)}
+		l := newLimiter(64, c.now)
+		answer := func(i, n int) Outcome {
+			if i < capacity {
+				return Success
+			}
+			return Throttled
+		}
+		sim(l, c, 600, 50*time.Millisecond, answer) // 30 s
+		before := l.Counts()
+		limits := sim(l, c, 1200, 50*time.Millisecond, answer) // 60 s
+		n := l.Counts()
+		lo, hi := slices.Min(limits), slices.Max(limits)
+		t.Logf("cap %d: plateau %d..%d (mean %.1f), cuts %d then %d, permille %d", capacity, lo, hi, meanOf(limits), before.Decreases, n.Decreases-before.Decreases, n.ThrottlePermille)
+		if capacity < 7 {
+			if m := meanOf(limits); m < float64(capacity)/2 || m > 2*float64(capacity) {
+				t.Errorf("cap %d: mean limit %.1f", capacity, m)
+			}
+			continue
+		}
+		// The plateau lies at or above the cap, below where 15 % of the
+		// answers would be throttles.
+		if lo < capacity-2 || float64(hi) > float64(capacity)/(1-cutFraction)+1 || n.Decreases != before.Decreases || n.ThrottlePermille >= cutFraction*1000 {
+			t.Errorf("cap %d: plateau %d..%d, %d cuts in it, permille %d", capacity, lo, hi, n.Decreases-before.Decreases, n.ThrottlePermille)
+		}
+	}
+}
+
 func TestLimiterFreezes(t *testing.T) {
 	c := &fakeClock{t: time.Unix(1e9, 0)}
 	l := newLimiter(8, c.now)
-	l.cycle(Throttled, 0) // 5
+	l.cut() // 5
 	c.add(11 * time.Second)
 	// three timeouts in 10 s freeze growth
 	for range 3 {
@@ -100,6 +248,9 @@ func TestLimiterFreezes(t *testing.T) {
 func TestLimiterAdmission(t *testing.T) {
 	l := NewLimiter(2)
 	ctx := context.Background()
+	for range 38 { // the window (at least 256) holds 38 throttles: the 39th cuts
+		l.cycle(Throttled, 0)
+	}
 	for range 2 {
 		if err := l.Acquire(ctx); err != nil {
 			t.Fatal(err)
@@ -224,72 +375,46 @@ func TestLimiterGrantCancelRace(t *testing.T) {
 	}
 }
 
-// TestFloorThrottleDoesNotRearm is Java's ConcurrencyGaugeFloorRearmSuppressionTest
-// on the fake clock: a throttle answer at a limit of 1 removes no
-// concurrency and must not re-arm the 10 s clean window, else sustained
-// throttling at the floor postpones growth forever; a real decrease (2 ->
-// 1) still re-arms, and floor answers neither extend nor shorten its
-// window.
-func TestFloorThrottleDoesNotRearm(t *testing.T) {
+// TestFloorCuts: a cut due at a limit of 1 removes nothing, counts under
+// floor_throttles and leaves the window as it is; once throttle answers
+// stop, growth resumes after 10 s without one even before the window
+// refills (at the floor's request rate it turns over slowly).
+func TestFloorCuts(t *testing.T) {
 	c := &fakeClock{t: time.Unix(1e9, 0)}
 	l := newLimiter(64, c.now)
 	for l.Limit() > 1 {
-		l.cycle(Throttled, 0) // the last real decrease (2 -> 1) arms the window at t0
+		l.cut()
 	}
-	t0 := c.t
-	for range 4 { // a floor answer every 2 s inside the window: no re-arm
+	l.cut() // due at the floor: the window keeps its throttles, so the next four are due too
+	for range 4 {
 		c.add(2 * time.Second)
 		l.cycle(Throttled, 0)
 	}
-	if n := l.Counts(); n.FloorThrottles != 4 || n.Decreases != 9 {
-		t.Fatalf("counts %+v", n)
+	if n := l.Counts(); n.FloorThrottles != 5 || n.Decreases != 9 || l.Limit() != 1 {
+		t.Fatalf("limit %d, counts %+v", l.Limit(), n)
 	}
-	c.t = t0.Add(cleanWindow - time.Millisecond)
+	last := c.t
+	c.t = last.Add(cleanWindow - time.Millisecond)
 	l.cycle(Success, 100*time.Millisecond)
 	if l.Limit() != 1 {
-		t.Fatalf("grew inside the window armed by the real decrease: limit %d", l.Limit())
+		t.Fatalf("grew within 10 s of a throttle with the window unfilled: limit %d", l.Limit())
 	}
-	c.t = t0.Add(cleanWindow + growthPace + time.Millisecond)
+	c.t = last.Add(cleanWindow + time.Millisecond)
 	l.cycle(Success, 100*time.Millisecond)
 	if l.Limit() != 2 {
-		t.Fatalf("floor throttles re-armed the clean window: limit %d 11 s after the last real decrease, want 2", l.Limit())
-	}
-
-	// Sustained throttling at the floor: one answer every 2 s, successes
-	// between. The limit still leaves 1 once a window passes; each real
-	// decrease back to 1 re-arms it.
-	c2 := &fakeClock{t: time.Unix(2e9, 0)}
-	l2 := newLimiter(64, c2.now)
-	for l2.Limit() > 1 {
-		l2.cycle(Throttled, 0)
-	}
-	grew := 0
-	for range 60 { // 120 s
-		c2.add(time.Second)
-		l2.cycle(Success, 100*time.Millisecond)
-		c2.add(time.Second)
-		before := l2.Limit()
-		l2.cycle(Throttled, 0)
-		if before > 1 {
-			grew++
-		}
-	}
-	if grew == 0 {
-		t.Fatal("sustained floor throttling pinned the limit at 1 for 120 s")
-	}
-	if n := l2.Counts(); n.Decreases != 9+int64(grew) || n.FloorThrottles != 60-int64(grew) {
-		t.Fatalf("counts %+v, grew %d", n, grew)
+		t.Fatalf("limit %d 10 s after the last throttle, want 2", l.Limit())
 	}
 }
 
 // TestFirstGrowthAfterCooldownIsImmediate: as in Java's gauge ("the first
 // +1 after a cool-down fires immediately"), counting held-back steps does
-// not consume the growth pace: a success just past the clean window grows
-// the limit even when a held-back step was counted under a second ago.
+// not consume the growth pace: a success just past the clean window (10 s
+// without a throttle answer, the window since the cut unfilled) grows the
+// limit even when a held-back step was counted under a second ago.
 func TestFirstGrowthAfterCooldownIsImmediate(t *testing.T) {
 	c := &fakeClock{t: time.Unix(1e9, 0)}
 	l := newLimiter(8, c.now)
-	l.cycle(Throttled, 0) // 8 -> 5, window armed at t0
+	l.cut() // 8 -> 5, the last throttle at t0
 	t0 := c.t
 	c.t = t0.Add(cleanWindow - time.Millisecond)
 	l.cycle(Success, 100*time.Millisecond) // held back, counted

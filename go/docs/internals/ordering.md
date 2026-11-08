@@ -110,7 +110,8 @@ held-up first range) bounds the peak live heap by the budget and the pages in fl
 **What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
 worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
-approximates), compression scratch, open spill readers (at most 8 × 64 KiB), the encoders' writers (budgeted
+approximates), compression scratch, open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
+largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
 at `parquetout.EncoderBytes`, 24 MiB each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
 by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
@@ -137,13 +138,34 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 A release of drained bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
-at once. Publishing only children never waits (`TestChildOnlyPublishIsAdmitted`). The run's own `WaitGroup`
+at once. Publishing only children waits only while the metadata in memory would by itself fill the budget
+(`TestChildOnlyPublishIsAdmitted`, `TestMarkerSaturationWakes`). The run's own `WaitGroup`
 waits for providers and spill I/O to return: a stop wakes every condition variable but cannot interrupt
 arbitrary I/O, which the command's forced-exit grace covers.
 
+The sink's own waits are outside these: the drainer hands a batch to the sink and waits for it to return,
+holding the drained bytes until then. A Parquet router's is `encoder_wait_ns` (a full part queue); a text
+sink's is `output.text.sink_wait_ns`. A text file's rows are formatted by `--encoders` goroutines: the drainer
+hands each batch, numbered by its order, to their queue (two batches per formatter) and returns; a sequencer
+writes the formatted chunks to the one stream in that order, waiting for each (`output_wait_ns`: the
+compressor's, a synchronous encoder or every parallel job's slot full, or the file's). A queued batch's row
+bytes are charged to the shared budget (`Shared`, as a Parquet part queue's) from hand-off until its chunk is
+written or dropped, so the drainer's wait is the queue full and listing waits on the budget as for any
+storage. The sequencer's first write failure (the file, or the compressor) cancels the run at once with that
+cause, as an encoder's does, since the drainer may be waiting for a page and hand on nothing that would see it;
+the output keeps it through the abort, so the run reports it rather than a later deadline or stall
+(`TestTextWriteFailureStopsListing`). So does the destination's own first failure, which with parallel zstd
+jobs the compressor's background flusher meets after the sequencer has gone idle: the destination writer
+records the original error and reports it the same way, and the abort does not replace it
+(`TestTextCompressorFailureStopsListing`, `textout` `TestIdleCompressorFailureReported`). With one formatter (stdout, or `--encoders 1`) the drainer formats and
+writes itself, and meets a failure in its own write. An abort stops
+the formatters at their next batch, drops the queue (releasing its bytes) and joins them before the
+compressor. The compressor queues bytes, not rows: its sections are bounded by its jobs (`textout.JobBytes`
+each, admitted apart from the budget) and nothing it holds is charged to the budget.
+
 ## Counting without order
 
-A dry run (`--count-only`: no dataset, no text) consumes no row in order, so the pipeline runs `order.Count`
+A count (`swath count`: no dataset, no text) consumes no row in order, so the pipeline runs `order.Count`
 instead of `Run` (`registry.Env.Count`). Workers pop ranges from a LIFO stack and push a range's children when
 its `Expand` returns, as in `Run`; rows are counted as they arrive and dropped. There is no tree, no budget,
 no drainer and no spill: memory is the pages in flight and the ranges queued for a worker, and the run
@@ -186,20 +208,58 @@ rows far ahead of the frontier keep the budget full, it would leave the drainer 
 range in flight of 64, as measured with that wait). Spill does not remove every wait: a worker still waits when the disk budget refuses a frame,
 and an emitter of markers waits once the markers in memory would fill the budget by themselves, so at
 sufficient scale (hundreds of finished ranges ahead of a stalled frontier) producers wait even with unlimited
-disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on the budget:
+disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on the budget.
+
 - **Order.** The rows of one range are already in key order, so the drainer replays a range's frames front to
   back when it reaches the markers: no index, no merge, no dictionaries. Frames are written before their
   markers are published, so the drainer never reads ahead of the writer.
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
-  range larger than the remaining budget therefore never blocks; this is what the slow-frontier shape needs.
-- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (or the temp directory for a text output; a dry run never spills).
-  Frames are length-prefixed, carry a CRC-32C, and are typed: rows, zstd rows (`swath diag list --spill-compress`, level 1),
-  or a trailer with the row count. A rows frame holds each row's key and the producer's payload encoded by
-  its `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values, `s3.Object` its
-  size, time and six strings); the encoding is private to one run. The trailer is written when the range ends and checked after replay.
-  Children have their own files, so a parent's trailer says nothing about them.
+  range larger than the remaining budget therefore does not block on the row budget while the disk budget
+  and reserve admit its frames (the waits above); this is what the slow-frontier shape needs.
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
+  Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
+  payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
+  uncompressed (`--spill-compress=false`), `Z` and `R` plain rows, compressed and not
+  (`--spill-plain`, the comparison arm; both flags are diagnostic runtime flags (`swath diag list`), and a resume may
+  change them: spill is disposable, removed when a run starts, so a resume never reads another run's frames), and `T` the trailer with the row count. A run writes
+  one rows type and its reader refuses every other, so a frame of an unknown or foreign format is never
+  decoded. The trailer is written when the range ends and checked after replay. Children have their own
+  files, so a parent's trailer says nothing about them.
+- **Delta rows.** Within a range rows are sorted, so neighbours share long key prefixes, times cluster and
+  storage classes and owners repeat. A delta frame's body is the row count, the storage its decoded rows may
+  own (the keys' bytes plus the payloads' `Heap`, an upper bound on what decoding copies), the payload coding
+  (contextual or stateless), then per row: the length of the prefix its key shares with the previous key
+  (bytes, not UTF-8 units: keys are bytes), the rest of the key, length-prefixed, and the payload. A producer
+  with a `schema.DeltaCodec[P]` (S3) codes its payload against the previous row's: `s3.Object` writes a flags
+  byte, its size as a signed varint (as the plain codec does), its time as the signed (zigzag) varint of its
+  difference from the previous time, or the time itself when the difference overflows int64, its ETag as 16
+  raw bytes when it is exactly 32 lowercase hex digits (an MD5, as `s3.Object` carries it, quotes stripped),
+  as a flag when it repeats the previous one and as the string itself otherwise (uppercase, multipart
+  `hex-N`, quoted or empty: only a spelling that round-trips byte for byte is taken raw), and each other
+  string as a flag when it repeats the previous row's, else the string. GCS and localfs keep their
+  stateless `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values) inside
+  delta frames: their keys are prefix-coded all the same. A plain frame holds each key whole and the
+  payload through `schema.Codec[P]`. The previous row is the frame's own, reset at every frame: a frame
+  decodes alone, without the file before it, which reopening an evicted reader at its position needs, and the codecs hold no state, so one serves every emitter at once (`Schema.Detach`
+  uses the stateless codec too). On the fake S3 fixture of `TestSpillFormatsIdentical` delta frames take
+  24 B/row against 67 B/row plain (zstd: 22 and 21); the measured runs are in
+  [measurements.md](../measurements.md#delta-coded-spill-frames).
+- **Compressed by default.** zstd level 1 runs over the delta frames: what delta coding leaves are the
+  bytes it cannot predict (raw ETags, key suffixes, sizes), and zstd still finds repeats among them,
+  while its input is already a few times smaller than a plain frame's, so its CPU cost is bounded by
+  the coded bytes, not the rows' logical size. The numbers that justify the default are in
+  [measurements.md](../measurements.md#delta-coded-spill-frames).
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
-  the reader is closed on every error path.
+  the reader is closed on every error path. A delta frame decodes into storage of its own (an owning
+  `schema.Decoder`, 64 KiB chunks): no decoded key or string views the read buffers, which the drainer
+  therefore reuses from frame to frame (`TestDeltaFramesRoundTrip` overwrites them after each frame). Its
+  header is checked before anything is allocated: at most as many rows as the largest frame its file was
+  given, at most as much declared storage as the largest declared, and at most 256 MiB. Every byte the rows
+  own is charged to the declared storage, because a few encoded bytes can stand for a 1,024-byte key (a
+  shared prefix) or a 32-byte ETag: a frame expanding past it is refused (`spill.decode_refused`). Prefix
+  lengths longer than the previous key, lengths past the frame, an unknown ETag form, a foreign payload
+  coding and trailing bytes are refused too (`TestDeltaFrameMalformed`), and the stream-wide order guard
+  checks every replayed row as before.
 - **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 readers
   (a descriptor and a 64 KiB buffer each, `order.MaxSpillReaders`) are open; past that the least recently
   used one is closed and reopened at its position when the drainer comes back to it
@@ -210,7 +270,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
-- **Disk budget.** A frame is written only if the live spill bytes stay within `-spill-max` (default: half
+- **Disk budget.** A frame is written only if the live spill bytes stay within `--spill-budget` (default: half
   the space free on the spill filesystem when the run starts, after the reserve; a library caller's negative
   value means no cap; the cap in effect is the report's `spill.max_bytes`) and the spill filesystem keeps a reserve free afterwards (`listing.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
@@ -226,9 +286,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   deleted at its trailer), so live spill is what the disk really holds. Trailers (a few bytes) are
   always admitted, and concurrent emitters can each pass the free-space check before either writes, so the
   reserve can be undershot by at most one frame per worker; the reserve is checked, not held, so parts
-  being published can use it too. A frame read back is refused (before allocating) past 256 MiB, compressed
-  or decoded, and a rows frame claiming more rows than the largest frame its file was given is refused
-  before its rows are allocated. A spill marker (the item a node keeps per frame on disk) counts its own
+  being published can use it too (what a frame read back may claim: **Defensive reads**, above). A spill marker (the item a node keeps per frame on disk) counts its own
   size against the row budget: after a spill, markers and children are admitted without a wait unless the
   markers in memory would by themselves fill the budget, and a marker's bytes are released when its frame
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
@@ -239,8 +297,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
   at start); `progress.json` carries the same as live values with their peaks
-  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin). The summary
-  reports `spill_peak_bytes` and
-  `spill_refused` (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical
-  output; a reserve larger than the disk spills nothing).
+  under `order` (`nodes`, `markers`, `spill_readers`, `spill_live_bytes`, `ahead_rows`, each with a `peak_` twin).
+  The stage's `Stats` carry `SpillPeak` and `SpillRefused`, the report's `spill.peak_bytes` and `spill.refused`
+  (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve
+  larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.

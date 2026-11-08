@@ -155,6 +155,14 @@ type Requests struct {
 	// their time in flight (over a wall time: the mean in flight).
 	InflightMax, InflightNs int64
 	Limit                   int64 // the adaptive limiter's current limit; 0 without a limiter
+	Timeouts                int64 // attempts past the per-request timeout, retried or not
+}
+
+// SeedTimed sources time their seed, the delimiter listings that tile the
+// scope before any range lists (the report's timings.seed_ms); ok is false
+// where none ran.
+type SeedTimed interface {
+	SeedTime() (d time.Duration, ok bool)
 }
 
 // Priced sources name the reference tariff of their list requests, so the

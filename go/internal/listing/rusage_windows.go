@@ -53,3 +53,7 @@ func rusage() (user, sys time.Duration, peak int64, ok bool) {
 func filetime(f windows.Filetime) time.Duration {
 	return time.Duration(int64(f.HighDateTime)<<32|int64(f.LowDateTime)) * 100
 }
+
+// residentBytes is the resident set now; not measured on this platform
+// (the history leaves it out).
+func residentBytes() (int64, bool) { return 0, false }

@@ -24,7 +24,7 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 	t.Cleanup(srv.Close)
 	cfg.Endpoint, cfg.PathStyle = srv.URL, true
 	cfg.BaseBackoff, cfg.MaxBackoff = time.Millisecond, 2*time.Millisecond
-	c, err := New(cfg)
+	c, err := New(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestCredentialChain(t *testing.T) {
 	if c := list(Config{Anonymous: true}); auth.Load() != "" || token.Load() != "" || c.Note() == "" {
 		t.Fatalf("anonymous request signed: %q, note %q", auth.Load(), c.Note())
 	}
-	if _, err := New(Config{Profile: "nope"}); err == nil {
+	if _, err := New(context.Background(), Config{Profile: "nope"}); err == nil {
 		t.Fatal("missing profile accepted")
 	}
 }
@@ -212,6 +212,8 @@ func TestURL(t *testing.T) {
 			"https://bkt.s3.eu-west-1.amazonaws.com/?encoding-type=url&list-type=2&max-keys=1000&prefix=a%20b%2F"},
 		{Config{Region: "us-east-1", PathStyle: true}, ListInput{Bucket: "bkt", StartAfter: "x", FetchOwner: true, Delimiter: "/", ContinuationToken: "t+="},
 			"https://s3.us-east-1.amazonaws.com/bkt?continuation-token=t%2B%3D&delimiter=%2F&encoding-type=url&fetch-owner=true&list-type=2&start-after=x"},
+		{Config{Region: "us-east-1"}, ListInput{Bucket: "a.b", Prefix: "~-_.é*\x01"},
+			"https://s3.us-east-1.amazonaws.com/a.b?encoding-type=url&list-type=2&prefix=~-_.%C3%A9%2A%01"},
 		{Config{Region: "us-east-1"}, ListInput{Bucket: "a.b"}, "https://s3.us-east-1.amazonaws.com/a.b?encoding-type=url&list-type=2"},
 		{Config{Endpoint: "http://127.0.0.1:9000"}, ListInput{Bucket: "bkt"}, "http://127.0.0.1:9000/bkt?encoding-type=url&list-type=2"},
 		{Config{Endpoint: "https://minio.example/s3/"}, ListInput{Bucket: "bkt"}, "https://bkt.minio.example/s3/?encoding-type=url&list-type=2"},
@@ -220,7 +222,7 @@ func TestURL(t *testing.T) {
 		{Config{Region: "cn-north-1"}, ListInput{Bucket: "bkt"}, "https://bkt.s3.cn-north-1.amazonaws.com.cn/?encoding-type=url&list-type=2"},
 	} {
 		c.cfg.Anonymous = true
-		cl, err := New(c.cfg)
+		cl, err := New(context.Background(), c.cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

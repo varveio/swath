@@ -10,3 +10,7 @@ import "time"
 // rusage is unavailable here: the report says so (rusage_available false)
 // and leaves the CPU and peak RSS values out rather than reporting zero.
 func rusage() (user, sys time.Duration, peak int64, ok bool) { return 0, 0, 0, false }
+
+// residentBytes is the resident set now; not measured on this platform
+// (the history leaves it out).
+func residentBytes() (int64, bool) { return 0, false }

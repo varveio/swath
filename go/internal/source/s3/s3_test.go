@@ -220,16 +220,17 @@ func TestParseURL(t *testing.T) {
 	}
 }
 
-// TestS3BoundPolicy: S3 keeps the conservative bound policy, the pivot
-// alphabet: no control character, '%', surrogate or non-character is sent
-// in start-after, while '/', non-ASCII letters and long keys are.
+// TestS3BoundPolicy: S3's bound policy is the pivot alphabet plus '%':
+// no control character, surrogate or non-character is sent in start-after,
+// while '/', '%' (copied from real keys), non-ASCII letters and long keys
+// are.
 func TestS3BoundPolicy(t *testing.T) {
-	for _, s := range []string{"a/b", "café", "世", strings.Repeat("k", 1024)} {
+	for _, s := range []string{"a/b", "café", "世", strings.Repeat("k", 1024), "a%20b", "%", "web/https%3A%2F%2F"} {
 		if !AcceptBound(s) {
 			t.Errorf("refused %q", s)
 		}
 	}
-	for _, s := range []string{"a%20b", "a\x01", "a\x7f", "a\u0085", "a﷐", "a￿", "\xff"} {
+	for _, s := range []string{"a%\x01", "a\x01", "a\x7f", "a\u0085", "a﷐", "a￿", "\xff"} {
 		if AcceptBound(s) {
 			t.Errorf("accepted %q", s)
 		}

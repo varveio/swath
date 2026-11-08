@@ -26,7 +26,7 @@ func TestRateLimitStormLowersConcurrency(t *testing.T) {
 	base, path, _ := strings.Cut(strings.TrimPrefix(ep, "http://"), "/")
 	px, err := faulttest.New("http://"+base, faulttest.Plan{Seed: 3, Dialect: "gcs", Windows: []faulttest.Window{
 		{Fraction: 1, Fault: faulttest.Latency, Delay: 30 * time.Millisecond},
-		{N1: 40, Fraction: 0.7, Fault: faulttest.Throttle}, // the first 40 requests, however long they take
+		{N1: 80, Fraction: 0.9, Fault: faulttest.Throttle}, // the first 80 requests, however long they take: a cut needs 39 throttles
 		{Fraction: 0.15, Fault: faulttest.Reset}}})
 	if err != nil {
 		t.Fatal(err)

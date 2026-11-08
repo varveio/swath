@@ -75,16 +75,25 @@ func TestCrashMatrix(t *testing.T) {
 		spill     []bool
 		intervals []time.Duration
 		nth       []int64 // occurrences to crash at, within each run (the GCS run has fewer parts and requests)
+		// absent: the points not on this provider's path (the scripted
+		// source sends no requests and has no range engine). Every other
+		// point's first occurrence must be reached; later ones are
+		// optional, since a run may hold fewer parts or splits.
+		absent []string
+		// also: further occurrences of one point. journal-append#2 is the
+		// first part's record (#1 is the header): the calibrating part
+		// claimed but unrecorded, reproduced at its pinned boundary.
+		also map[string][]int64
 	}{
-		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}},
-		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}},
+		{"s3", func(out string, resume bool) Config { return crashConfig(s3url, out, resume) }, []bool{false, true}, []time.Duration{off, time.Millisecond}, []int64{1, 4, 12}, nil, calibrating},
+		{"gcs", func(out string, resume bool) Config { return gcsConfig(gcsep, out, resume) }, []bool{false}, []time.Duration{off, time.Millisecond}, []int64{1, 3, 7}, nil, calibrating},
 		{"trickle", func(out string, resume bool) Config {
 			scriptMu.Lock()
 			scriptNext = &scripted{keys: trickle, chunk: 1, slow: time.Millisecond}
 			scriptMu.Unlock()
 			return Config{Source: SourceConfig{URI: "scripted://x"}, Output: OutputConfig{Dir: out, Resume: resume},
 				Limits: Limits{PartSize: 2 << 10, Workers: 2, RowBudget: 128 << 10, Spill: SpillLimits{Off: true}, PartInterval: off}}
-		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}},
+		}, []bool{false}, []time.Duration{4 * time.Millisecond}, []int64{1, 4, 12}, []string{"response-read", "split", "range-done"}, nil},
 	} {
 		ref := filepath.Join(t.TempDir(), "ref")
 		if _, err := Run(context.Background(), prov.config(ref, false)); err != nil {
@@ -100,7 +109,7 @@ func TestCrashMatrix(t *testing.T) {
 				continue
 			}
 			for _, point := range faults.Points {
-				for _, nth := range prov.nth {
+				for _, nth := range append(slices.Clone(prov.nth), prov.also[point]...) {
 					t.Run(fmt.Sprintf("%s/spill=%v/interval=%v/%s#%d", prov.name, spill, mode.interval > 0, point, nth), func(t *testing.T) {
 						out := filepath.Join(t.TempDir(), "ds")
 						var seen atomic.Int64
@@ -118,6 +127,12 @@ func TestCrashMatrix(t *testing.T) {
 						if seen.Load() < nth {
 							if err != nil {
 								t.Fatal(err)
+							}
+							switch {
+							case slices.Contains(prov.absent, point):
+								t.Skipf("%s is not on this provider's path", point)
+							case nth == 1:
+								t.Fatalf("%s never reached: the matrix no longer crosses this boundary", point)
 							}
 							t.Skipf("%s reached %d times only", point, seen.Load())
 						}
@@ -141,12 +156,90 @@ func TestCrashMatrix(t *testing.T) {
 						} else {
 							sameDataset(t, point, ref, out)
 						}
-						t.Logf("resumed %d parts (%d rows), listed %d more rows, %d parts cut by time", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsListed, sum.Resources.PartTimeCuts)
+						t.Logf("resumed %d parts (%d rows), listed %d more rows, %d parts cut by time", sum.Output.PartsRetained, sum.Output.RowsRetained, sum.Output.RowsEmitted, sum.Resources.PartTimeCuts)
 					})
 				}
 			}
 		}
 	}
+}
+
+// calibrating is the crash matrices' extra occurrence: the first part's
+// journal append.
+var calibrating = map[string][]int64{"journal-append": {2}}
+
+// TestCalibratingClaimRecoversRepeatedly: the first size-cut part (the
+// one that calibrates the part size) is claimed and the run killed before
+// its record; the resume reproduces it at its pinned boundary and is
+// itself killed (before the reproduction is claimed, at its claim again,
+// or after the next part's record), and a second resume finishes. Every
+// part is the clean run's, byte for byte: the reproduction calibrates as
+// the original did.
+func TestCalibratingClaimRecoversRepeatedly(t *testing.T) {
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	crashAt := func(out string, resume bool, point string, nth int64) {
+		t.Helper()
+		var seen int64
+		restore := faults.Set(func(p string) error {
+			if p == point {
+				if seen++; seen == nth {
+					return faults.ErrCrash
+				}
+			}
+			return nil
+		})
+		_, err := Run(context.Background(), crashConfig(url, out, resume))
+		restore()
+		if !errors.Is(err, faults.ErrCrash) {
+			t.Fatalf("%s#%d: crash not injected: %v", point, nth, err)
+		}
+	}
+	for _, again := range []struct {
+		point string
+		nth   int64
+	}{{"part-closed", 1}, {"journal-append", 1}, {"recorded", 2}} {
+		t.Run(fmt.Sprintf("%s#%d", again.point, again.nth), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "ds")
+			crashAt(out, false, "journal-append", 2)
+			crashAt(out, true, again.point, again.nth)
+			if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+				t.Fatal(err)
+			}
+			sameDataset(t, "calibrating claim, recovered twice", ref, out)
+		})
+	}
+	// Inside recovery itself: the claimed part has been moved into the
+	// suspect directory and the resume dies syncing that directory; the
+	// next resume finds the suspect (or the claim, if the move was lost)
+	// and reproduces it.
+	t.Run("suspect-dir-sync", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "ds")
+		crashAt(out, false, "journal-append", 2)
+		var synced atomic.Int64
+		restore := faults.SetIO(func(op, name string, _ []byte) (int, error) {
+			if op == "sync" && filepath.Base(name) == dataset.SuspectDir {
+				synced.Add(1)
+				return 0, faults.ErrCrash
+			}
+			return 0, nil
+		})
+		_, err := Run(context.Background(), crashConfig(url, out, true))
+		restore()
+		if !errors.Is(err, faults.ErrCrash) || synced.Load() == 0 {
+			t.Fatalf("recovery not killed at the suspect directory's sync: %v", err)
+		}
+		if m, _ := filepath.Glob(filepath.Join(out, dataset.Workspace, dataset.SuspectDir, "*")); len(m) == 0 {
+			t.Fatal("no suspect set aside before the kill: the test proves nothing")
+		}
+		if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+			t.Fatal(err)
+		}
+		sameDataset(t, "calibrating suspect, recovery killed", ref, out)
+	})
 }
 
 // TestResumeChecksIdentity: a resume with settings that change the dataset
@@ -272,8 +365,8 @@ func TestNoJournalAndCountOnly(t *testing.T) {
 		t.Fatalf("journal written with NoJournal: %v", err)
 	}
 	cfg = crashConfig(url, "", false)
-	if sum, err := Run(context.Background(), cfg); err != nil || sum.Output.RowsListed != 8000 {
-		t.Fatalf("count-only: %v %d", err, sum.Output.RowsListed)
+	if sum, err := Run(context.Background(), cfg); err != nil || sum.Output.RowsEmitted != 8000 {
+		t.Fatalf("count-only: %v %d", err, sum.Output.RowsEmitted)
 	}
 }
 
@@ -297,8 +390,8 @@ func TestEncoderFailureStopsListing(t *testing.T) {
 	if !errors.Is(err, diskFull) {
 		t.Fatalf("got %v, want the encoder's error", err)
 	}
-	if sum.Output.RowsListed >= 8000 {
-		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Output.RowsListed)
+	if sum.Output.RowsEmitted >= 8000 {
+		t.Fatalf("the pipeline ran to the end (%d rows ordered) after the encoder failed", sum.Output.RowsEmitted)
 	}
 }
 
@@ -402,9 +495,9 @@ func TestRenameFailureAfterRecordResumes(t *testing.T) {
 		bytes += rec.Part.Bytes
 	}
 	last := st.Records[len(st.Records)-1]
-	if len(st.Records) < 3 || rep.Output.PartsWritten != len(st.Records) || rep.Output.Bytes != bytes || rep.Output.RowsDurable != last.RowsTotal {
+	if len(st.Records) < 3 || rep.Output.PartsWritten != len(st.Records) || rep.Output.OutputBytes != bytes || rep.Output.RowsDurable != last.RowsTotal {
 		t.Fatalf("report: %d parts, %d bytes, %d durable rows; the journal: %d records, %d bytes, %d rows",
-			rep.Output.PartsWritten, rep.Output.Bytes, rep.Output.RowsDurable, len(st.Records), bytes, last.RowsTotal)
+			rep.Output.PartsWritten, rep.Output.OutputBytes, rep.Output.RowsDurable, len(st.Records), bytes, last.RowsTotal)
 	}
 	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
 		t.Fatalf("resume: %v", err)

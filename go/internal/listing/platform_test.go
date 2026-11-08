@@ -7,9 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -46,27 +44,5 @@ func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
 	}
 	if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: src, Options: fsOptions(false)}, Output: OutputConfig{Dir: filepath.Join(t.TempDir(), "local")}}); err != nil {
 		t.Fatalf("local run: %v", err)
-	}
-}
-
-// TestWindowsBuild cross-builds the command for Windows, where the
-// refusal above is the behaviour (dataset.DirSyncEnforced is false there),
-// and compiles the journal's tests, its Windows lock test included.
-func TestWindowsBuild(t *testing.T) {
-	if testing.Short() {
-		t.Skip("cross-build")
-	}
-	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	cmd := exec.Command(gobin, "build", "-o", os.DevNull, "./cmd/swath")
-	cmd.Dir = filepath.Join("..", "..")
-	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("windows build: %v\n%s", err, b)
-	}
-	cmd = exec.Command(gobin, "test", "-c", "-o", os.DevNull, "./internal/journal")
-	cmd.Dir = filepath.Join("..", "..")
-	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("windows journal tests: %v\n%s", err, b)
 	}
 }

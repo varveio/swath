@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -20,8 +22,8 @@ import (
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
 // engine flags: by default 64 workers whatever the CPU count, the seed (seed.prefixes counted), splits on,
-// the limiter on, no structure probes or floors; -seed=false reaches the selected provider, on swath list
-// and swath diag list alike.
+// the limiter on, no structure probes or floors; swath diag list -seed=false reaches the
+// selected provider, and swath list refuses it (a diagnostic flag).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	keys := gcstest.Keys(3000)
 	s3url := s3test.Bucket(t, keys)
@@ -34,7 +36,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		Invocation struct{ Workers int }
 		Outcome    struct{ Status string }
 		Output     struct {
-			RowsListed int64 `json:"rows_listed"`
+			RowsEmitted int64 `json:"rows_emitted"`
 		}
 		Source struct {
 			Name  string
@@ -60,11 +62,11 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		}
 		return r
 	}
-	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_start": false,
-		"seed": true, "split": true, "structure": true}
+	defaults := map[string]bool{"floors": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_split": false, "slow_start": false,
+		"seed": true, "seed_from": false, "split": true, "structure": true}
 	for name, src := range schemes {
 		r := runJSON(false, src...)
-		if r.Outcome.Status != "committed" || r.Output.RowsListed != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {
+		if r.Outcome.Status != "committed" || r.Output.RowsEmitted != int64(len(keys)) || r.Source.Name != name || !r.Source.Stats.Anonymous {
 			t.Fatalf("%s: %+v", name, r)
 		}
 		if r.Invocation.Workers != 64 {
@@ -80,16 +82,16 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		if !seeded(r) {
 			t.Fatalf("%s: not seeded by default: %v", name, r.Source.Stats.Counters.Values)
 		}
-		r = runJSON(false, append([]string{"--seed=false"}, src...)...)
-		if seeded(r) || r.Source.Stats.Counters.Features["seed"] || r.Output.RowsListed != int64(len(keys)) {
-			t.Fatalf("%s --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
+		// --seed is diagnostic: swath list refuses it, naming swath diag.
+		if err := run(context.Background(), append([]string{"--seed=false"}, src...), io.Discard, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath diag list") {
+			t.Fatalf("%s swath list --seed=false: %v", name, err)
 		}
 		r = runJSON(true, append([]string{"--seed=false"}, src...)...)
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s diag: default workers %d, want 64", name, r.Invocation.Workers)
 		}
-		if seeded(r) || r.Output.RowsListed != int64(len(keys)) {
-			t.Fatalf("%s diag --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsListed)
+		if seeded(r) || r.Output.RowsEmitted != int64(len(keys)) {
+			t.Fatalf("%s diag --seed=false: features %v, rows %d", name, r.Source.Stats.Counters.Features, r.Output.RowsEmitted)
 		}
 		t.Logf("%s: %s", name, fmt.Sprint(r.Source.Stats.Counters.Features))
 	}

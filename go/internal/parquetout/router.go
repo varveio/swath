@@ -75,7 +75,9 @@ type Options struct {
 	// nor by the interval, and written with the claimed part's columns and
 	// created_by. A resume sets it to reproduce a claimed part whose record
 	// was never written, whatever cut it (size, or a timer that fires
-	// differently now) and whichever build wrote it.
+	// differently now) and whichever build wrote it. A pinned part that
+	// reaches the size target at its boundary was cut by size, and
+	// calibrates as it did.
 	Cut *Cut
 }
 
@@ -283,14 +285,18 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 			r.cur.n++
 			r.cur.logical += r.schema.LogicalBytes(&seg[i])
 			if r.cur.pinned {
-				r.full = r.cur.n >= r.opt.Cut.Rows
+				if r.cur.n >= r.opt.Cut.Rows {
+					// The claimed boundary, whatever cut it. Whether
+					// it reached the size target is recomputed from the
+					// same rows: the cold run's part was cut by size
+					// exactly when it was, and so calibrates here too,
+					// before its successor is routed.
+					r.full = true
+					r.cur.bySize = r.cur.logical >= r.target()
+				}
 				continue
 			}
-			target := r.limit
-			if target == 0 {
-				target = r.initialTarget()
-			}
-			if r.cur.logical >= target {
+			if r.cur.logical >= r.target() {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
 			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
@@ -408,7 +414,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, p.ordinal, r.opt.Encoders, columns, createdBy)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.opt.Encoders, columns, createdBy)
 	}
 	if err != nil {
 		p.err = err
@@ -509,8 +515,14 @@ func (r *Router[P]) Routed() int64 {
 	return r.rows
 }
 
-// initialTarget is the logical bytes per part before calibration.
-func (r *Router[P]) initialTarget() int64 { return int64(float64(r.opt.PartSize) / initialRatio) }
+// target is the logical bytes that close a part by size: the frozen limit,
+// or before calibration PartSize/initialRatio.
+func (r *Router[P]) target() int64 {
+	if r.limit != 0 {
+		return r.limit
+	}
+	return int64(float64(r.opt.PartSize) / initialRatio)
+}
 
 // cut closes the current part. Until the ratio is frozen, the part is
 // waited for: it may be the calibrating part.

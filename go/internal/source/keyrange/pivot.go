@@ -13,6 +13,15 @@ import (
 // point strictly between two keys, built only from "safe" scalars, because
 // it is later sent as a start bound, and object stores reject control characters
 // and non-characters there (a verbatim-echo endpoint also mishandles '%').
+//
+// The rule is on what is synthesized, not on what is copied (I12): a pivot
+// is a prefix copied from one of its input keys, up to the scalar it
+// changes or appends ('%' included, when a real key holds it), followed by
+// safe scalars. between, forwardReflect and capFallback copy such a prefix
+// (forwardReflect("", "a%1") copies "a%" from the cursor: "a%c") and add
+// one safe scalar; extrapolate reads '%' as a digit of the page's alphabet
+// and, where its target's first new character would be '%', snaps it up to
+// the next safe byte. So a pivot holds '%' only where a surrounding key does.
 
 const (
 	maxKeyLen = 1024
@@ -43,6 +52,23 @@ func Safe(s string) bool {
 	}
 	for _, r := range s {
 		if !isSafe(int(r)) {
+			return false
+		}
+	}
+	return true
+}
+
+// SafeKey reports whether s is Safe but for '%', which it allows: the
+// bound policy of a provider that sends a real key's '%' as a start bound
+// (S3: the client percent-encodes the query and parses no echo of it).
+// Synthesis never adds '%' (the pivot alphabet excludes it), so a bound
+// holds one only where the key it was copied from does.
+func SafeKey(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r != '%' && !isSafe(int(r)) {
 			return false
 		}
 	}
@@ -324,12 +350,14 @@ func validCeil(b string) (string, bool) {
 
 // extrapolate picks a pivot from the observed key density. Keys are read as
 // numbers in the alphabet seen on the last page (its distinct bytes, all
-// safe ASCII, plus an end-of-string digit below them, which preserves
-// order); the page spanned (first, c], and the target is c + span·jump,
-// capped at the midpoint of (c, hi] for a bounded range. The target is cut
-// just after its first character that differs from c. ok=false when the
-// alphabet is not safe ASCII, or the result is not a safe key strictly
-// inside (c, hi); the caller then uses between/forwardReflect.
+// safe ASCII or '%', plus an end-of-string digit below them, which
+// preserves order); the page spanned (first, c], and the target is
+// c + span·jump, capped at the midpoint of (c, hi] for a bounded range. The
+// target is cut just after its first character that differs from c; that
+// character is synthesized, so a '%' there is snapped up to '&', the next
+// safe byte (still above c's byte there, which sorts below '%'). ok=false
+// when the alphabet is not safe ASCII or '%', or the result is not a key
+// strictly inside (c, hi); the caller then uses between/forwardReflect.
 func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string, bool) {
 	m, why := extrapolateWhy(page, c, hi, bounded, jump)
 	return m, why == extOK
@@ -341,7 +369,7 @@ type extReason uint8
 const (
 	extOK       extReason = iota
 	extShort              // fewer than 2 keys on the page
-	extAlphabet           // a byte on the page or the cursor is not safe ASCII
+	extAlphabet           // a byte on the page or the cursor is not safe ASCII or '%'
 	extZeroSpan           // the page spans no distance in the alphabet's numbers
 	extPastTop            // the target is past the top of the representable keys
 	extHole               // the target has an end-of-string digit inside it: not a string
@@ -357,7 +385,7 @@ func extrapolateWhy(page []string, c, hi string, bounded bool, jump int64) (stri
 	for _, k := range append(page, c) {
 		for i := 0; i < len(k); i++ {
 			b := k[i]
-			if b >= 0x80 || !isSafe(int(b)) {
+			if b >= 0x80 || (!isSafe(int(b)) && b != '%') {
 				return "", extAlphabet
 			}
 			seen[b] = true
@@ -421,10 +449,16 @@ func extrapolateWhy(page []string, c, hi string, bounded bool, jump int64) (stri
 		if digits[i] == 0 {
 			return "", extHole
 		}
-		m = append(m, alphabet[digits[i]-1])
 		if digits[i] != cd {
+			// The first new character: synthesized, so never '%'.
+			b := alphabet[digits[i]-1]
+			if b == '%' {
+				b = '%' + 1
+			}
+			m = append(m, b)
 			break
 		}
+		m = append(m, alphabet[digits[i]-1]) // c's own byte, copied
 	}
 	key := string(m)
 	if key <= c || len(key) > maxKeyLen || (bounded && key >= hi) {

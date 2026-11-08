@@ -13,7 +13,7 @@ type Admission struct {
 	// the worker count (Limiter).
 	Limiter bool
 	// SlowStart: with Limiter, the limit starts at 4 and doubles per second
-	// until the worker count or the first throttle or timeout
+	// until the worker count or the first cut or timeout
 	// (NewSlowStartLimiter).
 	SlowStart bool
 	// RequestRate caps attempts per second (Rate); 0: no cap.

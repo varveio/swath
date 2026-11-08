@@ -39,7 +39,7 @@ func TestBearerToken(t *testing.T) {
 	t.Cleanup(srv.Close)
 	secret := "printf tok-SECRET"
 	dir := filepath.Join(t.TempDir(), "ds")
-	args := []string{"s3://bkt", "--endpoint-url", srv.URL, "--bearer-token-command", secret, "-o", dir, "--part-size", "4KiB", "--part-interval", "0", "--workers", "2"}
+	args := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", secret, "-o", dir, "--part-size", "4KiB", "--part-interval", "0", "--workers", "2"}
 	crashRun(t, args, 2)
 	mu.Lock()
 	for a := range auths {
@@ -68,15 +68,15 @@ func TestBearerToken(t *testing.T) {
 		t.Fatalf("report: %s", raw)
 	}
 	// A failing command: no request goes out, the run fails closed.
-	bad := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "echo nope >&2; exit 4", "--count-only", "--report", report}
-	err = run(context.Background(), bad, io.Discard, false)
+	bad := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "echo nope >&2; exit 4", "--report", report}
+	err = runCount(context.Background(), bad, io.Discard, false)
 	if exitCode(t, err) != exitFatal || !strings.Contains(err.Error(), "exited 4: nope") {
 		t.Fatalf("failing command: %v", err)
 	}
 	if raw, _ := os.ReadFile(report); !bytes.Contains(raw, []byte(`"cause": "auth"`)) {
 		t.Fatalf("failing command report: %s", raw)
 	}
-	if err := run(context.Background(), []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "x", "--anonymous", "--count-only"}, io.Discard, false); exitCode(t, err) != exitUsage {
+	if err := runCount(context.Background(), []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "x", "--anonymous"}, io.Discard, false); exitCode(t, err) != exitUsage {
 		t.Fatalf("--anonymous with a token: %v", err)
 	}
 }

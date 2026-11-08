@@ -816,19 +816,21 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 }
 
 // verifyOption makes the router check the output's identity before it
-// creates each part file.
-func (jr *runJournal) verifyOption(o *parquetout.Options) {
-	if jr != nil && jr.lock != nil {
-		o.Verify = jr.lock.Verify
-		// Opened here, before any encoder runs (they share it).
-		r, err := jr.rooted()
-		o.Open = func(path string) (*os.File, error) {
-			if err != nil {
-				return nil, err
-			}
-			return r.OpenFile(jr.rel(path), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-		}
+// creates each part file. The output root is opened here, before any
+// encoder runs (they share it); a failure is the run's setup error.
+func (jr *runJournal) verifyOption(o *parquetout.Options) error {
+	if jr == nil || jr.lock == nil {
+		return nil
 	}
+	r, err := jr.rooted()
+	if err != nil {
+		return err
+	}
+	o.Verify = jr.lock.Verify
+	o.Open = func(path string) (*os.File, error) {
+		return r.OpenFile(jr.rel(path), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	}
+	return nil
 }
 
 // publish is commit-before-emit at part granularity: the record (the part
@@ -963,3 +965,12 @@ func (jr *runJournal) after() *string {
 // journaled reports whether the run keeps a journal (and so leaves its
 // temporary parts for -resume to reconcile after a failure).
 func (jr *runJournal) journaled() bool { return jr != nil && jr.j != nil }
+
+// ackedRows is the rows in parts the journal has acknowledged so far,
+// retained ones included (0 before the first, or without a journal).
+func (jr *runJournal) ackedRows() int64 {
+	if !jr.journaled() {
+		return 0
+	}
+	return jr.acked.rows.Load()
+}

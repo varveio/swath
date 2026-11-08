@@ -29,6 +29,7 @@ type Sink[P any] struct {
 	// the string fields, in the API's order around Size
 	etag, ckAlgo, ckType, class, ownerName, ownerID func(*P) (string, bool)
 	line                                            []byte
+	pipe                                            *pipeline[P] // parallel formatters (Config.Formatters > 1), else nil
 }
 
 // NewSink binds o to schema s; a TSV output gets its header line here, as
@@ -65,6 +66,10 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 			return nil, err
 		}
 	}
+	if o.cfg.Formatters > 1 {
+		k.pipe = startPipeline(k, s)
+		o.pipe = k.pipe
+	}
 	return k, nil
 }
 
@@ -77,9 +82,15 @@ func (k *Sink[P]) header(h []byte, f func(*P) (string, bool), name string) []byt
 
 // Write implements order.Sink.
 func (k *Sink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	t := time.Now()
+	defer func() { k.o.sink += time.Since(t) }()
+	if k.pipe != nil {
+		return k.pipe.send(ctx, segs)
+	}
 	for _, seg := range segs {
 		for i := range seg {
-			if _, err := k.o.bw.Write(k.row(&seg[i])); err != nil {
+			k.line = k.appendRow(k.line[:0], &seg[i])
+			if _, err := k.o.bw.Write(k.line); err != nil {
 				return err
 			}
 		}
@@ -88,7 +99,9 @@ func (k *Sink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	return k.o.endBatch()
 }
 
-func (k *Sink[P]) row(r *schema.Row[P]) []byte {
+// appendRow appends r's line to b. It reads only what NewSink bound, so
+// formatters call it at once.
+func (k *Sink[P]) appendRow(b []byte, r *schema.Row[P]) []byte {
 	p := &r.Data
 	size, _ := k.size(p)
 	mt, hasMt := k.mtime(p)
@@ -96,7 +109,6 @@ func (k *Sink[P]) row(r *schema.Row[P]) []byte {
 	if hasETag && k.quoteETag {
 		etag = `"` + etag + `"`
 	}
-	b := k.line[:0]
 	switch k.o.cfg.Format {
 	case TSV:
 		b = appendEscaped(b, r.Key, false)
@@ -168,9 +180,7 @@ func (k *Sink[P]) row(r *schema.Row[P]) []byte {
 		}
 		b = append(b, '}')
 	}
-	b = append(b, '\n')
-	k.line = b
-	return b
+	return append(b, '\n')
 }
 
 // tsv appends a tab and v when the schema has column f.

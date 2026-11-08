@@ -21,12 +21,12 @@ func TestNegativeDurationsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{src, "--count-only", "--max-duration=-1s"},
-		{src, "--count-only", "--stall-timeout=-1s"},
-		{src, "--count-only", "--progress-interval=-1s"},
-		{src, "--count-only", "--part-interval=-1s"},
-		{"s3://bucket", "--count-only", "--request-timeout=-1s"},
-		{"gs://bucket", "--count-only", "--gcs-request-timeout=-1s"},
+		{src, "--max-duration=-1s"},
+		{src, "--stall-timeout=-1s"},
+		{src, "--progress-interval=-1s"},
+		{src, "--part-interval=-1s"},
+		{"s3://bucket", "--request-timeout=-1s"},
+		{"gs://bucket", "--gcs-request-timeout=-1s"},
 	} {
 		var buf bytes.Buffer
 		err := run(context.Background(), args, &buf, false)
@@ -35,7 +35,7 @@ func TestNegativeDurationsRefused(t *testing.T) {
 		}
 	}
 	var buf bytes.Buffer
-	if err := run(context.Background(), []string{src, "--count-only", "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf, false); err != nil {
 		t.Fatalf("zero durations: %v", err)
 	}
 }
@@ -49,14 +49,14 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		args []string
 		flag string
 	}{
-		{[]string{"gs://bucket", "--count-only", "--anonymous"}, "--anonymous"},
-		{[]string{"gs://bucket", "--count-only", "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
-		{[]string{"gs://bucket", "--count-only", "--request-timeout", "5s"}, "--request-timeout"},
-		{[]string{"s3://bucket", "--count-only", "--gcs-endpoint", "http://127.0.0.1:1"}, "--gcs-endpoint"},
-		{[]string{"s3://bucket", "--count-only", "--gcs-anonymous"}, "--gcs-anonymous"},
-		{[]string{src, "--count-only", "--anonymous"}, "--anonymous"},
-		{[]string{src, "--count-only", "--region", "eu-west-1"}, "--region"},
-		{[]string{src, "--count-only", "--request-rate", "10"}, "--request-rate"},
+		{[]string{"gs://bucket", "--anonymous"}, "--anonymous"},
+		{[]string{"gs://bucket", "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
+		{[]string{"gs://bucket", "--request-timeout", "5s"}, "--request-timeout"},
+		{[]string{"s3://bucket", "--gcs-endpoint", "http://127.0.0.1:1"}, "--gcs-endpoint"},
+		{[]string{"s3://bucket", "--gcs-anonymous"}, "--gcs-anonymous"},
+		{[]string{src, "--anonymous"}, "--anonymous"},
+		{[]string{src, "--region", "eu-west-1"}, "--region"},
+		{[]string{src, "--request-rate", "10"}, "--request-rate"},
 	} {
 		var buf bytes.Buffer
 		err := run(context.Background(), tc.args, &buf, false)
@@ -76,7 +76,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		t.Error("--workers, a command flag, has a provider owner")
 	}
 	var buf bytes.Buffer
-	if err := run(context.Background(), []string{src, "--count-only", "--no-stats", "--workers", "2"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-stats", "--workers", "2"}, &buf, false); err != nil {
 		t.Fatalf("a command flag with a local root: %v", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestLocalTextRefusedUpFront(t *testing.T) {
 	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", filepath.Join(t.TempDir(), "rows.tsv")}} {
 		var buf bytes.Buffer
 		err := run(context.Background(), args, &buf, false)
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset) or --count-only") {
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath count") {
 			t.Errorf("%v: exit %d (%v)", args, exitOf(err), err)
 		}
 		if buf.Len() != 0 {
