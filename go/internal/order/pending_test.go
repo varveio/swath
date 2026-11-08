@@ -6,7 +6,8 @@ package order
 import (
 	"context"
 	"errors"
-	"runtime"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,14 +15,49 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
+// pendingFailure emits firstRows rows, then three more, then fails with
+// failure (or succeeds when it is nil). Its rows must reach send on the
+// emitter's own goroutine, so that a failure returned after them leaves
+// them validated and batched but never flushed: only a range the drainer
+// expands directly does that. When the worker claims the root instead, the
+// rows it emitted would be drained and then flushed by the drainer's wait
+// on the frontier, so the root hands them to a child (1), which the
+// drainer expands directly: the child stays in the root's pending list
+// until the root finishes, so no worker can claim it.
 type pendingFailure struct {
-	g         *Gauges
 	failure   error
 	firstRows int
+	frontier  <-chan struct{} // closed at the drainer's first frontier wait
+	childDone chan struct{}   // closed when the child's Expand returns
 }
 
 func (p pendingFailure) Root() int { return 0 }
-func (p pendingFailure) Expand(ctx context.Context, _ int, e source.Emitter[int, tp]) error {
+func (p pendingFailure) Expand(ctx context.Context, r int, e source.Emitter[int, tp]) error {
+	direct := e.(*emitter[int, tp]).direct
+	if r == 0 && !direct {
+		// The drainer waits on the frontier with the root on its path, so
+		// the child publishes at once.
+		select {
+		case <-p.frontier:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if err := e.Child(1); err != nil {
+			return err
+		}
+		select {
+		case <-p.childDone:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if r == 1 {
+		defer close(p.childDone)
+	}
+	if !direct {
+		return fmt.Errorf("range %d expanded by a worker, want the drainer", r)
+	}
 	if p.firstRows > 0 {
 		rows := make([]schema.Row[tp], p.firstRows)
 		for i := range rows {
@@ -31,17 +67,10 @@ func (p pendingFailure) Expand(ctx context.Context, _ int, e source.Emitter[int,
 			return err
 		}
 	}
+	// Direct: send has validated these before Rows returns; fewer than
+	// batchRows of them, they are not flushed.
 	if err := e.Rows([]schema.Row[tp]{{Key: "a"}, {Key: "a"}, {Key: "b"}}); err != nil {
 		return err
-	}
-	// Wait until send has validated the batch but has not flushed it.
-	for p.g.Snapshot().AheadRows != 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			runtime.Gosched()
-		}
 	}
 	return p.failure
 }
@@ -59,11 +88,19 @@ func TestDistinctCountsOnlyHandedRows(t *testing.T) {
 		{"success-across-flush", batchRows, nil, batchRows + 3, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g := &Gauges{}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			frontier := make(chan struct{})
+			var once sync.Once
+			hookWait = func(site string) {
+				if site == waitFrontier {
+					once.Do(func() { close(frontier) })
+				}
+			}
+			t.Cleanup(func() { hookWait = nil })
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			sink := &collect{}
-			st, err := Run(ctx, pendingFailure{g, tc.failure, tc.firstRows}, sink, &testSchema, Options{Workers: 1, Budget: 1 << 20, Groups: true, Gauges: g})
+			p := pendingFailure{failure: tc.failure, firstRows: tc.firstRows, frontier: frontier, childDone: make(chan struct{})}
+			st, err := Run(ctx, p, sink, &testSchema, Options{Workers: 1, Budget: 1 << 20, Groups: true})
 			if !errors.Is(err, tc.failure) {
 				t.Fatalf("error=%v", err)
 			}
