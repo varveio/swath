@@ -74,7 +74,7 @@ of the `keyrange` laws. CI never passes `-short`.
 
 `ci.yml` `changes` diffs the pull request's base (or the push's previous commit) against `HEAD`:
 
-- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `Dockerfile.replay-go` or its ignore file,
+- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.replay-go` or its ignore file,
   `scripts/ci/smoke-replay-container.sh` or `scripts/ci/go-race-shards.sh`.
 - **Java change:** any path outside `go/` and `Dockerfile.replay-go*`, so a documentation or script change
   runs the Java tiers.
@@ -98,7 +98,11 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
-The DuckDB downloads (`integration-tests`, the dispatch-only container smoke) retry five times, and the
+Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
+version `go.mod` names, with the module and build caches restored from the job's newest cache, keyed per job
+(and race shard), runner OS and architecture, `go.sum` and commit. Only a push to `main` saves, under its
+commit's key, so parallel jobs never overwrite one another's caches with partial ones and a pull request
+restores `main`'s newest without saving. The DuckDB downloads (`integration-tests`, the dispatch-only container smoke) retry five times, and the
 SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on

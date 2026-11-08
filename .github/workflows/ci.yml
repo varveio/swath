@@ -65,7 +65,7 @@ jobs:
             fi
             # grep reads every line rather than exiting at the first match while git still writes
             # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -394,10 +394,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-lint
 
       - name: gofmt
         if: needs.changes.outputs.go == 'true'
@@ -450,10 +449,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-race-${{ matrix.shard }}
 
       - name: go test -race (shard ${{ matrix.shard }})
         if: needs.changes.outputs.go == 'true'
@@ -504,10 +502,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-nonrace
 
       # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
@@ -545,10 +542,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-build
 
       - name: Static cross-builds (CGO_ENABLED=0)
         if: needs.changes.outputs.go == 'true'
@@ -649,10 +645,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-xos
 
       - name: go vet
         if: needs.changes.outputs.go == 'true'
@@ -696,7 +691,7 @@ jobs:
             # first match while git still writes (git's SIGPIPE under pipefail would turn a
             # match into go=false).
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if grep -E '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
+            if grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -705,10 +700,9 @@ jobs:
 
       - name: Set up Go (version from go/go.mod)
         if: steps.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-fixtures
 
       - name: Set up JDK 25
         if: steps.changes.outputs.go == 'true'

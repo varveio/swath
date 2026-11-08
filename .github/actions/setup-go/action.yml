@@ -1,0 +1,54 @@
+name: Set up Go with a per-job build cache
+description: >
+  Go at the version go/go.mod names, with the module and build caches restored from this job's
+  newest cache and saved under this commit's key on pushes to main. The key is per job (the
+  `key` input) and per SHA, so parallel jobs never overwrite one another's caches with partial
+  ones and each main commit saves a whole cache; a pull request restores main's newest and saves
+  nothing. setup-go's own cache (one key per go.sum for every job) is off.
+
+inputs:
+  key:
+    description: The job's cache name (its job id, and its matrix value where it has one)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go (version from go/go.mod)
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      with:
+        go-version-file: go/go.mod
+        cache: false
+
+    - name: Locate the Go caches
+      id: paths
+      shell: bash
+      run: |
+        echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+        echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+    # On a push to main: restore, and save this commit's cache when the job ends (the action's
+    # post step). Elsewhere: restore only.
+    - name: Restore the Go caches (saved at the end of the job)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      with:
+        path: |
+          ${{ steps.paths.outputs.gocache }}
+          ${{ steps.paths.outputs.gomodcache }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-
+          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+
+    - name: Restore the Go caches
+      if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      with:
+        path: |
+          ${{ steps.paths.outputs.gocache }}
+          ${{ steps.paths.outputs.gomodcache }}
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-
+          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
