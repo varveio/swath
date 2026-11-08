@@ -164,20 +164,20 @@ from the provider's schema before the source opens (`parquetout.EncoderBytes`, `
 one writer (its row group, a page buffer per column, and its wide values, the key and any column with
 `schema.Spec.MaxBytes` such as a local path's link target, priced at their longest) and one state of the router's
 codec, which every writer shares and which makes states only as encoders are admitted (a zstd state that has
-compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 31.5 MiB for S3, 32.5 for
-GCS and 61 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
+compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 32.5 MiB for S3, 34.5 for
+GCS and 69 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
 writers' live heap, 24 pages each at the longest values, within four encoders' price, before admission raises
 the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Before, each writer
 had a codec of its own with a state per column goroutine, against a constant 24 MiB (98.5 MiB measured for one
 S3 writer at four encoders). Descriptors bound the count
 too: as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker and
-a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 4 for S3). An explicit `--encoders` above that is honoured with a warning.
+a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 3 for S3). An explicit `--encoders` above that is honoured with a warning.
 
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
 1,000-key S3 response and its arena) is added to the writer allowance, still at most `GOMAXPROCS` and the
-descriptors. 128 MiB at 64 workers carries 6 for S3, at 256 workers 12. The router holds the extra slots from the
+descriptors. 128 MiB at 64 workers carries 5 for S3, at 256 workers 11. The router holds the extra slots from the
 start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
 goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
 An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
@@ -538,7 +538,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 
 ## Durable spill
 
-A journaled run (journal version 8) keeps the spill files that certify their rows: a resume replays them
+A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 

@@ -444,7 +444,7 @@ repetition. *Cold* is the default (delimiter seed); *seeded* lists the same keys
 cold run's dataset (one part, its key page index read: 1,954 cuts merged into 256 tiles); *grown* replaces keys
 800,001–850,000 by ten keys each (2,450,000 keys, one segment 10×) and lists it cold and seeded from the stale
 dataset. Rows equal keys in every run; the seeded datasets are byte-identical to the cold ones (same parts, same
-MD5s).
+digests).
 
 | Arm | Wall, s (3 runs) | Requests / 1k keys | `split.max_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
 |---|---|---|---|---|---|---|---|
@@ -711,9 +711,11 @@ That run used the build of the merged port, before the pivot policy and seed of 
 
 ## Recovery and part count
 
-**Verification read rate** (resume reads every retained part and checks its MD5): a 16 GiB, 4-vCPU VM, virtio
-disk, 1 GiB in 16 files of 64 MiB: 247, 306 and 376 MiB/s with the page cache dropped before each of three
-repetitions, 511 MiB/s warm, where MD5 on one core is the limit. 10,000 retained 64 MiB parts take roughly
+**Verification read rate** (resume reads every retained part and checks its digest; MD5 when measured,
+SHA-256 since journal version 9): a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB: 247, 306 and
+376 MiB/s with the page cache dropped before each of three repetitions, 511 MiB/s warm, where MD5 on one core
+was the limit. SHA-256 on one core of a Xeon Platinum 8581C (SHA extensions, 2026-11-08): 1,504 MiB/s, against
+692 for MD5; a CPU without the SHA extensions hashes SHA-256 slower than MD5. Not remeasured end to end. 10,000 retained 64 MiB parts take roughly
 30–45 minutes. Reproduce: `SWATH_VERIFY_DIR=DIR go test -run TestVerifyThroughput -v ./internal/listing`.
 
 **Part-count growth** (synthetic GCS fake, 8 workers, one-row parts, one run each):
@@ -1192,6 +1194,24 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
 - Cold-cache medians of the local walker; `readlink` cost (80 symlinks in `realistic`).
+
+## The seekparquet module's part writer, 2026-11-08
+
+The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`); the bytes are
+unchanged (`TestFooterOnlyChange`). Writer alone, 300,000 rows of `parquetout`'s test schema, one part, best of
+five, Xeon Platinum 8581C:
+
+| | swath writer (main 13c8e4c8) | module writer |
+|---|---|---|
+| one column goroutine | 1,277 k rows/s | 803 k rows/s (−37 %) |
+| four column goroutines | 2,166 k rows/s | 914 k rows/s (−58 %) |
+
+Shape suite, `nightly.yml` `go-shapes` dispatched on `main` (run 42525290072) and the branch (42525288025)
+together, 4-CPU runners: the nine `pq.*` arms 28.97 s on `main`, 36.00 s on the branch (+24.3 %; per arm +7.9 %
+for `pq.maxlen` to +47.3 % for `pq.highbytes`), every dataset identical to its shape; the 79 listing-only arms
+637.6 s and 643.4 s (+0.9 %). The cost is the module's row intake (a check and a copy of every byte value per
+row, on the caller's goroutine) and the copied page's admission price (32.5 MiB an S3 encoder instead of 31.5:
+3 encoders at the default 128 MiB instead of 4). One core hashes SHA-256 at 1,504 MiB/s and MD5 at 692.
 
 ## SeekParquet conformance
 

@@ -494,8 +494,11 @@ its checkpoint/publication state.
   is the commit (no `_SUCCESS`, `symlink.txt` or `.swath-state.json`),
   holding SeekParquet's members (format, version, `schema_id`, the key
   declaration, the parts with exact base64 key bounds) and swath's source,
-  scope, coverage and part MD5s under `extensions.swath`; every part's
-  footer carries the `seekparquet.*` stamps. Its guarantees are in
+  scope and coverage under `extensions.swath`, each part's SHA-256 in the
+  standard `parts[].sha256`; every part's footer carries the
+  `seekparquet.*` stamps. The format's mechanisms (manifest serialisation,
+  stamps, the part writer, footer inspection) are the
+  [seekparquet Go module](https://github.com/varveio/seekparquet)'s. Its guarantees are in
   [go/docs/internals/contracts.md](../../go/docs/internals/contracts.md),
   what changed for readers in [go/docs/upgrade.md](../../go/docs/upgrade.md).
 - parquet-mr `_metadata` summary files are deprecated/off-by-default — swath

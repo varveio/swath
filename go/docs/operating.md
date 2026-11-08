@@ -83,7 +83,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
-| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against its working set (one writer and one shared codec state, at the schema's longest keys: 31.5 MiB for S3, 32.5 for GCS's ten columns, 61 MiB for a local path) from an allowance equal to `--row-budget`, and the descriptor limit; the default 128 MiB admits 4 for S3 and 3 for GCS. Once listing has ended the Parquet allowance grows by 1 MiB per worker (no page is in flight any more): at 64 workers 6 for S3 and 5 for GCS, at 256 12 and 11 (report: `resources.drain.encoders_after_listing`); a given `--encoders` is never raised. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
+| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against its working set (one writer and one shared codec state, at the schema's longest keys: 32.5 MiB for S3, 34.5 for GCS's ten columns, 69 MiB for a local path) from an allowance equal to `--row-budget`, and the descriptor limit; the default 128 MiB admits 3 for S3 and for GCS. Once listing has ended the Parquet allowance grows by 1 MiB per worker (no page is in flight any more): at 64 workers 5 for S3 and GCS, at 256 11 for both (report: `resources.drain.encoders_after_listing`); a given `--encoders` is never raised. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath count` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
@@ -285,7 +285,7 @@ value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the di
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
-The resume keeps every published part, verifies each against its journal record (size and MD5: reads every
+The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
 roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
@@ -300,8 +300,8 @@ deleted from the bucket since stays in the dataset, one added inside a certified
 metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
 during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
 that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
-`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8
-(a run interrupted under an older build resumes as before, relisting), spill on, `--spill-budget` of at least
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8 or
+later (this build writes and resumes version 9 only), spill on, `--spill-budget` of at least
 16 MiB, and the range engine (S3 and GCS; not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the

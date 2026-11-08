@@ -32,7 +32,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | part closed and synced, not claimed (`part-closed`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
 | part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`), and writes it with the claimed part's columns and `created_by`, so a build that adds an optional column reproduces it (`TestClaimedPartKeepsItsColumns`, also for a torn record). A reproduced part that reaches the size target at that boundary was closed by size, and when it is the first such part it calibrates the size ratio as the original did, before its successor is routed (`TestCalibratingClaimRecoversRepeatedly`, `journal-append#2` in both crash matrices) |
 | record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its claimed part is set aside and must be reproduced exactly (below) |
-| record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
+| record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, SHA-256), then renamed into `data/` |
 | record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
 | record durable, rename absent, the whole frame lost since (the journal ends cleanly at the frame before) | reads as an append that never began: the claimed part is set aside the same way, reproduced or refused (`TestAcknowledgedWholeLastFrameLossPreservesPart`) |
 | rename done, directory sync absent (`renamed-unsynced`) | the same check: the part is either at its final name or still in `.swath/parts/`; recovery syncs `data/` before it removes the temporary parts |
@@ -116,7 +116,7 @@ goroutine, request or acknowledgement channel.
    part being recorded is ever claimed, so recovery can tell it from parts that closed early and were waiting
    for their turn, which no record can name.
 3. One journal record is appended and fsynced: the ordinal, the part's `dataset.PartInfo` (rows, bytes,
-   MD5, min and max key: the same type the manifest lists) and the writer state (the router's frozen part
+   SHA-256, min and max key: the same type the manifest lists) and the writer state (the router's frozen part
    limit, the total rows so far). The journal is about committed output only: no split history, no cursor.
 4. The part is renamed to `data/part-NNNNN.parquet` and the directory is fsynced.
 
@@ -124,6 +124,16 @@ This is commit-before-emit (I1) at part granularity: no row is published before 
 Rows may sit in memory, or in an unpublished `.tmp` part, beyond the last record; a crash loses them and the
 resume lists them again. At the end, `manifest.json` is installed by an atomic rename and a directory sync:
 that is the commit. The run reports follow it.
+
+The part file itself is written by the seekparquet module's part writer (`write.NewPart`; `Seal` writes the
+footer, syncs and closes the file, and returns the part's rows, size, exact bounds and the SHA-256 of every
+byte written, footer included, computed as the bytes went out). Its writes and sync go through swath's
+`faults` (the disk-fault matrix). The claim, the record, the rename into `data/` and the manifest's
+installation stay swath's (`listing.runJournal.publish`, `dataset.PublishPartWith`/`PublishPartIn`,
+`dataset.Publish` through `dataset.Replace`), not the module's `local.PublishPart` and `local.Commit`: those
+take no fault hooks, so the crash matrix's `renamed-unsynced` point and the disk-fault matrix's manifest write
+and sync could not be reached through them; and at the pinned version `PublishPart` renames over an existing
+final name rather than refusing it. The manifest's bytes are the module's (`seekparquet.MarshalManifest`).
 
 Every JSON file swath replaces goes through one primitive, `dataset.Replace`, with a temporary file of its
 own beside the target (`.NAME.*.tmp`, so concurrent writers never share one; an overwrite removes leftovers)
@@ -222,14 +232,16 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    removes and syncs parts through the output root (`os.Root`), as part creation does; an unrecorded entry of
    `data/` that is a link is removed itself, never what it names.
    The journal is synced first (its accepted frames are acted on). Every retained part
-   must match its record's size and MD5 (`ErrPartAltered` otherwise). A part whose record is durable but whose
+   must match its record's size and SHA-256 (`ErrPartAltered` otherwise). A part whose record is durable but whose
    rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
    Verification reads every retained part in full, so it costs O(dataset bytes): measured once (2026-11-06,
    a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB, `TestVerifyThroughput`): 247, 306 and
    376 MiB/s with the page cache dropped before each of three reps (the host's own cache likely warms), 511
-   MiB/s warm, where MD5 on one core is the limit. At the default part size, 10,000 retained parts (640 GB)
-   take roughly 30 to 45 minutes. The read stops when the run is stopped (a signal, `--max-duration`) and
+   MiB/s warm, where MD5 on one core was the limit (the digest was MD5 then). SHA-256 replaced it in journal
+   version 9: on a CPU with the SHA extensions it hashes about twice as fast as MD5 (1,504 against 692 MiB/s
+   on one core, Xeon Platinum 8581C, 2026-11-08), so the cold rates above stay disk-bound; without them it is
+   slower than MD5. At the default part size, 10,000 retained parts (640 GB) take roughly 30 to 45 minutes. The read stops when the run is stopped (a signal, `--max-duration`) and
    before recovery renames or removes anything, and its bytes count as progress (`progress.json`
    `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
    (`TestRecoveryVerificationIsCancellableAndReported`).
@@ -294,7 +306,7 @@ under the split mutex.
 ## The journal
 
 `DIR/.swath/journal` is append-only. Each frame is a 4-byte little-endian length, a CRC-32C (Castagnoli) over the length and
-the payload, and the payload (JSON); journal version 8 (version 3 made the identity provider-neutral, version 4 writes part
+the payload, and the payload (JSON); journal version 9 (version 3 made the identity provider-neutral, version 4 writes part
 bounds as base64, version 5 drops the split checkpoints and shares `PartInfo` with the manifest, version 6
 refuses version 5 journals: a run with `--max-keys` could write one, and neither its identity nor its records
 hold the cap or the S3 route, so through the library it could match an uncapped resume and a retained final
@@ -303,13 +315,13 @@ last record at the unclaimed temporary name until the rename into `data/`, and v
 only the claimed name, so it would remove that acknowledged part as unrecorded when the last record is torn or
 lost and could then commit a changed replacement; a version 6 journal is refused before recovery reads,
 moves or removes any part or touches the journal; version 8 adds the run UUID to the header, made when the
-run starts and kept across every resume, and keeps the durable spill across a resume: its part records and
-claimed-part handling are version 7's). A version 7 journal is still read and resumes as version 7: it keeps
-its version, writes nothing of version 8, and resumes with durable spill off (the disposable spill is
-relisted, as before); a version 7 build refuses a version 8 journal.
+run starts and kept across every resume, and keeps the durable spill across a resume; version 9 records each
+part's SHA-256 where earlier versions recorded its MD5, so recovery, which compares a retained part with its
+record by that digest, refuses versions 7 and 8 before it touches anything, as an earlier build refuses
+version 9).
 An older or newer journal is refused with a `journal.VersionError` (exit 1, class `fatal`, not resumable by this build) and the directory's parts and journal
 are left as they are: an interrupted run of an older build is finished with that build or started over with
-`--overwrite`. The first frame is the header (tool, format, identity, creation time, and from version 8 the run UUID).
+`--overwrite`. The first frame is the header (tool, format, identity, creation time, and the run UUID).
 Every later frame is a part record, with the ordinals dense from 0. `Append` writes and returns after
 `fsync`; its one caller is the ordered committer. A record must follow the one before it
 (`journal.Follows`: the next ordinal, no record after the final one, a nonempty part strictly after the last
@@ -336,7 +348,7 @@ record lost whole, the journal ending exactly at the frame before it, is indisti
 never began. So neither a torn tail nor a clean end is taken as proof that nothing depends on the next
 ordinal: whenever that ordinal's part is claimed (synced and renamed `.claimed` in `.swath/parts/` before its
 append began), it is moved to `.swath/suspect/` before the temporary parts are removed, and the resume must
-reproduce it byte for byte (size and MD5) before it records that ordinal again. The claimed part carries its
+reproduce it byte for byte (size and SHA-256) before it records that ordinal again. The claimed part carries its
 boundary: its footer's row count, synced with it before the append, and the resume closes the reproduced part
 after exactly that many rows (`parquetout.Options.Cut`), neither earlier by the part interval nor later by
 size. Without it, a part first closed by the interval would take more rows in a faster resume, or one with
@@ -391,6 +403,8 @@ tail as JSON lines.
   log to a consistent state that need not include the latest creations and renames, so an acknowledged
   part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
+  The seekparquet module's own publication refuses the same way (`local.ErrDirSyncUnsupported` unless
+  `Ops.AllowUnsynced`); swath does not publish through it (above).
   What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. CI's
   `go-xos` job runs the suite on Windows (`TestWindowsLock` included); the journaled-run tests skip there
   (`datasettest.RequireJournal`). `Replace` retries its rename there for up to two seconds while another
