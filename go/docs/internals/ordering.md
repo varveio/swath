@@ -112,12 +112,15 @@ encode fresh strings). GCS pages are decoded by `encoding/json`, which allocates
 retained GCS key pins only itself, and the engine's copy covers it anyway. The order stage itself keeps only
 rows (charged as rows, `Schema.RowBytes`) and the drainer's last key, which aliases the page of a row it has
 already handed on. `TestRetainedBoundsDoNotPinPages` (listing; real XML through the production parser, a
-held-up first range) bounds the peak live heap by the budget and the pages in flight and fails on the leak.
+held-up first range) bounds the peak live heap by the budget and the pages in flight and fails on the leak. It
+holds the smallest peak of three runs to that bound: the sampled live heap reads high for one sample when a
+collection lands at a burst, while a pinned page shows in every run.
 
 **What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
 worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
-approximates), compression scratch, open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
+approximates), compression scratch (a pooled spill encoder per concurrent writer, about 1.5 MiB each with its 1 MiB
+window), open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
 largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
 at `parquetout.EncoderBytes`, 24 MiB each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
