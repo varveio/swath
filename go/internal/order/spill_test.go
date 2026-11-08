@@ -28,6 +28,7 @@ import (
 // frontier) and many fast siblings after it, with long keys.
 type frontier struct {
 	slowPages, siblings, sibPages, rows int
+	long                                int // every long-th range's keys are about 1,000 bytes (0: none)
 	slowDelay, sibDelay                 time.Duration
 	// hold, if set, holds the slow range after its first page until every
 	// sibling has emitted all its rows (left counts them down).
@@ -40,6 +41,9 @@ type fr struct{ i int } // -1: root, 0: the slow range, 1..: siblings
 func (f *frontier) Root() fr { return fr{-1} }
 
 func (f *frontier) key(i, page, j int) string {
+	if f.long > 0 && i%f.long == 0 {
+		return fmt.Sprintf("r%04d/%01000d-%04d-%04d", i, 0, page, j)
+	}
 	return fmt.Sprintf("r%04d/%0200d-%04d-%04d", i, 0, page, j) // about 220-byte keys
 }
 

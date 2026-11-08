@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -53,6 +54,10 @@ type Factory struct {
 	// so its rows cannot be written as text; the command refuses a text run
 	// of it before opening it.
 	BinaryKeys bool
+	// EncoderBytes is the working set admitted per Parquet encoder of the
+	// provider's schema (parquetout.EncoderBytes), known before the source
+	// is opened; 0 prices it as parquetout.DefaultEncoderBytes.
+	EncoderBytes int64
 	// Classify, if set, names the class of a failure the provider caused
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.
@@ -138,7 +143,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		if err != nil {
 			return order.Stats{}, nil, err
 		}
-		sink, enc = r, r
+		sink, enc = segSink[P]{r, env.Ordered}, r
 	} else if env.Text != nil {
 		t, err := textout.NewSink(env.Text, b.s)
 		if err != nil {
@@ -146,7 +151,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		}
 		sink = t
 	}
-	if env.Ordered != nil {
+	if _, seg := sink.(segSink[P]); env.Ordered != nil && !seg { // segSink counts its own rows
 		sink = countSink[P]{sink, env.Ordered}
 	}
 	p := b.p
@@ -165,8 +170,65 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		st, err := order.Count(ctx, p, env.Ordered, env.Order)
 		return st, nil, err
 	}
-	st, err := order.Run(ctx, p, sink, b.s, env.Order)
+	opt := env.Order
+	if enc != nil {
+		// Once listing has ended, the encoders the router reserved for
+		// the drain are admitted (parquetout.Options.MaxEncoders).
+		prev := opt.ListingDone
+		opt.ListingDone = func() {
+			enc.Admit()
+			if prev != nil {
+				prev()
+			}
+		}
+	}
+	st, err := order.Run(ctx, p, sink, b.s, opt)
 	return st, enc, err
+}
+
+// segSink is the Parquet router as the order stage's sink: rows through
+// Write, and once listing is done the rest as parallel segments
+// (order.Segmenter), both counted in n when set (progress).
+type segSink[P any] struct {
+	r *parquetout.Router[P]
+	n *atomic.Int64
+}
+
+func (s segSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	s.count(segs)
+	return s.r.Write(ctx, segs)
+}
+
+func (s segSink[P]) count(segs [][]schema.Row[P]) {
+	if s.n != nil {
+		for _, seg := range segs {
+			s.n.Add(int64(len(seg)))
+		}
+	}
+}
+
+func (s segSink[P]) Plan() (dataset.SegmentPlan, bool) { return s.r.Plan() }
+
+func (s segSink[P]) BeginSegments() (dataset.SegmentPlan, bool) { return s.r.BeginSegments() }
+
+func (s segSink[P]) AbandonSegments() { s.r.AbandonSegments() }
+
+func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
+	seg, err := s.r.OpenSegment(ctx, continueOpen)
+	if err != nil {
+		return nil, err
+	}
+	return segPart[P]{seg, s}, nil
+}
+
+type segPart[P any] struct {
+	*parquetout.Segment[P]
+	s segSink[P]
+}
+
+func (p segPart[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	p.s.count(segs)
+	return p.Segment.Write(ctx, segs)
 }
 
 type countSink[P any] struct {

@@ -12,6 +12,8 @@ name: Nightly deep verification
 # The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
 # this workflow is the exhaustive/timing-realistic backstop.
 #
+# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64.
+#
 # ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
 # outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
 # wire that to wherever the owner actually watches (a follow-up, not yet done).
@@ -176,6 +178,53 @@ jobs:
         with:
           name: osv-image-reports
           path: build/reports/osv/*.json
+          if-no-files-found: ignore
+
+  # The Go race tests in one unsharded run on amd64. Per push, ci.yml races internal/listing and
+  # cmd/swath on arm64 only (go-race, scripts/ci/go-race-shards.sh): this is their amd64 race
+  # coverage, and a check that the shards' union still equals `go test -race ./...`. The -json
+  # stream is kept as an artifact for flakes and per-test times.
+  go-race-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      # -timeout is per package binary and leaves the job's limit room for the packages queued
+      # ahead of the last (the unsharded run took ~13 min), so a hang ends in a goroutine dump.
+      - name: go test -race ./... (unsharded, amd64)
+        run: |
+          set -euo pipefail
+          json="$RUNNER_TEMP/go-race-nightly.json"
+          set +e
+          go test -race -count=1 -timeout 40m -json ./... | tee "$json" |
+            jq --unbuffered -rj 'select(.Action == "output" and .Test == null) | .Output'
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::group::output of the failed tests"
+            jq -rjs '(map(select(.Action == "fail" and .Test != null) | [.Package, .Test]) | unique) as $failed
+              | .[] | select(.Action == "output" and .Test != null and ([.Package, .Test] as $k | $failed | index([$k])))
+              | .Output' "$json"
+            echo "::endgroup::"
+          fi
+          exit "$status"
+
+      - name: Upload the go test -json stream
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-race-nightly
+          path: ${{ runner.temp }}/go-race-nightly.json
           if-no-files-found: ignore
 
   # The Go port's shape suite at full scale (go/bench/shapes; go/docs/testing.md): every bucket

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
@@ -17,7 +18,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
 }
 
 // flagged is the GCS flag group's value: the GCS options and the range

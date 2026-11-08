@@ -152,6 +152,11 @@ func TestDelayedFrontierPlateaus(t *testing.T) {
 	if res.Spill.Rows == 0 {
 		t.Fatal("nothing spilled: the frontier was not delayed long enough")
 	}
+	if d := res.Drain; d == nil || d.ReadAhead == nil || sum.Timings.ListingDoneAt.IsZero() {
+		t.Fatalf("no drain account: %+v", d)
+	} else {
+		t.Logf("drain: tail %v, read-ahead %+v", time.Duration(d.TailNs), *d.ReadAhead)
+	}
 	if res.PeakNodes >= nodes*3/4 {
 		t.Fatalf("outstanding nodes peaked at %d of %d: no plateau", res.PeakNodes, nodes)
 	}
