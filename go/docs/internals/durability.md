@@ -351,6 +351,9 @@ by an earlier resume is never replaced by a later claimed part. The cost: a cras
 and the end of the append, followed by a source change inside that part, refuses rather than relists. On a static source it does, and the resume
 continues as if the append had never happened; when the source changed in that part's range, or no longer
 yields a part there, the resume refuses with `ErrAmbiguousTail` and keeps the part, at every later attempt too.
+A resume on a machine of the other encoder path (amd64 with AVX2 against any other) can refuse the same way on
+an unchanged source, when the part has dictionary pages the two paths encode differently
+([parquet-output.md](parquet-output.md#byte-identity)); resuming on a machine of the original path reproduces it.
 The operator decides: `--overwrite` starts over, and removing `.swath/suspect/` accepts the source as it is now.
 Everything else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming
 anything: a bad checksum with data after it; a whole last frame with a bad checksum whose last byte is not
