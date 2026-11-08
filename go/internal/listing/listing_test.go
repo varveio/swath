@@ -117,10 +117,12 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 // part is being written, fails with the cancellation and leaves no
 // scratch. The cancel point is established by construction: the encoder
 // cancels at its first batch (crash point "encoding", the part's temporary
-// file created), and the smallest row budget keeps the walk within a
-// budget of rows of that batch, so it cannot finish first. (A goroutine
-// polling for the temporary file every 50 µs raced the walk: on one core
-// the walk could finish before it looked.)
+// file created), and a part size of one row makes the router wait for
+// that encoder before it moves past the first cut, so the ordered walk
+// cannot finish before the cancellation is requested. The row budget only
+// bounds memory; spill stays on, so the source traversal itself is not
+// held back. (A goroutine polling for the temporary file every 50 µs raced
+// the walk: on one core the walk could finish before it looked.)
 func TestCancellationLeavesNothing(t *testing.T) {
 	src := t.TempDir()
 	for i := range 20000 {
