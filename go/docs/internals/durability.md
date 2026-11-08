@@ -63,8 +63,8 @@ damaged snapshot, with the truncation or the retirements' append lost where the 
 then resumes to the uninterrupted dataset. In the real process the same seal gating is
 `SWATH_TEST_SERIAL_SEALS`, a test hook beside `SWATH_TEST_KILL_AT`: each seal waits until the earlier seals'
 records were appended by ledger cycles of their own, so `TestSIGKILLDurableSpill` reaches its fourth-cycle
-arms by construction. Its recovery arms seed their damaged ledger from a run with its frontier held (no part
-published, K at ⊥) and killed at the sixth ledger sync, so certificates stay live above K for the recovery
+arms by construction. Its recovery arms seed their damaged ledger from a run whose first part's close is held
+(`SWATH_TEST_HANG_AT=part-closed:1`: no part published, K at ⊥) and killed at the sixth ledger sync, so certificates stay live above K for the recovery
 replay.
 
 The same schedule also runs, opt-in, against MinIO and against production key lists, through the real
