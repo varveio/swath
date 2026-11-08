@@ -36,6 +36,24 @@ applies the same rule per range (ranges are key-disjoint in group mode too, so t
 no part, split or resume boundary falls inside a key is the engine's and the router's work (providers.md, "Group
 mode"; parquet-output.md).
 
+**Repeated keys and durable spill.** A durable certificate `(cs, ce]` covers keys, and its bounds are fences.
+In group mode the engine declares a fence only at a complete key. A page that ends inside a hot key's group,
+leaving the group open, declares no page-end fence (`groups.fence_deferred`). A range's end fence comes after a key above its bound,
+and its split fence at a complete key. So no certificate bound cuts a version group: every version of `cs` lies
+before the capture, and every version of `ce` inside the certificate. K is a whole key too (no part ends inside
+a key), so recovery replay's rows above `max(cs, K)` drop or repeat no version. Replay accepts a key repeated
+within its group, and only in group mode. With versions a range's fresh data request starts at its key-marker
+(a continuation adds the version-id marker), which stands in for `start-after` in the reuse checks
+(`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing` `TestVersionsDurableSpill`).
+
+**Repeated keys and the drain tail (rule for a segmented tail).** A tail that cuts the rest of the stream into
+parallel part segments must cut where the router does. A segment boundary planned at a row count inside a
+group is moved forward to the next key change: the router defers its own cut there, so no part ends inside a
+key. With boundaries only at key changes, the seam check between segments stays strict (the first key of a
+segment is above the last of the one before). Inside a segment the per-row check accepts equality only in
+group mode, across one group's consecutive rows in provider order. `listing` `TestVersionsTailSeamsAtKeyChanges`
+documents the boundary case on the serial tail; a segmented tail must keep it passing.
+
 A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
 marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
 a prefix of the keyspace without a gap, the prefix a resume continues after. The context's stop callback

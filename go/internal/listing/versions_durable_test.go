@@ -249,3 +249,41 @@ func versionsK(t *testing.T, out string) string {
 	return k
 }
 
+// TestVersionsTailSeamsAtKeyChanges: the seam rule for the drain tail
+// (go/docs/internals/ordering.md, "Repeated keys"). Behind a slow frontier
+// the ranges ahead finish first and their rows are drained at the end, a
+// serial tail through the router; parts are cut every 5 rows, so most cut
+// points fall inside a hot key's 40 versions. Every cut must move to the
+// next key change: each part's last key is below the next part's first,
+// so no key spans two parts. A segmented drain tail must cut where the
+// router does: its planner moves each segment boundary to the next key
+// change, and its seam check then stays strict.
+func TestVersionsTailSeamsAtKeyChanges(t *testing.T) {
+	api := newHotVersions()
+	out := filepath.Join(t.TempDir(), "ds")
+	cfg := hotVersionsConfig(api, out, false)
+	cfg.Limits.Spill = SpillLimits{Off: true}
+	cfg.Limits.PartMaxRows = 5
+	cfg.Limits.RowBudget = 64 << 20 // the tail: every range ahead buffered, drained at the end
+	api.sealed.Store(8)             // no durable spill to wait for: the slow region alone holds the frontier back
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestOf(t, out)
+	if len(m.Parts) < 100 {
+		t.Fatalf("%d parts: the cuts are not exercised", len(m.Parts))
+	}
+	inside := 0
+	for i := 1; i < len(m.Parts); i++ {
+		a, b := string(m.Parts[i-1].MaxKey), string(m.Parts[i].MinKey)
+		if a >= b {
+			t.Fatalf("part %d ends at %q and part %d starts at %q: a key spans a seam", i-1, a, i, b)
+		}
+		if m.Parts[i-1].Rows > 5 {
+			inside++ // a cut deferred past a group
+		}
+	}
+	if inside == 0 {
+		t.Fatal("no cut was deferred to a key change: no group straddled a 5-row boundary")
+	}
+}
