@@ -76,6 +76,12 @@ type Options struct {
 	// previous row's, never one equal to After. Stats.DistinctKeys counts
 	// the keys.
 	Groups bool
+	// Durable, if set (with spill on, and a provider that declares fences:
+	// source.Fencing), is the attempt's durable spill: a spilled range with
+	// a free slot writes a durable file and seals its certificate, and the
+	// provider's replay ranges (source.Replaying) are its reused
+	// certificates, replayed by the drainer. Run never closes it.
+	Durable *Cache
 }
 
 // Stats describe a run.
@@ -116,6 +122,11 @@ type Stats struct {
 	// nothing on: from the drain's start to the first row, between two
 	// hand-ons, or from the last row to the drain's end.
 	FrontierStuck time.Duration
+	// ReplayedRows are the rows recovery replay handed on from reused
+	// certificates (in Received and Rows; never listed by the provider).
+	ReplayedRows int64
+	// Durable reports whether durable spill engaged for this run.
+	Durable bool
 }
 
 // Gauges are the order stage's live resource counts, read while it runs
@@ -241,6 +252,10 @@ type run[R, P any] struct {
 	stuck    time.Duration
 
 	received atomic.Int64 // rows the emitters received
+	replayed atomic.Int64 // of them, recovery replay's
+	// replay is the provider's replay ranges (source.Replaying), nil
+	// without durable spill.
+	replayFn func(r R) (int, bool)
 }
 
 // dispose releases the ranges that were queued but never expanded (a
@@ -465,6 +480,11 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	if err != nil {
 		cancel(err)
 	}
+	// The shutdown's first step: no slot or seal starts after it; the
+	// seals in flight finish before the workers are joined.
+	if o.sp != nil {
+		o.sp.cache.Stop()
+	}
 	wg.Wait()
 	if err == nil && ctx.Err() != nil {
 		// A worker failed (or the run was cancelled) after the drainer had
@@ -474,7 +494,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 	o.dispose()
 	st.Rows, st.MaxBuffered, st.FrontierWait, st.BudgetWait = o.rows, o.max, o.frontier, o.budget
 	st.DistinctKeys = o.distinct
-	st.Received = o.received.Load()
+	st.Received, st.ReplayedRows, st.Durable = o.received.Load(), o.replayed.Load(), o.sp != nil && o.sp.cache != nil
 	st.PeakNodes, st.PeakMarkers, st.PeakReaders = o.g.nodes.peak.Load(), o.g.markers.peak.Load(), o.g.readers.peak.Load()
 	st.PeakAhead, st.FrontierStuck = o.g.ahead.peak.Load(), o.stuck
 	if err == nil && st.Received != st.Rows {
@@ -533,6 +553,48 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		sp.g = o.g
 		o.sp = sp
 	}
+	stopWaker := func() {}
+	if c := opt.Durable; c != nil && o.sp != nil && fences(p) {
+		// Credit without the order stage's mutex: the cache's flusher lowers
+		// the live bytes and signals a one-slot channel; this waker calls
+		// wake. After Run returns the credit callback is detached.
+		o.sp.cache, o.sp.codecID = c, s.ID
+		if rp, ok := p.(source.Replaying[R]); ok {
+			o.replayFn = rp.Replay
+		}
+		o.sp.live.Add(c.RetainedBytes())
+		o.sp.track()
+		credit := make(chan struct{}, 1)
+		quit := make(chan struct{})
+		sp := o.sp
+		c.attach(func(n int64) {
+			sp.live.Add(-n)
+			sp.track()
+			sp.full.Store(false)
+			select {
+			case credit <- struct{}{}:
+			default:
+			}
+		})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case <-credit:
+					wake()
+				case <-quit:
+					return
+				}
+			}
+		}()
+		stopWaker = func() {
+			c.attach(nil)
+			close(quit)
+			<-done
+			event("waker-stopped")
+		}
+	}
 	if opt.Shared != nil {
 		opt.Shared.setWake(wake)
 	}
@@ -540,6 +602,9 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 	stop := context.AfterFunc(ctx, func() {
 		if hook != nil {
 			hook()
+		}
+		if o.sp != nil {
+			o.sp.cache.Stop()
 		}
 		o.stopped.Store(true)
 		wake()
@@ -549,11 +614,28 @@ func newRun[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P]
 		if opt.Shared != nil {
 			opt.Shared.setWake(nil)
 		}
+		stopWaker()
 		if o.sp != nil {
 			o.sp.close()
 		}
 		cancel(nil)
 	}, nil
+}
+
+// fences reports whether p declares coverage fences (source.Fencing): durable
+// spill engages only then.
+func fences[R, P any](p source.Provider[R, P]) bool {
+	f, ok := p.(source.Fencing)
+	return ok && f.Fences()
+}
+
+// replayOf is n's certificate when n is a replay range (the drainer's
+// alone).
+func (o *run[R, P]) replayOf(n *node[R, P]) (int, bool) {
+	if o.replayFn == nil {
+		return 0, false
+	}
+	return o.replayFn(n.r)
 }
 
 func (o *run[R, P]) worker() {
@@ -575,6 +657,9 @@ func (o *run[R, P]) worker() {
 		n := o.stack[len(o.stack)-1]
 		o.stack = o.stack[:len(o.stack)-1]
 		if n.state != queued { // the drainer took it
+			continue
+		}
+		if _, ok := o.replayOf(n); ok { // replayed by the drainer alone, in place
 			continue
 		}
 		n.state = expanding
@@ -601,12 +686,33 @@ func (o *run[R, P]) expand(n *node[R, P], direct bool) error {
 
 // expandBy is expand; drainer is set when the drainer runs it.
 func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
+	if i, ok := o.replayOf(n); ok {
+		// A recovery replay: sequential, direct, never split or spilled.
+		e := &emitter[R, P]{o: o, n: n, direct: true, drainer: drainer}
+		err := o.replayCert(i, e)
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if err != nil {
+			o.cancel(err)
+			o.stopped.Store(true)
+		}
+		n.state = done
+		if n.onPath.Load() {
+			o.drain.Broadcast()
+		}
+		return err
+	}
 	e := &emitter[R, P]{o: o, n: n, direct: direct, drainer: drainer}
 	err := o.p.Expand(o.ctx, n.r, e)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if err == nil {
 		err = e.publish()
+	}
+	if err == nil && n.spill != nil { // the trailer (and a durable seal), before the node is done
+		o.mu.Unlock()
+		err = e.complete()
+		o.mu.Lock()
 	}
 	if err != nil {
 		// Latch the failure before the node is exposed as done: otherwise
@@ -625,11 +731,6 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 			}
 		}
 		e.kids = nil
-	}
-	if err == nil && n.spill != nil { // the trailer, before the node is done
-		o.mu.Unlock()
-		err = o.sp.write(n.spill, nil, true)
-		o.mu.Lock()
 	}
 	n.state = done
 	for i := len(n.pending) - 1; i >= 0; i-- {
@@ -659,6 +760,48 @@ type emitter[R, P any] struct {
 	rows    int
 	units   int64
 	direct  bool // drainer-expanded, no child yet: rows go straight to the sink
+	// Coverage fences (source.Fencer; durable.go): mark is the first fence
+	// in the unpublished list (its item index), last the latest fence,
+	// fenced that no row followed it, kids that a child was emitted (no
+	// later fence certifies anything), span the range's declared bounds.
+	mark, last fenceMark
+	fenced     bool
+	childSeen  bool
+	span       *fenceSpan
+}
+
+// fenceMark is a fence: its key (top: ⊤) and, for mark, its item index.
+type fenceMark struct {
+	ok  bool
+	pos int
+	key string
+	top bool
+}
+
+// fenceSpan is a range's declared logical bounds.
+type fenceSpan struct {
+	lo, hi string
+	open   bool
+}
+
+// Span records the range's logical bounds and the fence at lo
+// (source.Fencer).
+func (e *emitter[R, P]) Span(lo, hi string, open bool) {
+	e.span = &fenceSpan{lo, hi, open}
+	e.Fence(lo, false)
+}
+
+// Fence records a fence (source.Fencer): O(1) state, never an item, so a
+// wholly filtered range's fences cost nothing and cannot accumulate.
+func (e *emitter[R, P]) Fence(x string, top bool) {
+	if e.childSeen || e.span == nil {
+		return
+	}
+	if !e.mark.ok {
+		e.mark = fenceMark{ok: true, pos: len(e.items), key: x, top: top}
+	}
+	e.last = fenceMark{ok: true, key: x, top: top}
+	e.fenced = true
 }
 
 const publishRows = 1024
@@ -669,6 +812,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 	}
 	e.o.received.Add(int64(len(rows)))
 	e.o.g.ahead.add(int64(len(rows)))
+	e.fenced = false
 	if e.direct {
 		if e.o.stopped.Load() {
 			return context.Cause(e.o.ctx)
@@ -693,6 +837,7 @@ func (e *emitter[R, P]) Rows(rows []schema.Row[P]) error {
 
 func (e *emitter[R, P]) Child(r R) error {
 	e.direct = false
+	e.childSeen = true
 	c := &node[R, P]{r: r}
 	u := childUnits()
 	e.items = append(e.items, item[R, P]{child: c, units: u})
@@ -717,7 +862,10 @@ func (e *emitter[R, P]) maybePublish() error {
 }
 
 // publish appends the collected items to the node; mu held. Unless the node
-// is on the drain path, it first waits while the budget is used up.
+// is on the drain path, it first waits while the budget is used up. A node
+// capturing a certificate spills every batch of rows until its seal: one it
+// would publish to memory instead (the awaited exception, or a refused
+// frame past the budget's need) abandons the capture first.
 func (e *emitter[R, P]) publish() error {
 	o := e.o
 	if len(e.items) == 0 {
@@ -732,13 +880,17 @@ func (e *emitter[R, P]) publish() error {
 		return nil
 	}
 	refused := false // the disk budget refused the last spill: wait before retrying
-	for o.full() && !o.stopped.Load() {
+	for (o.full() || (e.capturing() && e.rows > 0)) && !o.stopped.Load() {
+		full := o.full()
 		awaited := e.n.awaited.Load()
 		// The awaited node publishes past a full budget (the drainer needs
 		// it), except a node the drainer expands itself once its published
 		// lead passes leadLimit: nothing drains it until Expand returns,
 		// so its rows spill when they can.
 		if awaited && !(e.drainer && e.n.queued >= o.leadLimit()) {
+			if e.capturing() && e.rows > 0 {
+				e.abandon(abandonAwaited)
+			}
 			break
 		}
 		if o.sp != nil && e.rows > 0 && !refused {
@@ -759,9 +911,17 @@ func (e *emitter[R, P]) publish() error {
 			// may have marked this node awaited meanwhile).
 			refused = true
 			continue
+		} else if !full {
+			// A capturing node refused with room in memory: it would
+			// publish its rows to memory, which ends the capture.
+			e.abandon(abandonRefused)
+			break
 		} else if awaited {
 			// The drainer past its lead without spill (off, or refused):
 			// it cannot wait for itself. The documented exception.
+			if e.capturing() && e.rows > 0 {
+				e.abandon(abandonAwaited)
+			}
 			break
 		} else if e.rows == 0 {
 			// Only children and spill markers (metadata): admitted without
@@ -784,6 +944,11 @@ func (e *emitter[R, P]) publish() error {
 	if len(e.items) == 0 {
 		return nil
 	}
+	if f := e.n.spill; f != nil && f.d != nil && !f.capturing && !f.abandoned && e.rows > 0 {
+		// A pending capture (no fence yet) whose rows go to memory: the
+		// next spill arms it again.
+		o.sp.cache.st.CapturePendingDropped.Add(1)
+	}
 	for i := range e.items {
 		if it := &e.items[i]; it.spill != nil || it.child != nil {
 			o.meta += it.units
@@ -801,29 +966,155 @@ func (e *emitter[R, P]) publish() error {
 	o.buffered += e.units
 	o.max = max(o.max, o.buffered)
 	e.items, e.kids, e.rows, e.units = nil, nil, 0, 0
+	// The next list begins at a fence when this one ended at one.
+	e.mark = fenceMark{}
+	if e.fenced && !e.childSeen && e.last.ok {
+		e.mark = fenceMark{ok: true, key: e.last.key, top: e.last.top}
+	}
 	if e.n.onPath.Load() {
 		o.drain.Broadcast()
 	}
 	return nil
 }
 
+// capturing reports whether the node's durable file is capturing.
+func (e *emitter[R, P]) capturing() bool {
+	f := e.n.spill
+	return f != nil && f.capturing
+}
+
+// Reasons a capture is abandoned (DurableReport.Abandoned).
+const (
+	abandonAwaited  = "awaited"  // the drainer awaited the node: its rows went to memory
+	abandonRefused  = "refused"  // a refused frame with room in memory: its rows went there
+	abandonUnfenced = "unfenced" // rows followed the last fence (a failed or unfenced end)
+	abandonStopping = "stopping" // the run was stopping, or the ledger failed, at the seal
+	abandonEmpty    = "empty"    // the capture started at the closing fence: nothing certified
+)
+
+// abandon ends the node's capture uncertified: its file serves the live run
+// only, and its slot and history go back (the file keeps one trailer, at
+// the node's end).
+func (e *emitter[R, P]) abandon(why string) {
+	f := e.n.spill
+	if f == nil || f.d == nil || f.abandoned {
+		return
+	}
+	f.capturing, f.abandoned = false, true
+	c := e.o.sp.cache
+	c.abandon(f.d)
+	st := &c.st
+	switch why {
+	case abandonAwaited:
+		st.AbandonedAwaited.Add(1)
+	case abandonRefused:
+		st.AbandonedRefused.Add(1)
+	case abandonUnfenced:
+		st.AbandonedUnfenced.Add(1)
+	case abandonStopping:
+		st.AbandonedStopping.Add(1)
+	case abandonEmpty:
+		st.AbandonedEmpty.Add(1)
+	}
+}
+
 // spill writes the collected row items to the node's spill file and
 // replaces them with markers; called without mu (the node's own emitter is
-// the only writer of its file).
+// the only writer of its file). A durable file not yet capturing starts its
+// capture at the list's first fence: the rows before it are pre-capture
+// frames, then C, then the rest (a fence lies between items, so no frame
+// straddles C); with no fence the capture stays pending.
 func (e *emitter[R, P]) spill() error {
+	sp := e.o.sp
 	if e.n.spill == nil {
-		e.n.spill = e.o.sp.file()
+		if e.span != nil {
+			e.n.spill = sp.durableFile(e.span.lo, e.span.hi, e.span.open)
+		}
+		if e.n.spill == nil {
+			e.n.spill = sp.file()
+		}
+	}
+	f := e.n.spill
+	start := -1
+	if f.d != nil && !f.capturing && !f.abandoned && e.mark.ok && !e.mark.top {
+		start = e.mark.pos
 	}
 	for i := range e.items {
+		if i == start {
+			if err := e.startCapture(f); err != nil {
+				return err
+			}
+		}
 		if e.items[i].rows == nil {
 			continue
 		}
-		if err := e.o.sp.write(e.n.spill, e.items[i].rows, false); err != nil {
+		if err := sp.write(f, e.items[i].rows, false); err != nil {
 			return err // refused: the items not yet written keep their rows
 		}
 		e.rows -= len(e.items[i].rows)
 		e.units -= e.items[i].units - markerUnits()
-		e.items[i] = item[R, P]{spill: e.n.spill, units: markerUnits()}
+		e.items[i] = item[R, P]{spill: f, units: markerUnits()}
+	}
+	if start >= len(e.items) {
+		return e.startCapture(f)
+	}
+	return nil
+}
+
+// startCapture writes f's capture start at the list's first fence.
+func (e *emitter[R, P]) startCapture(f *spillFile) error {
+	if f.capturing {
+		return nil
+	}
+	if err := e.o.sp.capture(f, e.mark.key); err != nil {
+		return err
+	}
+	st := &e.o.sp.cache.st
+	st.CapturedRanges.Add(1)
+	if e.mark.key == e.span.lo {
+		st.CaptureAtStart.Add(1)
+	} else {
+		st.CaptureAtFence.Add(1)
+	}
+	return nil
+}
+
+// complete ends a spilled node after Expand returned and its last batch was
+// published: a capturing durable file is sealed when its last fence closes
+// it (no row after it), with ce that fence; the trailer is written, a
+// certificate's file synced and its record handed to the flusher. Called
+// without mu; an error stops the run before the node is done.
+func (e *emitter[R, P]) complete() error {
+	f, sp := e.n.spill, e.o.sp
+	if d := f.d; d != nil {
+		switch {
+		case !f.capturing:
+		case !e.fenced || !e.last.ok:
+			e.abandon(abandonUnfenced)
+		case !e.last.top && e.last.key <= d.cs:
+			e.abandon(abandonEmpty)
+		case !sp.cache.sealable():
+			e.abandon(abandonStopping)
+		default:
+			d.ce, d.ceOpen, d.certified = e.last.key, e.last.top, true
+			if d.ceOpen {
+				d.ce = ""
+			}
+		}
+		if !f.capturing && !f.abandoned { // never captured: the slot goes back
+			f.abandoned = true
+			sp.cache.abandon(d)
+		}
+	}
+	if err := sp.write(f, nil, true); err != nil {
+		return err
+	}
+	if d := f.d; d != nil && d.certified {
+		if err := sp.seal(f); err != nil {
+			return err
+		}
+		f.capturing = false
+		sp.cache.sealed(d)
 	}
 	return nil
 }

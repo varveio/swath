@@ -231,7 +231,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
   uncompressed (`--spill-compress=false`), `Z` and `R` plain rows, compressed and not
   (`--spill-plain`, the comparison arm; both flags are diagnostic runtime flags (`swath diag list`), and a resume may
-  change them: spill is disposable, removed when a run starts, so a resume never reads another run's frames), and `T` the trailer with the row count. A run writes
+  change them: disposable spill is removed when a run starts, so a resume never reads another run's
+  disposable frames, and a durable file's frames decode whatever the flags), and `T` the trailer with the row count. A run writes
   one rows type and its reader refuses every other, so a frame of an unknown or foreign format is never
   decoded. The trailer is written when the range ends and checked after replay. Children have their own
   files, so a parent's trailer says nothing about them.
@@ -276,7 +277,8 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   (`TestSpillReadersAreCapped`).
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
-  lock, and the resume relists from the durable frontier.
+  lock, and the resume relists from the durable frontier. The exception is a journaled run's durable
+  spill (next section), which a resume keeps and replays.
 - **Memory.** In-memory buffered rows stay within the budget plus one publish batch per worker plus the
   frontier path, with or without spill (`TestSpillKeepsWorkersBusy`). Workers also claim new ranges while
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
@@ -312,3 +314,119 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve
   larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.
+
+## Durable spill
+
+A journaled run (journal version 8) keeps the spill files that certify their rows: a resume replays them
+instead of listing those keys again. The design record is the durable-spill contract; this section is what
+the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
+
+- **Fences.** A range engine range (`keyrange`, S3 and GCS) declares coverage through the emitter
+  (`source.Fencer`): `Span(llo, hi, open)` before its first row, `llo = max(lo, after)`, so after an unsafe
+  resume key the logical start is K, never the request bound below it; then a fence after every page (its
+  cursor), at a split (the split cursor, before the children) and at its end (`hi`, or ⊤). A fence is
+  declared only at a bound the provider accepts or at K, never below K; the seed and resume wrapper ranges
+  and the sequential chain declare nothing. The adapters between provider and order stage (`source.Erase`,
+  the filters, the object-size counter) forward both calls, `Fences` and `Replay`
+  (`registry` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
+  spill engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
+  first fence in it and the latest fence (O(1)), so a wholly filtered page costs nothing and fences never
+  accumulate (`TestDurableZeroRowCertificate` allocates nothing per fence). A fence after a child certifies
+  nothing (`TestFencesHoldTheContract` holds every range to these rules on random keyspaces, splits and
+  resume keys, unsafe ones included).
+- **Capture.** When a range first spills with a free slot it gets a durable file in
+  `DIR/.swath/spill/durable/`. Its capture starts at the first fence of the list being spilled: the rows
+  before that fence are written as pre-capture frames, then the `C` frame (`cs`), then the rest; a fence
+  lies between items, so no frame straddles `C` (`TestDurableCertifiesExactRows` at page sizes 1, 999, 1,025
+  and 3,000 against the 1,024-row publish batch). With no fence in the list the capture is pending until a
+  later spill finds one; a pending range that publishes rows to memory meanwhile counts
+  `capture_pending_dropped`. Once capturing, every batch of rows is a frame, budget full or not, until the
+  seal. One that would go to memory instead (the drainer awaits the range, or a refused frame with room in
+  memory) abandons the capture: the file then serves the live run only, keeps one trailer at its end,
+  uncertified, and its slot and history go back (`TestDurableAbandonThenSpill`).
+- **Slots and history.** One non-blocking reservation takes a certificate slot and two ledger records (its
+  seal and its retirement); without either the range spills disposably, as before (`no_slot`,
+  `history_exhausted`), so admission never holds the frontier (`TestDurableSlotsFull`). The cap is one slot
+  per MiB of the spill cap, clamped to 16..10,000 (10,000 without a cap; below 16 MiB durable spill is off,
+  `durable_off`). The history cap H = 40,000 bounds the ledger's retained prefix plus outstanding
+  reservations; on a resume the prefix's record count is what counts, so history a truncation dropped is
+  refunded (`TestDurableHistoryRace`: racing captures never pass H).
+- **Seal.** After `Expand` returns and its last batch is published, outside the order mutex, a capturing
+  file whose last fence closes it (no row after it) is sealed with `ce` that fence: the trailer and tail are
+  written, the file is fsynced, and its record goes to the flusher; the node is marked done only then, and
+  never waits for the ledger. A seal error is latched (the run stopped) before the node is done or its
+  children exposed (`TestDurableSealErrorStopsRun`: the output is a prefix of the oracle). A capture that
+  started at its closing fence certifies nothing and is abandoned (`empty`); rows after the last fence
+  (`unfenced`), or a stop or failed ledger at the seal (`stopping`) abandon too.
+- **File format.** Version-2 frames (the journal's envelope: length, CRC-32C over the length and the
+  payload): `H` (magic, format version 2, run UUID, file ID, the journal identity's digest, the row codec ID
+  and its version, the writer's frame limits, the range's logical bounds), the rows frames (the disposable types, each
+  decoded whatever the run's flags), `C`, `T` (total and captured rows, flags, `cs`, `ce`, first and last
+  captured key, the trailer's offset, the CRC-32C of every byte before it), then a 16-byte tail (the
+  trailer's offset and the magic). Files are named by their random ID; nothing depends on a path or inode.
+  Disposable spill files keep the version-1 frames above.
+- **The ledger** (`spill/durable/ledger`) is a file of its own, not journal frames: the part journal keeps
+  its single committer and its strict corruption rule, and no cache failure touches it. Its first frame is
+  the magic, its version, the run UUID and the identity digest; then `sealed {file_id, cs, ce, ce_open,
+  rows, last_key, bytes, file_crc}` and `retired {file_id, reason}`. Recovery reads its durable prefix, up
+  to the first invalid frame or the end, and truncates (and syncs) it there before any append: interior
+  damage, a torn tail and frames persisted out of order all reduce to a shorter prefix, safe because every
+  certificate is then validated against its self-describing file. A foreign or unreadable header discards
+  the ledger and every spill file (`TestDurableLedgerPrefix`).
+- **The flusher** belongs to the attempt's cache (`order.Cache`), not to `order.Run`. One goroutine owns
+  every ledger append and every durable file's unlink: per cycle, at most every 100 ms, a sync of
+  `spill/durable/` (covering every name handed to it), the queued records, a ledger sync, then the queued
+  unlinks, with `Lock.Verify` immediately before each of these mutations, not once per cycle: a
+  replacement while an earlier step was blocked stops the next one (`TestDurableReplacedMidCycle`). It never takes the order mutex, and no code holding that mutex takes the ledger mutex
+  (`ledgerOrder` asserts it in the durable tests). An unlink's credit lowers the live spill bytes and
+  signals a one-slot channel that `order.Run`'s waker turns into a wake (`TestDurableCreditWithoutOrderLock`:
+  credit returns with the order mutex held throughout). A ledger failure latches: no new slot, queued
+  records dropped (recovery relists), but unlinks go on, so eviction still returns credit
+  (`TestDurableLedgerFailureEvicts`). The output's replacement, or an unlink failing other than for a
+  missing file, stops the flusher and cancels the run with that cause.
+- **Shutdown.** A stop sets the cache stopping (no slot or seal starts after it); `order.Run` joins its
+  workers (seals in flight finish), closes its readers and its waker; the router's `Close` or `Abort`
+  finishes, its part records still moving K; then the listing detaches the K callback and closes the cache
+  (the queue drained, the flusher joined, the ledger closed); on a commit `spill/durable/` is removed after
+  the manifest is installed. A failure keeps it for the resume.
+- **Retirement.** After each part record the journal stores K in the cache and returns. A sealed file is
+  retired (`published`) once K reaches `ce` and its reader has closed, whichever comes last; neither waits on
+  the other (`TestDurableRetireDefer`). A drained certificate stays charged to the live spill bytes until
+  its unlink; a refused frame evicts the oldest drained one (`evicted`, never an undrained file:
+  `TestDurableEviction`). A live-only durable file is unlinked when drained.
+- **Recovery** (`order.RecoverDurable`, after the parts' recovery, single-threaded, through the output root,
+  `Lock.Verify` immediately before each mutation: every directory sync, ledger write, sync and truncation,
+  every unlink): K from part records only; the ledger's prefix, bounded by the format rather than by
+  trusting the writer: the scan stops where the records kept plus one retirement owed per live certificate
+  (written by recovery, or reserved for an accepted one) would pass H (`TestDurableRecoveryHistory`), and before a sealed record that would make more than
+  10,000 certificates live (the largest cap any attempt has); the ledger is truncated there like a damaged
+  tail (`ledger_cut`), and the files named after it are orphans (`TestDurableRecoveryBounds`);
+  the directory streamed, every file no record names unlinked (`orphans`); every recorded file validated: regular, its recorded length and CRC, every frame's
+  CRC, the header (run UUID, file ID, identity, and a row codec ID and version this run replays: another is
+  `rejected.codec`, its interval a live gap, decided here rather than at replay), every rows frame's claimed rows and storage within the
+  header's limits and the hard ones before anything sized by them is allocated (zstd frames decoded under
+  the bound), one `C` equal to the record's `cs`, a certified trailer equal to the record, and the tail
+  (`TestDurableCorruption`). Then: `ce <= K`, missing, corrupt, foreign, other-codec or overlapping certificates are
+  retired (`retired.recovery`, `rejected.*`); recovery appends and syncs those records, unlinks, syncs the
+  directory, and only then does the attempt start its flusher, after applying its own caps (the
+  highest-keyed beyond the slots or the spill cap: `rejected.budget`). A crash anywhere in it reclassifies
+  identically.
+- **Recovery replay.** The accepted certificates become replay ranges: the engine's resume tiling
+  (`keyrange.aroundReuse`, seed or not) emits one at each certificate's position and tiles only the gaps
+  between them, their edges as bounds (`TestReuseTilesAroundSpans`: the gaps and the replays tile (K, ⊤],
+  and no data request starts inside a certificate). The drainer alone expands a replay range, directly:
+  sequential, never split or spilled; it skips the pre-capture frames, emits the captured keys above
+  max(cs, K) only (`TestDurableReplayAboveK`), rechecks every key's order and membership in (cs, ce]
+  (`InvariantError`), and hands the file back for retirement. Live replay of this run's durable files still
+  consumes every rows frame, pre-capture included. Replayed rows reach the order stage without the
+  provider: `listed - filtered + replayed = received = rows = routed`, and they are never counted in
+  `objects`, `pages`, `requests` or the filters' counts.
+- **Report.** `resources.spill.durable`: `slots`, `history`, `captured_ranges`, `capture_at.{range_start,fence}`,
+  `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned.{awaited,refused,unfenced,stopping,empty}`,
+  `sealed_files`, `sealed_durable` (records known synced), `flush_ns`, `flush_cycles`, `ledger_failed`,
+  `retained_bytes`, `peak_retained_bytes`, `retired.{published,evicted,recovery}`, `retire_deferred`, and on a
+  resume `resume.{ledger_dropped_bytes, ledger_cut, accepted, accepted_bytes, rejected.{missing,corrupt,foreign,codec,overlap,budget},
+  orphans, replayed_rows, replay_skipped_rows, gaps, requests_saved_est}` (requests saved at the engine's
+  1,000-key page). `spill.durable_off` says why durable spill was off when it could have run. The engine's
+  counters add `reuse.ranges`, `reuse.gaps` and `reuse.boundary_overfetch_keys` (keys a gap listed past its
+  end, a certificate's start).

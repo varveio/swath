@@ -114,8 +114,10 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
 logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
-schema id" below), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
-with that build or started over with `--overwrite`) and the writer recipe
+schema id" below), the private journal (version 8, never read by readers: version 8 adds the run UUID that durable spill files
+are bound to; a version 7 journal of the previous build still resumes, with durable spill off, and a version 7
+build refuses a version 8 journal; an interrupted run of an older build is finished with that build or started
+over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
 parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
 on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
@@ -263,10 +265,17 @@ finished with it or started over): `--output` is `-o`; `--force` is `--overwrite
 `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 3.** Version 3 adds attempt-scoped `output.versions`,
-`output.distinct_keys`, `output.live_objects` and S3 `output.delete_markers` or GCS
-`output.noncurrent`, present only for versions schemas (zero counts included).
-These count filtered rows handed on by order, or counted, and exclude retained resume rows.
+**Run report: version 3.** Version 3 only adds fields; nothing of version 2 changes, and a version 2 reader
+reads version 3 by ignoring them:
+
+- **Durable spill:** `resources.spill.durable` (the durable spill's account, and on a resume what it accepted,
+  rejected and replayed), `resources.spill.durable_off`, and the counters `reuse.ranges`, `reuse.gaps` and
+  `reuse.boundary_overfetch_keys`.
+- **Versions schemas** (`--all-versions`): attempt-scoped `output.versions`, `output.distinct_keys`,
+  `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
+  schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
+  retained resume rows.
+
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
 is the full schema and "Run report" in [cli.md](cli.md#run-report) its description.

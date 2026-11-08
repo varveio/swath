@@ -735,7 +735,14 @@ output's; absent for swath count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`.
+`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`, and with durable spill
+([internals/ordering.md](internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
+`history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
+began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
+`sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
+(by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
+`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
+`requests_saved_est`. `durable_off` says why durable spill is off when it could have run.
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](internals/counters.md)).

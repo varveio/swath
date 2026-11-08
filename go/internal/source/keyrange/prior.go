@@ -108,8 +108,8 @@ func tilePrior(pr *source.Prior, k int, after, scope string, safe func(string) b
 	return tiles, unsafe
 }
 
-// expandPrior tiles the scope (or a resumed (K, ⊤]) at the prior's cuts
-// and emits no rows: each bounded tile starts with the prior's expected
+// expandPrior tiles the scope (or a resumed (K, ⊤], cut around reused
+// certificates) at the prior's cuts and emits no rows: each bounded tile starts with the prior's expected
 // keys as its estimate (the rank's remainder until its first page, which
 // replaces it with the page's own measure), and the open frontier after
 // the last cut lists what the prior did not know.
@@ -146,11 +146,16 @@ func (p *Engine[P]) expandPrior(e source.Emitter[Range, P]) error {
 	}
 	p.c.Set(cSeedFromTiles, int64(len(out)))
 	p.c.Set(cSeedFromExpected, int64(expected))
+	// On a resume with reused certificates the prior tiles only the live
+	// gaps: each tile is cut around the certificates' spans, which become
+	// reused ranges the order stage replays. A prior never confers
+	// coverage: no key range is skipped because the prior listed it.
+	out = p.aroundReuse(out)
 	if p.opt.Resume != nil {
 		p.c.Set(cResumedRanges, int64(len(out)))
 	}
 	p.account(time.Now())
-	p.queued += len(out)
+	p.queued += p.queue(out)
 	p.c.Max(cMaxQueued, int64(p.queued))
 	p.unlock()
 	for _, t := range out {

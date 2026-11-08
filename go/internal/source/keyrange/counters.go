@@ -40,6 +40,7 @@ const (
 	cSeedStopFlat
 	cSeedFirstPageKeys
 	cSeedFirstPageDiscarded
+	cSeedFirstPageReuse
 	cSeedFlatChains
 	cSeedResumed
 	cSeedFromParts
@@ -111,6 +112,9 @@ const (
 	cChildSmallUpper
 	cFrontierHandoutKeys
 	cResumedRanges
+	cReuseRanges
+	cReuseGaps
+	cReuseBoundaryOverfetch
 	cMaxActive
 	cMaxQueued
 	cBusyNs
@@ -188,6 +192,7 @@ var Counters = table([numCounters]counters.Def{
 	cSeedStopFlat:                 d("seed.stop.flat", counters.Count, "seeds", "the seed stopped at a level with no folder, after a chain whose page held no folder was not followed", "seed"),
 	cSeedFirstPageKeys:            d("seed.first_page_keys", counters.Count, "objects", "keys the seed's first data page emitted: the whole scope, in one page", "seed"),
 	cSeedFirstPageDiscarded:       d("seed.first_page_discarded", counters.Flag, "", "the seed's first data page was truncated: discarded, the tiles list the scope from its start (one request more)", "seed"),
+	cSeedFirstPageReuse:           d("seed.first_page_skipped_reuse", counters.Flag, "", "a resume with reused certificates sent no first data page from K: it could list (and, fitting one page, emit) keys a certificate replays", "seed"),
 	cSeedFlatChains:               d("seed.flat_chains", counters.Count, "chains", "delimiter chains not followed past a page that held no folder (objects only)", "seed"),
 	cSeedResumed:                  d("seed.resumed", counters.Flag, "", "the seed tiled a resumed scope (K, ⊤]", "seed"),
 	cSeedFromParts:                d("seed.from.parts", counters.Count, "parts", "parts of the --seed-from dataset (0 for a cut file)", "seed_from"),
@@ -255,6 +260,9 @@ var Counters = table([numCounters]counters.Def{
 	cChildSmallUpper:              d("child_small.upper", counters.Count, "ranges", "upper split children that ended or split having listed fewer keys than one page (empty ones included)", "split"),
 	cFrontierHandoutKeys:          d("split.frontier_handout_keys", counters.Count, "keys", "keys listed inside the lower children of frontier splits (the child and its descendants): over split.accepted_frontier, the work a frontier split hands out", "split"),
 	cResumedRanges:                d("resumed_ranges", counters.Count, "ranges", "ranges a resume started with: (K, ⊤], or the seed's tiling of it", "resume"),
+	cReuseRanges:                  d("reuse.ranges", counters.Count, "ranges", "reused coverage certificates a resume replays from durable spill instead of listing them", "resume"),
+	cReuseGaps:                    d("reuse.gaps", counters.Count, "ranges", "ranges a resume with reused certificates lists: the gaps between them, tiled", "resume"),
+	cReuseBoundaryOverfetch:       d("reuse.boundary_overfetch_keys", counters.Count, "keys", "keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys)", "resume"),
 	cMaxActive:                    d("max_active", counters.Max, "ranges", "peak ranges in Expand at once"),
 	cMaxQueued:                    d("max_queued", counters.Max, "ranges", "peak ranges queued for a worker", "split"),
 	cBusyNs:                       d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
@@ -354,7 +362,7 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.Sequential || !p.opt.SlowSplit {
 		off = append(off, "slow_split")
 	}
-	if p.opt.Resume == nil {
+	if p.opt.Resume == nil && len(p.reuse) == 0 {
 		off = append(off, "resume")
 	}
 	if p.opt.MaxKeys == 0 {

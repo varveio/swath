@@ -215,6 +215,13 @@ func (o *opened[P]) Restart(after string) error {
 // (source.Seeded, --seed-from).
 func (o *opened[P]) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
 
+// Reuse lists around a resume's reused coverage certificates
+// (source.Reusing): the engine replays them, lists the gaps.
+func (o *opened[P]) Reuse(spans []source.Span) { o.p.Reuse(spans) }
+
+// Fences reports the engine's coverage fences (source.Fencing).
+func (o *opened[P]) Fences() bool { return o.p.Fences() }
+
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
@@ -224,6 +231,7 @@ var (
 	_ source.Identified = (*opened[Object])(nil)
 	_ source.Resumable  = (*opened[Object])(nil)
 	_ source.Seeded     = (*opened[Object])(nil)
+	_ source.Reusing    = (*opened[Object])(nil)
 	_ source.Capable    = (*opened[Object])(nil)
 	_ source.Reporter   = (*opened[Object])(nil)
 )

@@ -10,12 +10,14 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// ReportVersion is the run report's version. 3 adds attempt-scoped version
-// classification and distinct keys for versions schemas. 2: the clearer names
+// ReportVersion is the run report's version. 2: the clearer names
 // (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
 // count requests.http_attempts in place of cost.api_calls, one row budget),
 // phase times, free_disk_min_bytes and the bounded progress history
-// (go/docs/upgrade.md lists every rename).
+// (go/docs/upgrade.md lists every rename). 3 adds fields only:
+// resources.spill.durable and durable_off (the durable spill's account),
+// the reuse.* counters, and for versions schemas the attempt-scoped version
+// classification and distinct keys.
 const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
