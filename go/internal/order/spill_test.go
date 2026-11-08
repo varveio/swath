@@ -32,7 +32,8 @@ type frontier struct {
 	group                               int // consecutive rows of a page share a key, group at a time (0: none; Options.Groups)
 	slowDelay, sibDelay                 time.Duration
 	// hold, if set, holds the slow range after its first page until every
-	// sibling has emitted all its rows (left counts them down).
+	// sibling has emitted all its rows (left counts them down), or, with
+	// left nil, until the test closes it.
 	hold chan struct{}
 	left *atomic.Int64
 }
@@ -81,7 +82,7 @@ func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) e
 			}
 		}
 	}
-	if f.hold != nil && r.i > 0 && f.left.Add(-1) == 0 {
+	if f.left != nil && r.i > 0 && f.left.Add(-1) == 0 {
 		close(f.hold)
 	}
 	return nil
@@ -197,14 +198,43 @@ func TestSpillCleanedOnFailure(t *testing.T) {
 // bounded. A cap well below the spill a free run produces must be hit; a
 // free-space reserve larger than any disk refuses every frame, so the run
 // behaves as without spill.
+//
+// The slow range is held after its first page, so the siblings spill
+// behind it, and released by the run's own signals, never by time (#326):
+// in the free run once every other range is done ("one-range-open"), so its
+// peak is the siblings' whole spill; in the capped and reserve runs once a
+// frame has been refused (a worker then waits at "publish" or
+// "admission", reached only after a refusal), which the hold makes
+// certain: nothing is drained before, and the siblings spill four times
+// the cap. A hold released only on one-range-open would wait for the
+// refused siblings, and they for the drainer.
 func TestSpillDiskBudget(t *testing.T) {
-	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100, slowDelay: 5 * time.Millisecond}
+	f := &frontier{slowPages: 40, siblings: 56, sibPages: 10, rows: 100}
 	want := f.keys()
 	const workers, budget = 8, 500
-	run := func(opt Options) Stats {
+	run := func(opt Options, onRefusal bool) Stats {
 		t.Helper()
+		f.hold = make(chan struct{})
+		var once sync.Once
+		release := func() { once.Do(func() { close(f.hold) }) }
+		restore := SetDurableEvents(func(e string) {
+			if e == "one-range-open" && !onRefusal {
+				release()
+			}
+		})
+		defer restore()
+		hookWait = func(site string) {
+			if onRefusal && (site == waitPublish || site == waitAdmission) {
+				release()
+			}
+		}
+		defer func() { hookWait = nil }()
+		// A hold never released ends at the deadline as a failure of the
+		// fixture, not as a release by time.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
 		c := &collect{}
-		st, err := Run[fr, tp](context.Background(), f, c, &testSchema, opt)
+		st, err := Run[fr, tp](ctx, f, c, &testSchema, opt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,18 +247,18 @@ func TestSpillDiskBudget(t *testing.T) {
 		return st
 	}
 	dir := t.TempDir()
-	free := run(Options{Workers: workers, Budget: budget, SpillDir: dir})
+	free := run(Options{Workers: workers, Budget: budget, SpillDir: dir}, false)
 	if free.SpillRefused != 0 || free.SpillPeak == 0 {
 		t.Fatalf("no budget: peak %d, refused %d", free.SpillPeak, free.SpillRefused)
 	}
 	limit := free.SpillPeak / 4
-	capped := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit})
+	capped := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillMax: limit}, true)
 	t.Logf("peak without a cap %d bytes; with cap %d: peak %d, refused %d, %d rows spilled", free.SpillPeak, limit, capped.SpillPeak, capped.SpillRefused, capped.SpillRows)
 	// Trailers are always admitted (a few bytes per file).
 	if capped.SpillRefused == 0 || capped.SpillPeak > limit+16*capped.SpillFiles {
 		t.Fatalf("cap %d: peak %d, refused %d", limit, capped.SpillPeak, capped.SpillRefused)
 	}
-	none := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillReserve: 1 << 62})
+	none := run(Options{Workers: workers, Budget: budget, SpillDir: dir, SpillReserve: 1 << 62}, true)
 	if none.SpillRows != 0 || none.SpillRefused == 0 {
 		t.Fatalf("reserve: %d rows spilled, %d refused", none.SpillRows, none.SpillRefused)
 	}
