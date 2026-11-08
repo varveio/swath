@@ -206,35 +206,42 @@ func TestReadAheadKeepsOrder(t *testing.T) {
 	}
 }
 
-// TestReadAheadMemoryIsBounded: under a tiny budget, with everything
-// ahead of a held frontier spilled, the read-ahead holds at most its share
-// of the budget (or one frame) on top of the stage's bound: the budget,
-// one publish batch per worker and the frontier path.
-func TestReadAheadMemoryIsBounded(t *testing.T) {
-	withAhead(t)
+// heldBoundRun runs the held-frontier fixture of the memory bound tests:
+// a tiny budget, 16 workers, everything ahead of a held frontier spilled.
+// It requires the stage's bound: the budget, one publish batch per worker,
+// the frontier path, and a share of the budget (or one batch) for the
+// read-ahead or the segments.
+func heldBoundRun(t *testing.T, sink Sink[tp]) (Stats, *frontier) {
+	t.Helper()
 	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
 	const workers, budget = 16, 500
-	opt := Options{Workers: workers, Budget: budget, SpillDir: t.TempDir()}
-	c := &collect{}
-	st, err := Run[fr, tp](context.Background(), f, c, &testSchema, opt)
+	st, err := Run[fr, tp](context.Background(), f, sink, &testSchema, Options{Workers: workers, Budget: budget, SpillDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("max buffered %d; read-ahead %+v; drainer %+v; segments %+v", st.MaxBuffered, st.ReadAhead, st.Drainer, st.Segments)
+	if limit := int64(budget+workers*publishRows+f.rows) + max(budget/4, publishRows); st.MaxBuffered > limit {
+		t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
+	}
+	return st, f
+}
+
+// TestReadAheadMemoryIsBounded: the read-ahead holds at most its share of
+// the budget (or one frame) on top of the stage's bound (heldBoundRun).
+func TestReadAheadMemoryIsBounded(t *testing.T) {
+	withAhead(t)
+	c := &collect{}
+	st, f := heldBoundRun(t, c)
 	if !slices.Equal(c.keys, f.keys()) {
 		t.Fatalf("%d keys, want %d", len(c.keys), len(f.keys()))
 	}
 	replayed(t, st)
-	t.Logf("max buffered %d; read-ahead %+v; drainer %+v", st.MaxBuffered, st.ReadAhead, st.Drainer)
 	// On one processor the drainer may replay every frame before an idle
 	// worker is scheduled (DrainerFrames): correct, and nothing to bound.
 	if st.ReadAhead.Frames == 0 && runtime.GOMAXPROCS(0) > 1 {
 		t.Fatal("the read-ahead never engaged")
-	}
-	share := int64(budget / 4)
-	if limit := int64(budget+workers*publishRows+f.rows) + max(share, publishRows); st.MaxBuffered > limit {
-		t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
 	}
 }
 
@@ -461,31 +468,4 @@ func TestAheadWaitWakes(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestListingDoneIsReported: ListingDone is called once, when the last
-// range is expanded, before the drain ends; the workers' idle time is
-// split at it.
-func TestListingDoneIsReported(t *testing.T) {
-	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
-	var calls atomic.Int64
-	var at time.Time
-	st, err := Run[fr, tp](context.Background(), f, &collect{}, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir(),
-		ListingDone: func() {
-			if calls.Add(1) == 1 {
-				at = time.Now()
-			}
-		}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls.Load() != 1 || st.ListingDone.IsZero() || at.Before(st.ListingDone) || st.DrainEnd.Before(st.ListingDone) {
-		t.Fatalf("calls %d, listing done %v (called at %v), drain end %v", calls.Load(), st.ListingDone, at, st.DrainEnd)
-	}
-	if st.IdleBefore <= 0 {
-		t.Fatalf("idle before %v: the workers waited for the held frontier's children", st.IdleBefore)
-	}
-	t.Logf("tail %v, idle before %v after %v, drainer %+v, read-ahead %+v", st.DrainEnd.Sub(st.ListingDone), st.IdleBefore, st.IdleAfter, st.Drainer, st.ReadAhead)
 }

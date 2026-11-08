@@ -45,34 +45,19 @@ func TestWriterAdmissionCoversHeap(t *testing.T) {
 		t.Skip("allocates tens of megabytes")
 	}
 	if os.Getenv("SWATH_HEAP_GATES") == "" {
-		writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 6)
+		writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 6, false)
 		return
 	}
-	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24)
-	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24)
-	writerHeap(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24)
-	writerHeapRetained(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24)
+	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24, false)
+	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24, false)
+	writerHeap(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24, false)
+	writerHeap(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24, true)
 }
 
 // s3Row makes S3 rows with random keys of n bytes.
 func s3Row(n int) func(i int, r *rand.Rand) s3.Row {
 	return func(i int, r *rand.Rand) s3.Row {
 		return s3.Row{Key: randKey(r, i, n), Data: s3.Object{Size: int64(i), Mtime: int64(i) * 1000, ETag: fmt.Sprintf("%032x", i*7919), StorageClass: "STANDARD"}}
-	}
-}
-
-// fsRow makes local-path rows with random keys of n bytes and, link > 0,
-// random link targets of link bytes.
-func fsRow(n, link int) func(i int, r *rand.Rand) localfs.Row {
-	return func(i int, r *rand.Rand) localfs.Row {
-		e := localfs.Entry{Size: int64(i), Mtime: int64(i), Ctime: int64(i), Atime: int64(i), Btime: int64(i), Inode: int64(i),
-			Dev: 1, Blocks: 8, Mode: 0o644, UID: 1000, GID: 1000, Nlink: 1, Present: ^localfs.Presence(0), Kind: localfs.KindFile}
-		if link > 0 {
-			e.LinkTarget, e.Kind = randKey(r, 0, link), localfs.KindSymlink
-		} else {
-			e.Present &^= localfs.HasLink
-		}
-		return localfs.Row{Key: randKey(r, i, n), Data: e}
 	}
 }
 
@@ -119,30 +104,19 @@ func gcHeap() int64 {
 
 // writerHeap writes pages of 1,024 rows to writers parts open at once,
 // with writers encoders admitted of maxEncoders, and requires the live
-// heap after every page within the writers' admission.
-func writerHeap[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) {
+// heap after every page within the writers' admission. With retain, every
+// row is made before the writers start and kept until they finish (the
+// input in the baseline, excluded from the peak), as a listing keeps its
+// rows: the case that measured the narrowest margin, 216 to 218 MiB of 244
+// for four local writers (sol review 5); it also requires every admitted
+// codec state made, so each has compressed pages of several zstd blocks.
+func writerHeap[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int, retain bool) {
 	t.Helper()
-	peak := writerPeak(t, s, mk, writers, maxEncoders, pages, false)
+	peak := writerPeak(t, s, mk, writers, maxEncoders, pages, retain)
 	admitted := int64(writers) * parquetout.EncoderBytes(s)
-	t.Logf("%s: %d writers, %d pages each, held %.1f MiB at most, admitted %.1f MiB", s.ID, writers, pages, float64(peak)/(1<<20), float64(admitted)/(1<<20))
+	t.Logf("%s, input retained %v: %d writers, %d pages each, held %.1f MiB at most, admitted %.1f MiB", s.ID, retain, writers, pages, float64(peak)/(1<<20), float64(admitted)/(1<<20))
 	if peak > admitted {
-		t.Fatalf("%s: %d writers held %d bytes, admitted %d", s.ID, writers, peak, admitted)
-	}
-}
-
-// writerHeapRetained is writerHeap with every row made before the writers
-// start and kept until they finish (the input in the baseline, excluded
-// from the peak), as a listing keeps its rows: the case that measured the
-// narrowest margin, 216 to 218 MiB of 244 for four local writers (sol
-// review 5). It also requires every admitted codec state made, so each
-// has compressed pages of several zstd blocks.
-func writerHeapRetained[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) {
-	t.Helper()
-	peak := writerPeak(t, s, mk, writers, maxEncoders, pages, true)
-	admitted := int64(writers) * parquetout.EncoderBytes(s)
-	t.Logf("%s, input retained: %d writers, %d pages each, held %.1f MiB at most, admitted %.1f MiB", s.ID, writers, pages, float64(peak)/(1<<20), float64(admitted)/(1<<20))
-	if peak > admitted {
-		t.Fatalf("%s, input retained: %d writers held %d bytes, admitted %d", s.ID, writers, peak, admitted)
+		t.Fatalf("%s, input retained %v: %d writers held %d bytes, admitted %d", s.ID, retain, writers, peak, admitted)
 	}
 }
 

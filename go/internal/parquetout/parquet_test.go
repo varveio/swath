@@ -86,14 +86,16 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 
 func route(t *testing.T, rows []row, encoders int, partSize int64) (string, []dataset.Part) {
 	t.Helper()
-	return routeAdmit(t, rows, encoders, 0, -1, partSize)
+	out, parts, _, _ := routeAdmit(t, rows, encoders, 0, -1, partSize)
+	return out, parts
 }
 
 // routeAdmit is route with MaxEncoders max, Admit called after the
-// admitAt-th Write (never when negative).
-func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSize int64) (string, []dataset.Part) {
+// admitAt-th Write (never when negative), with the zstd states the shared
+// codec made before Admit and by Close.
+func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSize int64) (out string, parts []dataset.Part, before, after int) {
 	t.Helper()
-	out := t.TempDir()
+	out = t.TempDir()
 	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +105,7 @@ func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSiz
 	}
 	for i := 0; i < len(rows); i += 1500 {
 		if i/1500 == admitAt {
+			before = r.codec.states()
 			if n := r.Admit(); n != max(encoders, maxEnc) {
 				t.Fatalf("admitted %d, want %d", n, max(encoders, maxEnc))
 			}
@@ -112,11 +115,11 @@ func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSiz
 			t.Fatal(err)
 		}
 	}
-	parts, err := r.Close()
+	parts, err = r.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out, parts
+	return out, parts, before, r.codec.states()
 }
 
 func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
@@ -158,11 +161,21 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 
 // TestRouterAdmitIsByteIdentical: encoders admitted mid-run (as once
 // listing has ended) change neither the parts' boundaries nor their bytes,
-// and the router honours its raised count.
+// and the router honours its raised count. Its shared codec makes no more
+// zstd states than encoders admitted: before Admit, with MaxEncoders above
+// Encoders, at most Encoders; after, at most MaxEncoders. Whether a run
+// needs more than one state depends on how many compressions overlap (none
+// at GOMAXPROCS 1): TestCodecLeasesFollowLimit forces the overlap. A pool
+// of MaxEncoders handed round in turn warmed every state during listing,
+// past what admission had charged (sol review 3, P2: 148.5 MiB live
+// against 122.2 MiB priced at MaxEncoders 6).
 func TestRouterAdmitIsByteIdentical(t *testing.T) {
 	rows := testRows(60_000, 2)
 	_, base := route(t, rows, 1, 16<<10)
-	_, parts := routeAdmit(t, rows, 1, 4, 10, 16<<10)
+	_, parts, before, after := routeAdmit(t, rows, 2, 6, 20, 16<<10)
+	if before > 2 || after > 6 {
+		t.Fatalf("%d states before admission (2 admitted), %d after (6)", before, after)
+	}
 	if len(parts) != len(base) {
 		t.Fatalf("%d parts vs %d", len(parts), len(base))
 	}
@@ -380,51 +393,6 @@ func TestKeyLimits(t *testing.T) {
 	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
 	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
 		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
-	}
-}
-
-// TestCodecStatesFollowAdmission: the router's shared codec makes no more
-// zstd states than encoders admitted. Before Admit, with MaxEncoders above
-// Encoders, its writers use at most Encoders states; after, at most
-// MaxEncoders; the parts are one encoder's. Whether a run needs more than
-// one state depends on how many compressions overlap (none at
-// GOMAXPROCS 1): TestCodecLeasesFollowLimit forces the overlap. A pool
-// of MaxEncoders handed round in turn warmed every state during listing,
-// past what admission had charged (sol review 3, P2: 148.5 MiB live
-// against 122.2 MiB priced at MaxEncoders 6).
-func TestCodecStatesFollowAdmission(t *testing.T) {
-	rows := testRows(60_000, 2)
-	out := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	r, err := NewRouter(Options{Out: out, PartSize: 16 << 10, Encoders: 2, MaxEncoders: 6}, &testSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	half := len(rows) / 2
-	for i := 0; i < half; i += 1500 {
-		if err := r.Write(context.Background(), [][]row{rows[i:min(i+1500, half)]}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before := r.codec.states()
-	r.Admit()
-	for i := half; i < len(rows); i += 1500 {
-		if err := r.Write(context.Background(), [][]row{rows[i:min(i+1500, len(rows))]}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	parts, err := r.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	after := r.codec.states()
-	if before > 2 || after > 6 {
-		t.Fatalf("%d states before admission (2 admitted), %d after (6)", before, after)
-	}
-	if _, base := route(t, rows, 1, 16<<10); !slices.EqualFunc(parts, base, func(a, b dataset.Part) bool { return a.MD5 == b.MD5 }) {
-		t.Fatal("parts differ from one encoder's")
 	}
 }
 

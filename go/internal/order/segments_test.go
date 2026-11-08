@@ -209,9 +209,11 @@ func withProcs(t *testing.T, n int) {
 // exactly the serial drain's, with a byte limit alone and with a row cap,
 // for 2, 3 and 8 encoders admitted (the tiny budgets hold what the workers
 // read to the row budget: segReserve); every row passes the guard once (the oracle).
+// Without spill (a budget that holds everything), the rest held in memory
+// is cut and written as segments too, the parts the serial drain's.
 func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 	anyShare(t)
-	engaged := 0
+	engaged, fromMemory := 0, 0
 	for seed := range uint64(16) {
 		r := rand.New(rand.NewPCG(seed, 11))
 		want := genTree(rand.New(rand.NewPCG(seed, 11))).keys()
@@ -221,29 +223,38 @@ func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 			maxRows = int64(50 + r.IntN(2000))
 		}
 		budget := int64(50 + r.IntN(3000))
-		run := func(procs, encoders int) (*partSink, Stats) {
+		run := func(procs, encoders int, memory bool) (*partSink, Stats) {
 			t.Helper()
 			withProcs(t, procs)
 			fresh := genTree(rand.New(rand.NewPCG(seed, 11))) // the same shape, a fresh barrier
 			s := &partSink{limit: limit, maxRows: maxRows, encoders: encoders}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			st, err := Run[*rnode, tp](ctx, fresh, s, &testSchema, Options{Workers: 2 + r.IntN(8), Budget: budget, SpillDir: t.TempDir()})
+			opt := Options{Workers: 2 + r.IntN(8), Budget: budget, SpillDir: t.TempDir()}
+			if memory {
+				opt.Budget, opt.SpillDir = 1<<30, ""
+			}
+			st, err := Run[*rnode, tp](ctx, fresh, s, &testSchema, opt)
 			if err != nil {
 				t.Fatalf("seed %d procs %d: %v", seed, procs, err)
 			}
 			s.close()
 			return s, st
 		}
-		serial, sst := run(1, 1)
+		serial, sst := run(1, 1, false)
 		if sst.Segments.Reason != SegmentOneProcessor && sst.Segments.Reason != SegmentNotPlanned && sst.Segments.Reason != SegmentSinglePart {
 			t.Fatalf("seed %d: serial run's segments %+v", seed, sst.Segments)
 		}
 		if got := slices.Concat(serial.boundaries()...); !slices.Equal(got, want) {
 			t.Fatalf("seed %d: serial run's rows differ", seed)
 		}
+		if s, st := run(4, 3, true); st.SpillRows != 0 || !slices.EqualFunc(s.boundaries(), serial.boundaries(), slices.Equal[[]string]) {
+			t.Fatalf("seed %d in memory (%+v, %d rows spilled): %d parts, serial %d; or their rows differ", seed, st.Segments, st.SpillRows, len(s.parts), len(serial.parts))
+		} else if st.Segments.Reason == SegmentEngaged {
+			fromMemory++
+		}
 		for _, k := range []int{2, 3, 8} {
-			s, st := run(k+1, k)
+			s, st := run(k+1, k, false)
 			if !slices.EqualFunc(s.boundaries(), serial.boundaries(), slices.Equal[[]string]) {
 				t.Fatalf("seed %d k %d (%+v): %d parts, serial %d; or their rows differ", seed, k, st.Segments, len(s.parts), len(serial.parts))
 			}
@@ -266,8 +277,8 @@ func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 			}
 		}
 	}
-	if engaged == 0 {
-		t.Fatal("the segments never engaged")
+	if engaged == 0 || fromMemory == 0 {
+		t.Fatalf("the segments engaged %d times spilled, %d in memory", engaged, fromMemory)
 	}
 }
 
@@ -335,72 +346,50 @@ func TestSegmentsSeamError(t *testing.T) {
 	}
 }
 
-// TestSegmentsMemoryIsBounded: under a tiny budget the segments hold no
-// more than the serial drain: the budget, one publish batch per worker, the
-// frontier path, and the read-ahead's share it had when they began.
+// TestSegmentsMemoryIsBounded: the segments hold no more than the serial
+// drain: the stage's bound with the read-ahead's share it had when they
+// began (heldBoundRun).
 func TestSegmentsMemoryIsBounded(t *testing.T) {
 	anyShare(t)
 	withProcs(t, 5)
-	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
-	const workers, budget = 16, 500
 	s := &partSink{limit: 5000, encoders: 4}
-	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: workers, Budget: budget, SpillDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st, f := heldBoundRun(t, s)
 	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
 		t.Fatal("rows differ")
 	}
-	t.Logf("max buffered %d; segments %+v", st.MaxBuffered, st.Segments)
 	if st.Segments.Reason != SegmentEngaged {
 		t.Fatalf("segments %+v", st.Segments)
 	}
-	if limit := int64(budget+workers*publishRows+f.rows) + max(budget/4, publishRows); st.MaxBuffered > limit {
-		t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
-	}
 }
 
-// TestSegmentsFromMemory: without spill, the rest held in memory is cut
-// and written as segments too, the parts the serial drain's.
-func TestSegmentsFromMemory(t *testing.T) {
-	run := func(procs int) (*partSink, Stats) {
-		withProcs(t, procs)
-		f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-		f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-		f.left.Store(int64(f.siblings))
-		s := &partSink{limit: 20_000, encoders: 4}
-		st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30})
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.close()
-		return s, st
-	}
-	serial, _ := run(1)
-	s, st := run(5)
-	if st.Segments.Reason != SegmentEngaged || st.SpillRows != 0 {
-		t.Fatalf("segments %+v, %d rows spilled", st.Segments, st.SpillRows)
-	}
-	if !slices.EqualFunc(s.boundaries(), serial.boundaries(), slices.Equal[[]string]) {
-		t.Fatal("parts differ from the serial drain's")
-	}
-}
-
-// TestSegmentWorkersCap: Options.SegmentWorkers caps the workers.
+// TestSegmentWorkersCap: Options.SegmentWorkers caps the workers; and
+// ListingDone is called once, when the last range is expanded, before the
+// drain ends, the workers' idle time split at it.
 func TestSegmentWorkersCap(t *testing.T) {
 	withProcs(t, 9)
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
 	s := &partSink{limit: 3000, encoders: 8}
-	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30, SegmentWorkers: 3})
+	var calls atomic.Int64
+	var at time.Time
+	st, err := Run[fr, tp](context.Background(), f, s, &testSchema, Options{Workers: 8, Budget: 1 << 30, SegmentWorkers: 3,
+		ListingDone: func() {
+			if calls.Add(1) == 1 {
+				at = time.Now()
+			}
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st.Segments.Reason != SegmentEngaged || st.Segments.Workers != 3 {
 		t.Fatalf("segments %+v, want 3 workers", st.Segments)
+	}
+	if calls.Load() != 1 || st.ListingDone.IsZero() || at.Before(st.ListingDone) || st.DrainEnd.Before(st.ListingDone) {
+		t.Fatalf("calls %d, listing done %v (called at %v), drain end %v", calls.Load(), st.ListingDone, at, st.DrainEnd)
+	}
+	if st.IdleBefore <= 0 {
+		t.Fatalf("idle before %v: the workers waited for the held frontier's children", st.IdleBefore)
 	}
 }
 
