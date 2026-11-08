@@ -29,7 +29,7 @@ go -C "$checkout/go" build -o "$work/seekparquet-adapter" ./internal/cmd/conform
 
 if [ ! -x "$work/venv/bin/python" ]; then
   python3 -m venv "$work/venv"
-  "$work/venv/bin/python" -m pip install --quiet -r "$checkout/conformance/generators/requirements.txt"
+  "$work/venv/bin/python" -m pip install --quiet --retries 10 --timeout 60 -r "$checkout/conformance/generators/requirements.txt"
 fi
 rm -rf "$work/datasets"
 SWATH_SEEKPARQUET_FIXTURES="$work/datasets" go test -count=1 -run '^TestSeekParquetFixtures$' ./internal/listing
