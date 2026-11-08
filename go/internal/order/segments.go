@@ -105,6 +105,10 @@ type SegmentStats struct {
 	// planned: what the segments' budget does not count (the serial
 	// drain holds it too).
 	Tree int64
+	// DurableFiles is the durable spill files (order.Cache) the segments
+	// read frames of; DurableBoundaries the segment boundaries that fall
+	// inside one of their frames (a span of it on either side).
+	DurableFiles, DurableBoundaries int
 }
 
 // What set the segment workers' count (SegmentStats.WorkersBy).
@@ -301,6 +305,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		by = WorkersBySegments
 	}
 	o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free, o.seg.st.Tree = by, per, free, tree
+	o.seg.st.DurableFiles, o.seg.st.DurableBoundaries = durableUse(units, segs)
 	// The units are the rows' only reference now: the tree's items drop
 	// theirs, and the last segment to read a unit drops it (segment).
 	for _, it := range mem {
@@ -378,6 +383,24 @@ func segmentShare[P any](units []unit[P], pl SegmentPlan) int64 {
 	}
 	batch := batchRows + rows // a batch closes at the unit that brings it to batchRows
 	return frame + runBytes(units, int64(pl.Queue+3)*batch)
+}
+
+// durableUse counts the durable spill files among units and the segment
+// boundaries inside one of their frames (SegmentStats).
+func durableUse[P any](units []unit[P], segs []segment) (files, boundaries int) {
+	seen := map[*spillFile]bool{}
+	for i := range units {
+		if f := units[i].f; f != nil && f.d != nil && !seen[f] {
+			seen[f] = true
+			files++
+		}
+	}
+	for _, s := range segs[1:] {
+		if s.r0 > 0 && s.u0 < len(units) && units[s.u0].f != nil && units[s.u0].f.d != nil {
+			boundaries++
+		}
+	}
+	return files, boundaries
 }
 
 // runBytes is the most budget bytes any run of consecutive units holding

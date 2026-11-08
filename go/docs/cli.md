@@ -735,7 +735,7 @@ drain's tail once listing is done ([internals/ordering.md](internals/ordering.md
 `drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
 `segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
 `decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
-`per_worker_bytes`, `free_bytes`, `tree_bytes`); and `encoders_at_start`, `encoders_after_listing`,
+`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`); and `encoders_at_start`, `encoders_after_listing`,
 `encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one

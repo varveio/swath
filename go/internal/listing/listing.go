@@ -1084,7 +1084,8 @@ func (a *attempt) drain(ost order.Stats, oopt order.Options) *Drain {
 		d.Segments = &Segments{Reason: s.Reason, Segments: s.Segments, Workers: s.Workers, Rows: s.Rows, MaxRows: s.MaxRows, Seams: s.Seams,
 			TimeNs: int64(s.Time), MaxNs: int64(s.MaxTime), PlanNs: int64(s.Plan), ReadNs: int64(s.Read), DecodeNs: int64(s.Decode), WriteNs: int64(s.Write),
 			MaxWorkers: oopt.SegmentWorkers, BudgetWaits: s.BudgetWaits, BudgetWaitNs: int64(s.BudgetWait), MaxHeldBytes: s.MaxHeld,
-			WorkersBy: s.WorkersBy, PerWorkerBytes: s.PerWorker, FreeBytes: s.Free, TreeBytes: s.Tree}
+			WorkersBy: s.WorkersBy, PerWorkerBytes: s.PerWorker, FreeBytes: s.Free, TreeBytes: s.Tree,
+			DurableFilesRead: s.DurableFiles, DurableBoundaries: s.DurableBoundaries}
 		l := a.cfg.Limits
 		d.EncodersAtStart, d.EncodersAfterListing = l.Encoders, a.router.Encoders()
 		switch {

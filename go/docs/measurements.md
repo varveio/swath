@@ -1062,6 +1062,27 @@ swath trusts a page that is not truncated as the end of its range
 ([providers.md](internals/providers.md#range-engine-internalsourcekeyrange)), so the campaign's MinIO fixture
 is a list without that shape.
 
+## Drain tail: read-ahead and segments, 2026-11-07/08
+
+Batch, 64 lists of 20M keys or more, 256 workers, sorted Parquet (`pq256`) and TSV, n4-highcpu-16 unless said;
+ratios are wall against a binary run the same night (median · p90); every run's datasets byte-identical.
+
+| Run | Against | pq256 wall | tsv | Notes |
+|---|---|---|---|---|
+| segments at 8 vs 15 workers (16 vCPU) | the serial build | 0.75× (8) vs 0.81× (15) | – | 8 workers chosen (`minSegmentWorkers`, one per two processors) |
+| sentinel-cogs, 1.09B keys, 32 cores | 8 workers | 31 workers: −10 s of a 140 s tail | – | RSS 6.3 vs 3.4 GB; tail split 1,724 s writing, 714 s reading spill, 621 s decoding (≈68 % of 32 cores): CPU-bound |
+| `seg3` (a9c1e57f: the reservation counting the tree) | `seg3b` (3b057e78) | tail 1.10× median, up to 3× | – | 46 of 64 lists waited (`budget_waits` up to 46,528; logan-pub 15.5 → 45.4 s) |
+| `seg4` (eb826e5d: workers sized at plan time) | `seg4b` (3b057e78) | 1.01 · 1.09 (max 1.22) | 1.01 · 1.06 | `budget_waits` 0 on 64/64; the largest tails 10–25 % slower: encoders at start 5 → 3 (P2-E6) |
+| `seg5` (f6fee172: zstd lower-memory states, 4 encoders at start) | `seg5b` (3b057e78) | 1.03 · 1.16 | 1.02 · 1.15 | tail median 1.05×; A/A of 3b057e78: 1.00 · 1.06; `--encoders 5` slower |
+| `seg5` | `7b05605` (before phase 2) | 0.76 · 0.92 | – | |
+| `seg6` (c57d8825, main merged) | `seg6b` (main 9ad554b1) | 0.89 · 1.04 (max 1.16) | 0.98 · 1.06 | RSS median 649 MB, max 1.1 GB |
+| `seg6all` (251 lists, 64 workers, 50 ms) | the PR-1 gates | every gate holds | – | wall/ideal 1.17, p90 1.52; 251/251 identical, resume@40 too |
+
+Read-ahead: on one core it took turns with the drainer (the three largest lists 5 to 11 % slower with it), so it is
+off at GOMAXPROCS 1. Locally (2M keys, 4 cores) it read about 1,200 of 1,230 frames ahead without moving the
+wall: the tail was encoder-bound, which the segments then addressed. Open ablation, not run: segments on with
+the read-ahead off, and the plan-time pricing against a fixed worker count, on the 64 lists.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

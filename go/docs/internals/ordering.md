@@ -488,6 +488,11 @@ one whose `read_ns` is, by the spill disk.
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
   covers it).
+  On a resume that reuses certificates, a reused certificate is a replay range the drainer alone expands when
+  it reaches it, so listing is not done, and the segments cannot begin, until the drainer has passed the last
+  one; such a resume's tail then stays serial (`listing_active`) when the certificates lie near the end of the
+  keyspace (`TestSegmentsReplayDurableFiles`). The report counts what the segments read: `durable_files_read`
+  and `durable_boundaries`.
 
 ## Durable spill
 

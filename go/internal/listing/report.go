@@ -468,6 +468,11 @@ type Segments struct {
 	// TreeBytes is the budget bytes the tree held when the segments were
 	// planned, beside what they may take (two budgets in all, at most).
 	TreeBytes int64 `json:"tree_bytes"`
+	// DurableFilesRead is the durable spill files the segments read
+	// frames of; DurableBoundaries the segment boundaries inside one of
+	// their frames.
+	DurableFilesRead  int `json:"durable_files_read"`
+	DurableBoundaries int `json:"durable_boundaries"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").
