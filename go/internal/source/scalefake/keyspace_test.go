@@ -4,6 +4,7 @@
 package scalefake
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"sort"
@@ -178,7 +179,8 @@ func reference(keys []string, q Query) []Entry {
 // TestListMatchesReference: random queries (prefix, bound, inclusive or
 // not, end, delimiter, page size), paged through to the end with the
 // continuation token, give exactly the reference's entries, every page
-// full but the last, and Next empty exactly on the last.
+// full but the last, and Next empty exactly on the last; for every shape,
+// and for the same keys given as a list (FromKeys).
 func TestListMatchesReference(t *testing.T) {
 	for name, s := range shapes() {
 		t.Run(name, func(t *testing.T) {
@@ -187,55 +189,133 @@ func TestListMatchesReference(t *testing.T) {
 				t.Fatal(err)
 			}
 			keys := materialize(t, k)
-			r := rand.New(rand.NewPCG(s.Seed, 11))
-			for n := range 200 {
-				q := Query{Max: []int{1, 2, 3, 7, 100, 1000}[r.IntN(6)]}
-				if r.IntN(2) == 0 {
-					q.Prefix = probe(r, keys)
-					if r.IntN(2) == 0 {
-						if i := strings.LastIndex(q.Prefix, "/"); i >= 0 {
-							q.Prefix = q.Prefix[:i+1]
-						}
-					}
-				}
-				if r.IntN(3) > 0 {
-					q.After = probe(r, keys)
-				}
-				q.Inclusive, q.RollUpBelow = r.IntN(2) == 0, r.IntN(2) == 0
-				if r.IntN(3) == 0 {
-					q.End = probe(r, keys)
-				}
-				if r.IntN(2) == 0 {
-					q.Delimiter = "/"
-				}
-				want := reference(keys, q)
-				if len(want)/q.Max > 200 { // small pages are for short listings
-					q.Max = 1000
-				}
-				var got []Entry
-				for pages := 0; ; pages++ {
-					p, err := k.List(q)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if p.Next != "" && len(p.Entries) != q.Max {
-						t.Fatalf("query %d %+v: a page of %d with a next token", n, q, len(p.Entries))
-					}
-					got = append(got, p.Entries...)
-					if p.Next == "" {
-						break
-					}
-					if pages > len(keys)+2 {
-						t.Fatalf("query %d %+v: no end", n, q)
-					}
-					q.Token = p.Next
-				}
-				if !slices.Equal(got, want) {
-					t.Fatalf("query %d %+v:\n got %d entries %.300v\nwant %d entries %.300v", n, q, len(got), got, len(want), want)
-				}
+			checkQueries(t, k, keys, rand.New(rand.NewPCG(s.Seed, 11)))
+			l, err := FromKeys(keys)
+			if err != nil {
+				t.Fatal(err)
 			}
+			if l.Len() != k.Len() || l.String() != fmt.Sprintf("keys=%d list", len(keys)) || l.Dirs() != 0 {
+				t.Fatalf("list keyspace %s, %d keys, %d dirs", l, l.Len(), l.Dirs())
+			}
+			checkQueries(t, l, keys, rand.New(rand.NewPCG(s.Seed, 12)))
 		})
 	}
+}
+
+// hostileList is a key list no generated shape makes: multi-byte and
+// high bytes, '%', siblings that sort around '/', keys that are prefixes
+// of other keys, a folder marker, and 0xff runs.
+func hostileList() []string {
+	var keys []string
+	for i := range 300 {
+		for _, suf := range []string{"", "!", " copy", "-old", ".bak", "/", "/x", "_v2", "~", "%2F", "\xff", "\xff\xff/z"} {
+			keys = append(keys, fmt.Sprintf("p/n%03d%s", i%40, suf)+strings.Repeat("é", i%3)+fmt.Sprint(i/40))
+		}
+	}
+	keys = append(keys, "", "a/", "a//b", "\xff\xff\xff")
+	slices.Sort(keys)
+	return slices.Compact(keys)[1:] // no empty key
+}
+
+// TestKeyListHostile: a hostile key list answers every query as the
+// reference does; ReadKeys reads the same list from a file with or
+// without its last newline, and refuses one out of order or repeated.
+func TestKeyListHostile(t *testing.T) {
+	keys := hostileList()
+	k, err := FromKeys(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkQueries(t, k, keys, rand.New(rand.NewPCG(3, 4)))
+	file := strings.Join(keys, "\n")
+	for _, f := range []string{file, file + "\n"} {
+		r, err := ReadKeys(strings.NewReader(f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := materialize(t, r); !slices.Equal(got, keys) {
+			t.Fatalf("ReadKeys: %d keys, want %d", len(got), len(keys))
+		}
+	}
+	if e, err := ReadKeys(strings.NewReader("")); err != nil || e.Len() != 0 {
+		t.Fatalf("empty file: %v, %d keys", err, e.Len())
+	}
+	for _, bad := range []string{"b\na\n", "a\na\n", "a\n\nb\n"} {
+		if _, err := ReadKeys(strings.NewReader(bad)); err == nil {
+			t.Fatalf("ReadKeys(%q) accepted", bad)
+		}
+	}
+	if _, err := FromKeys([]string{"a", "b\nc"}); err == nil {
+		t.Fatal("FromKeys accepted a newline")
+	}
+}
+
+// checkQueries runs 200 random queries against k, whose keys are keys.
+func checkQueries(t *testing.T, k *Keyspace, keys []string, r *rand.Rand) {
+	t.Helper()
+	for n := range 200 {
+		q := Query{Max: []int{1, 2, 3, 7, 100, 1000}[r.IntN(6)]}
+		if r.IntN(2) == 0 {
+			q.Prefix = probe(r, keys)
+			if r.IntN(2) == 0 {
+				if i := strings.LastIndex(q.Prefix, "/"); i >= 0 {
+					q.Prefix = q.Prefix[:i+1]
+				}
+			}
+		}
+		if r.IntN(3) > 0 {
+			q.After = probe(r, keys)
+		}
+		q.Inclusive, q.RollUpBelow = r.IntN(2) == 0, r.IntN(2) == 0
+		if r.IntN(3) == 0 {
+			q.End = probe(r, keys)
+		}
+		if r.IntN(2) == 0 {
+			q.Delimiter = "/"
+		}
+		want := reference(keys, q)
+		if len(want)/q.Max > 200 { // small pages are for short listings
+			q.Max = 1000
+		}
+		if first, ok, err := k.First(q); err != nil || ok != (firstAt(keys, q) < len(keys)) || (ok && first != keys[firstAt(keys, q)]) {
+			t.Fatalf("query %d %+v: First %q %v %v", n, q, first, ok, err)
+		}
+		var got []Entry
+		for pages := 0; ; pages++ {
+			p, err := k.List(q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Next != "" && len(p.Entries) != q.Max {
+				t.Fatalf("query %d %+v: a page of %d with a next token", n, q, len(p.Entries))
+			}
+			got = append(got, p.Entries...)
+			if p.Next == "" {
+				break
+			}
+			if pages > len(keys)+2 {
+				t.Fatalf("query %d %+v: no end", n, q)
+			}
+			q.Token = p.Next
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("query %d %+v:\n got %d entries %.300v\nwant %d entries %.300v", n, q, len(got), got, len(want), want)
+		}
+	}
+}
+
+// firstAt is the index of the first of keys at or past q's prefix and
+// bound (q has no token).
+func firstAt(keys []string, q Query) int {
+	i := sort.SearchStrings(keys, q.Prefix)
+	if q.After != "" {
+		j := sort.SearchStrings(keys, q.After)
+		if !q.Inclusive && j < len(keys) && keys[j] == q.After {
+			j++
+		}
+		i = max(i, j)
+	}
+	return i
 }
 
 func TestListBadToken(t *testing.T) {
