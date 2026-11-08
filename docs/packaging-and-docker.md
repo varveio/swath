@@ -315,8 +315,11 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
 builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
 no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
-**`docker-publish`** additionally serves the CLI smoke's real Parquet capture through the replay
-image's DuckDB and Jetty paths before pushing both dev images to GHCR. Tagged publication belongs
+**`docker-publish`** runs an offline smoke (`--version` and `--help` on both images) before
+pushing both dev images to GHCR. Its deep smoke (Parquet write, read and resume against the
+public smoke bucket, then the replay image serving that capture through DuckDB and Jetty) reaches
+a real bucket, so it runs only on manual dispatch; no push or merge touches a real bucket. The
+release workflow runs the same deep smoke against the pushed digest before it applies `latest`. Tagged publication belongs
 to `.github/workflows/release.yml`, behind the protected `public-release`
 environment.
 
@@ -325,8 +328,8 @@ Which jobs run depends on the trigger:
 | Event | fast-tests | integration-tests | deep-tests | docker-check | docker-publish |
 |---|:--:|:--:|:--:|:--:|:--:|
 | **Pull request** (feature branch) | ✅ | — | — | ✅ (build + smoke, no push) | — |
-| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`) |
-| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only) |
+| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`, offline smoke) |
+| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only, plus the public-bucket smoke) |
 
 A merge that changes only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
 tiers: the Java jobs report success with their steps skipped and no Java image is published,
