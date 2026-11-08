@@ -6,6 +6,7 @@ package order
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -749,7 +750,7 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 			}
 		}
 		if !any {
-			lo, any = rs[0].Key, true
+			lo, any = strings.Clone(rs[0].Key), true // kept for the seam check: not the rows' storage
 		}
 		hi = rs[len(rs)-1].Key
 		n += int64(len(rs))
@@ -764,7 +765,9 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 	if err := write(); err != nil {
 		return 0, "", "", false, err
 	}
-	return n, lo, hi, any, nil
+	// The last key is kept until every segment has finished (the seam
+	// check): a copy, so it does not keep its frame or span alive.
+	return n, lo, strings.Clone(hi), any, nil
 }
 
 // checkTrailers checks, for every spill file the segments finished, that

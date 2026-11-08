@@ -509,6 +509,11 @@ type queuedSink struct {
 	stall  time.Duration
 	hold   chan struct{} // if set, every encoder waits on it before its first batch
 	queued atomic.Int64  // batches written to segments
+	closed atomic.Int64  // segment parts closed (their batches taken)
+	// atHold, if set, runs when the last segment hands its part back,
+	// once every other segment's part is closed: every segment but the
+	// last has finished.
+	atHold func()
 	wg     sync.WaitGroup
 	peak   atomic.Int64
 	held   *queuedSeg
@@ -570,11 +575,18 @@ func (g *queuedSeg) Close(ctx context.Context, rowCut bool) {
 	close(g.c)
 	<-g.drained // as the router's: the part's batches taken first
 	g.fakeSeg.Close(ctx, rowCut)
+	g.q.closed.Add(1)
 }
 
 func (g *queuedSeg) Hold(rowCut bool) {
 	g.q.held = g
 	g.fakeSeg.Hold(rowCut)
+	if g.q.atHold != nil {
+		for g.q.closed.Load() < int64(g.n-1) { // the parts opened before it (it opened last)
+			time.Sleep(time.Millisecond)
+		}
+		g.q.atHold()
+	}
 }
 
 // close ends the held part's queue and waits for every encoder.
@@ -734,4 +746,68 @@ func gcLive() int64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return int64(m.HeapAlloc)
+}
+
+// TestSegmentsCompletedPartsReleaseStorage: once a segment has finished,
+// nothing of it keeps row storage alive. Long keys in 1,000-row frames and
+// chunks, parts of about 28 rows (up to about 1,400 segments; fewer at
+// GOMAXPROCS 1, where the serial drain gets further), measured when the
+// last segment hands its part back and every other part is closed:
+//   - spilled: the seam keys each finished segment leaves for the seam
+//     check are copies, not views of the span or frame they came from
+//     (before, sol review 4, P2: every finished part kept its boundary
+//     span, tens of megabytes here);
+//   - in memory: the units every finished segment read are dropped once
+//     their last reader is done, and the tree's items with them (before
+//     7a6ff48e: every row stayed until the drain ended).
+//
+// The live heap, less the keys the fake parts keep, stays within two
+// budgets.
+func TestSegmentsCompletedPartsReleaseStorage(t *testing.T) {
+	withProcs(t, 5)
+	anyShare(t)
+	countRows = false
+	defer func() { countRows = true }()
+	for _, arm := range []struct {
+		name   string
+		budget int64
+		spill  bool
+	}{{"spilled", 2 << 20, true}, {"memory", 64 << 20, false}} {
+		f := &frontier{slowPages: 1, siblings: 40, sibPages: 1, rows: 1000, long: 1}
+		f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+		f.left.Store(int64(f.siblings))
+		shared := &Shared{}
+		s := &queuedSink{partSink: &partSink{limit: 30_000, encoders: 4, queue: 2}, shared: shared}
+		runtime.GC()
+		base := gcLive()
+		var held int64 = -1
+		s.atHold = func() {
+			s.mu.Lock()
+			kept := s.keyBytes
+			s.mu.Unlock()
+			held = gcLive() - base - kept
+		}
+		opt := Options{Workers: 8, Budget: arm.budget, Shared: shared}
+		if arm.spill {
+			opt.SpillDir = t.TempDir()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		st, err := Run[fr, tp](ctx, f, s, &testSchema, opt)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.close()
+		if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
+			t.Fatalf("%s: rows differ", arm.name)
+		}
+		sg := st.Segments
+		t.Logf("%s: %d segments, %d workers, %d spilled; live heap %.1f MiB when the last segment finished", arm.name, sg.Segments, sg.Workers, st.SpillRows, float64(held)/(1<<20))
+		if sg.Reason != SegmentEngaged || sg.Segments < 150 || (st.SpillRows > 0) != arm.spill || held < 0 {
+			t.Fatalf("%s: segments %+v, %d spilled, held %d", arm.name, sg, st.SpillRows, held)
+		}
+		if held > 2*min(arm.budget, 4<<20) {
+			t.Fatalf("%s: %d bytes live when the last segment finished", arm.name, held)
+		}
+	}
 }
