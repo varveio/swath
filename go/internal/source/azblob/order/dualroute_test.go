@@ -76,6 +76,8 @@ func list(t *testing.T, a *Adapter, q keyrange.Query, retries int) []string {
 // every prefix of the corpus's nested pairs; between the names holding a
 // byte in EE..F4; and the whole container behind faulttest's Azure
 // throttles and resets.
+// The full §7.3 (S3 route, shared fields, workers, seed and structure
+// modes, faults, crash and resume) and §7.4 belong to the wiring PR.
 func TestDualRoute(t *testing.T) {
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)

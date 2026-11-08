@@ -106,6 +106,7 @@ func (c *propertyCase) store() *ordertest.Store {
 func (c *propertyCase) check(set *counters.Set) (string, *ordertest.Store) {
 	st := c.store()
 	a := New(st, "c", set, 0)
+	before := a.Counter(CResponses)
 	a.trace = func(s span) { c.traced = append(c.traced, s) }
 	items, err := drain(testing.TB(nil), a, c.q, 1<<20)
 	if err != nil {
@@ -114,8 +115,10 @@ func (c *propertyCase) check(set *counters.Set) (string, *ordertest.Store) {
 	if got, want := names(items), oracle(c.keys, c.q); !slices.Equal(got, want) {
 		return fmt.Sprintf("listed %q, want %q", got, want), st
 	}
-	if st.Responses() > st.Attempts() {
-		return fmt.Sprintf("%d responses, %d attempts", st.Responses(), st.Attempts()), st
+	// Responses from the adapter's own counter, attempts from the fake's
+	// request log: two independent sources.
+	if responses := a.Counter(CResponses) - before; responses > int64(len(st.Log())) || responses != int64(st.Responses()) {
+		return fmt.Sprintf("%d responses counted, %d answered, %d attempts", responses, st.Responses(), len(st.Log())), st
 	}
 	if a.Len() != 0 {
 		return fmt.Sprintf("%d chains registered after the last page", a.Len()), st
@@ -193,7 +196,7 @@ func TestProperty(t *testing.T) {
 	}
 	// The generator reaches every path: splits, overlap past a span's end,
 	// empty continuing pages, empty spans and failed reads.
-	for _, i := range []int{CSpans, CSplits, CSeeks, CProbes, COverlapRows, CEmptyPages} {
+	for _, i := range []int{CSpans, CSplits, CSeeks, CProbes, COverlapRows, CEmptyPages, CResponses} {
 		if set.Load(counters.ID(i)) == 0 {
 			t.Errorf("no case engaged %s", CounterDefs[i].Key)
 		}

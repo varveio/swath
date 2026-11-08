@@ -48,6 +48,9 @@ const (
 	CEmptyPages
 	CStackMax
 	CBufferRowsMax
+	CResponses
+	CChainsEvicted
+	CChainsMax
 )
 
 // CounterDefs are the adapter's counters (§6), for the provider to
@@ -61,7 +64,18 @@ var CounterDefs = []counters.Def{
 	{Key: "order_empty_pages", Kind: counters.Count, Unit: "pages", Help: "empty continuing pages followed inside a span's read"},
 	{Key: "order_stack_max", Kind: counters.Max, Unit: "spans", Help: "the most spans a chain held"},
 	{Key: "order_buffer_rows_max", Kind: counters.Max, Unit: "items", Help: "the most items a chain held read and not yet emitted"},
+	{Key: "order_responses", Kind: counters.Count, Unit: "responses", Help: "listing responses the adapter consumed, empty continuing pages and the work of failed pages included"},
+	{Key: "order_chains_evicted", Kind: counters.Count, Unit: "chains", Help: "idle chains dropped, least recently used first, past MaxChains; their tokens are refused"},
+	{Key: "order_chains_max", Kind: counters.Max, Unit: "chains", Help: "the most chains an adapter held registered"},
 }
+
+// MaxChains is the most chains one adapter keeps registered; past it the
+// least recently used idle chain is evicted and its token refused
+// (ErrToken). The engine abandons chains routinely (a structure probe
+// drops its continuation, a split drops its parent's), so without a cap
+// they would accumulate until Release. 64 is far above what one range has
+// in flight: its listing chain plus a few probes.
+const MaxChains = 64
 
 // maxNameUnits is the longest Azure name, in UTF-16 code units.
 const maxNameUnits = 1024
@@ -120,6 +134,7 @@ type Adapter struct {
 	mu     sync.Mutex
 	chains map[uint64]*chain
 	next   uint64
+	clock  uint64 // ticks on every commit: a chain's used is its last tick
 
 	// trace, when set (tests), sees every span created.
 	trace func(span)
@@ -167,6 +182,7 @@ type chain struct {
 	limit int // stackBound of the chain's bounds
 	ids   int
 	seq   uint64
+	used  uint64
 	last  string // the last name emitted
 	any   bool   // a name was emitted
 }
@@ -261,12 +277,31 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 			a.next++
 			id = a.next
 		}
+		a.clock++
+		c.used = a.clock
 		a.chains[id] = c
 		page.Token = strconv.FormatUint(id, 10) + ":" + strconv.FormatUint(c.seq, 10)
+		for len(a.chains) > MaxChains {
+			a.evict()
+		}
+		a.max(CChainsMax, int64(len(a.chains)))
 	case id != 0:
 		delete(a.chains, id)
 	}
 	return page, nil
+}
+
+// evict drops the least recently used chain; a.mu is held.
+func (a *Adapter) evict() {
+	var oldest uint64
+	var lru *chain
+	for id, c := range a.chains {
+		if lru == nil || c.used < lru.used {
+			oldest, lru = id, c
+		}
+	}
+	delete(a.chains, oldest)
+	a.add(CChainsEvicted, 1)
 }
 
 func parseToken(t string) (id, seq uint64, err error) {
@@ -339,6 +374,7 @@ func (a *Adapter) read(ctx context.Context, c *chain, i, limit int) error {
 	if err != nil {
 		return err
 	}
+	a.add(CResponses, 1)
 	if len(out.Items) == 0 && out.NextMarker != "" {
 		a.add(CEmptyPages, 1)
 	}

@@ -167,6 +167,9 @@ func TestWorkedExamples(t *testing.T) {
 			if got := names(items); !slices.Equal(got, row.want) || !slices.Equal(row.want, oracle(row.keys, row.q)) {
 				t.Errorf("items %q, want %q (oracle %q)", got, row.want, oracle(row.keys, row.q))
 			}
+			if a.Counter(CResponses) != int64(row.responses) || a.Counter(CResponses) > int64(len(st.Log())) {
+				t.Errorf("%d responses counted, %d attempts, want %d", a.Counter(CResponses), len(st.Log()), row.responses)
+			}
 			if st.Responses() != row.responses {
 				t.Errorf("%d responses, want %d\n%s", st.Responses(), row.responses, st)
 			}
@@ -533,5 +536,55 @@ func TestStackBoundAtMaximumBounds(t *testing.T) {
 	_, a := run(t, []string{E, E + S, S, S + E, "b"}, q, nil)
 	if a.Counter(CStackMax) < int64(spans) {
 		t.Errorf("stack max %d", a.Counter(CStackMax))
+	}
+}
+
+// TestChainsEvicted: first pages never continued keep the registry at
+// MaxChains, the least recently used evicted (its token refused) and the
+// retained buffers bounded; a chain continued between them is always the
+// most recently used and is never evicted.
+func TestChainsEvicted(t *testing.T) {
+	var keys []string
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("k%03d", i), fmt.Sprintf("k%03d", i)+S, fmt.Sprintf("k%03d", i)+E)
+	}
+	st := ordertest.New(keys)
+	st.Short = every(5)
+	a := New(st, "c", nil, 0)
+	live := keyrange.Query{Max: 1}
+	var first string
+	for i := range 4 * MaxChains {
+		q := keyrange.Query{After: keys[i], Max: 1}
+		p, err := a.Fetch(context.Background(), &q)
+		if err != nil || !p.Truncated {
+			t.Fatal(p, err)
+		}
+		if i == 0 {
+			first = p.Token
+		}
+		if p, err = a.Fetch(context.Background(), &live); err != nil || !p.Truncated {
+			t.Fatalf("the continued chain at %d: %v", i, err)
+		}
+		live.Token = p.Token
+		if a.Len() > MaxChains {
+			t.Fatalf("%d chains", a.Len())
+		}
+	}
+	if a.Len() != MaxChains || a.Counter(CChainsMax) != MaxChains || a.Counter(CChainsEvicted) != int64(3*MaxChains+1) {
+		t.Errorf("%d chains, max %d, %d evicted", a.Len(), a.Counter(CChainsMax), a.Counter(CChainsEvicted))
+	}
+	a.mu.Lock()
+	rows := 0
+	for _, c := range a.chains {
+		for i := range c.stack {
+			rows += len(c.stack[i].buf)
+		}
+	}
+	a.mu.Unlock()
+	if rows > MaxChains*5 {
+		t.Errorf("%d rows retained", rows)
+	}
+	if _, err := a.Fetch(context.Background(), &keyrange.Query{After: keys[0], Max: 1, Token: first}); !errors.Is(err, ErrToken) {
+		t.Errorf("an evicted chain's token: %v", err)
 	}
 }
