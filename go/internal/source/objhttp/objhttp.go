@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // Class is what kind of failure an error is, for the caller's decision:
@@ -41,6 +42,7 @@ const (
 	ClassTransport    Class = "transport"      // the connection failed or was cut
 	ClassParse        Class = "parse"          // a 200 whose body did not parse
 	ClassInvalidPage  Class = "invalid_page"   // a page that breaks the listing contract (provider-detected)
+	ClassUnsupported  Class = "unsupported"    // a source or a name the tool refuses (source.ErrUnsupported): the run is refused, its journal kept
 	ClassCanceled     Class = "canceled"       // the caller's context ended
 	ClassOther        Class = "other"
 )
@@ -195,6 +197,10 @@ func Classify(err error, answer func(error) (Class, bool)) Class {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, source.ErrUnsupported):
+		// before the answer it may carry: an account whose namespace
+		// cannot be read is refused as unsupported, whatever the answer
+		return ClassUnsupported
 	case errors.As(err, &ce):
 		// before the context check: a credential failure may wrap a
 		// deadline (a token exchange's own timeout) without the caller's

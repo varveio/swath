@@ -116,8 +116,14 @@ func classify(err, cause error, dir string) outcome {
 		// The caller's to fix (another output, --overwrite, the original
 		// settings): nothing ran, and the output is as it was, so
 		// Resumable still says whether swath resume can continue a run
-		// there.
+		// there. A source refused mid-run (an Azure name at U+E000 and
+		// above) keeps its journal, so it stays resumable by a build that
+		// lists it; the provider's class is its cause.
 		o.Class, o.ExitCode = listing.ClassRefused, exitUsage
+		var ce interface{ Class() string }
+		if errors.As(err, &ce) {
+			o.Cause = ce.Class()
+		}
 	case errors.Is(err, source.ErrProtocol), errors.As(err, &ue):
 		// The service broke the listing contract: never resumable, and
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
