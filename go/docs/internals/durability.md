@@ -388,5 +388,5 @@ tail as JSON lines.
   part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
   What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. The
-  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in CI's `go` job,
+  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in CI's `go-build` job,
   never run natively.

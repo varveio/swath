@@ -298,7 +298,7 @@ on both, and nothing in the Go server needed a change for them. `bench/replayloa
 
 ## CI and the scripts
 
-- The `go` job's image smokes need no Java: both fixtures are written in the job by Go tools.
+- The `go-build` job's image smokes need no Java: both fixtures are written in the job by Go tools.
 - The `go-fixtures` job builds the Java distribution (`./gradlew :swath-replay:installDist`), which is why the
   Java `swath-replay`, `swath-core` and `swath-model` modules and the Gradle build are among its inputs:
   `bench/replay/make-fixtures.sh` sorts the synthetic and evidence captures with the Java `sort-fixture`, and
