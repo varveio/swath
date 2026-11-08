@@ -715,8 +715,8 @@ rows after filtering at the order stage's handoff (swath count: validated, count
 `versions`, with `versions` = `noncurrent` + `live_objects`. A live S3 object has
 `is_latest` true and `is_delete_marker` false; a live GCS generation has null
 `time_deleted`. Zero counts are present. Retained resume rows, held tails, relisting,
-and raw overfetch are excluded. `distinct_keys` comes from `order.Stats.DistinctKeys`;
-a failed order run can also have validated a pending batch that never reached its sink.
+and raw overfetch are excluded. `distinct_keys` comes from `order.Stats.DistinctKeys`
+and excludes pending batches that never reached the sink, including on a failed run.
 
 **Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
 is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,

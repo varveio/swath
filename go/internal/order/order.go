@@ -223,13 +223,15 @@ type run[R, P any] struct {
 	segs    [][]schema.Row[P]
 	segRows int
 	rows    int64
+	// Distinct keys validated in the pending batch, transferred at flush.
+	segDistinct int64
 	// released: bytes drained but still counted; releasedMeta: the part
 	// of it held by metadata (drainer only; returned under mu).
 	released, releasedMeta int64
-	// The stream-wide order guard: the last key handed on (drainer only).
+	// The stream-wide order guard: the last validated key (drainer only).
 	last    string
 	hasLast bool
-	// sent: a row has been handed on (last is a row's key, not After);
+	// sent: a row has been validated (last is a row's key, not After);
 	// distinct counts the keys handed on.
 	sent     bool
 	distinct int64
@@ -395,7 +397,7 @@ func (o *run[R, P]) send(rows []schema.Row[P]) error {
 			return orderError(o.last, k, o.rows+int64(o.segRows+i), o.opt.After != nil)
 		}
 		if !o.sent || k != o.last {
-			o.distinct++
+			o.segDistinct++
 		}
 		o.last, o.hasLast, o.sent = k, true, true
 	}
@@ -415,8 +417,10 @@ func (o *run[R, P]) flush() error {
 		return nil
 	}
 	o.rows += int64(o.segRows)
+	o.distinct += o.segDistinct
 	err := o.sink.Write(o.ctx, o.segs)
 	o.segs, o.segRows = nil, 0
+	o.segDistinct = 0
 	return err
 }
 
