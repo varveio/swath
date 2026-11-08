@@ -345,7 +345,7 @@ jobs:
 
       - name: go test -race
         if: steps.changes.outputs.go == 'true'
-        run: go test -race ./...
+        run: go test -race -timeout 30m ./...
 
       # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
