@@ -12,11 +12,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 )
 
@@ -171,5 +174,111 @@ func TestParallelAbortAndFailure(t *testing.T) {
 	settled(t, base)
 	if fb.n.Load() != 0 {
 		t.Fatalf("%d bytes left charged after a failure", fb.n.Load())
+	}
+}
+
+// TestParallelFailureReportedAtOnce: the sequencer's write fails while no
+// further batch is sent (the drainer waits for a page). Config.Fail
+// receives the failure at once, and Failed keeps it after Abort, so the
+// run reports the output's error rather than whatever stops it later.
+func TestParallelFailureReportedAtOnce(t *testing.T) {
+	got := make(chan error, 2)
+	w := &failWriter{}
+	w.armed.Store(true)
+	o, err := Open(Config{Format: TSV, Stdout: w, Formatters: 2, Fail: func(err error) { got <- err }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := NewSink(o, testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Write(context.Background(), bigRows(30_000)[:1]); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-got:
+		if !errors.Is(err, errDisk) {
+			t.Fatalf("Fail got %v, want the writer's", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the write failure was not reported while no batch followed")
+	}
+	o.Abort()
+	if err := o.Failed(); !errors.Is(err, errDisk) {
+		t.Fatalf("Failed after Abort: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatal("Fail called twice")
+	}
+}
+
+// TestIdleCompressorFailureReported: a .zst file with two compression
+// jobs accepts a few sections, then the disk fails in the compressor's
+// background flusher while nothing more is written (the sequencer idle,
+// the drainer waiting for a page). Config.Fail receives the disk's own
+// error at once, and Failed keeps it after Abort, not the abort's.
+func TestIdleCompressorFailureReported(t *testing.T) {
+	dir := t.TempDir()
+	release := make(chan struct{})
+	var writes atomic.Int64
+	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
+		// The frame header, written by the sequencer's own call, passes;
+		// the jobs' output (the flusher's) stalls, then fails: every
+		// write is handed on before the failure.
+		if op == "write" && strings.Contains(name, "idle.tsv.zst") && writes.Add(1) > 1 {
+			<-release
+			return 0, errDisk
+		}
+		return 0, nil
+	})()
+	got := make(chan error, 4)
+	o, err := Open(Config{Format: TSV, Path: filepath.Join(dir, "idle.tsv.zst"), Compression: Zstd, Jobs: 2, Formatters: 2,
+		Fail: func(err error) { got <- err }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := NewSink(o, testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// About 5 MB: one 4 MiB section handed to a job (its output stalls
+	// at the disk), the rest held in the compressor's buffer; every Write
+	// returns.
+	wrote := make(chan error, 1)
+	go func() {
+		for _, seg := range bigRows(42_000) {
+			if err := k.Write(context.Background(), [][]schema.Row[obj]{seg}); err != nil {
+				wrote <- err
+				return
+			}
+		}
+		wrote <- nil
+	}()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("the writes blocked behind the stalled disk: the test proves nothing")
+	}
+	for prev := int64(-1); prev != o.in.n.Load(); { // the sequencer has handed everything on and is idle
+		prev = o.in.n.Load()
+		time.Sleep(50 * time.Millisecond)
+	}
+	close(release)
+	select {
+	case err := <-got:
+		if !errors.Is(err, errDisk) {
+			t.Fatalf("Fail got %v, want the disk's", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the compressor's write failure was not reported while nothing more was written")
+	}
+	o.Abort()
+	if err := o.Failed(); !errors.Is(err, errDisk) {
+		t.Fatalf("Failed after Abort: %v, want the disk's error", err)
 	}
 }

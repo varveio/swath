@@ -43,7 +43,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		before := len(rest)
 		if err := f.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprintln(stdout, "usage: swath resume DIR [--"+strings.Join(resumeFlags, " ... --")+" ...]")
+				resumeUsage(stdout, f)
 				return err
 			}
 			return usageError{fmt.Errorf("resume: %w (only %s may change)", err, strings.Join(resumeFlags, ", "))}
@@ -119,7 +119,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	var secrets []string // secret flags the run had, whose values were not recorded
 	for _, a := range base {
 		n := strings.TrimLeft(a, "-")
-		if name, v, _ := strings.Cut(n, "="); a != n && (name == "overwrite" || name == "force") && (v == "" || v == "true") {
+		if name, v, _ := strings.Cut(n, "="); a != n && name == "overwrite" && (v == "" || v == "true") {
 			continue
 		}
 		if name, v, ok := strings.Cut(n, "="); a != n && ok && v == redacted && slices.Contains(secretFlags, name) {
@@ -135,12 +135,25 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)", dir, name, dir, name)})
 		}
 	}
-	cmd = append(append(cmd, overrides...), "--output", dir)
+	cmd = append(append(cmd, overrides...), "-o", dir)
 	// Parsed with the diagnostic flag set, a superset of swath list's: the
 	// runtime overrides include diagnostic ones (--spill-reserve,
 	// --spill-compress), and a recorded swath list command holds none
 	// that could change meaning.
-	return runWith(ctx, cmd, stdout, true, argv, true, att)
+	return runWith(ctx, command{diag: true}, cmd, stdout, argv, true, att)
+}
+
+// resumeUsage prints swath resume's help: the flags it takes again.
+func resumeUsage(w io.Writer, f *flag.FlagSet) {
+	fmt.Fprintln(w, "usage: swath resume DIR [flags]")
+	fmt.Fprintln(w, "  continues the interrupted run in DIR with the command its journal recorded; only these flags")
+	fmt.Fprintln(w, "  may be given again (the last value wins), the runtime ones and the operational ones:")
+	fmt.Fprintln(w)
+	for _, n := range resumeFlags {
+		if fl := f.Lookup(n); fl != nil {
+			fmt.Fprint(w, flagHelp(fl, helpFlag{name: n}))
+		}
+	}
 }
 
 // resumeTarget is o (the resume's flags) with the output a resume of dir
@@ -206,6 +219,13 @@ func show(args []string, stdout io.Writer) error {
 	f.SetOutput(io.Discard)
 	raw := f.Bool("journal", false, "dump the journal's header and records as JSON lines")
 	if err := f.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(stdout, "usage: swath show [--journal] DIR")
+			fmt.Fprintln(stdout, "  prints a committed dataset's manifest summary, or an interrupted run's recorded command,")
+			fmt.Fprintln(stdout, "  identity and committed parts")
+			fmt.Fprint(stdout, flagHelp(f.Lookup("journal"), helpFlag{name: "journal"}))
+			return err
+		}
 		return usageError{err}
 	}
 	if f.NArg() != 1 {

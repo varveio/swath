@@ -19,3 +19,7 @@ func rusage() (user, sys time.Duration, peak int64, ok bool) {
 	}
 	return time.Duration(ru.Utime.Nano()), time.Duration(ru.Stime.Nano()), int64(ru.Maxrss), true
 }
+
+// residentBytes is the resident set now; not measured on this platform
+// (the history leaves it out).
+func residentBytes() (int64, bool) { return 0, false }

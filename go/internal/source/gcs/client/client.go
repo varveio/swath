@@ -28,7 +28,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,8 +35,10 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source/tokensource"
 )
 
 // DefaultEndpoint is the JSON API base.
@@ -47,7 +48,7 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
 // fields asks only for what a listing reads (sent to DefaultEndpoint).
-const fields = "nextPageToken,prefixes,items(name,size,updated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+const fields = "nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
@@ -92,6 +93,7 @@ type Object struct {
 	Name           string
 	Size           int64
 	Updated        int64 // Unix microseconds; 0 when absent
+	TimeCreated    int64 // Unix microseconds; 0 when absent
 	ETag           string
 	Generation     int64
 	Metageneration int64
@@ -158,15 +160,11 @@ type Client struct {
 	base   *url.URL
 	http   []*http.Client // the transport pool, requests round-robin (pick)
 	next   atomic.Uint64
-	ts     oauth2.TokenSource // nil: anonymous
+	ts     *tokensource.Shared // nil: anonymous
 	source string
 
 	retry  objhttp.Retry
 	counts objhttp.Counters
-
-	tokMu    sync.Mutex
-	tokCall  *tokenCall   // the outstanding token source call, if any
-	tokCalls atomic.Int64 // token source calls started (tests)
 }
 
 // New resolves credentials and builds the client. Without Application
@@ -219,7 +217,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		&http.Client{Transport: c.http[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
 	case cfg.TokenSource != nil:
-		c.ts, c.source = cfg.TokenSource, "token source"
+		c.ts, c.source = tokensource.NewShared(cfg.TokenSource, 0), "token source"
 	case cfg.Anonymous:
 	case cfg.CredentialsFile != "":
 		c.source = "file " + cfg.CredentialsFile
@@ -231,12 +229,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		if err != nil {
 			return nil, &CredentialError{Source: c.source, Err: err}
 		}
-		c.ts = creds.TokenSource
+		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	default:
-		creds, err := google.FindDefaultCredentials(life, readScope)
+		creds, err := findCredentials(life, readScope)
 		switch {
 		case err == nil:
-			c.ts, c.source = creds.TokenSource, "application default credentials"
+			c.ts, c.source = tokensource.NewShared(creds.TokenSource, 0), "application default credentials"
 		case adcConfigured():
 			return nil, &CredentialError{Source: "application default credentials", Err: err}
 		case onGCEMachine():
@@ -244,7 +242,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 			// client library's detection in time: its service account is the
 			// configured source, never anonymity; token failures are retried
 			// per attempt like any refresh.
-			c.ts = google.ComputeTokenSource("", readScope)
+			c.ts = tokensource.NewShared(google.ComputeTokenSource("", readScope), 0)
 			c.source = "compute metadata (detection failed: " + err.Error() + ")"
 		default:
 			c.source = "anonymous (no application default credentials)"
@@ -294,6 +292,11 @@ func adcConfigured() bool {
 	return !errors.Is(err, fs.ErrNotExist)
 }
 
+// findCredentials is the client library's ADC search (tests replace it: on
+// a Google Cloud host the real one finds the metadata server, so what the
+// client does when the search fails could not be tested there).
+var findCredentials = google.FindDefaultCredentials
+
 // gceProductFile names the machine's product (tests move it).
 var gceProductFile = "/sys/class/dmi/id/product_name"
 
@@ -308,45 +311,23 @@ func onGCEMachine() bool {
 	return n == "Google" || n == "Google Compute Engine"
 }
 
-// tokenCall is one token source call that every concurrent waiter shares.
-type tokenCall struct {
-	done chan struct{}
-	t    *oauth2.Token
-	err  error
-}
-
 // token waits for the token source under the attempt's deadline. Waiters
-// share one outstanding call (at most one goroutine calls the source at a
-// time, however many attempts wait or give up); a call that outlives the
-// waits finishes in the background (its own HTTP client is bounded by the
-// request timeout) and later attempts reuse its token.
+// share one outstanding call (tokensource.Shared: at most one goroutine
+// calls the source at a time, however many attempts wait or give up); a
+// call that outlives the waits finishes in the background (its own HTTP
+// client is bounded by the request timeout) and later attempts reuse its
+// token.
 func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	c.tokMu.Lock()
-	call := c.tokCall
-	if call == nil {
-		call = &tokenCall{done: make(chan struct{})}
-		c.tokCall = call
-		c.tokCalls.Add(1)
-		go func() {
-			call.t, call.err = c.ts.Token()
-			c.tokMu.Lock()
-			c.tokCall = nil
-			c.tokMu.Unlock()
-			close(call.done)
-		}()
-	}
-	c.tokMu.Unlock()
-	select {
-	case <-call.done:
-		if call.err != nil {
-			return nil, &CredentialError{Source: c.source, Transient: transientToken(call.err),
-				Timeout: errors.Is(call.err, context.DeadlineExceeded), Err: call.err}
-		}
-		return call.t, nil
-	case <-ctx.Done():
+	t, err := c.ts.Token(ctx)
+	switch {
+	case err == nil:
+		return t, nil
+	case ctx.Err() != nil:
 		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
 			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
 	}
+	return nil, &CredentialError{Source: c.source, Transient: transientToken(err),
+		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 }
 
 // transientToken: the token endpoint's or the metadata server's 5xx, 408
@@ -458,7 +439,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "swath-go")
+	req.Header.Set("User-Agent", buildinfo.Tool)
 	if c.ts != nil {
 		tok, err := c.token(actx)
 		if err != nil {
@@ -523,6 +504,7 @@ type wireObject struct {
 	Name           string `json:"name"`
 	Size           string `json:"size"`
 	Updated        string `json:"updated"`
+	TimeCreated    string `json:"timeCreated"`
 	ETag           string `json:"etag"`
 	Generation     string `json:"generation"`
 	Metageneration string `json:"metageneration"`
@@ -567,15 +549,26 @@ func parse(body []byte) (*Page, error) {
 		if x.Metageneration, err = optInt(o.Metageneration); err != nil {
 			return nil, fmt.Errorf("%w: metageneration %q", ErrSyntax, o.Metageneration)
 		}
-		if o.Updated != "" {
-			t, err := time.Parse(time.RFC3339Nano, o.Updated)
-			if err != nil {
-				return nil, fmt.Errorf("%w: updated %q", ErrSyntax, o.Updated)
-			}
-			x.Updated = t.UnixMicro()
+		if x.Updated, err = optTime(o.Updated); err != nil {
+			return nil, fmt.Errorf("%w: updated %q", ErrSyntax, o.Updated)
+		}
+		if x.TimeCreated, err = optTime(o.TimeCreated); err != nil {
+			return nil, fmt.Errorf("%w: timeCreated %q", ErrSyntax, o.TimeCreated)
 		}
 	}
 	return p, nil
+}
+
+// optTime reads an RFC 3339 time as Unix microseconds; 0 when absent.
+func optTime(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0, err
+	}
+	return t.UnixMicro(), nil
 }
 
 func optInt(s string) (int64, error) {

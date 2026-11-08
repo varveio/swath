@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"strconv"
@@ -803,36 +804,16 @@ func civilDays(y, m, d int) int64 {
 }
 
 // parseError reads an S3 <Error> document; ok is false when the body is not
-// one.
+// one. Errors are the cold path: encoding/xml, not the page scanner.
 func parseError(body []byte) (code, message, requestID string, ok bool) {
-	p := &parser{b: body}
-	name, empty, err := p.root()
-	if err != nil || string(local(name)) != "Error" || empty {
+	var e struct {
+		XMLName   xml.Name `xml:"Error"`
+		Code      string
+		Message   string
+		RequestID string `xml:"RequestId"`
+	}
+	if xml.Unmarshal(body, &e) != nil {
 		return "", "", "", false
 	}
-	for {
-		k, n, e, err := p.next()
-		if err != nil || k == tEnd {
-			return code, message, requestID, err == nil
-		}
-		var dst *string
-		switch string(local(n)) {
-		case "Code":
-			dst = &code
-		case "Message":
-			dst = &message
-		case "RequestId":
-			dst = &requestID
-		default:
-			if p.skip(n, e) != nil {
-				return code, message, requestID, false
-			}
-			continue
-		}
-		t, err := p.scalar(n, e)
-		if err != nil {
-			return code, message, requestID, false
-		}
-		*dst = string(t)
-	}
+	return e.Code, e.Message, e.RequestID, true
 }

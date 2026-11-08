@@ -36,26 +36,23 @@ func TestRun(t *testing.T) {
 	if !strings.Contains(buf.String(), "rows=1 parts=1") {
 		t.Fatalf("summary: %s", buf.String())
 	}
-	err := run(context.Background(), []string{src, "--output", out}, &buf, false)
+	err := run(context.Background(), []string{src, "-o", out}, &buf, false)
 	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
 		t.Fatalf("non-empty output: %v", err)
 	}
 	// The report goes out on failure too, with the outcome.
 	buf.Reset()
-	if err := run(context.Background(), []string{src, "--output", out, "--report-format", "json"}, &buf, false); err == nil ||
+	if err := run(context.Background(), []string{src, "-o", out, "--report-format", "json"}, &buf, false); err == nil ||
 		!strings.Contains(buf.String(), `"status": "failed"`) || !strings.Contains(buf.String(), "not empty") {
 		t.Fatalf("failure report: %v\n%s", err, buf.String())
 	}
-	if err := run(context.Background(), []string{src, "--output", out, "--overwrite"}, &buf, false); err != nil {
+	if err := run(context.Background(), []string{src, "-o", out, "--overwrite"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(context.Background(), []string{src, "--output", out, "--force"}, &buf, false); err != nil {
-		t.Fatalf("--force (Java's alias of --overwrite): %v", err)
-	}
-	if err := run(context.Background(), []string{src, "--output", src, "--overwrite"}, &buf, false); err == nil || !strings.HasPrefix(err.Error(), "--output:") {
+	if err := run(context.Background(), []string{src, "-o", src, "--overwrite"}, &buf, false); err == nil || !strings.HasPrefix(err.Error(), "-o:") {
 		t.Fatalf("out == root: %v", err)
 	}
-	if err := run(context.Background(), []string{src, "--count-only", "--metadata", "bogus"}, &buf, false); err == nil {
+	if err := runCount(context.Background(), []string{src, "--metadata", "bogus"}, &buf, false); err == nil {
 		t.Fatal("bad --metadata accepted")
 	}
 }
@@ -99,9 +96,13 @@ func TestSize(t *testing.T) {
 // run with UPDATE=1 to rewrite it.
 func TestCLIDocFlags(t *testing.T) {
 	var b bytes.Buffer
-	usage(&b, newFlags(&options{}, false), false)
-	b.WriteString("\n")
-	usage(&b, newFlags(&options{}, true), true)
+	for i, cmd := range []command{{}, {count: true}, {diag: true}} {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "$ swath %s --help\n", cmd.name())
+		usage(&b, newFlags(&options{}, cmd.diag), cmd)
+	}
 	if strings.Contains(b.String(), " \t") {
 		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
 	}
@@ -207,7 +208,8 @@ func TestTerminalCausesOutrankStops(t *testing.T) {
 }
 
 // TestPartIntervalDefault: --part-interval defaults to Java's rotation
-// interval, 30 s (before: 60 s), on swath list and swath resume.
+// interval, 30 s (before: 60 s), on swath list (which does not take the
+// flag) as on swath diag list and swath resume.
 func TestPartIntervalDefault(t *testing.T) {
 	for _, diag := range []bool{false, true} {
 		var o options
@@ -224,11 +226,9 @@ func TestPartIntervalDefault(t *testing.T) {
 	}
 }
 
-// TestSpillFormatFlags: swath list and swath diag list both take the spill
-// frame flags, and the default is delta frames compressed with zstd: a
-// flag registered on one command only would leave the other on another
-// format (as an earlier build did, writing uncompressed frames under
-// swath list).
+// TestSpillFormatFlags: the default spill frames are delta coded and
+// compressed with zstd on every list command, and swath diag list takes
+// the frame flags (a comparison arm's).
 func TestSpillFormatFlags(t *testing.T) {
 	out := t.TempDir()
 	for _, diag := range []bool{false, true} {
@@ -241,8 +241,11 @@ func TestSpillFormatFlags(t *testing.T) {
 			{[]string{"--spill-plain"}, true, true},
 			{[]string{"--spill-plain", "--spill-compress=false"}, true, false},
 		} {
+			if !diag && c.args != nil {
+				continue // diagnostic flags: TestMovedFlagsNameDiag
+			}
 			args := append(append([]string{}, c.args...), "-o", filepath.Join(out, "ds"), "s3://bkt")
-			o, _, err := parseList(args, io.Discard, diag)
+			o, _, err := parseList(args, io.Discard, command{diag: diag})
 			if err != nil {
 				t.Fatalf("diag=%v %v: %v", diag, c.args, err)
 			}

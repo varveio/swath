@@ -51,13 +51,13 @@ func TestFilterDropsDirectoryRows(t *testing.T) {
 			sameRows(t, engine, ref, out)
 			var r struct {
 				Output struct {
-					RowsListed   int64 `json:"rows_listed"`
+					RowsEmitted  int64 `json:"rows_emitted"`
 					RowsFiltered int64 `json:"rows_filtered"`
 				}
 			}
 			readJSON(t, report, &r)
-			if r.Output.RowsListed != int64(len(files)) || r.Output.RowsFiltered != dirs {
-				t.Fatalf("listed %d, filtered %d; want %d files kept and %d directories dropped", r.Output.RowsListed, r.Output.RowsFiltered, len(files), dirs)
+			if r.Output.RowsEmitted != int64(len(files)) || r.Output.RowsFiltered != dirs {
+				t.Fatalf("listed %d, filtered %d; want %d files kept and %d directories dropped", r.Output.RowsEmitted, r.Output.RowsFiltered, len(files), dirs)
 			}
 			var m dataset.Manifest
 			readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
@@ -65,8 +65,8 @@ func TestFilterDropsDirectoryRows(t *testing.T) {
 			for _, p := range m.Parts {
 				rows += p.Rows
 			}
-			if rows != r.Output.RowsListed {
-				t.Fatalf("manifest holds %d rows, the report %d", rows, r.Output.RowsListed)
+			if rows != r.Output.RowsEmitted {
+				t.Fatalf("manifest holds %d rows, the report %d", rows, r.Output.RowsEmitted)
 			}
 		})
 	}

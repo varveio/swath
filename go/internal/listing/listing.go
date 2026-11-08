@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/filter"
@@ -93,6 +94,10 @@ type SourceConfig struct {
 	// Options is the provider's options value (registry.Factory.Flags or
 	// Defaults); opaque here. nil takes the provider's defaults.
 	Options any
+	// SeedFrom is a prior to start the range engine from instead of its
+	// delimiter seed (--seed-from): a committed dataset directory of the
+	// same source and scope, or a cut file. "" for none.
+	SeedFrom string
 }
 
 // OutputConfig is where the dataset goes.
@@ -212,7 +217,7 @@ func existing(dir string) string {
 // parts are written on the same filesystem and a full disk fails the run
 // where a refused spill frame only waits; at least minSpillReserve, a
 // margin for the journal, the manifest and whatever else writes there.
-// The spill cap (--spill-max) and this reserve protect different things:
+// The spill cap (--spill-budget) and this reserve protect different things:
 // the cap bounds spill's own use, the reserve bounds what spill may take
 // from the parts and from other processes, whose use the cap cannot see.
 // A product past int64 saturates (no filesystem holds it: every spill
@@ -413,7 +418,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 
 func run(ctx context.Context, cfg Config) (Report, error) {
 	start := time.Now()
-	sum := Report{ReportVersion: ReportVersion, Build: build(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
+	sum := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: cfg.Attempt, Timings: Timings{StartedAt: start.UTC()},
 		Outcome: Outcome{Status: StatusFailed}}
 	asked := cfg.Limits.Encoders
 	if err := cfg.resolve(); err != nil {
@@ -443,7 +448,6 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	sum.Invocation = Invocation{Argv: argv, Source: cfg.Source.URI, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
 		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
-	sum.Resources.RowBudgetBytes = cfg.Limits.RowBudget
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
 		return sum.failed(err)
@@ -474,6 +478,22 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
+	if cfg.Source.SeedFrom != "" {
+		pr, err := seedFrom(cfg, src)
+		switch {
+		case err == nil:
+			sum.Invocation.Prior = pr
+		case cfg.Output.Resume:
+			// A prior shapes the tiling only: a resume whose prior is gone
+			// or changed lists as a run without one.
+			warn(fmt.Sprintf("%v: resuming without it, as a run without --seed-from", err))
+		default:
+			rep, err := sum.failed(err)
+			cfg.finalize(&rep, err)
+			rep.Outcome.Unrecorded = settleUnowned(cfg, seen, rep, err)
+			return rep, err
+		}
+	}
 	id := identity(src, s, cfg)
 	sum.ArgsHash, sum.src = id.Hash(), src
 	jr, err := openJournal(ctx, cfg, src, id)
@@ -520,7 +540,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
-	id := journal.Identity{Tool: "swath-go", Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.WriterID,
+	id := journal.Identity{Tool: buildinfo.Tool, Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
 		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()
@@ -560,6 +580,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// disk, the journal) cancels listing at once, and is what Run returns.
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	if cfg.Progress == nil {
+		cfg.Progress = &Progress{} // the history reads it
+	}
 	// One byte budget for rows in flight, shared by the order stage and the
 	// encoders' queues (--row-budget; pages being parsed, codecs and the
 	// garbage collector are outside it).
@@ -569,13 +592,17 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	env := registry.Env{Empty: jr.complete()}
 	watchSource(cfg.Progress, &sum, src, &env)
 	if cfg.Output.Dir != "" {
-		env.Router = routerOptions(cfg, jr, shared, cancel)
+		ropt, err := routerOptions(cfg, jr, shared, cancel)
+		if err != nil {
+			return sum.failed(err)
+		}
+		env.Router = ropt
 	}
 	// A dry run counts: nothing consumes its rows in order, so it holds
 	// no reorder storage and never spills (order.Count).
 	env.Count = dryRun(cfg)
 	a := &attempt{cfg: cfg, jr: jr, sum: sum}
-	oopt, scratch, err := orderOptions(cfg, jr, sum.Resources.RowBudgetBytes, shared)
+	oopt, scratch, err := orderOptions(cfg, jr, sum.Invocation.RowBudgetBytes, shared)
 	if err != nil {
 		return a.sum.failed(err)
 	}
@@ -599,6 +626,9 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 			// shared budget; a stream's by the order stage, flushed per
 			// batch to its reader.
 			tc.Formatters, tc.Account = cfg.Limits.Encoders, shared.Add
+			// A formatters' write failure stops the listing at once,
+			// with its cause, as an encoder's does (routerOptions).
+			tc.Fail = func(err error) { cancel(fmt.Errorf("text output: %w", err)) }
 		}
 		t, err := textout.Open(tc)
 		if err != nil {
@@ -606,10 +636,26 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		}
 		text, env.Text = t, t
 	}
+	sizes := &registry.Sizes{}
+	env.Sizes = sizes
+	a.retained.Store(a.sum.Output.RowsRetained)
+	a.sum.sampler = startHistory(a.sample, historyDisk(cfg, oopt))
+	defer a.sum.sampler.finish()
 	heap := sampleHeap()
 	ost, router, err := src.Run(ctx, env)
 	a.sum.Resources.PeakHeapLiveBytes = heap()
 	a.router = router
+	a.sum.Output.RowsFetched = src.Listed()
+	if sizes.Measured {
+		b := sizes.Bytes.Load()
+		a.sum.Output.ObjectBytes = &b
+	}
+	if sd, ok := src.(source.SeedTimed); ok {
+		if d, ok := sd.SeedTime(); ok {
+			ms := d.Milliseconds()
+			a.sum.Timings.SeedMs = &ms
+		}
+	}
 	if text != nil {
 		err = a.settleText(text, err)
 	}
@@ -658,6 +704,38 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	return a.commit(s, src, listed)
 }
 
+// sample is the run's progress now, for the history.
+func (a *attempt) sample() Sample {
+	p := a.cfg.Progress.Snapshot()
+	v := Sample{RowsFetched: p.Objects, RowsEmitted: p.Ordered, RowsDurable: a.retained.Load(),
+		HTTPAttempts: p.Requests, Inflight: p.Inflight, Limit: p.Limit}
+	if r := a.jr.ackedRows(); r > 0 {
+		v.RowsDurable = r
+	}
+	if c := a.committed.Load(); c > 0 {
+		v.RowsDurable = c
+	}
+	if p.Order != nil {
+		v.SpillBytes = p.Order.SpillLiveBytes
+	}
+	return v
+}
+
+// historyDisk is the directory whose filesystem a run writes to: the spill
+// directory's, else the dataset's, else the text file's ("" for a run that
+// writes nothing).
+func historyDisk(cfg Config, oopt order.Options) string {
+	switch {
+	case oopt.SpillDir != "":
+		return oopt.SpillDir
+	case cfg.Output.Dir != "":
+		return cfg.Output.Dir
+	case cfg.Output.Text != nil && cfg.Output.Text.Path != "":
+		return filepath.Dir(cfg.Output.Text.Path)
+	}
+	return ""
+}
+
 // watchSource hands the progress file the source's live counters and the
 // order stage's counter of rows handed on.
 func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.Env) {
@@ -699,11 +777,13 @@ func watchSource(pr *Progress, sum *Report, src registry.Source, env *registry.E
 // routerOptions configures the Parquet router: parts journaled as they
 // close, their queues charged to the shared row budget, and an encoder
 // failure cancelling the run with its cause.
-func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) *parquetout.Options {
+func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel context.CancelCauseFunc) (*parquetout.Options, error) {
 	ropt := parquetout.Options{Out: cfg.Output.Dir, PartSize: cfg.Limits.PartSize, Encoders: cfg.Limits.Encoders, MaxEncoders: cfg.Limits.maxEncoders, Account: shared.Add,
 		Interval: max(0, cfg.Limits.PartInterval), MaxRows: cfg.Limits.PartMaxRows}
 	jr.routerOptions(&ropt)
-	jr.verifyOption(&ropt)
+	if err := jr.verifyOption(&ropt); err != nil {
+		return nil, err
+	}
 	if pr := cfg.Progress; pr != nil {
 		ropt.Encoded = &pr.encoded
 	}
@@ -722,7 +802,7 @@ func routerOptions(cfg Config, jr *runJournal, shared *order.Shared, cancel cont
 		}
 	}
 	ropt.Fail = func(err error) { cancel(fmt.Errorf("encode: %w", err)) }
-	return &ropt
+	return &ropt, nil
 }
 
 // orderOptions configures the order stage: the row budget, the resume
@@ -799,7 +879,7 @@ func textScratch(path string, att *Attempt) (string, error) {
 }
 
 // dryRun reports whether cfg writes nothing (no dataset, no text): its
-// rows are only counted (--count-only).
+// rows are only counted (swath count).
 func dryRun(cfg Config) bool { return cfg.Output.Dir == "" && cfg.Output.Text == nil }
 
 // attempt is one pipeline run's report and the state its failure and
@@ -809,6 +889,11 @@ type attempt struct {
 	jr     *runJournal
 	router parquetout.Encoder
 	sum    Report
+	// retained and committed are the rows the history reads as durable
+	// besides the journal's acknowledgements: those kept from an
+	// interrupted run, and the committed dataset's once the manifest is
+	// installed (a run without a journal has no acknowledgement).
+	retained, committed atomic.Int64
 }
 
 // settleText commits the text output after a successful run, or aborts
@@ -818,6 +903,11 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 		err = text.Commit()
 	} else {
 		text.Abort()
+		// The output's failure is the run's, whatever stop followed it
+		// (a deadline or the watchdog, when the cause could not be set).
+		if werr := text.Failed(); werr != nil && !errors.Is(err, werr) {
+			err = fmt.Errorf("text output: %w", werr)
+		}
 	}
 	st, out := text.Stats(), a.sum.Output.Text
 	out.Rows, out.Bytes, out.SinkWaitNs, out.OutputWaitNs, out.Formatters = text.Rows(), text.Bytes(), int64(st.SinkWait), int64(st.OutputWait), st.Formatters
@@ -830,7 +920,7 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 // account puts the order stage's and the router's resources in the report.
 func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res := &a.sum.Resources
-	res.MaxBufferedBytes, a.sum.Output.RowsListed = ost.MaxBuffered, ost.Rows
+	res.MaxBufferedBytes, a.sum.Output.RowsEmitted = ost.MaxBuffered, ost.Rows
 	a.sum.Output.RowsFiltered = filtered
 	// order: false for a dry run, which counts rows without ordering them
 	// (order.Count: no reorder storage, max_buffered_bytes 0).
@@ -905,14 +995,14 @@ func (a *attempt) durable() {
 	}
 	// Acknowledged by the journal: an append that succeeded is durable
 	// although its rename then failed (the resume renames it).
-	out.PartsWritten, out.Bytes = int(jr.acked.parts.Load()), jr.acked.bytes.Load()
+	out.PartsWritten, out.OutputBytes = int(jr.acked.parts.Load()), jr.acked.bytes.Load()
 	out.RowsDurable = out.RowsRetained
 	if r := jr.acked.rows.Load(); r > 0 {
 		out.RowsDurable = r
 	}
 	if jr.state != nil {
 		for _, rec := range jr.state.Records {
-			out.Bytes += rec.Part.Bytes
+			out.OutputBytes += rec.Part.Bytes
 		}
 	}
 }
@@ -947,12 +1037,15 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	if err != nil {
 		return a.fail(fmt.Errorf("encode: %w", err))
 	}
+	closed := time.Now()
+	drain := closed.Sub(listed).Milliseconds()
+	sum.Timings.DrainMs = &drain
 	if err := jr.unresolved(); err != nil {
 		return a.fail(err)
 	}
 	sum.Output.PartsWritten = len(parts) - sum.Output.PartsRetained
 	for _, part := range parts {
-		sum.Output.Bytes += part.Bytes
+		sum.Output.OutputBytes += part.Bytes
 	}
 	if err := jr.verify(); err != nil {
 		return a.fail(err)
@@ -968,12 +1061,15 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 			return err
 		}
 		committed = true
+		pub := time.Since(closed).Milliseconds()
+		sum.Timings.PublicationMs = &pub
 		if pr := cfg.Progress; pr != nil && !jr.journaled() {
 			pr.parts.Add(int64(sum.Output.PartsWritten))
 		}
 		sum.Outcome.Status, sum.Outcome.Class = StatusCommitted, ClassCompleted
-		sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsListed
+		sum.Output.RowsCommitted = sum.Output.RowsRetained + sum.Output.RowsEmitted
 		sum.Output.RowsDurable = sum.Output.RowsCommitted
+		a.committed.Store(sum.Output.RowsCommitted) // before finish takes the last sample
 		sum.finish()
 		cfg.finalize(sum, nil)
 		return nil

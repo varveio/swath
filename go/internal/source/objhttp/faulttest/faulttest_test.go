@@ -8,7 +8,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -151,5 +153,83 @@ func TestAnsweredRequestLeavesTheCount(t *testing.T) {
 				t.Fatalf("one at a time: %+v", s)
 			}
 		})
+	}
+}
+
+// TestHTTPSTargetIsSentItsOwnHost: a request forwarded to an https
+// provider endpoint carries the endpoint's host, not the proxy's, so a
+// virtual-hosted service routes it; a plain http target keeps the
+// client's Host as before.
+func TestHTTPSTargetIsSentItsOwnHost(t *testing.T) {
+	for _, c := range []struct{ target, host string }{
+		{"https://s3.us-east-1.amazonaws.com", "s3.us-east-1.amazonaws.com"},
+		{"http://127.0.0.1:9", "127.0.0.1:19091"},
+	} {
+		p, err := New(c.target, Plan{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("GET", "http://127.0.0.1:19091/b?list-type=2", nil)
+		p.next.Director(r)
+		if r.Host != c.host || r.URL.Scheme+"://"+r.URL.Host != c.target {
+			t.Errorf("%s: forwarded to %s://%s with Host %q", c.target, r.URL.Scheme, r.URL.Host, r.Host)
+		}
+	}
+	if _, err := New("ftp://host", Plan{}); err == nil {
+		t.Error("an ftp target was accepted")
+	}
+}
+
+// TestMaxBodyBoundsTheBuffer: with MaxBody set, an upstream body of
+// exactly MaxBody bytes is forwarded whole; a longer one, with or
+// without a Content-Length, is read no further than MaxBody+1 bytes and
+// answered 502 with BodyLimitHeader, never as a cut 200.
+func TestMaxBodyBoundsTheBuffer(t *testing.T) {
+	var read atomic.Int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		if r.URL.Query().Get("cl") != "" {
+			w.Header().Set("Content-Length", strconv.Itoa(n))
+		}
+		w.(http.Flusher).Flush()
+		for i := 0; i < n; i += 1000 {
+			k, err := io.WriteString(w, strings.Repeat("x", min(1000, n-i)))
+			read.Add(int64(k))
+			if err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer up.Close()
+	p, err := New(up.URL, Plan{MaxBody: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	get := func(q string) (int, string, string) {
+		resp, err := http.Get(srv.URL + "/b?" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get(BodyLimitHeader), string(b)
+	}
+	if code, mark, body := get("n=5000"); code != 200 || mark != "" || len(body) != 5000 {
+		t.Errorf("at the limit: %d %q %d bytes", code, mark, len(body))
+	}
+	for _, q := range []string{"n=5001", "n=20000000", "n=20000000&cl=1"} {
+		read.Store(0)
+		code, mark, body := get(q)
+		if code != http.StatusBadGateway || mark != "5000" || !strings.Contains(body, "over 5000 bytes") {
+			t.Errorf("%s: %d %q %q", q, code, mark, body)
+		}
+		// The upstream handler may have written ahead into its socket
+		// buffers, never the whole 20 MB.
+		if n := read.Load(); n > 8<<20 {
+			t.Errorf("%s: the upstream wrote %d bytes", q, n)
+		}
 	}
 }

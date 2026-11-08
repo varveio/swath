@@ -16,7 +16,7 @@ import (
 )
 
 // Count expands every range of p and counts its rows without ordering them:
-// a run whose rows nothing consumes (--count-only). Workers pop ranges from
+// a run whose rows nothing consumes (swath count). Workers pop ranges from
 // a LIFO stack as Run's do and push a range's children when its Expand
 // returns; rows are counted and dropped as they arrive. Nothing is
 // buffered: no tree, no budget, no spill (Options.Budget, Shared and the

@@ -72,7 +72,7 @@ def check(r, a):
     # encoders, parsing and the collector.
     workers, mem = inv["workers"], 2 * inv["row_budget_bytes"]
     committed = rep["outcome"]["status"] == "committed"
-    rows = out["rows_committed"] or out["rows_listed"]
+    rows = out["rows_committed"] or out.get("rows_emitted", out.get("rows_listed"))  # report v2, v1
     wall = rep["timings"]["wall_ms"] / 1000
     hwm = max([s.get("vmhwm_bytes", 0) for s in ss] + [0])
     peak_rss = res.get("peak_rss_bytes") or hwm

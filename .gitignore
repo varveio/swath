@@ -63,3 +63,7 @@ site/assets/*.mp4
 /go/swath
 /go/swath-*
 /go/swath.exe
+# The replay server (go/build.sh -o swath-replay ./cmd/swath-replay, cross builds, Windows .exe)
+/go/swath-replay
+/go/swath-replay-*
+/go/swath-replay.exe

@@ -45,7 +45,12 @@ type Strict struct {
 	// Lean sends objects with only name, size, updated, generation and
 	// etag: the protocol is the same, and a run-level test that does not
 	// read the rest of the metadata lists and encodes less.
-	Lean     bool
+	Lean bool
+	// Resource, when set, is the object resource sent for key k (the
+	// i-th in byte order) in place of Object's: a test that needs
+	// particular metadata, such as an object without an MD5, states it.
+	// It returns a new map on each call: the fields selector trims it.
+	Resource func(i int, k string) map[string]any
 	requests atomic.Int64
 	empties  atomic.Int64
 	last     atomic.Value // the last request's query
@@ -118,13 +123,20 @@ func Object(i int, k string) map[string]any {
 	o := leanObject(i, k)
 	for name, v := range map[string]any{
 		"kind": "storage#object", "id": "bkt/" + k + "/17", "selfLink": "https://example.invalid/" + url.PathEscape(k),
-		"bucket": "bkt", "timeCreated": "2026-11-05T00:00:00Z",
+		"bucket": "bkt", "timeCreated": created(i),
 		"metageneration": strconv.Itoa(1 + i%3), "storageClass": []string{"STANDARD", "NEARLINE", "ARCHIVE"}[i%3],
 		"md5Hash": "md5-" + strconv.Itoa(i) + "==", "crc32c": "c" + strconv.Itoa(i), "contentType": "application/x-" + strconv.Itoa(i%5),
 	} {
 		o[name] = v
 	}
 	return o
+}
+
+// created is the i-th object's timeCreated: before its updated time, a
+// distinct instant per object, in the millisecond form GCS writes.
+func created(i int) string {
+	t := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 1001 * time.Millisecond)
+	return t.Format("2006-01-02T15:04:05.000Z07:00")
 }
 
 // leanObject is Object's listing fields: name, size, updated, generation
@@ -251,9 +263,12 @@ func (f *Strict) write(w http.ResponseWriter, q url.Values, resp map[string]any)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// object is key i (k) as this fake sends it: Object, or with Lean its
-// listing fields only.
+// object is key i (k) as this fake sends it: Resource's, Object, or with
+// Lean its listing fields only.
 func (f *Strict) object(i int, k string) map[string]any {
+	if f.Resource != nil {
+		return f.Resource(i, k)
+	}
 	if f.Lean {
 		return leanObject(i, k)
 	}

@@ -18,7 +18,7 @@ import (
 func TestClientPagesMatchSDK(t *testing.T) {
 	keys := append(testKeys(), "sp ace", "pl+us", "pct%41", "amp&<>", "q\"'")
 	url := fakeBucket(t, keys, 0)
-	ours, err := client.New(client.Config{Endpoint: url, PathStyle: true, Anonymous: true})
+	ours, err := client.New(context.Background(), client.Config{Endpoint: url, PathStyle: true, Anonymous: true})
 	if err != nil {
 		t.Fatal(err)
 	}

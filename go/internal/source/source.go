@@ -49,6 +49,8 @@ type Emitter[R, P any] interface {
 	// not modify it afterwards. A non-nil error means stop.
 	Rows(rows []schema.Row[P]) error
 	// Child appends a range whose entire subtree sorts at this position.
+	// Ownership of r passes to the emitter even when Child returns an
+	// error: the order stage disposes it (Disposer), the provider must not.
 	Child(r R) error
 }
 

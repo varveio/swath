@@ -13,6 +13,7 @@ import (
 type Object struct {
 	Size           int64
 	Mtime          int64 // updated, UTC epoch microseconds
+	TimeCreated    int64 // timeCreated, UTC epoch microseconds; 0 when not listed
 	ETag           string
 	Generation     int64
 	Metageneration int64
@@ -39,8 +40,13 @@ var Schema = schema.Schema[Object]{
 		{Spec: schema.Spec{Name: "md5", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.MD5 })},
 		{Spec: schema.Spec{Name: "crc32c", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.CRC32C })},
 		{Spec: schema.Spec{Name: "content_type", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ContentType })},
+		// time_created is an optional column of the schema id, placed
+		// last: parts written before the lister recorded it lack it, so a
+		// reader may read it where present but not require it
+		// (docs/upgrade.md, "The downstream reader: dispatch on schema id").
+		{Spec: schema.Spec{Name: "time_created", Type: schema.TimestampMicros}, Int: func(o *Object) (int64, bool) { return o.TimeCreated, o.TimeCreated != 0 }},
 	},
-	Bytes: func(o *Object) int64 { return 32 + objectHeap(o) },
+	Bytes: func(o *Object) int64 { return 40 + objectHeap(o) }, // five integers of 8 bytes
 	Heap:  objectHeap,
 	Codec: objectCodec{},
 }
@@ -60,7 +66,7 @@ func nonEmpty(get func(*Object) string) func(*Object) (string, bool) {
 type objectCodec struct{}
 
 func (objectCodec) Append(dst []byte, o *Object) []byte {
-	for _, v := range [...]int64{o.Size, o.Mtime, o.Generation, o.Metageneration} {
+	for _, v := range [...]int64{o.Size, o.Mtime, o.Generation, o.Metageneration, o.TimeCreated} {
 		dst = binary.AppendVarint(dst, v)
 	}
 	for _, s := range [...]string{o.ETag, o.StorageClass, o.MD5, o.CRC32C, o.ContentType} {
@@ -70,6 +76,6 @@ func (objectCodec) Append(dst []byte, o *Object) []byte {
 }
 
 func (objectCodec) Decode(d *schema.Decoder, o *Object) {
-	o.Size, o.Mtime, o.Generation, o.Metageneration = d.Varint(), d.Varint(), d.Varint(), d.Varint()
+	o.Size, o.Mtime, o.Generation, o.Metageneration, o.TimeCreated = d.Varint(), d.Varint(), d.Varint(), d.Varint(), d.Varint()
 	o.ETag, o.StorageClass, o.MD5, o.CRC32C, o.ContentType = d.Str(), d.Str(), d.Str(), d.Str(), d.Str()
 }

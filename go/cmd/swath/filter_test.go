@@ -57,17 +57,17 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 	}
 	var r struct {
 		Output struct {
-			RowsListed   int64 `json:"rows_listed"`
+			RowsEmitted  int64 `json:"rows_emitted"`
 			RowsFiltered int64 `json:"rows_filtered"`
 		}
 		Invocation struct{ Source string }
 	}
 	readJSON(t, report, &r)
-	if r.Output.RowsListed+r.Output.RowsFiltered != int64(len(keys)) || r.Output.RowsFiltered == 0 {
+	if r.Output.RowsEmitted+r.Output.RowsFiltered != int64(len(keys)) || r.Output.RowsFiltered == 0 {
 		t.Fatalf("rows %+v of %d", r.Output, len(keys))
 	}
-	r0 := r.Output.RowsListed
-	if err := run(context.Background(), append(src, "--count-only", "--include", "^d01/", "--report", report), io.Discard, false); err != nil {
+	r0 := r.Output.RowsEmitted
+	if err := runCount(context.Background(), append(src, "--include", "^d01/", "--report", report), io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	readJSON(t, report, &r)

@@ -103,6 +103,16 @@ type Env struct {
 	// stage, counting them in Filtered.
 	Filter   *filter.Spec
 	Filtered *atomic.Int64
+	// Sizes, if set, sums the object sizes of the rows handed to the order
+	// stage (after the filters): the report's output.object_bytes.
+	Sizes *Sizes
+}
+
+// Sizes is the object bytes a run emitted. Measured says the schema has a
+// size column (Run sets it before listing; read it after Run returns).
+type Sizes struct {
+	Bytes    atomic.Int64
+	Measured bool
 }
 
 // Bound is a provider bound to its schema; embed it in an opened source.
@@ -148,6 +158,12 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		p = source.Empty[P]{}
 	} else if keep != nil {
 		p = newFiltered(p, keep, b.s, env.Filtered)
+	}
+	if env.Sizes != nil && !env.Empty {
+		if size := sizeColumn(b.s); size != nil {
+			env.Sizes.Measured = true
+			p = newSized(p, size, &env.Sizes.Bytes)
+		}
 	}
 	if env.Count {
 		st, err := order.Count(ctx, p, env.Ordered, env.Order)

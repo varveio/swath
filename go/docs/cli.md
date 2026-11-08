@@ -1,19 +1,26 @@
 # CLI
 
 ```text
-swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DIR
-swath list SOURCE [-o FILE|-] [flags]    list SOURCE as text rows (TSV, JSONL, a table) to a file or stdout
-swath resume DIR [runtime flags]         continue the interrupted run in DIR
-swath show [--journal] DIR               show a dataset or an interrupted run
-swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
-swath --version                          print the build (tool, module version, VCS revision)
+swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
+swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
+swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+swath resume DIR [flags]                continue the interrupted run in DIR
+swath show [--journal] DIR              show a dataset or an interrupted run
+swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
+swath --version                         print the build (tool, module version, VCS revision)
 ```
 
-SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `--output` (`-o`)
+`swath --help` prints that summary; `--help` on every command (`swath list --help`, `swath count --help`,
+`swath resume --help`, `swath show --help`, `swath diag --help`, `swath diag list --help`) prints its flags and
+exits 0.
+
+SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `-o DIR`
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
-below), or with `--count-only` only lists and counts (rows are counted as they arrive, never ordered, buffered
-or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)). It prints one
-line, or the run report (`run.json`) with `--report-format json`; `--report FILE` also writes that report to
+below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
+buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
+filter, performance, limit and reporting flags, and refuses the output ones (`-o`, `--format`, `--overwrite`,
+`--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2. Each prints one
+line (`swath count`: `rows=N object_bytes=B wall=...`), or the run report (`run.json`, below) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
 source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
 (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/` with the lock and journal) or anything below them,
@@ -27,8 +34,8 @@ marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manife
 `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` files are checked the same way and may not be symbolic links
 (a profile is opened, never through a link; the report replaces its name by a rename, which replaces a link
 there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
-the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-max`, `--spill-compress`, `--spill-plain`, the diagnostic `--spill-reserve`,
-`--part-interval`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, and the terminal flags
+the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the
+`--part-interval`, the diagnostic `--spill-compress`, `--spill-plain` and `--spill-reserve`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
 authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
@@ -41,309 +48,309 @@ and exits 0 (`DIR is already complete: nothing to resume`; the report's outcome 
 true), so a supervisor may resume until exit 0; one committed with partial coverage stays `incomplete`, exit 1.
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
-`swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
-`list` flag plus the diagnostic ones: `--sequential`, `--floors`, `--structure=auto|on|off`, `--max-keys` (range-engine sources), `--no-journal`,
-`--no-spill` and `--spill-reserve`; they exist for comparisons and tests, not production runs. Flags take one or two dashes. The
+`swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` and `swath diag
+count` take every `list` (or `count`) flag plus the diagnostic ones (the **Diagnostics** group below); they exist
+to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath count` refuse each of
+them with exit 2 and a message naming `swath diag`. Each flag has one name; an unknown flag is a usage error
+(exit 2). From the Java 0.3 releases, and renames since the unreleased builds of `main`: [upgrade.md](upgrade.md#changes-from-03-to-04). Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
 Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
 
 ## Flags
 
-Generated from the flag set (`TestCLIDocFlags` fails when this block is stale; `UPDATE=1 go test ./cmd/swath`
-rewrites it):
+Generated from the flag set, as `--help` prints it, grouped (source and output, performance, limits, output and
+reporting; the performance and limits flags say when to change them). `TestCLIDocFlags` fails when this block
+is stale (`UPDATE=1 go test ./cmd/swath` rewrites it), and `TestHelpGroupsCoverFlags` when a flag is in no
+group:
 
 <!-- flags:begin -->
 ```text
-usage: swath list SOURCE [--output DIR|FILE|-] [flags]
+$ swath list --help
+usage: swath list SOURCE [-o DIR|FILE|-] [flags]
+  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text
+  file; no -o, or -o -, text rows on stdout
   SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
 
-  -anonymous
-        S3: send unsigned requests, ignoring any credentials
-  -bearer-token-command command
-        S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
-  -bearer-token-refresh-interval duration
-        S3: run --bearer-token-command again after this duration (default 45m)
-  -color string
-        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
-  -count-only
-        walk and count without writing a dataset
-  -dualstack
-        S3: use the dual-stack (IPv6) endpoint
-  -encoders int
-        Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
-  -endpoint URL
-        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
-  -endpoint-url string
-        S3: Java swath's name for --endpoint
-  -exclude regex
-        drop keys in which this regex (Go RE2 syntax) matches anywhere
-  -fetch-owner
-        S3: fill owner_id and owner_display_name
-  -fips
-        S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
-  -force
-        Java swath's name for --overwrite
-  -format string
+Source and output:
+  -o directory
+        output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default)
+  --overwrite
+        replace a previous dataset in -o
+  --format string
         stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
-  -gcs-anonymous
-        GCS: send no credentials, ignoring any in the environment
-  -gcs-credentials file
-        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
-  -gcs-endpoint URL
-        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  -gcs-request-timeout duration
-        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
-  -gcs-user-project project
-        GCS: bill a requester-pays bucket's requests to this project
-  -include regex
-        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
-  -limiter
-        requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
-  -limiter-slow-start
-        requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too
-  -max-duration duration
-        stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
-  -max-size size
-        keep objects of at most this size
-  -metadata tier
-        local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
-  -min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
-  -modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
-  -modified-until time
-        keep objects modified at or before this time
-  -no-dirs
-        local: omit kind=DIR rows
-  -no-link-target
-        local: do not read symlink targets
-  -no-progress
-        no live progress on stderr
-  -no-stats
-        no end-of-run statistics on stderr
-  -o string
-        short for --output
-  -output directory
-        output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
-  -overwrite
-        replace a previous dataset in --output
-  -part-interval duration
-        close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
-  -part-rotation-max-rows N
-        also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
-  -part-size bytes
-        target bytes per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md) (default 67108864)
-  -path-style
-        S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
-  -profile profile
-        S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
-  -progress
-        print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
-  -progress-interval interval
-        progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
-  -q	quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
-  -qq
-        short for -q -q
-  -quiet
-        short for -q
-  -region string
+  --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
-  -report file
-        also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
-  -report-format text
-        text (one line) or json (the run report, as in run.json) (default "text")
-  -request-payer
+  --endpoint URL
+        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
+  --anonymous
+        S3: send unsigned requests, ignoring any credentials
+  --path-style
+        S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
+  --profile profile
+        S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
+  --request-payer
         S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
-  -request-rate N
-        requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
-  -request-timeout duration
-        S3: per-request timeout; a request that exceeds it is retried (default 30s)
-  -row-budget bytes
-        bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
-  -seed
-        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
-  -spill-compress
-        compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed (default true)
-  -spill-max bytes
-        the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
-  -spill-plain
-        write spill frames without delta coding (each key and payload whole; a comparison arm)
-  -stall-timeout duration
-        stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
-  -stats
-        print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
-  -storage-class classes
+  --bearer-token-command command
+        S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
+  --bearer-token-refresh-interval duration
+        S3: run --bearer-token-command again after this duration (default 45m)
+  --fips
+        S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  --dualstack
+        S3: use the dual-stack (IPv6) endpoint
+  --fetch-owner
+        S3: fill owner_id and owner_display_name
+  --gcs-endpoint URL
+        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
+  --gcs-anonymous
+        GCS: send no credentials, ignoring any in the environment
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --include regex
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+  --exclude regex
+        drop keys in which this regex (Go RE2 syntax) matches anywhere
+  --min-size size
+        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+  --max-size size
+        keep objects of at most this size
+  --modified-since time
+        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+  --modified-until time
+        keep objects modified at or before this time
+  --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
-  -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
-  -vv
-        short for -v -v
-  -vvv
-        short for -v -v -v
-  -workers int
-        listing goroutines (default 64, whatever the CPU count)
+  --seed-from path
+        start from a previous listing's key distribution instead of the delimiter seed: a committed dataset path of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively
 
-swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
+Performance:
+  --workers int
+        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
+  --row-budget bytes
+        bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
+        change it: raise it when resources.budget_wait_ns is large or spill is heavy and memory allows; lower it on a small host (the peak RSS is a few times it)
+  --spill-budget bytes
+        cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
+        change it: set it when the output filesystem is shared or small: the default takes up to half its free space
+  --encoders int
+        Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
+        change it: lower it to leave cores to other work; the default already follows the cores and the row budget
+  --part-size bytes
+        target bytes per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md) (default 67108864)
+        change it: smaller parts for readers that load whole parts, larger for fewer files on a very large listing
+  --part-interval duration
+        close an open part with rows after this duration although not full (a rotation target: the part is then encoded and published in order, so the recovery point can be older, and a stalled frontier leaves no part to close); 0: parts close by size only (default 30s)
+        change it: lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing
+  --part-rotation-max-rows N
+        also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
+        change it: set it when readers want parts of a bounded row count; it is frozen for resume
+
+Limits:
+  --max-duration duration
+        stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
+        change it: give every unattended run one; a stopped object-store run resumes where it stopped
+  --stall-timeout duration
+        stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+        change it: raise it for a service that is slow to answer for minutes at a time
+  --request-rate N
+        requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
+        change it: set it to stay under a request quota shared with other clients
+  --limiter
+        requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
+        change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
+  --request-timeout duration
+        S3: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow S3-compatible store whose pages take longer to answer
+  --gcs-request-timeout duration
+        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow GCS endpoint or emulator
+
+Output and reporting:
+  --report file
+        also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
+  --report-format text
+        text (one line) or json (the run report, as in run.json) (default text)
+  --progress
+        print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
+  --no-progress
+        no live progress on stderr
+  --progress-interval interval
+        progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
+  --stats
+        print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  --no-stats
+        no end-of-run statistics on stderr
+  -v, -vv, -vvv
+        verbose: a start line, and progress as appended records (-vv, -vvv: the same)
+  -q, -qq
+        quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
+  --color string
+        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+
+swath resume DIR continues an interrupted run with its recorded command; only
+workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
 profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
-swath show [--journal] DIR shows a dataset or an interrupted run.
-
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
-usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)
+$ swath count --help
+usage: swath count SOURCE [flags]
+  lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
+  arrive, never ordered, buffered or spilled; prints one line, or the run report
   SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
 
-  -anonymous
-        S3: send unsigned requests, ignoring any credentials
-  -bearer-token-command command
-        S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
-  -bearer-token-refresh-interval duration
-        S3: run --bearer-token-command again after this duration (default 45m)
-  -color string
-        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default "auto")
-  -count-only
-        walk and count without writing a dataset
-  -dualstack
-        S3: use the dual-stack (IPv6) endpoint
-  -encoders int
-        Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it
-  -endpoint URL
-        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
-  -endpoint-url string
-        S3: Java swath's name for --endpoint
-  -exclude regex
-        drop keys in which this regex (Go RE2 syntax) matches anywhere
-  -fetch-owner
-        S3: fill owner_id and owner_display_name
-  -fips
-        S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
-  -floors
-        ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
-  -force
-        Java swath's name for --overwrite
-  -format string
-        stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
-  -gcs-anonymous
-        GCS: send no credentials, ignoring any in the environment
-  -gcs-credentials file
-        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
-  -gcs-endpoint URL
-        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  -gcs-request-timeout duration
-        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
-  -gcs-user-project project
-        GCS: bill a requester-pays bucket's requests to this project
-  -include regex
-        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
-  -limiter
-        requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight (default true)
-  -limiter-slow-start
-        requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too
-  -max-duration duration
-        stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
-  -max-keys N
-        ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
-  -max-size size
-        keep objects of at most this size
-  -metadata tier
-        local: metadata tier per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)
-  -min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
-  -modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
-  -modified-until time
-        keep objects modified at or before this time
-  -no-dirs
-        local: omit kind=DIR rows
-  -no-journal
-        diagnostic: publish parts only at the end, without the journal that swath resume needs
-  -no-link-target
-        local: do not read symlink targets
-  -no-progress
-        no live progress on stderr
-  -no-spill
-        diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk
-  -no-stats
-        no end-of-run statistics on stderr
-  -o string
-        short for --output
-  -output directory
-        output: a dataset directory, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)
-  -overwrite
-        replace a previous dataset in --output
-  -part-interval duration
-        close an open part with rows after this duration although not full, bounding the age of the durable progress; 0: parts close by size only (default 30s)
-  -part-rotation-max-rows N
-        also close a part at N rows (Java's flag; 0: by size and --part-interval only); part of the resume identity
-  -part-size bytes
-        target bytes per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md) (default 67108864)
-  -path-style
-        S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
-  -profile profile
-        S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
-  -progress
-        print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
-  -progress-interval interval
-        progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
-  -q	quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
-  -qq
-        short for -q -q
-  -quiet
-        short for -q
-  -region string
+Source and output:
+  --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
-  -report file
-        also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
-  -report-format text
-        text (one line) or json (the run report, as in run.json) (default "text")
-  -request-payer
+  --endpoint URL
+        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
+  --anonymous
+        S3: send unsigned requests, ignoring any credentials
+  --path-style
+        S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
+  --profile profile
+        S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
+  --request-payer
         S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
-  -request-rate N
-        requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
-  -request-timeout duration
-        S3: per-request timeout; a request that exceeds it is retried (default 30s)
-  -row-budget bytes
-        bytes of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory (default 134217728)
-  -seed
-        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range (default true)
-  -sequential
-        ranges: list with one continuation-token chain (no ranges; the reference)
-  -spill-compress
-        compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed (default true)
-  -spill-max bytes
-        the spill disk budget: cap on spill bytes on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling
-  -spill-plain
-        write spill frames without delta coding (each key and payload whole; a comparison arm)
-  -spill-reserve bytes
-        diagnostic: free bytes spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)
-  -stall-timeout duration
-        stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
-  -stats
-        print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
-  -storage-class classes
+  --bearer-token-command command
+        S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
+  --bearer-token-refresh-interval duration
+        S3: run --bearer-token-command again after this duration (default 45m)
+  --fips
+        S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  --dualstack
+        S3: use the dual-stack (IPv6) endpoint
+  --fetch-owner
+        S3: fill owner_id and owner_display_name
+  --gcs-endpoint URL
+        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
+  --gcs-anonymous
+        GCS: send no credentials, ignoring any in the environment
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --include regex
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+  --exclude regex
+        drop keys in which this regex (Go RE2 syntax) matches anywhere
+  --min-size size
+        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+  --max-size size
+        keep objects of at most this size
+  --modified-since time
+        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+  --modified-until time
+        keep objects modified at or before this time
+  --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
-  -structure
+  --seed-from path
+        start from a previous listing's key distribution instead of the delimiter seed: a committed dataset path of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively
+
+Performance:
+  --workers int
+        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
+
+Limits:
+  --max-duration duration
+        stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
+        change it: give every unattended run one; a stopped object-store run resumes where it stopped
+  --stall-timeout duration
+        stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+        change it: raise it for a service that is slow to answer for minutes at a time
+  --request-rate N
+        requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
+        change it: set it to stay under a request quota shared with other clients
+  --limiter
+        requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
+        change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
+  --request-timeout duration
+        S3: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow S3-compatible store whose pages take longer to answer
+  --gcs-request-timeout duration
+        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow GCS endpoint or emulator
+
+Output and reporting:
+  --report file
+        also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
+  --report-format text
+        text (one line) or json (the run report, as in run.json) (default text)
+  --progress
+        print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
+  --no-progress
+        no live progress on stderr
+  --progress-interval interval
+        progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
+  --stats
+        print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  --no-stats
+        no end-of-run statistics on stderr
+  -v, -vv, -vvv
+        verbose: a start line, and progress as appended records (-vv, -vvv: the same)
+  -q, -qq
+        quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
+  --color string
+        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+
+swath resume DIR continues an interrupted run with its recorded command; only
+workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
+Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
+
+$ swath diag list --help
+usage: swath diag list SOURCE [flags]
+  every swath list flag (swath list --help), and the diagnostic flags below:
+  they exist to run an experiment or a comparison, not to operate the tool
+  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
+
+Diagnostics:
+  --seed
+        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists, the first carrying the first data page, which lists a scope of one page alone; not with -sequential); false: start from one range (default true)
+  --structure
         ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none (default auto)
-  -v	verbose: a start line, and progress as appended records (-vv, -vvv: the same)
-  -vv
-        short for -v -v
-  -vvv
-        short for -v -v -v
-  -workers int
-        listing goroutines (default 64, whatever the CPU count)
-
-swath resume DIR [--workers N ...] continues an interrupted run with its recorded command;
-only workers, encoders, row-budget, spill-max, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, quiet, color (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
-swath show [--journal] DIR shows a dataset or an interrupted run.
-
-Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
+  --slow-split
+        ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)
+  --floors
+        ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+  --sequential
+        ranges: list with one continuation-token chain (no ranges; the reference)
+  --max-keys N
+        ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
+  --limiter-slow-start
+        requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
+  --spill-plain
+        write spill frames without delta coding (each key and payload whole; a comparison arm)
+  --spill-compress
+        compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed (default true)
+  --spill-reserve bytes
+        free bytes spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)
+  --no-spill
+        wait on the reorder budget instead of spilling rows ahead of the frontier to disk
+  --no-journal
+        publish parts only at the end, without the journal that swath resume needs
 ```
 <!-- flags:end -->
 
 ## Semantics worth stating
 
-- **Sizes** (`--part-size`, `--row-budget`, `--spill-max`, `--spill-reserve`, `--min-size`, `--max-size`) have
+- **Sizes** (`--part-size`, `--row-budget`, `--spill-budget`, `--spill-reserve`, `--min-size`, `--max-size`) have
   one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
   not `1.3b`).
@@ -356,10 +363,10 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
 - **`--row-budget`** bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder
   queues); it is not a cap on resident memory. See [internals/ordering.md](internals/ordering.md).
-- **`--output`** is refused when non-empty unless `--overwrite` (or Java's alias `--force`), which replaces only
+- **`-o DIR`** is refused when non-empty unless `--overwrite`, which replaces only
   a previous dataset of this tool and never anything inside the listed root.
 - **Text output** (S3 and GCS sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
-  dataset: `swath list DIR` without `-o DIR` or `--count-only`, or with a text `-o`, is refused with exit 2). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
+  dataset: `swath list DIR` without `-o DIR`, or with a text `-o`, is refused with exit 2, naming `-o DIR` and `swath count`). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
   format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
   auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe
   compresses (`| zstd`). `--format` with a `-o` file or directory is refused, because the name already says it.
@@ -392,7 +399,8 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   One escaping rule for all three, JSON's string escapes: `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, any other byte
   below 0x20 and 0x7f as `\u00xx`, and `\"` inside JSON only. It is reversible, keeps a row on one line and a
   TSV field between its tabs, and never sends a terminal a control byte. Other provider columns (GCS
-  `generation`, `md5`, `crc32c`, `content_type`) have no S3 field and are not written: they are in the dataset.
+  `generation`, `md5`, `crc32c`, `content_type`, `time_created`) have no S3 field and are not written: they are
+  in the dataset.
   A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
   directory synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
@@ -408,7 +416,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   A,B` (repeatable) keeps the listed classes (case-insensitive). They reduce the rows written, not the requests
   made, with one exception: an `--include` anchored at the start with a literal (`^logs/2026/`) narrows the listed
   prefix to it (the same rows, fewer requests; the report's `invocation.source` names the narrowed root). The
-  dropped rows are counted in `output.rows_filtered` (`rows_listed` is what passed). The filters are part of the
+  dropped rows are counted in `output.rows_filtered` (`rows_emitted` is what passed; `rows_fetched` both). The filters are part of the
   resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
   manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
   `modified_after=…`, `modified_before=…`, `storage_class=…`), and a reader that needs the whole source refuses a
@@ -420,19 +428,41 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **S3 modes.** The default is the parallel core, seeded: before any range lists, delimiter listings of the
   folder hierarchy (the top level up to 4 pages, levels narrower than `--workers` descended up to 4 deep, at
   most 64 requests in at most 6 serial waves) tile the scope, or a resumed scope after its last published key.
-  On a bucket of a few pages that pre-phase is most of the run; `--seed=false` starts from one range instead;
+  The first wave also carries the scope's first data page: a complete page (the whole scope) lists a bucket of
+  one page in one round trip; a truncated one is discarded, and the first tile starts at the scope's start (or
+  the resumed key) as without it; a delimiter chain whose page held no folder is not
+  followed ([internals/providers.md](internals/providers.md#range-engine-internalsourcekeyrange));
+  `swath diag list --seed=false` starts from one
+  range instead (an experiment: [measurements](measurements.md) has the seed's effect on split depth);
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
-  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` (or Java's
-  name `--endpoint-url`) selects an S3-compatible store, addressed path-style by default, as Java's
+  dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` selects an S3-compatible store, addressed path-style by default, as Java's
   `--force-path-style` default with a custom endpoint; `--path-style=false` uses virtual-host addressing there. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
+- **Warm start:** `--seed-from PATH` (S3 and GCS) starts the range engine from a previous listing's key
+  distribution instead of the delimiter seed: no seed request, and the scope tiled into up to
+  `min(1000, 4 × --workers)` ranges of about equal expected keys. PATH is either a committed dataset directory of
+  the same source and scope (the manifest's bucket and prefix must be the run's; its parts' bounds, row counts and
+  key page index give the cuts) or a cut file: one key per line, ascending bytewise without repeats, each inside the
+  scope, optionally followed by a tab and the keys expected since the previous cut (every line or none), at most
+  262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it replaces). Anything
+  else is refused before any request (exit 2, class `refused`): another bucket or prefix, an unsorted or repeated
+  cut, a cut outside the scope, a cut file past those bounds, the output directory itself, `--sequential`, a filesystem source. Production should
+  seed from the previous dataset, which carries identity and counts; a cut file is for priors from elsewhere (an
+  S3 Inventory, a prefix list, another tool's segments). A prior changes only how the work is first divided: the
+  splits stay adaptive, the rows are the same. It is a runtime flag: `swath resume` reads it again and may change
+  or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without it. Counters
+  `seed.from.*`; the report's `invocation.prior` ([internals/providers.md](internals/providers.md)).
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
-  starts at `--workers`, falls by 0.7 on each throttle answer and grows back by one per second after 10 s
-  without one (Java swath's rules; [internals/providers.md](internals/providers.md)); `--limiter=false` keeps a
-  fixed `--workers` requests in flight. `--limiter-slow-start` (off by default) starts the limit at 4 instead
-  and doubles it each second up to `--workers` until the first throttle answer or timeout (Java's slow start);
+  starts at `--workers`, falls by 0.7 on a throttle answer, at most once per round trip and only while 15 % or
+  more of the last 4 × `--workers` answers (at least 256) are throttles, and grows back by one per second while under 7.5 % are
+  or after 10 s without one (Java swath's rules, read as a fraction so that a random background of throttles
+  is not taken for congestion; [internals/providers.md](internals/providers.md)); `--limiter=false` admits
+  every request at once: no limit applies, the `--workers` listing workers each wait on one page at a time, and
+  the seed's delimiter listings and the structure probes run beside them, so more than `--workers` requests can
+  be in flight. `swath diag list --limiter-slow-start` (off by default) starts the limit at 4 instead
+  and doubles it each second up to `--workers` until the first cut or timeout (Java's slow start);
   a resume replays it from the recorded command and may add or undo it, since a resumed client starts a new
   limiter (counters `slow_start.*`, feature `slow_start`, on only with the limiter). `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
   HTTP attempts at N per second (at least 0.001), every attempt counted (pages, probes, client retries, engine
@@ -453,7 +483,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   Windows with `cmd.exe /d /s /c "CMD"` (`%ComSpec%`, so write it in cmd syntax there); its
   stdout (trimmed, one line) is a bearer token sent as `Authorization: Bearer TOKEN` on every request instead of a
   SigV4 signature, and no AWS credential is looked up (it excludes `--anonymous` and `--profile`). The use is an
-  S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API: `swath list s3://bucket --endpoint-url
+  S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API: `swath list s3://bucket --endpoint
   https://storage.googleapis.com --bearer-token-command 'gcloud auth print-access-token' -o DIR` (the native
   `gs://` provider is the alternative). The token is fetched again after `--bearer-token-refresh-interval`
   (default 45 m, under a one-hour token lifetime), one run of the command at a time however many requests need
@@ -466,7 +496,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 - **Spill:** when the reorder budget is full, rows of ranges ahead of the frontier go to disposable files
   under `DIR/.swath/spill/` (a text file's in a scratch directory of its attempt beside it,
   `.NAME.swath-ATTEMPT-RANDOM/spill/`, removed when the attempt ends; stdout's under `$TMPDIR`) instead of
-  stalling the workers. `--spill-max` is the one disk budget: spill stops
+  stalling the workers. `--spill-budget` is the one disk budget: spill stops
   (and listing waits instead) at that many bytes on disk (default 0: half the space free on the spill
   filesystem when the run starts, after the reserve) or when the filesystem would drop below the reserve, one
   part per encoder at full size and at least 1 GiB (room for the parts being written on the same filesystem).
@@ -490,9 +520,12 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   the resume identity, so a resume would stop at the same place. Start over (`--overwrite`) with a larger
   `--part-size` or without `--part-rotation-max-rows`.
 - **Durable-progress age:** `--part-interval` (default 30 s, Java's rotation interval; 0: off) closes an open part that holds rows once
-  it is that old, although not full, so the journal's recovery point (what a resume keeps) is never older than
-  about that on a slow frontier; with 0, parts close by `--part-size` only and their boundaries do not depend on
-  timing. It may change on `swath resume`.
+  it is that old, although not full (checked every eighth of the interval; not a part whose boundary a resume
+  fixed). It is a rotation target, not a durability deadline: the closed part still encodes, syncs and is
+  published in ordinal order behind the parts before it, so the journal's recovery point (what a resume keeps)
+  lags by that work too, and while no rows reach the output no part is open to close, so the point does not
+  move. Rows listed but not yet in a published part are listed again by a resume. With 0, parts close by
+  `--part-size` only and their boundaries do not depend on timing. It may change on `swath resume`.
 - **Resume:** an S3 run keeps a journal in `DIR/.swath/` with the command that started it; after a crash or
   interruption, `swath resume DIR` continues it ([internals/durability.md](internals/durability.md)).
   `swath diag list --no-journal` turns it off (parts are then published only at the end).
@@ -509,9 +542,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   on `class`, `exit_code`, `resumable` and `cause`, also when a stop cause (the deadline, a signal) arrives
   after the run settled (a dataset committed with partial coverage is `incomplete`, exit 1, in all of them).
   The report's `output` counts the parts that stay in the output on failure too: after a failure of a
-  journaled run, `parts_written`, `bytes` and `rows_durable` are the parts the journal acknowledged (the append
+  journaled run, `parts_written`, `output_bytes` and `rows_durable` are the parts the journal acknowledged (the append
   returned, a failed rename after it included: the resume renames them), the recovered ones included in
-  `bytes` and `rows_durable`.
+  `output_bytes` and `rows_durable`.
   `error.json` is a convenience: it is current only when its `attempt.id` is the report's. No program can
   promise a new file on storage that refuses writes, so an attempt whose `error.json` write fails leaves the
   previous one in place, possibly with the same class and exit code; its report names another attempt and says
@@ -530,9 +563,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
-  | 0 | `completed` | the dataset is committed (or a dry run finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
+  | 0 | `completed` | the dataset is committed (or `swath count` finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
   | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output; a protocol violation, `cause` `protocol`, which outranks a stop cause and which the journal records, so `swath resume` refuses the run; the part limit, `cause` `part_limit`, and an output layout swath did not make (a linked `data/`, workspace, journal or part), `cause` `unsafe_layout`, which both also outrank a stop cause; the refused paths are left as they were; the outcome is in the report, and in `error.json` only when swath could take the output lock to settle it: a refused linked workspace or journal can leave `error.json` unchanged, and the external `--report` carries the refusal), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
-  | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `--output` without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume, an S3 directory bucket | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
+  | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `-o` directory without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume, an S3 directory bucket | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
   | 75 | `stuck` | no progress (Liveness, below) for `--stall-timeout` (default 10 min; a warning at half; also after the 15 s shutdown grace); `cause` names what rose meanwhile: `stuck_empty_chain` (empty continuing pages past the first 1,024 of their run), `stuck_throttle` (throttle answers), `stuck_timeouts` (attempts past the request timeout, no throttle) or `stuck_no_rows` (none of these: failing or hung requests, or a stopped pipeline) | yes, journal intact |
   | 124 | `deadline` | `--max-duration` reached with the output unfinished (also after the 15 s shutdown grace) | yes |
@@ -590,7 +623,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   | `frontier` | the listing's pages: those that held an entry or ended a chain, and empty continuing pages within the first 1,024 of their run (the watchdog's liveness with `advance`) |
   | `empty_chain_pages` | empty continuing pages past the first 1,024 of their run: answered, followed, not progress |
   | `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
-  | `part_age_ms` | time since the last part was published (or since the start): the recovery point's age |
+  | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
   | `rows_retained` | rows a resume kept from the interrupted run (not in `objects`) |
   | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS) |
@@ -623,26 +656,80 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
   and `--report` stand). `--color auto|always|never` colours the progress line and the statistics (headline
   cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless `NO_COLOR` is set and not empty or
   `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width: `golang.org/x/term`.
-- **Report continuity** (Java's report fields with consumers). `cost.api_calls` is every HTTP attempt this
-  invocation sent (pages, probes, client retries, engine requeues; the field the cloud importer reads as the
-  request count); `cost.cost_usd` is that count at `cost.basis.rate_per_1k_usd` (0.005, `source`
-  `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint), and both are
-  `null` on a custom endpoint, whose tariff is unknown. `efficiency.keys_per_sec` is `output.rows_listed` over
-  `timings.listing_ms` (listing and ordering; not publication, not the time before the run, not retained rows);
-  `efficiency.api_calls_per_1k_objects` is `null` without a row. Clocks: `timings.wall_ms` runs from
-  `timings.started_at` (the run's start, after the command line was read) to `finished_at`;
-  `timings.session_ms` is the whole invocation, from `attempt.started` (credential lookup, a resume's
-  verification and publication included); `listing_ms` ends with the order stage. `args_hash` (the field the
-  cloud importer reads as the configuration digest) is SHA-256 over the run's frozen identity (tool, format,
-  schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix,
-  route and region, and the filters): the same for a run and its resumes, never a credential, and not equal to
-  Java's (which covered the listing scope only). `outcome.stop_source` says what stopped a stopped run:
-  `sigint`, `sigterm`, `liveness_watchdog` (`--stall-timeout`), `timebox` (`--max-duration`), with
-  `+forced_exit` when it did not stop within the grace (`forced_exit` alone if it came first); `error.json`
-  carries it too. A supervisor can read the live `objects` count from `progress.json`. Attempt latency
-  is `source.stats.counters.values` `inflight.p50_ns`, `inflight.p90_ns`, `inflight.p99_ns`; how a split chain
-  reads from the counters is under "Range engine" in [internals/providers.md](internals/providers.md).
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces range-engine splits on stderr, one line per split (range id,
   bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation
   and the anchor its upper child carries).
+
+## Run report
+
+<!-- report:begin -->
+One schema (`listing.Report`, `report_version` 2) for `run.json` beside a committed dataset, `--report FILE`,
+and what `--report-format json` prints. It is operational: readers accept a dataset by its manifest, never by
+this report. The schema is pinned by `internal/listing/testdata/report-schema.golden` (`TestReportSchemaGolden`;
+a change bumps `report_version` and is listed in [upgrade.md](upgrade.md#run-report-and-counters)), and
+`TestReportSchemaDoc` keeps this section naming every field. It accounts for this invocation (rows it fetched
+and emitted, requests it made) separately from the dataset (rows retained from an interrupted run, durable,
+committed). Durations are integers with the unit in the name; a measurement that was not taken is absent,
+never zero.
+
+| Field | Meaning |
+|---|---|
+| `report_version` | 2 |
+| `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
+| `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
+| `invocation` | what was asked: `argv` (secret flags `[redacted]`), `source` (the root, narrowed by an anchored `--include`), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
+| `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
+
+**Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
+end, `wall_ms` between them; `session_ms` is the whole invocation, from `attempt.started` (credential lookup,
+a resume's verification and publication included). The phases follow one another: `listing_ms` from
+`started_at` to `listing_finished_at`, the end of the order stage (every row listed and handed on in order; it
+includes the setup and the order stage's drain after the last request), then `drain_ms` until the encoders have
+written and closed the last part, then `publication_ms` until the manifest is installed (`drain_ms` and
+`publication_ms` absent without a committed dataset). `seed_ms` overlaps `listing_ms` at its start: the range
+engine's seed, from its first delimiter request to its tiles (absent where none ran). `user_cpu_ms` and
+`sys_cpu_ms` are the process's CPU times (absent where the platform does not measure them).
+
+**Rows and bytes** (`output`). `rows_fetched` is what this invocation listed from the source, `rows_filtered`
+what the filters dropped of it, `rows_emitted` what was handed on in order (swath count: counted). On a run that
+succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`; a run that stopped has also fetched rows ahead of
+the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
+that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
+the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `parts_retained` count parts.
+`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
+`output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
+`rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`).
+
+**Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
+is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,
+`throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,
+and past the per-request timeout. `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
+`aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint); both `null` on a
+custom endpoint, whose tariff is unknown. `keys_per_sec` is `rows_emitted` over `listing_ms`;
+`http_attempts_per_1k_rows` is `http_attempts` per 1,000 `rows_fetched` (`null` without a row). Latency
+percentiles and in-flight time are the provider's counters (`source.stats.counters.values` `inflight.p50_ns`,
+`inflight.p90_ns`, `inflight.p99_ns`, `inflight.busy_ns`).
+
+**Resources** (`resources`). `peak_rss_bytes` (with `rusage_available`), `peak_heap_live_bytes` (sampled every
+100 ms), `max_buffered_bytes` (peak reorder storage, against `invocation.row_budget_bytes`), `free_disk_min_bytes`
+(the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
+output's; absent for swath count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
+`budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
+`part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
+off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `peak_bytes`, `refused`,
+`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`.
+
+**Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
+namespace, [internals/counters.md](internals/counters.md)).
+
+**History** (`history`). The run's progress over time, at most 300 samples (`listing.HistoryCap`, about 30 KB):
+the first at the start of listing, then one per `interval_ms` (1 s until the history fills; then every other
+sample is dropped and the interval doubles), and the last at the end. Each of `samples`: `at`, `rows_fetched`,
+`rows_emitted`, `rows_durable` (in journaled or committed parts, retained ones included), `http_attempts`,
+`inflight`, `limit` (the limiter's, 0 without one), `spill_bytes` (live), `free_disk_bytes` (absent without an
+output) and `rss_bytes` (the resident set now; Linux only, absent elsewhere). Absent for a run that stopped
+before listing.
+<!-- report:end -->

@@ -261,11 +261,26 @@ func TestCredentialsFailClosed(t *testing.T) {
 		c, _ := testClient(t, h, Config{Region: "us-east-1"})
 		signedWith(t, c, "AKWEB")
 	})
+	// New's context bounds the first lookup: a caller that gives up is not
+	// held for the configured source's 30 s wait, and its cancellation is
+	// not read as a verdict on the credentials.
+	t.Run("caller gives up", func(t *testing.T) {
+		_, token := setup(t)
+		os.WriteFile(token, []byte("jwt"), 0o600)
+		webIdentitySTS(t, 2*time.Second, 0, "")
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := New(ctx, Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:1", PathStyle: true})
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+			t.Fatalf("after %v: %v, want the caller's deadline", time.Since(start), err)
+		}
+	})
 	t.Run("refused", func(t *testing.T) {
 		_, token := setup(t)
 		os.WriteFile(token, []byte("jwt"), 0o600)
 		webIdentitySTS(t, 0, 400, "InvalidIdentityToken")
-		_, err := New(Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:1", PathStyle: true})
+		_, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:1", PathStyle: true})
 		var ce *objhttp.CredentialError
 		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || !strings.Contains(err.Error(), "web identity") {
 			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, Classify(err))
@@ -277,7 +292,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 		webIdentitySTS(t, 0, 503, "ServiceUnavailable")
 		srv := httptest.NewServer(http.HandlerFunc(h))
 		t.Cleanup(srv.Close)
-		c, err := New(Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true, MaxAttempts: 2,
+		c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true, MaxAttempts: 2,
 			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
 		if err != nil {
 			t.Fatal(err)
@@ -371,7 +386,7 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 				w.Write([]byte(okPage)) // a public bucket
 			}))
 			t.Cleanup(srv.Close)
-			c, err := New(Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
+			c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
 			if err == nil {
 				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())

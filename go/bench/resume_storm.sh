@@ -14,7 +14,7 @@
 # Environment: REPLAY_ENV (the replay oracle's env.sh), SWATH (Go binary), FAULTPROXY (built
 #   bench/faultproxy), RECORDINGS (default $BENCH_DATA/recordings), KILL_AT (s, default 30),
 #   PHASE (s from the first request, default KILL_AT+120), FRACTION (default 0.2), LIST_FLAGS (extra
-#   `swath list` flags, default "--seed --part-interval 10s"), PIN (a command prefix such as
+#   `swath diag list` flags, default "--part-interval 10s"), PIN (a command prefix such as
 #   "taskset -c 0", default none), TARGET (an S3 listing endpoint URL such as a bench scale fake: no replay
 #   server is started, LATENCY_MS is then unused and BUCKET names the fake's bucket).
 # Writes OUTDIR/arms.tsv (one line per run), OUTDIR/BUCKET-W-ARM-REP.{tsv,json,log,proxy,times};
@@ -31,7 +31,7 @@ FP=${FAULTPROXY:?path to the built bench/faultproxy}
 REC=${RECORDINGS:-${BENCH_DATA:?set BENCH_DATA to the bench-data directory}/recordings}
 KILL_AT=${KILL_AT:-30} FRACTION=${FRACTION:-0.2}
 PHASE=${PHASE:-$((KILL_AT + 120))}
-LIST_FLAGS=${LIST_FLAGS:---seed --part-interval 10s}
+LIST_FLAGS=${LIST_FLAGS:---part-interval 10s}
 ARMS=${ARMS:-shipped slowstart off}
 PIN=${PIN:-}
 MP=$((PORT + 100)) PP=$((PORT + 1))
@@ -65,7 +65,7 @@ for rep in $(seq 1 "$REPS"); do
       until (: < "/dev/tcp/127.0.0.1/$PP") 2> /dev/null; do sleep 0.2; done
       t0=$(ms)
       # shellcheck disable=SC2086
-      $PIN "$SW" list "s3://$B" --endpoint "http://127.0.0.1:$PP" --path-style --anonymous --region us-east-1 \
+      $PIN "$SW" diag list "s3://$B" --endpoint "http://127.0.0.1:$PP" --path-style --anonymous --region us-east-1 \
         --workers "$w" -o "$out" --report-format json $LIST_FLAGS $af > "$W/$id.list.json" 2> "$W/$id.list.log" < /dev/null &
       LPID=$!
       killed=0

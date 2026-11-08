@@ -16,7 +16,7 @@ for line in open(os.path.join(W, 'arms.tsv')):
     if arm != 'java':
         try:
             d = json.load(open(os.path.join(W, f'{b}-{cpus}-{arm}-{rep}.json')))
-            keys[b] = d['output']['rows_listed']
+            keys[b] = d['output'].get('rows_emitted', d['output'].get('rows_listed'))  # report v2, v1
         except Exception:
             pass
 

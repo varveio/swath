@@ -32,7 +32,7 @@ func (f *Fields) Set(s string) error {
 
 func flags(f *flag.FlagSet, _ bool, _ any) any {
 	o := &Options{LinkTarget: true}
-	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat (the default), statx (adds birth_time; Linux)")
+	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat, statx (adds birth_time; Linux)")
 	f.BoolVar(&o.NoDirs, "no-dirs", false, "local: omit kind=DIR rows")
 	f.BoolFunc("no-link-target", "local: do not read symlink targets", func(string) error { o.LinkTarget = false; return nil })
 	return o

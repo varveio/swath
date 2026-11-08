@@ -995,19 +995,18 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 	o.releaseEvery = releaseEvery
 	o.path = []drainFrame[R, P]{{n: root}}
 	o.advanced = time.Now()
+	defer o.stalled() // after the final flush too: a sink write that blocks is a stall
 	o.mu.Lock()
 	root.onPath.Store(true)
 	for len(o.path) > 0 {
 		if o.stopped.Load() {
 			o.mu.Unlock()
-			o.stalled()
 			return st, context.Cause(o.ctx)
 		}
 		if o.segmentsDue() {
 			done, err := o.trySegments()
 			if err != nil {
 				o.mu.Unlock()
-				o.stalled()
 				return st, err
 			}
 			if done {
@@ -1039,7 +1038,6 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		}
 		if err != nil {
 			o.mu.Unlock()
-			o.stalled()
 			return st, err
 		}
 		if child != nil {
@@ -1053,16 +1051,16 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 		hookDrained(o.buffered, o.meta)
 	}
 	o.mu.Unlock()
-	o.stalled()
 	err := o.flush()
 	o.drainEnd = time.Now()
 	return st, err
 }
 
 // stalled closes the interval since the drainer last handed rows on into
-// stuck. Every drain exit calls it, cancellation and errors included: an
-// interrupted run's last stall (a frontier that never answered before the
-// stop) is the one its report most needs.
+// stuck. Every drain exit runs it, deferred, after the final flush,
+// cancellation and errors included: an interrupted run's last stall (a
+// frontier that never answered, or a sink whose last write blocked until
+// the stop) is the one its report most needs.
 func (o *run[R, P]) stalled() { o.stuck = max(o.stuck, time.Since(o.advanced)) }
 
 // drainFinished drains a finished node's items up to its next child,
@@ -1179,6 +1177,17 @@ func (o *run[R, P]) closeNode(n *node[R, P]) error {
 
 // expandHere expands a queued node nobody has claimed, on the drainer.
 func (o *run[R, P]) expandHere(n *node[R, P], direct bool) error {
+	if len(o.segs) > 0 {
+		// Hand on what is batched before listing here, as before a wait on
+		// the frontier: the expansion is a request that may take long, and
+		// the sink (a part's age bound, its durability) must see every row
+		// the walk has reached meanwhile. The caller rechecks after (a
+		// worker may have taken the node).
+		o.mu.Unlock()
+		err := o.flush()
+		o.mu.Lock()
+		return err
+	}
 	n.state = expanding
 	n.awaited.Store(true)
 	o.release()

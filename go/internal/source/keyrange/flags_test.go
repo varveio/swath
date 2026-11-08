@@ -21,16 +21,16 @@ func TestFlags(t *testing.T) {
 		if !c.Admission.Limiter || !c.Policy.Seed || c.Policy.Floors || c.Policy.Structure != StructureAuto {
 			t.Fatalf("defaults: %+v", *c)
 		}
-		args := []string{"-seed=false", "-request-rate", "5"}
+		args := []string{"-limiter=false", "-request-rate", "5"}
 		if diag {
-			args = append(args, "-floors", "-sequential", "-max-keys", "9", "-limiter=false", "-structure=off")
+			args = append(args, "-seed=false", "-limiter-slow-start", "-floors", "-sequential", "-max-keys", "9", "-structure=off")
 		}
 		if err := f.Parse(args); err != nil {
 			t.Fatal(err)
 		}
-		want, adm := Policy{Structure: StructureAuto}, objhttp.Admission{Limiter: true, RequestRate: 5}
+		want, adm := Policy{Seed: true, Structure: StructureAuto}, objhttp.Admission{RequestRate: 5}
 		if diag {
-			want, adm = Policy{Floors: true, Sequential: true, MaxKeys: 9}, objhttp.Admission{RequestRate: 5}
+			want, adm = Policy{Floors: true, Sequential: true, MaxKeys: 9}, objhttp.Admission{SlowStart: true, RequestRate: 5}
 		}
 		if c.Policy != want || c.Admission != adm {
 			t.Fatalf("diag=%v: %+v, want %+v %+v", diag, *c, want, adm)

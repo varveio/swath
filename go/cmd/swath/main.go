@@ -167,8 +167,8 @@ func newAttempt() *listing.Attempt {
 	return &listing.Attempt{ID: hex.EncodeToString(b[:]), Started: time.Now().UTC()}
 }
 
-// cfgOut is the output directory a run with o would own ("" with
-// --count-only).
+// cfgOut is the output directory a run with o would own ("" for swath
+// count).
 func cfgOut(o options) string {
 	if o.countOnly || o.text != nil {
 		return ""
@@ -225,7 +225,8 @@ func brokenPipe(err error) bool { return errors.Is(err, syscall.EPIPE) }
 // usageError is a malformed command line.
 type usageError struct{ error }
 
-// dispatch runs one command: list, resume, show or diag list.
+// dispatch runs one command: list, count, resume, show, diag list or diag
+// count.
 func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		commands(os.Stderr)
@@ -234,11 +235,19 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "list":
 		return run(ctx, args[1:], stdout, false)
+	case "count":
+		return runCount(ctx, args[1:], stdout, false)
 	case "diag":
-		if len(args) < 2 || args[1] != "list" {
-			return usageError{errors.New("usage: swath diag list SOURCE [flags]")}
+		switch {
+		case len(args) == 2 && isHelp(args[1]):
+			fmt.Fprint(stdout, diagUsage)
+			return flag.ErrHelp
+		case len(args) >= 2 && args[1] == "list":
+			return run(ctx, args[2:], stdout, true)
+		case len(args) >= 2 && args[1] == "count":
+			return runCount(ctx, args[2:], stdout, true)
 		}
-		return run(ctx, args[2:], stdout, true)
+		return usageError{errors.New(strings.TrimSpace(diagUsage))}
 	case "resume":
 		return resume(ctx, args[1:], stdout)
 	case "show":
@@ -259,16 +268,28 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	return usageError{fmt.Errorf("unknown command %q", args[0])}
 }
 
+// isHelp reports a help request flag.
+func isHelp(a string) bool { return a == "-h" || a == "-help" || a == "--help" }
+
+// diagUsage is swath diag's own help.
+const diagUsage = `usage: swath diag list SOURCE [flags]    swath list with the diagnostic flags
+       swath diag count SOURCE [flags]   swath count with the diagnostic flags
+The diagnostic flags exist to run an experiment or a comparison, not to operate the tool.
+swath diag list --help lists them.
+`
+
 // commands prints the command summary.
 func commands(w io.Writer) {
 	fmt.Fprint(w, `usage:
-  swath list SOURCE --output DIR [flags]   list SOURCE into a sorted dataset in DIR
-  swath list SOURCE [-o FILE|-] [flags]    list SOURCE as text rows (TSV, JSONL, a table) to a file or stdout
-  swath resume DIR [runtime flags]         continue the interrupted run in DIR
-  swath show [--journal] DIR               show a dataset or an interrupted run
-  swath diag list SOURCE [flags]           list with diagnostic flags (comparisons, policy toggles)
-  swath --version                          print the build (tool, module version, VCS revision)
-SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]. swath list -h lists the flags.
+  swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
+  swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
+  swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+  swath resume DIR [flags]                continue the interrupted run in DIR
+  swath show [--journal] DIR              show a dataset or an interrupted run
+  swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
+  swath --version                         print the build (tool, module version, VCS revision)
+SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix].
+swath COMMAND --help lists a command's flags.
 `)
 }
 
@@ -295,16 +316,18 @@ func killAt(spec string, act func()) {
 }
 
 type options struct {
+	diag                   bool // swath diag list or count: the diagnostic flags too
 	out                    string
 	overwrite              bool
-	countOnly              bool
+	countOnly              bool // swath count
 	reportFormat, report   string
 	cpuProfile, memProfile string // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
 	partInterval           time.Duration
 	workers, encoders      int
 	partSize, rowBudget    size
-	spillMax, spillReserve zsize
+	spillBudget            zsize
+	spillReserve           zsize
 	resume, noJournal      bool
 	noSpill, spillCompress bool
 	spillPlain             bool
@@ -315,11 +338,12 @@ type options struct {
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
 	partMaxRows            int64
+	seedFrom               string
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-max", "spill-reserve", "spill-compress", "spill-plain", "part-interval", "report-format", "report", "max-duration", "stall-timeout"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-budget", "spill-reserve", "spill-compress", "spill-plain", "part-interval", "report-format", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
@@ -359,27 +383,38 @@ func redactArgv(argv []string) []string {
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
 
+// newFlags is the flag set of swath list (diag false) or swath diag list
+// (diag true). Both hold every flag, the diagnostic ones included, so that
+// one given to swath list is refused with a message naming swath diag
+// (placement) rather than as unknown; the help shows only the command's own
+// (helpGroups).
 func newFlags(o *options, diag bool) *flag.FlagSet {
 	f := flag.NewFlagSet("list", flag.ContinueOnError)
-	f.StringVar(&o.out, "output", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default without --count-only)")
-	f.StringVar(&o.out, "o", "", "short for --output")
+	o.diag = diag
+	registerFlags(f, o, true)
+	return f
+}
+
+// registerFlags registers the list flags on f, with the diagnostic ones
+// when diag.
+func registerFlags(f *flag.FlagSet, o *options, diag bool) {
+	f.StringVar(&o.out, "o", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default)")
 	f.StringVar(&o.format, "format", "", "stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format")
-	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in --output")
-	f.BoolVar(&o.overwrite, "force", false, "Java swath's name for --overwrite")
+	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in -o")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
 	o.rowBudget = listing.DefaultRowBudget
 	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
-	f.IntVar(&o.workers, "workers", 0, "listing goroutines (default 64, whatever the CPU count)")
+	f.StringVar(&o.seedFrom, "seed-from", "", "start from a previous listing's key distribution instead of the delimiter seed: a committed dataset `path` of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively")
+	f.IntVar(&o.workers, "workers", 0, "listing goroutines, the most requests in flight (default 64, whatever the CPU count)")
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
-	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full, bounding the age of the durable progress; 0: parts close by size only")
-	f.BoolVar(&o.countOnly, "count-only", false, "walk and count without writing a dataset")
-	f.Var(&o.spillMax, "spill-max", "the spill disk budget: cap on spill `bytes` on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling")
+	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full (a rotation target: the part is then encoded and published in order, so the recovery point can be older, and a stalled frontier leaves no part to close); 0: parts close by size only")
+	f.Int64Var(&o.partMaxRows, "part-rotation-max-rows", 0, "also close a part at `N` rows (Java's flag; 0: by size and --part-interval only); part of the resume identity")
+	f.Var(&o.spillBudget, "spill-budget", "cap on spill `bytes` on disk (0: half the free space on the output filesystem at start, after a reserve of one part per encoder and at least 1 GiB); past it, or at the reserve, listing waits instead of spilling")
 	f.StringVar(&o.reportFormat, "report-format", "text", "`text` (one line) or json (the run report, as in run.json)")
 	f.StringVar(&o.report, "report", "", "also write the run report (JSON, with the outcome and the attempt id) to this `file` when the attempt ends, on failure too")
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
-	f.Int64Var(&o.partMaxRows, "part-rotation-max-rows", 0, "also close a part at `N` rows (Java's flag; 0: by size and --part-interval only); part of the resume identity")
 	o.term.register(f)
 	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
 	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
@@ -395,15 +430,15 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		}
 		return nil
 	})
-	// The spill frame format is a runtime choice on every list command (and
-	// on resume: spill is disposable, so a resume's frames never meet the
-	// crashed run's).
-	f.BoolVar(&o.spillCompress, "spill-compress", true, "compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
-	f.BoolVar(&o.spillPlain, "spill-plain", false, "write spill frames without delta coding (each key and payload whole; a comparison arm)")
+	o.spillCompress = true
 	if diag {
-		f.BoolVar(&o.noJournal, "no-journal", false, "diagnostic: publish parts only at the end, without the journal that swath resume needs")
-		f.BoolVar(&o.noSpill, "no-spill", false, "diagnostic: wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
-		f.Var(&o.spillReserve, "spill-reserve", "diagnostic: free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
+		// The spill frame format is a runtime choice (and on resume: spill
+		// is disposable, so a resume's frames never meet the crashed run's).
+		f.BoolVar(&o.spillCompress, "spill-compress", true, "compress spill frames (zstd level 1); --spill-compress=false writes them uncompressed")
+		f.BoolVar(&o.spillPlain, "spill-plain", false, "write spill frames without delta coding (each key and payload whole; a comparison arm)")
+		f.BoolVar(&o.noJournal, "no-journal", false, "publish parts only at the end, without the journal that swath resume needs")
+		f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
+		f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
 	}
 	// Each provider owns its flag group; a group several share (the range
 	// engine's) is registered once and passed to each of them.
@@ -441,7 +476,6 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 		}
 	}
 	f.SetOutput(io.Discard)
-	return f
 }
 
 // nonNegativeDurations refuses a negative value of any duration flag given
@@ -512,42 +546,41 @@ func rateFitsStall(f *flag.FlagSet, stall time.Duration) error {
 	return nil
 }
 
-// usage prints the flags generated from the flag set itself.
-func usage(w io.Writer, f *flag.FlagSet, diag bool) {
-	if diag {
-		fmt.Fprintln(w, "usage: swath diag list SOURCE [flags]   (the list flags plus diagnostic ones)")
-	} else {
-		fmt.Fprintln(w, "usage: swath list SOURCE [--output DIR|FILE|-] [flags]")
-	}
-	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
-	fmt.Fprintln(w)
-	// PrintDefaults indents each usage with four spaces and a tab; eight
-	// spaces look the same and leave no space before a tab in the
-	// generated docs/cli.md.
-	var defaults strings.Builder
-	f.SetOutput(&defaults)
-	f.PrintDefaults()
-	f.SetOutput(io.Discard)
-	fmt.Fprint(w, strings.ReplaceAll(defaults.String(), "\n    \t", "\n        "))
-	fmt.Fprintln(w, "\nswath resume DIR [--workers N ...] continues an interrupted run with its recorded command;")
-	fmt.Fprintln(w, "only "+strings.Join(runtimeFlags, ", ")+" (runtime) and")
-	fmt.Fprintln(w, strings.Join(operationalFlags, ", ")+" (operational) may change.")
-	fmt.Fprintln(w, "swath show [--journal] DIR shows a dataset or an interrupted run.")
-	fmt.Fprintln(w, "\nProfiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.")
+// run is swath list (diag: swath diag list).
+func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
+	return runWith(ctx, command{diag: diag}, args, stdout, nil, false, nil)
 }
 
-func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
-	return runWith(ctx, args, stdout, diag, nil, false, nil)
+// runCount is swath count (diag: swath diag count).
+func runCount(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
+	return runWith(ctx, command{diag: diag, count: true}, args, stdout, nil, false, nil)
+}
+
+// command is one of the list commands: swath list, swath count, and their
+// swath diag forms.
+type command struct{ diag, count bool }
+
+// name is the command as typed.
+func (c command) name() string {
+	n := "list"
+	if c.count {
+		n = "count"
+	}
+	if c.diag {
+		n = "diag " + n
+	}
+	return n
 }
 
 // parseList resolves a list command line: its options and SOURCE, with
 // the usage refusals (a help request prints the usage to stdout).
-func parseList(args []string, stdout io.Writer, diag bool) (o options, root string, err error) {
-	f := newFlags(&o, diag)
+func parseList(args []string, stdout io.Writer, cmd command) (o options, root string, err error) {
+	f := newFlags(&o, cmd.diag)
+	o.countOnly = cmd.count
 	for rest := args; ; {
 		if err := f.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				usage(stdout, f, diag)
+				usage(stdout, f, cmd)
 				return o, "", err
 			}
 			return o, "", usageError{err}
@@ -565,6 +598,9 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 		return o, "", usageError{errors.New("missing SOURCE")}
 	case o.reportFormat != "text" && o.reportFormat != "json":
 		return o, "", usageError{fmt.Errorf("--report-format %q: want text or json", o.reportFormat)}
+	}
+	if err := placement(f, cmd); err != nil {
+		return o, "", usageError{err}
 	}
 	if err := nonNegativeDurations(f); err != nil {
 		return o, "", usageError{err}
@@ -590,7 +626,7 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	}
 	o.text = text
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
-		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset) or --count-only: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
+		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath count: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
@@ -604,13 +640,13 @@ func parseList(args []string, stdout io.Writer, diag bool) (o options, root stri
 	return o, root, nil
 }
 
-// runWith lists; argv0 is the recorded command, resumed tells a resume, att
-// is the attempt (nil: a new one).
-func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, recorded []string, resumed bool, att *listing.Attempt) error {
+// runWith runs a list command; recorded is the recorded command (a
+// resume's), resumed tells a resume, att is the attempt (nil: a new one).
+func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, recorded []string, resumed bool, att *listing.Attempt) error {
 	if att == nil {
 		att = newAttempt()
 	}
-	o, root, err := parseList(args, stdout, diag)
+	o, root, err := parseList(args, stdout, cmd)
 	if err != nil {
 		return err
 	}
@@ -621,11 +657,7 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
-		argv = append([]string{"list"}, args...)
-		if diag {
-			argv = append([]string{"diag", "list"}, args...)
-		}
-		argv = redactArgv(argv)
+		argv = redactArgv(append(strings.Fields(cmd.name()), args...))
 	}
 	pf, err := registry.Lookup(root)
 	if err != nil {
@@ -633,10 +665,10 @@ func runWith(ctx context.Context, args []string, stdout io.Writer, diag bool, re
 	}
 	root = narrowRoot(root, &o.filter)
 	cfg := listing.Config{
-		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme]},
+		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
-			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillMax), Reserve: int64(o.spillReserve)}},
+			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
@@ -764,14 +796,18 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
-	parts, outBytes := sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.Bytes
+	cpu := fmt.Sprintf("wall=%.3fs user=%s sys=%s peak_rss=%s", float64(sum.Timings.WallMs)/1000,
+		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
+		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"))
+	if o.countOnly {
+		fmt.Fprintf(stdout, "rows=%d object_bytes=%s %s\n", sum.Output.RowsEmitted, measured(sum.Output.ObjectBytes, 1, "%.0f"), cpu)
+		return nil
+	}
+	parts, outBytes := sum.Output.PartsWritten+sum.Output.PartsRetained, sum.Output.OutputBytes
 	if t := sum.Output.Text; t != nil {
 		parts, outBytes = 1, t.Bytes // one text file
 	}
-	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d wall=%.3fs user=%s sys=%s peak_rss=%s max_buffered=%d\n",
-		sum.Output.RowsListed, parts, outBytes, float64(sum.Timings.WallMs)/1000,
-		measured(sum.Timings.UserCPUMs, 1000, "%.2fs"), measured(sum.Timings.SysCPUMs, 1000, "%.2fs"),
-		measured(sum.Resources.PeakRSSBytes, 1<<20, "%.1fMiB"), sum.Resources.MaxBufferedBytes)
+	fmt.Fprintf(stdout, "rows=%d parts=%d out_bytes=%d %s max_buffered=%d\n", sum.Output.RowsEmitted, parts, outBytes, cpu, sum.Resources.MaxBufferedBytes)
 	return nil
 }
 
@@ -801,7 +837,7 @@ func explain(err error) error {
 	case errors.Is(err, dataset.ErrNotEmpty):
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
 	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrInsideRoot), errors.Is(err, dataset.ErrNotDataset):
-		return fmt.Errorf("--output: %w", err)
+		return fmt.Errorf("-o: %w", err)
 	case errors.As(err, &mm):
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):

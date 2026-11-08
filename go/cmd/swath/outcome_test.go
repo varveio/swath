@@ -241,7 +241,7 @@ func crashRun(t *testing.T, args []string, nth int64) {
 		return nil
 	})
 	defer restore()
-	if err := run(context.Background(), args, io.Discard, false); !errors.Is(err, faults.ErrCrash) {
+	if err := run(context.Background(), args, io.Discard, true); !errors.Is(err, faults.ErrCrash) {
 		t.Fatalf("crash not injected: %v", err)
 	}
 }
@@ -361,7 +361,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
-		err := runWith(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--output", dir}, io.Discard, false, nil, true, nil)
+		err := runWith(ctx, command{}, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "-o", dir}, io.Discard, nil, true, nil)
 		if !errors.Is(err, listing.ErrNothingToResume) {
 			t.Fatalf("%s: resumed run: %v", layout, err)
 		}
@@ -526,7 +526,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	// A resumed run that meets the committed dataset (the race the
 	// command's early check cannot close).
 	report = filepath.Join(t.TempDir(), "report.json")
-	if err := runWith(ctx, append(slices.Clone(args), "-o", dir, "--report", report), io.Discard, false, nil, true, nil); err != nil {
+	if err := runWith(ctx, command{}, append(slices.Clone(args), "-o", dir, "--report", report), io.Discard, nil, true, nil); err != nil {
 		t.Fatalf("resumed run on a complete dataset: %v", err)
 	}
 	rep = listing.Report{}
@@ -566,7 +566,7 @@ func TestRefusalsExit2(t *testing.T) {
 		{"new run over an interrupted one", "refused", true, func(r string) error { return run(ctx, gcs(interrupted, "--report", r), io.Discard, false) }},
 		{"output is the root", "refused", false, func(r string) error { return run(ctx, []string{src, "-o", src, "--report", r}, io.Discard, false) }},
 		{"changed identity", "refused", true, func(r string) error {
-			return runWith(ctx, gcs(interrupted, "--part-size", "8KiB", "--report", r), io.Discard, false, nil, true, nil)
+			return runWith(ctx, command{}, gcs(interrupted, "--part-size", "8KiB", "--report", r), io.Discard, nil, true, nil)
 		}},
 		{"nothing to resume", "refused", false, func(r string) error { return resume(ctx, []string{"--report", r, t.TempDir()}, io.Discard) }},
 		{"unknown scheme", "usage", false, func(r string) error {

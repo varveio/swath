@@ -13,10 +13,11 @@ Linked into `cmd/swath` unless marked tests.
 |---|---|---|
 | `github.com/aws/aws-sdk-go-v2` (`aws`, `config`, `feature/ec2/imds`) | Apache-2.0 | The S3 credential chain (environment, profiles, SSO, web identity, roles, IMDS) and the SigV4 signer; the list requests themselves are ours ([providers.md](providers.md#the-list-clients-hand-rolled-on-the-sdks-auth)). |
 | `github.com/aws/aws-sdk-go-v2/service/s3` | Apache-2.0 | Tests: the SDK oracle the S3 list client is compared against (`internal/source/s3/sdkoracle`). |
-| `github.com/aws/smithy-go` | Apache-2.0 | The SDK's `APIError` and logger types, to classify credential failures and keep the SDK's logger quiet. |
+| `github.com/Azure/azure-sdk-for-go/sdk/storage/azblob` (v1.7.0), `.../sdk/azcore` | MIT | Tests: the official Azure SDK's flat and hierarchy paginators consume the replay's Azure route (`internal/replay/azure` `sdk_test.go`, `sdkunit_test.go`); not linked into either binary. v1.7.0 is the newest release that does not require Apache Arrow and newer compression modules than the production build uses. |
+| `github.com/aws/smithy-go` | Apache-2.0 | The SDK's `APIError` and logger types, to classify credential failures and keep the SDK's logger quiet; `encoding/httpbinding.EscapePath`, the SigV4 URI encoding of the list query. |
 | `cloud.google.com/go/compute/metadata` | Apache-2.0 | The GCE metadata server's typed error, to tell a transient metadata outage from a refusal. |
 | `golang.org/x/oauth2` (`google`) | BSD-3 | Google application-default credentials and token refresh for GCS; bearer-token reuse (`internal/source/tokensource`). |
-| `golang.org/x/sync` (`singleflight`) | BSD-3 | One bearer-token refresh shared by concurrent callers (`tokensource`). |
+| `golang.org/x/sync` (`singleflight`) | BSD-3 | One token refresh shared by concurrent callers (`tokensource`: S3 bearer tokens and GCS credentials). |
 | `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock) and console VT mode. |
 | `golang.org/x/term` | BSD-3 | Whether stderr is a terminal, and its width, for the progress line. |
 | `github.com/klauspost/compress` (`zstd`, `gzip`) | BSD-3 | zstd for Parquet pages and spill frames, gzip and zstd for text output; the standard library has no zstd, and the same module's gzip is a drop-in for `compress/gzip`. |

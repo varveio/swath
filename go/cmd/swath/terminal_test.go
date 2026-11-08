@@ -149,10 +149,11 @@ func TestStatsBlock(t *testing.T) {
 	per := 1.5
 	usd := 0.01
 	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
-		Output:     listing.Output{RowsListed: 2_000_000, PartsWritten: 2, Bytes: 3_500_000},
+		Output:     listing.Output{RowsEmitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000},
 		Resources:  listing.Resources{PeakRSSBytes: &rss},
-		Cost:       &listing.Cost{APICalls: 2000, CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
-		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, APICallsPer1kObjects: &per}}
+		Requests:   &listing.Requests{HTTPAttempts: 2000},
+		Cost:       &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
+		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}
 	got := statsLines(r, false)
 	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · 1.50 per 1k objects · in flight avg 0.00 · peak 0",
 		"~$0.010 (est. @ $0.005/1k LIST)", "2 files · 3.5 MB written · peak RSS 200.0 MB"}
@@ -179,8 +180,8 @@ func TestStatsBlock(t *testing.T) {
 	}
 }
 
-// TestReportContinuity: a run's report carries cost.api_calls (every HTTP
-// attempt) with the labelled estimate only on a known tariff, efficiency,
+// TestReportContinuity: a run's report carries requests.http_attempts
+// (every HTTP attempt) with the labelled estimate only on a known tariff, efficiency,
 // session_ms and args_hash (the same for the same identity, another for
 // another prefix); --stats prints the block on stderr, the summary line
 // stays on stdout, and progress.json carries the request account.
@@ -189,14 +190,16 @@ func TestReportContinuity(t *testing.T) {
 	stderr := captureStderr(t)
 	type rep struct {
 		ArgsHash string `json:"args_hash"`
-		Cost     *struct {
-			APICalls int64    `json:"api_calls"`
-			CostUSD  *float64 `json:"cost_usd"`
-			Basis    *struct{ Source string }
+		Requests *struct {
+			HTTPAttempts int64 `json:"http_attempts"`
+		}
+		Cost *struct {
+			CostUSD *float64 `json:"cost_usd"`
+			Basis   *struct{ Source string }
 		}
 		Efficiency *struct {
 			KeysPerSec float64  `json:"keys_per_sec"`
-			Per1k      *float64 `json:"api_calls_per_1k_objects"`
+			Per1k      *float64 `json:"http_attempts_per_1k_rows"`
 		}
 		Timings struct {
 			SessionMs int64 `json:"session_ms"`
@@ -216,7 +219,7 @@ func TestReportContinuity(t *testing.T) {
 		return r, out.String()
 	}
 	r, out := list("s3://bkt", "--stats")
-	if r.Cost == nil || r.Cost.APICalls < 1 || r.Cost.CostUSD != nil || r.Cost.Basis != nil {
+	if r.Requests == nil || r.Requests.HTTPAttempts < 1 || r.Cost == nil || r.Cost.CostUSD != nil || r.Cost.Basis != nil {
 		t.Fatalf("cost on a custom endpoint: %+v", r.Cost)
 	}
 	if r.Efficiency == nil || r.Efficiency.Per1k == nil || *r.Efficiency.Per1k <= 0 || len(r.ArgsHash) != 64 || r.Timings.SessionMs < r.Timings.WallMs {

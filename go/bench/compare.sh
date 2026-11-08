@@ -23,8 +23,8 @@ configs() {
   echo "fd-stat|fdfind -uu --changed-before 2100-01-01 . $D"
   echo "fd-nostat|fdfind -uu . $D"
   echo "find-printf|find $D -type f -printf '%s %T@ %p\n'"
-  echo "swath-local-names|$BIN list $D --count-only --fields names"
-  echo "swath-local-stat|$BIN list $D --count-only"
+  echo "swath-local-names|$BIN count $D --fields names"
+  echo "swath-local-stat|$BIN count $D"
   echo "swath-local-full-dfs-parallel|$BIN list $D --order dfs-parallel --reorder-rows 100000 --out $SCR/out --overwrite"
   echo "swath-local-full-none|$BIN list $D --out $SCR/out --overwrite"
 }

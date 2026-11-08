@@ -148,7 +148,7 @@ func TestDelayedFrontierPlateaus(t *testing.T) {
 	nodes := int64(1 + ft.siblings + ft.siblings*ft.fanout)
 	res := sum.Resources
 	t.Logf("synthetic: %d ranges, %d rows; peak nodes %d, markers %d, spill readers %d, spill live %d bytes (sampled %+v); heap +%d MiB; spill %+v",
-		nodes, sum.Output.RowsListed, res.PeakNodes, res.PeakMarkers, res.Spill.PeakReaders, res.Spill.PeakBytes, peak, (peakHeap.Load()-base.HeapInuse)>>20, *res.Spill)
+		nodes, sum.Output.RowsEmitted, res.PeakNodes, res.PeakMarkers, res.Spill.PeakReaders, res.Spill.PeakBytes, peak, (peakHeap.Load()-base.HeapInuse)>>20, *res.Spill)
 	if res.Spill.Rows == 0 {
 		t.Fatal("nothing spilled: the frontier was not delayed long enough")
 	}
