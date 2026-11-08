@@ -389,11 +389,12 @@ Diagnostics:
 - **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--azblob-endpoint URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
   `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--azblob-anonymous`, else a SAS (`--azblob-sas`, the
-  root's query when it carries `sig`, or `AZURE_STORAGE_SAS_TOKEN`), else an account key (`AZURE_STORAGE_KEY`),
-  else Entra ID (`DefaultAzureCredential`). A SAS is never recorded: `swath resume` must be given one again, and
-  may be given another. Only accounts that report a flat namespace are listed, by Get Account Information or,
+  root's query when it names a SAS parameter, or `AZURE_STORAGE_SAS_TOKEN`), else an account key
+  (`AZURE_STORAGE_KEY`), else Entra ID (`DefaultAzureCredential`). A SAS is never recorded or shown (the root is
+  redacted to `?sig=[redacted]` in the terminal, the journal and the report): `swath resume` must be given one
+  again, by `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`, whichever the run used, and may be given another. Only accounts that report a flat namespace are listed, by Get Account Information or,
   when that is refused (an anonymous caller always is) or silent, by the account's Data Lake host
-  (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; not asked with a custom `--azblob-endpoint`).
+  (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; asked only for the default endpoint).
   A hierarchical-namespace account is refused before any listing request (exit 2, cause `unsupported`), as is
   `--all-versions`; so is one whose namespace neither answer gives, unless `--azblob-flat` asserts it flat (the
   assertion is frozen for resume and shown in the report's `namespace`, `asserted`). A run that meets a name at U+E000 and above stops

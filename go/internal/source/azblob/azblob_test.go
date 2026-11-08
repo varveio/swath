@@ -11,12 +11,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
@@ -321,6 +324,75 @@ func TestStagedRefusalBounds(t *testing.T) {
 	}
 }
 
+// TestUnsafePrefixRefused: a scope prefix that carries a byte in EE..F4
+// is refused at open, before any request, not listed as an empty scope.
+func TestUnsafePrefixRefused(t *testing.T) {
+	c := &pages{err: errors.New("never asked")}
+	_, err := New(context.Background(), Options{Account: "acct", Container: "c", Prefix: "pｚ/", Client: c})
+	if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" || c.lists.Load() != 0 || !strings.Contains(err.Error(), `first name "pｚ/"`) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// sortedAPI serves keys in byte order, startFrom inclusive and the marker
+// a key, recording every StartFrom sent.
+type sortedAPI struct {
+	keys []string
+	mu   sync.Mutex
+	from []string
+}
+
+func (s *sortedAPI) AccountInfo(context.Context, string) (bool, error) { return false, nil }
+
+func (s *sortedAPI) List(_ context.Context, in *client.ListInput) (*client.ListOutput, error) {
+	s.mu.Lock()
+	s.from = append(s.from, in.StartFrom)
+	s.mu.Unlock()
+	start := in.StartFrom
+	if in.Marker != "" {
+		start = in.Marker
+	}
+	i, _ := slices.BinarySearch(s.keys, start)
+	j := min(i+in.MaxResults, len(s.keys))
+	out := &client.ListOutput{}
+	for _, k := range s.keys[i:j] {
+		out.Items = append(out.Items, client.Item{Name: k})
+	}
+	if j < len(s.keys) {
+		out.NextMarker = s.keys[j]
+	}
+	return out, nil
+}
+
+// TestSynthesizedPivotRefused: the engine's pivot alphabet includes every
+// scalar from U+E000 up, so over keys that all sit below U+E000 (lead byte
+// ED) its frontier splits synthesise a bound at U+10000 and above. The
+// real engine sends it to fetch, which refuses it before any request with
+// it is sent: the run stops with the staged refusal naming a name that is
+// not a key.
+func TestSynthesizedPivotRefused(t *testing.T) {
+	var keys []string
+	for r := rune(0xD000); r < 0xD7A0; r += 2 {
+		keys = append(keys, "k"+string(r))
+	}
+	slices.Sort(keys)
+	f := &sortedAPI{keys: keys}
+	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: f, Policy: keyrange.Policy{PageSize: 3}}, 64)
+	if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" {
+		t.Fatalf("err %v, want the staged refusal of a synthesised bound", err)
+	}
+	named := err.Error()[strings.Index(err.Error(), "first name ")+len("first name "):]
+	name, uerr := strconv.Unquote(strings.TrimSuffix(named, ")"))
+	if uerr != nil || slices.Contains(keys, name) || !highByte(name) {
+		t.Fatalf("refused %q (%v): want a synthesised bound, not a key", named, uerr)
+	}
+	for _, from := range f.from {
+		if highByte(from) {
+			t.Fatalf("startFrom %q was sent", from)
+		}
+	}
+}
+
 // TestAdmission: only a positively flat account is listed. A
 // hierarchical namespace (the replay's), a refused account-information
 // call (403, 401) and --all-versions refuse the run before any listing
@@ -523,8 +595,17 @@ func TestParseURL(t *testing.T) {
 			t.Fatalf("%s accepted", in)
 		}
 	}
-	if _, _, _, _, err := ParseURL("az://acct?sig=SECRET"); err == nil || strings.Contains(err.Error(), "SECRET") {
-		t.Fatalf("an error quotes the SAS: %v", err)
+	// A query naming SAS parameters is a credential whether or not it
+	// parses: refused unless it is a signed query string, never quoted,
+	// never taken into the prefix, always redacted.
+	for _, in := range []string{"az://acct?sig=SECRET", "az://acct?sig=SECRET&x=%ZZ", "az://acct/c/p?sig=SECRET&x=%ZZ",
+		"az://acct/c/a?b?sig=SECRET", "az://acct/c/p?sv=1&se=SECRET", "az://acct/c/p?%73ig=SECRET%ZZ", "az://acct/c?SIG=SECRET;x"} {
+		if _, _, p, s, err := ParseURL(in); err == nil || strings.Contains(err.Error(), "SECRET") {
+			t.Fatalf("%s: prefix %q sas %q, %v: want a refusal that does not quote it", in, p, s, err)
+		}
+		if got := RedactRoot(in); strings.Contains(got, "SECRET") || !strings.HasSuffix(got, "?"+RedactedSAS) {
+			t.Fatalf("%s redacted to %q", in, got)
+		}
 	}
 	if got := RedactRoot("az://acct/c/p?sv=1&sig=SECRET"); got != "az://acct/c/p?"+RedactedSAS {
 		t.Fatalf("redacted %q", got)
@@ -716,6 +797,49 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 	}
 	if Schema.ID != "swath/azblob-objects/v1" || Schema.MaxKeyBytes != 3072 {
 		t.Fatalf("schema %+v", Schema.Info)
+	}
+}
+
+// cappedAPI is a supplied client that reports the client's cut waits and
+// shrunk pages (the body cap is 64 MiB, more than any page the replay can
+// serve, so its path is driven in the client's own tests).
+type cappedAPI struct {
+	*sortedAPI
+	retryAfter, shrinks int64
+}
+
+func (c cappedAPI) RetryAfterCapped() int64 { return c.retryAfter }
+func (c cappedAPI) BodyCapShrinks() int64   { return c.shrinks }
+
+// TestClientCutsReported: retry_after_capped counts the 503 ServerBusy
+// answers whose Retry-After (an hour) passed the request timeout, through
+// the built client against the replay; body_cap_shrinks is reported from
+// the client.
+func TestClientCutsReported(t *testing.T) {
+	keys := lowKeys()
+	r := azblobtest.Serve(t, keys)
+	u, _ := url.Parse(base(r))
+	px := httputil.NewSingleHostReverseProxy(u)
+	var busy atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Query().Get("comp") == "list" && busy.Add(1) <= 2 {
+			w.Header().Set("x-ms-error-code", "ServerBusy")
+			w.Header().Set("Retry-After", "3600")
+			w.WriteHeader(503)
+			return
+		}
+		px.ServeHTTP(w, req)
+	}))
+	t.Cleanup(srv.Close)
+	rows, st := list(t, Options{Account: r.Account, Container: r.Container, Endpoint: srv.URL, Timeout: 300 * time.Millisecond,
+		Policy: keyrange.Policy{Sequential: true}}, 1)
+	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 || st.Counters.Value("body_cap_shrinks") != 0 {
+		t.Fatalf("%d rows, retry_after_capped %d, body_cap_shrinks %d", len(rows), st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
+	}
+	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3, shrinks: 5}
+	_, st = list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
+	if st.Counters.Value("retry_after_capped") != 3 || st.Counters.Value("body_cap_shrinks") != 5 {
+		t.Fatalf("supplied client: retry_after_capped %d, body_cap_shrinks %d", st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
 	}
 }
 

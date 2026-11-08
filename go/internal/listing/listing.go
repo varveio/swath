@@ -451,7 +451,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if argv == nil {
 		argv = []string{}
 	}
-	sum.Invocation = Invocation{Argv: argv, Source: cfg.Source.URI, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
+	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
 		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {

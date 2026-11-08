@@ -132,8 +132,15 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	for _, name := range secrets {
 		given := false
 		f.Visit(func(fl *flag.Flag) { given = given || fl.Name == name })
+		if env := secretEnv[name]; env != "" && os.Getenv(env) != "" {
+			given = true // the provider reads the credential from there
+		}
 		if !given {
-			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)", dir, name, dir, name)})
+			hint := ""
+			if env := secretEnv[name]; env != "" {
+				hint = " or set " + env
+			}
+			return stop(usageError{fmt.Errorf("the run in %s was started with --%s, which is never recorded: give it again (swath resume %s --%s ...)%s", dir, name, dir, name, hint)})
 		}
 	}
 	cmd = append(append(cmd, overrides...), "-o", dir)

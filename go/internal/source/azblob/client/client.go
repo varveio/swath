@@ -632,19 +632,17 @@ const blobSuffix, dfsSuffix = ".blob.core.windows.net", ".dfs.core.windows.net"
 // x-ms-namespace-enabled. It exists for anonymous admission: Azure answers
 // an anonymous Get Account Information with 401, but tells an anonymous
 // caller of a public container this header (checked live on 2026-11-08).
-// The DFS host is the blob host with its blob label replaced, so an
-// endpoint that is not ACCOUNT.blob.core.windows.net has none
-// (ErrNoDFSEndpoint). Credentials, retries and classification are
+// The DFS host is the blob host with its blob label replaced, so only the
+// exact default endpoint, https://ACCOUNT.blob.core.windows.net without a
+// port or path, has one; any other endpoint answers ErrNoDFSEndpoint. Credentials, retries and classification are
 // AccountInfo's; a refused call or a missing header is an error, never
 // "flat".
 func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, error) {
-	u := c.route(container)
-	host, ok := strings.CutSuffix(strings.ToLower(u.Host), blobSuffix)
-	if !ok || u.Scheme != "https" {
+	if !c.defaultEndpoint() {
 		return false, ErrNoDFSEndpoint
 	}
-	u.Host = host + dfsSuffix
-	u.RawQuery = encodeQuery(url.Values{"resource": {"filesystem"}})
+	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
+		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
 		hdr, _, err := c.attempt(ctx, http.MethodHead, &u, maxErrorBody)
 		if err != nil {
@@ -658,6 +656,19 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 		}
 		return false, ErrNamespaceUnknown
 	})
+}
+
+// defaultEndpoint: the client's endpoint is exactly the account's blob
+// host, https://ACCOUNT.blob.core.windows.net with no port or path (the
+// default, or that URL given explicitly), the only form with a Data Lake
+// host beside it.
+func (c *Client) defaultEndpoint() bool {
+	if c.cfg.Endpoint == "" {
+		return true
+	}
+	u, err := url.Parse(c.cfg.Endpoint)
+	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Host, c.cfg.Account+blobSuffix) &&
+		(u.Path == "" || u.Path == "/") && u.User == nil
 }
 
 // attempt sends one request of u with method (GET or HEAD; the SAS

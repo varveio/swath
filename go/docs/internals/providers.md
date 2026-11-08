@@ -100,7 +100,7 @@ validation of every page.
 Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`;
 `NamespaceInfo` sends Filesystem Get Properties (a HEAD) on the account's Data Lake host and reads
 `x-ms-namespace-enabled`, for anonymous admission (an endpoint other than `ACCOUNT.blob.core.windows.net` has
-no such host: `ErrNoDFSEndpoint`); in both a refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
+no such host, and so has any endpoint that is not exactly `https://ACCOUNT.blob.core.windows.net`: `ErrNoDFSEndpoint`); in both a refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
 before `encoding/xml`'s streaming decoder reads `EnumerationResults` one entry at a time, keeping `Blob` and
 `BlobPrefix` in one slice in wire order and only the listed properties. A `<Name Encoded="true">` (a name with
 U+FFFE or U+FFFF) is percent-decoded once with path semantics (`+` stays `+`); a malformed escape or invalid
@@ -399,19 +399,26 @@ clients [above](#the-list-clients-hand-rolled-on-the-sdks-auth). The root is `az
 `--azblob-endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
 account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
 `http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--azblob-anonymous`; a SAS from
-`--azblob-sas`, else the root's query when it carries a signature (`az://acct/c?sv=...&sig=...`; a `?` without
-`sig` belongs to the prefix), else `AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
+`--azblob-sas`, else the root's query when it names a SAS parameter (`sig`, `sv`, `se`, `sp`, ...; found by
+scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
+root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
+`AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
 Key); else Entra ID (`DefaultAzureCredential`), else none, with the client's note as a warning. A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
-as `?sig=[redacted]`, and a resume of either needs a SAS again (`--azblob-sas` or the environment); the root in
-the identity, the manifest, the reports and the errors has no query.
+as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
+(the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
+it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
+report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
+and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is refused at open,
+before any request (every name in scope would hold it).
 
 **Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
 the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
 which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
 account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
-the blob host with its `blob` label replaced, so only for an `ACCOUNT.blob.core.windows.net` endpoint; with
-`--azblob-endpoint` elsewhere there is no such host and this step is skipped): `x-ms-namespace-enabled` `false`
+the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
+with the configured account, no port and no path; with any other `--azblob-endpoint` there is no such host and
+this step is skipped): `x-ms-namespace-enabled` `false`
 passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
 Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
 unless `--azblob-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
@@ -456,7 +463,9 @@ service URL as the client requests it, the account path segment kept on a custom
 are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-flat`). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles` (503 `ServerBusy` and 429),
-`timeouts`, `parse_failures`, the admission's) and `transport.pool_size`. **Connections**: the GCS pool, one
+`timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`
+past the request timeout, cut to it) and `body_cap_shrinks` (a page past the 64 MiB body cap, asked again with
+`maxresults` halved). **Connections**: the GCS pool, one
 transport per 16 workers (1 to 8). The client's anonymous note goes to the run's warnings.
 
 ## Range engine (`internal/source/keyrange`)

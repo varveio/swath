@@ -62,6 +62,11 @@ type Factory struct {
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.
 	Classify func(error) string
+	// Redact, if set, returns the root with any credential it carries
+	// replaced (an Azure SAS in its query), for everything that shows or
+	// records a root: the command line, the terminal and the report. The
+	// root itself still goes to Open.
+	Redact func(root string) string
 }
 
 // Request is what the pipeline tells a factory.
@@ -281,6 +286,15 @@ func Register(f Factory) {
 		panic("registry: scheme registered twice: " + f.Scheme)
 	}
 	factories[f.Scheme] = f
+}
+
+// Redact is root as it may be shown or recorded (Factory.Redact): with its
+// provider's credential redacted, or as it is.
+func Redact(root string) string {
+	if f, err := Lookup(root); err == nil && f.Redact != nil {
+		return f.Redact(root)
+	}
+	return root
 }
 
 // Factories returns the registered factories, by scheme.

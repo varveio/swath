@@ -88,11 +88,33 @@ func TestNamespaceInfo(t *testing.T) {
 	if _, err := c.NamespaceInfo(ctx, "cont"); Classify(err) != objhttp.ClassAuth {
 		t.Fatalf("401: %v (%s)", err, Classify(err))
 	}
-	other, _ := New(ctx, Config{Account: "acct", Endpoint: srv.URL, Anonymous: true})
 	mu.Lock()
-	n := len(seen)
+	answer = "false"
 	mu.Unlock()
-	if _, err := other.NamespaceInfo(ctx, "cont"); !errors.Is(err, ErrNoDFSEndpoint) || len(seen) != n {
-		t.Fatalf("custom endpoint: %v after %d requests", err, len(seen)-n)
+	for ep, dfs := range map[string]bool{
+		srv.URL: false,
+		"https://acct.blob.core.windows.net/proxy": false, // a path: a proxy, not the account's host
+		"https://acct.blob.core.windows.net:8443":  false,
+		"https://other.blob.core.windows.net":      false, // another account's host
+		"http://acct.blob.core.windows.net":        false,
+		"https://ACCT.blob.core.windows.net/":      true,
+	} {
+		other, err := New(ctx, Config{Account: "acct", Endpoint: ep, Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		n := len(seen)
+		mu.Unlock()
+		_, err = other.NamespaceInfo(ctx, "cont")
+		mu.Lock()
+		sent := seen[n:]
+		mu.Unlock()
+		if dfs != (err == nil) || !dfs && (!errors.Is(err, ErrNoDFSEndpoint) || len(sent) != 0) {
+			t.Fatalf("endpoint %s: %v after %d requests", ep, err, len(sent))
+		}
+		if dfs && (sent[0].Header.Get("X-Original-Host") != "acct.dfs.core.windows.net" || sent[0].URL.Path != "/cont") {
+			t.Fatalf("endpoint %s: sent to %s%s", ep, sent[0].Header.Get("X-Original-Host"), sent[0].URL.Path)
+		}
 	}
 }

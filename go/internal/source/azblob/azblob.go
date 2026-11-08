@@ -53,6 +53,13 @@ type counted interface{ Counters() client.Counters }
 // pool (client.Client).
 type pooled interface{ Transports() int }
 
+// capped is implemented by clients that count the waits and pages they
+// cut (client.Client: retry_after_capped, body_cap_shrinks).
+type capped interface {
+	RetryAfterCapped() int64
+	BodyCapShrinks() int64
+}
+
 // live is implemented by clients that count their attempts live
 // (source.Requested).
 type live interface{ Live() objhttp.Live }
@@ -113,45 +120,62 @@ type Resume struct{ After string }
 const RedactedSAS = "sig=[redacted]"
 
 // ParseURL splits az://ACCOUNT/CONTAINER[/PREFIX][?SAS]. A query is the
-// root's SAS when it carries a signature (sig); otherwise '?' belongs to
-// the prefix. Errors never quote the SAS.
+// root's SAS when any of its parameters is named as a SAS parameter
+// (sasParam), found by scanning the names whether or not the query parses;
+// otherwise '?' belongs to the prefix. A SAS query must parse and carry a
+// signature, or the root is refused. Errors never quote the SAS.
 func ParseURL(u string) (account, container, prefix, sas string, err error) {
+	shown := RedactRoot(u)
 	rest, ok := strings.CutPrefix(u, "az://")
 	if !ok || rest == "" {
-		return "", "", "", "", fmt.Errorf("not an az://ACCOUNT/CONTAINER[/PREFIX] URL: %q", stripSAS(u))
+		return "", "", "", "", fmt.Errorf("not an az://ACCOUNT/CONTAINER[/PREFIX] URL: %q", shown)
 	}
-	if path, q, found := strings.Cut(rest, "?"); found && isSAS(q) {
+	if path, q, found := strings.Cut(rest, "?"); found && sasQuery(q) {
+		if v, perr := url.ParseQuery(q); perr != nil || !v.Has("sig") {
+			return "", "", "", "", fmt.Errorf("%s: the query names shared access signature parameters but is not a signed query string", shown)
+		}
 		rest, sas = path, q
 	}
 	account, rest, _ = strings.Cut(rest, "/")
 	container, prefix, _ = strings.Cut(rest, "/")
 	if account == "" || container == "" {
-		return "", "", "", "", fmt.Errorf("no account or container in %q: want az://ACCOUNT/CONTAINER[/PREFIX]", stripSAS(u))
+		return "", "", "", "", fmt.Errorf("no account or container in %q: want az://ACCOUNT/CONTAINER[/PREFIX]", shown)
 	}
 	return account, container, prefix, sas, nil
 }
 
-// isSAS: q is a query string with a signature.
-func isSAS(q string) bool {
-	v, err := url.ParseQuery(q)
-	return err == nil && v.Has("sig")
-}
+// sasParams are the query parameters of an Azure shared access signature
+// (account, service and user delegation SAS): sig is the secret, the
+// others say what it grants.
+var sasParams = map[string]bool{"sig": true, "sv": true, "ss": true, "srt": true, "sp": true, "se": true, "st": true,
+	"spr": true, "sip": true, "sr": true, "si": true, "sdd": true, "ses": true, "skoid": true, "sktid": true, "skt": true,
+	"ske": true, "sks": true, "skv": true, "saoid": true, "suoid": true, "scid": true}
 
-// stripSAS is u without a SAS query.
-func stripSAS(u string) string {
-	if path, q, found := strings.Cut(u, "?"); found && isSAS(q) {
-		return path
+// sasQuery reports whether q names a SAS parameter, scanning its
+// parameter names split at '&' and '?' (also ';'), each unescaped where it
+// can be, without requiring q to parse: a malformed query that carries a
+// signature is still a credential.
+func sasQuery(q string) bool {
+	for _, kv := range strings.FieldsFunc(q, func(r rune) bool { return r == '&' || r == '?' || r == ';' }) {
+		name, _, _ := strings.Cut(kv, "=")
+		if n, err := url.QueryUnescape(name); err == nil {
+			name = n
+		}
+		if sasParams[strings.ToLower(strings.TrimSpace(name))] {
+			return true
+		}
 	}
-	return u
+	return false
 }
 
-// RedactRoot replaces an az:// root's SAS with RedactedSAS, for a recorded
-// command line; any other argument is returned as it is.
+// RedactRoot replaces an az:// root's SAS query with RedactedSAS, for
+// anything shown or recorded (registry.Factory.Redact); any other argument
+// is returned as it is.
 func RedactRoot(arg string) string {
 	if !strings.HasPrefix(arg, "az://") {
 		return arg
 	}
-	if path, q, found := strings.Cut(arg, "?"); found && isSAS(q) {
+	if path, q, found := strings.Cut(arg, "?"); found && sasQuery(q) {
 		return path + "?" + RedactedSAS
 	}
 	return arg
@@ -224,6 +248,11 @@ var _ source.Provider[Range, Object] = (*Provider)(nil)
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, source.Unsupported(errors.New("azblob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
+	}
+	if highByte(opt.Prefix) {
+		// every name in scope would carry it: refused up front, not an
+		// empty listing
+		return nil, (&Provider{opt: opt}).unsupportedName(opt.Prefix)
 	}
 	p, own, err := connect(ctx, opt)
 	if err != nil {
@@ -392,6 +421,10 @@ func (p *Provider) Stats() Stats {
 	}
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
+	}
+	if c, ok := p.client.(capped); ok {
+		p.Set().Set(p.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
+		p.Set().Set(p.ID(client.CBodyCapShrinks), c.BodyCapShrinks())
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}

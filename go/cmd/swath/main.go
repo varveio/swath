@@ -458,19 +458,25 @@ var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-
 // resume must be given it again.
 var secretFlags = []string{"bearer-token-command", "azblob-sas"}
 
+// secretEnv names the environment variable that may stand in for a secret
+// flag on swath resume: the provider reads the same credential from it
+// when the flag is absent, so a rotated SAS may come from either source.
+var secretEnv = map[string]string{"azblob-sas": azblob.EnvSAS}
+
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
 // redactArgv is argv with every secret flag's value replaced by redacted,
 // in both spellings (--flag VALUE and --flag=VALUE), and an az:// root's
-// SAS query by azblob.RedactedSAS (a resume must be given it again).
+// SAS query by its provider's redaction (registry.Redact; a resume must be
+// given it again).
 func redactArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
 		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
-			out = append(out, azblob.RedactRoot(a))
+			out = append(out, registry.Redact(a))
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
@@ -691,7 +697,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 			break
 		}
 		if root != "" {
-			return o, "", usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
+			return o, "", usageError{fmt.Errorf("unexpected argument %q", registry.Redact(f.Arg(0)))}
 		}
 		root, rest = f.Arg(0), f.Args()[1:]
 	}
@@ -832,7 +838,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			settled = true
 		}
 	}
-	tt := startTerminal(o.term, att, root, cfg.Output.Dir)
+	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir)
 	defer tt.close()
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
