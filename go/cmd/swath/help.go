@@ -39,7 +39,7 @@ var helpGroups = []helpGroup{
 		{name: "format"},
 		{name: "region"}, {name: "endpoint"}, {name: "anonymous"}, {name: "path-style"},
 		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
-		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"},
+		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
 		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},

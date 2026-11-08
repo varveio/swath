@@ -214,6 +214,11 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
 | `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
+| `groups.open_pages` | count | pages | groups | pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split) |
+| `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
+| `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
+| `groups.max_rows` | max | rows | groups | the most rows one key's group held |
+| `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages) was not split |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

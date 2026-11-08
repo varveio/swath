@@ -4,6 +4,7 @@
 package s3
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -242,4 +243,20 @@ func versionRows(out *client.VersionPage, owner bool) []VersionRow {
 		v.Size = e.Size
 	}
 	return rows
+}
+
+// fetchVersions is the versions engine's page fetch: one
+// ListObjectVersions (versionsInput, versionsPage).
+func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *keyrange.Query) (*keyrange.Page[Version], error) {
+	in, err := versionsInput(p.opt.Bucket, q)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", client.ErrInvalidPage, err)
+	}
+	// ListObjectVersions always returns owners (no fetch-owner
+	// parameter); --fetch-owner decides whether they are kept.
+	out, err := api.ListObjectVersions(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
 }

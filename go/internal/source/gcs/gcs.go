@@ -60,6 +60,9 @@ type Options struct {
 	Workers         int
 	Client          API     // optional; built from the options above when nil
 	Resume          *Resume // continue after a journaled run's last published key
+	// AllVersions lists every generation (versions=true, NewGenerations)
+	// instead of the live objects.
+	AllVersions bool
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -85,7 +88,7 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 
 // Faults are the throttle answers and attempt timeouts so far
 // (source.Faulted); 0 for a supplied client that does not count them.
-func (p *Provider) Faults() (throttles, timeouts int64) {
+func (p *provider[P]) Faults() (throttles, timeouts int64) {
 	if c, ok := p.client.(counted); ok {
 		n := c.Counters()
 		return n.Throttles, n.Timeouts
@@ -95,7 +98,7 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 
 // Requests is the client's live request account (source.Requested); zero
 // for a supplied client that does not count it.
-func (p *Provider) Requests() source.Requests {
+func (p *provider[P]) Requests() source.Requests {
 	if c, ok := p.client.(live); ok {
 		l := c.Live()
 		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
@@ -106,7 +109,7 @@ func (p *Provider) Requests() source.Requests {
 
 // Answered is the requests the service answered usably (source.Live); 0
 // for a supplied client that does not count them.
-func (p *Provider) Answered() int64 {
+func (p *provider[P]) Answered() int64 {
 	if c, ok := p.client.(answering); ok {
 		return c.Answered()
 	}
@@ -122,8 +125,15 @@ type Stats struct {
 }
 
 // Provider is the range engine bound to objects.list.
-type Provider struct {
-	*keyrange.Engine[Object]
+type Provider = provider[Object]
+
+// GenerationsProvider is the generations listing (Options.AllVersions):
+// objects.list with versions=true, rows of swath/gcs-generations/v1.
+type GenerationsProvider = provider[Generation]
+
+// provider is a GCS listing with payload P.
+type provider[P any] struct {
+	*keyrange.Engine[P]
 	opt       Options
 	client    API
 	anonymous bool
@@ -135,35 +145,21 @@ type Provider struct {
 // Range is the engine's range.
 type Range = keyrange.Range
 
-var _ source.Provider[Range, Object] = (*Provider)(nil)
+var (
+	_ source.Provider[Range, Object]     = (*Provider)(nil)
+	_ source.Provider[Range, Generation] = (*GenerationsProvider)(nil)
+)
 
-// New builds a provider.
+// New builds a provider of the current objects.
 func New(ctx context.Context, opt Options) (*Provider, error) {
-	if opt.Bucket == "" {
-		return nil, errors.New("no bucket")
+	if opt.AllVersions {
+		return nil, errors.New("gcs: Options.AllVersions lists generations: use NewGenerations")
 	}
-	p := &Provider{opt: opt, client: opt.Client}
-	own := p.client == nil
-	if own {
-		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
-			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
-		if err != nil {
-			return nil, fmt.Errorf("GCS client: %w", err)
-		}
-		p.client = c
-		p.creds, p.anonymous = c.Credentials()
+	p, own, err := connect[Object](ctx, opt)
+	if err != nil {
+		return nil, err
 	}
-	if r, ok := p.client.(Routed); ok {
-		p.route, p.project = r.Route(opt.Bucket), r.UserProject()
-	}
-	var resume *keyrange.Resume
-	if opt.Resume != nil {
-		resume = &keyrange.Resume{After: opt.Resume.After}
-	}
-	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume, eo.ClientOff = opt.Prefix, opt.Workers, resume, opt.Admission.Off(own)
-	e, err := keyrange.New(eo, keyrange.Description[Object]{
+	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
 		Target:  "gs://" + opt.Bucket + "/" + opt.Prefix,
 		Listing: keyrange.Listing, // names list in unsigned UTF-8 byte order; startOffset is any name
 		// startOffset lists names >= the offset; endOffset lists names
@@ -180,6 +176,72 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	}
 	p.Engine = e
 	return p, nil
+}
+
+// NewGenerations builds a provider of every generation (versions=true):
+// live and noncurrent, a name's generations consecutive and ascending. A
+// physical seek starts at the exclusive successor of its bound
+// (ExclusiveStart), so no row of a complete name is listed again; where
+// the bound policy refuses the successor, it starts at the name and the
+// engine drops the name's rows.
+func NewGenerations(ctx context.Context, opt Options) (*GenerationsProvider, error) {
+	opt.AllVersions = true
+	p, own, err := connect[Generation](ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Generation]{
+		Target:         "gs://" + opt.Bucket + "/" + opt.Prefix,
+		Listing:        keyrange.Listing,
+		InclusiveStart: func(after string) bool { _, ok := ExclusiveStart(after); return !ok },
+		AcceptBound:    AcceptBound,
+		Requeue:        requeue,
+		InvalidPage:    client.ErrInvalidPage,
+		Groups:         GenerationSchema.Groups,
+		Detach:         GenerationSchema.Detach,
+		Size:           func(g *Generation) int64 { return g.Size },
+		Counters:       clientCounters,
+	}, p.fetchGenerations)
+	if err != nil {
+		return nil, err
+	}
+	p.Engine = e
+	return p, nil
+}
+
+// connect builds the client unless Options.Client supplies one (own).
+func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error) {
+	if opt.Bucket == "" {
+		return nil, false, errors.New("no bucket")
+	}
+	p := &provider[P]{opt: opt, client: opt.Client}
+	own := p.client == nil
+	if own {
+		lim, rate := opt.Admission.New(opt.Workers)
+		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
+		if err != nil {
+			return nil, false, fmt.Errorf("GCS client: %w", err)
+		}
+		p.client = c
+		p.creds, p.anonymous = c.Credentials()
+	}
+	if r, ok := p.client.(Routed); ok {
+		p.route, p.project = r.Route(opt.Bucket), r.UserProject()
+	}
+	return p, own, nil
+}
+
+// engineOptions is the range engine's options for p.
+func (p *provider[P]) engineOptions(own bool) keyrange.Options {
+	opt := p.opt
+	var resume *keyrange.Resume
+	if opt.Resume != nil {
+		resume = &keyrange.Resume{After: opt.Resume.After}
+	}
+	eo := opt.Policy.Options()
+	eo.Prefix, eo.Workers, eo.Resume, eo.ClientOff = opt.Prefix, opt.Workers, resume, opt.Admission.Off(own)
+	return eo
 }
 
 // AcceptBound is GCS's bound policy: an object name is valid UTF-8 of 1 to
@@ -214,13 +276,13 @@ const maxName = 1024
 var requeue = objhttp.Requeue(client.Classify)
 
 // Restart continues after a journaled run's last published key.
-func (p *Provider) Restart(after string) {
+func (p *provider[P]) Restart(after string) {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
 }
 
 // Stats snapshots the counters.
-func (p *Provider) Stats() Stats {
+func (p *provider[P]) Stats() Stats {
 	if c, ok := p.client.(counted); ok {
 		c.Counters().Store(p.Set(), p.ID(0))
 	}
@@ -231,7 +293,7 @@ func (p *Provider) Stats() Stats {
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
-func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
+func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
 	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
 		StartOffset: q.After, PageToken: q.Token, MaxResults: q.Max}
 	if q.Bounded {
