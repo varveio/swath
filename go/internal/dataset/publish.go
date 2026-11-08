@@ -166,7 +166,8 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reads either form, by its format member: the SeekParquet
-// one as the module parses it (strictly, its version one this build reads).
+// one as the module parses it (strictly, its version one this build reads,
+// within ManifestLimits).
 func (m *Manifest) UnmarshalJSON(b []byte) error {
 	var head struct {
 		Format string `json:"format"`
@@ -183,7 +184,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 			PublishedAt: l.PublishedAt, Source: l.Source, Scope: l.Scope, Coverage: l.Coverage, Parts: l.Parts}
 		return nil
 	}
-	sm, err := seekparquet.ParseManifest(b, seekparquet.Limits{})
+	sm, err := seekparquet.ParseManifest(b, ManifestLimits)
 	if err != nil {
 		return err
 	}

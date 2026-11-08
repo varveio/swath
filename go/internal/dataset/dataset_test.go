@@ -312,3 +312,42 @@ func TestManifestShape(t *testing.T) {
 		t.Fatalf("an earlier build's manifest read as %+v: %v", m, err)
 	}
 }
+
+// TestManifestLimitsReadSwathsLargest: every manifest swath can write reads
+// back. The largest, MaxParts parts with keys at manifestKeyBytes, fits
+// ManifestLimits (measured from a written part entry, not built whole), and
+// 30,000 one-row parts of 1,024-byte keys, past the module's default 64 MiB,
+// parse.
+func TestManifestLimitsReadSwathsLargest(t *testing.T) {
+	manifest := func(parts, keyBytes int) []byte {
+		t.Helper()
+		m := Manifest{Format: seekparquet.Format, DraftRevision: int(seekparquet.DraftRevision), SchemaID: "x/v1", Key: seekparquet.Key{Column: KeyColumn, Unique: true},
+			Coverage: Coverage{Exclusions: []string{}, Filters: []string{}}, Parts: make([]ManifestPart, parts)}
+		for i := range m.Parts {
+			lo := []byte(strings.Repeat("\xff", keyBytes))
+			copy(lo, fmt.Sprintf("%08d", 2*i))
+			hi := slices.Clone(lo)
+			copy(hi, fmt.Sprintf("%08d", 2*i+1))
+			m.Parts[i] = ManifestPart{Path: DataDir + "/" + PartName(MaxParts-parts+i),
+				PartInfo: PartInfo{Rows: 1 << 40, Bytes: 1 << 40, MinKey: Key(lo), MaxKey: Key(hi), SHA256: strings.Repeat("f", 64)}}
+		}
+		b, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	one, two := manifest(1, manifestKeyBytes), manifest(2, manifestKeyBytes)
+	entry := int64(len(two) - len(one))
+	if largest := int64(len(one)) + (MaxParts-1)*entry; largest > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
+		t.Fatalf("the largest manifest, %d bytes of %d parts, is past ManifestLimits %+v", largest, MaxParts, ManifestLimits)
+	}
+	b := manifest(30_000, 1024)
+	if len(b) <= 64<<20 {
+		t.Fatalf("%d bytes: not past the module's default", len(b))
+	}
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil || len(m.Parts) != 30_000 {
+		t.Fatalf("30,000 parts: %d read, %v", len(m.Parts), err)
+	}
+}

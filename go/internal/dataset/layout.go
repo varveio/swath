@@ -8,6 +8,7 @@
 package dataset
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -70,6 +71,19 @@ func PartName(i int) string { return fmt.Sprintf("part-%05d.parquet", i) }
 // five digits of PartName. The router refuses to open another
 // (ErrPartLimit).
 const MaxParts = 100_000
+
+// ManifestLimits bound what swath's readers (show, --seed-from) accept of
+// a manifest (seekparquet.ParseManifest), so that every dataset swath can
+// write reads back: MaxParts parts, each priced at manifestKeyBytes for
+// both bounds (base64) plus 1 KiB for the rest of its entry, and 1 MiB for
+// the rest of the manifest. About 1.1 GiB: the module's default, 64 MiB,
+// refuses 30,000 parts of 1,024-byte keys.
+var ManifestLimits = seekparquet.Limits{Parts: MaxParts,
+	ManifestBytes: MaxParts*(2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes))+1<<10) + 1<<20}
+
+// manifestKeyBytes is the longest key ManifestLimits provides for: the
+// object stores' 1,024-byte cap, and a local path at Linux's PATH_MAX.
+const manifestKeyBytes = 4096
 
 // ErrPartLimit: the run would open part MaxParts, past the five-digit
 // ordinals a dataset has. Every earlier part is published first. The part
