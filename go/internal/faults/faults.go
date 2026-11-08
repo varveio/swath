@@ -18,22 +18,24 @@ var ErrCrash = errors.New("injected crash")
 var Points = []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append",
 	"journal-sync", "recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"}
 
-// SpillPoints are the durable spill's crash points in a run, in order: a
-// durable file's writes (the first, carrying the header and, at a range's
+// SpillPoints are the durable spill's crash points in a run, in order: the
+// sync of each directory the run creates (spill/, spill/durable/; twice in
+// a run), a durable file's writes (the first, carrying the header and, at a range's
 // start, the capture start; later rows frames; the trailer and tail), its
 // fsync at the seal, then the flusher's directory sync,
 // ledger append, ledger sync and unlink. The durable kill matrices
 // (listing's TestDurableKillMatrix, cmd/swath's SIGKILL matrix) require
 // each of them reached on a fixture built to reach it.
-var SpillPoints = []string{"spill-write-header", "spill-write-frames", "spill-write-trailer", "spill-seal",
+var SpillPoints = []string{"spill-dir-sync", "spill-write-header", "spill-write-frames", "spill-write-trailer", "spill-seal",
 	"spill-ledger-dirsync", "spill-ledger-append", "spill-ledger-sync", "spill-unlink"}
 
 // RecoveryPoints are the durable spill recovery's crash points, reached on
-// a resume, in order: the ledger's truncation, the retirements' append,
-// their sync, each unlink, the directory sync, then the first recovery
-// replay (the repeated-recovery tests).
-var RecoveryPoints = []string{"spill-ledger-truncate", "spill-recovery-retire", "spill-recovery-sync", "spill-recovery-unlink",
-	"spill-recovery-dirsync", "spill-replay"}
+// a resume, in order: the ledger's truncation, after it (before its
+// sync), the retirements' append, their sync, each unlink, the directory
+// sync, the start of a recovery replay, and each captured frame it
+// replays (mid replay, after earlier frames' rows were handed on).
+var RecoveryPoints = []string{"spill-ledger-truncate", "spill-ledger-truncated", "spill-recovery-retire", "spill-recovery-sync",
+	"spill-recovery-unlink", "spill-recovery-dirsync", "spill-replay", "spill-replay-frame"}
 
 var hook atomic.Pointer[func(point string) error]
 

@@ -204,6 +204,9 @@ func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
 		if !capture {
 			continue // pre-capture: live replay's only
 		}
+		if err := faults.At("spill-replay-frame"); err != nil { // mid replay: earlier frames' rows handed on
+			return err
+		}
 		rows, err := sp.decodeFrame(typ, body, uint64(d.most), uint64(d.owned), false)
 		if err != nil {
 			return bad("%v", err)

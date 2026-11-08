@@ -254,9 +254,12 @@ func damagedSnapshot(t *testing.T, out string) {
 // the damaged snapshot (damagedSnapshot), and every interruption must
 // happen (a point not reached fails the test). Where the state after the
 // first interruption still reaches the point, the second is there again:
-// before the truncation, before the retirements' append, at their sync
-// with the unsynced append lost (simulated loss: the ledger cut back to
-// its synced prefix), at the first recovery replay. Where it cannot (the
+// before the truncation; after it, before its sync, with the truncation
+// lost (simulated power loss: the ledger's earlier bytes restored); before
+// the retirements' append; at their sync with the unsynced append lost
+// (the ledger cut back to its synced prefix); at a recovery replay's
+// start; mid replay (its second captured frame, after earlier rows were
+// handed on). Where it cannot (the
 // retirements durable), the second is at the first recovery replay. Then
 // a resume completes: the part journal is never refused, and the dataset
 // is the uninterrupted one.
@@ -266,52 +269,74 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 	ledger := func(dir string) string { return filepath.Join(dir, order.DurableDir, "ledger") }
 	for _, sc := range []struct {
 		first, second string
-		lose          bool // the first interruption loses the ledger's unsynced append
+		nth           int64  // the occurrence interrupted (0: the first)
+		lose          string // unsynced state lost at the first interruption: "append", "truncation"
 	}{
-		{"spill-ledger-truncate", "spill-ledger-truncate", false},
-		{"spill-recovery-retire", "spill-recovery-retire", false},
-		{"spill-recovery-sync", "spill-recovery-sync", true},
-		{"spill-recovery-sync", "spill-replay", false},
-		{"spill-recovery-unlink", "spill-replay", false},
-		{"spill-recovery-dirsync", "spill-replay", false},
-		{"spill-replay", "spill-replay", false},
+		{"spill-ledger-truncate", "spill-ledger-truncate", 0, ""},
+		{"spill-ledger-truncated", "spill-ledger-truncated", 0, "truncation"},
+		{"spill-ledger-truncated", "spill-replay", 0, ""},
+		{"spill-recovery-retire", "spill-recovery-retire", 0, ""},
+		{"spill-recovery-sync", "spill-recovery-sync", 0, "append"},
+		{"spill-recovery-sync", "spill-replay", 0, ""},
+		{"spill-recovery-unlink", "spill-replay", 0, ""},
+		{"spill-recovery-dirsync", "spill-replay", 0, ""},
+		{"spill-replay", "spill-replay", 0, ""},
+		{"spill-replay-frame", "spill-replay-frame", 2, ""},
 	} {
 		name := sc.first + "+" + sc.second
-		if sc.lose {
-			name += "/unsynced-lost"
+		if sc.nth > 1 {
+			name += fmt.Sprintf("#%d", sc.nth)
+		}
+		if sc.lose != "" {
+			name += "/unsynced-" + sc.lose + "-lost"
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
 				t.Fatal(err)
 			}
+			nth := max(sc.nth, 1)
 			for i, point := range []string{sc.first, sc.second} {
 				var seen atomic.Int64
 				synced := int64(-1)
+				var whole []byte
 				restore := faults.Set(func(p string) error {
-					if p == "spill-recovery-retire" && synced < 0 {
+					switch {
+					case p == "spill-ledger-truncate" && whole == nil:
+						whole, _ = os.ReadFile(ledger(dir)) // durable before the truncation
+					case p == "spill-recovery-retire" && synced < 0:
 						if fi, err := os.Stat(ledger(dir)); err == nil {
 							synced = fi.Size() // the truncated prefix, synced
 						}
 					}
-					if p == point && seen.Add(1) == 1 {
+					if p == point && seen.Add(1) == nth {
 						return faults.ErrCrash
 					}
 					return nil
 				})
 				_, err := Run(context.Background(), durableConfig(url, dir, true))
 				restore()
-				if seen.Load() == 0 || !errors.Is(err, faults.ErrCrash) {
-					t.Fatalf("interruption %d at %s not reached: %v", i+1, point, err)
+				if seen.Load() < nth || !errors.Is(err, faults.ErrCrash) {
+					t.Fatalf("interruption %d at %s#%d not reached (%d seen): %v", i+1, point, nth, seen.Load(), err)
 				}
 				if errors.Is(err, journal.ErrCorrupt) {
 					t.Fatalf("%s: the part journal refused: %v", point, err)
 				}
-				if sc.lose {
+				switch {
+				case sc.lose == "append":
 					if synced < 0 {
 						t.Fatal("no synced prefix recorded")
 					}
 					if err := os.Truncate(ledger(dir), synced); err != nil {
+						t.Fatal(err)
+					}
+				case sc.lose == "truncation":
+					// Truncated, never synced: the power loss restores the
+					// ledger's durable bytes.
+					if whole == nil {
+						t.Fatal("no ledger before the truncation")
+					}
+					if err := os.WriteFile(ledger(dir), whole, 0o644); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -735,7 +760,11 @@ func TestDurableKillMatrix(t *testing.T) {
 		}
 	}
 	for _, point := range faults.SpillPoints {
-		for _, nth := range []int64{1, 4} {
+		nths := []int64{1, 4}
+		if point == "spill-dir-sync" {
+			nths = []int64{1, 2} // spill/ and spill/durable/: two per run
+		}
+		for _, nth := range nths {
 			t.Run(fmt.Sprintf("%s#%d", point, nth), func(t *testing.T) {
 				out := filepath.Join(t.TempDir(), "ds")
 				crashDurable(t, durableConfig(url, out, false), point, nth)
@@ -743,53 +772,40 @@ func TestDurableKillMatrix(t *testing.T) {
 			})
 		}
 	}
-	// Torn writes: the nth write of a kind keeps half its bytes, then the
-	// process dies.
-	torn := func(t *testing.T, out string, match func(name string, b []byte) bool, nth int64) {
-		var seen atomic.Int64
-		restore := faults.SetIO(func(op, name string, b []byte) (int, error) {
-			if op == "write" && match(name, b) && seen.Add(1) == nth {
-				return len(b) / 2, faults.ErrCrash
-			}
-			return 0, nil
-		})
-		_, err := Run(context.Background(), durableConfig(url, out, false))
-		restore()
-		if seen.Load() < nth || !errors.Is(err, faults.ErrCrash) {
-			t.Fatalf("torn write not injected (%d seen): %v", seen.Load(), err)
-		}
-	}
-	spill := func(typ byte) func(string, []byte) bool {
-		return func(name string, b []byte) bool {
-			if !strings.HasSuffix(name, ".spill") || len(b) < 9 {
-				return false
-			}
-			// The write's frames: its first frame's type, or any frame's.
-			for off := 0; off+9 <= len(b); {
-				if b[off+8] == typ {
-					return true
-				}
-				off += 8 + int(binary.LittleEndian.Uint32(b[off:]))
-			}
-			return false
-		}
-	}
+	// Torn writes: the nth write carrying a frame of a kind (or a tail) is
+	// cut at an explicit offset inside that frame (or the tail), then the
+	// process dies; the cut is checked to lie inside it.
 	for _, tc := range []struct {
-		name  string
-		match func(string, []byte) bool
-		nth   int64
-	}{
-		{"header", spill('H'), 2},
-		{"capture", spill('C'), 2},
-		{"trailer", spill('T'), 2},
-		{"rows", func(name string, b []byte) bool {
-			return strings.HasSuffix(name, ".spill") && len(b) > 8 && b[8] != 'H' && b[8] != 'C'
-		}, 4},
-		{"ledger", func(name string, b []byte) bool { return strings.HasSuffix(name, "ledger") }, 2},
-	} {
-		t.Run("torn-"+tc.name, func(t *testing.T) {
+		kind string // H, C, rows, T, tail, ledger
+		nth  int64
+	}{{"H", 2}, {"C", 2}, {"rows", 4}, {"T", 2}, {"tail", 2}, {"ledger", 2}} {
+		t.Run("torn-"+tc.kind, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "ds")
-			torn(t, out, tc.match, tc.nth)
+			var seen atomic.Int64
+			var cut, lo, hi int
+			restore := faults.SetIO(func(op, name string, b []byte) (int, error) {
+				if op != "write" || !strings.HasSuffix(name, map[bool]string{true: "ledger", false: ".spill"}[tc.kind == "ledger"]) {
+					return 0, nil
+				}
+				k := tc.kind
+				if k == "ledger" {
+					k = "any"
+				}
+				c, l, h := tearAt(b, k)
+				if c < 0 || seen.Add(1) != tc.nth {
+					return 0, nil
+				}
+				cut, lo, hi = c, l, h
+				return c, faults.ErrCrash
+			})
+			_, err := Run(context.Background(), durableConfig(url, out, false))
+			restore()
+			if seen.Load() < tc.nth || !errors.Is(err, faults.ErrCrash) {
+				t.Fatalf("torn %s write not injected (%d seen): %v", tc.kind, seen.Load(), err)
+			}
+			if cut <= lo || cut >= hi {
+				t.Fatalf("cut at %d, not inside the %s at [%d, %d)", cut, tc.kind, lo, hi)
+			}
 			resume(t, out)
 		})
 	}
@@ -959,4 +975,30 @@ func TestDurableFailedRecoveryCloses(t *testing.T) {
 			sameDataset(t, tc.name, ref, dir)
 		})
 	}
+}
+
+// tearAt is where to cut write b inside its first frame of kind k (a frame
+// type "H", "C", "T"; "rows": any other spill frame; "any": the first
+// frame; "tail": the 16-byte tail after a trailer), with that frame's (or
+// tail's) bounds; -1 if b holds none. The cut keeps the frame's header and
+// half its payload: a torn frame, never a frame boundary.
+func tearAt(b []byte, k string) (cut, lo, hi int) {
+	off, last := 0, ""
+	for off+9 <= len(b) {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		if n < 2 || off+8+n > len(b) {
+			break
+		}
+		typ := string(b[off+8])
+		last = typ
+		hit := k == "any" || k == typ || (k == "rows" && typ != "H" && typ != "C" && typ != "T")
+		if hit {
+			return off + 8 + n/2, off, off + 8 + n
+		}
+		off += 8 + n
+	}
+	if k == "tail" && last == "T" && len(b)-off == 16 {
+		return off + 8, off, len(b)
+	}
+	return -1, 0, 0
 }

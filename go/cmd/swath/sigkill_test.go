@@ -233,7 +233,11 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 		sameParts(t, at, ref, out)
 	}
 	for _, point := range faults.SpillPoints {
-		for _, nth := range []string{"1", "4"} {
+		nths := []string{"1", "4"}
+		if point == "spill-dir-sync" {
+			nths = []string{"1", "2"} // spill/ and spill/durable/: two per run
+		}
+		for _, nth := range nths {
 			at := point + ":" + nth
 			out := filepath.Join(t.TempDir(), "ds")
 			killed(at, exec.Command(bin, args(out)...))

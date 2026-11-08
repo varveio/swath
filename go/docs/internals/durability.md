@@ -47,14 +47,25 @@ resume and compare with an uninterrupted run: byte for byte with the part interv
 refusal) with it on, where parts are closed by time (a trickling source in `TestCrashMatrix`, a slower bucket
 with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
 
-The durable spill has crash points of its own (`faults.SpillPoints`: a durable file's header (with the
-capture start at a range's start), later frames and trailer writes, its seal's fsync, the flusher's directory sync, ledger append, ledger sync and
-unlink; `faults.RecoveryPoints`: a resume's ledger truncation, its retirements' append and sync, an unlink,
-the directory sync and the first recovery replay). `TestDurableKillMatrix` (in process: at each point's 1st
-and 4th occurrence, then torn writes of each kind and lost unsynced state) and `TestSIGKILLDurableSpill` (the
-real process) run them on a slow-frontier fixture that spills and seals, and fail if a point is not reached;
+The durable spill has crash points of its own. `faults.SpillPoints`: the sync of each directory the run
+creates, a durable file's first write (its header, with the capture start at a range's start), later frames
+and trailer writes, its seal's fsync, the flusher's directory sync, ledger append, ledger sync and unlink.
+`faults.RecoveryPoints`: a resume's ledger truncation, the moment after it (truncated, not yet synced), its
+retirements' append and sync, an unlink, the directory sync, a recovery replay's start and each captured
+frame it replays. `TestDurableKillMatrix` (in process: each point's 1st and 4th occurrence; writes torn at
+an explicit offset inside a header, a capture start, a rows frame, a trailer, a tail and a ledger record;
+lost unsynced state) and `TestSIGKILLDurableSpill` (the real process) run them on a slow-frontier fixture
+and fail if a point is not reached.
 `TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
-damaged snapshot. Each then resumes to the uninterrupted dataset.
+damaged snapshot, with the truncation or the retirements' append lost where the schedule says so. Each
+then resumes to the uninterrupted dataset.
+
+**Priors and certificates.** This branch has no `--seed-from` (a prior dataset's listing used as seed
+tiles); the merge with the branch that adds it must keep these rules. A prior, like `--seed`, only shapes
+the tiling of the live gaps: its tiles are clipped around the accepted certificates (no data request starts
+inside a certificate's `(cs, ce]`, as `keyrange.aroundReuse` does for the seed), and it confers no
+coverage: no key range is skipped or certified because a prior listed it. Coverage above K comes only from
+certificates this run's ledger and files prove, and a certificate never depends on a prior.
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
 target or, on a slow frontier, once it has been open for the part interval (default 30 s,

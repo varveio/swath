@@ -86,7 +86,7 @@ func (c *Cache) ensureDirs() error {
 	}
 	for _, rel := range made {
 		if err := faults.At("spill-dir-sync"); err != nil {
-			return c.unavailable(err)
+			return err // an injected kill, not an unavailable spill
 		}
 		for _, dir := range []string{rel, filepath.Dir(rel)} {
 			if err := c.verify(); err != nil {
@@ -306,6 +306,10 @@ func (c *Cache) readLedger() (map[[16]byte]*entry, error) {
 		if err := f.Truncate(off); err != nil {
 			f.Close()
 			return nil, c.unavailable(err)
+		}
+		if err := faults.At("spill-ledger-truncated"); err != nil { // truncated, not yet synced
+			f.Close()
+			return nil, err
 		}
 		if err := c.verify(); err != nil {
 			f.Close()
