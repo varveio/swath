@@ -873,3 +873,47 @@ func TestPinsBindTheRecordedRequest(t *testing.T) {
 		t.Errorf("%d failed: %+v", rep.Failed, rep.Results)
 	}
 }
+
+// TestSourcedPinNeedsAnIssuedToken: a pin for a case that sends a token
+// its source walk issued applies only where the replay mapped such a
+// token. A mid-walk exchange labelled gcs-07i and annotated verbatim
+// sends the provider's unmapped token to the Go server, which refuses
+// it: the pinned 200 -> 400 must not document that (it would hide the
+// missing issuer), so the exchange fails. The same pin documents the
+// case's request when its token is the mapped one its source issued.
+func TestSourcedPinNeedsAnIssuedToken(t *testing.T) {
+	status := "GCS HTTP status differs: expected=200 actual=400"
+	pins, err := readPins(writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-07i": {query: "prefix=probe/r1/x/&maxResults=2&pageToken=TOK", status: 200, body: `{"kind":"storage#objects"}`, mismatch: status},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := liveKeys()
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), tokenParam: "pageToken",
+		tokenRe: regexp.MustCompile(`("nextPageToken":")([^"]*)"`), extra: http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}},
+		tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	defer live.Close()
+	walk := captureWalk(t, live.URL, "/storage/v1/b/bkt/o", "prefix=data/small/&maxResults=2", "pageToken", gcsNextToken, false)
+	tok := gcsNextToken([]byte(*walk[0].Response.Body))
+	source := walk[0]
+	source.Annotations = []capturedHeader{{recordCaseHeader, "gcs-07q"}}
+	sourced := walk[1]
+	sourced.Seq, sourced.Request.Query = 2, "prefix=data/tree/&maxResults=2&pageToken="+campaignEscape(tok, "")
+	sourced.Annotations = []capturedHeader{{recordCaseHeader, "gcs-07i"}, {recordFromHeader, "gcs-07q"}}
+	orphan := sourced
+	orphan.Seq, orphan.Annotations = 1, []capturedHeader{{recordCaseHeader, "gcs-07i"}, {recordTokenHeader, tokenVerbatim}}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), client: &http.Client{}}
+	replay := func(xs ...capturedExchange) *report {
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+		return rep
+	}
+	if rep := replay(orphan); len(rep.Residuals) != 0 || rep.Failed != 1 || rep.Results[0].Detail != status {
+		t.Errorf("verbatim provider token: documented %q, %d failed %+v", rep.Residuals, rep.Failed, rep.Results)
+	}
+	if rep := replay(source, sourced); len(rep.Residuals) != 1 || !strings.HasPrefix(rep.Residuals[0], "capture 2 [gcs-07i]") || rep.Failed != 0 {
+		t.Errorf("mapped token: documented %q, %d failed %+v", rep.Residuals, rep.Failed, rep.Results)
+	}
+}

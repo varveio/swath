@@ -536,7 +536,9 @@ the request's shape and both answers' shapes, never the case name alone, so the 
 way still fails (`TestDocumentedDifferences`): a mismatch the provider evidence pins for its case, message for
 message (`-live-pins`; on a walk, the page that differs ends the walk), for a request of the shape the evidence
 captured for that case, answered with the captured provider status and, where the provider refused, its reason
-(GCS) or code (S3). The shape is the case's query template (its literal parameters exactly, each name any name),
+(GCS) or code (S3), and carrying the token the case sends as the replay formed it: for a case that sends an issued
+token, one the replay mapped from an earlier answer (a provider token sent unmapped documents nothing,
+`TestSourcedPinNeedsAnIssuedToken`). The shape is the case's query template (its literal parameters exactly, each name any name),
 and the pins file is read with the evidence beside it (`index.json` and the captures): a pin whose case is not in
 the matrix, whose capture is missing, or whose template does not render the captured query over the evidence's run
 prefix is an error, so no pin documents by its case label alone (`TestReadPins`,

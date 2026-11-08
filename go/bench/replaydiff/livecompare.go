@@ -821,6 +821,7 @@ type judgement struct {
 	query            string // the query the provider was sent
 	mutation         string // the alteration of an issued token the request carries, if any
 	refTok, gotTok   string // the tokens each side was sent (decoded)
+	origin           tokenOrigin
 	ref, got         *response
 	df               diff
 }
@@ -940,6 +941,19 @@ const (
 	pinAnyToken                 // a walk: none on its first page, its own on the rest
 )
 
+// tokenOrigin is how a judged request's token was formed, as the driver
+// knows it (live) or as the replay verified it (a recording): a pin for a
+// case that sends an issued token documents nothing for a token the
+// replay could not map, sent to the Go server as the provider's.
+type tokenOrigin int
+
+const (
+	originNone     tokenOrigin = iota // no token, or an empty one
+	originIssued                      // a token an earlier answer issued, each side its own
+	originMutated                     // such a token, altered by the request's mutation
+	originVerbatim                    // a token the case wrote itself, issued by no answer
+)
+
 // admits reports whether j is the pinned mismatch for a request of the
 // pin's shape answered as the evidence's provider answered it.
 func (p pin) admits(j judgement) bool {
@@ -948,15 +962,23 @@ func (p pin) admits(j judgement) bool {
 	}
 	switch p.token {
 	case pinNoToken:
-		if j.refTok != "" {
+		if j.refTok != "" || j.origin != originNone {
 			return false
 		}
 	case pinSourced:
-		if j.refTok == "" {
+		want := originIssued
+		if p.mutation != "" {
+			want = originMutated
+		}
+		if j.refTok == "" || j.origin != want {
 			return false
 		}
 	case pinTampered:
-		if j.refTok != tamperedToken {
+		if j.refTok != tamperedToken || j.origin != originVerbatim {
+			return false
+		}
+	case pinAnyToken:
+		if j.origin != originNone && j.origin != originIssued {
 			return false
 		}
 	}

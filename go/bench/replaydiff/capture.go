@@ -584,6 +584,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			}
 		}
 		gotTok, mutation, source := "", "", refTok
+		origin := originNone // how the request's token was formed, as verified here
 		switch {
 		case note.token == tokenVerbatim:
 			// A token the case wrote itself is one no answer issued: one
@@ -596,6 +597,9 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 				continue
 			}
 			gotTok = refTok
+			if refTok != "" {
+				origin = originVerbatim
+			}
 		case note.token != "":
 			var err error
 			if mutation, source, err = noteMutation(note.token); err != nil {
@@ -637,8 +641,9 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 				d.record(result{Kind: "capture", Name: name, Skipped: fmt.Sprintf("its token was issued by capture %d, whose replay failed", t.failedAt)})
 				continue
 			}
-			gotTok = t.got
+			gotTok, origin = t.got, originIssued
 			if mutation != "" {
+				origin = originMutated
 				var err error
 				if gotTok, err = mutateToken(gotTok, mutation); err != nil {
 					failed(x.Seq)
@@ -671,7 +676,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			failed(x.Seq) // the Go server issued no token where the provider did
 		}
 		if why := documentedDifference(judgement{protocol: protocol, bucket: d.o.bucket, caseID: note.caseID,
-			query: rest, mutation: mutation, refTok: refTok, gotTok: gotTok, ref: ref, got: b, df: df}, d.pins); why != "" {
+			query: rest, mutation: mutation, refTok: refTok, gotTok: gotTok, origin: origin, ref: ref, got: b, df: df}, d.pins); why != "" {
 			d.noteDocumented(name, why, df)
 			continue
 		}
