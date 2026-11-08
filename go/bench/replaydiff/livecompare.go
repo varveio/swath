@@ -702,7 +702,7 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 	replayFields := gcsReplayFields
 	if meta == gcsNative {
 		replayFields = maps.Clone(gcsReplayFields)
-		replayFields["md5Hash"], replayFields["crc32c"] = true, true
+		replayFields["md5Hash"], replayFields["crc32c"], replayFields["timeCreated"] = true, true, true
 	}
 	for i := range n.items {
 		ni, ri := n.items[i], r.items[i]
@@ -733,6 +733,14 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 			for _, f := range []string{"storageClass", "contentType", "md5Hash", "crc32c"} {
 				pequal(f+" "+is, ni.optionalText(f), ri.optionalText(f))
 			}
+			// timeCreated is listed where the recording stored it (a part
+			// written before the lister recorded it holds none).
+			if ri.has("timeCreated") {
+				if !gcsSixDigits.MatchString(ri.text("timeCreated")) {
+					pfail("replay timeCreated must use six UTC fractional digits")
+				}
+				pequal("timeCreated "+is, instantOf(ni.text("timeCreated"), "timeCreated"), instantOf(ri.text("timeCreated"), "timeCreated"))
+			}
 		} else {
 			pequal("generation "+is, "1", ri.decimal("generation"))
 			pequal("metageneration "+is, "1", ri.decimal("metageneration"))
@@ -751,7 +759,7 @@ func gcsAssertPage(nativeBody, replayBody []byte, bucket string, full bool, meta
 		} else if ri.has("acl") {
 			pfail("replay noAcl projection must omit acl")
 		}
-		if ri.has("timeCreated") || ri.has("owner") {
+		if meta != gcsNative && ri.has("timeCreated") || ri.has("owner") {
 			pfail("replay contains profile-omitted native metadata")
 		}
 	}
@@ -798,4 +806,241 @@ func gcsFullProjection(query string) bool {
 		}
 	}
 	return false
+}
+
+// --- Documented differences ----------------------------------------------
+
+// judgement is one request and the two answers the live comparators
+// held to each other, with what is known of how the request was formed:
+// what a documented difference is matched against. The live modes judge
+// the provider's answer as it arrives; the capture mode judges the one a
+// recording holds, by the same rules.
+type judgement struct {
+	protocol, bucket string
+	caseID           string // the matrix case, when known
+	query            string // the query the provider was sent
+	mutation         string // the alteration of an issued token the request carries, if any
+	refTok, gotTok   string // the tokens each side was sent (decoded)
+	origin           tokenOrigin
+	ref, got         *response
+	df               diff
+}
+
+// documentedDifference reports why a failed comparison is a difference
+// the replay is known to keep, or "" when it is not one. Each rule
+// matches the request's shape and both answers' shapes, never the case
+// name alone, so the same difference in another request is documented
+// too and any other answer to the same request still fails:
+//
+//   - a mismatch the provider evidence pins for the case (pins, from
+//     -live-pins), message for message, for a request of the shape the
+//     evidence captured for that case and answered as the evidence's
+//     provider answered it (pin.admits): the case label alone, an
+//     annotation in a recording, documents nothing;
+//   - S3 ListObjects V1 (list-type absent or not 2): the provider lists,
+//     the replay refuses list-type (it serves ListObjectsV2 only);
+//   - S3 fetch-owner=true where the provider writes Owner and the replay
+//     writes none (a recording made without owners), the pages otherwise
+//     agreeing;
+//   - S3, an issued token with a decoded byte flipped (s3-07x): the
+//     provider serves its own token so altered as if unaltered, the
+//     replay refuses every altered token;
+//   - GCS softDeleted=true (gcs-11h): a provider bucket that keeps
+//     soft-deleted objects lists them, the replay refuses the parameter.
+//
+// The rules after the pins key on the request and the answers alone; the
+// mutation the decoded-byte rule reads is, in a recording, an annotation
+// the replay has verified against the captured token.
+func documentedDifference(j judgement, pins map[string]pin) string {
+	if j.df.OK {
+		return ""
+	}
+	if p, ok := pins[j.caseID]; ok && p.admits(j) {
+		return "the provider evidence pins this mismatch for " + j.caseID + ": " + p.mismatch
+	}
+	if j.protocol == "gcs" {
+		if v, ok := firstParam(j.query, "softDeleted"); ok && v == "true" && j.ref.Status == 200 &&
+			j.got.Status == 400 && gcsReasonIs(j.got, "invalid") {
+			return "softDeleted=true: the provider lists the soft-deleted objects its bucket keeps; the replay holds none and refuses the parameter"
+		}
+		return ""
+	}
+	if j.ref.Status != 200 || !bytes.Contains(j.ref.Body, []byte("<ListBucketResult")) {
+		return ""
+	}
+	if lt, ok := firstParam(j.query, "list-type"); (!ok || lt != "2") && bytes.Contains(j.ref.Body, []byte("<Marker>")) &&
+		s3Refused(j.got, "list-type") {
+		return "ListObjects V1: the provider lists; the replay serves ListObjectsV2 only and refuses list-type"
+	}
+	if v, ok := firstParam(j.query, "fetch-owner"); ok && v == "true" && j.got.Status == 200 &&
+		bytes.Contains(j.ref.Body, []byte("<Owner>")) && !bytes.Contains(j.got.Body, []byte("<Owner>")) {
+		body := dropOwners(j.ref.Body)
+		h := j.ref.Header.Clone()
+		if h.Get("Content-Length") != "" {
+			h.Set("Content-Length", strconv.Itoa(len(body)))
+		}
+		if s3Live(&response{Status: j.ref.Status, Header: h, Body: body}, j.got, j.bucket, j.refTok, j.gotTok).OK {
+			return "fetch-owner=true over a recording made without owners: the provider writes Owner, the replay has none to write"
+		}
+	}
+	if j.mutation == "flip-decoded" && s3Refused(j.got, "continuation-token") {
+		return "an issued token with a decoded byte flipped: the provider serves its own token so altered as if unaltered; the replay refuses every altered token (its token carries a checksum)"
+	}
+	return ""
+}
+
+// firstParam is the first value of the query parameter name as the
+// provider reads a raw query (s3Params: malformed escapes dropped, '+' a
+// space).
+func firstParam(query, name string) (string, bool) {
+	params, _ := s3Params(query)
+	for _, p := range params {
+		if p.name == name {
+			return string(p.value), true
+		}
+	}
+	return "", false
+}
+
+var s3ArgumentName = regexp.MustCompile(`<ArgumentName>([^<]*)</ArgumentName>`)
+
+// s3Refused reports whether r is S3's 400 InvalidArgument naming argument.
+func s3Refused(r *response, argument string) bool {
+	c, a := errorCode.FindSubmatch(r.Body), s3ArgumentName.FindSubmatch(r.Body)
+	return r.Status == 400 && c != nil && string(c[1]) == "InvalidArgument" && a != nil && string(a[1]) == argument
+}
+
+// gcsReasonIs reports whether r is a GCS error whose first reason is
+// reason.
+func gcsReasonIs(r *response, reason string) bool {
+	var got string
+	return profileCheck(r, r, func() { got = gcsErrorReason(r) }).OK && got == reason
+}
+
+// pin is a mismatch the provider evidence pins for a matrix case, bound
+// to what the evidence captured for that case: the request's shape (the
+// case's query template, which readPins holds to the captured query),
+// the provider's status and, where it refused, its first reason (GCS) or
+// error code (S3), and the token the case sends.
+type pin struct {
+	mismatch  string
+	shape     *regexp.Regexp // the query, its token parameter removed
+	refStatus int
+	refReason string
+	mutation  string   // the case's alteration of an issued token ("" for none)
+	token     pinToken // which token the request carries
+}
+
+// pinToken is the token a pinned case's request carries.
+type pinToken int
+
+const (
+	pinNoToken  pinToken = iota // an exchange: no issued token (a template's own empty one aside)
+	pinSourced                  // a token its source walk issued
+	pinTampered                 // the campaign's constant malformed token
+	pinAnyToken                 // a walk: none on its first page, its own on the rest
+)
+
+// tokenOrigin is how a judged request's token was formed, as the driver
+// knows it (live) or as the replay verified it (a recording): a pin for a
+// case that sends an issued token documents nothing for a token the
+// replay could not map, sent to the Go server as the provider's.
+type tokenOrigin int
+
+const (
+	originNone     tokenOrigin = iota // no token, or an empty one
+	originIssued                      // a token an earlier answer issued, each side its own
+	originMutated                     // such a token, altered by the request's mutation
+	originVerbatim                    // a token the case wrote itself, issued by no answer
+)
+
+// admits reports whether j is the pinned mismatch for a request of the
+// pin's shape answered as the evidence's provider answered it.
+func (p pin) admits(j judgement) bool {
+	if j.df.Detail != p.mismatch || j.ref.Status != p.refStatus || j.mutation != p.mutation {
+		return false
+	}
+	switch p.token {
+	case pinNoToken:
+		if j.refTok != "" || j.origin != originNone {
+			return false
+		}
+	case pinSourced:
+		want := originIssued
+		if p.mutation != "" {
+			want = originMutated
+		}
+		if j.refTok == "" || j.origin != want {
+			return false
+		}
+	case pinTampered:
+		if j.refTok != tamperedToken || j.origin != originVerbatim {
+			return false
+		}
+	case pinAnyToken:
+		if j.origin != originNone && j.origin != originIssued {
+			return false
+		}
+	}
+	if _, q, _ := queryToken(j.query, tokenParamOf(j.protocol)); !p.shape.MatchString(q) {
+		return false
+	}
+	return p.refReason == "" || errorReason(j.protocol, j.ref) == p.refReason
+}
+
+// tokenParamOf is the protocol's continuation parameter.
+func tokenParamOf(protocol string) string {
+	if protocol == "gcs" {
+		return "pageToken"
+	}
+	return "continuation-token"
+}
+
+// errorReason is a refusal's first reason (GCS) or error code (S3), ""
+// when the body is not that protocol's error document.
+func errorReason(protocol string, r *response) string {
+	if protocol == "gcs" {
+		var reason string
+		if !profileCheck(r, r, func() { reason = gcsErrorReason(r) }).OK {
+			return ""
+		}
+		return reason
+	}
+	if m := errorCode.FindSubmatch(r.Body); m != nil {
+		return string(m[1])
+	}
+	return ""
+}
+
+// escapedName matches a template placeholder's value as the campaign
+// escapes it (campaignEscape with '/' safe, or with nothing safe for a
+// {name!} placeholder): whatever name the fixture binds there.
+const (
+	escapedName       = `(?:[A-Za-z0-9_.~/-]|%[0-9A-F]{2})*`
+	escapedNameNoPath = `(?:[A-Za-z0-9_.~-]|%[0-9A-F]{2})*`
+)
+
+// templateShape is the query shape a case's template defines: its
+// literal text exactly, each placeholder any escaped name, the token
+// parameter removed; with the scope's prefix the live driver adds to a
+// template that names none.
+func templateShape(tmpl, tokenParam string) *regexp.Regexp {
+	_, tmpl, _ = queryToken(tmpl, tokenParam)
+	var b strings.Builder
+	b.WriteString("^")
+	parseTemplate(tmpl, func(literal string, p *placeholder) {
+		switch {
+		case p == nil:
+			b.WriteString(regexp.QuoteMeta(literal))
+		case p.slashes:
+			b.WriteString(escapedNameNoPath)
+		default:
+			b.WriteString(escapedName)
+		}
+	})
+	if _, ok := firstParam(tmpl, "prefix"); !ok {
+		b.WriteString("(?:&prefix=" + escapedName + ")?")
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
 }

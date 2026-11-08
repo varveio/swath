@@ -17,8 +17,8 @@ import (
 // metacharacters ('\'' as &apos;), ETag quoting as &quot; and millisecond
 // LastModified are the replay wire contract, and the encoding-type=url
 // grammar (output.AppendPercentEncoded), the control characters as
-// &#xN; references (output.XMLEntity) and the error document
-// (AppendError) are live S3's. encoding/xml's marshaller produces none of
+// &#xN; references (output.XMLEntity), Owner's place in Contents and the
+// error document (AppendError) are live S3's. encoding/xml's marshaller produces none of
 // them (it escapes '"' as &#34;, TAB, LF and CR as references, and writes
 // other control characters as U+FFFD). TestRenderListGolden pins the
 // bytes.
@@ -205,9 +205,6 @@ func appendContents(dst []byte, obj *store.Object, req *Request, ts *timestamps,
 	dst = append(dst, "<Size>"...)
 	dst = strconv.AppendInt(dst, size, 10)
 	dst = append(dst, "</Size>"...)
-	if obj.StorageClass != nil {
-		dst = appendTextElement(dst, "StorageClass", *obj.StorageClass)
-	}
 	if req.FetchOwner && (obj.OwnerID != nil || obj.OwnerDisplayName != nil) {
 		dst = append(dst, "<Owner>"...)
 		if obj.OwnerID != nil {
@@ -217,6 +214,9 @@ func appendContents(dst []byte, obj *store.Object, req *Request, ts *timestamps,
 			dst = appendTextElement(dst, "DisplayName", *obj.OwnerDisplayName)
 		}
 		dst = append(dst, "</Owner>"...)
+	}
+	if obj.StorageClass != nil {
+		dst = appendTextElement(dst, "StorageClass", *obj.StorageClass)
 	}
 	return append(dst, "</Contents>"...), onePass, fallback
 }
@@ -248,9 +248,8 @@ func contentUnits(o *output.Output, obj *store.Object, req *Request, ts *timesta
 		size = *obj.Size
 	}
 	intElement(o, "Size", size)
-	if obj.StorageClass != nil {
-		textElement(o, "StorageClass", *obj.StorageClass)
-	}
+	// Owner comes before StorageClass, where live S3 writes it
+	// (TestLiveOwnerBeforeStorageClass); the Java server writes it after.
 	if req.FetchOwner && (obj.OwnerID != nil || obj.OwnerDisplayName != nil) {
 		o.ASCII("<Owner>")
 		if obj.OwnerID != nil {
@@ -260,6 +259,9 @@ func contentUnits(o *output.Output, obj *store.Object, req *Request, ts *timesta
 			textElement(o, "DisplayName", *obj.OwnerDisplayName)
 		}
 		o.ASCII("</Owner>")
+	}
+	if obj.StorageClass != nil {
+		textElement(o, "StorageClass", *obj.StorageClass)
 	}
 	o.ASCII("</Contents>")
 }

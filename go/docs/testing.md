@@ -30,7 +30,7 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 | order and memory bound | `order` `TestOrderedOutput`, `TestSinkFailureStopsPromptly`, `TestCancellation`, `TestFailedRangeStopsTheStream` (a failed range stops the drainer before it is seen as done: rows of later ranges already listed never reach the sink past the gap its dropped children leave; every run holds the drainer until the workers have expanded both siblings and holds the context's stop callback until the run returns, barriers rather than sleeps, so it fails on every run without the latch), `TestInterruptedRunReportsStall` (a run cancelled, or failed by its provider, after 200 ms with nothing handed on reports that stall as `FrontierStuck`), `TestFinalFlushReportsStall` (one row batched until the final flush, a sink blocked until the deadline: the wait is the stall) |
 | deterministic output | `parquetout` `TestRouterIsDeterministicAcrossEncoders`, `TestColumnParallelEncodingIsByteIdentical` |
 | publication order and gate | `dataset` `TestCheck`, `TestPublishFailureLeavesNoSuccess`; `listing` cancellation and encoder-failure tests |
-| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`, for S3 and GCS (a fake JSON API, `gcs/gcstest`): an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence (GCS: 1st, 3rd, 7th; spill on and off for S3), then resume: the dataset is byte-identical to an uninterrupted run (row-identical in the arms with the part interval on, whose time cuts depend on timing). `cmd/swath` `TestSIGKILLAtEveryPoint`, for S3 and GCS (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it; byte-identical with `--part-interval=0`, since a 30 s time cut under load moves part boundaries, and row-identical in a 1 ms interval arm), `TestGCSOutageThenResume` (503 to every request from three quarters through a run: exit 75, resumable, then `swath resume` byte-identical), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed with `swath resume` (a frozen flag on resume is a usage error, exit 2). `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run. `TestGCSResumeRefusesAnotherRoute`: refusal of a GCS resume through another route or billed project. `TestCredentialRotationResumes`: a signed run resumes with rotated keys (credentials are not identity), rotated keys with another region are refused; `TestGCSCredentialRotationResumes` the same on GCS (bearer tokens from a rotated authorized-user credential resume; another billed project is refused). `cmd/swath` `TestGCSCappedRunIsIncomplete`: a GCS run capped by `--max-keys` commits with incomplete coverage, exits 1 (`incomplete`, not resumable), keeps no journal, and `swath resume` refuses it unchanged. `listing` `TestDiskFaultMatrix`: a part file, a journal record and the manifest each fail at a write (half its bytes, then `ENOSPC`) and at its fsync (`EIO`): the run fails without a manifest, published parts stay, and a resume is byte-identical. `TestWatchdogWriteInFlightAtRelease`: a watchdog write under way at the end of a run keeps the lock held and the run waiting; a later write is refused |
+| crash and resume (I1, I5, I6) | `listing` `TestCrashMatrix`, for S3 and GCS (a fake JSON API, `gcs/gcstest`): an injected crash (no cleanup, as a kill) at every point in `faults.Points` (split, range done, part closed, record written, rename, every part published, manifest installed), at its 1st, 4th and 12th occurrence (GCS: 1st, 3rd, 7th; spill on and off for S3), then resume: the dataset is byte-identical to an uninterrupted run (row-identical in the arms with the part interval on, whose time cuts depend on timing). `cmd/swath` `TestSIGKILLAtEveryPoint`, for S3 and GCS (the real process SIGKILLs itself at 13 points, including between a rename and its directory sync, before the manifest and after it; byte-identical with `--part-interval=0`, since a 30 s time cut under load moves part boundaries, and row-identical in a 1 ms interval arm), `TestGCSOutageThenResume` (503 to every request from three quarters through a run: exit 75, resumable, then `swath resume` byte-identical), `TestSIGKILLResume`: a real process killed with SIGKILL after 4 parts, resumed with `swath resume` (a frozen flag on resume is a usage error, exit 2). `TestResumeChecksIdentity`: typed mismatch errors, overwrite needed for a fresh run. `TestGCSResumeRefusesAnotherRoute`: refusal of a GCS resume through another route or billed project. `TestCredentialRotationResumes`: a signed run resumes with rotated keys (credentials are not identity), rotated keys with another region are refused; `TestGCSCredentialRotationResumes` the same on GCS (bearer tokens from a rotated authorized-user credential resume; another billed project is refused). `cmd/swath` `TestGCSCappedRunIsIncomplete`: a GCS run capped by `--max-keys` commits with incomplete coverage, exits 1 (`incomplete`, not resumable), keeps no journal, and `swath resume` refuses it unchanged. `listing` `TestDiskFaultMatrix`: a part file, a journal record and the manifest each fail at a write (half its bytes, then `ENOSPC`) and at its fsync (`EIO`): the run fails without a manifest, published parts stay, and a resume is byte-identical. `TestWatchdogWriteInFlightAtRelease`: a watchdog write under way at the end of a run keeps the lock held and the run waiting; a later write is refused. `TestClaimedPartKeepsItsColumns`: a GCS run by a build without `time_created` stopped with part 1 claimed (at `journal-append`, and as a torn record) is resumed by a build with it: part 1 is reproduced byte for byte with the claimed part's columns, the later parts carry the column (`parquetout` `TestCutReproducesClaimedFooter`: the claimed part's columns and `created_by` are each needed) |
 | resume after K (I4) | `source/keyrange` `TestResumeAfterKey`: random keyspaces, split coins and K; the resume lists exactly the keys after K and its ranges tile (K, ⊤]. `TestResumeWithSplitKills`: K inside a date folder, also a `%` and a control-character key (listed from K's safe prefix), killed at random split points (`faults` "split") and resumed after the last key that reached the sink until done: exactly the keys after K, once each |
 | spill (step 3) | `order` `TestSpillKeepsWorkersBusy` (slow dense frontier, 56 fast siblings, 220-byte keys, 8 workers, 500-row budget; the frontier is held until every sibling has finished emitting: identical output, buffered rows within budget + one batch per worker + the frontier path, every sibling completes behind the held frontier (spill keeps them progressing; a liveness property, not a speed figure), no files left; plain and zstd), `TestSpillCleanedOnFailure`; `TestSpillDiskBudget` (a cap at a quarter of the uncapped peak holds with identical output; a reserve larger than the disk spills nothing); frontier and budget waits are nonzero without spill |
 | summary semantics | `listing` `TestSummaryDistinguishesOffFromZero`: a disabled policy's counters are absent and its feature reads false; an enabled one reports zeros |
@@ -61,8 +61,8 @@ linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/
 - **GCS client vs Google's JSON API client:** `TestClientPagesMatchGoogleClient` sends the same requests
   through the hand-rolled `objects.list` call and `google.golang.org/api/storage/v1` (a test dependency;
   the binary does not link it) to a fake JSON server and compares every field the schema keeps (names,
-  prefixes, tokens, size, generation, metageneration, etag, update time, storage class, MD5, CRC32C, content
-  type) across prefixes, delimiters, both offsets and keys that need escaping or hold control characters. Our
+  prefixes, tokens, size, generation, metageneration, etag, update time, creation time, storage class, MD5,
+  CRC32C, content type) across prefixes, delimiters, both offsets and keys that need escaping or hold control characters. Our
   client runs twice: on the fake's endpoint, and addressed to Google's endpoint (redirected to the fake), where
   it sends the production `fields=` selector, which the fake applies while the Google client reads full
   responses; `TestRowsCarryEveryField` checks the adapter's row mapping. The fake's page tokens are opaque
@@ -177,6 +177,15 @@ go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./c
   -report /tmp/diff.json
 ```
 
+Against the providers themselves the check is a recording: the live matrix (provider cases, walks, altered and
+invented tokens, the scripted matrix) is sent once through `bench/faultproxy -record` with `replaydiff
+-live-record`, and `replaydiff -capture` replays the recording offline as often as needed, judging each answer by
+the live comparison and its documented differences ([replay.md](replay.md#the-recorded-live-matrix)). A live run
+is only how a recording is made. Recordings of real buckets stay local and are never committed; the tests CI
+runs record fake providers in-process (`bench/replaydiff` `TestLiveMatrixRecordedReplaysOffline`,
+`TestPinnedDifferencesAreDocumentedInBoth`; `bench/faultproxy` `TestRecordAnnotations`), and the provider
+evidence they replay is the owned-bucket archive committed under `docs/`.
+
 ## The fake bucket
 
 `bench/s3fake` serves a gofakes3 bucket loaded from a key list:
@@ -234,6 +243,32 @@ go test -run XXX -fuzz FuzzPropose -fuzztime 1m ./internal/source/keyrange   # p
 ```
 
 Failing inputs land in `testdata/fuzz/` and run as regular tests from then on.
+
+### Replay server targets
+
+Each target seeds from the goldens and fixtures of its package, runs its seeds in a plain `go test`, and
+states a property that holds for every input. `-fuzz` takes one target per run (a regular expression that
+matches one name, from inside `go/`):
+
+```bash
+nice go test ./internal/replay/s3 -run XXX -fuzz '^FuzzToken$' -fuzztime 2m
+```
+
+| Target | Property |
+|---|---|
+| `s3` `FuzzToken` | `DecodeToken` never panics and answers a non-token with the one 400 `InvalidArgument`; an accepted string is the only spelling of its boundary; a boundary round-trips; a token with a character replaced, a decoded byte changed or padding added is refused (CRC-32 catches every error burst of 32 bits or fewer); one with one or four characters dropped or one appended is refused or is the only spelling of another boundary (the seed `four-dropped-is-a-token` is such a pair) |
+| `s3` `FuzzParseRequest` | `ParseRequest` never panics; every refusal is a 400 `InvalidArgument`; an accepted request has a page of 0 to 1,000, UTF-8 bounds with no NUL where one is refused, and a token that decodes |
+| `s3` `FuzzListingText` | any key, prefix and delimiter render to a listing `encoding/xml` parses; with `encoding-type=url` each echoed value decodes back to its bytes by S3's table (`+` a space); without it each reads back as the key's text with malformed UTF-8 replaced, wherever that text is representable in XML 1.0 (no CR, which the parser folds, and no control character, which S3 writes as a character reference) |
+| `s3` `FuzzErrorText` | an error document carrying any value parses and reads back as the value, under the same representability |
+| `s3` `FuzzRowFastPathMatchesUnits` | `TestRowFastPathMatchesUnits` for any key and text values, chunk size and cap: the same bytes, refusal, chunks and percent-encoding counts |
+| `output` `FuzzEscaped`, `FuzzPercentEncoded` | `XMLEntity`'s escaping and the percent encoder write the same bytes at every chunk edge as the byte-by-byte definition; the percent encoding decodes back to the input |
+| `gcs` `FuzzToken`, `FuzzTokenScope` | `decodeToken` never panics and refuses with `errToken`; an accepted token re-encodes to one that decodes alike; a round trip keeps the progress byte; another binding, or any altered character of the binding, is refused; a token is accepted exactly under the scope and fixture it was issued for |
+| `gcs` `FuzzParse` | never panics; every refusal is a `*Failure`; an accepted request has a page of 1 to 1,000 and UTF-8 key parameters of at most 1,024 bytes |
+| `azure` `FuzzMarker`, `FuzzMarkerScope` | the same properties for `az1.` markers, with the scope's fields (prefix, delimiter, `startFrom`, fixture identity, service version) each binding |
+| `azure` `FuzzParse` | never panics; every refusal is an `*Error` with a status and code; accepted values are within the bounds |
+| `azure` `FuzzCompareIsUTF16Order` | `Compare` is the comparison of UTF-16 code units for any two valid UTF-8 names, and a total order on any bytes |
+| `azure` `FuzzListingOrder` | a walk over any valid names (flat or delimited, any prefix, `startFrom` and page size, native or row rollup) equals the brute-force UTF-16 listing |
+| `azure` `FuzzListingXML` | a listing of any name and echoed values parses with `encoding/xml` and reads back as the input, a name sent `Encoded="true"` after percent-decoding; a name the route refuses is a `FixtureIncompatible` error |
 
 ## Measurements
 

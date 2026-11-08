@@ -1,0 +1,6 @@
+go test fuzz v1
+string("k")
+bool(false)
+byte('\x00')
+uint(18446744073709551615)
+string("")

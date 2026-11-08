@@ -118,7 +118,8 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
 - A `continuation-token` takes precedence over `start-after`: the page resumes at the token and the response
   omits the ignored `StartAfter`. A token is unpadded base64url of the resume boundary and a CRC-32, so a
   flipped or dropped character is refused as S3 refuses it (S3 serves some alterations of its own decoded
-  bytes; this server refuses every one). The checksum covers only the flag and the boundary: it shows a token was
+  bytes; this server refuses every one). A dropped or appended character is accepted only when the shorter or
+  longer payload is by a 1-in-2^32 coincidence the token of another boundary. The checksum covers only the flag and the boundary: it shows a token was
   not altered, not where it came from. No bucket, fixture, process or secret is bound in, so a token survives a
   restart, is accepted by a server on another fixture, and one a client builds for any boundary is accepted
   (one past the fixture's keys gives an empty page), as a `start-after` would be (`TestTokenIsNotBound`). A flat page's token sent with a delimiter resumes
@@ -137,8 +138,13 @@ ignored; an escaped spelling is another bucket). Keys are bytes in unsigned byte
   2026-11-07 against a public `us-east-1` bucket, anonymous; the `TestLive*` tests of `s3` pin each).
   ListObjects V1 (no `list-type`) and `list-type=3` are refused (`400 InvalidArgument`), where S3 serves them;
   `fetch-owner=true` renders `Owner` only where the fixture holds owner columns.
+- `fetch-owner` asks for owners only when its value, read as above, is exactly `true` (`%74rue` too): `TRUE`,
+  `True`, `yes`, `1`, an empty or bare `fetch-owner`, `true%20` and `+true` list without `Owner`, and of a
+  repeated `fetch-owner` the first value decides (`TestLiveFetchOwnerIsExactlyTrue`).
 - `LastModified` has millisecond precision, with the year of era (`0001` for year 0, `+10000` past year 9999);
-  `Owner` appears only with `fetch-owner=true`. Which fields a `Contents` element carries, and from what, depends
+  `Owner` appears only with `fetch-owner=true`, after `Size` and before `StorageClass`, where live S3 writes it
+  (`TestLiveOwnerBeforeStorageClass`; S3 wrote `ID` alone on 2026-11-07, and a recording that holds a display
+  name renders it after the `ID`). Which fields a `Contents` element carries, and from what, depends
   on the recording's schema ([Item fields by route and recording schema](#item-fields-by-route-and-recording-schema)):
   a `swath/gcs-objects/v1` recording is listed as Cloud Storage's own S3-compatible XML API lists it.
 - Errors are S3's XML error document, as live S3 wrote each: `Code`, `Message`, then the elements of that
@@ -265,13 +271,12 @@ is either mapped to the equivalent value, where a real equivalent exists, or a f
 schemas are S3's own (`swath/canonical` is the format-1 schema, `swath/s3-objects/v1` the Go lister's S3
 datasets, `swath-replay/objects/v1` what `sort-fixture` writes from a capture; all three hold the same nine
 columns); `swath/gcs-objects/v1` is GCS's own; `swath-local/v1` (a local tree's size and modification time) has
-no provider API, so every route maps or fills it. Cells marked "open" do not follow the rule today and are kept
-as they are (each is listed below the table).
+no provider API, so every route maps or fills it.
 
 | Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath-local/v1` |
 |---|---|---|---|
 | S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
-| S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `last_modified` (GCS `updated`), milliseconds; open (a) | mapped from the modification time, milliseconds |
+| S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `time_created` (GCS `timeCreated`, which the XML API lists), milliseconds; from `last_modified` (GCS `updated`) where `time_created` is null or the part lacks the column | mapped from the modification time, milliseconds |
 | S3: `ETag` | exact, absent when null | mapped: the MD5 in lower-case hex; without an MD5, `-` and the etag; neither: placeholder `swath-s3-synthetic-v1` | placeholder `swath-s3-synthetic-v1` (S3 lists every object with an ETag) |
 | S3: `Size` | exact (`0` when null) | mapped from `size` (the same value) | mapped from the file size |
 | S3: `StorageClass` | exact, absent when null | absent (the XML API sends none, whatever the class) | placeholder `STANDARD` (S3 lists every object with a class) |
@@ -279,6 +284,7 @@ as they are (each is listed below the table).
 | S3: `Owner` (`fetch-owner=true`) | exact, absent when both columns are null | absent (not stored; the XML API sent none) | absent, no real equivalent: an S3 owner `ID` names an account, nothing in a local tree does (its uid names a user of one host), and a placeholder would invent one. Live S3 drops an owner field it does not return rather than filling it (2026-11-07: `Owner` with `ID` alone, no `DisplayName`); the route answers `fetch-owner=true` without `Owner` for every recording that holds none |
 | GCS: `name`, `size` | mapped from the key and size (`0` when null) | exact | mapped from the path and file size |
 | GCS: `updated` | mapped from `last_modified` (six digits; the epoch when null) | exact | mapped from the modification time |
+| GCS: `timeCreated` | absent (not stored) | exact (six digits), just before `updated`; absent when `time_created` is null or the part lacks the column | absent |
 | GCS: `etag` | placeholder `swath-gcs-synthetic-v1` (an S3 ETag is not a GCS etag) | exact (`swath-gcs-synthetic-v1` when null) | placeholder `swath-gcs-synthetic-v1` |
 | GCS: `generation`, `metageneration` | placeholder `1` | exact (`1` when null) | placeholder `1` |
 | GCS: `storageClass` | placeholder `STANDARD` | exact (`STANDARD` when null) | placeholder `STANDARD` |
@@ -286,30 +292,28 @@ as they are (each is listed below the table).
 | GCS: `md5Hash`, `crc32c` | absent (an S3 ETag is an MD5 only for some uploads, and the listing cannot tell which) | exact, absent when null | absent |
 | GCS: `acl` (`projection=full`) | `[]` | `[]` | `[]` |
 | Azure: `Name`, `Content-Length` | mapped from the key and size | mapped from the name and size | mapped from the path and file size |
-| Azure: `Last-Modified` | mapped, seconds (Azure's precision) | mapped from `last_modified`, seconds | mapped, seconds |
+| Azure: `Last-Modified` | mapped, seconds (Azure's precision) | mapped from `last_modified` (`updated`, which moves with metadata changes as Azure's does), seconds | mapped, seconds |
 | Azure: `Etag` | placeholder `0x000000000000001` | placeholder `0x000000000000001` | placeholder `0x000000000000001` |
 | Azure: `Content-Type` | placeholder `application/octet-stream` | mapped from `content_type`; placeholder `application/octet-stream` when null or a value Azure cannot hold (a control character, not UTF-8) | placeholder `application/octet-stream` |
 | Azure: `Content-MD5` | absent | mapped from `md5` (GCS lists it as the standard base64 of 16 bytes, the form `Content-MD5` takes), after `Content-Type` and before `BlobType`, where native listings place it; absent when null or in any other form | absent |
 | Azure: `BlobType`, `AccessTier`, `AccessTierInferred`, `LeaseStatus`, `LeaseState` | placeholders `BlockBlob`, `Hot`, `true`, `unlocked`, `available` | the same placeholders | the same placeholders |
 
-The S3 view of a `swath/gcs-objects/v1` recording is Cloud Storage's own S3-compatible XML API's answer for
-the same objects, probed on 2026-11-07 (`storage.googleapis.com`, anonymous `list-type=2` on public buckets,
-with and without `fetch-owner=true`): `ETag` is the object's MD5 in lower-case hex, quoted; a composite object,
-which has no MD5, has `-` and its JSON API `etag`, quoted (the etag already carries the metageneration); no
-`StorageClass`, `Owner`, `ChecksumAlgorithm` or `ChecksumType` element appears for a STANDARD, NEARLINE or
-MULTI_REGIONAL object (no public COLDLINE or ARCHIVE object was found to probe). An `md5` value that is not the
-standard base64 of 16 bytes is not taken for an MD5. The placeholder `swath-s3-synthetic-v1` is neither 32
-hexadecimal digits with an optional `-N` part count (an S3 ETag) nor `-` and base64 (the XML API's composite
-form), so a client cannot take it for a real ETag; Cloud Storage lists every object with an etag, so only a
-recording made some other way lacks both. The route writes no `Generation` or `MetaGeneration` element, which
-the XML API adds and S3 does not have, and writes the ETag's quotation marks as `&quot;`, as live S3 does
-(`server` `TestLiveGCSXMLAPIContents` pins the probed elements, `TestGCSRecordingOnTheS3Route` the edge rows).
-
-Open cells:
-
-- (a) The XML API's `LastModified` is the object's `timeCreated`, which a recording does not store; the route
-  sends `updated`. They differ only for an object whose metadata changed after it was written (metageneration
-  above 1).
+The S3 view of a `swath/gcs-objects/v1` recording is Cloud Storage's own S3-compatible XML API's answer for the
+same objects, probed on 2026-11-07 (`storage.googleapis.com`, anonymous `list-type=2` on public buckets, with and
+without `fetch-owner=true`): `ETag` is the object's MD5 in lower-case hex, quoted; a composite object, which has
+no MD5, has `-` and its JSON API `etag`, quoted (the etag already carries the metageneration); no `StorageClass`,
+`Owner`, `ChecksumAlgorithm` or `ChecksumType` element appears for a STANDARD, NEARLINE or MULTI_REGIONAL object
+(no public COLDLINE or ARCHIVE object was found to probe); `LastModified` is the object's `timeCreated`, not its
+`updated` (they differ once its metadata changed, metageneration above 1), so the route maps it from
+`time_created`. A recording's parts written before the lister listed `timeCreated` hold no `time_created` column;
+their rows keep `updated`. An `md5` value that is not the standard base64 of 16 bytes is not taken for an MD5. The
+placeholder `swath-s3-synthetic-v1` is neither 32 hexadecimal digits with an optional `-N` part count (an S3 ETag)
+nor `-` and base64 (the XML API's composite form), so a client cannot take it for a real ETag; Cloud Storage lists
+every object with an etag, so only a recording made some other way lacks both. The route writes no `Generation` or
+`MetaGeneration` element, which the XML API adds and S3 does not have, and writes the ETag's quotation marks as
+`&quot;`, as live S3 does (`server` `TestLiveGCSXMLAPIContents` pins the probed elements,
+`TestGCSRecordingOnTheS3Route` the edge rows, `TestResumedGCSRecordingMixesParts` a recording with parts of both
+kinds).
 
 The S3-shaped schemas' answers on every route are the replay wire contract's
 (`server` `TestEmptyAndNullStringsEndToEnd`).
@@ -464,6 +468,12 @@ the same key shape.
 
 ## Live conformance
 
+The Go server is held to the provider by recordings: a client's requests and the provider's answers, captured
+once by the recording proxy and replayed offline as often as needed (Live capture, below). The recording that
+carries the edge cases is the live matrix described here, sent once through the proxy (The recorded live
+matrix, below); a live run is how such a recording is made, and a replay of it judges every answer by the same
+comparison as the live run did.
+
 `bench/replaydiff -live-endpoint` compares the Go server with the provider itself: anonymous requests to live S3
 or GCS, and the same requests to the Go server serving a recording of the same bucket. A live bucket changes, so
 `-live-prefix` keeps every request inside one scope (a request of the matrix that names no prefix is given the
@@ -513,11 +523,31 @@ presence and by where it leads; an S3 page's `ContinuationToken` must echo its o
 values (its element sequence is compared; the replay's are synthetic). GCS item metadata is compared exactly
 (`etag`, `generation`, `metageneration`, `storageClass`, `contentType`, `md5Hash`, `crc32c`) when the fixture is
 a `swath/gcs-objects/v1` dataset, and held to the synthetic profile otherwise (`-gcs-metadata`, default auto);
-`timeCreated`, `id`, `selfLink` and the rest are not stored, so not compared. A header outside the classified
+`timeCreated` is compared as an instant where the replay lists it (a recording that stored it); `id`,
+`selfLink` and the rest are not stored, so not compared. A header outside the classified
 set fails the comparison, as it fails the suite. Two S3 checks go beyond the suite's policy: an S3 error is
 compared as its whole document, every element's name and text as written in order, `RequestId` and `HostId` by
 presence only; and the key-carrying elements of a page (`Key`, `Prefix`, `StartAfter`, `Delimiter`) are
 compared as written as well as decoded, so a character reference and the raw character differ.
+
+**Documented differences.** A difference the replay is known to keep is listed apart, with its reason, under
+`documented_residuals` (`DOCUMENTED RESIDUAL` in the text), and is neither passed nor failed. Each rule matches
+the request's shape and both answers' shapes, never the case name alone, so the same request answered any other
+way still fails (`TestDocumentedDifferences`): a mismatch the provider evidence pins for its case, message for
+message (`-live-pins`; on a walk, the page that differs ends the walk), for a request of the shape the evidence
+captured for that case, answered with the captured provider status and, where the provider refused, its reason
+(GCS) or code (S3), and carrying the token the case sends as the replay formed it: for a case that sends an issued
+token, one the replay mapped from an earlier answer (a provider token sent unmapped documents nothing,
+`TestSourcedPinNeedsAnIssuedToken`). The shape is the case's query template (its literal parameters exactly, each name any name),
+and the pins file is read with the evidence beside it (`index.json` and the captures): a pin whose case is not in
+the matrix, whose capture is missing, or whose template does not render the captured query over the evidence's run
+prefix is an error, so no pin documents by its case label alone (`TestReadPins`,
+`TestPinsBindTheRecordedRequest`); S3 ListObjects V1 (`list-type` absent or
+not 2) listed by the provider and refused by the replay (V2 only, see Limits); S3 `fetch-owner=true` where the
+provider writes `Owner` and the replay writes none (a recording made without owners), the pages otherwise equal;
+S3, an issued token with a decoded byte flipped (`s3-07x`), served by the provider as if unaltered and refused by
+the replay; GCS `softDeleted=true` (`gcs-11h`) listed by a bucket that keeps soft-deleted objects and refused by
+the replay. The live run and the replay of its recording apply the same rules.
 
 ### Live S3, 2026-11-07
 
@@ -557,7 +587,8 @@ route now answers twelve of them as live S3 does (The S3 route, above). The S3 r
 | walks of `giab` | `encoding-type=url` over a key with spaces | a space is `+` (`Karyotype+Report+-+...`) | `%20` | as live S3 |
 | scripted, 22 requests | `start-after` holding U+0000 | `400 InvalidArgument` ("cannot include Null") | a listing | as live S3 |
 | scripted, 2 requests | `start-after` with a byte that is not UTF-8 (`%FF`) | read as U+FFFD (echoed `%EF%BF%BD`) | the byte as sent | as live S3 |
-| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID` | no `Owner` | no `Owner`: the recording was made without owners (a fixture with owner columns renders them) |
+| `s3-11a`, scripted `fetch-owner=true` | `fetch-owner=true` | `Owner` with `ID`, before `StorageClass` | no `Owner` | no `Owner` over a recording made without owners; over one made with them, as live S3 (below) |
+| scripted `fetch-owner=TRUE delimiter` | `fetch-owner=TRUE` | no `Owner` (only `true` in lower case asks for it) | `Owner`, over a recording made with owners | as live S3 (below) |
 
 Rerun after the change (same recordings and flags): `noaa-normals-pds` with `-live-scripted -max-prefixes 40`,
 provider cases 67 passed and 5 differing, scripted 336 / 1, walks 10 / 0 (1,908 requests); `giab` 67 / 4, walks
@@ -575,6 +606,15 @@ previous server, `noaa-normals-pds` with `-live-scripted -max-prefixes 40` diffe
 scripted 41, every S3 error and the control characters); after the change, provider cases 67 passed and 5
 differing, scripted 345 / 1, walks 10 / 0 (1,926 requests), the same six differences as above.
 
+Owner's place (2026-11-07): over a recording of `noaa-normals-pds` made with `--fetch-owner` the same day, the
+replay wrote `Owner` after `StorageClass`, and `s3-11a` and the scripted `fetch-owner=true` differed on the
+`Contents` field sequence; it now writes it before, as live S3 does (The S3 route), and both pass. With
+`-live-scripted -max-prefixes 40`: provider cases 68 passed and 4 differing, scripted 345 / 1, walks 10 / 0
+(1,926 requests). The scripted `fetch-owner=TRUE` differed as well: live S3 writes `Owner` only for the value
+`true` in lower case, where the route took `true` in any case; it now reads the value as live S3 does (The S3
+route). Rerun: provider cases 68 passed and 4 differing, scripted 346 / 0, walks 10 / 0 (1,926 requests); the
+differences left are ListObjects V1 (`s3-12a` to `s3-12c`) and `s3-07x`.
+
 ### Live GCS, 2026-11-07
 
 Four public buckets recorded with the Go lister the same day (native `swath/gcs-objects/v1` datasets, anonymous
@@ -589,11 +629,22 @@ Four public buckets recorded with the Go lister the same day (native `swath/gcs-
 | `gcp-public-data-landsat`, `LC08/01/001/` (13:10Z) | 314,390 | 86 of 110 | 54 / 31 (30) | 124 / 0 | 1,942 |
 | `gcp-public-data-nexrad-l2`, `1991/06/` (13:11Z) | 12 | 83 of 110 (r/ on a reduced shape) | 54 / 28 (27) | 36 / 0 | 278 |
 
+A fifth bucket, recorded at 22:25Z by a lister that lists `timeCreated` (the dataset holds `time_created`;
+`swath list gs://gatk-best-practices --gcs-anonymous`, without the proxy), compared the same way with the walks
+comparing `timeCreated` as an instant: `gatk-best-practices`, whole bucket, 1,954 objects, 86 of 110 cases sent,
+54 / 31 (30), walks 48 / 0, 1,478 requests; scope `cnn-h38/` (6 objects), 26 / 24 (23), walks 4 / 0. 120 of its
+objects have metageneration 2 and a `timeCreated` before `updated`. Walking the whole bucket on the replay's S3
+route (`list-type=2`, `max-keys=1000`, `fetch-owner=true`, flat and with `/`) against Cloud Storage's XML API
+for the same bucket, every `Contents` field agreed on all 1,954 objects (`LastModified` included; the server
+before `time_created` was read sent `updated` and differed on those 120), and the GCS route's `timeCreated`
+and `updated` agreed with the JSON API's on every object.
+
 `gcs-07v` (a decoded byte of an issued token flipped) is skipped on every run: the replay's `gcs1.` token is not
 base64 as a whole, the pinned "no analogue" of the evidence. On `nexrad-l2` no directory holds six objects, so a
 directory of three stands in for `r/`; those cases are listed as run on a reduced shape (`REDUCED SHAPE`).
 
-Pinned differences: every difference but the ones below reproduces, message for message, the mismatch the
+Pinned differences (counted as differing in the table above; the comparison now lists them as documented):
+every difference but the ones below reproduces, message for message, the mismatch the
 owned-bucket evidence pins for its case (`docs/replay-provider-conformance.md`): `gcs-03p` (`includeTrailingDelimiter`
 refused), `gcs-05e` to `gcs-05i` (malformed escapes, invalid UTF-8 and duplicate parameters refused; live GCS
 serves them), `gcs-06a`, `06b`, `06l`, `06m` (`maxResults` 0, leading zeros and duplicates refused), `gcs-06e`
@@ -605,7 +656,7 @@ refuses it, the replay decodes it), `gcs-11e`, `11f`, `11g`, `11i` (`fields`, `v
 
 | Case | Bucket | Request | Live GCS | Replay |
 |---|---|---|---|---|
-| `gcs-11h` | all four | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
+| `gcs-11h` | all five | `softDeleted=true` | `200`, a listing (these buckets keep soft-deleted objects; the evidence bucket had soft delete disabled and answered `400`) | `400 invalid`, `feature_softDeleted` |
 | `gcs-07r` | sentinel-2 | an issued token with its last character changed | accepted (the changed character only touched unused bits) and resumes at the token's position | the altered `gcs1.` token decodes to another position |
 
 ### Live capture
@@ -649,7 +700,7 @@ exchange, never a cut body (`TestRecordBodyLimit`, `TestCaptureLimits`):
 | `faultproxy -record-max-body` | 16 MiB | the answer body the proxy buffers and records (the proxy reads no further than one byte past it) | the client is answered `502` with `X-Faulttest-Body-Limit`, the exchange is recorded with `limit_exceeded` and no body, logged, and the proxy exits 1 at shutdown with the count |
 | `replaydiff -capture-max-body` | 16 MiB | a captured body as recorded (a `body_base64` body by its decoded length); a capture line may be six times this plus 1 MiB (JSON escaping) | the exchange (or the line, read to its end) fails and the replay goes on |
 | `replaydiff -capture-max-decoded` | 64 MiB | a body once its content coding (gzip) is undone | the exchange fails |
-| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed | the replay fails at that exchange and stops |
+| `replaydiff -capture-max-tokens` | 1,048,576 | the page tokens remembered for the walks still to be replayed (one entry per issuing request) | the replay fails at that exchange and stops |
 | `replaydiff -capture-max-details` | 1,000 | the failing exchanges, and apart from them the skipped ones, the report details | the rest are counted, not detailed, and the report says how many |
 
 An exchange the recorder marked `limit_exceeded` fails in the replay as well.
@@ -667,6 +718,76 @@ On 2026-11-07 (the Go lister's own requests, 16 workers, ranges split by the lis
 The first replay of `cloud-samples-data` found the one difference this check has found: an object stored without a
 content type is listed by GCS without `contentType`, which the native rendering filled with
 `application/octet-stream`; the native rendering now omits it (`TestNativeNullContentTypeIsOmitted`).
+
+### The recorded live matrix
+
+A client's own recording holds only ordinary requests. The edge cases (an empty `start-after=`, malformed
+escapes, duplicated parameters, control characters, altered and invented tokens, the error documents) are the
+live matrix's, so the live matrix is recorded too: the live mode is pointed at the recording proxy with
+`-live-record`, and the recording is replayed with `-capture`:
+
+```bash
+/tmp/faultproxy -target https://s3.us-east-1.amazonaws.com -listen 127.0.0.1:19401 -record /tmp/live-matrix.jsonl &
+/tmp/replaydiff -live-endpoint http://127.0.0.1:19401 -live-record -protocol s3 -go ./swath-replay \
+  -fixture /data/rec/noaa-normals-pds/dataset/data -bucket noaa-normals-pds -live-scripted -max-prefixes 40
+kill -INT %1
+/tmp/replaydiff -capture /tmp/live-matrix.jsonl -go ./swath-replay -fixture /data/rec/noaa-normals-pds/dataset/data \
+  -bucket noaa-normals-pds -report /tmp/replay.json
+# GCS: -target https://storage.googleapis.com, -protocol gcs, -live-prefix P and -live-pins on both runs
+```
+
+With `-live-record` each request to the provider carries annotations as `X-Record-*` headers, which the proxy
+writes to the exchange (`annotations`) and removes before forwarding, so the provider is asked exactly what it
+would be asked directly (`TestRecordAnnotations`): `X-Record-Case`, the matrix case; `X-Record-Token`, how a token
+the driver formed itself was made: `verbatim` (the tampered constant, a scripted invented token: issued by no
+answer, sent to the replay as it was) or the alteration (`flip`, `truncate`, `flip-decoded`) and the issued token
+it was applied to; and `X-Record-Token-From`, the walk a token case takes its token from. An annotation is a claim
+the replay holds to the captured request, never acted on unchecked: the alteration applied to the named issued
+token must give exactly the token the request carried, and a `verbatim` token must be one no earlier captured answer
+issued; otherwise the exchange fails (`annotation does not match the captured token`,
+`TestCaptureMutationAnnotationIsVerified`). The replay sends an altered token as the Go server's token for the same
+issued one, altered the same way, and applies `-live-pins` to the annotated case only where the request and answers
+are the pinned ones (above). The driver also drops the `X-Content-Type-Options` the proxy adds to every answer it releases
+(the file keeps the provider's headers as sent).
+
+A provider may issue the same token from requests of different scope (a GCS token names the object its page ends
+at, whatever the query asked), while the Go server's tokens carry their scope and are refused with another. The
+replay therefore keeps one Go token per issuing request. A request annotated with its source walk sends that walk's
+Go token, or fails when that walk issued no such token, whatever its own query was issued; only a request without a
+source continues the token an earlier request of its own query was issued, else one of the same query but its page
+size (`maxResults`, `max-keys`: a client may change it mid-walk, and both token contracts accept the same scope with
+another page size; `TestCaptureWalkChangesPageSize`), its own case's where several were.
+Where the candidates would send different Go tokens the request fails as ambiguous; none is chosen by recency
+(`TestCaptureTokenIssuedByTwoScopes`, `TestCaptureTokenFromNamedWalk`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
+live run's verdicts: no failure the live run did not have, every documented difference documented again, and a
+second replay gives the same report (`TestLiveMatrixRecordedReplaysOffline`,
+`TestPinnedDifferencesAreDocumentedInBoth`).
+
+On 2026-11-07 (fixtures recorded the same day: `noaa-normals-pds` with the Java lister, `--no-sign-request
+--sort`, no owners; the `gcp-public-data-landsat` prefix with the Go lister, a native dataset; the Go server at
+this commit, `-parallel 4`, default walk sizes 7 and 1,000, anonymous requests through the session's proxy; each
+recording replayed twice, the two reports identical apart from their timing):
+
+| Recording | Exchanges | Passed | Documented | Failed |
+|---|---|---|---|---|
+| `s3://noaa-normals-pds`, live matrix with `-live-scripted -max-prefixes 40` | 963 | 957 | 6 | 0 |
+| `gs://gcp-public-data-landsat/LC08/01/001/`, live matrix with `-live-pins` | 971 | 940 | 31 | 0 |
+
+The six S3 documented differences are ListObjects V1 (`s3-12a`, `s3-12b`, `s3-12c`), `fetch-owner=true` over a
+recording made without owners (`s3-11a` and its scripted twin) and `s3-07x`; the 31 GCS ones are the 30 cases whose
+mismatch the evidence pins (`gcs-06b` among them, a walk) and `gcs-11h`. The live runs that made the recordings
+gave the same verdicts (S3 422 compared, 422 passed; GCS 178 compared, 178 passed, `gcs-07v` not sent: the replay's
+token is not base64 as a whole). On the GCS route the driver's own scripted matrix (`-live-scripted`) is not part
+of the live check: it was written against the Java server, and 48 of its requests differ from live GCS, the same
+48 in the live run and in the replay of its recording (parameters live GCS accepts and the replay refuses, the
+error reason `invalid` where GCS writes `invalidParameter` or `required`, and root listings outside the recorded
+scope).
+
+Recordings of real buckets are never committed: they hold a third party's listing. They are made locally (a
+live run through the proxy) and replayed locally against the dataset of the same run. The recorded flows CI runs
+use inputs of the repository alone: the fake providers and in-test recorders of `bench/replaydiff` and
+`bench/faultproxy` (the tests named above), and the owned-bucket provider evidence committed under `docs/`
+(The GCS evidence replay, below; the Azure evidence replay).
 
 ## Measurements
 
@@ -858,8 +979,8 @@ each page took: `flat`, `delimiter_indexed`, `delimiter_walk`, `empty_intersecti
 
 ### Item metadata by fixture schema
 
-Each item carries `kind`, `bucket`, `name`, `size` (a decimal string), `updated` (RFC 3339 UTC, six fractional
-digits: the fixture's microseconds exactly), then the metadata fields. Which values they hold depends on the
+Each item carries `kind`, `bucket`, `name`, `size` (a decimal string), `timeCreated` where stored, `updated`
+(RFC 3339 UTC, six fractional digits: the fixture's microseconds exactly), then the metadata fields. Which values they hold depends on the
 fixture's declared schema id:
 
 | Field | `swath/gcs-objects/v1` (the lister's GCS datasets) | every other schema (S3, canonical, sort-fixture output, local) |
@@ -870,8 +991,9 @@ fixture's declared schema id:
 | `storageClass` | exact (`STANDARD` when null) | synthetic: `STANDARD` |
 | `contentType` | exact, absent when null (as live GCS lists an object stored without one) | synthetic: `application/octet-stream` |
 | `md5Hash`, `crc32c` | exact, absent when null | absent |
+| `timeCreated` | exact (six fractional digits, as `updated`), written just before `updated`; absent when null or in a part without the optional `time_created` column (one written before the lister listed it) | absent |
 | `acl` | `[]` with `projection=full` | `[]` with `projection=full` |
-| `id`, `selfLink`, `mediaLink`, `timeCreated`, `owner`, `metadata` and the rest | absent (not stored) | absent |
+| `id`, `selfLink`, `mediaLink`, `owner`, `metadata` and the rest | absent (not stored) | absent |
 
 The synthetic values are the replay wire contract's (`gcs` `TestRenderGolden`). The table in
 [Item fields by route and recording schema](#item-fields-by-route-and-recording-schema) holds every route's

@@ -90,6 +90,15 @@ func build() (app, version, rev string) {
 	return
 }
 
+// creator is the created_by option: this build's, or raw verbatim. A
+// WriterConfig option sets only its non-zero fields.
+func creator(raw string) pq.WriterOption {
+	if raw == "" {
+		return pq.CreatedBy(createdBy, createdVersion, createdBuild)
+	}
+	return &pq.WriterConfig{CreatedBy: raw}
+}
+
 // writer writes one sorted part in strictly ascending key order.
 type writer[P any] struct {
 	schema    *schema.Schema[P]
@@ -108,8 +117,10 @@ type writer[P any] struct {
 	closed    bool
 }
 
-// create opens path for part ordinal (0-based).
-func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int) (*writer[P], error) {
+// create opens path for part ordinal (0-based). createdBy, if not empty,
+// is the footer's created_by verbatim instead of this build's (a
+// reproduced claimed part's own, Cut.CreatedBy).
+func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int, createdBy string) (*writer[P], error) {
 	c, err := newCodec(max(1, maxColumns))
 	if err != nil {
 		return nil, err
@@ -138,7 +149,7 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Boolean, &pq.Plain),
-		pq.CreatedBy(createdBy, createdVersion, createdBuild),
+		creator(createdBy),
 		pq.KeyValueMetadata(dataset.StampProfile, dataset.Format),
 		pq.KeyValueMetadata(dataset.StampProfileVersion, strconv.Itoa(dataset.FormatVersion)),
 		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
@@ -324,19 +335,32 @@ func (t *tracking) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// PartRows is the row count in a part file's footer. A resume reads it from
-// a claimed part to cut the reproduced part at the same boundary
-// (Options.Cut); the byte comparison that follows decides, so a damaged
-// footer can only make that comparison fail. f is the part, opened by the
-// caller (recovery opens it through the output root).
-func PartRows(f *os.File) (int64, error) {
+// Footer is what a part file's footer says about how it was written: its
+// row count, its columns in order (the key first) and its created_by.
+type Footer struct {
+	Rows      int64
+	Columns   []string
+	CreatedBy string
+}
+
+// ReadFooter reads a part file's footer. A resume reads it from a claimed
+// part to reproduce that part as it was written (Options.Cut): at the same
+// boundary, with the same columns and created_by, whichever build wrote
+// it. The byte comparison that follows decides, so a damaged footer can
+// only make that comparison fail. f is the part, opened by the caller
+// (recovery opens it through the output root).
+func ReadFooter(f *os.File) (Footer, error) {
 	st, err := f.Stat()
 	if err != nil {
-		return 0, err
+		return Footer{}, err
 	}
 	pf, err := pq.OpenFile(f, st.Size(), pq.SkipPageIndex(true), pq.SkipBloomFilters(true))
 	if err != nil {
-		return 0, err
+		return Footer{}, err
 	}
-	return pf.NumRows(), nil
+	ft := Footer{Rows: pf.NumRows(), CreatedBy: pf.Metadata().CreatedBy}
+	for _, c := range pf.Schema().Fields() {
+		ft.Columns = append(ft.Columns, c.Name())
+	}
+	return ft, nil
 }

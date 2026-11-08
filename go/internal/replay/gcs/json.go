@@ -65,7 +65,8 @@ func RenderPage(o *output.Output, r *Request, page *Page) error {
 		w.field("items", false)
 		w.startArray()
 		day, date := int64(-1<<63), ""
-		var updated [27]byte
+		var updated, createdBuf [27]byte
+		var timeCreated []byte
 		for i := range page.Items {
 			if w.failed() {
 				return nil
@@ -85,6 +86,13 @@ func RenderPage(o *output.Output, r *Request, page *Page) error {
 				}
 				day, date = d, t.Format("2006-01-02")
 			}
+			created := it.Native != nil && it.Native.TimeCreated != nil
+			if created {
+				var ok bool
+				if timeCreated, ok = appendTime(createdBuf[:0], *it.Native.TimeCreated); !ok {
+					return &FixtureProblem{"timestamp_out_of_range"}
+				}
+			}
 			if i > 0 {
 				w.byte(',')
 			}
@@ -97,6 +105,12 @@ func RenderPage(o *output.Output, r *Request, page *Page) error {
 			w.utf8(it.Key)
 			w.field("size", false)
 			w.utf8(strconv.AppendInt(updated[:0], it.Size, 10))
+			if created {
+				// Live GCS lists timeCreated just before updated; it is
+				// written only where the recording stored it.
+				w.field("timeCreated", false)
+				w.utf8(timeCreated)
+			}
 			w.field("updated", false)
 			w.utf8(appendUpdated(updated[:0], date, sec, frac))
 			w.metadata(it.Native)
@@ -146,6 +160,18 @@ func AppendPage(dst []byte, r *Request, page *Page) ([]byte, error) {
 		dst = append(dst, v...)
 	}
 	return dst, nil
+}
+
+// appendTime writes epoch microseconds as appendUpdated does, or reports
+// false for a time outside years 0 to 9999.
+func appendTime(dst []byte, micros int64) ([]byte, bool) {
+	sec, frac := floorDiv(micros, 1_000_000)
+	d, _ := floorDiv(sec, 86_400)
+	t := time.Unix(d*86_400, 0).UTC()
+	if t.Year() < 0 || t.Year() > 9999 {
+		return dst, false
+	}
+	return appendUpdated(dst, t.Format("2006-01-02"), sec, frac), true
 }
 
 // appendUpdated writes an RFC 3339 UTC time with six fractional digits:

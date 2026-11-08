@@ -55,8 +55,7 @@ var gcsProbes = []gcsProbe{
 		`<Contents><Key>d/tool.jar</Key><Generation>1762400300456789</Generation><MetaGeneration>2</MetaGeneration><LastModified>2025-11-06T03:38:20.455Z</LastModified><ETag>"-CNW28d7M3JADEAI="</ETag><Size>280287512</Size></Contents>`,
 	},
 	{ // An object whose metadata changed after upload: the XML API's
-		// LastModified is timeCreated, which a recording does not store;
-		// the replay sends updated (TestGCSRecordingOnTheS3Route).
+		// LastModified is timeCreated, not updated.
 		map[string]any{"name": "e/reads.cram", "size": "15953191127", "generation": "1762400400567890", "metageneration": "2",
 			"etag": "CNLcz47N3JADEAI=", "md5Hash": "5Y9eT3FvvB3ZI/fcWL8DFA==", "crc32c": "imEqqA==", "storageClass": "MULTI_REGIONAL",
 			"contentType": "application/octet-stream", "timeCreated": "2025-11-06T03:40:00.566Z", "updated": "2025-11-06T08:10:43.105Z"},
@@ -117,10 +116,11 @@ var contentsRe = regexp.MustCompile(`<Contents>.*?</Contents>`)
 // StorageClass (STANDARD, NEARLINE or MULTI_REGIONAL), Owner or checksum
 // element. Two differences are the S3 route's own: it writes no
 // Generation or MetaGeneration (elements S3 does not have), and it writes
-// the ETag's quotation marks as &quot;, as live S3 does. The last probe's
-// LastModified is the recording's updated, not the XML API's timeCreated.
-// Before, the route sent the GCS etag as the ETag and the GCS storage
-// class as StorageClass.
+// the ETag's quotation marks as &quot;, as live S3 does. LastModified is
+// the recorded timeCreated, as the XML API's, also for the last probe,
+// whose updated is later. Before, the route sent the GCS etag as the ETag
+// and the GCS storage class as StorageClass, and before the lister
+// recorded timeCreated, the last probe's LastModified was its updated.
 func TestLiveGCSXMLAPIContents(t *testing.T) {
 	objects := map[string]map[string]any{}
 	var want []string
@@ -128,9 +128,6 @@ func TestLiveGCSXMLAPIContents(t *testing.T) {
 		objects[p.resource["name"].(string)] = p.resource
 		w := regexp.MustCompile(`<Generation>[0-9]+</Generation><MetaGeneration>[0-9]+</MetaGeneration>`).ReplaceAllString(p.xmlAPI, "")
 		w = strings.ReplaceAll(w, `"`, "&quot;")
-		if p.resource["timeCreated"] != p.resource["updated"] {
-			w = strings.Replace(w, p.resource["timeCreated"].(string), p.resource["updated"].(string)[:23]+"Z", 1)
-		}
 		want = append(want, w)
 	}
 	dir := recordGCS(t, objects)

@@ -266,8 +266,10 @@ Every request of a token chain repeats its `startOffset`, `endOffset`, prefix an
 group (`keyrange.Flags`, registered once by the command); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
 
 **Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
-`etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed) and
-`content_type`. **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
+`etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed),
+`content_type` and, last, `time_created` (`timeCreated`, µs, the logical type of `last_modified`). `time_created`
+is an optional column of the schema id: a part written before the lister listed it has no such column, and a
+run resumed across that change holds parts of both kinds ([../upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)). **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
 client requests it; scheme and host case are the only equivalence) and the billed project the client sends
 (`--gcs-user-project` for the built-in client); credentials may change. A run with `--max-keys`, or through a
 supplied client that does not name its route and billed project (`gcs.Routed`), cannot resume.

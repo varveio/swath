@@ -4,16 +4,19 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +45,7 @@ type liveRun struct {
 	// tokens holds each walk case's next tokens per page, per side.
 	tokens map[string][2][]string
 	// pins are the provider evidence's pinned mismatches by case id.
-	pins map[string]string
+	pins map[string]pin
 }
 
 func liveClient(parallel int) *http.Client {
@@ -81,7 +84,7 @@ func runLive(o options) error {
 	if err != nil {
 		return err
 	}
-	ref := &target{name: "live", base: base, client: client,
+	ref := &target{name: "live", base: base, client: client, recorder: o.liveRecord,
 		vhost: o.protocol == "s3" && strings.HasPrefix(u.Host, o.bucket+".")}
 
 	keys, newest, err := listScope(got, o.protocol, o.bucket, o.livePrefix)
@@ -330,13 +333,21 @@ func (lr *liveRun) nextToken(body []byte) string {
 	return nextToken(body)
 }
 
-// send asks both sides, each with its own token, and compares.
-func (lr *liveRun) send(query string, header [][2]string, refTok, gotTok string) (a, b *response, df diff, err error) {
+// send asks both sides, each with its own token, and compares. note
+// says how the token was formed, for a recording proxy (its case is
+// c's).
+func (lr *liveRun) send(c liveCase, refTok, gotTok string, note recordNote) (a, b *response, df diff, err error) {
 	d := lr.d
-	if a, err = d.ref.do(d.o.bucket, lr.request(lr.withToken(query, refTok), header)); err != nil {
+	query := c.query
+	ra := lr.request(lr.withToken(query, refTok), c.header)
+	if d.ref.recorder {
+		note.caseID = c.id
+		ra.Header = append(slices.Clone(ra.Header), note.headers()...)
+	}
+	if a, err = d.ref.do(d.o.bucket, ra); err != nil {
 		return nil, nil, df, fmt.Errorf("live: %w", err)
 	}
-	if b, err = d.got.do(d.o.bucket, lr.request(lr.withToken(query, gotTok), header)); err != nil {
+	if b, err = d.got.do(d.o.bucket, lr.request(lr.withToken(query, gotTok), c.header)); err != nil {
 		return a, nil, df, fmt.Errorf("go: %w", err)
 	}
 	d.count(2)
@@ -363,26 +374,54 @@ func (lr *liveRun) result(c liveCase) result {
 
 func (lr *liveRun) exchange(c liveCase) {
 	res := lr.result(c)
-	_, _, df, err := lr.send(c.query, c.header, "", "")
-	lr.finish(&res, df, err)
+	var note recordNote
+	if t, _, ok := queryToken(c.query, lr.tokenParam()); ok && t != "" {
+		note.token = tokenVerbatim // a token the case wrote itself, no answer issued
+	}
+	a, b, df, err := lr.send(c, "", "", note)
+	origin := originNone
+	if note.token == tokenVerbatim {
+		origin = originVerbatim
+	}
+	lr.finish(&res, lr.judgement(c, "", "", "", origin, a, b, df), err)
 }
 
-func (lr *liveRun) finish(res *result, df diff, err error) {
+// judgement is what the documented differences are matched against.
+func (lr *liveRun) judgement(c liveCase, mutation, refTok, gotTok string, origin tokenOrigin, a, b *response, df diff) judgement {
+	return judgement{protocol: lr.protocol, bucket: lr.d.o.bucket, caseID: c.id, query: c.query, mutation: mutation, origin: origin,
+		refTok: refTok, gotTok: gotTok, ref: a, got: b, df: df}
+}
+
+// finish records a case's verdict: a documented difference
+// (documentedDifference) is listed apart, outside the verdict counts.
+func (lr *liveRun) finish(res *result, j judgement, err error) {
+	df := j.df
+	if err == nil {
+		if why := documentedDifference(j, lr.pins); why != "" {
+			lr.d.noteDocumented(res.Name, why, df)
+			return
+		}
+	}
 	if err != nil {
 		res.Error = err.Error()
 	} else {
 		res.Pass = df.OK
 		if !df.OK {
 			res.diff = &df
-			res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 		}
 	}
 	lr.d.record(*res)
 }
 
-// readPins reads a replay-expectations.json: case id to "match" or to
-// {"mismatch": message}.
-func readPins(path string) (map[string]string, error) {
+// readPins reads a replay-expectations.json (case id to "match" or to
+// {"mismatch": message}) and binds each pinned mismatch to the evidence
+// beside it (index.json and the capture it names): the case must be one
+// of the provider's matrix whose template, rendered over the evidence's
+// run prefix, is the captured request's query, and the pin then applies
+// only to requests of that template's shape answered as the captured
+// provider answered (pin.admits). A pin that cannot be bound so is an
+// error: it would document by its label alone.
+func readPins(path string) (map[string]pin, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -391,33 +430,152 @@ func readPins(path string) (map[string]string, error) {
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	pins := map[string]string{}
+	pins := map[string]pin{}
+	var ids []string
+	mismatches := map[string]string{}
 	for id, v := range raw {
 		var m struct{ Mismatch string }
 		if json.Unmarshal(v, &m) == nil && m.Mismatch != "" {
-			pins[id] = m.Mismatch
+			mismatches[id] = m.Mismatch
+			ids = append(ids, id)
 		}
+	}
+	if len(ids) == 0 {
+		return pins, nil
+	}
+	dir := filepath.Dir(path)
+	var index struct {
+		Provider  string `json:"provider"`
+		RunPrefix string `json:"run_prefix"`
+		Captures  map[string]struct {
+			File string `json:"file"`
+			Kind string `json:"kind"`
+		} `json:"captures"`
+	}
+	if err := readEvidenceJSON(filepath.Join(dir, "index.json"), &index); err != nil {
+		return nil, fmt.Errorf("the pins' evidence index: %w", err)
+	}
+	var cases []providerCase
+	switch index.Provider {
+	case "gcs":
+		cases = gcsProviderCases()
+	case "s3":
+		cases = s3ProviderCases()
+	default:
+		return nil, fmt.Errorf("the pins' evidence index names provider %q, not gcs or s3", index.Provider)
+	}
+	tokenParam := tokenParamOf(index.Provider)
+	for _, id := range slices.Sorted(slices.Values(ids)) {
+		i := slices.IndexFunc(cases, func(c providerCase) bool { return c.ID == id })
+		if i < 0 {
+			return nil, fmt.Errorf("pin %s: not a case of the %s matrix", id, index.Provider)
+		}
+		c := cases[i]
+		ce, ok := index.Captures[id]
+		if !ok {
+			return nil, fmt.Errorf("pin %s: the evidence holds no capture of it", id)
+		}
+		if ce.Kind != "exchange" {
+			return nil, fmt.Errorf("pin %s: its capture is a %s; a pin binds one captured exchange", id, ce.Kind)
+		}
+		var doc struct {
+			Request struct {
+				Query string `json:"query"`
+			} `json:"request"`
+			Response struct {
+				Status     int    `json:"status"`
+				BodyBase64 string `json:"body_base64"`
+			} `json:"response"`
+		}
+		if err := readEvidenceJSON(filepath.Join(dir, filepath.FromSlash(ce.File)), &doc); err != nil {
+			return nil, fmt.Errorf("pin %s: %w", id, err)
+		}
+		want, missing := c.render(corpusBinding(index.RunPrefix))
+		_, want, _ = queryToken(want, tokenParam)
+		capTok, captured, _ := queryToken(doc.Request.Query, tokenParam)
+		if len(missing) > 0 || captured != want {
+			return nil, fmt.Errorf("pin %s: the evidence captured %q, which the case's template %q does not render over %q",
+				id, doc.Request.Query, c.Tmpl, index.RunPrefix)
+		}
+		p := pin{mismatch: mismatches[id], shape: templateShape(c.Tmpl, tokenParam), refStatus: doc.Response.Status, mutation: c.Mutation}
+		switch {
+		case c.Mutation == "tampered":
+			p.token, p.mutation = pinTampered, ""
+		case c.TokenFrom != "":
+			p.token = pinSourced
+		case c.Kind == "walk":
+			p.token = pinAnyToken
+		}
+		if p.token == pinSourced && capTok == "" || p.token == pinTampered && capTok != tamperedToken {
+			return nil, fmt.Errorf("pin %s: the evidence captured %q, without the token the case sends", id, doc.Request.Query)
+		}
+		if p.refStatus != 200 {
+			body, err := base64.StdEncoding.DecodeString(doc.Response.BodyBase64)
+			if err != nil {
+				return nil, fmt.Errorf("pin %s: the captured body: %w", id, err)
+			}
+			if p.refReason = errorReason(index.Provider, &response{Status: p.refStatus, Body: body}); p.refReason == "" {
+				return nil, fmt.Errorf("pin %s: the captured %d is not a %s error document", id, p.refStatus, index.Provider)
+			}
+		}
+		pins[id] = p
 	}
 	return pins, nil
 }
 
+// readEvidenceJSON decodes an evidence file; a .gz file is stored
+// compressed.
+func readEvidenceJSON(path string, v any) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var r io.Reader = f
+	if strings.HasSuffix(path, ".gz") {
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		r = zr
+	}
+	if err := json.NewDecoder(r).Decode(v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
 // walk follows each side's own tokens to the end, comparing every page.
+// A page whose difference is a documented one ends the walk, which is
+// then listed as documented, as the page is in a replay of its
+// recording.
 func (lr *liveRun) walk(c liveCase) {
 	res := lr.result(c)
 	res.Pass = true
 	var refTokens, gotTokens []string
 	refTok, gotTok := "", ""
 	limit := lr.d.o.walkLimit
+	documented := ""
 	for {
-		a, b, df, err := lr.send(c.query, c.header, refTok, gotTok)
+		a, b, df, err := lr.send(c, refTok, gotTok, recordNote{})
 		res.Pages++
+		if err == nil && !df.OK {
+			origin := originIssued
+			if refTok == "" {
+				origin = originNone
+			}
+			if why := documentedDifference(lr.judgement(c, "", refTok, gotTok, origin, a, b, df), lr.pins); why != "" {
+				documented = why
+				lr.d.noteDocumented(res.Name, fmt.Sprintf("page %d: %s", res.Pages, why), df)
+				break
+			}
+		}
 		if err != nil || !df.OK {
 			res.Pass, res.FailAt = false, res.Pages
 			if err != nil {
 				res.Error = err.Error()
 			} else {
 				res.diff = &df
-				res.Pinned = lr.pins[res.Name] != "" && lr.pins[res.Name] == df.Detail
 			}
 			break
 		}
@@ -434,7 +592,9 @@ func (lr *liveRun) walk(c liveCase) {
 	lr.mu.Lock()
 	lr.tokens[c.id] = [2][]string{refTokens, gotTokens}
 	lr.mu.Unlock()
-	lr.d.record(res)
+	if documented == "" {
+		lr.d.record(res)
+	}
 }
 
 // token sends a case with a token its source walk issued at page Page,
@@ -443,8 +603,10 @@ func (lr *liveRun) token(c liveCase) {
 	res := lr.result(c)
 	src := c.src
 	var toks [2]string
+	note, mutation := recordNote{from: src.TokenFrom}, src.Mutation
 	if src.Mutation == "tampered" {
 		toks = [2]string{tamperedToken, tamperedToken}
+		note, mutation = recordNote{token: tokenVerbatim}, ""
 	} else {
 		lr.mu.Lock()
 		walked, ok := lr.tokens[src.TokenFrom]
@@ -461,9 +623,19 @@ func (lr *liveRun) token(c liveCase) {
 			}
 			toks[i] = t
 		}
+		if mutation != "" {
+			note.token = tokenNote(mutation, walked[0][src.Page])
+		}
 	}
-	_, _, df, err := lr.send(c.query, c.header, toks[0], toks[1])
-	lr.finish(&res, df, err)
+	a, b, df, err := lr.send(c, toks[0], toks[1], note)
+	origin := originIssued
+	switch {
+	case src.Mutation == "tampered":
+		origin = originVerbatim
+	case mutation != "":
+		origin = originMutated
+	}
+	lr.finish(&res, lr.judgement(c, mutation, toks[0], toks[1], origin, a, b, df), err)
 }
 
 // mutateToken is the campaign's token alteration (matrix.py
@@ -473,9 +645,13 @@ func (lr *liveRun) token(c liveCase) {
 // about the unused bits of the last character or the padding, as the
 // campaign's is not.
 func mutateToken(token, mutation string) (string, error) {
-	switch mutation {
-	case "":
+	switch {
+	case mutation == "":
 		return token, nil
+	case token == "":
+		return "", fmt.Errorf("an empty token has no %s alteration", mutation)
+	}
+	switch mutation {
 	case "flip":
 		last := "A"
 		if strings.HasSuffix(token, "A") {

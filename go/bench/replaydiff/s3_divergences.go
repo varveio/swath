@@ -30,8 +30,9 @@ import (
 // delimiter relists the prefix it ends in; encoding-type is checked;
 // marker is refused; encoding-type=url writes a space as '+' and leaves
 // '*'; a NUL in the prefix or start-after is refused; key parameters are
-// read as UTF-8 with replacement; and every listing and error document
-// has a newline after its XML declaration (declNewline).
+// read as UTF-8 with replacement; Owner is written before StorageClass
+// (ownerFirst), and only for fetch-owner=true exactly (dropOwners); and every listing and error document has a newline after
+// its XML declaration (declNewline).
 //
 // Against the Java server every S3 request therefore goes through
 // compareS3 instead of a byte comparison of the two answers to the same
@@ -259,7 +260,8 @@ func javaFormToken(boundary []byte, inclusive bool) string {
 // written into the matrix is sent to the Go server as it is.
 func planS3(query string, driverToken bool) s3Plan {
 	plan := s3Plan{java: query, goQuery: query}
-	plan.fixes = append(plan.fixes, s3Fix{"control characters written as references", controlReferences})
+	plan.fixes = append(plan.fixes, s3Fix{"control characters written as references", controlReferences},
+		s3Fix{"Owner before StorageClass", ownerFirst})
 	for i := 0; i < len(query); i++ {
 		if query[i] >= 0x80 {
 			// The route reads raw non-ASCII bytes as '?'; the driver's
@@ -349,6 +351,10 @@ func planS3(query string, driverToken bool) s3Plan {
 		plan.fixes = append(plan.fixes, s3Fix{"empty start-after echoed", func(b []byte) []byte {
 			return bytes.Replace(b, []byte("</Prefix>"), []byte("</Prefix><StartAfter></StartAfter>"), 1)
 		}})
+	}
+	if owner, ok := get("fetch-owner"); ok && string(owner.value) != "true" {
+		// First, so the owners are gone before any rule moves them.
+		plan.fixes = append([]s3Fix{{"Owner only for fetch-owner=true exactly", dropOwners}}, plan.fixes...)
 	}
 	if hasEnc && strings.EqualFold(string(enc.value), "url") {
 		plan.fixes = append(plan.fixes, s3Fix{"encoding-type=url writes ' ' as '+' and '*' as is", reencodeURL})
@@ -557,6 +563,7 @@ func (d *driver) compareS3(r request) (*response, diff, error) {
 		}
 		d.count(2)
 		want := withDeclNewline(a)
+		want.Body = ownerFirst(want.Body)
 		df := (bytesComparator{}).compare(masked(want), masked(b))
 		if df.OK && !bytes.Equal(want.Body, b.Body) {
 			d.noteTokenBytes(r.Name)
@@ -769,6 +776,36 @@ func controlReferences(b []byte) []byte {
 		return b
 	}
 	return out
+}
+
+// javaOwnerElement is an Owner element of a Java page.
+var javaOwnerElement = regexp.MustCompile(`<Owner>(?:<ID>[^<]*</ID>)?(?:<DisplayName>[^<]*</DisplayName>)?</Owner>`)
+
+// dropOwners removes every Owner from a Java page: the Java server
+// renders owners for fetch-owner=true in any case, live S3 and the Go
+// route only for the exact value true (internal/replay/s3
+// TestLiveFetchOwnerIsExactlyTrue).
+func dropOwners(b []byte) []byte {
+	if !bytes.Contains(b, []byte("<Owner>")) {
+		return b
+	}
+	return javaOwnerElement.ReplaceAll(b, nil)
+}
+
+// javaOwner is a Java page's StorageClass followed by its Owner, the
+// order the Java server writes; the element texts are escaped, so they
+// hold no '<'.
+var javaOwner = regexp.MustCompile(`(<StorageClass>[^<]*</StorageClass>)(<Owner>(?:<ID>[^<]*</ID>)?(?:<DisplayName>[^<]*</DisplayName>)?</Owner>)`)
+
+// ownerFirst moves each Owner in a Java page before the StorageClass in
+// front of it, where live S3 writes it (internal/replay/s3
+// TestLiveOwnerBeforeStorageClass); a Contents element without both is
+// left as it is.
+func ownerFirst(b []byte) []byte {
+	if !bytes.Contains(b, []byte("</StorageClass><Owner>")) {
+		return b
+	}
+	return javaOwner.ReplaceAll(b, []byte("${2}${1}"))
 }
 
 func masked(r *response) *response {

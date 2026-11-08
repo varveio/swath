@@ -46,7 +46,12 @@ time the epoch, a null ETag, storage class, checksum or owner field an absent el
 column; a `swath/gcs-objects/v1` recording with the S3 route's view of it, the ETag derived from the `md5` and
 `etag` columns (`gcsETag`: the MD5 in hex, else `-` and the etag, else `swath-s3-synthetic-v1`) and no storage
 class. The window cache's packer holds the `md5` column apart and derives the ETag column once per fill, so a
-window's rows are the bare reader's (`store` `TestGCSRecordingS3View`).
+window's rows are the bare reader's (`store` `TestGCSRecordingS3View`). `Projection.Created`, which only the S3
+pager sets, reads `LastModified` from the optional `time_created` column where a row holds one and from
+`last_modified` otherwise; the packer holds `time_created` as a third integer column and lays it over
+`LastModified` once per fill. A schema without the column drops `Created` from the projection (as `Content`),
+so its reads share windows with reads without it (`store` `TestGCSRecordingLastModifiedFromTimeCreated`, over
+parts with and without the column, packed, bare, overflowed and rolled up).
 
 ## The pager
 
@@ -129,9 +134,10 @@ character references and other control bytes as U+FFFD, and the element order, `
 `&quot;`, millisecond `LastModified` rounded toward the earlier millisecond with the year of era (`+10000`,
 `0001` for year 0, `TestLastModifiedYears`) are fixed by the wire contract (`TestRenderListGolden` is a page the
 Java server answered), while the `encoding-type=url` grammar, the control characters as `&#xN;` in listing text
-(`output.XMLEntity`, read by both the unit path and the row fast path) and the error document with its own
-escaping (`&#N;`, quotes as they are) are live S3's (`TestLiveURLEncodingTable`,
-`TestLiveControlCharactersAreReferences`, `TestLiveErrorDocuments`).
+(`output.XMLEntity`, read by both the unit path and the row fast path), `Owner`'s place in `Contents` (before
+`StorageClass`) and the error document with its own escaping (`&#N;`, quotes as they are) are live S3's
+(`TestLiveURLEncodingTable`, `TestLiveControlCharactersAreReferences`, `TestLiveOwnerBeforeStorageClass`,
+`TestLiveErrorDocuments`).
 
 It is written into an `output.Output`, not a slice, so memory is charged before it exists. Each append admits
 the same unit the contract's renderer admits (a tag in three parts, an entity, a byte, a number, a value's exact
@@ -298,11 +304,14 @@ both answers and the rules involved, counted as passed or failed on the Go side.
 first (bucket, method, `list-type`, `max-keys`) is expected in live S3's document (`javaFirstRefusal`).
 The newline after the XML declaration is on every listing and error, so the driver inserts it after the Java
 server's declaration in every expectation and in the as-sent comparison (`declNewline`), and it alone makes no
-request a divergence (`TestDivergenceAssertsTheGoSide`). `s3DivergenceCases` adds one case per rule with a pin
+request a divergence (`TestDivergenceAssertsTheGoSide`). Each `Owner` in a Java page is moved before the
+`StorageClass` in front of it (`ownerFirst`), and every `Owner` is dropped from a Java page when the request's
+`fetch-owner` is not exactly `true` (`dropOwners`); `TestOwnerOrderIsDerived` covers both over an owner-bearing
+fixture, and `TestTestWriterPartAgainstJava` against the Java launcher. `s3DivergenceCases` adds one case per rule with a pin
 from the live probe. Tests: `TestS3PlanRules`,
 `TestS3PlanFixes`, `TestJavaFirstRefusals`,
 `TestUTF8ReplacedMatchesTheRoute`, `TestTokenTranslation`, `TestDivergenceCases`,
-`TestDivergenceAssertsTheGoSide`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
+`TestDivergenceAssertsTheGoSide`, `TestOwnerOrderIsDerived`; the route's own pins are the `TestLive*` tests in `s3/livegolden_test.go`.
 
 In the package's own tests the driver compares two Go servers over the same keys, one whose store answers the
 `/` rollup and one that declines it (`TestDriverFindsNoDifferenceBetweenRollupAndWalk`), and checks that
@@ -388,7 +397,10 @@ so the S3 path is unchanged), and the protocols and profiles in the metrics payl
 - **Native metadata.** `NewPager` reads a `swath/gcs-objects/v1` fixture's columns by name through
   `store.Sorted.ReadRows` and `RollupRows` (the same cursor and reader slots); any other store goes through
   `Rows` and the synthetic profile. `TestNativeSchemaRendersTheBucketsMetadata` lists a fake bucket with the
-  Go lister, serves the dataset and checks each item against the fake's objects.
+  Go lister, serves the dataset and checks each item against the fake's objects. A row's `time_created` is
+  rendered as `timeCreated` just before `updated`, in `updated`'s form; a null, or a part without the column,
+  renders none (`TestNativeTimeCreatedIsRenderedWhenStored`; `server` `TestResumedGCSRecordingMixesParts`
+  serves a run resumed across the column on both routes).
 
 ### The GCS driver and the evidence replay
 
