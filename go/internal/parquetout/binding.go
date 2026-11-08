@@ -93,21 +93,17 @@ type encoded struct {
 
 func (f encoded) Encoding() encoding.Encoding { return f.enc }
 
-// fill writes rows into dst, one parquet row each of s's columns (the
-// key, then s.Columns), a column at a time: the single row-to-column
-// mapping, driven by the schema's accessors. Byte values view the rows'
-// strings.
-func fill[P any](s *schema.Schema[P], dst []pq.Row, rows []schema.Row[P]) {
+// fillKey writes the key column (column 0) of rows into dst.
+func fillKey[P any](dst []pq.Value, rows []schema.Row[P]) {
 	for i := range rows {
-		dst[i][0] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
-	}
-	for c := range s.Columns {
-		fillColumn(&s.Columns[c], c+1, dst, rows)
+		dst[i] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
 	}
 }
 
-// fillColumn writes column col (schema column c) of rows into dst.
-func fillColumn[P any](c *schema.Column[P], col int, dst []pq.Row, rows []schema.Row[P]) {
+// fill writes column c (c >= 1; schema column c-1) of rows into dst as
+// parquet values: the single row-to-column mapping, driven by the schema's
+// accessors.
+func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row[P]) {
 	def := 1
 	if c.Required {
 		def = 0
@@ -116,33 +112,33 @@ func fillColumn[P any](c *schema.Column[P], col int, dst []pq.Row, rows []schema
 	case c.Str != nil:
 		for i := range rows {
 			if v, ok := c.Str(&rows[i].Data); ok {
-				dst[i][col] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
+				dst[i] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
 			} else {
-				dst[i][col] = pq.NullValue().Level(0, 0, col)
+				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	case c.Type == schema.Int32 || c.Type == schema.Uint32:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i].Data); ok {
-				dst[i][col] = pq.Int32Value(int32(v)).Level(0, def, col)
+				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
 			} else {
-				dst[i][col] = pq.NullValue().Level(0, 0, col)
+				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	case c.Bool != nil:
 		for i := range rows {
 			if v, ok := c.Bool(&rows[i].Data); ok {
-				dst[i][col] = pq.BooleanValue(v).Level(0, def, col)
+				dst[i] = pq.BooleanValue(v).Level(0, def, col)
 			} else {
-				dst[i][col] = pq.NullValue().Level(0, 0, col)
+				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	default:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i].Data); ok {
-				dst[i][col] = pq.Int64Value(v).Level(0, def, col)
+				dst[i] = pq.Int64Value(v).Level(0, def, col)
 			} else {
-				dst[i][col] = pq.NullValue().Level(0, 0, col)
+				dst[i] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	}

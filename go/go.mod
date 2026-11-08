@@ -16,7 +16,7 @@ require (
 	github.com/johannesboyne/gofakes3 v1.2.0
 	github.com/klauspost/compress v1.20.3
 	github.com/parquet-go/parquet-go v0.32.0
-	github.com/varveio/seekparquet/go v0.1.1-0.20261108212931-929dfa3843f1
+	github.com/varveio/seekparquet/go v0.1.1-0.20261108221443-6401109d1e5d
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0

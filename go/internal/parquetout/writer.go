@@ -69,9 +69,8 @@ const unboundedKeyBytes = 4096
 //     (pageBufferBytes, grown to the page) and its wide values: the key
 //     about two and a half times over (the page being filled, its delta
 //     encoding), a column with Spec.MaxBytes four times (its dictionary
-//     attempt besides). The module's part writer copies the page being
-//     filled (write.PartWriter.WriteRows: rows may be reused), one more
-//     time each, priced and not yet remeasured. One S3 writer at 1,024-byte keys measured 13 MiB,
+//     attempt besides). The module's page intake (WritePage) borrows the
+//     page's values from the rows and copies nothing. One S3 writer at 1,024-byte keys measured 13 MiB,
 //     four 15 each (19.5 priced); four filesystem writers at binary
 //     4,096-byte keys and link targets, 24 pages each, 170 MiB in all, and
 //     216 to 218 with 800 MB of rows live beside them (244 priced, 61
@@ -93,7 +92,7 @@ func stateBytes(page int64) int64 {
 }
 
 func writerBytes(key, wide, columns int) int64 {
-	return groupBytes + int64(columns)*pageBufferBytes + 7*int64(pageRows)*int64(key)/2 + 5*int64(pageRows)*int64(wide)
+	return groupBytes + int64(columns)*pageBufferBytes + 5*int64(pageRows)*int64(key)/2 + 4*int64(pageRows)*int64(wide)
 }
 
 func encoderBytes(maxKey, wide, columns int) int64 {
@@ -139,20 +138,18 @@ func footerBuild(b buildinfo.Build) (app, version, rev string) {
 	return b.Tool, b.Version, rev
 }
 
-// writer writes one sorted part through the module's part writer, which
-// checks the key order (strictly ascending, or with schema.Info.Groups
-// nondecreasing) and the profile.
+// writer writes one sorted part through the module's part writer, a page
+// at a time (write.PartWriter.WritePage), which checks the key order
+// (strictly ascending, or with schema.Info.Groups nondecreasing).
 type writer[P any] struct {
 	schema *schema.Schema[P]
 	path   string
 	part   *write.PartWriter
-	capped []int    // the columns with a Spec.MaxBytes, enforced as the key's cap is
-	rows   []pq.Row // a batch handed to the part writer, reused
+	fill   func(column int, values []pq.Value) // fillPage, bound once
+	capped []int                               // the columns with a Spec.MaxBytes, enforced as the key's cap is
+	page   []schema.Row[P]                     // the page being filled; the module borrows it during WritePage
 	closed bool
 }
-
-// batchRows is the rows handed to the part writer at a time.
-const batchRows = 64
 
 // partFile is a part's file as the module writes it: its writes and its
 // sync go through faults.
@@ -189,12 +186,8 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		_ = f.Close()
 		return nil, fmt.Errorf("create part: %w", err)
 	}
-	width := len(s.Columns) + 1
-	values := make([]pq.Value, batchRows*width)
-	w := &writer[P]{schema: s, path: path, part: part, rows: make([]pq.Row, batchRows)}
-	for i := range w.rows {
-		w.rows[i] = values[i*width : (i+1)*width : (i+1)*width]
-	}
+	w := &writer[P]{schema: s, path: path, part: part, page: make([]schema.Row[P], 0, pageRows)}
+	w.fill = func(column int, values []pq.Value) { fillPage(s, w.page, column, values) }
 	for i := range s.Columns {
 		if s.Columns[i].MaxBytes > 0 && s.Columns[i].Str != nil {
 			w.capped = append(w.capped, i)
@@ -203,23 +196,43 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	return w, nil
 }
 
+// fillPage writes column of page into values (WritePage's fill): the key,
+// or schema column column-1.
+func fillPage[P any](s *schema.Schema[P], page []schema.Row[P], column int, values []pq.Value) {
+	if column == 0 {
+		fillKey(values, page)
+	} else {
+		fill(&s.Columns[column-1], column, values, page)
+	}
+}
+
 // write appends rows, after checking each against the schema's value
-// caps.
+// caps, writing each page as it fills.
 func (w *writer[P]) write(rows []schema.Row[P]) error {
-	for len(rows) > 0 {
-		n := min(len(rows), batchRows)
-		for i := range rows[:n] {
-			if err := w.check(&rows[i]); err != nil {
+	for i := range rows {
+		if err := w.check(&rows[i]); err != nil {
+			return err
+		}
+		w.page = append(w.page, rows[i])
+		if len(w.page) == pageRows {
+			if err := w.flushPage(); err != nil {
 				return err
 			}
 		}
-		fill(w.schema, w.rows[:n], rows[:n])
-		if _, err := w.part.WriteRows(w.rows[:n]); err != nil {
-			return err
-		}
-		rows = rows[n:]
 	}
 	return nil
+}
+
+// flushPage hands the buffered page to the module, which encodes it
+// before it returns; the page is reused after.
+func (w *writer[P]) flushPage() error {
+	if len(w.page) == 0 {
+		return nil
+	}
+	err := w.part.WritePage(len(w.page), w.fill)
+	clear(w.page) // drop the rows' strings: the provider's arenas
+	w.page = w.page[:0]
+	return err
 }
 
 // check enforces the key's cap and each capped column's.
@@ -246,7 +259,13 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	w.closed = true
 	// The directory entry is made durable by the committer that claims
 	// the part for its record (listing), not here.
-	info, err := w.part.Seal()
+	err := w.flushPage()
+	var info seekparquet.PartInfo
+	if err == nil {
+		info, err = w.part.Seal()
+	} else {
+		_ = w.part.Abort()
+	}
 	if err != nil {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.path, err)
 	}
