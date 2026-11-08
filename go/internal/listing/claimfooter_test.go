@@ -126,8 +126,8 @@ func TestClaimedPartKeepsItsColumns(t *testing.T) {
 			if len(m.Parts) < 4 {
 				t.Fatalf("%d parts", len(m.Parts))
 			}
-			if p := m.Parts[1]; p.MD5 != claimed.MD5 || p.Bytes != claimed.Bytes {
-				t.Fatalf("part 1 is %d bytes, md5 %s; the claimed part %d bytes, md5 %s", p.Bytes, p.MD5, claimed.Bytes, claimed.MD5)
+			if p := m.Parts[1]; p.SHA256 != claimed.SHA256 || p.Bytes != claimed.Bytes {
+				t.Fatalf("part 1 is %d bytes, sha256 %s; the claimed part %d bytes, sha256 %s", p.Bytes, p.SHA256, claimed.Bytes, claimed.SHA256)
 			}
 			for i, p := range m.Parts {
 				if got := hasColumn(t, filepath.Join(out, filepath.FromSlash(p.Path)), "time_created"); got != (i > 1) {

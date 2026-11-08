@@ -5,7 +5,7 @@ package listing
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"maps"
 	"os"
@@ -62,9 +62,9 @@ func checkContract(t *testing.T, out string) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sum := md5.Sum(b)
-		if int64(len(b)) != p.Bytes || hex.EncodeToString(sum[:]) != p.MD5 {
-			t.Fatalf("part %d: bytes or md5 differ from the manifest", i)
+		sum := sha256.Sum256(b)
+		if int64(len(b)) != p.Bytes || hex.EncodeToString(sum[:]) != p.SHA256 {
+			t.Fatalf("part %d: bytes or sha256 differ from the manifest", i)
 		}
 		f, err := os.Open(filepath.Join(out, p.Path))
 		if err != nil {

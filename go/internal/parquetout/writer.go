@@ -4,11 +4,8 @@
 package parquetout
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"os"
 	"strings"
 
@@ -148,7 +145,6 @@ func footerBuild(b buildinfo.Build) (app, version, rev string) {
 type writer[P any] struct {
 	schema *schema.Schema[P]
 	path   string
-	file   partFile
 	part   *write.PartWriter
 	capped []int    // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	rows   []pq.Row // a batch handed to the part writer, reused
@@ -159,20 +155,11 @@ type writer[P any] struct {
 const batchRows = 64
 
 // partFile is a part's file as the module writes it: its writes and its
-// sync go through faults, and its bytes are hashed with MD5 as written
-// (the journal's digest).
-type partFile struct {
-	*os.File
-	md5 hash.Hash
-}
+// sync go through faults.
+type partFile struct{ *os.File }
 
-func (f partFile) Write(b []byte) (int, error) {
-	n, err := faults.Write(f.File, b)
-	f.md5.Write(b[:max(n, 0)])
-	return n, err
-}
-
-func (f partFile) Sync() error { return faults.Sync(f.File) }
+func (f partFile) Write(b []byte) (int, error) { return faults.Write(f.File, b) }
+func (f partFile) Sync() error                 { return faults.Sync(f.File) }
 
 // create opens path for a part, compressing with c (the router's, shared
 // by its writers; the writer does not close it). createdBy, if not empty,
@@ -193,8 +180,7 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		pq.CreatedBy(createdApp, createdVersion, createdBuild).ConfigureWriter(&cfg)
 		createdBy = cfg.CreatedBy
 	}
-	file := partFile{File: f, md5: md5.New()}
-	part, err := write.NewPart(file, nodeOf(s), write.PartOptions{
+	part, err := write.NewPart(partFile{f}, nodeOf(s), write.PartOptions{
 		Key:      seekparquet.Key{Column: dataset.KeyColumn, Unique: !s.Info.Groups},
 		SchemaID: s.ID, Codec: c, CreatedBy: createdBy, ColumnWorkers: columns,
 		PageRows: pageRows, RowGroupBytes: groupBytes, RowGroupRows: groupRows,
@@ -205,7 +191,7 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	}
 	width := len(s.Columns) + 1
 	values := make([]pq.Value, batchRows*width)
-	w := &writer[P]{schema: s, path: path, file: file, part: part, rows: make([]pq.Row, batchRows)}
+	w := &writer[P]{schema: s, path: path, part: part, rows: make([]pq.Row, batchRows)}
 	for i := range w.rows {
 		w.rows[i] = values[i*width : (i+1)*width : (i+1)*width]
 	}
@@ -264,7 +250,7 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	if err != nil {
 		return dataset.Part{}, fmt.Errorf("close %s: %w", w.path, err)
 	}
-	return dataset.Part{Path: w.path, PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, MD5: hex.EncodeToString(w.file.md5.Sum(nil)),
+	return dataset.Part{Path: w.path, PartInfo: dataset.PartInfo{Rows: info.Rows, Bytes: info.Bytes, SHA256: info.SHA256,
 		MinKey: dataset.Key(info.MinKey), MaxKey: dataset.Key(info.MaxKey)}}, nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -244,7 +245,7 @@ func TestManifestShape(t *testing.T) {
 		touch(t, filepath.Join(out, DataDir, "x"))
 		touch(t, TempPath(out, 0))
 		cov := Coverage{Complete: true, StopReason: "completed"}
-		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", MD5: "0123456789abcdef0123456789abcdef"}}
+		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", SHA256: strings.Repeat("0123456789abcdef", 4)}}
 		if err := Publish(out, Meta{SchemaID: id, Groups: groups, Source: Source{Kind: "s3", URI: "s3://b/", Container: "b"}, Scope: Scope{Kind: "whole"}, Coverage: cov}, []Part{part}, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -271,7 +272,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["parts"], &parts); err != nil {
 			t.Fatal(err)
 		}
-		if len(parts) != 1 || !slices.Equal(slices.Sorted(maps.Keys(parts[0])), []string{"bytes", "max_key_base64", "min_key_base64", "path", "rows"}) ||
+		if len(parts) != 1 || !slices.Equal(slices.Sorted(maps.Keys(parts[0])), []string{"bytes", "max_key_base64", "min_key_base64", "path", "rows", "sha256"}) ||
 			string(parts[0]["max_key_base64"]) != `"Yv8="` {
 			t.Fatalf("parts %s", raw["parts"])
 		}
@@ -279,7 +280,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "part_md5", "published_at", "scope", "source"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
 		}
 		var m Manifest
@@ -287,7 +288,7 @@ func TestManifestShape(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !m.Current() || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
-			len(m.Parts) != 1 || m.Parts[0].MD5 != part.MD5 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
+			len(m.Parts) != 1 || m.Parts[0].SHA256 != part.SHA256 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
 		}
 	}
@@ -298,7 +299,16 @@ func TestManifestShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(legacy), &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MD5 != "ab" || m.Parts[0].MinKey != "a" || !m.Key.Unique {
+	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MinKey != "a" || !m.Key.Unique {
 		t.Fatalf("format 2 read as %+v", m)
+	}
+	// An earlier build's SeekParquet manifest: MD5 digests under the
+	// extension, none in the parts.
+	earlier := `{"format":"seekparquet","format_version":0,"draft_revision":1,"schema_id":"x/v1","key":{"column":"key","unique":true},
+		"extensions":{"swath":{"published_at":"2026-11-08T18:00:00Z","source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},
+		"coverage":{"complete":true,"stop_reason":"completed"},"part_md5":["0123456789abcdef0123456789abcdef"]}},
+		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ=="}]}`
+	if err := json.Unmarshal([]byte(earlier), &m); err != nil || !m.Current() || !m.Coverage.Complete || m.Parts[0].SHA256 != "" || m.Parts[0].MaxKey != "a" {
+		t.Fatalf("an earlier build's manifest read as %+v: %v", m, err)
 	}
 }

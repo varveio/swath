@@ -96,6 +96,8 @@ def check_dataset(path, adapter, reference, failures):
     def fail(what, got, want):
         failures.append(f"{path}: {what}: got {json.dumps(got)[:400]}, reference {json.dumps(want)[:400]}")
 
+    if not all(p.get("sha256") for p in manifest["parts"]):
+        failures.append(f"{path}: a part declares no sha256: the digest level would check nothing")
     for who, label in ((reference, "reference"), (adapter, "adapter")):
         for level in ("full", "digest"):
             report = who.ask({"op": "validate", "dataset": path, "level": level})

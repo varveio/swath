@@ -79,8 +79,8 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	serial := writeFile(t, filepath.Join(dir, "1"), rows, 1)
 	for _, n := range []int{2, 4, 15} {
-		if p := writeFile(t, filepath.Join(dir, strconv.Itoa(n)), rows, n); p.MD5 != serial.MD5 {
-			t.Fatalf("columns=%d: %s != %s", n, p.MD5, serial.MD5)
+		if p := writeFile(t, filepath.Join(dir, strconv.Itoa(n)), rows, n); p.SHA256 != serial.SHA256 {
+			t.Fatalf("columns=%d: %s != %s", n, p.SHA256, serial.SHA256)
 		}
 	}
 }
@@ -135,7 +135,7 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			t.Fatalf("enc=%d: %d parts vs %d", enc, len(parts), len(base))
 		}
 		for i := range parts {
-			if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+			if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
 				t.Fatalf("enc=%d part %d differs", enc, i)
 			}
 			// The footer carries the SeekParquet stamps and the value
@@ -174,7 +174,7 @@ func TestRouterAdmitIsByteIdentical(t *testing.T) {
 		t.Fatalf("%d parts vs %d", len(parts), len(base))
 	}
 	for i := range parts {
-		if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+		if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
 			t.Fatalf("part %d differs", i)
 		}
 	}

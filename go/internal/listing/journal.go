@@ -5,7 +5,7 @@ package listing
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -67,7 +67,7 @@ type runJournal struct {
 	// verified: part files are created and renamed relative to it, never
 	// by a pathname that may name another directory by then.
 	root *os.Root
-	// cache is the attempt's durable spill (a version 8 journal with spill
+	// cache is the attempt's durable spill (a journal with spill
 	// on; nil otherwise), owned here and closed after the router; off is
 	// why it is off when it could not be set up.
 	cache *order.Cache
@@ -119,7 +119,7 @@ type suspect struct {
 	ordinal int
 	path    string
 	rel     string           // path relative to the output root
-	info    dataset.PartInfo // bytes and MD5 only
+	info    dataset.PartInfo // bytes and SHA-256 only
 	// footer is the claimed part's footer (zero if unreadable): the resume
 	// cuts the reproduced part at its row count (parquetout.Options.Cut),
 	// since its first cut may have been the part interval's, which a
@@ -390,10 +390,6 @@ func recoverLocked(ctx context.Context, cfg Config, r *os.Root, id journal.Ident
 	jr := &runJournal{out: cfg.Output.Dir, lock: lock, j: j, state: st, suspect: sus, root: r}
 	switch {
 	case cfg.Limits.Spill.Off:
-	case j.RunUUID() == "":
-		// A version 7 journal resumes as version 7: no durable spill, and
-		// nothing of version 8 is written.
-		jr.off = "journal version 7"
 	default:
 		// The durable spill's recovery, after the parts': K is theirs.
 		jr.cache, err = order.RecoverDurable(r, lock.Verify, j.RunUUID(), id.Hash(), id.SchemaID, jr.after())
@@ -754,13 +750,13 @@ func (v verifier) verifyPartIn(r *os.Root, out, rel string, want dataset.PartInf
 	if err != nil {
 		return err
 	}
-	if got.Bytes != want.Bytes || got.MD5 != want.MD5 {
-		return fmt.Errorf("%w: %s is %d bytes, md5 %s; the journal says %d bytes, md5 %s", ErrPartAltered, path, got.Bytes, got.MD5, want.Bytes, want.MD5)
+	if got.Bytes != want.Bytes || got.SHA256 != want.SHA256 {
+		return fmt.Errorf("%w: %s is %d bytes, sha256 %s; the journal says %d bytes, sha256 %s", ErrPartAltered, path, got.Bytes, got.SHA256, want.Bytes, want.SHA256)
 	}
 	return nil
 }
 
-// measure is a file's size and MD5 (hex), as a PartInfo records them.
+// measure is a file's size and SHA-256 (hex), as a PartInfo records them.
 func measure(path string) (dataset.PartInfo, error) {
 	return verifier{ctx: context.Background()}.measure(path)
 }
@@ -788,7 +784,7 @@ func (v verifier) measure(path string) (dataset.PartInfo, error) {
 
 // measureFile is measure of the open file f (path names it in errors).
 func (v verifier) measureFile(f *os.File, path string) (dataset.PartInfo, error) {
-	h := md5.New()
+	h := sha256.New()
 	buf := make([]byte, verifyChunk)
 	var n int64
 	for {
@@ -808,7 +804,7 @@ func (v verifier) measureFile(f *os.File, path string) (dataset.PartInfo, error)
 			return dataset.PartInfo{}, err
 		}
 	}
-	return dataset.PartInfo{Bytes: n, MD5: hex.EncodeToString(h.Sum(nil))}, nil
+	return dataset.PartInfo{Bytes: n, SHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
 func (jr *runJournal) last() *journal.Record {
@@ -894,9 +890,9 @@ func (jr *runJournal) publish(ordinal int, p dataset.Part, limit, rows int64, fi
 		return p, err
 	}
 	sus := jr.suspect
-	if sus != nil && ordinal == sus.ordinal && (p.Bytes != sus.info.Bytes || p.MD5 != sus.info.MD5) {
-		return p, fmt.Errorf("%w: part %d is %d bytes, md5 %s now; the part set aside (%s) is %d bytes, md5 %s",
-			ErrAmbiguousTail, ordinal, p.Bytes, p.MD5, sus.path, sus.info.Bytes, sus.info.MD5)
+	if sus != nil && ordinal == sus.ordinal && (p.Bytes != sus.info.Bytes || p.SHA256 != sus.info.SHA256) {
+		return p, fmt.Errorf("%w: part %d is %d bytes, sha256 %s now; the part set aside (%s) is %d bytes, sha256 %s",
+			ErrAmbiguousTail, ordinal, p.Bytes, p.SHA256, sus.path, sus.info.Bytes, sus.info.SHA256)
 	}
 	// The claim: from here until the rename into data/, this part may be
 	// named by an acknowledged record, and recovery keeps it (keepSuspect).

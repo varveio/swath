@@ -753,7 +753,7 @@ func TestAmbiguousTailRefusesOnChangedSource(t *testing.T) {
 				t.Fatalf("%s, attempt %d: resume did not refuse: %v", damage, attempt, err)
 			}
 			got, err := measure(kept)
-			if err != nil || got.MD5 != acked.MD5 || got.Bytes != acked.Bytes {
+			if err != nil || got.SHA256 != acked.SHA256 || got.Bytes != acked.Bytes {
 				t.Fatalf("%s, attempt %d: the acknowledged part is not kept: %v %+v", damage, attempt, err, got)
 			}
 			if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err == nil {
@@ -870,7 +870,7 @@ func TestAcknowledgedWholeLastFrameLossPreservesPart(t *testing.T) {
 				t.Fatalf("%s, attempt %d: resume did not refuse: %v", change, attempt, err)
 			}
 			got, err := measure(kept)
-			if err != nil || got.MD5 != acked.MD5 || got.Bytes != acked.Bytes {
+			if err != nil || got.SHA256 != acked.SHA256 || got.Bytes != acked.Bytes {
 				t.Fatalf("%s, attempt %d: the acknowledged part is not kept: %v %+v", change, attempt, err, got)
 			}
 			if _, err := os.Stat(filepath.Join(out, dataset.DataDir, dataset.PartName(2))); err == nil {

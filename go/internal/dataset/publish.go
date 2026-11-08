@@ -42,13 +42,15 @@ func (k *Key) UnmarshalJSON(b []byte) error {
 }
 
 // PartInfo is what is durable about a part, shared by the manifest and the
-// journal's recovery records: its rows, size, digest and exact key bounds.
+// journal's recovery records: its rows, size, SHA-256 (lowercase hex, as
+// the module's part writer computes it while writing) and exact key
+// bounds.
 type PartInfo struct {
 	Rows   int64  `json:"rows"`
 	Bytes  int64  `json:"bytes"`
 	MinKey Key    `json:"min_key_base64"`
 	MaxKey Key    `json:"max_key_base64"`
-	MD5    string `json:"md5"`
+	SHA256 string `json:"sha256"`
 }
 
 // Part is a written part at run time: its file and its PartInfo.
@@ -105,13 +107,15 @@ func Check(parts []Part, rows int64) error {
 // a reader needs to accept it: a SeekParquet manifest (the version, the
 // schema id, the key declaration and the ordered parts with their exact
 // bounds) whose swath extension says what was listed (source, scope), how
-// much of it (coverage), when it was published and each part's MD5.
+// much of it (coverage) and when it was published. Each part carries its
+// SHA-256 (the manifest's standard sha256 member).
 //
 // The fields are flat in Go; the JSON is the module's
 // (seekparquet.MarshalManifest, ParseManifest), with swath's fields under
-// extensions.swath. UnmarshalJSON reads that form and the swath-dataset
-// format 2 manifest earlier builds wrote (LegacyFormat), whose fields are
-// top-level and whose parts carry their md5.
+// extensions.swath. UnmarshalJSON reads that form (an earlier build's
+// MD5 digests under extensions.swath.part_md5 are not read) and the
+// swath-dataset format 2 manifest earlier builds wrote (LegacyFormat), whose
+// fields are top-level.
 type Manifest struct {
 	Format        string // seekparquet.Format, or LegacyFormat when read from an earlier build's dataset
 	FormatVersion int    // seekparquet.FormatVersion (LegacyFormatVersion)
@@ -125,14 +129,12 @@ type Manifest struct {
 	Parts         []ManifestPart // in key order; part i is data/part-%05d.parquet
 }
 
-// swathExtension is extensions.swath: PartMD5 holds each part's MD5 in
-// lowercase hexadecimal, in manifest order.
+// swathExtension is extensions.swath.
 type swathExtension struct {
 	PublishedAt time.Time `json:"published_at"`
 	Source      Source    `json:"source"`
 	Scope       Scope     `json:"scope"`
 	Coverage    Coverage  `json:"coverage"`
-	PartMD5     []string  `json:"part_md5"`
 }
 
 // legacyManifest is the swath-dataset format 2 manifest.
@@ -149,12 +151,11 @@ type legacyManifest struct {
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	x := swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage, PartMD5: make([]string, len(m.Parts))}
+	x := swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
-		sm.Parts[i] = seekparquet.PartInfo{Path: p.Path, Rows: p.Rows, Bytes: p.Bytes, MinKey: []byte(p.MinKey), MaxKey: []byte(p.MaxKey)}
-		x.PartMD5[i] = p.MD5
+		sm.Parts[i] = seekparquet.PartInfo{Path: p.Path, Rows: p.Rows, Bytes: p.Bytes, MinKey: []byte(p.MinKey), MaxKey: []byte(p.MaxKey), SHA256: p.SHA256}
 	}
 	ext, err := json.Marshal(map[string]swathExtension{Extension: x})
 	if err != nil {
@@ -194,14 +195,8 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
 		Key: sm.Key, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(sm.Parts))}
-	if len(x.PartMD5) != len(sm.Parts) && len(x.PartMD5) != 0 {
-		return fmt.Errorf("manifest: %d part digests for %d parts", len(x.PartMD5), len(sm.Parts))
-	}
 	for i, p := range sm.Parts {
-		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey)}}
-		if len(x.PartMD5) > 0 {
-			m.Parts[i].MD5 = x.PartMD5[i]
-		}
+		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}
 	return nil
 }

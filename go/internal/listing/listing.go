@@ -180,7 +180,7 @@ type Spill struct {
 	ReserveBytes int64 `json:"reserve_bytes"`
 	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
 	// Durable is the durable spill's account (nil when it was off: no
-	// journal, a version 7 journal, a provider without fences, a spill cap
+	// journal, a provider without fences, a spill cap
 	// below 16 MiB); DurableOff says why it was off when it could have run.
 	Durable    *order.DurableReport `json:"durable,omitempty"`
 	DurableOff string               `json:"durable_off,omitempty"`
