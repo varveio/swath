@@ -21,6 +21,13 @@ import (
 	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
+// ErrRepeatedKeys refuses a SeekParquet dataset whose keys repeat (a
+// versions listing, --all-versions): the routes page by key alone, so a
+// page boundary inside a key's group would lose the rest of the group.
+// They are served once the versions routes carry a key's position in its
+// group (issue #279).
+var ErrRepeatedKeys = errors.New("replay does not serve datasets with repeated keys yet")
+
 // reader is a fixture's sorted reader: the legacy core over a Java-era or
 // format 2 fixture (*legacy.Reader), or seekReader over a SeekParquet
 // dataset. Both take the legacy core's requests and return its rows.
@@ -55,10 +62,9 @@ func isSeekParquet(dir string) bool {
 }
 
 // seekReader serves a SeekParquet dataset through the seekparquet module:
-// its range reads, its delimited listing with the (key, offset) cursor,
-// and groups of equal keys when the manifest declares keys not unique. It
-// does not count the page work the legacy core counts (legacy.Stats stays
-// zero): the module does not report it.
+// its range reads and its delimited listing. Keys must be unique
+// (ErrRepeatedKeys). It does not count the page work the legacy core counts (legacy.Stats stays
+// zero; Sorted.PageStats is false): the module does not report it.
 type seekReader struct {
 	d       *seekparquet.Dataset
 	root    *os.Root
@@ -113,6 +119,10 @@ func openSeek(ctx context.Context, dir string, expect []legacy.Column, files *le
 		return nil, err
 	}
 	r := &seekReader{d: d, root: root, meta: d.Metadata()}
+	if !r.meta.Key.Unique {
+		_ = r.Close()
+		return nil, fmt.Errorf("%w: the manifest declares key.unique false (%s)", ErrRepeatedKeys, r.meta.SchemaID)
+	}
 	if err := r.inspect(src, expect); err != nil {
 		_ = r.Close()
 		return nil, err

@@ -45,8 +45,8 @@ var footerOnlyGolden = map[string][]partDigests{
 }
 
 // footerOnlyScenarios write short string keys (unique and repeated) and
-// binary keys longer than the 1,024-byte value-column bound, some
-// beginning with more than 1,024 0xFF bytes: the keys whose index maximum
+// binary keys longer than 1,024 bytes, some beginning with more than
+// 1,024 0xFF bytes: the keys whose index maximum
 // parquet-go shortens to an all-0xFF value that is below them.
 var footerOnlySchemaIDs = map[string]string{"unique": testSchema.ID, "grouped": groupedSchema.ID, "long": "test/binary-key"}
 
@@ -169,7 +169,7 @@ func TestFooterOnlyChange(t *testing.T) {
 			}
 			kv := footer(t, parts[i].Path)
 			stamps := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1", dataset.StampSchema: footerOnlySchemaIDs[name],
-				dataset.StampKeyColumn: "key", dataset.StampKeyUnique: strconv.FormatBool(name != "grouped"), dataset.StampIndexBound: "1024"}
+				dataset.StampKeyColumn: "key", dataset.StampKeyUnique: strconv.FormatBool(name != "grouped")}
 			if !maps.Equal(kv, stamps) {
 				t.Errorf("%s part %d: footer key/value metadata %q, want %q", name, i, kv, stamps)
 			}

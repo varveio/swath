@@ -331,8 +331,8 @@ the script. It checks a SeekParquet dataset independently of the Go code: schema
 SeekParquet members only, its key declaration (`unique` false exactly for the versions schemas), the swath
 extension's fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts,
 row counts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), each part's MD5 against
-`extensions.swath.part_md5`, and the six footer stamps (`seekparquet.*` and `swath.index_bound_bytes`) and no
-other `seekparquet.*` or `swath.*` entry.
+`extensions.swath.part_md5`, and the five `seekparquet.*` footer stamps and no other `seekparquet.*` or `swath.*`
+entry.
 Current-object keys rise strictly; version keys may repeat within a part but parts remain strictly
 key-disjoint. S3 versions retain nullable delete-marker fields; GCS schemas are checked column by column
 in every part, with generations rising within each key and `time_deleted` in UTC microseconds. An optional
@@ -352,7 +352,8 @@ dependencies):
 2. `listing` `TestSeekParquetFixtures` (skipped unless `SWATH_SEEKPARQUET_FIXTURES` names a directory) writes
    three datasets with this build's writer and publication: S3 current objects over four parts whose keys roll
    up at several depths; S3 versions, keys repeated in groups up to 3,000 rows across pages and row groups
-   (`unique` false); filesystem keys over 1,024 bytes, half led by 1,100 `0xFF` bytes.
+   (`unique` false); filesystem keys over 1,024 bytes, half led by 1,100 `0xFF` bytes, a third of them symlinks whose link
+targets are as long.
 3. `scripts/ci/seekparquet_conformance.py` has the suite's reference adapter (a full pyarrow scan that checks
    every rule it can, page indexes and page bounds included) validate each dataset at the `full` and `digest`
    levels (`digest` checks nothing: swath writes no `sha256`), then requires the Go adapter to answer whole and

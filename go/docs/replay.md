@@ -25,7 +25,8 @@ kill %1
 ```
 
 `--fixture` is a sorted listing: a dataset directory this tool wrote (SeekParquet, read through the seekparquet
-module `github.com/varveio/seekparquet/go`, groups of repeated keys included), a format-2 dataset directory of an
+module `github.com/varveio/seekparquet/go`; one whose keys repeat, an `--all-versions` listing, is refused until
+the versions routes exist), a format-2 dataset directory of an
 earlier build, a dataset's `data/` directory, a directory of sorted parts written by Java `swath --sort`, or one
 such part. A fixture that cannot
 be served sorted is refused when it opens, with the reason. A file ending

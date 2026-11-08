@@ -18,9 +18,13 @@ reader reads the parts as a table, as before; a reader that knows the profile (t
 `github.com/varveio/seekparquet/go`, which `swath-replay` serves datasets through) seeks a key, reads key
 ranges and lists a prefix with delimiter rollups from the manifest, the footers, the key column's page index
 and a few pages. The specification is the SeekParquet repository's `spec/format-1.md`; what follows is what
-changed against format 2. The data pages are unchanged: a format 2 build and this one write the same pages,
-page indexes and footers for the same rows, apart from the stamps and the key column's index bounds
-(`TestFooterOnlyChange`).
+changed against format 2. The data pages did not change with the format: for the rows `TestFooterOnlyChange`
+writes (short unique keys, repeated keys, keys over 1,024 bytes), a format 2 build and this one write the same
+pages, page indexes and footers, apart from the stamps and the bounds of values over 1,024 bytes. That is shown for
+those inputs only: the same switch raised klauspost/compress from v1.19.1 to v1.20.3, whose zstd encoder may
+choose its entropy tables differently on other data of more than one block, so a part of a build before and
+after need not be byte-identical in general (the writer recipe, `swath-go/parquet-r3`, already keeps their
+resumes apart).
 
 **Dispatch.** `"format": "seekparquet"` with `format_version` 0 and `draft_revision` 1 is SeekParquet;
 `"format": "swath-dataset"` with `format_version` 2 is format 2 ([Dispatch](#dispatch)). A SeekParquet reader
@@ -73,13 +77,14 @@ producer may be SeekParquet without a swath extension; a reader that needs swath
 | `swath.profile` = `swath-dataset`, `swath.profile_version` = `2` | `seekparquet.format_version` = `0`, `seekparquet.draft_revision` = `1` |
 | `swath.schema_id` | `seekparquet.schema_id` |
 | – | `seekparquet.key_column` = `key`, `seekparquet.key_unique` = `true` or `false` (as the manifest's `key`) |
-| `swath.index_bound_bytes` = `1024` | `swath.index_bound_bytes` = `1024`, now the value columns' bound only (SeekParquet ignores entries it does not define) |
+| `swath.index_bound_bytes` = `1024` | removed: no column index bound is shortened |
 
-**Bounds.** The key column's ColumnIndex bounds are exact: each page's first and last key. Format 2 shortened
-keys longer than 1,024 bytes, and parquet-go shortens a maximum by incrementing its last kept byte, so a key
-whose first 1,024 bytes are all `0xFF` got a maximum below it, which SeekParquet forbids (RG-5). Value
-columns' bounds are still shortened at 1,024 bytes; S3 and GCS keys are at most 1,024 bytes, so only
-filesystem keys change. Statistics in the column chunk metadata were exact already.
+**Bounds.** Every column's ColumnIndex bounds are exact: each page's minimum and maximum (the key's: its first
+and last key). Format 2 shortened values longer than 1,024 bytes, and parquet-go shortens a maximum by
+incrementing its last kept byte, so a value whose first 1,024 bytes are all `0xFF` got a maximum below it: no
+upper bound at all, which Parquet and SeekParquet (RG-5) forbid. S3 and GCS keys and values are at most 1,024
+bytes, so only filesystem keys and link targets change. Statistics in the column chunk metadata were exact
+already.
 
 **Resume.** An interrupted run of a format 2 build is finished with that build or started over with
 `--overwrite`: the resume identity's dataset format and writer recipe changed, so this build refuses its journal.
@@ -87,7 +92,9 @@ filesystem keys change. Statistics in the column chunk metadata were exact alrea
 
 **Replay fixtures.** `swath-replay` serves a SeekParquet dataset through the seekparquet module, a format 2
 dataset and a Java-era fixture through its own readers (`internal/replay/legacy`); the startup line's kind is
-`seekparquet`, `format-2` or `java-era`.
+`seekparquet`, `format-2` or `java-era`. It refuses a dataset whose keys repeat (`key.unique` false, an
+`--all-versions` listing) until the versions routes exist (#279): its routes continue after a key, never inside
+a key's group.
 
 ## Dispatch
 

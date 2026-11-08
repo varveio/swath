@@ -20,7 +20,7 @@ Go writer meets them.
 | Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page (SeekParquet GEO-1 recommends at most 1,024 key rows a page). The column index carries page bounds; header statistics would duplicate them. |
-| Column index bounds | the key column's exact (each page's first and last key, `indexBound`); value columns' shortened to 1,024 bytes (`swath.index_bound_bytes`) | SeekParquet RG-5 requires a true upper bound, and parquet-go shortens a maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the key. Only keys over 1,024 bytes (filesystem paths) are affected; `TestKeyLimits` and `TestFooterOnlyChange` check exact bounds. |
+| Column index bounds | exact for every column: each page's minimum and maximum (`exactBounds`, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value: format 2's 1,024-byte limit did that to any key or value over 1,024 bytes (filesystem paths and link targets). `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
 | Codec | zstd, klauspost `SpeedDefault` with entropy coding of all-literal blocks enabled | pure Go (`CGO_ENABLED=0`). The default wrapper skips entropy coding on all-literal blocks, which loses most of the gain on hex ETags. |
 | Codec states | one pool per router, shared by its writers: single-state zstd encoders made as concurrent page compressions need them, up to the encoders admitted (raised by `Router.Admit`), reused last-in first-out | a state keeps the history of the largest page it compressed (about 10.6 MiB once a page passes one 128 KiB zstd block, with zstd's lower encoder memory, which changes how the encoder allocates its history and scratch, not its window or matching: `TestLowerEncoderMemIsByteIdentical` compares 33 raw inputs, three patterns at eleven sizes up to 9 MiB, with and without it; it is evidence, not proof for every frame or reuse history, and exercises no schema). The 10.6 MiB and the 12 MiB priced are measured residency and allowance, not a bound the library guarantees. The spill frames' zstd encoders are separate and set apart: `order.spillEncoderOptions`, a 1 MiB window with the same lower-memory mode, about 1.5 MiB each ([ordering](ordering.md)); the Parquet codec keeps the default 8 MiB window, which its bytes (`parquetout.Recipe`) depend on, so a pool handed round in turn warms every state; output does not depend on the state (`EncodeAll` resets it). |
@@ -43,12 +43,12 @@ acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md))
 
 Every part carries SeekParquet's five stamps (STAMP-1), equal to the manifest's: `seekparquet.format_version=0`,
 `seekparquet.draft_revision=1`, `seekparquet.schema_id`, `seekparquet.key_column=key` and
-`seekparquet.key_unique` (`true`, or `false` for a schema whose keys repeat, `schema.Info.Groups`), and swath's
-`swath.index_bound_bytes=1024` (the value columns' column-index truncation; SeekParquet ignores entries it does
-not define). Within-file order is the standard `sorting_columns` (key, ascending) on every row group. Order
+`seekparquet.key_unique` (`true`, or `false` for a schema whose keys repeat, `schema.Info.Groups`); format 2's
+`swath.index_bound_bytes` is gone with the shortening it described. Within-file order is the standard `sorting_columns` (key, ascending) on every row group. Order
 across parts, exact bounds and completeness are the manifest's; nothing in a footer says where a part sits
 in the dataset. `TestFooterOnlyChange` pins the digests of the data pages, page indexes and footer the format 2
-writer wrote for the same rows and requires them unchanged apart from the stamps and the key bounds.
+writer wrote for its rows and requires them unchanged apart from the stamps and the bounds of keys over 1,024
+bytes (shown for those rows; see [../upgrade.md](../upgrade.md#seekparquet) on the compression library).
 
 ## Part router and deterministic boundaries
 

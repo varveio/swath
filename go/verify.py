@@ -206,9 +206,8 @@ def main(out, reference=None):
             for k, v in con.execute(f"SELECT key, value FROM parquet_kv_metadata('{p}')").fetchall()
         )
         want = {"seekparquet.format_version": "0", "seekparquet.draft_revision": "1", "seekparquet.schema_id": m["schema_id"],
-                "seekparquet.key_column": "key", "seekparquet.key_unique": "false" if groups else "true",
-                "swath.index_bound_bytes": "1024"}
-        check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: SeekParquet version, schema id, key; value index bound")
+                "seekparquet.key_column": "key", "seekparquet.key_unique": "false" if groups else "true"}
+        check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: SeekParquet version, schema id, key")
         check(not [k for k in kv if k.startswith(("swath.", "seekparquet.")) and k not in want], "  no other swath.* or seekparquet.* stamps")
         with open(p, "rb") as part:
             digest = hashlib.md5(part.read()).hexdigest()

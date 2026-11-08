@@ -76,8 +76,7 @@ func checkContract(t *testing.T, out string) []string {
 			kv[e.Key] = e.Value
 		}
 		want := map[string]string{dataset.StampFormatVersion: strconv.Itoa(dataset.FormatVersion), dataset.StampDraftRevision: strconv.Itoa(dataset.DraftRevision),
-			dataset.StampSchema: m.SchemaID, dataset.StampKeyColumn: m.Key.Column, dataset.StampKeyUnique: strconv.FormatBool(m.Key.Unique),
-			dataset.StampIndexBound: "1024"}
+			dataset.StampSchema: m.SchemaID, dataset.StampKeyColumn: m.Key.Column, dataset.StampKeyUnique: strconv.FormatBool(m.Key.Unique)}
 		if !m.Current() || m.Key.Column != dataset.KeyColumn {
 			t.Fatalf("manifest %s %d draft %d, key %+v", m.Format, m.FormatVersion, m.DraftRevision, m.Key)
 		}

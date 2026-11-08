@@ -1204,7 +1204,7 @@ revision `0.1.0-draft.4`; the same numbers on the development host and in the pu
 | Suite reader target, the module's Go adapter | 1,429 passed, 0 failed, 207 skipped (the validator targets, which the module does not claim); `reader` qualified |
 | `s3-current`: 4 parts, 9,000 rows, `unique` true | reference adapter: `full` and `digest` complete; 234 requests answered alike by both adapters |
 | `s3-versions`: 5 parts, 24,976 rows, `unique` false, a 3,000-row group | `full` and `digest` complete; 184 requests alike |
-| `local-long-keys`: 3 parts, 3,000 keys of 1,109 bytes, half led by 1,100 `0xFF` bytes | `full` and `digest` complete; 204 requests alike |
+| `local-long-keys`: 3 parts, 3,000 keys of 1,109 bytes, half led by 1,100 `0xFF` bytes (a third with link targets as long, added after the review below) | `full` and `digest` complete; 204 requests alike |
 | The same check with the versions dataset's manifest edited to `unique: true` | refused, `stamp_mismatch`, at open and at the `structural` level (the check fails as it should) |
 
 `digest` checks nothing (swath writes no `sha256`). What this does not show: the suite's indexed-access
@@ -1218,7 +1218,9 @@ FileMetaData without its key/value metadata, `created_by` and index locations ar
 identical for keys within 1,024 bytes and exact for the long ones. The same digests held with
 klauspost/compress v1.20.3, brotli v1.2.8 and lz4 v4.1.33, which the seekparquet module requires (from
 v1.19.1, v1.1.1 and v4.1.21): the writer's zstd output did not change for these pages, the long keys' pages
-over one zstd block included.
+over one zstd block included. That is evidence for these inputs, not a general identity: v1.20.3's encoder may
+choose its entropy tables differently on other multi-block data. After the review (#299) the value columns'
+bounds are exact too, which changes only values over 1,024 bytes; the pinned digests are unchanged.
 
 ## Downstream reader compatibility
 

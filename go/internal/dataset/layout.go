@@ -70,9 +70,6 @@ const (
 	StampSchema        = "seekparquet.schema_id"
 	StampKeyColumn     = "seekparquet.key_column" // KeyColumn
 	StampKeyUnique     = "seekparquet.key_unique" // "true", "false" with repeated keys
-	// StampIndexBound is swath's own: the ColumnIndex min/max truncation
-	// of the value columns in bytes. The key column's bounds are exact.
-	StampIndexBound = "swath.index_bound_bytes"
 )
 
 // PartName is the published name of part ordinal i: dense, zero-based,

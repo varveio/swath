@@ -30,7 +30,6 @@ const (
 	groupBytes      = 8 << 20 // row-group target, on the writer's size estimate
 	groupRows       = 1_000_000
 	dictionaryBytes = 8 << 10 // dictionary limit per column chunk
-	indexBoundBytes = 1024    // column-index min/max truncation of the value columns
 	pageBufferBytes = 1 << 20 // parquet-go page buffer
 	writeBuffer     = 4096    // parquet-go output buffer
 	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
@@ -110,22 +109,18 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 	return writerBytes(maxKey, wide, columns) + stateBytes(page)
 }
 
-// indexBound is the ColumnIndex bound length of the column at path: none
-// for the key, whose page bounds are its pages' exact first and last keys
-// (SeekParquet RG-5: parquet-go shortens a maximum by incrementing its last
-// kept byte, and one whose kept bytes are all 0xFF stays below the key it
-// bounds), indexBoundBytes for the value columns.
-func indexBound(path []string) int {
-	if len(path) == 1 && path[0] == dataset.KeyColumn {
-		return 0
-	}
-	return indexBoundBytes
-}
+// exactBounds is the ColumnIndex bound length of every column: none, so
+// each page's bounds are its exact minimum and maximum. parquet-go shortens
+// a longer maximum by incrementing its last kept byte, and one whose kept
+// bytes are all 0xFF stays below the value it bounds: not a bound (Parquet,
+// SeekParquet RG-5). Only values over parquet-go's limit (keys and link
+// targets of local paths over 1,024 bytes as this writer set it) differ.
+func exactBounds([]string) int { return 0 }
 
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
-// 8 MiB row groups, 8 KiB dictionaries, exact key index bounds and
-// 1,024-byte value index bounds, the SeekParquet footer stamps, delta keys
+// 8 MiB row groups, 8 KiB dictionaries, exact column index bounds, the
+// SeekParquet footer stamps, delta keys
 // and etags, delta integers with standard INT annotations, zstd
 // SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
 // then at the frozen ratio. Bump the revision with any change to these.
@@ -205,7 +200,7 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		pq.WriteBufferSize(writeBuffer),
 		pq.MaxRowsPerRowGroup(groupRows),
 		pq.DictionaryMaxBytes(dictionaryBytes),
-		pq.ColumnIndexSizeLimit(indexBound),
+		pq.ColumnIndexSizeLimit(exactBounds),
 		pq.DefaultEncodingFor(pq.ByteArray, &pq.RLEDictionary),
 		pq.DefaultEncodingFor(pq.Int64, &pq.DeltaBinaryPacked),
 		pq.DefaultEncodingFor(pq.Int32, &pq.DeltaBinaryPacked),
@@ -216,7 +211,6 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		pq.KeyValueMetadata(dataset.StampSchema, s.ID),
 		pq.KeyValueMetadata(dataset.StampKeyColumn, dataset.KeyColumn),
 		pq.KeyValueMetadata(dataset.StampKeyUnique, strconv.FormatBool(!s.Info.Groups)),
-		pq.KeyValueMetadata(dataset.StampIndexBound, strconv.Itoa(indexBoundBytes)),
 		// Standard Parquet sorting_columns on every row group (metadata only:
 		// rows arrive sorted; GenericWriter does not reorder them).
 		pq.SortingWriterConfig(pq.SortingColumns(pq.Ascending("key"))),

@@ -118,8 +118,8 @@ func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Sch
 // S3 current objects over several parts and row groups, whose keys roll up
 // at several depths; S3 versions, whose keys repeat in groups that span
 // pages and row groups (unique false); and filesystem keys longer than the
-// 1,024-byte value index bound, half of them led by 0xFF bytes, whose exact
-// key bounds parquet-go would have shortened below the key.
+// 1,024 bytes, half of them led by 0xFF bytes, with link targets as long,
+// whose exact bounds parquet-go would have shortened below the value.
 func TestSeekParquetFixtures(t *testing.T) {
 	base := os.Getenv("SWATH_SEEKPARQUET_FIXTURES")
 	if base == "" {
@@ -157,7 +157,11 @@ func TestSeekParquetFixtures(t *testing.T) {
 		if i >= 1500 {
 			lead = strings.Repeat("\xff", 1100)
 		}
-		long = append(long, localfs.Row{Key: fmt.Sprintf("%s/%02d/%05d", lead, i%7, i), Data: localfs.Entry{Kind: localfs.KindFile}})
+		entry := localfs.Entry{Kind: localfs.KindFile}
+		if i%3 == 0 { // link targets over 1,024 bytes, some all 0xFF
+			entry = localfs.Entry{Kind: localfs.KindSymlink, LinkTarget: lead + strings.Repeat("\xff", i%5), Present: localfs.HasLink}
+		}
+		long = append(long, localfs.Row{Key: fmt.Sprintf("%s/%02d/%05d", lead, i%7, i), Data: entry})
 	}
 	slices.SortFunc(long, func(a, b localfs.Row) int { return strings.Compare(a.Key, b.Key) })
 	writeSeekFixture(t, filepath.Join(base, "local-long-keys"), "local-fs", &localfs.Schema, long, 1000)
