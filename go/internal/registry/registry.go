@@ -205,7 +205,7 @@ func (s segSink[P]) AbandonSegments() { s.r.AbandonSegments() }
 // segmentPlan is the router's plan as the order stage takes it.
 func segmentPlan(p parquetout.SegmentPlan) order.SegmentPlan {
 	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full,
-		Encoders: p.Encoders, Queue: p.Queue, OpenQueue: p.OpenQueue}
+		Encoders: p.Encoders, Queue: p.Queue}
 }
 
 func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {

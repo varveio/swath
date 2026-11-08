@@ -97,7 +97,7 @@ func TestSegmentPastLimitCancels(t *testing.T) {
 			time.Sleep(20 * time.Millisecond) // the second is waiting for the first's publication
 			cancel(cause)                     // what the order stage does when a segment fails
 		} else {
-			first.Close(false)
+			first.Close(ctx, false)
 		}
 		select {
 		case err := <-got:

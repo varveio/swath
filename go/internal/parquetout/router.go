@@ -152,17 +152,21 @@ type part[P any] struct {
 	segs      chan batch[P]
 	done      chan struct{}
 	published chan struct{} // closed once published (or failed), with Publish set
+	drained   chan struct{} // closed once the encoder has taken every batch of its closed queue
 	logical   int64
 	n         int64 // rows routed into this part
 	pinned    bool  // its boundary is Options.Cut
 	bySize    bool  // closed because it reached the size target
 	final     bool
-	segment   bool  // written as a segment (OpenSegment)
-	closed    bool  // its queue is closed (r.mu)
-	limit     int64 // logical bytes per part in effect after this part
-	rows      int64 // rows in parts 0..ordinal
-	info      dataset.Part
-	err       error
+	segment   bool // written as a segment (OpenSegment)
+	// tokens bound the batches a segment queues to the part it continues
+	// (its queue is partQueue deep) to segmentQueue, as a new segment's.
+	tokens chan struct{}
+	closed bool  // its queue is closed (r.mu)
+	limit  int64 // logical bytes per part in effect after this part
+	rows   int64 // rows in parts 0..ordinal
+	info   dataset.Part
+	err    error
 }
 
 // NewRouter returns a router writing into opt.Out.
@@ -330,18 +334,21 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 type batch[P any] struct {
 	segs  [][]schema.Row[P]
 	bytes int64
+	// tokens: the batch holds one of its part's tokens (Segment.Write on
+	// the continued part), returned once it is written or dropped.
+	tokens chan struct{}
 }
 
 func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
-	return r.sendTo(ctx, r.cur, segs)
+	return r.sendTo(ctx, r.cur, segs, nil)
 }
 
 // sendTo queues segs to part p's encoder (the open part, or a segment's).
-func (r *Router[P]) sendTo(ctx context.Context, p *part[P], segs [][]schema.Row[P]) error {
+func (r *Router[P]) sendTo(ctx context.Context, p *part[P], segs [][]schema.Row[P], tokens chan struct{}) error {
 	if len(segs) == 0 {
 		return nil
 	}
-	b := batch[P]{segs: segs}
+	b := batch[P]{segs: segs, tokens: tokens}
 	if r.opt.Account != nil {
 		for _, s := range segs {
 			b.bytes += r.schema.RowsBytes(s)
@@ -372,6 +379,9 @@ func (r *Router[P]) done1(b batch[P]) {
 	if r.opt.Account != nil && b.bytes != 0 {
 		r.opt.Account(-b.bytes)
 	}
+	if b.tokens != nil {
+		<-b.tokens
+	}
 }
 
 // open starts the next part's encoder, waiting for a free slot.
@@ -400,7 +410,7 @@ func (r *Router[P]) open(ctx context.Context) error {
 		return fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
 			dataset.ErrPartLimit, o, r.rows, r.opt.PartSize, r.opt.MaxRows)
 	}
-	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}), drained: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	p.pinned = r.opt.Cut != nil && r.opt.Cut.Ordinal == p.ordinal
 	if n := len(r.parts); n > 0 {
@@ -438,6 +448,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		for b := range p.segs { // drain so the router never blocks
 			r.done1(b)
 		}
+		close(p.drained)
 		return
 	}
 	for b := range p.segs {
@@ -466,6 +477,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		}
 		r.done1(b)
 	}
+	close(p.drained)
 	if p.err != nil || r.aborted.Load() {
 		w.abort()
 		return

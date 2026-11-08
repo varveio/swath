@@ -50,24 +50,25 @@ type Segmenter[P any] interface {
 // closes after the row whose logical bytes bring it to Limit, or else after
 // MaxRows rows (0: none). Logical and Rows are the open part's (Open); Full:
 // it closes before the next row. Encoders is the encoders admitted; Queue
-// the batches a segment's part queues, OpenQueue the open part's, which
-// the first segment continues.
+// the batches a segment queues to its part.
 type SegmentPlan struct {
-	Limit, MaxRows   int64
-	Logical, Rows    int64
-	Open, Full       bool
-	Encoders         int
-	Queue, OpenQueue int
+	Limit, MaxRows int64
+	Logical, Rows  int64
+	Open, Full     bool
+	Encoders       int
+	Queue          int
 }
 
-// SegmentSink is one segment's part. Close closes it (not the last);
+// SegmentSink is one segment's part. Close closes it (not the last) and
+// returns once its batches have been taken (or ctx is done), so a worker
+// holds one part's queue at a time;
 // Hold hands the last back to the sink as its open part, which the sink
 // closes, final, only once the whole run has checked out (the Parquet
 // router's Close, after the stage's conservation and the pipeline's
 // reconciliation). rowCut: the row cap closed the part.
 type SegmentSink[P any] interface {
 	Write(ctx context.Context, segs [][]schema.Row[P]) error
-	Close(rowCut bool)
+	Close(ctx context.Context, rowCut bool)
 	Hold(rowCut bool)
 }
 
@@ -234,11 +235,11 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		free -= sh.Load()
 	}
 	o.mu.Unlock()
-	per, first := segmentShare(units, pl)
+	per := segmentShare(units, pl)
 	if hookShare != nil {
-		per, first = hookShare(per, first)
+		per = hookShare(per)
 	}
-	if kb := budgetWorkers(free, per, first); kb < k {
+	if kb := budgetWorkers(free, per); kb < k {
 		k, by = kb, WorkersByRowBudget
 	}
 	// Every spill file's trailer must count the rows replayed from it
@@ -328,25 +329,25 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	return true, nil
 }
 
-// segmentShare is the budget bytes one segment worker holds at most
-// (per), and what the first holds beside (first: the open part it
-// continues queues pl.OpenQueue batches, not pl.Queue). A worker's rows in
-// hand are consecutive: the batch it gathers, its part's queue and the
-// batch its encoder writes, at most Queue+2 batches of batchRows rows,
-// priced at the most any run of that many consecutive rows weighs
-// (runBytes: a cluster of long keys is priced as such, not at the mean);
-// beside them the largest unit (a spilled frame, or rows in memory) it
-// reads or gathers next.
-func segmentShare[P any](units []unit[P], pl SegmentPlan) (per, first int64) {
-	var frame int64 // the unit it reads or gathers next, beside them
+// segmentShare is the budget bytes one segment worker holds at most. Its
+// rows in hand are consecutive: the batch it gathers, its part's queue
+// (pl.Queue batches; the part the first segment continues is held to as
+// many, parquetout's tokens) and the batch its encoder writes, at most
+// Queue+2 batches of batchRows rows and one unit's, and one batch more:
+// the batch being handed on is counted twice while its Write waits for
+// room (its reservation, and the queue's charge, taken first). They are
+// priced at the most any
+// run of that many consecutive rows weighs (runBytes: a cluster of long
+// keys is priced as such, not at the mean); beside them the largest unit
+// (a spilled frame, or rows in memory) it reads or gathers next.
+func segmentShare[P any](units []unit[P], pl SegmentPlan) int64 {
+	var frame, rows int64 // the unit it reads or gathers next, beside them; the most rows in one
 	for i := range units {
 		frame = max(frame, units[i].units)
+		rows = max(rows, units[i].n)
 	}
-	per = frame + runBytes(units, int64(pl.Queue+2)*batchRows)
-	if pl.Open && pl.OpenQueue > pl.Queue {
-		first = frame + runBytes(units, int64(pl.OpenQueue+2)*batchRows) - per
-	}
-	return per, first
+	batch := batchRows + rows // a batch closes at the unit that brings it to batchRows
+	return frame + runBytes(units, int64(pl.Queue+3)*batch)
 }
 
 // runBytes is the most budget bytes any run of consecutive units holding
@@ -368,14 +369,13 @@ func runBytes[P any](units []unit[P], rows int64) int64 {
 	return most
 }
 
-// budgetWorkers is how many segment workers the budget the segments may
-// take (free) holds, each per bytes and the first first
-// more besides: at least one.
-func budgetWorkers(free, per, first int64) int {
-	if per <= 0 || free < per+first {
+// budgetWorkers is how many segment workers of per bytes each the budget
+// the segments may take (free) holds: at least one.
+func budgetWorkers(free, per int64) int {
+	if per <= 0 {
 		return 1
 	}
-	return int(1 + (free-per-first)/per)
+	return int(max(1, free/per))
 }
 
 // segReserve reserves c budget bytes for a unit a segment worker is about
@@ -435,7 +435,7 @@ func (o *run[R, P]) segRelease(c, tree int64) {
 }
 
 // hookShare, if set (tests), replaces segmentShare's estimate.
-var hookShare func(per, first int64) (int64, int64)
+var hookShare func(per int64) int64
 
 // hookSegmenter runs (tests) just before the drainer calls its Segmenter;
 // mu is the stage's lock, which must not be held then.
@@ -601,7 +601,7 @@ func (o *run[R, P]) runSegments(units []unit[P], segs []segment, k int) error {
 				if segs[j].final {
 					out.Hold(segs[j].rowCut)
 				} else {
-					out.Close(segs[j].rowCut)
+					out.Close(o.ctx, segs[j].rowCut)
 				}
 				first[j], last[j], has[j], counts[j], times[j] = f, l, ok, n, time.Since(t)
 			}

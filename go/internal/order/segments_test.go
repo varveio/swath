@@ -28,12 +28,12 @@ import (
 // as the router's is once part 0 has frozen its ratio. Parts record their
 // keys, whether they were closed, final, and in which order they opened.
 type partSink struct {
-	limit, maxRows   int64
-	encoders         int
-	queue, openQueue int // the plan's queue depths (SegmentPlan.Queue, OpenQueue)
-	failAt           int // the segment (1-based, in opening order) whose Write fails (0: none)
-	opened           int
-	failed           *fakePart // the failing segment's part
+	limit, maxRows int64
+	encoders       int
+	queue          int // the plan's queue depth (SegmentPlan.Queue)
+	failAt         int // the segment (1-based, in opening order) whose Write fails (0: none)
+	opened         int
+	failed         *fakePart // the failing segment's part
 
 	mu        sync.Mutex
 	parts     []*fakePart
@@ -87,7 +87,7 @@ func (s *partSink) Plan() (SegmentPlan, bool) {
 	if len(s.parts) < 2 || s.segmented {
 		return SegmentPlan{}, false
 	}
-	pl := SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue, OpenQueue: s.openQueue}
+	pl := SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue}
 	if s.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, s.full, s.cur.logical, int64(len(s.cur.keys))
 	}
@@ -154,7 +154,7 @@ func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	return nil
 }
 
-func (f *fakeSeg) Close(rowCut bool) {
+func (f *fakeSeg) Close(_ context.Context, rowCut bool) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	f.p.closed = true
@@ -183,6 +183,14 @@ func (s *partSink) boundaries() [][]string {
 }
 
 // withProcs sets the processors the read-ahead and the segments may use.
+// anyShare plans the segment workers as if each held one byte
+// (hookShare): a test of the tail's cuts, seams or failures at a budget too
+// small to hold two real shares, the safety gate holding the bound alone.
+func anyShare(t *testing.T) {
+	hookShare = func(int64) int64 { return 1 }
+	t.Cleanup(func() { hookShare = nil })
+}
+
 func withProcs(t *testing.T, n int) {
 	prev := aheadProcs
 	aheadProcs = func() int { return n }
@@ -196,6 +204,7 @@ func withProcs(t *testing.T, n int) {
 // for 2, 3 and 8 encoders admitted (the tiny budgets hold what the workers
 // read to the row budget: segReserve); every row passes the guard once (the oracle).
 func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
+	anyShare(t)
 	engaged := 0
 	for seed := range uint64(16) {
 		r := rand.New(rand.NewPCG(seed, 11))
@@ -260,6 +269,7 @@ func TestSegmentsCutWhereTheSinkWould(t *testing.T) {
 // The run fails with it, that part is never closed (so never published),
 // and every part closed holds an exact run of the oracle's rows.
 func TestSegmentsFailureClosesNoPart(t *testing.T) {
+	anyShare(t)
 	withProcs(t, 5)
 	f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
@@ -323,6 +333,7 @@ func TestSegmentsSeamError(t *testing.T) {
 // more than the serial drain: the budget, one publish batch per worker, the
 // frontier path, and the read-ahead's share it had when they began.
 func TestSegmentsMemoryIsBounded(t *testing.T) {
+	anyShare(t)
 	withProcs(t, 5)
 	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
@@ -392,6 +403,7 @@ func TestSegmentWorkersCap(t *testing.T) {
 // holds the router's lock while part 0's encoder, accounting its bytes,
 // wakes the stage (Shared.Add takes the stage's lock).
 func TestSegmenterCalledUnlocked(t *testing.T) {
+	anyShare(t)
 	withProcs(t, 5)
 	var calls, held atomic.Int64
 	hookSegmenter = func(mu *sync.Mutex) {
@@ -484,9 +496,8 @@ func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 
 // queuedSink is partSink whose segments queue their batches to stalled
 // encoders, as the Parquet router's do: each batch's bytes are counted
-// downstream (Shared) from Write until its encoder has taken it, the
-// continued part's queue is the serial part's 16 batches deep, a new
-// part's two. peak is the most counted downstream at once.
+// downstream (Shared) from Write until its encoder has taken it, two
+// batches queued a part. peak is the most counted downstream at once.
 type queuedSink struct {
 	*partSink
 	shared *Shared
@@ -498,8 +509,9 @@ type queuedSink struct {
 
 type queuedSeg struct {
 	*fakeSeg
-	q *queuedSink
-	c chan [][]schema.Row[tp]
+	q       *queuedSink
+	c       chan [][]schema.Row[tp]
+	drained chan struct{}
 }
 
 func (s *queuedSink) OpenSegment(ctx context.Context, cont bool) (SegmentSink[tp], error) {
@@ -507,11 +519,9 @@ func (s *queuedSink) OpenSegment(ctx context.Context, cont bool) (SegmentSink[tp
 	if err != nil {
 		return nil, err
 	}
-	depth := 2
-	if cont {
-		depth = 16
-	}
-	g := &queuedSeg{fakeSeg: out.(*fakeSeg), q: s, c: make(chan [][]schema.Row[tp], depth)}
+	// Two batches queued, as the router's segment parts (the part a
+	// segment continues is held to as many by its tokens).
+	g := &queuedSeg{fakeSeg: out.(*fakeSeg), q: s, c: make(chan [][]schema.Row[tp], 2), drained: make(chan struct{})}
 	s.wg.Go(func() {
 		for b := range g.c {
 			time.Sleep(s.stall)
@@ -522,6 +532,7 @@ func (s *queuedSink) OpenSegment(ctx context.Context, cont bool) (SegmentSink[tp
 			}
 			s.shared.Add(-n)
 		}
+		close(g.drained)
 	})
 	return g, nil
 }
@@ -544,9 +555,10 @@ func (g *queuedSeg) Write(ctx context.Context, b [][]schema.Row[tp]) error {
 	}
 }
 
-func (g *queuedSeg) Close(rowCut bool) {
+func (g *queuedSeg) Close(ctx context.Context, rowCut bool) {
 	close(g.c)
-	g.fakeSeg.Close(rowCut)
+	<-g.drained // as the router's: the part's batches taken first
+	g.fakeSeg.Close(ctx, rowCut)
 }
 
 func (g *queuedSeg) Hold(rowCut bool) {
@@ -584,7 +596,7 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
 	shared := &Shared{}
-	s := &queuedSink{partSink: &partSink{limit: 200_000, encoders: 4, queue: 2, openQueue: 16}, shared: shared, stall: 10 * time.Millisecond}
+	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
@@ -607,7 +619,7 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 // (2026-11-07), the gate counted the tree too and admitted every worker,
 // which then waited tens of thousands of times on Batch.
 func TestSegmentsSizedToBudget(t *testing.T) {
-	const budget = 52 << 20
+	const budget = 28 << 20
 	st, peak, waits := budgetRun(t, budget, 200)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers != 2 || sg.WorkersBy != WorkersByRowBudget || st.SpillRows == 0 {
@@ -627,8 +639,7 @@ func TestSegmentsSizedToBudget(t *testing.T) {
 // continued part) whatever the budget: 19 MB downstream.
 func TestSegmentsStayWithinBudget(t *testing.T) {
 	const budget = 4 << 20
-	hookShare = func(per, first int64) (int64, int64) { return 1, 0 }
-	defer func() { hookShare = nil }()
+	anyShare(t)
 	st, peak, waits := budgetRun(t, budget, 60)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers < 2 || st.SpillRows == 0 {
@@ -644,7 +655,7 @@ func TestSegmentsStayWithinBudget(t *testing.T) {
 // count, over every start.
 func TestRunBytes(t *testing.T) {
 	us := []unit[tp]{{n: 10, units: 100}, {n: 10, units: 900}, {n: 10, units: 100}, {n: 5, units: 50}}
-	for _, tc := range []struct{ rows, want int64 }{{10, 900}, {15, 1000}, {20, 1000}, {30, 1100}, {100, 1150}} {
+	for _, tc := range []struct{ rows, want int64 }{{10, 900}, {15, 1000}, {20, 1000}, {30, 1100}, {100, 1150}} { // 15: from the second unit, 900+100
 		if got := runBytes(us, tc.rows); got != tc.want {
 			t.Errorf("runBytes(%d) = %d, want %d", tc.rows, got, tc.want)
 		}

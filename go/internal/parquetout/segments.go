@@ -26,14 +26,14 @@ import (
 // to Limit, or else after MaxRows rows (0: no row cap). Logical and Rows
 // are the open part's so far (Open); Full: the open part is closed before
 // the next row. Encoders is the encoders admitted now; Queue the batches
-// a segment's part queues (segmentQueue), OpenQueue the open part's
-// (partQueue), which the first segment continues.
+// a segment queues to its part (segmentQueue; to the open part it
+// continues, whose queue is deeper, as many: Segment.Write's tokens).
 type SegmentPlan struct {
-	Limit, MaxRows   int64
-	Logical, Rows    int64
-	Open, Full       bool
-	Encoders         int
-	Queue, OpenQueue int
+	Limit, MaxRows int64
+	Logical, Rows  int64
+	Open, Full     bool
+	Encoders       int
+	Queue          int
 }
 
 // Plan is the cut rule for the rows still to come, or false while it
@@ -60,7 +60,7 @@ func (r *Router[P]) plan() (SegmentPlan, bool) {
 			return SegmentPlan{}, false
 		}
 	}
-	pl := SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders(), Queue: segmentQueue, OpenQueue: partQueue}
+	pl := SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders(), Queue: segmentQueue}
 	if r.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, r.full, r.cur.logical, r.cur.n
 	}
@@ -122,7 +122,7 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 			return nil, errors.New("parquet router: no open part to continue")
 		}
 		p := r.cur
-		p.segment = true
+		p.segment, p.tokens = true, make(chan struct{}, segmentQueue+1)
 		r.cur, r.full = nil, false
 		return &Segment[P]{r: r, p: p}, nil
 	}
@@ -171,7 +171,7 @@ func (r *Router[P]) OpenSegment(ctx context.Context, continueOpen bool) (*Segmen
 		return nil, fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
 			dataset.ErrPartLimit, o, rows, r.opt.PartSize, r.opt.MaxRows)
 	}
-	p := &part[P]{ordinal: o, opened: time.Now(), segs: make(chan batch[P], segmentQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: o, opened: time.Now(), segs: make(chan batch[P], segmentQueue), done: make(chan struct{}), drained: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit, segment: true}
 	if n := len(r.parts); n > 0 {
 		p.prev = r.parts[n-1]
@@ -190,21 +190,38 @@ func (s *Segment[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 		n += int64(len(seg))
 	}
 	s.r.segRows.Add(n)
-	return s.r.sendTo(ctx, s.p, segs)
+	if t := s.p.tokens; t != nil {
+		select {
+		case t <- struct{}{}:
+		case <-s.p.done:
+			return s.p.err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return s.r.sendTo(ctx, s.p, segs, s.p.tokens)
 }
 
 // Close closes the segment's part (never the last: Hold); rowCut says the
-// row cap closed it (RowCuts).
-func (s *Segment[P]) Close(rowCut bool) {
+// row cap closed it (RowCuts). It returns once the part's encoder has
+// taken every batch queued (or ctx is done): a worker then opens its next
+// part holding no batches of the last, so it holds one part's queue at a
+// time, as its share of the row budget assumes (order.segmentShare).
+func (s *Segment[P]) Close(ctx context.Context, rowCut bool) {
 	s.r.mu.Lock()
-	defer s.r.mu.Unlock()
 	if s.p.closed {
+		s.r.mu.Unlock()
 		return
 	}
 	s.p.closed = true
 	close(s.p.segs)
 	if rowCut {
 		s.r.rowCuts.Add(1)
+	}
+	s.r.mu.Unlock()
+	select {
+	case <-s.p.drained:
+	case <-ctx.Done():
 	}
 }
 

@@ -201,15 +201,15 @@ func TestSIGKILLInSegments(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(200000, 13))))
+	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(150000, 13))))
 	env := append(os.Environ(), "GOMAXPROCS=4")
 	for _, arm := range []struct {
 		name, budget string
 		spilled      bool // the segments read spill frames
-	}{{"memory", "64MiB", false}, {"spill", "24MiB", true}} {
+	}{{"memory", "96MiB", false}, {"spill", "12MiB", true}} {
 		runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", arm.budget}
 		args := func(out string, extra ...string) []string {
-			a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "8",
+			a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32",
 				"-part-size", "16KiB", "-o", out}
 			return append(append(a, runtime...), extra...)
 		}
@@ -230,6 +230,8 @@ func TestSIGKILLInSegments(t *testing.T) {
 						MaxWorkers int    `json:"max_workers"`
 						Rows       int64  `json:"rows"`
 						ReadNs     int64  `json:"read_ns"`
+						WorkersBy  string `json:"workers_by"`
+						PerWorker  int64  `json:"per_worker_bytes"`
 					} `json:"segments"`
 				} `json:"drain"`
 			} `json:"resources"`
@@ -241,7 +243,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 		if sg == nil || sg.Reason != "engaged" || sg.Workers < 2 || sg.MaxWorkers < 2 || sg.Segments < 4 || (sg.ReadNs > 0) != arm.spilled {
 			t.Fatalf("%s: the fixture does not reach the segment tail it means to: %+v", arm.name, sg)
 		}
-		t.Logf("%s reference: %d segments, %d workers (cap %d), %d rows, %d ns reading spill", arm.name, sg.Segments, sg.Workers, sg.MaxWorkers, sg.Rows, sg.ReadNs)
+		t.Logf("%s reference: %d segments, %d workers (cap %d, by %s at %d bytes each), %d rows, %d ns reading spill", arm.name, sg.Segments, sg.Workers, sg.MaxWorkers, sg.WorkersBy, sg.PerWorker, sg.Rows, sg.ReadNs)
 		for _, point := range faults.SegmentPoints {
 			nths := []string{"1"}
 			if point == "segment-published" {

@@ -93,7 +93,7 @@ func segmentRun(t *testing.T, rows []row, base []dataset.Part, abortFirst bool) 
 		if j == len(segs)-1 {
 			segs[j].Hold(false) // Close marks it final
 		} else {
-			segs[j].Close(false)
+			segs[j].Close(ctx, false)
 		}
 	}
 	parts, err := r.Close()
