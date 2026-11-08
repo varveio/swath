@@ -59,7 +59,8 @@ func textFields(o *Object) [8]**string {
 type packer struct {
 	out packed
 	// slots maps each read column to its packed field: 0 and 1 the ints,
-	// 2 to 8 the texts before MD5, 9 a GCS recording's MD5 (md5).
+	// 2 to 8 the texts before MD5, 9 a GCS recording's MD5 (md5), 10 its
+	// creation time (created).
 	slots []int
 	texts [7]strings.Builder
 	// md5 holds the MD5 column of a projection with one, from which
@@ -68,6 +69,10 @@ type packer struct {
 	md5      packedText
 	md5Text  strings.Builder
 	md5Field bool
+	// created holds the creation time column of a projection with
+	// Created, whose non-null values packed puts over the LastModified
+	// column's.
+	created packedInts
 	// limit bounds each arena (at most maxPackedArena); overflow reports
 	// a row was refused, and stop (when set) ends the read early.
 	limit    int
@@ -90,17 +95,16 @@ func (p objectProjection) packer(columns []string, proj Projection, n, limit int
 		limit = maxPackedArena
 	}
 	k := &packer{slots: make([]int, len(columns)), limit: limit, md5Field: proj.Content}
-	fields := [10]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType,
-		p.contentType, p.md5}
+	fields := [11]string{p.size, p.lastModified, p.etag, p.storageClass, p.ownerID, p.ownerDisplayName, p.checksumAlgorithm, p.checksumType,
+		p.contentType, p.md5, p.timeCreated}
 	for c, name := range columns {
 		k.slots[c] = slices.Index(fields[:], name)
 	}
 	k.out.keyEnd = make([]uint32, 0, n)
 	for _, slot := range k.slots {
-		switch {
+		switch col := k.ints(slot); {
 		case slot < 0:
-		case slot < 2:
-			col := &k.out.ints[slot]
+		case col != nil:
 			col.present, col.values, col.null = true, make([]int64, 0, n), make([]bool, 0, n)
 		default:
 			col, _ := k.text(slot)
@@ -113,6 +117,17 @@ func (p objectProjection) packer(columns []string, proj Projection, n, limit int
 		}
 	}
 	return k
+}
+
+// ints returns an integer slot's column, nil for any other slot.
+func (k *packer) ints(slot int) *packedInts {
+	switch slot {
+	case 0, 1:
+		return &k.out.ints[slot]
+	case 10:
+		return &k.created
+	}
+	return nil
 }
 
 // text returns a text slot's column and arena.
@@ -148,10 +163,9 @@ func (k *packer) Keys(keys [][]byte) {
 }
 
 func (k *packer) Values(c int, values []parquet.Value) {
-	switch slot := k.slots[c]; {
+	switch slot, col := k.slots[c], k.ints(k.slots[c]); {
 	case slot < 0 || k.overflow:
-	case slot < 2:
-		col := &k.out.ints[slot]
+	case col != nil:
 		for _, v := range values {
 			col.values = append(col.values, v.Int64())
 			col.null = append(col.null, v.IsNull())
@@ -172,10 +186,9 @@ func (k *packer) Values(c int, values []parquet.Value) {
 // Missing nulls the column for the run's rows: every row before them has
 // a value or a null already.
 func (k *packer) Missing(c int) {
-	switch slot := k.slots[c]; {
+	switch slot, col := k.slots[c], k.ints(k.slots[c]); {
 	case slot < 0 || k.overflow:
-	case slot < 2:
-		col := &k.out.ints[slot]
+	case col != nil:
 		for len(col.null) < k.out.n {
 			col.values = append(col.values, 0)
 			col.null = append(col.null, true)
@@ -209,6 +222,20 @@ func (k *packer) packed() (packed, error) {
 		k.out.texts[0] = etags
 		if k.md5Field {
 			k.out.texts[7] = k.md5
+		}
+	}
+	if k.created.present {
+		lastModified := &k.out.ints[1]
+		if !lastModified.present {
+			*lastModified = packedInts{present: true, values: make([]int64, k.out.n), null: make([]bool, k.out.n)}
+			for i := range lastModified.null {
+				lastModified.null[i] = true
+			}
+		}
+		for i, null := range k.created.null {
+			if !null {
+				lastModified.values[i], lastModified.null[i] = k.created.values[i], false
+			}
 		}
 	}
 	return k.out, nil

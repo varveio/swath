@@ -16,7 +16,9 @@
 // as exceeded): run a client through it against a live provider endpoint
 // (-target https://s3.REGION.amazonaws.com for path-style S3, or
 // https://storage.googleapis.com) and replay the capture with
-// replaydiff -capture.
+// replaydiff -capture. A request's X-Record-* headers annotate its
+// exchange (replaydiff -live-record sends the case and how a token was
+// formed): they are written with it and never forwarded.
 //
 //	go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \
 //	  -window throttle:10s-25s:0.5 -timeline storm.tsv

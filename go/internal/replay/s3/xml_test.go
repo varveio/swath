@@ -106,8 +106,8 @@ func TestRenderAdversarialUnencodedValues(t *testing.T) {
 		`<LastModified>1969-12-31T23:59:59.999Z</LastModified>` +
 		`<ETag>&quot;e&amp;&lt;&gt;&quot;&apos;😀&quot;</ETag>` +
 		`<ChecksumAlgorithm>CRC&amp;</ChecksumAlgorithm><ChecksumType>TYPE&gt;</ChecksumType>` +
-		`<Size>-9223372036854775808</Size><StorageClass>ST😀&amp;</StorageClass>` +
-		`<Owner><ID>id&lt;</ID><DisplayName>display&apos;</DisplayName></Owner>` +
+		`<Size>-9223372036854775808</Size>` +
+		`<Owner><ID>id&lt;</ID><DisplayName>display&apos;</DisplayName></Owner><StorageClass>ST😀&amp;</StorageClass>` +
 		`</Contents></ListBucketResult>`
 	if got := string(AppendList(nil, res)); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)

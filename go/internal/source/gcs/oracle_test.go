@@ -34,7 +34,7 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 // reads every page as Google's generated JSON API client does (test-only
 // oracle; the binary does not link it), every field the schema keeps:
 // names, prefixes, tokens, size, generation, metageneration, etag, update
-// time, storage class, MD5, CRC32C and content type, across prefixes,
+// time, creation time, storage class, MD5, CRC32C and content type, across prefixes,
 // delimiters and both offsets, with keys that need escaping. Our client
 // runs twice: against the fake's endpoint (full responses) and addressed
 // to Google's endpoint, where it sends the production fields selector,
@@ -99,7 +99,11 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					want := client.Object{Name: g.Name, Size: int64(g.Size), Updated: up.UnixMicro(), ETag: g.Etag,
+					created, err := time.Parse(time.RFC3339Nano, g.TimeCreated)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := client.Object{Name: g.Name, Size: int64(g.Size), Updated: up.UnixMicro(), TimeCreated: created.UnixMicro(), ETag: g.Etag,
 						Generation: g.Generation, Metageneration: g.Metageneration, StorageClass: g.StorageClass,
 						MD5: g.Md5Hash, CRC32C: g.Crc32c, ContentType: g.ContentType}
 					if o != want || g.StorageClass == "" || g.Md5Hash == "" || g.Metageneration == 0 {
@@ -116,7 +120,8 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 }
 
 // TestRowsCarryEveryField: the adapter maps every listed field into the
-// schema's row (through the engine, at several pages).
+// schema's row (through the engine, at several pages), timeCreated
+// included.
 func TestRowsCarryEveryField(t *testing.T) {
 	keys := testKeys()
 	_, ep := newFake(t, keys)
@@ -137,7 +142,11 @@ func TestRowsCarryEveryField(t *testing.T) {
 		w := gcstest.Object(i, r.Key)
 		gen, _ := strconv.ParseInt(w["generation"].(string), 10, 64)
 		meta, _ := strconv.ParseInt(w["metageneration"].(string), 10, 64)
-		want := Object{Size: int64(len(r.Key)), Mtime: updated, ETag: w["etag"].(string), Generation: gen, Metageneration: meta,
+		created, err := time.Parse(time.RFC3339Nano, w["timeCreated"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := Object{Size: int64(len(r.Key)), Mtime: updated, TimeCreated: created.UnixMicro(), ETag: w["etag"].(string), Generation: gen, Metageneration: meta,
 			StorageClass: w["storageClass"].(string), MD5: w["md5Hash"].(string), CRC32C: w["crc32c"].(string), ContentType: w["contentType"].(string)}
 		if r.Data != want {
 			t.Fatalf("%q: row %+v, want %+v", r.Key, r.Data, want)

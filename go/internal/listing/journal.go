@@ -112,11 +112,13 @@ type suspect struct {
 	path    string
 	rel     string           // path relative to the output root
 	info    dataset.PartInfo // bytes and MD5 only
-	// rows is the claimed part's row count (its footer; 0 if unreadable):
-	// the resume cuts the reproduced part there (parquetout.Options.Cut),
+	// footer is the claimed part's footer (zero if unreadable): the resume
+	// cuts the reproduced part at its row count (parquetout.Options.Cut),
 	// since its first cut may have been the part interval's, which a
-	// resume's timing does not repeat.
-	rows int64
+	// resume's timing does not repeat, and writes it with its columns and
+	// created_by, since the build that resumes may write an optional
+	// column the claimed part lacks, or name itself differently.
+	footer parquetout.Footer
 }
 
 // openJournal takes ownership of the output and prepares it: a fresh
@@ -606,8 +608,8 @@ func measureSuspect(v verifier, r *os.Root, out, rel string, n int) (*suspect, e
 	if err != nil {
 		return nil, fmt.Errorf("resume: suspect part: %w", err)
 	}
-	rows, _ := parquetout.PartRows(f) // unreadable: no boundary, the comparison refuses
-	return &suspect{ordinal: n, path: path, rel: rel, info: info, rows: rows}, nil
+	footer, _ := parquetout.ReadFooter(f) // unreadable: no boundary, the comparison refuses
+	return &suspect{ordinal: n, path: path, rel: rel, info: info, footer: footer}, nil
 }
 
 // checkParts is recoverParts up to the removal of the temporary parts.
@@ -808,8 +810,8 @@ func (jr *runJournal) routerOptions(o *parquetout.Options) {
 		o.Resume = &parquetout.Resume{Parts: parts, Limit: last.Limit, Rows: last.RowsTotal}
 	}
 	o.Publish = jr.publish
-	if sus := jr.suspect; sus != nil && sus.rows > 0 {
-		o.Cut = &parquetout.Cut{Ordinal: sus.ordinal, Rows: sus.rows}
+	if sus := jr.suspect; sus != nil && sus.footer.Rows > 0 {
+		o.Cut = &parquetout.Cut{Ordinal: sus.ordinal, Rows: sus.footer.Rows, Columns: sus.footer.Columns, CreatedBy: sus.footer.CreatedBy}
 	}
 }
 

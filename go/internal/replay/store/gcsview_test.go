@@ -13,9 +13,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
+
+	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // TestGCSETag pins gcsETag, the S3 ETag of a GCS object as Cloud Storage's
@@ -261,6 +265,181 @@ func TestGCSRecordingAzureView(t *testing.T) {
 		}
 	}
 	if got := gcsObjects.projection(Projection{Content: true}); got != (Projection{Content: true}) {
+		t.Errorf("GCS projection %+v", got)
+	}
+}
+
+// gcsTimedRow is a swath/gcs-objects/v1 row with both time columns, as
+// the lister writes since it records time_created; gcsUntimedRow is one
+// written before, without the column.
+type gcsTimedRow struct {
+	Key          string  `parquet:"key"`
+	Size         int64   `parquet:"size"`
+	LastModified *int64  `parquet:"last_modified,optional,timestamp(microsecond)"`
+	ETag         *string `parquet:"etag,optional"`
+	TimeCreated  *int64  `parquet:"time_created,optional,timestamp(microsecond)"`
+}
+
+type gcsUntimedRow struct {
+	Key          string  `parquet:"key"`
+	Size         int64   `parquet:"size"`
+	LastModified *int64  `parquet:"last_modified,optional,timestamp(microsecond)"`
+	ETag         *string `parquet:"etag,optional"`
+}
+
+// writeGCSParts writes a swath/gcs-objects/v1 dataset of one part per
+// rows slice, in order: parts of gcsUntimedRow where untimed is true,
+// else of gcsTimedRow (the column set of a run resumed by a build that
+// records time_created).
+func writeGCSParts(t *testing.T, parts [][]gcsTimedRow, untimed []bool) string {
+	t.Helper()
+	const schemaID = "swath/gcs-objects/v1"
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := []parquet.WriterOption{parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))), parquet.PageBufferSize(512)}
+	for k, v := range sortedparquettest.Format2Stamps(schemaID, 1024) {
+		options = append(options, parquet.KeyValueMetadata(k, v))
+	}
+	var entries []map[string]any
+	for i, rows := range parts {
+		name := fmt.Sprintf("data/part-%05d.parquet", i)
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		var err error
+		if untimed[i] {
+			old := make([]gcsUntimedRow, len(rows))
+			for j, r := range rows {
+				old[j] = gcsUntimedRow{Key: r.Key, Size: r.Size, LastModified: r.LastModified, ETag: r.ETag}
+			}
+			err = parquet.WriteFile(path, old, options...)
+		} else {
+			err = parquet.WriteFile(path, rows, options...)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, map[string]any{"path": name, "rows": len(rows), "bytes": info.Size(),
+			"min_key_base64": base64.StdEncoding.EncodeToString([]byte(rows[0].Key)),
+			"max_key_base64": base64.StdEncoding.EncodeToString([]byte(rows[len(rows)-1].Key))})
+	}
+	raw, _ := json.Marshal(map[string]any{"format": "swath-dataset", "format_version": 2, "schema_id": schemaID,
+		"coverage": map[string]any{"complete": true}, "parts": entries})
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestGCSRecordingLastModifiedFromTimeCreated reads a swath/gcs-objects/v1
+// dataset of three parts, the first written without time_created and the
+// others with it (some rows null), through the window cache (packed),
+// the bare reader, the arena overflow path and a rollup. With Created
+// (the S3 route) every row's LastModified is its time_created, else its
+// last_modified; without it (the Azure route, the GCS route's
+// non-native reads) always its last_modified; the answers of every path
+// are equal. A schema without the column drops Created, so its reads
+// share windows with reads without it. Before, LastModified was
+// last_modified on every route.
+func TestGCSRecordingLastModifiedFromTimeCreated(t *testing.T) {
+	ctx := context.Background()
+	var parts [][]gcsTimedRow
+	want := map[string][2]int64{} // key: LastModified with and without Created
+	for p := range 3 {
+		var rows []gcsTimedRow
+		for i := range 400 {
+			n := p*400 + i
+			key := fmt.Sprintf("k/%05d", n)
+			etag := fmt.Sprint(n)
+			updated, created := int64(1_700_000_000_000_000+n*1_000_003), int64(1_600_000_000_000_000+n*999_983)
+			r := gcsTimedRow{Key: key, Size: int64(n), LastModified: &updated, ETag: &etag}
+			stored := p > 0 && n%7 != 0
+			if stored {
+				r.TimeCreated = &created
+				want[key] = [2]int64{created, updated}
+			} else {
+				want[key] = [2]int64{updated, updated}
+			}
+			rows = append(rows, r)
+		}
+		parts = append(parts, rows)
+	}
+	dir := writeGCSParts(t, parts, []bool{true, false, false})
+	open := func(opts Options) *Sorted {
+		s, _, err := Open(ctx, dir, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s.(*Sorted)
+	}
+	bare := open(Options{Prefetch: Prefetch{Off: true}})
+	cached := open(Options{Prefetch: Prefetch{WindowRows: 37, MaxWindows: 5}})
+	overflow := open(Options{Prefetch: Prefetch{WindowRows: 37, MaxWindows: 5}})
+	overflow.arenaLimit = 300
+	check := func(how string, got []Object, created bool) {
+		t.Helper()
+		for _, o := range got {
+			w, ok := want[string(o.Key)]
+			at := w[1]
+			if created {
+				at = w[0]
+			}
+			if !ok || o.LastModified == nil || o.LastModified.UnixMicro() != at || o.LastModified.Location() != time.UTC {
+				t.Fatalf("%s: %s: LastModified %v, want %d", how, o.Key, o.LastModified, at)
+			}
+		}
+	}
+	var walks [2]map[string][]Object // by Created, per path
+	for c, created := range []bool{true, false} {
+		walks[c] = map[string][]Object{}
+		for name, s := range map[string]*Sorted{"bare": bare, "cached": cached, "overflow": overflow} {
+			var all []Object
+			for page, from := 0, []byte(nil); ; page++ {
+				got, err := s.Rows(ctx, from, false, nil, 100, Projection{Owner: page%2 == 0, Content: page%3 == 0, Created: created})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got) == 0 {
+					break
+				}
+				for i := range got {
+					got[i].ContentType, got[i].MD5 = nil, nil // read on some pages only
+				}
+				all = append(all, got...)
+				from = got[len(got)-1].Key
+			}
+			if len(all) != len(want) {
+				t.Fatalf("%s created %v: %d rows", name, created, len(all))
+			}
+			check(fmt.Sprintf("%s created %v", name, created), all, created)
+			walks[c][name] = all
+			entries, ok, err := s.DelimitedRollup(ctx, nil, true, nil, []byte("k/"), []byte("/"), 2000, Projection{Created: created}, true)
+			if err != nil || !ok || len(entries) != len(want) {
+				t.Fatalf("%s rollup: %d entries, %v %v", name, len(entries), ok, err)
+			}
+			objects := make([]Object, len(entries))
+			for i, e := range entries {
+				objects[i] = *e.Object
+			}
+			check(name+" rollup", objects, created)
+		}
+		for _, name := range []string{"cached", "overflow"} {
+			if !reflect.DeepEqual(walks[c][name], walks[c]["bare"]) {
+				t.Errorf("created %v: the %s walk differs from the bare reader's", created, name)
+			}
+		}
+	}
+	for _, p := range []objectProjection{s3Objects, localObjects} {
+		if got := p.projection(Projection{Created: true}); got != (Projection{}) {
+			t.Errorf("%+v: projection %+v, want Created dropped", p, got)
+		}
+	}
+	if got := gcsObjects.projection(Projection{Created: true}); got != (Projection{Created: true}) {
 		t.Errorf("GCS projection %+v", got)
 	}
 }

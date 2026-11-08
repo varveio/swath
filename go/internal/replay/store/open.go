@@ -22,7 +22,8 @@ import (
 // wherever a schema has it: the Object projection's (the S3-shaped
 // schemas' nine columns) and the GCS route's native columns of
 // swath/gcs-objects/v1 (generation, metageneration, md5, crc32c,
-// content_type; md5 also gives the S3 route its ETag). A part with such a column of another physical type, a
+// content_type, time_created; md5 also gives the S3 route its ETag, and
+// time_created its LastModified). A part with such a column of another physical type, a
 // conflicting logical annotation or a repeated one is refused at open
 // (unsupported_schema, naming the column), so no read decodes a value as a
 // type it is not. No schema the store serves uses one of these names for
@@ -41,6 +42,7 @@ var expect = []sortedparquet.Column{
 	{Name: "md5", Kind: parquet.ByteArray, Check: stringColumn},
 	{Name: "crc32c", Kind: parquet.ByteArray, Check: stringColumn},
 	{Name: "content_type", Kind: parquet.ByteArray, Check: stringColumn},
+	{Name: "time_created", Kind: parquet.Int64, Check: timestampMicros},
 }
 
 // stringColumn accepts a byte array column the projections render as a string:
@@ -70,8 +72,8 @@ func signedInt64(node parquet.Node) error {
 	return fmt.Errorf("annotated %s, not a signed 64-bit integer", logical)
 }
 
-// timestampMicros requires last_modified to be a microsecond timestamp, the
-// unit Object.LastModified is decoded in.
+// timestampMicros requires a time column (last_modified, time_created) to
+// be a microsecond timestamp, the unit Object.LastModified is decoded in.
 func timestampMicros(node parquet.Node) error {
 	logical := node.Type().LogicalType()
 	if logical == nil {

@@ -48,7 +48,7 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
 // fields asks only for what a listing reads (sent to DefaultEndpoint).
-const fields = "nextPageToken,prefixes,items(name,size,updated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+const fields = "nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
@@ -93,6 +93,7 @@ type Object struct {
 	Name           string
 	Size           int64
 	Updated        int64 // Unix microseconds; 0 when absent
+	TimeCreated    int64 // Unix microseconds; 0 when absent
 	ETag           string
 	Generation     int64
 	Metageneration int64
@@ -503,6 +504,7 @@ type wireObject struct {
 	Name           string `json:"name"`
 	Size           string `json:"size"`
 	Updated        string `json:"updated"`
+	TimeCreated    string `json:"timeCreated"`
 	ETag           string `json:"etag"`
 	Generation     string `json:"generation"`
 	Metageneration string `json:"metageneration"`
@@ -547,15 +549,26 @@ func parse(body []byte) (*Page, error) {
 		if x.Metageneration, err = optInt(o.Metageneration); err != nil {
 			return nil, fmt.Errorf("%w: metageneration %q", ErrSyntax, o.Metageneration)
 		}
-		if o.Updated != "" {
-			t, err := time.Parse(time.RFC3339Nano, o.Updated)
-			if err != nil {
-				return nil, fmt.Errorf("%w: updated %q", ErrSyntax, o.Updated)
-			}
-			x.Updated = t.UnixMicro()
+		if x.Updated, err = optTime(o.Updated); err != nil {
+			return nil, fmt.Errorf("%w: updated %q", ErrSyntax, o.Updated)
+		}
+		if x.TimeCreated, err = optTime(o.TimeCreated); err != nil {
+			return nil, fmt.Errorf("%w: timeCreated %q", ErrSyntax, o.TimeCreated)
 		}
 	}
 	return p, nil
+}
+
+// optTime reads an RFC 3339 time as Unix microseconds; 0 when absent.
+func optTime(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0, err
+	}
+	return t.UnixMicro(), nil
 }
 
 func optInt(s string) (int64, error) {

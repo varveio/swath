@@ -399,7 +399,8 @@ Diagnostics:
   One escaping rule for all three, JSON's string escapes: `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, any other byte
   below 0x20 and 0x7f as `\u00xx`, and `\"` inside JSON only. It is reversible, keeps a row on one line and a
   TSV field between its tabs, and never sends a terminal a control byte. Other provider columns (GCS
-  `generation`, `md5`, `crc32c`, `content_type`) have no S3 field and are not written: they are in the dataset.
+  `generation`, `md5`, `crc32c`, `content_type`, `time_created`) have no S3 field and are not written: they are
+  in the dataset.
   A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
   directory synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`

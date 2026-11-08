@@ -113,10 +113,12 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 ## Versions
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
-logical schema (`schema_id`), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
+logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
+schema id" below), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
 with that build or started over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
-parts are byte-identical within a build only.
+parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
+on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
 
 ## Run report and counters
 
@@ -300,9 +302,14 @@ does, stated as the contract rather than as its code:
   read no `_SUCCESS` and no run summary. Any other manifest is format 1 and takes the legacy path.
 - **Whole-source acceptance.** From the manifest's coverage: `complete` true, `stop_reason` `completed`,
   `skipped_entries` 0, `filters` present and empty, `scope.kind` `whole`; a missing field refuses.
-- **Schema id.** Each schema id defines the exact columns by name and type; the reader dispatches on it
-  (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
-  container against what it was asked to open. The Java-era `version_id`, `is_latest`, `is_delete_marker`
+- **Schema id.** Each schema id defines the columns a reader may rely on, by name and type; the reader dispatches
+  on it (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
+  container against what it was asked to open. A schema id is not a closed column set: a part may hold columns its
+  id does not define, which the reader ignores, and an optional column of the id may be absent from some parts or
+  all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
+  build that writes the column mixes parts with and without it under one id (the resume identity freezes the
+  schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
+  column of every schema id is present in every part. The Java-era `version_id`, `is_latest`, `is_delete_marker`
   and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
   only.
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.

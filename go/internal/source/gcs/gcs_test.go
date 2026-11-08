@@ -15,6 +15,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -485,6 +486,30 @@ func TestInvalidPageClass(t *testing.T) {
 }
 
 // newFake serves the strict objects.list fake (gcstest.Strict) over keys.
+// TestCodecRoundTripsEveryField: the spill encoding keeps every field of
+// an Object, so a spilled row is written as the row listed; a zero
+// timeCreated (not listed) stays zero, its column null.
+func TestCodecRoundTripsEveryField(t *testing.T) {
+	for _, o := range []Object{
+		{Size: 1, Mtime: 2, TimeCreated: 3, ETag: "e", Generation: 4, Metageneration: 5, StorageClass: "s", MD5: "m", CRC32C: "c", ContentType: "t"},
+		{Size: 7, Mtime: -8, ETag: "e2", Generation: 9},
+	} {
+		d := schema.NewDecoder(Schema.Codec.Append(nil, &o))
+		var got Object
+		Schema.Codec.Decode(d, &got)
+		if err := d.Err(); err != nil || d.Len() != 0 || got != o {
+			t.Fatalf("round trip of %+v: %+v, %v", o, got, err)
+		}
+	}
+	last := Schema.Columns[len(Schema.Columns)-1]
+	if last.Name != "time_created" || last.Type != schema.TimestampMicros || last.Int == nil {
+		t.Fatalf("last column %+v", last.Spec)
+	}
+	if _, ok := last.Int(&Object{}); ok {
+		t.Fatal("an unlisted timeCreated is not null")
+	}
+}
+
 func newFake(t testing.TB, keys []string) (*gcstest.Strict, string) {
 	f := gcstest.NewStrict(keys)
 	return f, f.Serve(t)

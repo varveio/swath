@@ -234,7 +234,7 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 	for i := range out.Items {
 		o, r := &out.Items[i], &rows[i]
 		r.Key = o.Name
-		r.Data = Object{Size: o.Size, Mtime: o.Updated, ETag: o.ETag, Generation: o.Generation,
+		r.Data = Object{Size: o.Size, Mtime: o.Updated, TimeCreated: o.TimeCreated, ETag: o.ETag, Generation: o.Generation,
 			Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5, CRC32C: o.CRC32C,
 			ContentType: o.ContentType}
 	}

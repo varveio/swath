@@ -419,11 +419,11 @@ same-page successors keep the cursor to avoid repeated page decodes for dense sm
 From each arm's worktree, after `./gradlew :swath-replay:installDist`:
 
 ```bash
-/home/sagi_varve_io/.jdks/jdk-25.0.4+7/bin/java \
+java \
   -Xmx4g -Dswath.replay.prefetch.enabled=false \
   -cp 'swath-replay/build/install/swath-replay/lib/*' \
   io.varve.swath.replay.server.ReplayServerApp serve \
-  --fixture /home/sagi_varve_io/work/replay-fixtures/aws-public-blockchain-current-eba31d9 \
+  --fixture <fixture-root>/aws-public-blockchain-current-eba31d9 \
   --bucket aws-public-blockchain --host 127.0.0.1 --port 19091 --metrics-port 19193 \
   --serving-mode sorted --parquet-connections 8 --max-concurrent-requests 64
 ```

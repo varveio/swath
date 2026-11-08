@@ -19,7 +19,10 @@
 // With -live-endpoint https://BUCKET.s3.REGION.amazonaws.com the reference
 // is live S3 instead (anonymous, the scripted matrix only, compared
 // structurally with tokens masked); live buckets change, so treat a
-// difference there as a lead to check, not a verdict.
+// difference there as a lead to check, not a verdict. With -live-record
+// the endpoint is bench/faultproxy -record in front of the provider: the
+// whole live run is recorded once, annotated, and -capture replays it
+// offline under the same comparison.
 //
 // -dump-tsv FILE writes the reference's full listing as a memstore TSV
 // fixture and exits.
@@ -66,7 +69,7 @@ type options struct {
 	seed                                                           uint64
 	acceptSegments                                                 bool
 	livePrefix, stableBefore, gcsMeta                              string
-	liveScripted                                                   bool
+	liveScripted, liveRecord                                       bool
 	liveWalkPages                                                  int
 	capture                                                        string
 	captureLimits                                                  captureLimits
@@ -91,7 +94,10 @@ func main() {
 	flag.StringVar(&o.stableBefore, "live-stable-before", "", "live: refuse to run unless every fixture name under the scope was modified before this RFC 3339 time")
 	flag.StringVar(&o.gcsMeta, "gcs-metadata", "auto", "live gcs: compare item metadata as native (exact) or synthetic (masked); auto reads the fixture")
 	flag.BoolVar(&o.liveScripted, "live-scripted", false, "live: also send the driver's own scripted matrix")
-	flag.StringVar(&o.pins, "live-pins", "", "live: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is marked PINNED")
+	flag.BoolVar(&o.liveRecord, "live-record", false, "live: the endpoint is a bench/faultproxy -record proxy in front of the provider; "+
+		"each request names its case and how its token was formed in X-Record-* headers the proxy records and strips, for replaydiff -capture")
+	flag.StringVar(&o.pins, "live-pins", "", "live and capture: a replay-expectations.json of the provider evidence, beside its index.json and captures; "+
+		"a difference whose message is its case's pinned mismatch, for a request of the shape the evidence captured for the case answered as captured, is a documented difference")
 	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
 	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
@@ -121,7 +127,13 @@ func main() {
 type target struct {
 	name, base string
 	vhost      bool // live S3: the bucket is in the host name
-	client     *http.Client
+	// recorder: the base is a bench/faultproxy -record proxy in front of
+	// the provider (-live-record). Requests may carry X-Record-*
+	// annotations, and the X-Content-Type-Options the proxy sets on every
+	// answer it releases is removed: it is the proxy's, not the
+	// provider's (the recording keeps the provider's headers as sent).
+	recorder bool
+	client   *http.Client
 }
 
 func (t *target) url(bucket string, r request) string {
@@ -167,6 +179,9 @@ func (t *target) do(bucket string, r request) (*response, error) {
 		// The framing Go's client lifts out of the header map, put back
 		// for the live modes' header classification.
 		resp.Header["Transfer-Encoding"] = []string{strings.Join(resp.TransferEncoding, ", ")}
+	}
+	if t.recorder {
+		resp.Header.Del("X-Content-Type-Options")
 	}
 	return &response{Status: resp.StatusCode, Header: resp.Header, Body: body}, err
 }
@@ -273,9 +288,6 @@ type result struct {
 	// answer had none, keeps it out of the results: it was not sent, and
 	// the report lists it under skipped, neither passed nor failed.
 	Skipped string `json:"skipped,omitempty"`
-	// Pinned marks a live difference that reproduces, message for
-	// message, the mismatch the provider evidence pins for its case.
-	Pinned bool `json:"pinned_mismatch,omitempty"`
 	*diff
 }
 
@@ -316,7 +328,12 @@ type report struct {
 	// they stay visible (Compare "residual"), with what each server
 	// answered. They are not in Compared, Passed or Failed; a residual
 	// request that gets no answer is a failure, not a residual.
-	Residuals []string `json:"documented_residuals,omitempty"`
+	// The live and capture modes list here the differences
+	// documentedDifference matches, with the reason, also outside the
+	// verdict counts. ResidualsNotShown counts those past the driver's
+	// detail limit.
+	Residuals         []string `json:"documented_residuals,omitempty"`
+	ResidualsNotShown int      `json:"residuals_not_shown,omitempty"`
 	// Scope, Newest and Coverage are the live modes': the prefix every
 	// request stayed under, the newest modification time the fixture
 	// holds there, and each provider matrix case with its query or why it
@@ -442,6 +459,9 @@ type driver struct {
 	// capture of any length full of failures then keeps its report, and
 	// the memory it takes, to this many entries.
 	maxDetails int
+	// pins are the provider evidence's pinned mismatches by case id
+	// (-live-pins), for a capture's annotated cases.
+	pins map[string]pin
 }
 
 func (d *driver) record(r result) {
@@ -507,6 +527,20 @@ func (d *driver) noteResidual(name string, df diff) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: reference %d, go %d", name, df.Status[0], df.Status[1]))
+}
+
+// noteDocumented lists a live or captured answer whose difference is a
+// documented one (documentedDifference), with the reason. Like a
+// residual it is neither compared, passed nor failed; past the detail
+// limit it is counted only.
+func (d *driver) noteDocumented(name, why string, df diff) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.maxDetails > 0 && len(d.rep.Residuals) >= d.maxDetails {
+		d.rep.ResidualsNotShown++
+		return
+	}
+	d.rep.Residuals = append(d.rep.Residuals, fmt.Sprintf("%s: %s (provider %d, go %d)", name, why, df.Status[0], df.Status[1]))
 }
 
 // narrow applies a request's Compare mode to a verdict: "headers" sets the
@@ -795,11 +829,7 @@ func (d *driver) summary() []byte {
 		if r.Pass {
 			continue
 		}
-		pinned := ""
-		if r.Pinned {
-			pinned = " PINNED"
-		}
-		fmt.Fprintf(&text, "FAIL%s %s %q %s %s", pinned, r.Kind, r.Name, r.Method, r.Target)
+		fmt.Fprintf(&text, "FAIL %s %q %s %s", r.Kind, r.Name, r.Method, r.Target)
 		if r.FailAt > 0 {
 			fmt.Fprintf(&text, " (page %d)", r.FailAt)
 		}
@@ -835,6 +865,9 @@ func (d *driver) summary() []byte {
 	for _, s := range rep.Residuals {
 		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
 	}
+	if rep.ResidualsNotShown > 0 {
+		fmt.Fprintf(&text, "%d more documented residuals not shown (-capture-max-details %d)\n", rep.ResidualsNotShown, d.maxDetails)
+	}
 	for _, s := range sortedDivergences(rep.Divergences) {
 		fmt.Fprintf(&text, "DOCUMENTED DIVERGENCE %s\n", s)
 	}
@@ -842,24 +875,11 @@ func (d *driver) summary() []byte {
 		fmt.Fprintf(&text, "%d documented divergences (answered as live S3), %d requests whose answers differ only in token bytes\n",
 			len(rep.Divergences), len(rep.TokenBytes))
 	}
-	if pinned := countPinned(rep.Results); pinned > 0 {
-		fmt.Fprintf(&text, "%d of the %d differences reproduce the provider evidence's pinned mismatch for their case\n", pinned, rep.Failed)
-	}
 	fmt.Fprintf(&text, "%d compared (%d HTTP requests) in %.1fs: %d passed, %d failed, %d skipped, %d documented residuals",
-		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.SkippedCount, len(rep.Residuals))
+		rep.Compared, rep.Requests, rep.Seconds, rep.Passed, rep.Failed, rep.SkippedCount, len(rep.Residuals)+rep.ResidualsNotShown)
 	if n := rep.FailuresNotShown + rep.SkipsNotShown; n > 0 {
 		fmt.Fprintf(&text, " (%d failures and %d skips not shown)", rep.FailuresNotShown, rep.SkipsNotShown)
 	}
 	text.WriteByte('\n')
 	return text.Bytes()
-}
-
-func countPinned(rs []result) int {
-	n := 0
-	for _, r := range rs {
-		if r.Pinned {
-			n++
-		}
-	}
-	return n
 }

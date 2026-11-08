@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/replay/output"
 	"github.com/varveio/swath/go/internal/replay/store"
@@ -544,5 +545,128 @@ func TestLiveXMLDeclarationNewline(t *testing.T) {
 		"<RequestId>S3LISTINGREPLAY</RequestId><HostId>S3LISTINGREPLAY</HostId></Error>"
 	if got := string(AppendError(nil, e)); got != want {
 		t.Errorf("error document:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestLiveOwnerBeforeStorageClass pins where Owner sits in a Contents
+// element: S3 answered list-type=2&max-keys=2&fetch-owner=true, with and
+// without encoding-type=url and with delimiter=/, on two public us-east-1
+// buckets (one whose objects carry checksums, one whose objects carry
+// none) with
+//
+//	<Contents><Key>K</Key><LastModified>T</LastModified><ETag>&quot;E&quot;</ETag>
+//	<ChecksumAlgorithm>CRC32</ChecksumAlgorithm><ChecksumType>FULL_OBJECT</ChecksumType>
+//	<Size>N</Size><Owner><ID>(64 hex digits)</ID></Owner><StorageClass>STANDARD</StorageClass></Contents>
+//
+// (the checksum elements absent on the second bucket): Owner after Size
+// and before StorageClass, holding ID alone, and with fetch-owner=false no
+// Owner. A recording without owner columns answers fetch-owner=true
+// without Owner. Both the row fast path and the unit path render it.
+func TestLiveOwnerBeforeStorageClass(t *testing.T) {
+	id := strings.Repeat("0123456789abcdef", 4)
+	size1, size2 := int64(36822), int64(3358)
+	mod1, mod2 := time.UnixMicro(1_764_016_424_000_000), time.UnixMicro(1_662_746_724_000_000)
+	objs := []store.Object{
+		{Key: []byte("index.html"), Size: &size1, LastModified: &mod1, ETag: sp("0123456789abcdef0123456789abcdef"),
+			ChecksumAlgorithm: sp("CRC32"), ChecksumType: sp("FULL_OBJECT"), StorageClass: sp("STANDARD"), OwnerID: &id},
+		{Key: []byte("r/k 01.csv.gz"), Size: &size2, LastModified: &mod2, ETag: sp("fedcba9876543210fedcba9876543210"),
+			StorageClass: sp("STANDARD"), OwnerID: &id},
+		{Key: []byte("t/a/k1"), Size: &size2, LastModified: &mod2, ETag: sp("fedcba9876543210fedcba9876543210"),
+			StorageClass: sp("STANDARD"), OwnerID: &id},
+	}
+	owned, err := memstore.New(objs, memstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range objs {
+		objs[i].OwnerID = nil
+	}
+	unowned, err := memstore.New(objs, memstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := "<Owner><ID>" + id + "</ID></Owner>"
+	first := func(owner string) string {
+		return "<Contents><Key>index.html</Key><LastModified>2025-11-24T20:33:44.000Z</LastModified>" +
+			"<ETag>&quot;0123456789abcdef0123456789abcdef&quot;</ETag>" +
+			"<ChecksumAlgorithm>CRC32</ChecksumAlgorithm><ChecksumType>FULL_OBJECT</ChecksumType>" +
+			"<Size>36822</Size>" + owner + "<StorageClass>STANDARD</StorageClass></Contents>"
+	}
+	second := func(key, owner string) string {
+		return "<Contents><Key>" + key + "</Key><LastModified>2022-09-09T18:05:24.000Z</LastModified>" +
+			"<ETag>&quot;fedcba9876543210fedcba9876543210&quot;</ETag>" +
+			"<Size>3358</Size>" + owner + "<StorageClass>STANDARD</StorageClass></Contents>"
+	}
+	for _, c := range []struct {
+		st    store.Store
+		query string
+		want  string
+	}{
+		{owned, "list-type=2&max-keys=2&fetch-owner=true", first(owner) + second("r/k 01.csv.gz", owner)},
+		{owned, "list-type=2&max-keys=2&fetch-owner=true&encoding-type=url", first(owner) + second("r/k+01.csv.gz", owner)},
+		{owned, "list-type=2&max-keys=2&fetch-owner=true&delimiter=/", first(owner) + "<CommonPrefixes><Prefix>r/</Prefix></CommonPrefixes>"},
+		{owned, "list-type=2&max-keys=2&fetch-owner=false", first("") + second("r/k 01.csv.gz", "")},
+		{owned, "list-type=2&max-keys=2", first("") + second("r/k 01.csv.gz", "")},
+		{unowned, "list-type=2&max-keys=2&fetch-owner=true", first("") + second("r/k 01.csv.gz", "")},
+	} {
+		req, err := ParseRequest("bkt", c.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := (&Pager{Store: c.st}).List(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, fast := range []bool{true, false} {
+			rowFastPath = fast
+			doc := string(AppendList(nil, res))
+			rowFastPath = true
+			i, j := strings.Index(doc, "<Contents>"), strings.LastIndex(doc, "</ListBucketResult>")
+			if i < 0 || j < i || doc[i:j] != c.want {
+				t.Errorf("%s fast=%v:\n got %s\nwant %s", c.query, fast, doc, c.want)
+			}
+		}
+	}
+}
+
+// TestLiveFetchOwnerIsExactlyTrue pins which fetch-owner values ask for
+// owners: S3 answered fetch-owner=true, =%74rue, a true before a TRUE or
+// a false, and a true after a malformed fetch-owner with Owner; and
+// fetch-owner=TRUE, =True, =yes, =1, =, a bare fetch-owner, =true%20,
+// =+true, =true%00, a true after a TRUE, a false or an empty value, and
+// Fetch-Owner=true without it. The value is read as every parameter is
+// (the first one counts, a malformed one is dropped) and must then be
+// "true" exactly.
+func TestLiveFetchOwnerIsExactlyTrue(t *testing.T) {
+	id := strings.Repeat("0123456789abcdef", 4)
+	size := int64(36822)
+	st, err := memstore.New([]store.Object{{Key: []byte("index.html"), Size: &size, StorageClass: sp("STANDARD"), OwnerID: &id}}, memstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for q, want := range map[string]bool{
+		"fetch-owner=true": true, "fetch-owner=%74rue": true, "fetch-owner=true&fetch-owner=TRUE": true,
+		"fetch-owner=true&fetch-owner=false": true, "fetch-owner=tru%ZZ&fetch-owner=true": true,
+		"fetch-owner=TRUE": false, "fetch-owner=True": false, "fetch-owner=yes": false, "fetch-owner=1": false,
+		"fetch-owner=": false, "fetch-owner": false, "fetch-owner=true%20": false, "fetch-owner=+true": false,
+		"fetch-owner=true%00": false, "fetch-owner=TRUE&fetch-owner=true": false, "fetch-owner=false&fetch-owner=true": false,
+		"fetch-owner=&fetch-owner=true": false, "Fetch-Owner=true": false,
+	} {
+		req, err := ParseRequest("bkt", "list-type=2&max-keys=1&"+q)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		res, err := (&Pager{Store: st}).List(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		doc := string(AppendList(nil, res))
+		owner := "<Size>36822</Size><Owner><ID>" + id + "</ID></Owner><StorageClass>STANDARD</StorageClass></Contents>"
+		if !want {
+			owner = "<Size>36822</Size><StorageClass>STANDARD</StorageClass></Contents>"
+		}
+		if !strings.Contains(doc, owner) {
+			t.Errorf("%s: %s\nwant %s", q, doc, owner)
+		}
 	}
 }

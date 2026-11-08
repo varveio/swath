@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -220,7 +221,7 @@ func TestTwoEntryPrefix(t *testing.T) {
 }
 
 // TestGCSMaskMetadata: with -gcs-mask-metadata an item's native metadata
-// against the synthetic profile compares equal, a different name or size
+// (timeCreated included) against the synthetic profile compares equal, a different name or size
 // still differs.
 func TestGCSMaskMetadata(t *testing.T) {
 	h := http.Header{"Content-Type": {"application/json; charset=utf-8"}}
@@ -233,6 +234,11 @@ func TestGCSMaskMetadata(t *testing.T) {
 	c := gcsComparator{maskMetadata: true}
 	if d := c.compare(item("a", "1", synthetic), item("a", "1", native)); !d.OK {
 		t.Errorf("masked metadata differs: %+v", d)
+	}
+	created := item("a", "1", native)
+	created.Body = bytes.Replace(created.Body, []byte(`,"updated"`), []byte(`,"timeCreated":"2025-01-01T00:00:00.000000Z","updated"`), 1)
+	if d := c.compare(item("a", "1", synthetic), created); !d.OK {
+		t.Errorf("masked metadata with timeCreated differs: %+v", d)
 	}
 	if d := (gcsComparator{}).compare(item("a", "1", synthetic), item("a", "1", native)); d.OK {
 		t.Error("unmasked metadata compared equal")

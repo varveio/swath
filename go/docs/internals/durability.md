@@ -29,7 +29,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, not claimed (`part-closed`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`). A reproduced part that reaches the size target at that boundary was closed by size, and when it is the first such part it calibrates the size ratio as the original did, before its successor is routed (`TestCalibratingClaimRecoversRepeatedly`, `journal-append#2` in both crash matrices) |
+| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`), and writes it with the claimed part's columns and `created_by`, so a build that adds an optional column reproduces it (`TestClaimedPartKeepsItsColumns`, also for a torn record). A reproduced part that reaches the size target at that boundary was closed by size, and when it is the first such part it calibrates the size ratio as the original did, before its successor is routed (`TestCalibratingClaimRecoversRepeatedly`, `journal-append#2` in both crash matrices) |
 | record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its claimed part is set aside and must be reproduced exactly (below) |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
 | record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
@@ -299,8 +299,13 @@ reproduce it byte for byte (size and MD5) before it records that ordinal again. 
 boundary: its footer's row count, synced with it before the append, and the resume closes the reproduced part
 after exactly that many rows (`parquetout.Options.Cut`), neither earlier by the part interval nor later by
 size. Without it, a part first closed by the interval would take more rows in a faster resume, or one with
-another `--part-interval`, and an unchanged source would be refused. An unreadable footer gives no boundary,
-and the byte comparison decides as before. A suspect already set aside
+another `--part-interval`, and an unchanged source would be refused. The footer also says how the part was
+written: its columns and its `created_by`. The resume writes the reproduced part with those (the schema's
+columns that the footer names, in order) and the parts after it with its own, so a resume by a build that
+writes an optional column the claimed part lacks (`time_created` for GCS), or that names itself differently in
+`created_by`, still reproduces an unchanged source's part (`TestClaimedPartKeepsItsColumns`,
+`parquetout` `TestCutReproducesClaimedFooter`). An unreadable footer gives no boundary, and the byte comparison
+decides as before. A suspect already set aside
 by an earlier resume is never replaced by a later claimed part. The cost: a crash or failure between the claim
 and the end of the append, followed by a source change inside that part, refuses rather than relists. On a static source it does, and the resume
 continues as if the append had never happened; when the source changed in that part's range, or no longer
