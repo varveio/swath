@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	pq "github.com/parquet-go/parquet-go"
@@ -364,10 +365,13 @@ func TestKeyLimits(t *testing.T) {
 
 // TestCodecStatesFollowAdmission: the router's shared codec makes no more
 // zstd states than encoders admitted. Before Admit, with MaxEncoders above
-// Encoders, its writers use at most Encoders states; after, up to
-// MaxEncoders. A pool of MaxEncoders handed round in turn warmed every
-// state during listing, past what admission had charged (sol review 3,
-// P2: 148.5 MiB live against 122.2 MiB priced at MaxEncoders 6).
+// Encoders, its writers use at most Encoders states; after, at most
+// MaxEncoders; the parts are one encoder's. Whether a run needs more than
+// one state depends on how many compressions overlap (none at
+// GOMAXPROCS 1): TestCodecLeasesFollowLimit forces the overlap. A pool
+// of MaxEncoders handed round in turn warmed every state during listing,
+// past what admission had charged (sol review 3, P2: 148.5 MiB live
+// against 122.2 MiB priced at MaxEncoders 6).
 func TestCodecStatesFollowAdmission(t *testing.T) {
 	rows := testRows(60_000, 2)
 	out := t.TempDir()
@@ -396,7 +400,7 @@ func TestCodecStatesFollowAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := r.codec.states()
-	if before > 2 || after > 6 || after <= before {
+	if before > 2 || after > 6 {
 		t.Fatalf("%d states before admission (2 admitted), %d after (6)", before, after)
 	}
 	if _, base := route(t, rows, 1, 16<<10); !slices.EqualFunc(parts, base, func(a, b dataset.Part) bool { return a.MD5 == b.MD5 }) {
@@ -439,6 +443,68 @@ func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestCodecLeasesFollowLimit: leases held at once (barriers, not timing)
+// make states up to the limit and no further: a lease past it waits until
+// one is returned, or until setLimit raises the limit, which then makes
+// the states asked for. Before (sol review 4, P3), the admission test
+// asserted growth from a run whose compressions need not overlap, and
+// failed at GOMAXPROCS 1.
+func TestCodecLeasesFollowLimit(t *testing.T) {
+	c, err := newCodec(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	var held []*zstd.Encoder
+	lease := func() {
+		e, err := c.take()
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, e)
+	}
+	lease()
+	lease()
+	if c.states() != 2 {
+		t.Fatalf("%d states for 2 leases", c.states())
+	}
+	got := make(chan *zstd.Encoder, 4)
+	go func() {
+		e, _ := c.take()
+		got <- e
+	}()
+	select {
+	case <-got:
+		t.Fatal("a third lease past the limit of 2 did not wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.setLimit(6) // admission: the waiting lease makes a state
+	held = append(held, <-got)
+	lease()
+	lease()
+	lease()
+	if c.states() != 6 {
+		t.Fatalf("%d states for 6 leases at a limit of 6", c.states())
+	}
+	go func() {
+		e, _ := c.take()
+		got <- e
+	}()
+	select {
+	case <-got:
+		t.Fatal("a seventh lease past the limit of 6 did not wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.give(held[0]) // a returned state is reused, none made
+	if e := <-got; e != held[0] || c.states() != 6 {
+		t.Fatalf("the waiting lease got another state (%d made)", c.states())
+	}
+	for _, e := range held[1:] {
+		c.give(e)
+	}
+	c.give(held[0])
 }
 
 // TestValueLimits: a column with a Spec.MaxBytes (a local path's link
