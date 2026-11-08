@@ -73,12 +73,19 @@ jobs:
           fi
           echo "changes: $(cat "$GITHUB_OUTPUT")"
 
-      # Always computed, even when go=false: go-race expands it before its steps can skip.
+      # Always computed: go-race expands it before its steps can skip. When go=false it is one
+      # step-skipped leg on ubuntu-latest, not every shard's (arm64) runner.
       - name: Go race shard matrix
         id: shards
+        env:
+          GO_CHANGED: ${{ steps.changes.outputs.go }}
         run: |
           set -euo pipefail
-          matrix=$(./scripts/ci/go-race-shards.sh --matrix)
+          if [ "$GO_CHANGED" = true ]; then
+            matrix=$(./scripts/ci/go-race-shards.sh --matrix)
+          else
+            matrix='[{"shard":"off","runner":"ubuntu-latest"}]'
+          fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "go-race shards: $matrix"
 
@@ -414,13 +421,16 @@ jobs:
   # go test -race, one leg per row of scripts/ci/go-race-shards.sh (the changes job expands its
   # table into this matrix, so the table is the one place a shard is added). A leg's name is its
   # shard; the step prints the exact `go test` command to rerun it locally. fail-fast is off so
-  # one red shard still lets the others report. -timeout stays under the job's limit so a hang
-  # ends in go test's goroutine dump rather than a killed runner.
+  # one red shard still lets the others report. go test's -timeout is per package binary, so it
+  # is set to leave the job's limit room for setup, compiling and the packages queued ahead of
+  # the last one (the whole `rest` shard takes ~6 min): a hang ends in go test's goroutine dump,
+  # not a killed runner. The -json stream is kept as the go-race-SHARD artifact (per-test
+  # starts and times, passing subtests included) for flakes and rebalancing.
   go-race:
     needs: changes
     name: go-race (${{ matrix.shard }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -447,8 +457,31 @@ jobs:
           # Captured first, so a failing script fails the step instead of running no arguments.
           shard_args=$(../scripts/ci/go-race-shards.sh "$SHARD")
           mapfile -t args <<<"$shard_args"
-          printf 'go test -race -timeout 25m'; printf " '%s'" "${args[@]}"; echo
-          go test -race -timeout 25m "${args[@]}"
+          printf 'go test -race -timeout 20m'; printf " '%s'" "${args[@]}"; echo
+          json="$RUNNER_TEMP/go-race.json"
+          # The log shows each package's own output live (its ok/FAIL line, a timeout's dump), then
+          # the output of every failed test; the full stream is the artifact.
+          set +e
+          go test -race -timeout 20m -json "${args[@]}" | tee "$json" |
+            jq --unbuffered -rj 'select(.Action == "output" and .Test == null) | .Output'
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::group::output of the failed tests"
+            jq -rjs '(map(select(.Action == "fail" and .Test != null) | [.Package, .Test]) | unique) as $failed
+              | .[] | select(.Action == "output" and .Test != null and ([.Package, .Test] as $k | $failed | index([$k])))
+              | .Output' "$json"
+            echo "::endgroup::"
+          fi
+          exit "$status"
+
+      - name: Upload the go test -json stream
+        if: always() && needs.changes.outputs.go == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-race-${{ matrix.shard }}
+          path: ${{ runner.temp }}/go-race.json
+          if-no-files-found: ignore
 
   # The tests that measure the process and so must not run under -race, which distorts heap and
   # time: each opted in by its own gate, one step per tier.

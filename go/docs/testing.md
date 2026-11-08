@@ -13,7 +13,7 @@ CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each 
 | job | runs | runner |
 |---|---|---|
 | `go-lint` | `gofmt -l` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
-| `go-race (SHARD)` | `go test -race -timeout 25m` on one shard, one leg per shard below | per shard |
+| `go-race (SHARD)` | `go test -race -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
 | `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 
@@ -31,10 +31,12 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 
 A package split across rows has a remainder row that `-skip`s the union of its other rows' `-run`
 patterns, so the split is complete and disjoint by construction; `--check` also lists the package's tests
-and fails when a pattern selects none or a test is selected twice. The rule for the race lane: per push,
+and fails when a package named has no remainder row or two, a row (pattern or remainder) selects no test,
+or a test is selected twice; packages and tests are discovered with `-race`, as the shards build them. The rule for the race lane: per push,
 `internal/listing` and `cmd/swath` are raced on arm64 only, whose weaker memory model makes it the better
 race target (and where the same `-race` suite took about 30 % less time than on amd64); the nightly full,
-unsharded race run on amd64 covers the other architecture. To find a failure, open the red
+unsharded race run on amd64 (`nightly.yml` `go-race-nightly`, `go test -race ./...`, its JSON stream the
+`go-race-nightly` artifact) covers the other architecture. To find a failure, open the red
 `go-race (SHARD)` leg: its test step prints the exact `go test` command, which reruns that shard locally from
 `go/`; `scripts/ci/go-race-shards.sh SHARD` prints the arguments alone. To repeat one test on a chosen OS,
 use `go-stress.yml`.

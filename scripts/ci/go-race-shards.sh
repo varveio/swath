@@ -9,9 +9,11 @@
 # A row names a package and a -run pattern: the package's remainder shard -skips the union of
 # its other rows' patterns, so the split of one package is complete and disjoint by
 # construction, and `rest` is every package no row names, so a new package lands somewhere
-# without an edit. --check still verifies it against the real test lists: each pattern must
-# select at least one test and no test may be selected twice. Patterns are anchored and use
-# only the syntax Go's RE2 and grep -E agree on.
+# without an edit. --check still verifies it against the real test lists: every package named
+# has exactly one remainder row, each row (pattern or remainder) selects at least one test, and
+# no test is selected twice. Packages and tests are discovered with -race, as the shards build
+# them, so a package or test file under `//go:build race` is not invisible to the check. Patterns
+# are anchored and use only the syntax Go's RE2 and grep -E agree on.
 #
 # The heavy shards race on the arm64 runner only: its weaker memory model makes it the better
 # race target, and the same -race suite took ~30 % less time there than on amd64
@@ -62,11 +64,11 @@ named_packages() {
   for row in "${table[@]}"; do field "$row" 3; echo; done | sed '/^$/d' | sort -u
 }
 
-# Every package of the module, as ./relative paths.
+# Every package of the module as the race shards build it, as ./relative paths.
 all_packages() {
   local module
   module=$(go list -m)
-  go list ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u
+  go list -race ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u
 }
 
 shard_args() {
@@ -114,11 +116,20 @@ check() {
       echo "::error::package $pkg is in $rows shards"; fail=1
     fi
   done
-  # Tests of each split package: every pattern selects something, no test twice.
+  # Each named package has exactly one remainder row: without it, the tests its patterns miss
+  # would run nowhere; with two, they would run twice.
+  for pkg in $named; do
+    n=$(rows_of "$pkg" | awk '$4 == "-"' | grep -c . || true)
+    if [ "$n" != 1 ]; then
+      echo "::error::package $pkg has $n remainder rows, not 1"; fail=1
+    fi
+  done
+  # Tests of each split package: every row selects something, no test twice.
+  local rest_n
   for pkg in $named; do
     union=$(split_union "$pkg")
     [ -n "$union" ] || continue
-    tests=$(go test -list . "$pkg" | grep -E '^(Test|Fuzz|Example)' || true)
+    tests=$(go test -race -list . "$pkg" | grep -E '^(Test|Fuzz|Example)' || true)
     for row in "${table[@]}"; do
       [ "$(field "$row" 3)" = "$pkg" ] || continue
       run=$(field "$row" 4)
@@ -129,6 +140,7 @@ check() {
         echo "::error::shard $(field "$row" 1): $run selects no test in $pkg"; fail=1
       fi
     done
+    rest_n=0
     while read -r t; do
       n=0
       for row in "${table[@]}"; do
@@ -138,8 +150,13 @@ check() {
       done
       if [ "$n" -gt 1 ]; then
         echo "::error::$pkg $t is selected by $n shards"; fail=1
+      elif [ "$n" -eq 0 ]; then
+        rest_n=$((rest_n + 1))
       fi
     done <<<"$tests"
+    if [ "$rest_n" -lt 1 ]; then
+      echo "::error::the remainder shard of $pkg selects no test"; fail=1
+    fi
     echo "$pkg: $(wc -l <<<"$tests") tests over $(rows_of "$pkg" | grep -c .) shards"
   done
   for row in "${table[@]}"; do
