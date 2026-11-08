@@ -767,7 +767,7 @@ files); `wide` is 1,000,000 empty files in 1,000 directories. Warm cache, 3 repe
 
 These were measured on the walker before the pipeline was restructured (the same `getdents64` and
 dirfd-relative `fstatat` path; its `--engine`, `--fields` and `--order` flags no longer exist, and
-`bench/run.sh` and `bench/compare.sh` still drive them). The current pipeline on the same tree, in one
+`bench/run.sh` still drives them; `bench/compare.sh` uses the current flags). The current pipeline on the same tree, in one
 interleaved session against that walker: stat count-only 1.81 s against 1.64 s and names 0.58 s against 0.51 s
 (within that session's noise for stat), and a full run writing the dataset 1.77–1.78 s.
 
