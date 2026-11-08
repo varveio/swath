@@ -482,12 +482,15 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   frame read ahead, past any capture frame before it. The segments check a durable file's trailer (its total
   rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
   trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
-  covers it).
-  On a resume that reuses certificates, a reused certificate is a replay range the drainer alone expands when
-  it reaches it, so listing is not done, and the segments cannot begin, until the drainer has passed the last
-  one; such a resume's tail then stays serial (`listing_active`) when the certificates lie near the end of the
-  keyspace (`TestSegmentsReplayDurableFiles`). The report counts what the segments read: `durable_files_read`
-  and `durable_boundaries`.
+  covers it). The report counts what the segments read: `durable_files_read` and `durable_boundaries`.
+- **Known limitation: a resume that reuses certificates.** A reused certificate is a replay range that only
+  the drainer expands, when it reaches it in key order. Listing is therefore not done, and the segments cannot
+  begin (they need the rest of the stream immutable and known), until the drainer has passed the last
+  certificate. When the certificates lie near the end of the keyspace, such a resume's tail stays serial and
+  the report says so (`reason` `listing_active`; `TestSegmentsReplayDurableFiles`). The output is the same
+  either way; only the tail's speed differs. Follow-up: let the segments take a reused certificate's frames
+  as units of the rest (its file's rows are already on disk and certified), so they can begin before the
+  drainer reaches it.
 
 ## Durable spill
 
