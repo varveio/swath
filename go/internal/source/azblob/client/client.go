@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -135,8 +136,9 @@ type Client struct {
 	source string
 	note   string
 
-	retry  objhttp.Retry
-	counts objhttp.Counters
+	retry            objhttp.Retry
+	counts           objhttp.Counters
+	retryAfterCapped atomic.Int64
 }
 
 // New resolves credentials and builds the client.
@@ -157,6 +159,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	// Redirects are answers, never followed, also through a supplied HTTP
 	// client: the resume identity freezes the route (as the S3 and GCS
 	// clients do).
+	// The Location header is removed before net/http sees it (noLocation):
+	// a malformed one would otherwise end the request in an error that
+	// quotes it, SAS included, before CheckRedirect runs.
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if cfg.HTTPClient == nil {
 		// One transport per connWorkers workers, sharing one TLS session
@@ -166,17 +171,36 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 			t := http.DefaultTransport.(*http.Transport).Clone()
 			t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
 			t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
-			c.http = append(c.http, &http.Client{Transport: t, CheckRedirect: noRedirect})
+			c.http = append(c.http, &http.Client{Transport: noLocation{t}, CheckRedirect: noRedirect})
 		}
 	} else {
 		hc := *cfg.HTTPClient
 		hc.CheckRedirect = noRedirect
+		next := hc.Transport
+		if next == nil {
+			next = http.DefaultTransport
+		}
+		hc.Transport = noLocation{next}
 		c.http = []*http.Client{&hc}
 	}
 	if err := c.credentials(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// noLocation drops the Location header of every 3xx answer, so net/http
+// returns the answer (a redirect class failure) instead of parsing a
+// target the client never follows; no Location value reaches an error.
+type noLocation struct{ next http.RoundTripper }
+
+func (n noLocation) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := n.next.RoundTrip(req)
+	if err == nil && resp.StatusCode/100 == 3 && resp.Header.Get(headerLocation) != "" {
+		resp.Header = resp.Header.Clone()
+		resp.Header.Del(headerLocation)
+	}
+	return resp, err
 }
 
 // baseURL is the account's root URL, ending in '/'.
@@ -268,18 +292,55 @@ func (c *Client) entra(ctx context.Context) error {
 		c.ts, c.source = c.shared(cred), source
 		return nil
 	}
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.cfg.RequestTimeout)
+	if onAzureVM() {
+		// An Azure VM's managed identity is the configured source even when
+		// the metadata service does not answer now (DefaultAzureCredential
+		// reports a probe timeout as unavailable): never anonymity.
+		c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+		return nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	_, err = cred.GetToken(pctx, policy.TokenRequestOptions{Scopes: []string{storageScope}})
 	switch {
 	case err == nil:
 		c.ts, c.source = c.shared(cred), source
+	case ctx.Err() != nil:
+		return ctx.Err()
 	case refused(err):
 		return &CredentialError{Source: source, Err: err}
-	default:
+	case unavailable(err):
 		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
+	default:
+		// Found but not reachable now (a timeout, a transport failure, a
+		// token endpoint's 5xx): the chain stays and each attempt asks for
+		// its token again, a failure classified transport or timeout.
+		c.ts, c.source = c.shared(cred), source
+		c.note = "Entra ID token not obtained at start (" + err.Error() + "): retried per request"
 	}
 	return nil
+}
+
+// unavailable reports azidentity's explicit absence signal: every source
+// of the chain said it has no credential (credentialUnavailableError, the
+// non-retriable error that is not an authentication failure).
+func unavailable(err error) bool {
+	var af *azidentity.AuthenticationFailedError
+	var nr interface{ NonRetriable() }
+	return !errors.As(err, &af) && errors.As(err, &nr)
+}
+
+// azureAssetTagFile holds the chassis asset tag Azure sets on its VMs
+// (tests move it); IMDS answers only there.
+var azureAssetTagFile = "/sys/class/dmi/id/chassis_asset_tag"
+
+// azureAssetTag is the chassis asset tag of every Azure VM.
+const azureAssetTag = "7783-7084-3265-9085-8269-3286-77"
+
+// onAzureVM reports an Azure VM by its chassis asset tag.
+func onAzureVM() bool {
+	b, _ := os.ReadFile(azureAssetTagFile)
+	return strings.TrimSpace(string(b)) == azureAssetTag
 }
 
 // tokenHTTP is the HTTP client of token exchanges: the first pooled
@@ -398,6 +459,10 @@ func (c *Client) Live() objhttp.Live {
 	return l
 }
 
+// RetryAfterCapped is the number of answers whose Retry-After was cut to
+// the request timeout (retry_after_capped).
+func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
+
 // Counters returns the request counters so far.
 func (c *Client) Counters() Counters {
 	n := c.counts.Load()
@@ -454,7 +519,7 @@ func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
 		if err := faults.At("response-read"); err != nil {
 			return nil, err
 		}
-		p, err := parse(body)
+		p, err := parse(ctx, body)
 		if err != nil {
 			if errors.Is(err, ErrSyntax) {
 				c.counts.ParseFailure()
@@ -544,7 +609,8 @@ func (c *Client) attempt(ctx context.Context, u *url.URL, limit int64) (http.Hea
 		return nil, nil, c.responseError(resp, body, u)
 	}
 	if int64(len(body)) > limit {
-		return nil, nil, fmt.Errorf("Azure response larger than %d bytes", limit)
+		// No valid answer is this large (bodyCap): a corrupt one, retried.
+		return nil, nil, fmt.Errorf("%w: Azure response larger than %d bytes", ErrSyntax, limit)
 	}
 	return resp.Header, body, nil
 }
@@ -556,11 +622,18 @@ func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Er
 	code, msg := errorBody(body)
 	e := &Error{Status: resp.StatusCode, Code: resp.Header.Get(headerErrorCode), Message: msg,
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
+	if e.Wait > c.cfg.RequestTimeout {
+		// A wait past the attempt deadline the caller set holds a worker
+		// while the engine sees no progress: it is cut to that deadline and
+		// counted; the attempt budget still bounds the total.
+		e.Wait = c.cfg.RequestTimeout
+		c.retryAfterCapped.Add(1)
+	}
 	if e.Code == "" {
 		e.Code = code
 	}
-	if loc := resp.Header.Get(headerLocation); e.Status/100 == 3 {
-		e.Message = "redirect to " + loc + " (not followed)"
+	if e.Status/100 == 3 {
+		e.Message = "redirect not followed" // its target is never quoted: it may carry the SAS
 	}
 	if e.Status == http.StatusBadRequest {
 		e.Query = u.RawQuery
@@ -573,20 +646,43 @@ func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Er
 // is the one without it. It runs before any wrapping that flattens the
 // error into text (objhttp.Timeout).
 func (c *Client) redact(err error, u *url.URL) error {
-	if c.sas == "" {
+	if c.sas == "" || err == nil {
 		return err
 	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		ue.URL = u.String()
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if ue, ok := e.(*url.Error); ok {
+			ue.URL = u.String()
+		}
+	}
+	msg := err.Error()
+	if s := c.scrub(msg); s != msg {
+		// Some layer still quotes the SAS: the error becomes its scrubbed
+		// text, keeping only whether it is a transport failure (retried).
+		if objhttp.Transport(err) {
+			var ne net.Error
+			timeout := errors.As(err, &ne) && ne.Timeout()
+			return &scrubbedNetError{msg: s, timeout: timeout}
+		}
+		return errors.New(s)
 	}
 	return err
 }
 
+// scrubbedNetError is a transport failure whose text was scrubbed of the
+// SAS.
+type scrubbedNetError struct {
+	msg     string
+	timeout bool
+}
+
+func (e *scrubbedNetError) Error() string   { return e.msg }
+func (e *scrubbedNetError) Timeout() bool   { return e.timeout }
+func (e *scrubbedNetError) Temporary() bool { return false }
+
 // scrub removes the SAS, and its signature as sent or decoded, from text
 // the service or a redirect returned.
 func (c *Client) scrub(s string) string {
-	if c.sas == "" || s == "" {
+	if s == "" {
 		return s
 	}
 	secrets := []string{c.sas}
@@ -600,8 +696,11 @@ func (c *Client) scrub(s string) string {
 			s = strings.ReplaceAll(s, x, "REDACTED")
 		}
 	}
-	return s
+	return sigParam.ReplaceAllString(s, "${1}REDACTED")
 }
+
+// sigParam is a SAS signature parameter in any text, as sent or escaped.
+var sigParam = regexp.MustCompile(`(?i)((?:^|[?&;\s"'(])sig(?:=|%3D))[^&\s"'<>)]*`)
 
 // requestID is a fresh x-ms-client-request-id: a random UUID.
 func requestID() string {

@@ -103,23 +103,32 @@ before `encoding/xml`'s streaming decoder reads `EnumerationResults` one entry a
 U+FFFE or U+FFFF) is percent-decoded once with path semantics (`+` stays `+`); a malformed escape or invalid
 UTF-8 is an invalid page, as are names that do not ascend strictly in UTF-16 code-unit order (byte order with
 lead bytes F0..F4 before EE..EF, compared in the client) and a `NextMarker` equal to the marker sent; an empty or
-absent `NextMarker` is the end (Azure has no truncation flag). The body cap is derived from the page size:
-names reach 1,024 UTF-16 units (3,072 bytes of UTF-8), 9,216 bytes Encoded, so an entry is capped at that plus
-4 KiB of properties and a 5,000-entry page at about 63.5 MiB, not 16 MiB. Classification takes `x-ms-error-code`
+absent `NextMarker` is the end (Azure has no truncation flag). A 200 must be a listing envelope:
+`EnumerationResults` holding a `Blobs` element (empty for an empty page) and no `Error` element, with nothing
+after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is derived
+from the page size: names reach 1,024 UTF-16 units (3,072 bytes of UTF-8), 9,216 bytes Encoded; the five
+uploader-set properties arrive in one request whose headers HTTP.sys bounds at 16,384 bytes, at most 6× that
+escaped; with 2 KiB of fixed properties an entry is at most 109,568 bytes and a 5,000-entry page about 522 MiB (the
+read grows only with the body). A larger body cannot be a valid page and is a retried `parse` failure. Classification takes `x-ms-error-code`
 first, the body's `<Code>` when the header is absent, then the status, because `AuthenticationFailed` arrives as a
 403 and `ServerBusy` as a 503: `auth` (`NoAuthenticationInformation`, `AuthenticationFailed`,
 `InvalidAuthenticationInfo`, 401), `access_denied` (`AuthorizationFailure`, `AuthorizationPermissionMismatch`,
 another 403), `no_such_bucket` (`ContainerNotFound`), `throttle` (`ServerBusy`, 429), `timeout`
 (`OperationTimedOut`, 408), `server` (`InternalError`, another 5xx); retried are 408, 429, 502, 503, 504 and a 500
 only when it is `OperationTimedOut` or `InternalError`, and a `Retry-After` (seconds or an HTTP date) longer than
-the drawn backoff is waited out (`objhttp.RetryAfter`). Authentication, in precedence: anonymous; a SAS appended
+the drawn backoff is waited out (`objhttp.RetryAfter`), at most the request timeout (a longer one is cut to it
+and counted in `retry_after_capped`; the attempt budget still ends the request, which the engine requeues).
+Redirects are never followed and their target is never quoted: the client's transport drops `Location` from
+every 3xx, and request errors are scrubbed of the SAS through their whole chain. Authentication, in precedence: anonymous; a SAS appended
 to every query and removed from every error (request URLs, 400 query echoes, redirect targets, messages); a
 Shared Key signature with `x-ms-date` per attempt (`TestSharedKeyMatchesSDK` compares it with the SDK's on both
 endpoint forms); Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`, its tokens
 coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a timeout
 retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the others the
-chain reads), a credential that will not work is a `CredentialError`; with nothing configured one token is asked
-for at `New`, and when no managed identity or CLI login answers the requests go unauthenticated with a note.
+chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token is asked
+for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes the
+requests unauthenticated, with a note; a timeout, a transport failure or a token endpoint's 5xx keeps the chain and
+each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the managed identity is always kept.
 Connections are the GCS pool. `TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
 SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the evidence archive to the client.
 

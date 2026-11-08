@@ -41,7 +41,7 @@ func TestTransportPoolSpreadsConnections(t *testing.T) {
 		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Workers: workers})
 		roots := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 		for _, hc := range c.http {
-			hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots
+			hc.Transport.(noLocation).next.(*http.Transport).TLSClientConfig.RootCAs = roots
 		}
 		n := c.Transports()
 		if n != PoolSize(workers) {

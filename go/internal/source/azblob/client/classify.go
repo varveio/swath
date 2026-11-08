@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
@@ -94,19 +95,22 @@ func (e *Error) Retryable() bool {
 func (e *Error) RetryAfter() time.Duration { return e.Wait }
 
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date
-// (relative to now); 0 when absent, malformed or past.
+// (relative to now); 0 when absent, malformed, negative or past.
 func retryAfter(v string, now time.Time) time.Duration {
 	if v == "" {
 		return 0
 	}
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-		if n <= 0 {
-			return 0
+	if strings.Trim(v, "0123456789") == "" {
+		// Delay seconds, saturating: a value past any Duration is the
+		// largest one (the caller caps it at the request timeout).
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil || n > uint64(math.MaxInt64/time.Second) {
+			return time.Duration(math.MaxInt64/time.Second) * time.Second
 		}
-		return time.Duration(min(n, int64(math.MaxInt64/time.Second))) * time.Second
+		return time.Duration(n) * time.Second
 	}
 	if t, err := http.ParseTime(v); err == nil && t.After(now) {
-		return t.Sub(now)
+		return t.Sub(now) // saturates at the largest Duration
 	}
 	return 0
 }

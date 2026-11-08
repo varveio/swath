@@ -305,42 +305,78 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 	}
 }
 
+// unavailableErr is azidentity's own absence signal: the chain with only
+// the environment credential, in an empty environment.
+func unavailableErr(t *testing.T) error {
+	t.Helper()
+	clearEntra(t)
+	t.Setenv("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential")
+	defer os.Unsetenv("AZURE_TOKEN_CREDENTIALS")
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cred.GetToken(context.Background(), policy.TokenRequestOptions{Scopes: []string{storageScope}})
+	if err == nil || !unavailable(err) {
+		t.Fatalf("%v: not the unavailable signal", err)
+	}
+	return err
+}
+
 // TestEntraDiscovery: with nothing configured, one token is asked for at
-// New: a credential found (a managed identity, an Azure CLI login) is
-// used; none found means unauthenticated requests and a note; a refused
-// grant refuses the client. Configured by the environment, a credential
-// that will not build refuses the client too. The lookup is faked, so the
-// outcome does not depend on the host the test runs on.
+// New. A credential found is used. Only azidentity's explicit absence
+// signal (every source unavailable) means unauthenticated requests, with a
+// note. A transient failure (a metadata service timing out, a transport
+// failure, a token endpoint's 503) keeps the chain, each request asking
+// again (classified transport or timeout, never anonymity). A refused
+// grant refuses the client; so does a credential the environment
+// configures that will not build. On an Azure VM the managed identity is
+// kept even when the chain reports itself unavailable. The lookup is
+// faked, so the outcome does not depend on the host.
 func TestEntraDiscovery(t *testing.T) {
+	absent := unavailableErr(t)
 	refusedErr := &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 401}}
 	for _, x := range []struct {
 		name       string
 		configured bool
+		azureVM    bool
 		cred       *countingCredential
 		buildErr   error
 		anonymous  bool
 		fails      bool
+		retryClass objhttp.Class // the first request's class when the chain is kept but failing
 	}{
-		{"found", false, &countingCredential{}, nil, false, false},
-		{"none found", false, &countingCredential{err: errors.New("ManagedIdentityCredential: no response from the IMDS endpoint")}, nil, true, false},
-		{"refused", false, &countingCredential{err: refusedErr}, nil, false, true},
-		{"chain does not build", false, nil, errors.New("no credential"), true, false},
-		{"configured, does not build", true, nil, errors.New("invalid AZURE_TOKEN_CREDENTIALS"), false, true},
+		{name: "found", cred: &countingCredential{}},
+		{name: "absent", cred: &countingCredential{err: absent}, anonymous: true},
+		{name: "metadata timeout", cred: &countingCredential{err: fmt.Errorf("ManagedIdentityCredential: %w", context.DeadlineExceeded)}, retryClass: objhttp.ClassTimeout},
+		{name: "transport failure", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{}}, retryClass: objhttp.ClassTransport},
+		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, retryClass: objhttp.ClassTransport},
+		{name: "absent on an Azure VM", azureVM: true, cred: &countingCredential{err: absent}, retryClass: objhttp.ClassAuth},
+		{name: "refused", cred: &countingCredential{err: refusedErr}, fails: true},
+		{name: "chain does not build", buildErr: errors.New("no credential"), anonymous: true},
+		{name: "configured, does not build", configured: true, buildErr: errors.New("invalid AZURE_TOKEN_CREDENTIALS"), fails: true},
 	} {
 		t.Run(x.name, func(t *testing.T) {
 			clearEntra(t)
 			if x.configured {
 				t.Setenv("AZURE_CLIENT_ID", "cid")
 			}
-			old := newDefaultCredential
-			t.Cleanup(func() { newDefaultCredential = old })
+			tag := t.TempDir() + "/chassis_asset_tag"
+			if x.azureVM {
+				os.WriteFile(tag, []byte(azureAssetTag+"\n"), 0o644)
+			}
+			oldTag, old := azureAssetTagFile, newDefaultCredential
+			t.Cleanup(func() { azureAssetTagFile, newDefaultCredential = oldTag, old })
+			azureAssetTagFile = tag
 			newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
 				if x.buildErr != nil {
 					return nil, x.buildErr
 				}
 				return x.cred, nil
 			}
-			c, err := New(context.Background(), Config{Account: "acct"})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("")) }))
+			defer srv.Close()
+			c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1})
 			var ce *CredentialError
 			if x.fails {
 				if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth {
@@ -352,11 +388,38 @@ func TestEntraDiscovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			src, anon := c.Credentials()
-			if anon != x.anonymous || (anon && !strings.Contains(c.Note(), "no Azure credentials found")) || (!anon && c.Note() != "") {
+			if anon != x.anonymous || (anon && !strings.Contains(c.Note(), "no Azure credentials found")) {
 				t.Fatalf("credentials %q anonymous=%v note %q", src, anon, c.Note())
+			}
+			if x.retryClass != "" {
+				_, err := c.List(context.Background(), &ListInput{Container: "c"})
+				if !errors.As(err, &ce) || Classify(err) != x.retryClass {
+					t.Fatalf("first request: %v (class %q), want a %s credential error", err, Classify(err), x.retryClass)
+				}
 			}
 		})
 	}
+	// The caller's context bounds the discovery.
+	clearEntra(t)
+	old := newDefaultCredential
+	t.Cleanup(func() { newDefaultCredential = old })
+	newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+		return blockingCredential{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := New(ctx, Config{Account: "acct"}); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Fatalf("New under an expiring context: %v after %s", err, time.Since(start))
+	}
+}
+
+// blockingCredential answers only when its context ends.
+type blockingCredential struct{}
+
+func (blockingCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	<-ctx.Done()
+	return azcore.AccessToken{}, ctx.Err()
 }
 
 // TestAnonymousPrecedence: Anonymous sends nothing, whatever else is
