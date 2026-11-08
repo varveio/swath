@@ -505,7 +505,7 @@ Diagnostics:
   instead of delta-coding them, the comparison arm
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
-  and one state of the shared codec, priced from the provider's schema at its longest keys (31.5 MiB for S3 and GCS, 61 MiB for a
+  and one state of the shared codec, priced from the provider's schema at its longest keys (31.5 MiB for S3, 32.5 for GCS, 61 MiB for a
   local path), each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
   when the resources cannot carry it, a warning names the shortfall. For a `.zst` text file the same flag

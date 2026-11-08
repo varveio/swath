@@ -463,10 +463,10 @@ func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
 	}
 }
 
-// TestCodecLeasesFollowLimit: leases held at once (barriers, not timing)
-// make states up to the limit and no further: a lease past it waits until
-// one is returned, or until setLimit raises the limit, which then makes
-// the states asked for. Before (sol review 4, P3), the admission test
+// TestCodecLeasesFollowLimit: leases held at once (the overlap forced,
+// not left to scheduling) make states up to the limit and no further: a
+// lease past it waits (observed for 50 ms) until one is returned, or until
+// setLimit raises the limit, which then makes the states asked for. Before (sol review 4, P3), the admission test
 // asserted growth from a run whose compressions need not overlap, and
 // failed at GOMAXPROCS 1.
 func TestCodecLeasesFollowLimit(t *testing.T) {
