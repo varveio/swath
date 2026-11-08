@@ -234,13 +234,14 @@ the following:
   certificates above K, and the resume must accept and replay some. The kills before the first seal are not
   asked to reuse.
 
-One more arm runs at the 1 s interval, `suspect-composition`. This is §6's "time cuts on" row: the composition is
+One more arm, `suspect-composition`, runs at a 3 s interval. This is §6's "time cuts on" row: the composition is
 forced, and the reproduction is checked byte for byte.
 
 1. A run with serialized seals is killed at its sixth ledger sync, so five certificates are durable. Its parts
    are 64 MiB, so the interval closes them.
-2. Copies of that output are resumed and killed at the n-th journal append, after the part's claim and before
-   its record. This repeats until the claimed part holds rows replayed from two certificates and rows listed
+2. Copies of that output are resumed, without the slow frontier, and killed at the n-th journal append,
+   after the part's claim and before its record. At 1 s, or behind the frontier, MinIO's time-closed parts
+   held one certificate or one gap, never both. This repeats until the claimed part holds rows replayed from two certificates and rows listed
    live between them.
 3. The next resume must reproduce that part byte for byte.
 
@@ -290,7 +291,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 | versions | `listing` `TestDurableVersions` |
 | exclusion | `listing` `TestDurableOverwrite`; a second process: the output lock's tests, not durable-specific |
 | changed source | `listing` `TestDurableChangedSource` |
-| time cuts on (suspect part over two replay files and a gap) | campaign `suspect-composition` (1 s interval) |
+| time cuts on (suspect part over two replay files and a gap) | campaign `suspect-composition` (3 s interval) |
 | reduced cap, ENOSPC | `order` `TestDurableReducedCap`; `listing` `TestDurableSealENOSPC`; ENOSPC on a captured frame: not covered |
 | eviction | `order` `TestDurableEviction`, `TestDurableLedgerFailureEvicts` |
 

@@ -66,6 +66,12 @@ import (
 // certificates the kills at 40 % and 70 % find live.
 const campaignFrontierDelay = 200 * time.Millisecond
 
+// suspectInterval is the part interval of the suspect-composition arm:
+// long enough that a part closed by time spans a replayed certificate, the
+// live gap after it and the next certificate (at 1 s, MinIO's parts held
+// one certificate's replay or one gap's rows, never both).
+const suspectInterval = "3s"
+
 // firstKey is a ListObjectsV2 page's first key (as the service escaped it;
 // the frontier's keys are plain).
 var firstKey = regexp.MustCompile(`<Key>([^<]*)</Key>`)
@@ -471,21 +477,21 @@ func campaign(t *testing.T, fx campaignFixture) {
 			})
 		}
 	}
-	interval := append([]string{"--part-interval", campaignInterval}, common...)
-	t.Run("interval-"+campaignInterval+"/suspect-composition", func(t *testing.T) {
+	interval := append([]string{"--part-interval", suspectInterval}, common...)
+	t.Run("interval-"+suspectInterval+"/suspect-composition", func(t *testing.T) {
 		status, line := "FAIL", ""
 		defer func() {
 			if !t.Failed() {
 				status = "pass"
 			}
-			appendResult(t, results, fmt.Sprintf("%s\tinterval-%s\tsuspect-composition\t%s\t%s", fx.name, campaignInterval, status, line))
+			appendResult(t, results, fmt.Sprintf("%s\tinterval-%s\tsuspect-composition\t%s\t%s", fx.name, suspectInterval, status, line))
 		}()
-		line = suspectComposition(t, rn, ref, interval, func(out string) []string { return listArgsSized(out, "64MiB", interval) })
+		line = suspectComposition(t, rn, px, ref, interval, func(out string) []string { return listArgsSized(out, "64MiB", interval) })
 	})
 }
 
 // suspectComposition is contract §6's "time cuts on" row: a part closed by
-// the interval that holds rows replayed from two certificates and rows
+// the interval (suspectInterval) that holds rows replayed from two certificates and rows
 // listed live between them, claimed and then killed before its part
 // record, must be reproduced byte for byte by the next resume. The crashed
 // run seals certificates one ledger cycle each (SWATH_TEST_SERIAL_SEALS)
@@ -494,18 +500,21 @@ func campaign(t *testing.T, fx campaignFixture) {
 // output, killed at its n-th journal append (the part claimed, its record
 // not yet written), until the claimed part has that composition; then the
 // resume must reproduce it (its bytes in data/) and the dataset must be
-// the reference's rows.
-func suspectComposition(t *testing.T, rn *campaignRunner, ref string, runtime []string, list func(out string) []string) string {
+// the reference's rows. The resumes run without the slow frontier: behind
+// it each 1 s part held only frontier rows, below every certificate.
+func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref string, runtime []string, list func(out string) []string) string {
 	crashed := filepath.Join(t.TempDir(), "crashed")
 	if _, err := rn.run(list(crashed), "spill-ledger-sync:6", 0, "SWATH_TEST_SERIAL_SEALS=1"); err != nil {
 		t.Fatalf("the crashed run: %v", err)
 	}
+	slow := px.slow.Swap(nil)
+	defer px.slow.Store(slow)
 	certs, k := liveCerts(t, crashed), lastKey(t, crashed)
 	if n := eligibleCerts(certs, k); n < 2 {
 		t.Fatalf("%d certificates above K after the crash; the composition needs two", n)
 	}
 	resume := append(append([]string{"resume"}, runtime...), "--report-format", "json")
-	for n := 1; n <= 8; n++ {
+	for n := 1; n <= 12; n++ {
 		try := filepath.Join(t.TempDir(), "try")
 		if err := os.CopyFS(try, os.DirFS(crashed)); err != nil {
 			t.Fatal(err)
@@ -544,7 +553,7 @@ func suspectComposition(t *testing.T, rn *campaignRunner, ref string, runtime []
 		t.Logf("%s: suspect part %d (rows from %d certificates, %d live rows between them) reproduced byte for byte", at, ord, replayed, gaps)
 		return fmt.Sprintf("%s\tpart %d\t%d certificates\t%d live rows\t%d bytes", at, ord, replayed, gaps, len(want))
 	}
-	t.Fatal("no claimed part with rows from two certificates and live rows between them in 8 tries")
+	t.Fatal("no claimed part with rows from two certificates and live rows between them in 12 tries")
 	return ""
 }
 
