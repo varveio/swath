@@ -83,9 +83,11 @@ func TestDurableMinIO(t *testing.T) {
 		t.Skip("SWATH_MINIO_ENDPOINT is not set (go/bench/minio.sh up)")
 	}
 	bucket := orDefault(os.Getenv("SWATH_MINIO_BUCKET"), "swath-durable")
-	// 16 workers: at 64 concurrent listings the single-drive MinIO's heap
-	// outgrew its container and requests timed out (go/bench/minio.sh).
-	campaign(t, campaignFixture{name: "minio/" + bucket, upstream: ep, bucket: bucket, workers: orDefault(os.Getenv("SWATH_MINIO_WORKERS"), "16"), env: []string{
+	// 32 workers: at 64 concurrent listings the single-drive MinIO's heap
+	// outgrew its container and requests timed out (go/bench/minio.sh); at
+	// 16 the captured ranges were still open at the 40 % kill, so that
+	// reuse arm had no certificate.
+	campaign(t, campaignFixture{name: "minio/" + bucket, upstream: ep, bucket: bucket, workers: orDefault(os.Getenv("SWATH_MINIO_WORKERS"), "32"), env: []string{
 		"AWS_ACCESS_KEY_ID=" + orDefault(os.Getenv("SWATH_MINIO_ACCESS_KEY"), "swath"),
 		"AWS_SECRET_ACCESS_KEY=" + orDefault(os.Getenv("SWATH_MINIO_SECRET_KEY"), "swath-secret"),
 	}})
