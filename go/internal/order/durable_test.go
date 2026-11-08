@@ -148,6 +148,28 @@ func durableEntries(t *testing.T, root *os.Root) []fs.DirEntry {
 	return ents
 }
 
+// durableNames is the names in the durable directory under root, sorted.
+func durableNames(t *testing.T, root *os.Root) []string {
+	t.Helper()
+	var names []string
+	for _, e := range durableEntries(t, root) {
+		names = append(names, e.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
+// readDir lists dir, failing on any error: a listing that fails must not
+// read as an empty directory.
+func readDir(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ents
+}
+
 // newDurable is a fresh durable spill under a temporary output.
 func newDurable(t *testing.T) (*Cache, *os.Root, string) {
 	t.Helper()
@@ -849,7 +871,7 @@ func TestDurableCorruption(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.Close()
-			ents, _ := os.ReadDir(filepath.Join(dir, DurableDir))
+			ents := durableEntries(t, root)
 			var victim string
 			for _, e := range ents {
 				if strings.HasSuffix(e.Name(), ".spill") {
@@ -1094,10 +1116,9 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 	for _, point := range []string{"spill-recovery-sync", "spill-recovery-unlink", "spill-recovery-dirsync"} {
 		t.Run(point, func(t *testing.T) {
 			root, _ := sealedSpill(t, 6)
-			files := func() int { return len(durableEntries(t, root)) }
-			before := files()
-			if before < 3 {
-				t.Fatalf("%d durable entries", before)
+			before := durableNames(t, root)
+			if len(before) < 3 {
+				t.Fatalf("%d durable entries", len(before))
 			}
 			var bad atomic.Bool
 			verify := func() error {
@@ -1117,8 +1138,8 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 			if !errors.Is(err, replaced) {
 				t.Fatalf("recovery after the replacement: %v", err)
 			}
-			if point != "spill-recovery-dirsync" && files() != before {
-				t.Fatalf("%d of %d entries left: unlinked after the replacement", files(), before)
+			if after := durableNames(t, root); point != "spill-recovery-dirsync" && !slices.Equal(after, before) {
+				t.Fatalf("entries %q, before %q: unlinked after the replacement", after, before)
 			}
 		})
 	}
@@ -1233,8 +1254,8 @@ func TestDurableCodecRejected(t *testing.T) {
 	if rep.Rejected["codec"] != int64(n) || rep.Accepted != 0 || rep.Rejected["corrupt"] != 0 || len(r.Spans()) != 0 {
 		t.Fatalf("%d certificates of another codec: %+v", n, rep)
 	}
-	if ents := durableEntries(t, root); len(ents) != 1 { // the ledger
-		t.Fatalf("%d entries left in the durable directory", len(ents))
+	if names := durableNames(t, root); !slices.Equal(names, []string{ledgerName}) {
+		t.Fatalf("durable directory holds %q, want the ledger alone", names)
 	}
 }
 

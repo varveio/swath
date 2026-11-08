@@ -363,7 +363,8 @@ overruns the file over bytes that hold a whole frame under a smaller length (the
 so a match proves the damage); a part published under its final name beyond the recorded ones; an unknown
 header version. A journal file that is empty or whose header frame is incomplete means the header never
 became durable, and the run starts over, but only when no part file exists in `data/` or `.swath/parts/`:
-the header is synced before any part exists, so a part proves damage. `swath show --journal DIR` prints the header, every record and any torn
+the header is synced before any part exists, so a part proves damage. A part directory that exists but cannot
+be listed is an error, never "no part" (`TestDamagedHeader`). `swath show --journal DIR` prints the header, every record and any torn
 tail as JSON lines.
 
 **The contract, precisely.**

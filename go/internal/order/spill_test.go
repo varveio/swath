@@ -164,7 +164,7 @@ func TestSpillKeepsWorkersBusy(t *testing.T) {
 		if limit := int64(budget + workers*publishRows + f.rows); st.MaxBuffered > limit {
 			t.Fatalf("max buffered %d > %d", st.MaxBuffered, limit)
 		}
-		if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		if ents := readDir(t, dir); len(ents) != 0 {
 			t.Fatalf("spill files left: %d", len(ents))
 		}
 	}
@@ -187,7 +187,7 @@ func TestSpillCleanedOnFailure(t *testing.T) {
 	if _, err := Run[fr, tp](context.Background(), f, c, &testSchema, Options{Workers: 8, Budget: 300, SpillDir: dir}); err == nil {
 		t.Fatal("sink failure not reported")
 	}
-	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+	if ents := readDir(t, dir); len(ents) != 0 {
 		t.Fatalf("spill directory left after failure: %d entries", len(ents))
 	}
 }
@@ -232,7 +232,7 @@ func TestSpillDiskBudget(t *testing.T) {
 	if none.SpillRows != 0 || none.SpillRefused == 0 {
 		t.Fatalf("reserve: %d rows spilled, %d refused", none.SpillRows, none.SpillRefused)
 	}
-	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+	if ents := readDir(t, dir); len(ents) != 0 {
 		t.Fatalf("spill files left: %d", len(ents))
 	}
 }

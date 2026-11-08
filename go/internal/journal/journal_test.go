@@ -151,6 +151,14 @@ func TestDamagedHeader(t *testing.T) {
 		t.Fatalf("short header with a part on disk: %v", err)
 	}
 	os.Remove(filepath.Join(out, dataset.DataDir, dataset.PartName(0)))
+	// A part directory that cannot be listed (here a file in its place)
+	// is an error, not proof that no part exists.
+	os.Remove(filepath.Join(out, dataset.DataDir))
+	os.WriteFile(filepath.Join(out, dataset.DataDir), []byte("x"), 0o644)
+	if _, err := Read(out); err == nil || errors.Is(err, ErrNoJournal) || errors.Is(err, ErrCorrupt) {
+		t.Fatalf("short header, part directory unlistable: %v", err)
+	}
+	os.Remove(filepath.Join(out, dataset.DataDir))
 	long := append([]byte{}, b...)
 	binary.LittleEndian.PutUint32(long[:4], uint32(len(b)))
 	os.WriteFile(Path(out), long, 0o644)
