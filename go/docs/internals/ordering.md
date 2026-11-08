@@ -372,13 +372,10 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
   (`TestReadAheadCancelMidReplay`).
 
-The report's `resources.drain.read_ahead` counts `frames` and `rows` read ahead, `drainer_frames` (planned,
-taken over unread), `unplanned_frames` (reached with nothing planned), `drainer_waits`, `capped_waits`,
-`read_ns`, `decode_ns` and `max_reads`; beside it the drain's `tail_ns` (from `timings.listing_done_at` to the last row),
-the workers' idle time before and after listing ended, and the drainer's time: `replay_read_ns`,
-`replay_decode_ns`, `ahead_wait_ns`, `order_check_ns`, `sink_write_ns` (with `frontier_wait_ns`). On one
-processor the drainer may replay every frame before an idle worker is scheduled: `drainer_frames` then counts
-them all.
+The report's `resources.drain.read_ahead` and the drainer's split of `tail_ns` (fields in
+[counters.md](counters.md)) say where the tail went: a drainer whose `sink_write_ns` dominates is bound by the
+sink, one whose `replay_read_ns` or `ahead_wait_ns` does, by the spill read-back. On one processor the drainer
+may replay every frame before an idle worker is scheduled: `drainer_frames` then counts them all.
 
 ### Segments: parts written in parallel after listing
 
@@ -474,12 +471,10 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   thousands of times on Batch, tails up to 3× longer (2026-11-07). Beside its writer and that share a worker
   holds one batch of row headers, and the read-ahead stops when segments begin.
 
-The report's `resources.drain.segments` carries `reason` (`engaged`, `one_processor`, `one_encoder`,
-`single_part`, `not_planned`, `row_budget`, `listing_active`), `segments`, `workers`, `rows`, `max_rows`, `seam_checks`,
-`time_ns` (summed, open to close), `max_time_ns`, `plan_ns`, `max_workers` (the cap), and the time's split:
-`read_ns` (spill frames read, `decode_ns` of it decoding) and `write_ns` (handing batches to the parts, their
-encoders' queue waits included), `workers_by`, `per_worker_bytes`, `free_bytes` (the plan), `budget_waits`, `budget_wait_ns` and `max_held_bytes` (the row budget's hold on the tail). A tail whose `write_ns` is most of `time_ns` is bound by the parts' encoding;
-one whose `read_ns` is, by the spill disk.
+The report's `resources.drain.segments` (fields in [counters.md](counters.md)) gives the engagement `reason`,
+what sized the workers (`workers_by`, with both sides of the plan), and the time's split. A tail whose
+`write_ns` is most of `time_ns` is bound by the parts' encoding; one whose `read_ns` is, by the spill disk;
+`budget_waits` well above zero means the plan's share was short and the safety gate held the bound.
 
 - **Durable files.** The read-ahead and the segments read a durable spill file's rows frames as they read a
   run-private file's, by the offset its marker records (a header or capture frame may precede a rows frame:

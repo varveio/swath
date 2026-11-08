@@ -80,7 +80,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Resource | Flag | Default | What to know |
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
-| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory. It also sizes the segment tail after listing, beside it: when listing ends the tree holds about one budget of rows (spill keeps it there, and the serial drain holds it too), and the segments' queues and frames may take one more, so the tail can hold about two row budgets in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`). Each segment worker is planned at `resources.drain.segments.per_worker_bytes` of that second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
+| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
 | Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against its working set (one writer and one shared codec state, at the schema's longest keys: 31.5 MiB for S3, 32.5 for GCS's ten columns, 61 MiB for a local path) from an allowance equal to `--row-budget`, and the descriptor limit; the default 128 MiB admits 4 for S3 and 3 for GCS. Once listing has ended the Parquet allowance grows by 1 MiB per worker (no page is in flight any more): at 64 workers 6 for S3 and 5 for GCS, at 256 12 and 11 (report: `resources.drain.encoders_after_listing`); a given `--encoders` is never raised. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath count` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
@@ -104,9 +104,11 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 - **Rows in flight, bounded by `--row-budget`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
   not charged, and no range keeps the page it was cut from alive, see
-  [ordering](internals/ordering.md#what-a-waiting-range-retains)).
+  [ordering](internals/ordering.md#what-a-waiting-range-retains)). When listing ends the tree holds about
+  one budget (spill keeps it there), and the segment tail's queues and frames may take one more beside it:
+  about two row budgets in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`).
 - **Pages in flight, outside it:** a response body and its parsed page per worker (up to 16 MiB each in
-  the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers and codec (31.5 MiB each for S3, 32.5 for GCS, 61 for a local path),
+  the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers and codec (each encoder's working set, above),
   compression scratch, and the garbage collector's headroom (with the default `GOGC`, up to about twice
   the live heap).
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
