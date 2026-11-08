@@ -14,10 +14,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // versioned is a fake versions listing (S3 ListObjectVersions-shaped):
@@ -26,10 +28,12 @@ import (
 // a continuation resumes at its entry. Each row's Size is its index in
 // rows, so a test sees within-key order and duplicates.
 type versioned struct {
-	rows      []Row
-	short     bool // pages of 1..Max entries
-	empties   bool // some continuing pages hold nothing
-	inclusive bool // the start bound lists After's own rows again
+	rows                 []Row
+	short                bool // pages of 1..Max entries
+	empties              bool // some continuing pages hold nothing
+	inclusive            bool // the start bound lists After's own rows again
+	latency, slowLatency time.Duration
+	slowPrefix           string
 
 	mu    sync.Mutex
 	rng   *rand.Rand
@@ -58,7 +62,20 @@ func (v *versioned) want(prefix, after string) []Row {
 	return out
 }
 
-func (v *versioned) fetch(_ context.Context, q *Query) (*Page[Object], error) {
+func (v *versioned) fetch(ctx context.Context, q *Query) (*Page[Object], error) {
+	delay := v.latency
+	if v.slowPrefix != "" && (strings.HasPrefix(q.Prefix, v.slowPrefix) || strings.HasPrefix(q.After, v.slowPrefix)) {
+		delay = v.slowLatency
+	}
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	var i int
@@ -197,8 +214,9 @@ func groupKeys(n int) []string {
 
 // TestGroupsEveryRowOnceInOrder lists versioned keyspaces at small page
 // sizes through every path (sequential, forced splits, the seed and
-// structure probes, demand splits, resume, an inclusive start) and checks
-// every row once, in order, with the group counters engaged.
+// structure probes, warm starts, latency-ranked splits, demand splits, resume,
+// an inclusive start) and checks every row once, in order, with the group
+// counters engaged.
 func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 	type cfg struct {
 		name string
@@ -210,7 +228,22 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 		return func() bool { mu.Lock(); defer mu.Unlock(); return rng.IntN(2) == 0 }
 	}
 	keys := groupKeys(1200)
+	prior := &source.Prior{Source: "cuts", Unscoped: true, Counted: true}
+	// Include the hot key itself to exercise an exact group boundary.
+	for i := 60; i < len(keys); i += 60 {
+		prior.Cuts = append(prior.Cuts, source.Cut{Key: keys[i]})
+	}
 	for _, page := range []int{1, 2, 3, 7, 50} {
+		// Cuts carry row mass, as a versioned --seed-from dataset does.
+		mass, cut := int64(0), 0
+		versions := groupKeyspace(len(keys), page, 300)
+		for i, key := range keys {
+			mass += int64(versions(i))
+			if cut < len(prior.Cuts) && key == prior.Cuts[cut].Key {
+				prior.Cuts[cut].Rows = mass
+				mass, cut = 0, cut+1
+			}
+		}
 		for _, short := range []bool{false, true} {
 			for seed := range uint64(3) {
 				cfgs := []cfg{
@@ -218,6 +251,8 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 					{"forced", Options{Workers: 8, SplitCoin: coin(seed)}},
 					{"seed+structure", Options{Workers: 16, Seed: true, SeedFirstPage: true, Structure: StructureOn}},
 					{"demand", Options{Workers: 16}},
+					{"warm-start", Options{Workers: 16, Prior: prior}},
+					{"slow-split", Options{Workers: 16, Seed: true, SeedFirstPage: true, SlowSplit: true}},
 					{"resume", Options{Workers: 8, SplitCoin: coin(seed), Resume: &Resume{After: keys[600]}}},
 					{"resume-hot", Options{Workers: 8, Seed: true, Resume: &Resume{After: keys[300]}}},
 					{"prefix", Options{Workers: 8, Prefix: "d01/", SplitCoin: coin(seed)}},
@@ -231,6 +266,18 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 							opt := c.opt
 							opt.PageSize = page
 							st := runGroups(t, v, opt)
+							switch c.name {
+							case "warm-start":
+								if st.Get(cSeedFromCuts) != int64(len(prior.Cuts)) || st.Get(cSeedFromTiles) < 2 || st.Get(cSeedFromExpected) == 0 || st.Get(cSeedRequests) != 0 {
+									t.Errorf("warm start: cuts=%d tiles=%d expected=%d seed_requests=%d", st.Get(cSeedFromCuts), st.Get(cSeedFromTiles), st.Get(cSeedFromExpected), st.Get(cSeedRequests))
+								}
+							case "slow-split":
+								for _, id := range []counterID{cSlowMaxRangeLatency, cSlowRunLatency} {
+									if st.Get(id) == 0 {
+										t.Errorf("%s: 0, want engaged", Counters[id].Key)
+									}
+								}
+							}
 							if page <= 7 && st.Get(cGroupsMaxRows) < int64(50*page) && !strings.HasPrefix(c.name, "resume") && c.name != "prefix" && c.name != "sequential" {
 								t.Errorf("groups.max_rows %d: the hot key's group was not seen whole", st.Get(cGroupsMaxRows))
 							}
@@ -240,6 +287,25 @@ func TestGroupsEveryRowOnceInOrder(t *testing.T) {
 			}
 		}
 	}
+	// Latency ranking above is exercised throughout the matrix. This
+	// outlier also requires an actual slow-range split while other workers
+	// are busy, with groups crossing page boundaries in both Run and Count.
+	t.Run("slow-range-engaged", func(t *testing.T) {
+		var keys []string
+		for d := range 100 {
+			for i := range 100 {
+				keys = append(keys, fmt.Sprintf("d/%03d/file-%05d", d, i))
+			}
+		}
+		v := newVersioned(keys, func(int) int { return 3 }, 1)
+		v.latency, v.slowPrefix, v.slowLatency = 4*time.Millisecond, "d/000/", 80*time.Millisecond
+		st := runGroups(t, v, Options{Workers: 16, PageSize: 20, Seed: true, SeedFirstPage: true, SlowSplit: true})
+		for _, id := range []counterID{cSplitReasonSlowRange, cSlowMaxRangeLatency, cSlowRunLatency, cGroupsHeldRows} {
+			if st.Get(id) == 0 {
+				t.Errorf("%s: 0, want engaged", Counters[id].Key)
+			}
+		}
+	})
 }
 
 // TestGroupsSplitVetoAndRelist: forced splits around a hot key are vetoed

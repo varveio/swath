@@ -320,7 +320,10 @@ does, stated as the contract rather than as its code:
   (required). `swath/gcs-generations/v1` is the `swath/gcs-objects/v1` columns, then `time_deleted` (null for
   the live generation; there is no `is_latest`). In both, a key repeats once per version, on consecutive rows,
   in the service's order within the key (S3 newest first, versions and delete markers interleaved; GCS by
-  generation, ascending), which the file order carries and no column rebuilds; parts stay key-disjoint (a key's
+  generation, ascending), which the file order carries and no column rebuilds. On S3, the first row of a
+  key's group has `is_latest`: it is the latest entry, and a delete marker means the object is deleted.
+  On GCS, the last row of a name's group is the newest generation; it is live only if `time_deleted` is
+  null, and a name may have no live generation. Parts stay key-disjoint (a key's
   rows are never split across parts), and `sorting_columns` is `key` ascending. A reader that assumes one row
   per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
   is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The reserved Java-era version columns are absent from the current-object S3 schema;
