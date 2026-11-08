@@ -382,6 +382,18 @@ after `lo`, later pages follow the continuation token. Keys past `hi` are trimme
 whose last key equals `hi` ends the range without another request; a page that is not truncated ends it. A truncated
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
+**What is trusted.** swath takes a page that is not truncated as the true end of its range: every key the
+service holds after the page's start, up to the range's end, was on that page. Nothing in one reply can show
+otherwise. An empty page marked not truncated is exactly what an empty range returns, and swath never sees a
+key that the service leaves out. Only a witness outside that reply can expose the omission:
+
+- an independent sequential audit of the same scope (one continuation-token chain from the start);
+- a key known to exist past the page's start, inside the range, that the listing lacks.
+
+The durable spill campaign found such a service: MinIO answering a `start-after` inside one prefix with an
+empty page ([measurements.md](../measurements.md#durable-spill), `bench/minio_start_after.sh`). Its key-file
+oracle is the first kind of witness.
+
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --seed=false` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points
 `(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, 1,000 entries a page,

@@ -215,6 +215,7 @@ type Engine[P any] struct {
 	running map[uint64]*running // ranges in Expand
 	queued  int
 	tiles   []tileAccount // the prior's bounded tiles (expandPrior), by Range.tile
+	reuse   []source.Span // reused certificates a resume lists around (Reuse)
 	// latSum/latN: the run's range pages' latency (ns), for SlowSplit;
 	// slowQueued: children of slow splits not yet started.
 	latSum     float64

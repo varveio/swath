@@ -45,6 +45,21 @@ func (s sized[P]) Expand(ctx context.Context, r any, e source.Emitter[any, P]) e
 	return s.p.Expand(ctx, r, sizeEmitter[P]{e, s.size, s.n})
 }
 
+// Fences and Replay forward the provider's (source.Fencing,
+// source.Replaying): durable spill engages only when the whole chain from
+// the provider to the order stage forwards them.
+func (s sized[P]) Fences() bool {
+	fc, ok := s.p.(source.Fencing)
+	return ok && fc.Fences()
+}
+
+func (s sized[P]) Replay(r any) (int, bool) {
+	if rp, ok := s.p.(source.Replaying[any]); ok {
+		return rp.Replay(r)
+	}
+	return 0, false
+}
+
 type sizedDisposer[P any] struct {
 	sized[P]
 	d source.Disposer[any]
@@ -56,6 +71,19 @@ type sizeEmitter[P any] struct {
 	source.Emitter[any, P]
 	size func(*P) (int64, bool)
 	n    *atomic.Int64
+}
+
+// Span and Fence forward to a Fencer emitter.
+func (e sizeEmitter[P]) Span(lo, hi string, open bool) {
+	if f, ok := e.Emitter.(source.Fencer); ok {
+		f.Span(lo, hi, open)
+	}
+}
+
+func (e sizeEmitter[P]) Fence(x string, top bool) {
+	if f, ok := e.Emitter.(source.Fencer); ok {
+		f.Fence(x, top)
+	}
 }
 
 // Rows hands the rows on and adds their sizes once the order stage has

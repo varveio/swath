@@ -279,7 +279,7 @@ func (o *run[R, P]) replayMarker(it *item[R, P]) error {
 	if err != nil {
 		return err
 	}
-	o.sp.skip(it.spill, ft.at.size, int64(len(rows)))
+	o.sp.skip(it.spill, ft.at.off+ft.at.size, int64(len(rows)))
 	return o.send(rows)
 }
 

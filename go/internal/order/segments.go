@@ -336,6 +336,16 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	if err == nil {
 		err = faults.At("segments-written") // tests: killed with every row handed on, the last part held
 	}
+	if err == nil {
+		// Every spill file the segments finished is done as the drainer's
+		// trailer read leaves it: a run-private file removed and its credit
+		// returned, a durable one handed back to its cache (drainedFile).
+		for f := range files {
+			if e := o.sp.drained(f); e != nil && err == nil {
+				err = e
+			}
+		}
+	}
 	o.advanced = time.Now()
 	o.mu.Lock()
 	if err != nil {

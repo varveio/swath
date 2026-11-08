@@ -954,6 +954,114 @@ At 16 cores neither step moves the wall. On one core delta coding takes 24–28 
 same VM and zstd on top costs nothing measurable, so delta+zstd stays the default; Go on one core is 36–45 %
 ahead of Java pinned to one core. The plain arm of noaa-goes19 at one core did not run.
 
+## Durable spill
+
+**Fixtures.** One MinIO bucket and three production key lists. Every arm resumes through the real binary
+(`cmd/swath` `TestDurableMinIO` and `TestDurableCorpus`; the schedule and the assertions are described in
+[testing.md](testing.md#durable-spill-campaign-opt-in), with the commands that reproduce this table).
+
+- **MinIO.** `RELEASE.2026-10-23T20-06-51Z`, the Chainguard image pinned in `bench/minio.sh`: a single drive
+  on a tmpfs, 3 GiB, heap target 1 GiB. The bucket holds the first 250,000 keys of `noaa-nbm-grib2-pds`
+  (date paths), filled by `bench/s3fill`. The runs are signed and use 32 workers. At 16 workers the captured
+  ranges were still open at the 40 % kill, so that arm had no certificate; at 64, MinIO outgrew its container.
+- **Corpus.** The first 2,000,000 keys of `real-changesets` (flat numeric names), `noaa-nbm-grib2-pds` (deep
+  date paths) and `argoverse-6M` (long keys, about 130 B), each served by the private key-list fake at
+  5 ms a page through `bench/durable_corpus.sh` (`MAX_KEYS=2000000`). The runs are anonymous and use the
+  default workers.
+- **Skew.** Pages below the key at 10 % of the list wait 200 ms more.
+- **Flags.** `--row-budget 1MiB --spill-budget 256MiB --spill-reserve 64MiB`. Parts are sized to give about 16
+  per dataset, 58 KiB to 1 MiB.
+- **Build.** `go/p2-durable-spill` at `22fe7cda` for the kill arms. The suspect-composition arm's figures are
+  from its rerun at `c0ffc6cf`, which checks replay provenance and logs every resume of the arm. 2026-11-08, 4 shared
+  vCPU.
+- **Oracle.** For every fixture, the uninterrupted reference lists exactly its key file.
+
+**Result: 92 of 92 arms pass.** That is 11 kill schedules at 2 intervals, plus the suspect composition, on 4
+fixtures. Every arm checks the following:
+
+- With `--part-interval=0`, every resumed dataset is byte-identical to the reference. With a 1 s interval it
+  is row-identical in every column.
+- Rows reconcile in every resume.
+- No certificate is rejected.
+- Every resume is checked against the request log, and none of the logged data requests started in
+  `[max(cs, K), ce)` of a certificate live in the ledger's prefix when that resume started. In the kill arms
+  the resumes logged 52,222 data requests: 47,548 from the completing resumes and 4,674 from the killed first
+  resumes of the mid-replay arm. The suspect-composition arm's resumes are counted in its own table below.
+  Delimiter probes and continuations are not data requests and are not checked.
+- Every reuse arm (the unlink, mid-replay, 40 % and 70 % kills) found certificates above K, and its resume
+  accepted and replayed some.
+
+Each cell below is the resume's requests over the cold run's, with the accepted certificates in brackets.
+"No seal yet" marks a kill that, by design, falls before the first certificate is recorded. The cold run made
+386 requests on MinIO, 2,112 on `real-changesets`, 2,223 on `noaa-nbm-grib2-pds` and 2,379 on `argoverse-6M`.
+
+| Kill | MinIO, interval 0 | MinIO, 1 s | changesets, 0 | changesets, 1 s | nbm, 0 | nbm, 1 s | argoverse, 0 | argoverse, 1 s |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| capture frames #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| seal #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| ledger append #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| ledger sync #1 | 0.99 (1) | 0.85 (1) | 1.00 (1) | 0.99 (2) | 1.00 (1) | 0.99 (1) | 1.00 (1) | 1.00 (1) |
+| unlink #1 | 0.76 (27) | 0.81 (14) | 0.48 (254) | 0.55 (254) | 0.11 (255) | 0.14 (254) | 0.15 (254) | 0.14 (255) |
+| after part record #2 | 0.80 (25) | 0.85 (6) | 0.46 (246) | 0.57 (248) | 0.10 (247) | 0.14 (256) | 0.60 (256) | 0.68 (256) |
+| mid recovery replay (ledger sync #3, then replay frame #2) | 0.81 (25) | 0.75 (17) | 0.72 (255) | 0.72 (256) | 0.05 (235) | 0.10 (246) | 0.14 (254) | 0.14 (255) |
+| lost unsealed tail (seal #2) | 0.99 (1) | 0.87 (1) | 0.99 (1) | 1.00 (1) | 1.00 (1) | 0.99 (1) | 1.00 (1) | 1.01 (1) |
+| torn ledger append (sync #2) | 0.99 (1) | 0.98 (2) | 0.98 (55) | 0.97 (56) | 0.93 (14) | 0.93 (15) | 0.96 (25) | 0.95 (28) |
+| 40 % of keys | 0.85 (23) | 0.82 (17) | 0.80 (188) | 0.78 (205) | 0.77 (42) | 0.76 (43) | 0.75 (158) | 0.76 (149) |
+| 70 % of keys | 0.68 (7) | 0.70 (5) | 0.68 (234) | 0.68 (246) | 0.54 (83) | 0.56 (79) | 0.59 (256) | 0.69 (256) |
+
+Savings follow the certificates that are live at the kill.
+
+Request counts depend on scheduling and vary from run to run. In this run the MinIO resumes after the unlink
+and mid-replay kills needed 0.75-0.81x the cold run's requests, against 0.07-0.30x in the first campaign at
+16 workers. More workers seal more and smaller certificates, earlier, and K had advanced further by the first
+unlink.
+
+The kill percentages count `<Key>` elements returned to the binary before their delayed delivery. Overfetch
+and probe keys are included, so a percentage approximates the keys served, not distinct keys processed.
+
+**Suspect composition** (§6 "time cuts on", `--part-interval 3s`, 64 MiB parts; rerun at `c0ffc6cf`,
+2026-11-08). On every fixture a part closed by time held rows from several certificates' intervals and rows
+listed live between them. It was claimed, and the run was killed before its record. The next resume then:
+
+- rejected no certificate;
+- accepted every certificate live above K, the part's among them;
+- replayed at least the part's certificate rows, so those rows are replay's;
+- reproduced the claimed file at its ordinal byte for byte. This is the suspect-part invariant, not identity
+  with a cold run's part, which only the interval-0 arms assert.
+
+Every try and the final resume were checked against the request log, and no logged request started inside a
+live certificate. With reuse off (`--spill-budget 1MiB` on the arm's resumes) the arm fails.
+
+| Fixture | Killed at | Part | Certificates in it | Live rows between them | Bytes | Accepted | Rows replayed | Resumes (data requests logged) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| MinIO | journal append #7 | 7 | 3 | 20,171 | 825,207 | 120 | 203,796 | 8 (825) |
+| `real-changesets` | journal append #1 | 0 | 6 | 324,041 | 2,960,064 | 256 | 453,476 | 2 (2,216) |
+| `noaa-nbm-grib2-pds` | journal append #1 | 0 | 6 | 362,875 | 4,103,476 | 256 | 1,759,471 | 2 (828) |
+| `argoverse-6M` | journal append #2 | 1 | 6 | 172,709 | 9,459,146 | 254 | 911,631 | 3 (2,425) |
+
+**Full scale (GCP Batch).** Runs `dur1` (build `79bafbc6`) and `dur2` (`7af71ece`) listed 64 production
+lists of 20 to 150 million keys. Each list ran cold and was SIGKILLed at 40 % and at 70 %, then resumed.
+In both runs all 64 resumed datasets were byte-identical. The resumes took a median of 0.66x the cold run's
+requests after the 40 % kill (p90 0.99) and 0.22x after the 70 % kill (p90 0.43).
+
+**A MinIO listing anomaly.** A first MinIO fixture held the first 250,000 keys of `nara-1950-census`. On it,
+this MinIO answered every `start-after` inside `1950census/` with an empty page marked not truncated, even
+when the `start-after` was a stored key. `1950census/` sorts after its siblings `1950census-descriptions/`
+and `1950census-maps/`. A sequential continuation-token listing returned all 250,000 keys in order. swath
+splits ranges by `start-after`, so it listed 107,651 keys and lost the 142,349 under `1950census/` without
+an error, identically on every run. A three-key bucket of the same shape did not reproduce it.
+
+The key-file oracle is what caught the loss. A review of swath's requests found no construction fault: a
+`start-after` is sent only without a continuation token, data queries carry no delimiter, and values are
+percent-encoded once, slashes included. `bench/minio_start_after.sh` reproduces the empty page with
+curl-signed requests alone, no swath and no SDK (re-run 2026-11-08 against the pinned image). A prefix
+query lists `1950census/43290879-Alabama/…-0001.jpg` first, yet `start-after=1950census/` and
+`start-after=` that stored key both return `KeyCount=0 IsTruncated=false`.
+
+swath trusts a page that is not truncated as the end of its range
+([providers.md](internals/providers.md#range-engine-internalsourcekeyrange)), so the campaign's MinIO fixture
+is a list without that shape.
+
 ## Smoke runs only
 
 These prove a harness end to end. They are single runs on a loaded host and **not evidence**; the measured

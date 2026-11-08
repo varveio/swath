@@ -114,8 +114,10 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
 logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
-schema id" below), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
-with that build or started over with `--overwrite`) and the writer recipe
+schema id" below), the private journal (version 8, never read by readers: version 8 adds the run UUID that durable spill files
+are bound to; a version 7 journal of the previous build still resumes, with durable spill off, and a version 7
+build refuses a version 8 journal; an interrupted run of an older build is finished with that build or started
+over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
 parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
 on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
@@ -282,10 +284,13 @@ is the full schema and "Run report" in [cli.md](cli.md#run-report) its descripti
 | – | `output.text.formatters`, `output.text.output_wait_ns`, `output.text.compressor` (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`) |
 | `resources.spill` | adds `logical_bytes`, `format`, `decode_refused` |
 
-**Run report: version 3** adds, beside version 2's fields: `timings.listing_done_at` (the provider finished)
-and `resources.drain` (sorted Parquet: the drain tail's times, the read-ahead's frames and waits, the parallel
-segments' plan and holdings, and the encoders admitted at start and after listing; [cli.md](cli.md#run-report)).
-Nothing of version 2 is renamed or removed.
+**Run report: version 3.** Durable spill adds `resources.spill.durable` (the durable spill's account, and on a
+resume what it accepted, rejected and replayed) and `resources.spill.durable_off`, and the counters `reuse.ranges`,
+`reuse.gaps` and `reuse.boundary_overfetch_keys`; the drain tail adds `timings.listing_done_at` (the provider
+finished) and `resources.drain` (sorted Parquet: the tail's times, the read-ahead's frames and waits, the
+parallel segments' plan and holdings, and the encoders admitted at start and after listing;
+[cli.md](cli.md#run-report)). Nothing of version 2 changes: a reader of version 2 can read version 3 by
+ignoring those fields.
 
 **Counters** (`source.stats.counters`, [internals/counters.md](internals/counters.md)), against those builds. New: `seed.from.*`
 (the warm start), `seed.first_page_keys`, `seed.flat_chains`, `seed.stop.flat`, `seed.stop.one_page`,

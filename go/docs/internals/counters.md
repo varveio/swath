@@ -28,7 +28,11 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
 `swath diag list --no-spill` or `swath count`, `features.order` is false for `swath count` (rows counted, not
-ordered), and `encoder_wait_ns` is absent without output.
+ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
+abandons by reason, retirements, retained bytes, and on a resume `resume` with what it accepted, rejected and
+replayed; [ordering.md](ordering.md#durable-spill)) is absent when durable spill was off, and
+`spill.durable_off` then says why when it could have run (a version 7 journal, a spill budget below 16 MiB, a
+provider without fences, a directory that could not be set up).
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts
 logical calls.
@@ -133,6 +137,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.stop.flat` | count | seeds | seed | the seed stopped at a level with no folder, after a chain whose page held no folder was not followed |
 | `seed.first_page_keys` | count | objects | seed | keys the seed's first data page emitted: the whole scope, in one page |
 | `seed.first_page_discarded` | flag |  | seed | the seed's first data page was truncated: discarded, the tiles list the scope from its start (one request more) |
+| `seed.first_page_skipped_reuse` | flag |  | seed | a resume with reused certificates sent no first data page from K: it could list (and, fitting one page, emit) keys a certificate replays |
 | `seed.flat_chains` | count | chains | seed | delimiter chains not followed past a page that held no folder (objects only) |
 | `seed.resumed` | flag |  | seed | the seed tiled a resumed scope (K, ⊤] |
 | `seed.from.parts` | count | parts | seed_from | parts of the --seed-from dataset (0 for a cut file) |
@@ -204,6 +209,9 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `child_small.upper` | count | ranges | split | upper split children that ended or split having listed fewer keys than one page (empty ones included) |
 | `split.frontier_handout_keys` | count | keys | split | keys listed inside the lower children of frontier splits (the child and its descendants): over split.accepted_frontier, the work a frontier split hands out |
 | `resumed_ranges` | count | ranges | resume | ranges a resume started with: (K, ⊤], or the seed's tiling of it |
+| `reuse.ranges` | count | ranges | resume | reused coverage certificates a resume replays from durable spill instead of listing them |
+| `reuse.gaps` | count | ranges | resume | ranges a resume with reused certificates lists: the gaps between them, tiled |
+| `reuse.boundary_overfetch_keys` | count | keys | resume | keys a gap listed past its end, a reused certificate's start, and dropped (also in overfetch_keys) |
 | `max_active` | max | ranges |  | peak ranges in Expand at once |
 | `max_queued` | max | ranges | split | peak ranges queued for a worker |
 | `busy_ns` | count | ns |  | sum of Expand wall time |

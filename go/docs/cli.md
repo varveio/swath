@@ -675,7 +675,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 2 |
+| `report_version` | 3 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (secret flags `[redacted]`), `source` (the root, narrowed by an anchored `--include`), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -720,7 +720,14 @@ output's; absent for swath count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`. `drain` (sorted Parquet; absent otherwise) is the
+`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`, and with durable spill
+([internals/ordering.md](internals/ordering.md#durable-spill)) `durable`: `slots` (the certificate cap),
+`history` and `history_cap` (ledger records against H), `captured_ranges`, `capture_at` (by where the capture
+began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (by reason), `sealed_files`,
+`sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
+(by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
+`accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
+`requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
 drain's tail once listing is done ([internals/ordering.md](internals/ordering.md), every field in
 [internals/counters.md](internals/counters.md)): `tail_ns`, `worker_idle_before_listing_done_ns`,
 `worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,

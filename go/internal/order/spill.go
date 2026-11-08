@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 )
 
@@ -124,6 +126,15 @@ type spiller[P any] struct {
 	logical                    atomic.Int64 // schema.LogicalBytes of the rows written
 	decodeRefused              atomic.Int64 // frames refused at read for decoding past their bound
 	decodeNs                   atomic.Int64 // the drainer's own frame decoding (next)
+
+	// cache, if set, is the attempt's durable spill (durable.go): a range
+	// whose provider declared its span gets a durable file when a slot is
+	// free. codecID names the row codec in a durable file's header.
+	cache   *Cache
+	codecID string
+	// rdec decodes zstd frames of a recovery replay when this run does not
+	// compress (made on first need).
+	rdec *zstd.Decoder
 }
 
 func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress bool, max, reserve int64) (*spiller[P], error) {
@@ -181,6 +192,9 @@ func (s *spiller[P]) close() {
 	s.closeReaders()
 	if s.dec != nil {
 		s.dec.Close()
+	}
+	if s.rdec != nil {
+		s.rdec.Close()
 	}
 	if s.check() == nil { // else the pathname names another directory now
 		_ = os.RemoveAll(s.dir)
@@ -261,7 +275,13 @@ func (s *spiller[P]) openReader(f *spillFile) error {
 		lru.r = nil
 	}
 	s.mu.Unlock()
-	fh, err := os.Open(f.path)
+	var fh *os.File
+	var err error
+	if f.d != nil {
+		fh, err = s.cache.root.Open(s.cache.rel(f.d.name))
+	} else {
+		fh, err = os.Open(f.path)
+	}
 	if err != nil {
 		return fmt.Errorf("spill: %w", err)
 	}
@@ -300,11 +320,65 @@ type spillFile struct {
 	// the largest storage a delta frame written declared: a frame read
 	// back that claims more is malformed, refused before any allocation.
 	most, mostOwned atomic.Int64
+
+	// A durable file (d set): its version-2 frames are written through the
+	// output root, crc is the CRC-32C of every byte written (owner only),
+	// capturing is set from its C frame until the seal or an abandon.
+	d                    *Cert
+	crc                  uint32
+	capturing, abandoned bool
+	captureAt            int64 // the C frame's offset
 }
 
 func (s *spiller[P]) file() *spillFile {
 	s.files.Add(1)
 	return &spillFile{path: filepath.Join(s.dir, fmt.Sprintf("%08d.spill", s.seq.Add(1)))}
+}
+
+// durableFile is a new durable file for a range of logical bounds (lo,
+// hi], or nil when no slot is free (the range spills disposably, as
+// without durable spill): the slot and its history are taken without a
+// wait.
+func (s *spiller[P]) durableFile(lo, hi string, open bool) *spillFile {
+	if s.cache == nil || !s.cache.reserve() {
+		return nil
+	}
+	s.files.Add(1)
+	id := randomID()
+	return &spillFile{d: &Cert{id: id, name: fileName(id), lo: lo, hi: hi, open: open, slot: true}}
+}
+
+// capture writes f's C frame, cs: the frames after it are its
+// certificate's rows. It is always admitted (a few bytes).
+func (s *spiller[P]) capture(f *spillFile, cs string) error {
+	off := f.size
+	if err := s.writeFrames(f, nil, frame2(nil, frameCapture, schema.AppendString(nil, cs)), false); err != nil {
+		return err
+	}
+	f.capturing, f.captureAt = true, off
+	f.d.cs = cs
+	return nil
+}
+
+// seal makes a durable file's data durable (its trailer written): the
+// flusher syncs its name with the directory before the record.
+func (s *spiller[P]) seal(f *spillFile) error {
+	err := faults.At("spill-seal")
+	if err == nil {
+		err = s.check()
+	}
+	var fh *os.File
+	if err == nil {
+		fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_WRONLY, 0)
+	}
+	if err == nil {
+		err = errors.Join(faults.Sync(fh), fh.Close())
+	}
+	if err != nil {
+		return fmt.Errorf("spill seal: %w", err)
+	}
+	f.d.bytes, f.d.crc = f.size, f.crc
+	return nil
 }
 
 func (s *spiller[P]) frame(typ byte, body []byte) []byte {
@@ -316,11 +390,38 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 	return append(hdr[:], payload...)
 }
 
+// durableWritePoint is the crash point before a durable file's write, by
+// what the write carries: the header (the first write, with the capture
+// start when the capture starts at the range's start, and the first
+// rows), the trailer and tail (the final one), or later frames (rows, or
+// a capture start armed at a later fence).
+func durableWritePoint(first, final bool) string {
+	switch {
+	case first:
+		return "spill-write-header"
+	case final:
+		return "spill-write-trailer"
+	}
+	return "spill-write-frames"
+}
+
 // write appends one frame of rows (and, when final, the trailer).
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
+	return s.writeFrames(f, rows, nil, final)
+}
+
+// writeFrames appends, for a durable file's first write, its header; then
+// meta (whole frames, a capture start), the frame of rows and, when final,
+// the trailer (with a durable file's tail).
+func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte, final bool) error {
 	bp := s.buffer()
 	defer s.bufs.Put(bp)
 	buf := (*bp)[:0]
+	if f.d != nil && f.size == 0 {
+		buf = frame2(buf, frameHeader, s.cache.headerBody(f.d, s.codecID))
+	}
+	buf = append(buf, meta...)
+	at := len(buf) // the rows frame's offset in buf
 	var logical int64
 	var framed int64 // bytes of the rows frame
 	if len(rows) > 0 {
@@ -365,30 +466,72 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 		} else {
 			buf = body
 		}
-		binary.LittleEndian.PutUint32(buf[:4], uint32(len(buf)-8))
-		binary.LittleEndian.PutUint32(buf[4:8], crc32.Checksum(buf[8:], spillCRC))
-		framed = int64(len(buf))
+		if f.d != nil {
+			seal2(buf[at:])
+		} else {
+			binary.LittleEndian.PutUint32(buf[at:at+4], uint32(len(buf)-at-8))
+			binary.LittleEndian.PutUint32(buf[at+4:at+8], crc32.Checksum(buf[at+8:], spillCRC))
+		}
+		framed = int64(len(buf) - at)
 	}
-	if final {
+	if final && f.d == nil {
 		buf = append(buf, s.frame(frameTrailer, binary.AppendUvarint(nil, uint64(f.written)))...)
+	}
+	var captured int64
+	if f.capturing {
+		captured = int64(len(rows))
+	}
+	if final && f.d != nil {
+		d := f.d
+		off := f.size + int64(len(buf))
+		prior := crc32.Update(f.crc, spillCRC, buf)
+		rowsBefore, capBefore, lastBefore := d.rows, d.captured, d.last
+		d.rows, d.captured = d.rows+int64(len(rows)), d.captured+captured
+		if captured > 0 {
+			d.last = rows[len(rows)-1].Key
+		}
+		buf = frame2(buf, frameTrailer, trailerBody(d, f.captureAt > 0 || f.capturing, off, prior))
+		buf = append(buf, tail(off)...)
+		d.rows, d.captured, d.last = rowsBefore, capBefore, lastBefore
 	}
 	*bp = buf
 	if len(buf) == 0 {
 		return nil
 	}
 	n := int64(len(buf))
-	if !s.admit(n, final) {
+	if !s.admit(n, final || len(rows) == 0) {
 		return errSpillFull
 	}
 	// Each frame opens the file by name: the output must still be the
-	// directory the run owns (two stats per frame).
-	err := s.check()
+	// directory the run owns. Ownership is checked before each mutation
+	// (the create or open, the append, an ENOSPC rollback's truncation),
+	// two stats each, so a replacement while one was under way stops the
+	// next as the fatal replacement, never as a refused frame. A durable
+	// file is opened through the output root.
+	var err error
+	if f.d != nil {
+		err = faults.At(durableWritePoint(f.size == 0, final))
+	}
+	if err == nil {
+		err = s.check()
+	}
 	if err == nil {
 		var fh *os.File
-		if fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
-			_, err = fh.Write(buf)
-			if err != nil && errors.Is(err, syscall.ENOSPC) && fh.Truncate(f.size) == nil {
-				err = errSpillFull // the torn frame is gone: back off as if refused
+		if f.d != nil {
+			fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		} else {
+			fh, err = os.OpenFile(f.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		}
+		if err == nil {
+			if err = s.check(); err == nil {
+				_, err = faults.Write(fh, buf)
+				if err != nil && errors.Is(err, syscall.ENOSPC) {
+					if verr := s.check(); verr != nil {
+						err = verr // replaced mid-write: fatal, nothing more touched
+					} else if fh.Truncate(f.size) == nil {
+						err = errSpillFull // the torn frame is gone: back off as if refused
+					}
+				}
 			}
 			if cerr := fh.Close(); err == nil {
 				err = cerr
@@ -411,13 +554,28 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 		return fmt.Errorf("spill: %w", err)
 	}
 	if len(rows) > 0 {
-		f.lastOff, f.lastSize, f.lastRows, f.lastLogical = f.size, framed, int64(len(rows)), logical
+		// The rows frame's place in the file (a durable file's header or
+		// capture frame may precede it in buf): the read-ahead and the
+		// segments read it there.
+		f.lastOff, f.lastSize, f.lastRows, f.lastLogical = f.size+int64(at), framed, int64(len(rows)), logical
 	}
 	if final {
-		f.trailerAt = f.size + framed
+		f.trailerAt = f.size + int64(at) + framed
 	}
 	f.size += n
 	f.written += int64(len(rows))
+	if d := f.d; d != nil {
+		f.crc = crc32.Update(f.crc, spillCRC, buf)
+		s.cache.charge(d, n)
+		d.rows += int64(len(rows))
+		if captured > 0 {
+			if d.captured == 0 {
+				d.first = strings.Clone(rows[0].Key)
+			}
+			d.captured += captured
+			d.last = strings.Clone(rows[len(rows)-1].Key)
+		}
+	}
 	if len(rows) > 0 {
 		s.rows.Add(int64(len(rows)))
 		s.frames.Add(1)
@@ -450,6 +608,10 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 			s.live.Add(-n)
 			s.refused.Add(1)
 			s.full.Store(true)
+			// Drained certificates hold credit until K covers them: the
+			// oldest is retired now (its credit returns at its unlink,
+			// through the waker); an undrained file never is.
+			s.cache.evictOne()
 			return false
 		}
 	}
@@ -462,6 +624,24 @@ func (s *spiller[P]) admit(n int64, final bool) bool {
 // release returns a deleted file's bytes to the budget and wakes every
 // waiter: a worker held at admission, or an emitter whose frame was
 // refused, may now spill.
+// drained ends a file whose rows were all handed on without its reader
+// reaching the trailer (the segments, which checked the trailers first):
+// as next does at the trailer, a run-private file is removed and its
+// credit returned, a durable one handed back to its cache.
+func (s *spiller[P]) drained(f *spillFile) error {
+	s.closeFile(f)
+	if f.d != nil {
+		s.cache.drainedFile(f.d)
+		return nil
+	}
+	err := s.check()
+	if err == nil {
+		err = os.Remove(f.path)
+	}
+	s.release(f)
+	return err
+}
+
 func (s *spiller[P]) release(f *spillFile) {
 	s.live.Add(-f.size)
 	s.track()
@@ -509,6 +689,9 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		s.closeFile(f)
 		return nil, errSpillFrame
 	}
+	if f.d != nil {
+		return s.nextDurable(f, hdr, size)
+	}
 	var payload []byte
 	if s.delta {
 		if uint32(cap(s.rbuf)) < size {
@@ -542,49 +725,15 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		s.release(f)
 		return nil, err
 	}
-	var dst []byte
-	if s.delta {
-		dst = s.zbuf[:0]
-	}
 	t := time.Now()
-	rows, dst, err := s.decodeFrame(f, typ, body, dst)
+	rows, err := s.decodeFrame(typ, body, uint64(f.most.Load()), uint64(f.mostOwned.Load()), true)
 	s.decodeNs.Add(int64(time.Since(t)))
-	if s.delta {
-		s.zbuf = dst
-	}
 	if err != nil {
 		s.closeFile(f)
 		return nil, err
 	}
 	f.read += int64(len(rows))
 	return rows, nil
-}
-
-// decodeFrame decodes the body of one rows frame of f, of type typ.
-// Frames are independently decodable: next and readAt share it. dst, if
-// not nil, is scratch for a zstd frame's decoded bytes, returned for reuse
-// (the drainer's zbuf, for delta frames whose rows own their storage);
-// readAt, which runs beside the drainer, passes nil.
-func (s *spiller[P]) decodeFrame(f *spillFile, typ byte, body, dst []byte) ([]schema.Row[P], []byte, error) {
-	switch typ {
-	case frameRowsZstd, frameDeltaZstd:
-		var err error
-		if body, err = s.dec.DecodeAll(body, dst); err != nil {
-			return nil, dst, errSpillFrame
-		}
-		dst = body
-	}
-	var rows []schema.Row[P]
-	var err error
-	if s.delta {
-		rows, err = decodeDelta(body, s.codec, s.dc, uint64(f.most.Load()), uint64(f.mostOwned.Load()))
-	} else {
-		rows, err = decodeRows(body, s.codec, uint64(f.most.Load()))
-	}
-	if err != nil && errors.Is(err, schema.ErrDecodeCap) {
-		s.decodeRefused.Add(1)
-	}
-	return rows, dst, err
 }
 
 // readAt reads and decodes the rows frame of size bytes at off in f on
@@ -595,7 +744,7 @@ func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], tim
 	if size <= 8 || size-8 > maxSpillFrame { // checked before allocating
 		return nil, 0, errSpillFrame
 	}
-	fh, err := os.Open(f.path)
+	fh, err := s.openAt(f)
 	if err != nil {
 		return nil, 0, fmt.Errorf("spill: %w", err)
 	}
@@ -609,17 +758,38 @@ func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], tim
 		return nil, 0, fmt.Errorf("spill: %w", err)
 	}
 	payload := buf[8:]
-	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(buf[4:8]) || payload[0] != s.rowsType() {
+	if int64(binary.LittleEndian.Uint32(buf[:4])) != size-8 || !frameOK(f, [8]byte(buf[:8]), payload) || payload[0] != s.rowsType() {
 		return nil, 0, errSpillFrame
 	}
 	t := time.Now()
-	rows, _, err := s.decodeFrame(f, payload[0], payload[1:], nil) // its own buffers: it runs beside the drainer
+	rows, err := s.decodeFrame(payload[0], payload[1:], uint64(f.most.Load()), uint64(f.mostOwned.Load()), false) // its own buffers: it runs beside the drainer
 	return rows, time.Since(t), err
+}
+
+// openAt opens f for a read at an offset: a durable file through the
+// output root, as its writes and the drainer's reader do.
+func (s *spiller[P]) openAt(f *spillFile) (*os.File, error) {
+	if f.d != nil {
+		return s.cache.root.Open(s.cache.rel(f.d.name))
+	}
+	return os.Open(f.path)
+}
+
+// frameOK checks a frame's CRC: a durable file's frames cover their
+// header's length too (check2), a run-private file's the payload alone.
+func frameOK(f *spillFile, hdr [8]byte, payload []byte) bool {
+	if f.d != nil {
+		return check2(hdr, payload)
+	}
+	return crc32.Checksum(payload, spillCRC) == binary.LittleEndian.Uint32(hdr[4:])
 }
 
 // trailerRows reads f's trailer on its own descriptor (any goroutine,
 // once the file is complete): the row count its owner wrote.
 func (s *spiller[P]) trailerRows(f *spillFile) (int64, error) {
+	if f.d != nil {
+		return s.durableTrailerRows(f)
+	}
 	size := f.size - f.trailerAt
 	if f.trailerAt <= 0 || size <= 9 || size > 32 {
 		return 0, errSpillFrame
@@ -644,15 +814,48 @@ func (s *spiller[P]) trailerRows(f *spillFile) (int64, error) {
 	return int64(n), nil
 }
 
-// skip passes over the frame of size bytes holding rows rows that the
+// durableTrailerRows is trailerRows for a durable file: its trailer frame
+// (check2), then the tail; the rows are the trailer's (parseTrailer).
+func (s *spiller[P]) durableTrailerRows(f *spillFile) (int64, error) {
+	if f.trailerAt <= 0 || f.trailerAt+9 > f.size {
+		return 0, errSpillFrame
+	}
+	fh, err := s.openAt(f)
+	if err != nil {
+		return 0, fmt.Errorf("spill: %w", err)
+	}
+	defer fh.Close()
+	var hdr [8]byte
+	if _, err := fh.ReadAt(hdr[:], f.trailerAt); err != nil {
+		return 0, fmt.Errorf("spill: %w", err)
+	}
+	size := int64(binary.LittleEndian.Uint32(hdr[:4]))
+	if size < 1 || f.trailerAt+8+size > f.size {
+		return 0, errSpillFrame
+	}
+	payload := make([]byte, size)
+	if _, err := fh.ReadAt(payload, f.trailerAt+8); err != nil {
+		return 0, fmt.Errorf("spill: %w", err)
+	}
+	if !check2(hdr, payload) || payload[0] != frameTrailer {
+		return 0, errSpillFrame
+	}
+	t, ok := parseTrailer(payload[1:])
+	if !ok {
+		return 0, errSpillFrame
+	}
+	return t.rows, nil
+}
+
+// skip passes over the frame ending at end holding rows rows that the
 // read-ahead replayed (drainer only): the next sequential read, or the
 // trailer's, starts after it, on a reader reopened there.
-func (s *spiller[P]) skip(f *spillFile, size, rows int64) {
+func (s *spiller[P]) skip(f *spillFile, end, rows int64) {
 	if f.r != nil {
 		s.closeFile(f)
 		f.r = nil
 	}
-	f.pos += size
+	f.pos = end // absolute: a durable file's capture frame may precede a rows frame
 	f.read += rows
 }
 

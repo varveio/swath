@@ -62,7 +62,15 @@ type Sorted struct {
 	mu          sync.Mutex
 	seed        int64
 	Calls       int
+	// Starts are the data (non-delimiter) requests' exclusive start keys:
+	// the start-after, or for a continuation the key before its position
+	// ("" from the scope's start). Read under Lock.
+	Starts []string
 }
+
+// Lock and Unlock guard Starts and Calls.
+func (f *Sorted) Lock()   { f.mu.Lock() }
+func (f *Sorted) Unlock() { f.mu.Unlock() }
 
 func NewSorted(keys []string, short bool, seed int64) *Sorted {
 	k := slices.Clone(keys)
@@ -127,6 +135,18 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 			}
 		}
 		i = max(i, sort.Search(len(f.Keys), func(j int) bool { return f.Keys[j] > sa }))
+	}
+	if delim == "" {
+		start := in.StartAfter
+		if in.ContinuationToken != "" {
+			start = ""
+			if i > 0 {
+				start = f.Keys[i-1]
+			}
+		}
+		f.mu.Lock()
+		f.Starts = append(f.Starts, start)
+		f.mu.Unlock()
 	}
 	out := &Page{}
 	n := 0
