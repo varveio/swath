@@ -815,7 +815,7 @@ jobs:
           fi
           echo "CI gate passed."
 
-  # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge that touches Java and on
+  # Dev-image GHCR publish + offline runtime smoke (deep public-bucket smoke on manual dispatch only). Runs on every `main` merge that touches Java and on
   # manual dispatch from any branch. Tagged releases publish through release.yml
   # instead; `latest` and the semver tags are owned solely by that workflow, so this
   # job can never regress a release pointer.
@@ -903,7 +903,21 @@ jobs:
       - name: Smoke — replay toolkit launcher and runtime classpath
         run: docker run --rm swath-replay:ci --help
 
+      # Offline smoke, on every publish: the image starts, the entrypoint passes arguments
+      # and the CLI answers without touching any network. This is what gates the push on a
+      # main merge. The real-bucket smoke below is manual-only (owner policy: no automatic
+      # runs against real buckets; the release workflow still runs it before `latest`).
+      - name: Smoke — image starts offline (--version and --help)
+        run: |
+          version=$(sed -n 's/^version=//p' gradle.properties)
+          out=$(docker run --rm swath:ci --version)
+          echo "$out"
+          grep -qxF "swath $version" <<<"$out"
+          grep -qF "${GITHUB_SHA:0:12}" <<<"$out"
+          docker run --rm swath:ci --help | grep -q 'Parallel, resumable S3 object lister'
+
       - name: Install DuckDB CLI
+        if: github.event_name == 'workflow_dispatch'
         run: |
           curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
           echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
@@ -911,15 +925,17 @@ jobs:
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
           duckdb --version
 
-      # Deep runtime smoke (shared with release.yml — see the script header). Runs
-      # only here on non-PR events, so a network hiccup never blocks a PR. Gates the
-      # push below: a shading/exclude/runtime regression can never reach the GHCR tags.
+      # Deep runtime smoke (shared with release.yml — see the script header). Reaches a real
+      # public bucket, so it runs ONLY on manual dispatch (owner policy: no automatic runs
+      # against real buckets). When dispatched it gates the push below.
       - name: Smoke — container Parquet write + read + resume (public bucket)
+        if: github.event_name == 'workflow_dispatch'
         run: ./scripts/ci/smoke-container.sh swath:ci dockersmoke
         env:
           SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
 
       - name: Smoke — replay serves the captured Parquet through DuckDB and Jetty
+        if: github.event_name == 'workflow_dispatch'
         run: ./scripts/ci/smoke-replay-container.sh swath-replay:ci dockersmoke/data/data
 
       # Only now — after the smoke passed — log in and push the multi-arch
