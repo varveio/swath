@@ -1197,7 +1197,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's
 `go-nonrace` job runs the same script on every Go change). seekparquet `go/v0.1.0` (commit `81e44548`), suite
-revision `0.1.0-draft.4`, run on the development host before the pull request's CI.
+revision `0.1.0-draft.4`; the same numbers on the development host and in the pull request's CI (#299, `go-nonrace`).
 
 | Check | Result |
 |---|---|
