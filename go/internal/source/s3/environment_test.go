@@ -4,6 +4,7 @@
 package s3
 
 import (
+	"context"
 	"fmt"
 	"net/http/httptest"
 	"slices"
@@ -34,10 +35,11 @@ func proxied(t *testing.T, keys []string, plan faulttest.Plan) (*faulttest.Proxy
 // through the throttle-free window that follows. Without the limiter the
 // same storm leaves concurrency at the worker count.
 //
-// The storm is requests 24 to 55 by arrival, not a span of time: on a
-// loaded host a time span can hold no request at all. The limiter is at
-// its floor after 5 throttles (16, 11, 7, 4, 2, 1), and the rest of the
-// storm drains the requests it admitted before then. "After the storm"
+// The storm is requests 24 to 143 by arrival, not a span of time: on a
+// loaded host a time span can hold no request at all. A cut needs 39 fresh
+// throttles (15 % of the limiter's 256-answer window), so the 120 throttles
+// cut three times (16, 11, 7, 4); retries of throttled requests fall in
+// the storm too. "After the storm"
 // starts 200 ms after the last throttle and ends 10 s (the limiter's clean
 // window) after the first: growth comes back only that long after the
 // last real decrease, which no throttle precedes. Past it the limiter may
@@ -49,7 +51,7 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("logs%03d/%05d", i%200, i))
 	}
 	slices.Sort(keys)
-	storm := faulttest.Window{N0: 24, N1: 56, Fraction: 1, Fault: faulttest.Throttle}
+	storm := faulttest.Window{N0: 24, N1: 144, Fraction: 1, Fault: faulttest.Throttle}
 	slow := faulttest.Window{Fraction: 1, Fault: faulttest.Latency, Delay: 60 * time.Millisecond}
 	const workers = 16
 	const cleanWindow = 10 * time.Second // objhttp's throttle-free time before any growth
@@ -142,7 +144,7 @@ func TestAttemptsAreRequestEconomics(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ep := fakeBucket(t, keys, c.fail)
-			cl, err := client.New(client.Config{Endpoint: ep, PathStyle: true, Anonymous: true, Region: "us-east-1",
+			cl, err := client.New(context.Background(), client.Config{Endpoint: ep, PathStyle: true, Anonymous: true, Region: "us-east-1",
 				MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
 			if err != nil {
 				t.Fatal(err)

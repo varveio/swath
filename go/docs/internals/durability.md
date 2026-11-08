@@ -29,7 +29,7 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | split decided, children partly queued (`split`) | in memory only: the resume starts from K; the split is lost harmlessly |
 | rows buffered or queued to an encoder (`range-done`, `encoding`) | relisted from K |
 | part closed and synced, not claimed (`part-closed`) | the orphan in `.swath/parts/` is removed and the part is reproduced byte for byte |
-| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`) |
+| part claimed, record not yet written (`journal-append`) | the claimed part is set aside and must be reproduced exactly (below): on disk this is the same as an acknowledged record lost whole since. The resume closes that ordinal after the claimed part's row count, so a part the part interval closed is reproduced whatever the resume's timing or interval (`TestTimeCutClaimResumes`). A reproduced part that reaches the size target at that boundary was closed by size, and when it is the first such part it calibrates the size ratio as the original did, before its successor is routed (`TestCalibratingClaimRecoversRepeatedly`, `journal-append#2` in both crash matrices) |
 | record written, not synced (`journal-sync`) | a whole unsynced frame that survived is a valid record of a synced part, and recovery syncs the journal before acting on it; a torn tail (power loss) is dropped, and its claimed part is set aside and must be reproduced exactly (below) |
 | record durable, rename absent (`recorded`, `rename`) | the part in `.swath/parts/` is checked against the record (size, MD5), then renamed into `data/` |
 | record durable, rename absent, the record truncated or zeroed since (damage, not a crash) | reads as a torn tail: the part is set aside in `.swath/suspect/`; the resume records that ordinal again only if it reproduces the part byte for byte, and otherwise refuses (`ErrAmbiguousTail`) with the part kept (`TestAmbiguousTailRefusesOnChangedSource`) |
@@ -91,12 +91,12 @@ that is the commit. The run reports follow it.
 Every JSON file swath replaces goes through one primitive, `dataset.Replace`, with a temporary file of its
 own beside the target (`.NAME.*.tmp`, so concurrent writers never share one; an overwrite removes leftovers)
 and a stated durability: `Durable` (file synced before the rename, directory after) for `manifest.json` and
-`run.json`; `Atomic` (never torn, not synced) for the files rewritten as the run goes or read only by its
-supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
+`run.json`, and for the outcome files a supervisor acts on, `error.json` and the `--report` file; `Atomic`
+(never torn, not synced) for the file rewritten as the run goes, `.swath/progress.json`.
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`; `--limiter-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--limiter-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
@@ -161,8 +161,8 @@ supervisor: `.swath/progress.json`, `error.json` and the `--report` file.
    equivalence allowed beyond the client's own folding of one trailing endpoint slash: another endpoint, path
    or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), or the run declines resume. Workers, encoders,
-   row budget, `-seed` and
-   credentials may change. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
+   row budget and credentials may change; so may the seed for a library caller (`-seed` is not part of
+   the identity), but the CLI's `swath resume` replays the recorded `--seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
    lock is taken, for the run or for a refusal's settlement, an existing `.swath/` must be a directory and an
@@ -342,5 +342,5 @@ tail as JSON lines.
   part could lose its name. A journaled run and `swath resume` are therefore refused with
   `listing.ErrUnenforced` before the output is created or touched (`TestUnenforcedPlatformRefusesJournal`).
   What still runs: `--no-journal` runs of object stores and filesystem runs, which are not resumable. The
-  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in the tests
-  (`TestWindowsBuild`), never run natively.
+  Windows build and the journal's tests (`TestWindowsLock` included) are cross-compiled in CI's `go` job,
+  never run natively.

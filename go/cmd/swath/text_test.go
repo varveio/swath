@@ -72,7 +72,7 @@ func TestTextOutput(t *testing.T) {
 	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "not resumable") {
 		t.Fatalf("resume of a text file: %v", err)
 	}
-	if err := run(context.Background(), []string{t.TempDir()}, &out, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--count-only") {
+	if err := run(context.Background(), []string{t.TempDir()}, &out, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath count") {
 		t.Fatalf("local source as text: %v", err)
 	}
 	var u usageError
@@ -135,8 +135,7 @@ func TestResolveOutput(t *testing.T) {
 		{o: options{out: "ds", format: "tsv"}, failure: "--format is for stdout"},
 		{o: options{out: "x.tsv", format: "tsv"}, failure: "--format is for stdout"},
 		{o: options{format: "parquet"}, failure: "want auto, table, tsv or jsonl"},
-		{o: options{countOnly: true, format: "tsv"}, failure: "--count-only"},
-		{o: options{countOnly: true, out: "x.tsv"}, failure: "--count-only"},
+		{o: options{countOnly: true}},
 	} {
 		c, err := resolveOutput(&tc.o, tc.tty)
 		switch {

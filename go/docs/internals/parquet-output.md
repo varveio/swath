@@ -23,25 +23,16 @@ dataset layout"); this page says how the Go writer meets it.
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
 | Key length | per schema (`schema.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | filesystem keys longer than the 1,024-byte bound truncation get truncated, conservative column-index bounds (min truncated, max rounded up); `TestKeyLimits` covers both. |
 | `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | generic readers learn the order without the swath stamps; metadata only, rows already arrive sorted. |
-| `created_by` | `swath-go version <module version or devel> (build <revision>[-dirty])`, from the build itself | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath-go/parquet-r2`) is promised. |
+| `created_by` | `swath-go version <module version or devel> (build <revision>[-dirty])`, from the build itself (`internal/buildinfo`: the revision `build.sh` links in, else the toolchain's VCS stamp; shortened to 12 hex digits) | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath-go/parquet-r2`) is promised. |
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `--report-format json` prints the
-same type, also for a dry run or a failure, and `--report FILE` writes it to FILE when the attempt ends (also for a
-resume refused before it runs). Sections: `build` (tool, module version, VCS revision), `attempt` (`id`, random
-per invocation, and `started`; `error.json` carries the same, so a reader holding the report can tell a stale
-`error.json` from this attempt's),
-`invocation` (argv, source, output, schema, workers, encoders, row budget and part size), `outcome` (`committed`,
-`listed` or `failed`, the error, completeness, stop reason, per-entry errors, and the command's `class`,
-`exit_code`, `resumable` and `cause`, as in [../cli.md](../cli.md), and `unrecorded`: why `error.json` does not hold this outcome, when it does not), `timings` (timestamps and
-integer `*_ms` durations, wall, listing, user and system CPU; the CPU times, like peak RSS, are optional: present
-where the platform measures them, `resources.rusage_available` false and all three left out where it does not), `output` (rows this invocation listed, rows
-retained from an interrupted run, rows committed; parts written and retained; bytes), `resources` (`rusage_available` and, where true, peak RSS,
-row budget, peak buffered, waits in `*_ns`, spill, `features`) and `source` (the provider's statistics under
-its name: `s3`, `local`; requests and attempts are this invocation's). It is operational: written after the
-commit (a failure to write it is a warning, the dataset stands) and never part of acceptance, which reads the
-manifest's coverage ([../upgrade.md](../upgrade.md)). There is no cost estimate and no Java-only field.
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 2); `--report-format json`
+prints the same type, also for `swath count` or a failure, and `--report FILE` writes it to FILE when the attempt
+ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
+[../cli.md](../cli.md#run-report) (pinned by `internal/listing/testdata/report-schema.golden`). It is
+operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
+acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md)).
 
 ## Footer stamps
 
@@ -64,6 +55,9 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
   calibrate: its encoded size is more footer, and its ratio would freeze a limit far below the part size
   for the whole run and its resumes (`TestTimeCutPartDoesNotCalibrate`: such a ratio cut 546 parts where a
   clean run cuts 12; the test allows at most the clean run's count plus the parts the interval closed, plus two).
+  A resume that reproduces a claimed, unrecorded part closes it at its recorded row count; if that is the
+  calibrating part it reaches the size target there, as the original did, and calibrates the same ratio
+  (`TestPinnedCalibratingPartCalibrates`).
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 
@@ -75,11 +69,13 @@ part interval cuts (below).
 journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
 (`TestRouterRefusesPartPastLimit`). `dataset.PartOrdinal` refuses a six-digit name.
 
-**The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) bounds the
-age of the recovery point on a slow frontier: a part open that long with rows is closed although not full,
-and a journaled run publishes it, so a crash loses at most about that long of frontier progress instead of a
-whole part's worth. It bounds the frontier's age only: rows listed past the frontier (buffered, spilled, or in
-parts not yet recorded) are lost and relisted whatever the interval ([durability.md](durability.md)). The
+**The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) is a
+rotation target: a part open that long with rows is closed although not full (the router's ticker cuts only an
+existing part whose boundary no resume fixed), and a journaled run publishes it in ordinal order behind the parts
+before it. It bounds how long rows wait in an open part, not the age of the recovery point: the closed part
+still encodes and syncs, and while no rows reach the output no part is open to close. Rows listed past the
+frontier (buffered, spilled, or in parts not yet recorded) are relisted whatever the interval
+([durability.md](durability.md)). The
 default is Java's rotation interval, 30 s; a cut part can be far below its target size. The order stage hands on its batch before the drainer waits on the frontier, so the
 open part holds every row the walk has reached. A cut by time makes that run's boundaries depend on timing:
 the report counts such cuts (`resources.part_time_cuts`); with none, or with the interval off (zero;

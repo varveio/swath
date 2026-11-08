@@ -37,7 +37,7 @@ func TestRetryContract(t *testing.T) {
 		Garbled:  func(w http.ResponseWriter) { fmt.Fprint(w, `<ListBucketResult><IsTruncated>fal`) },
 	}
 	objhttptest.Contract(t, wire, func(s objhttptest.Settings) objhttptest.Client {
-		c, err := New(Config{Endpoint: s.Endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1", RequestTimeout: s.Timeout,
+		c, err := New(context.Background(), Config{Endpoint: s.Endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1", RequestTimeout: s.Timeout,
 			MaxAttempts: s.Retry.MaxAttempts, BaseBackoff: s.Retry.BaseBackoff, MaxBackoff: s.Retry.MaxBackoff, Limiter: s.Retry.Limiter})
 		if err != nil {
 			t.Fatal(err)

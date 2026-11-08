@@ -16,7 +16,7 @@ import (
 // freezes the schema, the writer, the part size and the key cap; the
 // source names the rest (Provider and Source, from source.Identified).
 type Identity struct {
-	Tool     string `json:"tool"`      // "swath-go"
+	Tool     string `json:"tool"`      // buildinfo.Tool
 	Format   int    `json:"format"`    // dataset format version (the journal's own is in the header)
 	SchemaID string `json:"schema_id"` // output schema
 	KeyCap   int    `json:"key_cap"`   // the schema's key length limit (rows it refuses)

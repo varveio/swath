@@ -6,6 +6,7 @@ package parquetout
 import (
 	"context"
 	"errors"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -50,7 +52,7 @@ func testRows(n int, seed int64) []row {
 
 func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part {
 	t.Helper()
-	w, err := create(nil, path, &testSchema, 0, columns, func() int { return columns })
+	w, err := create(nil, path, &testSchema, columns, func() int { return columns })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,13 +184,8 @@ func TestValuesAreCopied(t *testing.T) {
 func TestFooterMatchesSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x")
 	writeFile(t, path, testRows(100, 3), 1)
-	f, _ := os.Open(path)
-	defer f.Close()
-	fi, _ := f.Stat()
-	pf, err := pq.OpenFile(f, fi.Size())
-	if err != nil {
-		t.Fatal(err)
-	}
+	pf, closeFile := openParquet(t, path)
+	defer closeFile()
 	elems := pf.Metadata().Schema[1:]
 	specs := testSchema.Specs()
 	if len(elems) != len(specs) {
@@ -211,18 +208,36 @@ func TestFooterMatchesSchema(t *testing.T) {
 	}
 }
 
-func footer(t *testing.T, path string) map[string]string {
+// openParquet opens path's Parquet footer; close closes the file (callers
+// close each file when done with it: a test may read hundreds of parts).
+func openParquet(t *testing.T, path string) (pf *pq.File, close func()) {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	fi, _ := f.Stat()
-	pf, err := pq.OpenFile(f, fi.Size())
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+		}
+	}()
+	fi, err := f.Stat()
 	if err != nil {
 		t.Fatal(err)
 	}
+	pf, err = pq.OpenFile(f, fi.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok = true
+	return pf, func() { f.Close() }
+}
+
+func footer(t *testing.T, path string) map[string]string {
+	t.Helper()
+	pf, closeFile := openParquet(t, path)
+	defer closeFile()
 	kv := map[string]string{}
 	for _, e := range pf.Metadata().KeyValueMetadata {
 		kv[e.Key] = e.Value
@@ -234,27 +249,30 @@ func readKeys(t *testing.T, parts []dataset.Part) []string {
 	t.Helper()
 	var keys []string
 	for _, p := range parts {
-		f, err := os.Open(p.Path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fi, _ := f.Stat()
-		pf, err := pq.OpenFile(f, fi.Size())
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := pq.NewReader(pf)
-		buf := make([]pq.Row, 512)
-		for {
-			n, err := r.ReadRows(buf)
-			for _, row := range buf[:n] {
-				keys = append(keys, string(row[0].ByteArray()))
+		func() {
+			pf, closeFile := openParquet(t, p.Path)
+			defer closeFile() // also on a Fatal; the reader does not close the file
+			r := pq.NewReader(pf)
+			buf := make([]pq.Row, 512)
+			for {
+				n, err := r.ReadRows(buf)
+				for _, row := range buf[:n] {
+					keys = append(keys, string(row[0].ByteArray()))
+				}
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", p.Path, err) // a decoding or I/O failure is not the end of the part
+				}
+				if n == 0 {
+					t.Fatalf("%s: ReadRows returned no rows and no error", p.Path)
+				}
 			}
-			if err != nil || n == 0 {
-				break
+			if err := r.Close(); err != nil {
+				t.Fatal(err)
 			}
-		}
-		f.Close()
+		}()
 	}
 	return keys
 }
@@ -318,5 +336,20 @@ func TestKeyLimits(t *testing.T) {
 	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
 	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
 		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
+	}
+}
+
+// TestFooterBuild: created_by carries the build's revision, a linker one
+// included, shortened to 12 hex digits with its -dirty mark kept.
+func TestFooterBuild(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"0123456789abcdef0123456789abcdef01234567", "0123456789ab"},
+		{"0123456789abcdef0123456789abcdef01234567-dirty", "0123456789ab-dirty"},
+		{"abc", "abc"},
+		{"", ""},
+	} {
+		if app, v, rev := footerBuild(buildinfo.Build{Tool: buildinfo.Tool, Version: "v1", Revision: c.in}); app != buildinfo.Tool || v != "v1" || rev != c.want {
+			t.Errorf("%q: %q %q %q, want revision %q", c.in, app, v, rev, c.want)
+		}
 	}
 }

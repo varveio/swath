@@ -5,6 +5,7 @@ package s3
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -75,3 +76,141 @@ func (objectCodec) Decode(d *schema.Decoder, o *Object) {
 	o.ETag, o.StorageClass, o.OwnerID = d.Str(), d.Str(), d.Str()
 	o.OwnerDisplayName, o.ChecksumAlgorithm, o.ChecksumType = d.Str(), d.Str(), d.Str()
 }
+
+// The delta encoding of an Object against the previous row's (spill's delta
+// frames): a flags byte, the size as a signed varint (as in Append), the
+// time as a signed varint of its difference from the previous time (zigzag:
+// neighbours' times cluster, so the difference is small either way) or,
+// when the difference overflows, the time itself; the ETag; then each other
+// string unless it repeats the previous row's.
+const (
+	deltaTimeAbs   = 1 << 0 // the time itself, not a difference (int64 overflow)
+	deltaETagShift = 1      // two bits, the ETag's form (etag*)
+	deltaETagMask  = 3 << deltaETagShift
+	// deltaSame + i: string i of sameStrings repeats the previous row's.
+	deltaSame = 3
+)
+
+// The ETag's forms. A raw ETag is 16 bytes standing for exactly 32
+// lowercase hex digits (an MD5, how S3 spells a single-part ETag once its
+// quotes are stripped, which is how Object carries it): it round-trips
+// byte for byte. Any other spelling (uppercase hex, multipart "hex-N",
+// quoted, empty) is the string itself.
+const (
+	etagString = iota
+	etagSame
+	etagRaw
+)
+
+// sameStrings are the strings after the ETag, in order, each with a repeat
+// flag (bits deltaSame..deltaSame+4).
+func sameStrings(o *Object) [5]*string {
+	return [5]*string{&o.StorageClass, &o.OwnerID, &o.OwnerDisplayName, &o.ChecksumAlgorithm, &o.ChecksumType}
+}
+
+func (objectCodec) AppendDelta(dst []byte, prev, o *Object) []byte {
+	at := len(dst)
+	dst = append(dst, 0)
+	var flags byte
+	dst = binary.AppendVarint(dst, o.Size)
+	if d := o.Mtime - prev.Mtime; (o.Mtime^prev.Mtime)&(o.Mtime^d) < 0 {
+		flags |= deltaTimeAbs
+		dst = binary.AppendVarint(dst, o.Mtime)
+	} else {
+		dst = binary.AppendVarint(dst, d)
+	}
+	switch {
+	case o.ETag == prev.ETag:
+		flags |= etagSame << deltaETagShift
+	default:
+		if out, ok := appendRawETag(dst, o.ETag); ok {
+			flags |= etagRaw << deltaETagShift
+			dst = out
+		} else {
+			dst = schema.AppendString(dst, o.ETag)
+		}
+	}
+	ps, cur := sameStrings(prev), sameStrings(o)
+	for i := range cur {
+		if *cur[i] == *ps[i] {
+			flags |= 1 << (deltaSame + i)
+		} else {
+			dst = schema.AppendString(dst, *cur[i])
+		}
+	}
+	dst[at] = flags
+	return dst
+}
+
+func (objectCodec) DecodeDelta(d *schema.Decoder, prev, o *Object) {
+	flags := d.Byte()
+	o.Size = d.Varint()
+	if t := d.Varint(); flags&deltaTimeAbs != 0 {
+		o.Mtime = t
+	} else {
+		o.Mtime = prev.Mtime + t // wraps only on a malformed frame, which its CRC guards
+	}
+	switch (flags & deltaETagMask) >> deltaETagShift {
+	case etagString:
+		o.ETag = d.Str()
+	case etagSame:
+		o.ETag = prev.ETag
+	case etagRaw:
+		raw := d.Fixed(md5Bytes)
+		b := d.Alloc(2 * md5Bytes)
+		if d.Err() != nil {
+			return
+		}
+		hex.Encode(b, raw)
+		o.ETag = schema.View(b)
+	default:
+		d.Fixed(-1) // an unknown form: malformed
+		return
+	}
+	ps, cur := sameStrings(prev), sameStrings(o)
+	for i := range cur {
+		if flags&(1<<(deltaSame+i)) != 0 {
+			*cur[i] = *ps[i]
+		} else {
+			*cur[i] = d.Str()
+		}
+	}
+}
+
+// md5Bytes is an MD5's size: a single-part ETag is its 32 hex digits.
+const md5Bytes = 16
+
+// appendRawETag appends etag's 16 raw bytes when it is exactly 32
+// lowercase hex digits (the spelling hex.Encode gives back), else returns
+// dst unchanged and false. One pass through a table: the check is on
+// every spilled row.
+func appendRawETag(dst []byte, etag string) ([]byte, bool) {
+	if len(etag) != 2*md5Bytes {
+		return dst, false
+	}
+	var raw [md5Bytes]byte
+	var bad byte
+	for i := range raw {
+		hi, lo := lowerHex[etag[2*i]], lowerHex[etag[2*i+1]]
+		bad |= hi | lo
+		raw[i] = hi<<4 | lo&0x0f
+	}
+	if bad&0xf0 != 0 {
+		return dst, false
+	}
+	return append(dst, raw[:]...), true
+}
+
+// lowerHex maps a lowercase hex digit to its value and every other byte to
+// 0xff (its high bits mark it invalid).
+var lowerHex = func() (t [256]byte) {
+	for i := range t {
+		t[i] = 0xff
+	}
+	for i, c := range "0123456789abcdef" {
+		t[c] = byte(i)
+	}
+	return t
+}()
+
+var _ schema.DeltaCodec[Object] = objectCodec{}

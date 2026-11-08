@@ -35,7 +35,7 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 			// The command an earlier build recorded: the same run with a
 			// flag since removed.
 			recorded := append([]string{"diag", "list", removed}, args...)
-			err := runWith(ctx, append(args, "--max-duration", "200ms"), io.Discard, true, recorded, false, nil)
+			err := runWith(ctx, command{diag: true}, append(args, "--max-duration", "200ms"), io.Discard, recorded, false, nil)
 			if c := exitCode(t, err); c != exitDeadline {
 				t.Fatalf("first attempt: exit %d", c)
 			}

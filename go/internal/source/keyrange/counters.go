@@ -36,7 +36,23 @@ const (
 	cSeedStopRequests
 	cSeedStopRoundTrips
 	cSeedStopFailed
+	cSeedStopOnePage
+	cSeedStopFlat
+	cSeedFirstPageKeys
+	cSeedFirstPageDiscarded
+	cSeedFlatChains
 	cSeedResumed
+	cSeedFromParts
+	cSeedFromIndexed
+	cSeedFromIndexFailed
+	cSeedFromCuts
+	cSeedFromUnsafe
+	cSeedFromTiles
+	cSeedFromExpected
+	cSeedFromErrWithin
+	cSeedFromErrGrown
+	cSeedFromErrShrunk
+	cSeedFromErrMaxGrown
 	cSentinelDeclinedTruncated
 	cSentinelDeclinedObjectLast
 	cSentinelDeclinedNoCeiling
@@ -62,13 +78,14 @@ const (
 	cSplitAcceptedFrontier
 	cSplitRejectedCursor
 	cSplitRejectedBound
-	cSplitRejectedDone
 	cSplitRejectedNoPivot
 	cSplitRejectedUnsafeCursor
 	cSplitRejectedUnsafePivot
 	cSplitSkippedNoDemand
+	cSplitReasonSlowRange
+	cSlowMaxRangeLatency
+	cSlowRunLatency
 	cSplitSkippedOutranked
-	cSplitSkippedNotContinuing
 	cSplitSkippedRemainder
 	cSplitSkippedLowerTiny
 	cSplitSkippedUpperTiny
@@ -161,7 +178,23 @@ var Counters = table([numCounters]counters.Def{
 	cSeedStopRequests:             d("seed.stop.requests", counters.Count, "seeds", "the seed stopped: the next level, or the next empty page a chain follows, would pass 64 requests", "seed"),
 	cSeedStopRoundTrips:           d("seed.stop.round_trips", counters.Count, "seeds", "the seed stopped: 6 round trips spent (a wave costs its longest chain of requests, empty pages followed included)", "seed"),
 	cSeedStopFailed:               d("seed.stop.failed", counters.Count, "seeds", "the seed stopped: a listing failed or the run was canceled (the seed counters are what it spent until then)", "seed"),
+	cSeedStopOnePage:              d("seed.stop.one_page", counters.Count, "seeds", "the seed stopped: its first data page, sent with the top level's first delimiter request, was not truncated (the scope fits in one page; no tile)", "seed"),
+	cSeedStopFlat:                 d("seed.stop.flat", counters.Count, "seeds", "the seed stopped at a level with no folder, after a chain whose page held no folder was not followed", "seed"),
+	cSeedFirstPageKeys:            d("seed.first_page_keys", counters.Count, "objects", "keys the seed's first data page emitted: the whole scope, in one page", "seed"),
+	cSeedFirstPageDiscarded:       d("seed.first_page_discarded", counters.Flag, "", "the seed's first data page was truncated: discarded, the tiles list the scope from its start (one request more)", "seed"),
+	cSeedFlatChains:               d("seed.flat_chains", counters.Count, "chains", "delimiter chains not followed past a page that held no folder (objects only)", "seed"),
 	cSeedResumed:                  d("seed.resumed", counters.Flag, "", "the seed tiled a resumed scope (K, ⊤]", "seed"),
+	cSeedFromParts:                d("seed.from.parts", counters.Count, "parts", "parts of the --seed-from dataset (0 for a cut file)", "seed_from"),
+	cSeedFromIndexed:              d("seed.from.indexed_parts", counters.Count, "parts", "parts whose key page index was read for finer cuts", "seed_from"),
+	cSeedFromIndexFailed:          d("seed.from.index_failed", counters.Count, "parts", "parts whose key page index could not be read: their part bounds were cut at instead", "seed_from"),
+	cSeedFromCuts:                 d("seed.from.cuts", counters.Count, "cuts", "cut keys the prior offered (before the merge into tiles)", "seed_from"),
+	cSeedFromUnsafe:               d("seed.from.unsafe", counters.Count, "cuts", "cuts the provider does not accept as a bound: cut at their longest accepted prefix, or merged into the next", "seed_from"),
+	cSeedFromTiles:                d("seed.from.tiles", counters.Count, "ranges", "ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers))", "seed_from"),
+	cSeedFromExpected:             d("seed.from.expected_keys", counters.Count, "keys", "keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth", "seed_from"),
+	cSeedFromErrWithin:            d("seed.from.error.within_2x", counters.Count, "ranges", "prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included)", "seed_from"),
+	cSeedFromErrGrown:             d("seed.from.error.grown", counters.Count, "ranges", "prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out)", "seed_from"),
+	cSeedFromErrShrunk:            d("seed.from.error.shrunk", counters.Count, "ranges", "prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied", "seed_from"),
+	cSeedFromErrMaxGrown:          d("seed.from.error.max_grown", counters.Max, "x", "the largest ratio of a prior tile's listed keys to the prior's expectation, rounded", "seed_from"),
 	cSplitConsidered:              d("split.considered", counters.Count, "decisions", "split decisions taken with demand and rank", "split"),
 	cSplitPivotReflect:            d("split.pivot.reflect", counters.Count, "splits", "accepted splits whose pivot is the cursor reflected from its chain's anchor (forwardReflect at the scalar where they diverge)", "split"),
 	cSplitPivotMidpoint:           d("split.pivot.midpoint", counters.Count, "splits", "accepted splits whose pivot is a safe scalar midpoint between the cursor and hi", "split"),
@@ -174,7 +207,7 @@ var Counters = table([numCounters]counters.Def{
 	cReflectCeiling:               d("split.reflect.ceiling", counters.Count, "decisions", "reflections at or past the range's ceiling (hi, or the scope's prefixCeil on the frontier): the pivot fell back to the midpoint between the cursor and the ceiling, and the upper child starts a new chain", "split"),
 	cDensityShrinkPrevented:       d("split.density.shrink_prevented", counters.Count, "decisions", "decisions whose density step lay nearer the cursor than the anchor reflection: not taken (the density step may move a pivot further, never nearer)", "split"),
 	cDensityRefusedShort:          d("split.density.refused.short_page", counters.Count, "decisions", "density step refused (after its halvings): fewer than 2 keys on the page", "split"),
-	cDensityRefusedAlphabet:       d("split.density.refused.alphabet", counters.Count, "decisions", "density step refused (after its halvings): a byte on the page or the cursor is non-ASCII or unsafe ('%', control)", "split"),
+	cDensityRefusedAlphabet:       d("split.density.refused.alphabet", counters.Count, "decisions", "density step refused (after its halvings): a byte on the page or the cursor is non-ASCII or a control character ('%' is read as a digit)", "split"),
 	cDensityRefusedZeroSpan:       d("split.density.refused.zero_span", counters.Count, "decisions", "density step refused (after its halvings): the page spans no distance", "split"),
 	cDensityRefusedPastTop:        d("split.density.refused.past_top", counters.Count, "decisions", "density step refused (after its halvings): the target is past the representable keys", "split"),
 	cDensityRefusedHole:           d("split.density.refused.hole", counters.Count, "decisions", "density step refused (after its halvings): the target is not a string (an end-of-string digit inside it)", "split"),
@@ -183,13 +216,14 @@ var Counters = table([numCounters]counters.Def{
 	cSplitAcceptedFrontier:        d("split.accepted_frontier", counters.Count, "splits", "splits of the open frontier", "split"),
 	cSplitRejectedCursor:          d("split.rejected.cursor", counters.Count, "decisions", "guard: pivot not above the cursor", "split"),
 	cSplitRejectedBound:           d("split.rejected.bound", counters.Count, "decisions", "guard: pivot not below hi (or the scope ceiling)", "split"),
-	cSplitRejectedDone:            d("split.rejected.done", counters.Count, "decisions", "guard: the range had ended", "split"),
 	cSplitRejectedNoPivot:         d("split.rejected.no_pivot", counters.Count, "decisions", "guard: no safe pivot exists", "split"),
 	cSplitRejectedUnsafeCursor:    d("split.rejected.unsafe_cursor", counters.Count, "decisions", "guard: the cursor is not a usable start-after", "split"),
 	cSplitRejectedUnsafePivot:     d("split.rejected.unsafe_pivot", counters.Count, "decisions", "guard: the provider vetoes the pivot as a bound", "split"),
 	cSplitSkippedNoDemand:         d("split.skipped.no_demand", counters.Count, "decisions", "no idle worker (hunger <= 0)", "split"),
+	cSplitReasonSlowRange:         d("split.reason.slow_range", counters.Count, "splits", "--slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges'", "slow_split"),
+	cSlowMaxRangeLatency:          d("split.slow.max_range_latency_ns", counters.Max, "ns", "--slow-split: the highest page latency (EWMA) of a range", "slow_split"),
+	cSlowRunLatency:               d("split.slow.run_latency_ns", counters.Gauge, "ns", "--slow-split: the run's mean range page latency", "slow_split"),
 	cSplitSkippedOutranked:        d("split.skipped.outranked", counters.Count, "decisions", "larger ranges took the demand", "split"),
-	cSplitSkippedNotContinuing:    d("split.skipped.not_continuing", counters.Count, "decisions", "the range's last page did not continue", "split"),
 	cSplitSkippedRemainder:        d("split.skipped.remainder", counters.Count, "decisions", "bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page)", "split"),
 	cSplitSkippedLowerTiny:        d("split.skipped.lower_tiny", counters.Count, "decisions", "bounded range whose pivot would leave the lower child (cursor, pivot] under 1 page by its last page's density: not split, the owner's next request covers it (decided again after the next page)", "split"),
 	cSplitSkippedUpperTiny:        d("split.skipped.upper_tiny", counters.Count, "decisions", "bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page)", "split"),
@@ -264,7 +298,8 @@ var seedLevelCuts = [seedLevels + 1]counters.ID{cSeedLevel0Cuts, cSeedLevel1Cuts
 
 // seedStopBy is the counter of each reason the seed stopped descending.
 var seedStopBy = [...]counters.ID{stopWide: cSeedStopWide, stopLeaf: cSeedStopLeaf, stopLevels: cSeedStopLevels,
-	stopRequests: cSeedStopRequests, stopRoundTrips: cSeedStopRoundTrips, stopFailed: cSeedStopFailed}
+	stopRequests: cSeedStopRequests, stopRoundTrips: cSeedStopRoundTrips, stopFailed: cSeedStopFailed,
+	stopOnePage: cSeedStopOnePage, stopFlat: cSeedStopFlat}
 
 // probeSent is the counter of each reason a probe was sent.
 var probeSent = [...]counters.ID{probeFrontier: cStructureSentFrontier, probeStall: cStructureSentStall, probeForced: cStructureSentForced}
@@ -298,8 +333,14 @@ func (p *Engine[P]) disabled() []string {
 	if p.opt.Sequential || !p.opt.Floors {
 		off = append(off, "floors")
 	}
-	if p.opt.Sequential || !p.opt.Seed {
+	if p.opt.Sequential || !p.opt.Seed || p.opt.Prior != nil {
 		off = append(off, "seed")
+	}
+	if p.opt.Sequential || p.opt.Prior == nil {
+		off = append(off, "seed_from")
+	}
+	if p.opt.Sequential || !p.opt.SlowSplit {
+		off = append(off, "slow_split")
 	}
 	if p.opt.Resume == nil {
 		off = append(off, "resume")

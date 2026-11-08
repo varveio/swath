@@ -26,4 +26,4 @@ case "${last:-}" in
 ./cmd/*) pkg= ;;
 esac
 CGO_ENABLED=0 exec go build -trimpath \
-	-ldflags="-s -w -X github.com/varveio/swath/go/internal/listing.revision=$rev -X main.revision=$rev" "$@" $pkg
+	-ldflags="-s -w -X github.com/varveio/swath/go/internal/buildinfo.Revision=$rev -X main.revision=$rev" "$@" $pkg

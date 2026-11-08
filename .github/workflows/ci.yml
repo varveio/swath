@@ -358,6 +358,9 @@ jobs:
                 ./build.sh -o "$RUNNER_TEMP/$cmd-${target%/*}-${target#*/}" "./cmd/$cmd"
             done
           done
+          # The journal's tests (its Windows lock test included) compile for
+          # Windows, where they are never run.
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/journal-windows.test" ./internal/journal
           # Each CI build names its commit (build.sh stamps it).
           for cmd in swath swath-replay; do
             "$RUNNER_TEMP/$cmd-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"

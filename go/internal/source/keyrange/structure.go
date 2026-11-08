@@ -173,9 +173,7 @@ func (p *Engine[P]) probeStructure(ctx context.Context, c, hi string) structure 
 		wg.Go(func() {
 			in := p.query()
 			in.Prefix, in.After, in.Delimiter, in.Max, in.Probe = pre, c, "/", min(structureKeys, p.opt.PageSize), true
-			p.lock()
 			p.c.Inc(cStructureRequests)
-			p.unlock()
 			out, err := p.list(ctx, in)
 			if err != nil {
 				return // structure is advice: a failed probe is no folder

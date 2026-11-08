@@ -18,7 +18,7 @@ a boolean, `gauge` a value derived when the provider snapshots (the attempt late
 a policy names it (`Feature`). `features` maps every such policy to whether this run had it on; the values of
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
-- absent, feature `false`: the policy was off for this run (for S3: `seed` with `--seed=false` or `--sequential`,
+- absent, feature `false`: the policy was off for this run (for S3: `seed` with `swath diag list --seed=false` or `--sequential`,
   `split` with `--sequential`, `floors` without `--floors`, `structure` with `--structure=off` (`--sequential`,
   `--floors` and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
@@ -27,7 +27,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
-`swath diag list --no-spill` or `--count-only`, `features.order` is false for `--count-only` (rows counted, not
+`swath diag list --no-spill` or `swath count`, `features.order` is false for `swath count` (rows counted, not
 ordered), and `encoder_wait_ns` is absent without output.
 
 Request accounting uses `attempts` (HTTP requests, retries included) as the denominator; `requests` counts
@@ -56,13 +56,25 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `budget_wait_ns` | ns | emitters, and workers with ranges queued, waited on a full reorder budget (the reorder cost); summed over goroutines |
 | `encoder_wait_ns` | ns | the order stage waited for an encoder: a full part queue, or every encoder busy when a part opened |
 | `spill.rows`, `spill.bytes`, `spill.ranges` | rows, bytes, ranges | rows written to spill and replayed, bytes written, ranges that spilled |
+| `spill.logical_bytes`, `spill.format` | bytes, name | the spilled rows' logical size (key and column values, as the part router counts them; `spill.bytes` against it is what the frame coding saved) and the frames written: `delta+zstd` (the default), `delta` (`--spill-compress=false`), `plain+zstd` or `plain` (`--spill-plain`) |
+| `spill.decode_refused` | frames | frames refused at read for decoding past their declared storage (a malformed frame; the run fails with it) |
 | `spill.peak_bytes`, `spill.refused` | bytes, frames | peak live spill bytes; frames the disk budget refused (the emitter waited instead) |
 | `spill.dir`, `spill.fs_type` | path, name | the spill directory and its filesystem (Linux: `tmpfs`, `ext4`, `xfs`, ..., or the statfs magic in hex; absent elsewhere): on `tmpfs` or `ramfs` spill is memory outside `peak_rss_bytes`, and the run warns at start |
 | `peak_ahead_rows` | rows | the most rows listed and not yet handed on at once: ahead of the publish frontier, in memory or spilled (live: `progress.json` `order.ahead_rows`) |
 | `frontier_stuck_max_ns` | ns | the longest interval in which the order stage handed nothing on: from the drain's start to the first row, between two hand-ons, or from the last row to the drain's end, whether it ends in success, cancellation or an error |
-| `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
+| `peak_heap_live_bytes` | bytes | the peak live heap while listing (`/gc/heap/live:bytes`, sampled every 100 ms); against `invocation.row_budget_bytes` it is the memory the budget does not see, the garbage collector's headroom aside |
 
-A dry run (`--count-only`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
+A text run's sink (run summary, `output.text`):
+
+| Key | Unit | Meaning |
+|---|---|---|
+| `sink_wait_ns` | ns | the order stage was in the text sink: rows waiting on the writer (one formatter: formatting them, and `output_wait_ns`; more: handing batches to the formatters' full queue) |
+| `output_wait_ns` | ns | handing bytes on: to the compressor (a synchronous encoder compressing, or every parallel job busy), or to the file or stream uncompressed; by the order stage with one formatter, by the sequencer with more |
+| `formatters` | goroutines | rows formatted at once: `--encoders` (as admitted) for a file, 1 (the order stage) for stdout |
+| `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
+| `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `row_budget` (16 MiB each of an allowance equal to the row budget carries fewer), `encoders` (asked), `gzip` (one stream) |
+
+A count (`swath count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
 and `frontier_stuck_max_ns` are 0 and `spill` is absent.
 
 Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
@@ -99,7 +111,23 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `seed.stop.requests` | count | seeds | seed | the seed stopped: the next level, or the next empty page a chain follows, would pass 64 requests |
 | `seed.stop.round_trips` | count | seeds | seed | the seed stopped: 6 round trips spent (a wave costs its longest chain of requests, empty pages followed included) |
 | `seed.stop.failed` | count | seeds | seed | the seed stopped: a listing failed or the run was canceled (the seed counters are what it spent until then) |
+| `seed.stop.one_page` | count | seeds | seed | the seed stopped: its first data page, sent with the top level's first delimiter request, was not truncated (the scope fits in one page; no tile) |
+| `seed.stop.flat` | count | seeds | seed | the seed stopped at a level with no folder, after a chain whose page held no folder was not followed |
+| `seed.first_page_keys` | count | objects | seed | keys the seed's first data page emitted: the whole scope, in one page |
+| `seed.first_page_discarded` | flag |  | seed | the seed's first data page was truncated: discarded, the tiles list the scope from its start (one request more) |
+| `seed.flat_chains` | count | chains | seed | delimiter chains not followed past a page that held no folder (objects only) |
 | `seed.resumed` | flag |  | seed | the seed tiled a resumed scope (K, ⊤] |
+| `seed.from.parts` | count | parts | seed_from | parts of the --seed-from dataset (0 for a cut file) |
+| `seed.from.indexed_parts` | count | parts | seed_from | parts whose key page index was read for finer cuts |
+| `seed.from.index_failed` | count | parts | seed_from | parts whose key page index could not be read: their part bounds were cut at instead |
+| `seed.from.cuts` | count | cuts | seed_from | cut keys the prior offered (before the merge into tiles) |
+| `seed.from.unsafe` | count | cuts | seed_from | cuts the provider does not accept as a bound: cut at their longest accepted prefix, or merged into the next |
+| `seed.from.tiles` | count | ranges | seed_from | ranges the prior tiled the scope into, the open frontier after its last cut included (at most min(1000, 4×workers)) |
+| `seed.from.expected_keys` | count | keys | seed_from | keys the prior expected in its bounded tiles (0 without counts): against objects, the scope's growth |
+| `seed.from.error.within_2x` | count | ranges | seed_from | prior tiles whose ranges listed within 2x of the keys the prior expected (a tile's descendants included) |
+| `seed.from.error.grown` | count | ranges | seed_from | prior tiles whose ranges listed more than 2x the keys the prior expected: the segment grew (its first page's gauge replaced the estimate, and splits share it out) |
+| `seed.from.error.shrunk` | count | ranges | seed_from | prior tiles whose ranges listed less than half the keys the prior expected: the segment shrank or emptied |
+| `seed.from.error.max_grown` | max | x | seed_from | the largest ratio of a prior tile's listed keys to the prior's expectation, rounded |
 | `seed.sentinel_declined.truncated` | count | decisions | seed | sentinel declined: the top level had more pages than the seed followed |
 | `seed.sentinel_declined.object_last` | count | decisions | seed | sentinel declined: the top level's last page ended with an object |
 | `seed.sentinel_declined.no_ceiling` | count | decisions | seed | sentinel declined: no prefix ceiling above the last cut (and a resume key) |
@@ -116,7 +144,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.reflect.ceiling` | count | decisions | split | reflections at or past the range's ceiling (hi, or the scope's prefixCeil on the frontier): the pivot fell back to the midpoint between the cursor and the ceiling, and the upper child starts a new chain |
 | `split.density.shrink_prevented` | count | decisions | split | decisions whose density step lay nearer the cursor than the anchor reflection: not taken (the density step may move a pivot further, never nearer) |
 | `split.density.refused.short_page` | count | decisions | split | density step refused (after its halvings): fewer than 2 keys on the page |
-| `split.density.refused.alphabet` | count | decisions | split | density step refused (after its halvings): a byte on the page or the cursor is non-ASCII or unsafe ('%', control) |
+| `split.density.refused.alphabet` | count | decisions | split | density step refused (after its halvings): a byte on the page or the cursor is non-ASCII or a control character ('%' is read as a digit) |
 | `split.density.refused.zero_span` | count | decisions | split | density step refused (after its halvings): the page spans no distance |
 | `split.density.refused.past_top` | count | decisions | split | density step refused (after its halvings): the target is past the representable keys |
 | `split.density.refused.hole` | count | decisions | split | density step refused (after its halvings): the target is not a string (an end-of-string digit inside it) |
@@ -125,13 +153,14 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.accepted_frontier` | count | splits | split | splits of the open frontier |
 | `split.rejected.cursor` | count | decisions | split | guard: pivot not above the cursor |
 | `split.rejected.bound` | count | decisions | split | guard: pivot not below hi (or the scope ceiling) |
-| `split.rejected.done` | count | decisions | split | guard: the range had ended |
 | `split.rejected.no_pivot` | count | decisions | split | guard: no safe pivot exists |
 | `split.rejected.unsafe_cursor` | count | decisions | split | guard: the cursor is not a usable start-after |
 | `split.rejected.unsafe_pivot` | count | decisions | split | guard: the provider vetoes the pivot as a bound |
 | `split.skipped.no_demand` | count | decisions | split | no idle worker (hunger <= 0) |
+| `split.reason.slow_range` | count | splits | slow_split | --slow-split: splits taken without an idle worker: the range's pages took at least 4 times the run's mean page latency and its time left (keys left x its page latency) was at least twice the mean of the running ranges' |
+| `split.slow.max_range_latency_ns` | max | ns | slow_split | --slow-split: the highest page latency (EWMA) of a range |
+| `split.slow.run_latency_ns` | gauge | ns | slow_split | --slow-split: the run's mean range page latency |
 | `split.skipped.outranked` | count | decisions | split | larger ranges took the demand |
-| `split.skipped.not_continuing` | count | decisions | split | the range's last page did not continue |
 | `split.skipped.remainder` | count | decisions | split | bounded range whose remainder (cursor, hi] is under 2 pages by its last page's density: not split, the owner lists it in at most two more requests (decided again after the next page) |
 | `split.skipped.lower_tiny` | count | decisions | split | bounded range whose pivot would leave the lower child (cursor, pivot] under 1 page by its last page's density: not split, the owner's next request covers it (decided again after the next page) |
 | `split.skipped.upper_tiny` | count | decisions | split | bounded range whose pivot would leave the upper child (pivot, hi] under 1 page by its last page's density (often: past the remainder's last key): not split (decided again after the next page) |
@@ -196,18 +225,22 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
 | `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
 | `inflight.latency_overflow` | count | attempts |  | attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket |
-| `limiter.decreases` | count | steps | limiter | limit multiplied by 0.7 on a 429/503/SlowDown answer |
-| `limiter.floor_throttles` | count | answers | limiter | 429/503/SlowDown answers at a limit of 1: no decrease and no fresh 10 s cool-down |
-| `limiter.increases` | count | steps | limiter | limit raised by one (at most one per second, after 10 s without a throttle) |
-| `limiter.growth_cooldown` | count | steps | limiter | due growth steps held back: a throttle answer in the last 10 s |
+| `limiter.decreases` | count | steps | limiter | cuts: limit multiplied by 0.7 on a 429/503/SlowDown answer, at most one per round trip, while 15 % or more of the window's answers were throttles |
+| `limiter.floor_throttles` | count | answers | limiter | cuts due at a limit of 1: no decrease |
+| `limiter.cuts_suppressed.round_trip` | count | answers | limiter | 429/503/SlowDown answers to attempts sent before the last cut: no further cut (one per round trip) |
+| `limiter.cuts_suppressed.tolerated` | count | answers | limiter | 429/503/SlowDown answers while under 15 % of the window's answers were throttles: no cut (a background the retries absorb) |
+| `limiter.throttle_permille` | gauge | permille | limiter | throttle answers per 1,000 of the window (the last 4 x workers answers since the last cut) at the end |
+| `limiter.limit` | gauge | permits | limiter | the limit at the end: where it converged |
+| `limiter.increases` | count | steps | limiter | growth steps: limit raised by one, at most one per second, while the window since the last cut is full with under 7.5 % throttles, or after 10 s without a throttle answer |
+| `limiter.growth_cooldown` | count | steps | limiter | due growth steps held back by throttling: the window since a cut not yet full, or 7.5 % or more of it throttles, and a throttle answer in the last 10 s |
 | `limiter.growth_latency_frozen` | count | steps | limiter | due growth steps held back: successful attempts' latency EWMA above twice the baseline |
 | `limiter.growth_timeout_frozen` | count | steps | limiter | due growth steps held back: 3 or more attempt timeouts in the last 10 s |
 | `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
 | `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
 | `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
 | `limiter.max_depth` | max | permits | limiter | most permits the limit stood below the worker count |
-| `slow_start.doubles` | count | steps | slow_start | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout) |
-| `slow_start.ramp_ns` | max | ns | slow_start | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout) |
+| `slow_start.doubles` | count | steps | slow_start | --limiter-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
+| `slow_start.ramp_ns` | max | ns | slow_start | --limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
 | `slow_start.end_limit` | max | permits | slow_start | --limiter-slow-start: the limit the ramp ended at (0: still ramping) |
 | `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |

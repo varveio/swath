@@ -11,7 +11,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
@@ -48,7 +48,8 @@ const EncoderBytes = 24 << 20
 // and etags, delta integers with standard INT annotations, zstd
 // SpeedDefault with entropy coding, and parts cut at size/0.1 for part 0,
 // then at the frozen ratio. Bump the revision with any change to these.
-// A resume refuses a journal written under another recipe.
+// It is the resume identity's writer field: a resume refuses a journal
+// written under another recipe.
 //
 // Versions are separate: the dataset format (dataset.FormatVersion), the
 // logical schema (schema IDs), the private journal (journal.Version) and
@@ -56,38 +57,20 @@ const EncoderBytes = 24 << 20
 // within a build; across builds only the recipe is promised.
 const Recipe = "swath-go/parquet-r2"
 
-// WriterID is the resume identity's writer field.
-const WriterID = Recipe
-
 // createdBy is the footer's created_by: the tool, its module version and
-// its VCS revision, from the build itself.
-var createdBy, createdVersion, createdBuild = build()
+// its VCS revision, from the build itself (buildinfo, the linker's revision
+// included), the revision shortened to 12 hex digits.
+var createdBy, createdVersion, createdBuild = footerBuild(buildinfo.Read())
 
-func build() (app, version, rev string) {
-	app, version = "swath-go", "devel"
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
-	if v := info.Main.Version; v != "" && v != "(devel)" {
-		version = v
-	}
-	dirty := false
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			dirty = s.Value == "true"
-		}
-	}
+func footerBuild(b buildinfo.Build) (app, version, rev string) {
+	rev, dirty := strings.CutSuffix(b.Revision, "-dirty")
 	if len(rev) > 12 {
 		rev = rev[:12]
 	}
 	if dirty {
 		rev += "-dirty"
 	}
-	return
+	return b.Tool, b.Version, rev
 }
 
 // writer writes one sorted part in strictly ascending key order.
@@ -108,8 +91,8 @@ type writer[P any] struct {
 	closed    bool
 }
 
-// create opens path for part ordinal (0-based).
-func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], ordinal, maxColumns int, columns func() int) (*writer[P], error) {
+// create opens path for a part.
+func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], maxColumns int, columns func() int) (*writer[P], error) {
 	c, err := newCodec(max(1, maxColumns))
 	if err != nil {
 		return nil, err

@@ -30,9 +30,21 @@ import (
 // is removed when Run returns, on success or failure.
 //
 // A file is a sequence of frames: a 4-byte little-endian payload length, a
-// CRC-32C of the payload, and the payload, whose first byte is its type:
-// 'R' rows, 'Z' zstd-compressed rows (level 1), 'T' the trailer (row count),
-// written when the range ends and checked after replay.
+// CRC-32C of the payload, and the payload, whose first byte is its type
+// (the frame* constants): rows, delta-coded or plain, each optionally
+// zstd-compressed (level 1), or the trailer (row count), written when the
+// range ends and checked after replay. A run writes one rows type and its
+// reader refuses every other, so a frame of an unknown or foreign format
+// is never decoded.
+//
+// A delta frame (appendDelta) codes each key against the previous key in
+// the frame (shared-prefix length, then the suffix) and each payload against
+// the previous payload through the producer's schema.DeltaCodec (S3), or
+// its stateless Codec (the other producers). The previous row is the
+// frame's own: it resets at every frame, so a frame decodes alone, without
+// the file before it (what replay after reopening a reader, and a durable
+// spill, need). Decoded rows own their storage (an owning decoder, bounded
+// by the frame's declared storage), so the read buffers are reused.
 //
 // Disk budget. Spill never fills the disk: a frame is written only if the
 // live spill bytes stay within Max and the spill filesystem keeps Reserve
@@ -47,9 +59,28 @@ import (
 
 var spillCRC = crc32.MakeTable(crc32.Castagnoli)
 
+// Frame types: the payload's first byte.
+const (
+	frameRows      = 'R' // plain rows (appendRows): --spill-plain --spill-compress=false
+	frameRowsZstd  = 'Z' // plain rows, zstd: --spill-plain
+	frameDelta     = 'D' // delta rows (appendDelta): --spill-compress=false
+	frameDeltaZstd = 'Y' // delta rows, zstd: the CLI's default
+	frameTrailer   = 'T' // the row count, at the range's end
+)
+
+// A delta frame's payload coding (its header's third field): a run writes
+// the one its producer has, and its reader refuses the other.
+const (
+	payloadStateless  = 0 // schema.Codec
+	payloadContextual = 1 // schema.DeltaCodec
+)
+
 type spiller[P any] struct {
+	schema   *schema.Schema[P]
 	codec    schema.Codec[P]
+	dc       schema.DeltaCodec[P] // the producer's contextual codec, or nil
 	dir      string
+	delta    bool // delta frames (else plain: --spill-plain)
 	compress bool
 	max      int64 // live spill bytes (0: no cap)
 	reserve  int64 // free bytes to leave on the filesystem (0: none)
@@ -62,16 +93,23 @@ type spiller[P any] struct {
 	g        *Gauges      // live bytes and open readers (nil in tests)
 	seq      atomic.Uint64
 	enc      sync.Pool // *zstd.Encoder
+	bufs     sync.Pool // *[]byte: writers' frame and body buffers
 	dec      *zstd.Decoder
+	// rbuf and zbuf are the drainer's read and decode buffers, reused from
+	// frame to frame for delta frames (their rows own their storage); a
+	// plain frame's rows view its buffers, so each gets fresh ones.
+	rbuf, zbuf []byte
 
 	mu   sync.Mutex
 	open map[*spillFile]struct{} // files with an open reader, closed by close
 	tick uint64                  // reader use order, for eviction (mu)
 
 	rows, frames, bytes, files atomic.Int64
+	logical                    atomic.Int64 // schema.LogicalBytes of the rows written
+	decodeRefused              atomic.Int64 // frames refused at read for decoding past their bound
 }
 
-func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max, reserve int64) (*spiller[P], error) {
+func newSpiller[P any](sch *schema.Schema[P], parent string, plain, compress bool, max, reserve int64) (*spiller[P], error) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
@@ -79,7 +117,8 @@ func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max,
 	if err != nil {
 		return nil, fmt.Errorf("spill: %w", err)
 	}
-	s := &spiller[P]{codec: codec, dir: dir, compress: compress, max: max, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s := &spiller[P]{schema: sch, codec: sch.Codec, dir: dir, delta: !plain, compress: compress, max: max, reserve: reserve, open: map[*spillFile]struct{}{}}
+	s.dc, _ = sch.Codec.(schema.DeltaCodec[P])
 	if compress {
 		// A decoded frame is bounded like a raw one: a damaged or hostile
 		// frame cannot claim more memory than any frame written.
@@ -88,6 +127,31 @@ func newSpiller[P any](codec schema.Codec[P], parent string, compress bool, max,
 		}
 	}
 	return s, nil
+}
+
+// format names the frames the run writes, for the report.
+func (s *spiller[P]) format() string {
+	f := "plain"
+	if s.delta {
+		f = "delta"
+	}
+	if s.compress {
+		f += "+zstd"
+	}
+	return f
+}
+
+// rowsType is the type of the rows frames the run writes and reads.
+func (s *spiller[P]) rowsType() byte {
+	switch {
+	case s.delta && s.compress:
+		return frameDeltaZstd
+	case s.delta:
+		return frameDelta
+	case s.compress:
+		return frameRowsZstd
+	}
+	return frameRows
 }
 
 // close releases every reader still open (a run that failed downstream
@@ -195,9 +259,10 @@ type spillFile struct {
 	read    int64 // rows replayed (drainer only)
 	pos     int64 // bytes replayed: where a closed reader reopens (drainer only)
 	used    uint64
-	// most is the row count of the largest frame written: a frame read
+	// most is the row count of the largest frame written, and mostOwned
+	// the largest storage a delta frame written declared: a frame read
 	// back that claims more is malformed, refused before any allocation.
-	most atomic.Int64
+	most, mostOwned atomic.Int64
 }
 
 func (s *spiller[P]) file() *spillFile {
@@ -216,14 +281,40 @@ func (s *spiller[P]) frame(typ byte, body []byte) []byte {
 
 // write appends one frame of rows (and, when final, the trailer).
 func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error {
-	var buf []byte
+	bp := s.buffer()
+	defer s.bufs.Put(bp)
+	buf := (*bp)[:0]
+	var logical int64
 	if len(rows) > 0 {
 		if int64(len(rows)) > f.most.Load() {
 			f.most.Store(int64(len(rows))) // the owner is the only writer
 		}
-		body := appendRows(nil, rows, s.codec)
-		typ := byte('R')
+		var owned int64
+		for i := range rows {
+			logical += s.schema.LogicalBytes(&rows[i])
+			owned += int64(len(rows[i].Key)) + s.schema.Heap(&rows[i].Data)
+		}
+		if s.delta && owned > f.mostOwned.Load() {
+			f.mostOwned.Store(owned)
+		}
+		typ := s.rowsType()
+		// The frame is built in place: its header, then the body, coded
+		// straight into the frame or, compressed, into a scratch buffer.
+		buf = append(buf, 0, 0, 0, 0, 0, 0, 0, 0, typ)
+		var bodyBuf *[]byte
+		body := buf
 		if s.compress {
+			bodyBuf = s.buffer()
+			defer s.bufs.Put(bodyBuf)
+			body = (*bodyBuf)[:0]
+		}
+		if s.delta {
+			body = appendDelta(body, rows, s.codec, s.dc, owned)
+		} else {
+			body = appendRows(body, rows, s.codec)
+		}
+		if s.compress {
+			*bodyBuf = body
 			enc, _ := s.enc.Get().(*zstd.Encoder)
 			if enc == nil {
 				var err error
@@ -231,15 +322,18 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 					return err
 				}
 			}
-			body = enc.EncodeAll(body, nil)
+			buf = enc.EncodeAll(body, buf)
 			s.enc.Put(enc)
-			typ = 'Z'
+		} else {
+			buf = body
 		}
-		buf = s.frame(typ, body)
+		binary.LittleEndian.PutUint32(buf[:4], uint32(len(buf)-8))
+		binary.LittleEndian.PutUint32(buf[4:8], crc32.Checksum(buf[8:], spillCRC))
 	}
 	if final {
-		buf = append(buf, s.frame('T', binary.AppendUvarint(nil, uint64(f.written)))...)
+		buf = append(buf, s.frame(frameTrailer, binary.AppendUvarint(nil, uint64(f.written)))...)
 	}
+	*bp = buf
 	if len(buf) == 0 {
 		return nil
 	}
@@ -282,9 +376,19 @@ func (s *spiller[P]) write(f *spillFile, rows []schema.Row[P], final bool) error
 	if len(rows) > 0 {
 		s.rows.Add(int64(len(rows)))
 		s.frames.Add(1)
+		s.logical.Add(logical)
 	}
 	s.bytes.Add(n)
 	return nil
+}
+
+// buffer is a writer's frame or body buffer from the pool (put back by the
+// caller).
+func (s *spiller[P]) buffer() *[]byte {
+	if bp, ok := s.bufs.Get().(*[]byte); ok {
+		return bp
+	}
+	return new([]byte)
 }
 
 // errSpillFull is a refusal by the disk budget, not a failure.
@@ -360,15 +464,28 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		s.closeFile(f)
 		return nil, errSpillFrame
 	}
-	payload := make([]byte, size)
+	var payload []byte
+	if s.delta {
+		if uint32(cap(s.rbuf)) < size {
+			s.rbuf = make([]byte, size)
+		}
+		payload = s.rbuf[:size]
+	} else {
+		payload = make([]byte, size)
+	}
 	if _, err := io.ReadFull(f.r, payload); err != nil || crc32.Checksum(payload, spillCRC) != binary.LittleEndian.Uint32(hdr[4:]) {
 		s.closeFile(f)
 		return nil, errSpillFrame
 	}
 	f.pos += int64(len(hdr)) + int64(size)
 	body := payload[1:]
-	switch payload[0] {
-	case 'T':
+	typ := payload[0]
+	if typ != frameTrailer && typ != s.rowsType() {
+		s.closeFile(f)
+		return nil, errSpillFrame
+	}
+	switch typ {
+	case frameTrailer:
 		n, k := binary.Uvarint(body)
 		s.closeFile(f)
 		if k <= 0 || int64(n) != f.read {
@@ -380,19 +497,31 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 		}
 		s.release(f)
 		return nil, err
-	case 'Z':
+	case frameRowsZstd, frameDeltaZstd:
+		var dst []byte
+		if s.delta {
+			dst = s.zbuf[:0]
+		}
 		var err error
-		if body, err = s.dec.DecodeAll(body, nil); err != nil {
+		if body, err = s.dec.DecodeAll(body, dst); err != nil {
 			s.closeFile(f)
 			return nil, errSpillFrame
 		}
-	case 'R':
-	default:
-		s.closeFile(f)
-		return nil, errSpillFrame
+		if s.delta {
+			s.zbuf = body
+		}
 	}
-	rows, err := decodeRows(body, s.codec, uint64(f.most.Load()))
+	var rows []schema.Row[P]
+	var err error
+	if s.delta {
+		rows, err = decodeDelta(body, s.codec, s.dc, uint64(f.most.Load()), uint64(f.mostOwned.Load()))
+	} else {
+		rows, err = decodeRows(body, s.codec, uint64(f.most.Load()))
+	}
 	if err != nil {
+		if errors.Is(err, schema.ErrDecodeCap) {
+			s.decodeRefused.Add(1)
+		}
 		s.closeFile(f)
 		return nil, err
 	}
@@ -400,8 +529,8 @@ func (s *spiller[P]) next(f *spillFile) ([]schema.Row[P], error) {
 	return rows, nil
 }
 
-// appendRows encodes rows for a frame: the count, then per row its key
-// and the producer's payload codec. The format is private to one run.
+// appendRows encodes rows for a plain frame: the count, then per row its
+// key and the producer's payload codec.
 func appendRows[P any](dst []byte, rows []schema.Row[P], c schema.Codec[P]) []byte {
 	dst = binary.AppendUvarint(dst, uint64(len(rows)))
 	for i := range rows {
@@ -429,6 +558,114 @@ func decodeRows[P any](src []byte, c schema.Codec[P], most uint64) ([]schema.Row
 		if err := d.Err(); err != nil {
 			return nil, err
 		}
+	}
+	if d.Len() != 0 {
+		return nil, schema.ErrCodec
+	}
+	return rows, nil
+}
+
+// appendDelta encodes rows as a delta frame's body: the row count, the
+// storage its decoded rows may own (owned: the keys' bytes and the
+// payloads' Heap, an upper bound on what decoding copies), the payload
+// coding, then per row the length of the prefix its key shares with the
+// previous key, the rest of the key (length-prefixed) and the payload,
+// through dc against the previous payload when the producer has one, else
+// through c. Lengths are bytes: keys are bytes, not UTF-8 text. The first
+// row's previous key is empty and its previous payload a zero P.
+func appendDelta[P any](dst []byte, rows []schema.Row[P], c schema.Codec[P], dc schema.DeltaCodec[P], owned int64) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(rows)))
+	dst = binary.AppendUvarint(dst, uint64(owned))
+	coding := byte(payloadStateless)
+	if dc != nil {
+		coding = payloadContextual
+	}
+	dst = append(dst, coding)
+	var zero P
+	prev, prevKey := &zero, ""
+	for i := range rows {
+		key := rows[i].Key
+		shared := commonPrefix(prevKey, key)
+		dst = binary.AppendUvarint(dst, uint64(shared))
+		dst = schema.AppendString(dst, key[shared:])
+		if dc != nil {
+			dst = dc.AppendDelta(dst, prev, &rows[i].Data)
+		} else {
+			dst = c.Append(dst, &rows[i].Data)
+		}
+		prev, prevKey = &rows[i].Data, key
+	}
+	return dst
+}
+
+// commonPrefix is the length of the longest common byte prefix of a and b.
+func commonPrefix(a, b string) int {
+	n := min(len(a), len(b))
+	i := 0
+	for i+8 <= n && a[i:i+8] == b[i:i+8] {
+		i += 8
+	}
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
+}
+
+// decodeDelta decodes a frame written by appendDelta, of at most most rows
+// whose storage is at most mostOwned bytes (the largest its file was
+// given) and maxSpillDecoded: the header is checked before anything is
+// allocated, and every byte the rows own is charged to the declared
+// storage (schema.ErrDecodeCap past it), so a malformed frame cannot
+// allocate past what was spilled however far its prefixes expand. Every
+// length is checked before use, and a frame must end exactly at its last
+// row. The rows own their storage: src can be reused once this returns.
+func decodeDelta[P any](src []byte, c schema.Codec[P], dc schema.DeltaCodec[P], most, mostOwned uint64) ([]schema.Row[P], error) {
+	n, k := binary.Uvarint(src)
+	if k <= 0 {
+		return nil, schema.ErrCodec
+	}
+	src = src[k:]
+	owned, k := binary.Uvarint(src)
+	if k <= 0 || len(src) == k {
+		return nil, schema.ErrCodec
+	}
+	coding := src[k]
+	src = src[k+1:]
+	want := byte(payloadStateless)
+	if dc != nil {
+		want = payloadContextual
+	}
+	if coding != want || n > uint64(len(src)) || n > most {
+		return nil, schema.ErrCodec
+	}
+	if owned > mostOwned || owned > maxSpillDecoded {
+		return nil, schema.ErrDecodeCap
+	}
+	d := schema.NewOwningDecoder(src, int64(owned))
+	rows := make([]schema.Row[P], n)
+	var zero P
+	prev, prevKey := &zero, ""
+	for i := range rows {
+		shared, suffix := d.Uvarint(), d.Uvarint()
+		if d.Err() != nil || shared > uint64(len(prevKey)) || suffix > uint64(d.Len()) {
+			return nil, schema.ErrCodec
+		}
+		b := d.Alloc(int(shared) + int(suffix))
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
+		copy(b, prevKey[:shared])
+		copy(b[shared:], d.Fixed(int(suffix)))
+		rows[i].Key = schema.View(b)
+		if dc != nil {
+			dc.DecodeDelta(d, prev, &rows[i].Data)
+		} else {
+			c.Decode(d, &rows[i].Data)
+		}
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
+		prev, prevKey = &rows[i].Data, rows[i].Key
 	}
 	if d.Len() != 0 {
 		return nil, schema.ErrCodec

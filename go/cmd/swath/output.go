@@ -4,7 +4,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -44,9 +43,7 @@ func textDest(path string) (format, compression string) {
 func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 	toStdout := o.out == "" || o.out == "-"
 	switch {
-	case o.countOnly && (o.format != "" || o.out != ""):
-		return nil, errors.New("--count-only writes nothing: it takes no --output or --format")
-	case o.countOnly:
+	case o.countOnly: // swath count writes nothing (placement refuses -o and --format)
 		return nil, nil
 	case !toStdout && o.format != "":
 		return nil, fmt.Errorf("--format is for stdout: -o %s decides by its name (.tsv or .jsonl, optionally .gz or .zst, is one text file; any other name, the dataset directory)", o.out)

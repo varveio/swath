@@ -66,7 +66,8 @@ server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/m
 
 **Ours.** The one list call per provider (ListObjectsV2; `objects.list`), built and sent by
 `internal/source/s3/client` and `internal/source/gcs/client`; S3's response parser, a hand-written scanner
-over the body that allocates per page, not per object; GCS's decoding of only the listed fields with
+over the body that allocates per page, not per object (an `<Error>` body, the cold path, goes through
+`encoding/xml`); GCS's decoding of only the listed fields with
 `encoding/json` into a fixed envelope; bodies read up to 16 MiB; envelope and page validation (a 200 that is
 not a listing envelope is a `parse` failure and retried, never an empty final page); redirects never
 followed; and, shared through `internal/source/objhttp`, the retry loop, failure classification, client
@@ -93,8 +94,8 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
 `go version -m swath` lists no `service/s3`.
 
 - *Request:* one signed GET with `list-type=2`, `prefix`, `start-after`, `continuation-token`, `max-keys`,
-  `delimiter`, `fetch-owner` and `encoding-type=url`. The query is built sorted and SigV4-encoded, so the URL
-  sent is the canonical query that is signed.
+  `delimiter`, `fetch-owner` and `encoding-type=url`. The query is built sorted and SigV4-encoded (smithy-go's
+  `httpbinding.EscapePath`), so the URL sent is the canonical query that is signed.
 - *Endpoints:* the client supports these forms:
   - virtual-hosted `bucket.s3.REGION.amazonaws.com` (the default);
   - path-style (`-path-style`; also used automatically for bucket names with dots and for IP endpoints);
@@ -135,7 +136,8 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   keys, `AWS_PROFILE`, web-identity token, container endpoint, metadata endpoint; no profile with keys, a role,
   a credential process, SSO or a login session; no EC2 sign in the DMI vendor, asset tag or hypervisor id, or
   IMDS disabled) and the lookup, bounded at 3 s, finds nothing. A configured source (or `--profile`) is waited
-  for up to 30 s (a web-identity token file not yet mounted is polled for); a lookup that fails for good is a
+  for up to 30 s (a web-identity token file not yet mounted is polled for), both waits inside the command's
+  context, so a signal or deadline ends them (`client.New` takes it); a lookup that fails for good is a
   `CredentialError` (class `auth`, exit 1); one that fails transiently (an STS 5xx or throttle, a cut
   connection, past the wait) keeps the source with a note on stderr, and each request's signing retries it
   (then the range is requeued, ending in 75 if it never answers), as a refresh failure mid-run does.
@@ -176,20 +178,49 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   default in the command, `--limiter=false` turns it off; a library caller's zero `Admission` leaves it off;
   the engine only reports its features, `Admission.Off`): every HTTP attempt (pages, seed,
   structure and split probes, client retries, engine requeues) takes a permit before it is sent and returns it
-  when its answer is read, so in-flight requests never exceed the limit. The limit starts at the worker count;
-  each throttle answer (S3 429/503/`SlowDown`; GCS 429 and rate-limit reasons) multiplies it by 0.7 (floor 1;
-  an answer at the floor removes nothing and does not restart the window, `limiter.floor_throttles`);
-  after 10 s without a decrease it grows by one per second back to the worker count. Growth (never the limit)
+  when its answer is read, so in-flight requests never exceed the limit. The limit starts at the worker count.
+  The throttle signal (S3 429/503/`SlowDown`; GCS 429 and rate-limit reasons) is read over a *window*: the
+  last 4 × workers answers (at least 256, at most 4,096) to attempts sent since the last cut.
+  - *Cut:* a throttle answer multiplies the limit by 0.7 (floor 1; a cut due at the floor removes nothing,
+    `limiter.floor_throttles`) only while at least 15 % of the window are throttles (so at least 39, an unfilled
+    window's missing answers counted as successes), and empties the window. Answers to attempts sent before the
+    last cut (now − latency earlier than the cut) describe a limit already cut: they are neither counted nor cut
+    on (`limiter.cuts_suppressed.round_trip`), so a round trip of throttles cuts once. A throttle under the 15 %
+    is tolerated (`limiter.cuts_suppressed.tolerated`).
+  - *Growth:* +1 per second back to the worker count while the window, full since the last cut, holds under
+    7.5 % throttles, or after 10 s without any throttle answer (the slow-rate fallback: at a few requests a
+    second the window turns over slowly); otherwise held (`limiter.growth_cooldown`).
+  - *The statistics.* A 5 % background over 256 answers reads 12.8 throttles with a standard deviation of 3.5;
+    39 is 7.5 deviations above it, out of reach by chance over the thousands of overlapping windows a long run
+    slides through. The merge review probed the first rule, 10 % of 4 × workers with a floor of 64, locally (build
+    `04cbff74`, a 2M-key synthetic list through a static S3 fake at 50 ms with 5 % random throttles, one run per
+    arm on a shared 4-core dev box): at 16 workers 7 random throttles cut, and the limit fell from 16 to 7
+    (13.0 s against 9.6 s with the limiter off);
+    at 10 % of 256 (3.7 deviations) a 120 s simulated run at 5 % still cut on some seeds. Hence the 256 floor at
+    every worker count and the 15 %. Its price is reaction time at few workers: past a real cap 77 % of answers
+    are throttles, so the 39 arrive within about 51 answers, three round trips at 16 workers, thirteen at 4.
+  - *Why it diverges from Java's gauge,* which cuts on every throttle answer and grows only after 10 s
+    without a decrease: one round trip of 64 throttled answers cut 64 to 1 there, and a load-independent
+    background (S3 returns `SlowDown` from partitions at random; the client's retries absorb it) never left
+    10 s clean, so 1 % throttled answers held the limit at the floor (red team: 59 s against 3.8 s with the
+    limiter off; 5 %: 111 s). Growth's 7.5 % is half the cut's: between them (a limit just past a real cap, or a
+    7.5-15 % background) the limit holds, neither cutting nor growing. A cap is then a plateau, not a sawtooth,
+    where the limit one past the cap reads 7.5 to 15 % throttles (`TestLimiterPlateausUnderRateCap`: 15 per
+    round trip holds at 17, 40 at 44); a cap of fewer than about 7 per round trip, where one permit past it is
+    already over 15 %, still cuts and regrows. `TestLimiterToleratesRandomThrottles`: 1 % and 5 % stay at the
+    worker count at 16 and 64 workers over four 120 s streams each, 25 % is cut. Kept from Java: the factor, the
+    floor, the pace, the freezes below. `limiter.throttle_permille` and `limiter.limit` are the window and the limit at the end of the run. Growth (never the limit)
   is held while three or more attempt timeouts fell in the last 10 s, or while the EWMA of successful attempts'
   latency exceeds twice its baseline (a rolling minimum re-floored every minute), with one step per 30 s let
   through when there is progress. Its only inputs are the attempts' own latency and answers; no permit is held
   during a backoff, and admission waits are not latency samples. A permit is returned however the attempt ends,
   a panic included. The rules and constants are Java swath's
-  `ConcurrencyGauge`. Java's slow start is behind `--limiter-slow-start` (off by default until measured,
+  `ConcurrencyGauge`. Java's slow start is behind `swath diag list --limiter-slow-start` (off by default until measured,
   `objhttp.NewSlowStartLimiter`): the limit starts at min(4, workers) and each paced growth step doubles it
   instead of adding one, the first double on the first success and then at most one per second (4 to 64 in
-  3 s), under the same brakes (the latency valve's step stays +1); the first throttle answer or attempt timeout
-  ends the ramp for good. It applies to whatever builds the client, a resume included; the reason in Java is
+  3 s), under the same brakes (the latency valve's step stays +1); the first cut or attempt timeout
+  ends the ramp for good (a tolerated throttle answer does not, where Java's first throttle answer does: a
+  random background would end every ramp at 4 or 8). It applies to whatever builds the client, a resume included; the reason in Java is
   that a restart at the full width into a throttling endpoint (a resume after a stall) storms it at once.
   Counters `limiter.*`, the ramp's `slow_start.{doubles,ramp_ns,end_limit}` (feature `slow_start`: off without the
   flag, so an unengaged ramp and an absent one differ).
@@ -217,10 +248,10 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
 ListObjectsV2 (`start-after` is exclusive, there is no end bound, so the engine trims at `hi`; probes do not
 fetch owners), its description adds the client's counters (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), requeues a transient failure whose retries were exhausted, and wraps contract breaks in
-`client.ErrInvalidPage`. `TestDecisionsGolden` (`internal/source/s3`) pins the engine's decisions through
-the S3 adapter: for every fixture and hostile keyspace and four deterministic configurations, a hash of the
-covered intervals, the requests sent, the output and the non-zero counters, against
-`testdata/decisions.golden`.
+`client.ErrInvalidPage`. `TestRequests` (`internal/source/s3`) pins what the adapter sends: the scope
+prefix, a resume's `start-after`, continuations without it, 1,000 keys a page, and the seed's delimiter
+listing in its first wave, beside the first data page; a real key's `%` is sent as a start-after. Where ranges split is the engine's policy, tested in `internal/source/keyrange` against the
+tiling, resume and sorted-output laws, not frozen in a hash.
 
 ## GCS (`internal/source/gcs`)
 
@@ -238,11 +269,12 @@ or `GCE_METADATA_HOST`) whose metadata server the client library did not detect 
 token source is used anyway and its failures are retried per attempt (S3 follows the same rule). The token source lives as long as the client: it is built on a context that is
 never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
 waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
-time, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
+time: `tokensource.Shared`, the coalescer S3's bearer tokens use, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
 transport failure or timeout is
 retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
 (`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
-local token endpoint). The scope is `devstorage.read_only`. The binary links
+local token endpoint; the last injects a failed ADC search, so its unreadable-gcloud, compute-metadata and
+anonymous outcomes hold on a Google Cloud host too). The scope is `devstorage.read_only`. The binary links
 `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`, not Google's storage client;
 `google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
 pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
@@ -303,15 +335,22 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     refuse NUL, or 1,025 bytes); otherwise it sends no end bound and the engine trims;
   - *bound admissibility:* the engine needs only valid UTF-8 bounds (it compares bytes); which strings a
     provider accepts as a start bound is its `AcceptBound` predicate, by default the pivot alphabet
-    (`Safe`: valid UTF-8 without C0, DEL, C1, `%`, surrogates or non-characters), which S3 declares
-    explicitly (`s3.AcceptBound`). Synthesized pivots always use the pivot alphabet. The predicate guards
-    every bound the engine sends: pivots (guard clause `unsafe_pivot`), cursors (`unsafe_cursor`), seed and structure
-    boundaries and a resume's start (K's longest accepted prefix);
+    (`Safe`: valid UTF-8 without C0, DEL, C1, `%`, surrogates or non-characters). S3 declares `SafeKey`
+    (`s3.AcceptBound`): the pivot alphabet plus `%`. `%` is out of the alphabet because an SDK that decodes a
+    verbatim-echo endpoint's `StartAfter` crashes on it (I12); this client percent-encodes the query and parses
+    no echo, so a real key holding `%` (a cursor, a folder) is a usable `start-after`. Under `Safe` a bucket
+    whose every key holds `%` (URL-encoded names) had no usable cursor and listed on one worker: 107.9 s
+    against 8.6 s on 2M keys at 50 ms ([measurements](../measurements.md#red-team-fixes-2026-11-07)).
+    Synthesized scalars always come from the pivot alphabet: a pivot is a prefix copied from one of its input
+    keys (cursor, bound or anchor), up to the scalar it changes or appends, plus safe scalars, so it never
+    introduces a `%` its inputs do not hold at that position (`FuzzPropose` checks it). The
+    predicate guards every bound the engine sends: pivots (guard clause `unsafe_pivot`), cursors
+    (`unsafe_cursor`), seed and structure boundaries and a resume's start (K's longest accepted prefix);
   - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 
-The engine's options are the scope prefix, `Sequential`, `Seed`, `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
+The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
 `Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
 seed requests ask for it, structure probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
@@ -329,13 +368,26 @@ after `lo`, later pages follow the continuation token. Keys past `hi` are trimme
 whose last key equals `hi` ends the range without another request; a page that is not truncated ends it. A truncated
 page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
 
-**Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `--seed=false` turns it
+**Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --seed=false` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points
 `(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, 1,000 entries a page,
 `Probe` set):
+- *The first data page.* The first wave also carries the scope's first data page (no delimiter, from the
+  start a first tile would use; `Options.SeedFirstPage`, which the command's policy sets with the seed). When it
+  is not truncated the scope fits in one page: the seed emits it, the delimiter requests still in flight are
+  cancelled, and the seed stops there with no tile (`seed.stop.one_page`, `seed.first_page_keys`), one round
+  trip in all, as `--seed=false` (red team: 100 and 1,000 keys took 4x the `--seed=false` wall, 70 requests per
+  1,000 keys on 100). A truncated page is discarded (`seed.first_page_discarded`, one request more) and the
+  tiles are the seed's alone, from the scope's start. Emitting it and starting the first tile after it left
+  the 12.6M-key megascenes list with a serial tail (12 s to 20 s, mean active 57 to 35, for the same requests
+  and splits; `TestSeedFirstPageLargeFirstTile` is its shape).
 - *Pagination.* The top level follows its continuation token up to 4 pages (`seed.pages`), so a top level of
   up to about 4,000 folders is tiled whole; past that it is `seed.truncated`. Four pages are already four
-  times the most cuts a seed keeps.
+  times the most cuts a seed keeps. A chain whose last page held no folder (objects only) is not followed
+  (`seed.flat_chains`; the level then stops as `seed.stop.flat` if it found no folder): each further page of
+  a flat level is a round trip that finds no cut (the red team's flat leaves spent 4-6 waves for none). The
+  cost: a level with more than a page of objects before its first folder is not tiled past them, and the
+  tiles split there as any range does.
 - *Descent.* While a level holds fewer folders than `--workers`, the next level is listed under every one of
   them, all at once: one *wave* of independent requests, through the provider's client and admission like
   any request. Each folder's chain is paginated the same way, one wave per page. The descent stops
@@ -366,10 +418,61 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   covers only the first tile, `(K, c1]`. An inclusive-start provider returns the folder at or below the bound,
   which the engine drops (`bound_drops`). `seed.resumed` marks it and `resumed_ranges` counts the tiles.
 
-The seed is a serial pre-phase of 1 to 6 waves: on a bucket of a few pages it is paid on the critical path
-for little gain, which is why `--seed=false` remains. The default is measured against `--seed=false` on
-production key lists of 1M objects and more ([measurements](../measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms));
-its cost on a bucket of a few pages is not measured.
+**Warm start** (`--seed-from PATH`, `prior.go`; off by default). A previous listing is a cut-point set with a density
+prior, so the engine can start from it instead of the seed: the root tiles the scope at the prior's cuts and lists
+nothing itself, no delimiter request is sent (`seed.requests` 0, the `seed` feature off, `seed_from` on). The prior
+(`source.Prior`, in `internal/source` so the pipeline fills it without importing a provider package; `source.Seeded` takes it) is source-neutral: ordered byte-exact cut keys, each with an optional count of the keys expected
+in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/listing/prior.go`):
+- *a committed format-2 dataset directory*: the manifest's parts give exact bounds and row counts; the key
+  column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
+  reads the footer and those two index sections, never a data page) gives cuts a thousand times finer. The
+  reader offers 4,096 cuts of about equal rows (four candidates per tile at the most tiles a run starts with),
+  reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a key over
+  the 1,024-byte index bound) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes
+  the last cut;
+- *a cut file*: one key per line, ascending bytewise without repeats, optionally a tab and the expected count;
+  every line has a count or none does (uncounted cuts weigh one each). Its cuts are held for the run and
+  merged into at most 1,000 tiles, so the file is bounded: more than 262,144 cuts or 16 MiB (counted while reading, so a
+  pipe or a growing file is bounded too) is refused before any request (`ErrPrior`; `maxCutFileCuts`, `maxCutFileBytes`, about 30 MiB held at most). Thin a larger one,
+  every nth line with its count the sum of the lines it replaces (`TestSeedFromCutFileBounded`).
+
+Identity, checked before any request (exit 2, class `refused`, `ErrPrior`): a dataset's manifest must name the
+run's source kind and container (the bucket), and its scope must be the run's prefix exactly: a dataset of
+`s3://b/logs/` does not seed `s3://b` nor `s3://b/logs/2026/` (a prefix mismatch is refused, not clipped). The
+manifest records no endpoint or region, so those are not checked: a dataset of another store's bucket of the same
+name is accepted, which can make the run slower, never wrong. A cut file records no scope: every cut must carry the
+run's prefix. Either way the cuts must ascend, be valid UTF-8 and at most 1,024 bytes. The prior is not the output
+directory; the sequential listing and sources off the range engine (the filesystem) refuse it.
+
+Tiling (`tilePrior`): cuts at or below a resume key are dropped (a resume tiles `(K, ⊤]`, its first tile from
+K's longest accepted prefix, as the seed's); a cut the provider does not accept as a bound is replaced by its
+longest accepted prefix when that still sorts after the previous cut and inside the scope, else merged into the
+next (`seed.from.unsafe`); with more cuts than `min(1000, 4 × workers) − 1`, a cut is kept where the running mass
+first reaches the next multiple of total/(tiles − 1), the last always. The tiles are `(⊥, c1], …, (ck−1, ck]` and
+the open frontier `(ck, ⊤]` for keys the prior did not know (`seed.from.tiles` counts all). Each bounded tile
+carries its expected keys as its estimate (`Range.est`), the rank's remainder until its first page.
+
+The prior sets the initial tiles and that first estimate only; the adaptive engine is the same for every source
+(owner splits on demand, the gauge, the admission gates, the override, structure probes). How a stale prior is
+corrected: a tile's first page replaces the prior's estimate with its gauge's remainder, so a grown segment is
+under-ranked only until its first page; from then the rank, by estimated remainder, sees it as large, and once
+workers go idle (hunger) it splits inside like any range, the gates reading the page, not the prior. A gauge that
+cannot read the bound (+∞) ranks it above every finite estimate; where the gauge errs, the admission override (4
+refusals in a row) and hunger cover the rest. An emptied segment costs one request for its tile; a new folder
+between cuts lies inside one tile and is split there. The report shows it: `seed.from.error.within_2x`, `.grown`,
+`.shrunk` and `.max_grown` compare every prior tile's listed keys (its descendants included, exact once the run
+ends) with the prior's count; `split.pivot.*`, `split.max_depth` and `child_empty.*` show the splits it took, as on
+any run; `seed.from.expected_keys` against `objects` is the scope's growth. The run report's `invocation.prior`
+names the path, the source (`dataset` or `cuts`), the cuts offered and whether they were counted. On a resume the
+prior is read again; one that is gone or no longer matches is a warning, and the resume lists without it.
+
+There are no finer cuts than the page index: the index gives every 1,024th key, more than the 1,000 tiles a run
+starts with need, and a tile's own pages measure the rest.
+
+The seed is a serial pre-phase of 1 to 6 waves; on a bucket of one page the first wave is the whole listing.
+The default is measured against `swath diag list --seed=false` on production key lists of 1M objects and more
+([measurements](../measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)), and on
+100 to 10,000 keys ([measurements](../measurements.md#red-team-fixes-2026-11-07)).
 
 The seed only paginates and descends narrow levels, in parallel waves, under fixed budgets. Java swath's hybrid
 seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classifies truncated levels, samples
@@ -425,12 +528,29 @@ The pivot is not touched by admission; the gates refuse, they do not move a pivo
 structure boundary as to the policy's pivot. On the 4.1M-key noaa-nws-fourcastnetgfs-pds list and synthetic
 1-2M-key lists the gates cut requests per 1,000 keys by 2-15 % with no wall increase
 ([measurements](../measurements.md#split-admission-on-small-lists)); a flat million-key list ends in about 250
-ranges where it ends in 630-810 without them (`TestAdmissionMillionFlat`). What remains are empty upper children of pivots placed in a folder
+ranges where it ends in 630-810 without them (`TestAdmissionFlat`: 1,000 pages at 64 workers, 100,000 keys in
+pages of 100 by default, the million-key list in pages of 1,000 with `SWATH_PERF=1`). What remains are empty upper children of pivots placed in a folder
 gap (a date's `day=32`-`day=99`, a letter after a counter's digits), which only a structure probe can see.
 
-**Floors** (Swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
+**Slow-range splitting** (off by default, `swath diag list --slow-split`; `Options.SlowSplit`). Demand is idle
+workers and the rank counts keys, so a range whose pages are slow (one folder at 2 s a page among 200 ms pages,
+the red team's `hotcold.narrow.d200`) stays on one worker until the rest drains (`split.skipped.no_demand`).
+With the switch each range keeps its page latency (an EWMA, weight 0.5 on the newest page; children start from
+their parent's), the rank reads time left (keys left × page latency) in place of keys left, and a bounded range
+splits without an idle worker (`split.reason.slow_range`) when its page latency is at least 4 times the run's
+mean (a latency outlier: neither jitter of 20-500 ms nor a slow half of the keyspace reaches it) and its time
+left is at least twice the running ranges' mean. Keys left are the gauge's remainder or, where that is +∞ (a
+seed tile's bound is the next folder, and a page cannot see where its own folder ends), the keys the range has
+listed; a slow split's child that is still an outlier halves again without that test. Bounded: one slow split's
+children wait at a time (they are queued, not run, until a worker frees up), and the admission gates apply.
+Counters `split.slow.max_range_latency_ns`, `split.slow.run_latency_ns`. Measured: on a scaled slow folder
+(`TestSlowRangeSplits`) 9 % off the wall; on the suite ([measurements](../measurements.md#red-team-fixes-2026-11-07))
+too little to adopt: the slow folder still peels a few pages per split, as the pivot policy hands out what an
+idle worker can take, not half a folder whose end no page shows.
+
+**Floors** (Java swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
 [measurements](../measurements.md#policy-switches)).
-Two gates on bounded ranges, read from a position estimate rather than a request (Swath's default
+Two gates on bounded ranges, read from a position estimate rather than a request (Java swath's default
 rate-anchored sensor, `RateAnchoredEstimator`): the keys left are `max(keys listed, 1 page) × g`, where `g`,
 clamped to [1/4, 16], is the remaining span over the consumed span read as base-256 fractions (12 bytes) past
 the byte where the cursor diverges from `lo`; where the cursor shares more with `lo` than `hi` does, the window
@@ -471,8 +591,8 @@ folder at any level: eight in a row along a range's ancestry stop probing there 
 (`structure.suppressed`; `structure.suppressed_inherited` when the eight were all an ancestor's), so a flat
 keyspace pays at most eight probes along any chain.
 
-**Guards**, checked before any child and counted per clause: `done` (never after the page that ended the
-range), `no_pivot` (the owner keeps listing), `unsafe_cursor` (`c` must be a usable start-after), `cursor`
+**Guards**, checked before any child and counted per clause (a page that ended the range never reaches
+them: the loop ends before the decision): `no_pivot` (the owner keeps listing), `unsafe_cursor` (`c` must be a usable start-after), `cursor`
 (`m > c`), `unsafe_pivot` (the provider's `AcceptBound` vetoes `m`), `bound` (`m < hi`, or below
 `prefixCeil(scope)` on the frontier). Each declines only that page's
 split, and the next continuing page is evaluated afresh, except `no_pivot` after a safe cursor: a later cursor only
@@ -499,7 +619,7 @@ child makes the depth linear in the range's size. So the pivot is the further of
    (`Ā`), which bounds exactly the same valid keys, so a scope ending in a multi-byte scalar still has a
    midpoint. An anchor that is not UTF-8 (a first key) measures nothing, and the reflection is taken from ⊥.
 2. **The galloped density step.** Keys are read as numbers in the alphabet seen on the last page (safe ASCII
-   only); the target is `c + page span × (max(4, hunger) << g)`, at most halfway to `hi`, cut after its first
+   and `%`; the target's first new character is synthesized, so a `%` there is snapped up to `&`); the target is `c + page span × (max(4, hunger) << g)`, at most halfway to `hi`, cut after its first
    character that differs from `c`. `g`, the gallop generation, counts the consecutive upper children along the
    chain (a lower child is 0, at most 16), so a remainder that keeps splitting hands out twice as much per
    round trip. A target past the representable keys, with a hole, or outside `(c, hi)` is halved within the
@@ -519,7 +639,9 @@ The pivot is placed outside the decision mutex, from the page and a snapshot of 
 page's bookkeeping: the density step's big-number arithmetic, up to one evaluation per halving, is the costly
 part of a decision. The decision itself (demand, rank, a structure boundary, the guards, the reservation) stays
 under the mutex; a page whose snapshot saw no demand is not split even if demand arose since
-(`split.skipped.no_demand`). Generation and anchor live on the immutable `Range`; nothing persists them (a
+(`split.skipped.no_demand`). Counters are atomic and are not a reason to take the mutex: a path that only
+counts (requests, pages, overfetch, structure probes) does so without it, and `SWATH_SPLIT_TRACE` prints after
+the split is committed and the mutex released, so `mutex.wait_ns` measures decisions. Generation and anchor live on the immutable `Range`; nothing persists them (a
 resume starts new chains).
 
 There is no 1-key pivot probe (Java's `max-keys=1` request after the pivot, moving an empty upper child's
@@ -529,8 +651,9 @@ concurrency: 27–31 % more requests and 2.2–2.3× the wall.
 
 **Counters** (in the run summary): objects, bytes, pages, requests, retries, `overfetch_keys`; seed
 (prefixes, pages, requests, round trips, levels, cuts per level, why it stopped, cuts, unsafe, subsampled,
-sentinel and why declined, resumed); splits (considered, accepted bounded and
-frontier, rejected per guard clause, skipped for no demand, outranked, not continuing, or by an admission
+sentinel and why declined, resumed); warm start (`seed.from.*`: parts, indexed and failed parts, cuts, unsafe
+cuts, tiles, expected keys, the prior's error per tile); splits (considered, accepted bounded and
+frontier, rejected per guard clause, skipped for no demand, outranked, or by an admission
 gate), each accepted
 split's pivot source, the density refinement's refusals by reason; `child_empty.{lower,upper}` and by pivot
 source and kind of `hi`; small children; depth; unsplittable ranges; the floors' skips; structure probes and
@@ -543,7 +666,7 @@ step lay further), and `split.pivot.structure`. `split.frontier.anchored` counts
 an anchor, `split.gallop.max_generation` the longest run of upper children that split, and
 `split.reflect.ceiling`, `split.density.shrink_prevented`, `split.gallop.halvings` and `split.sliver_refused` the
 decisions where those rules engaged. When the density step is refused, `split.density.refused.*` says why
-(`alphabet` is a non-ASCII or `%` page: issue-shaped keys turn density off, and only the reflection and the
+(`alphabet` is a page with a non-ASCII or control byte: such keys turn density off, and only the reflection and the
 midpoint remain). A child carries its parent's pivot source, so an empty child is attributed
 (`child_empty.by.<source>.<lower|upper>`) and classed by its `hi` (`child_empty.hi.pivot`: a pivot; `.bound`: a
 seed cut, the scope's end or ⊤). The chain's length is `split.max_depth`, its mean over the leaves
@@ -559,7 +682,7 @@ generation and the anchor its upper child carries.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with the seed it is tiled as above, without it the root is
+**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root is
 one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
 
 ## Registry and optional interfaces
@@ -569,7 +692,8 @@ paths), its flag group (`Flags(fs, diag, shared) any` returns the provider's opt
 parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine names the
 engine's shared flag group (`Shared: keyrange.FlagGroup`, `SharedFlags`: the policy flags `--seed`,
 `--structure`, `--floors`, `--sequential`, `--max-keys` and the admission flags
-`--limiter`, `--limiter-slow-start`, `--request-rate`): the command registers each named group once and
+`--limiter`, `--limiter-slow-start`, `--request-rate`; all but `--limiter` and `--request-rate` diagnostic,
+registered with `diag` only): the command registers each named group once and
 passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
 names it. The command imports providers only for that
 registration and passes the options value for the root's scheme as `listing.Config.Source.Options`, opaque to the
@@ -603,5 +727,7 @@ What a provider must state about itself (built: `source.Capable` with `Resume`, 
 - **Restart:** start after a key; the journal stores no provider state. A provider that can only replay
   tokens must re-list to the key or declare `Capabilities.Resume` false.
 - **Disposal:** a cancelled run releases every queued range's resources: the order stage disposes ranges it
-  never expands, including children an `Expand` emitted before failing. Filesystem chunks release their shared
-  directory descriptor this way (`TestCancelReleasesChunkFDs`).
+  never expands, including children an `Expand` emitted before failing (`Child` takes ownership even when it
+  returns an error). A range a worker has taken is the provider's: its `Expand` releases it however it ends,
+  a return on an already-cancelled context included. Filesystem chunks release their shared directory
+  descriptor both ways (`TestCancelReleasesChunkFDs`, `TestCancelledChunkReleasesItsFD`).

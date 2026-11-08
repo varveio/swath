@@ -32,6 +32,13 @@ func run(t *testing.T, api *sorted, opt Options, workers int) ([]string, Stats, 
 // runBudget runs with a reorder budget in rows (the CLI default is 131,072).
 func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]string, Stats, []span) {
 	t.Helper()
+	return runPolicy(t, api, opt, workers, budget, nil)
+}
+
+// runPolicy is runBudget with the provider's bound policy accept (nil: the
+// default, Safe).
+func runPolicy(t *testing.T, api *sorted, opt Options, workers, budget int, accept func(string) bool) ([]string, Stats, []span) {
+	t.Helper()
 	var mu sync.Mutex
 	var leaves []span
 	opt.Workers = workers
@@ -40,7 +47,7 @@ func runBudget(t *testing.T, api *sorted, opt Options, workers, budget int) ([]s
 		leaves = append(leaves, span{lo, hi, open})
 		mu.Unlock()
 	}
-	p, err := newTest(api, opt)
+	p, err := New(opt, Description[Object]{Target: "test", Listing: Listing, AcceptBound: accept, Size: func(o *Object) int64 { return o.Size }}, fetchFrom(api))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,23 +176,21 @@ func TestT3Guard(t *testing.T) {
 		found   bool
 		ceil    string
 		bounded bool
-		done    bool
 		want    clause
 	}{
-		{"b", "c", true, "d", true, false, clauseOK},
-		{"b", "b", true, "d", true, false, clauseCursor},
-		{"b", "a", true, "d", true, false, clauseCursor},
-		{"b", "d", true, "d", true, false, clauseBound},
-		{"b", "e", true, "d", true, false, clauseBound},
-		{"b", "zz", true, "", false, false, clauseOK}, // open frontier, no ceiling
-		{"b", "c", true, "d", true, true, clauseDone},
-		{"b\x01", "c", true, "d", true, false, clauseUnsafeCursor},
-		{"b", "", false, "d", true, false, clauseNoPivot},
-		{"b", "c\x01", true, "d", true, false, clauseUnsafePivot},
-		{"b", "cv", true, "d", true, false, clauseUnsafePivot}, // vetoed by the provider below
+		{"b", "c", true, "d", true, clauseOK},
+		{"b", "b", true, "d", true, clauseCursor},
+		{"b", "a", true, "d", true, clauseCursor},
+		{"b", "d", true, "d", true, clauseBound},
+		{"b", "e", true, "d", true, clauseBound},
+		{"b", "zz", true, "", false, clauseOK}, // open frontier, no ceiling
+		{"b\x01", "c", true, "d", true, clauseUnsafeCursor},
+		{"b", "", false, "d", true, clauseNoPivot},
+		{"b", "c\x01", true, "d", true, clauseUnsafePivot},
+		{"b", "cv", true, "d", true, clauseUnsafePivot}, // vetoed by the provider below
 	} {
 		veto := func(s string) bool { return Safe(s) && s != "cv" }
-		if got := guard(tc.c, tc.m, tc.found, tc.ceil, tc.bounded, tc.done, veto); got != tc.want {
+		if got := guard(tc.c, tc.m, tc.found, tc.ceil, tc.bounded, veto); got != tc.want {
 			t.Errorf("guard(%+v) = %d, want %d", tc, got, tc.want)
 		}
 	}
@@ -204,7 +209,7 @@ func TestT3Guard(t *testing.T) {
 	if len(got) != 3000 || st.Get(cSplitRejectedUnsafeCursor) == 0 {
 		t.Fatalf("unsafe cursor: %d keys, %+v", len(got), st.Counters)
 	}
-	// A page that ends a range is never followed by a split (done is checked
+	// A page that ends a range is never followed by a split (the loop ends
 	// before the decision), and splits need a full page (progress gate):
 	// one page of keys never splits.
 	_, st, _ = run(t, newSorted(keys[:900], false, 1), Options{}, 8)
@@ -383,7 +388,8 @@ func TestFilterLeavesSplitInputs(t *testing.T) {
 	expand := func(drop bool) result {
 		var p *Engine[Object]
 		var res result
-		p, err := newTest(newSorted(keys, false, 1), Options{Workers: 64, PageSize: 100, SplitCoin: func() bool {
+		// Floors: the density is maintained only for the tail floor.
+		p, err := newTest(newSorted(keys, false, 1), Options{Workers: 64, PageSize: 100, Floors: true, SplitCoin: func() bool {
 			res.dens = p.running[1].dens.ewma // decide holds the engine's lock
 			return true
 		}})

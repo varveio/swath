@@ -138,15 +138,18 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			}
 		})
 	}
+	// A limiter of 8 has a 256-answer window (the floor): the 39th throttle
+	// reaches 15 % of it and cuts (8 -> 5, the window emptied); the 40th is
+	// tolerated.
 	t.Run("limiter: throttles lower it, other failures do not", func(t *testing.T) {
 		var n atomic.Int64
 		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			switch n.Add(1) {
-			case 1, 2:
+			switch k := n.Add(1); {
+			case k <= 40:
 				w.Throttle(rw)
-			case 3:
+			case k == 41:
 				w.Server(rw)
-			case 4:
+			case k == 42:
 				conn, _, err := rw.(http.Hijacker).Hijack()
 				if err == nil {
 					conn.Close()
@@ -158,12 +161,12 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 		defer srv.Close()
 		l := objhttp.NewLimiter(8)
 		cl := build(Settings{Endpoint: srv.URL, Timeout: time.Second,
-			Retry: objhttp.Retry{MaxAttempts: 9, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Limiter: l}})
+			Retry: objhttp.Retry{MaxAttempts: 45, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Limiter: l}})
 		if err := cl.List(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		got := cl.Counters()
-		if l.Limit() != 3 || got.Retries != 3 || got.Limiter.Decreases != 2 || got.Limiter.Depth != 5 || got.Limiter.Increases != 0 {
+		if l.Limit() != 5 || got.Retries != 41 || got.Limiter.Decreases != 1 || got.Limiter.Tolerated != 39 || got.Limiter.Depth != 3 || got.Limiter.Increases != 0 {
 			t.Fatalf("limit %d, counters %+v", l.Limit(), got)
 		}
 	})

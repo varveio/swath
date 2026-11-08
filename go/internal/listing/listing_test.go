@@ -51,8 +51,8 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Output.RowsListed != 7 || sum.Output.PartsWritten != 1 {
-		t.Fatalf("rows %d parts %d", sum.Output.RowsListed, sum.Output.PartsWritten)
+	if sum.Output.RowsEmitted != 7 || sum.Output.PartsWritten != 1 {
+		t.Fatalf("rows %d parts %d", sum.Output.RowsEmitted, sum.Output.PartsWritten)
 	}
 	for _, f := range []string{dataset.ManifestName, dataset.ReportName, "data/part-00000.parquet"} {
 		if _, err := os.Stat(filepath.Join(out, f)); err != nil {
@@ -106,8 +106,8 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sum.Output.RowsListed != 7 || fsStats(sum).Skipped != 1 {
-			t.Fatalf("portable=%v: rows %d skipped %d", portable, sum.Output.RowsListed, fsStats(sum).Skipped)
+		if sum.Output.RowsEmitted != 7 || fsStats(sum).Skipped != 1 {
+			t.Fatalf("portable=%v: rows %d skipped %d", portable, sum.Output.RowsEmitted, fsStats(sum).Skipped)
 		}
 	}
 }
@@ -136,8 +136,8 @@ func TestCancellationLeavesNothing(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if sum.Output.RowsListed >= 20200 {
-		t.Fatalf("walk finished (%d rows) before cancellation took effect", sum.Output.RowsListed)
+	if sum.Output.RowsEmitted >= 20200 {
+		t.Fatalf("walk finished (%d rows) before cancellation took effect", sum.Output.RowsEmitted)
 	}
 	noScratch(t, out)
 }
@@ -170,7 +170,7 @@ func TestCountOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Output.RowsListed != 3 || fsStats(sum).Files != 2 || fsStats(sum).Dirs != 1 {
+	if sum.Output.RowsEmitted != 3 || fsStats(sum).Files != 2 || fsStats(sum).Dirs != 1 {
 		t.Fatalf("%+v", sum)
 	}
 }

@@ -19,6 +19,7 @@ type Policy struct {
 	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
 	Floors     bool      // the gate-chain floors (off by default)
+	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 }
 
 // Common is the flag group every provider on the engine shares: the
@@ -31,8 +32,8 @@ type Common struct {
 
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
-	return Options{Sequential: p.Sequential, Seed: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Floors: p.Floors}
+	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
+		MaxKeys: p.MaxKeys, Floors: p.Floors, SlowSplit: p.SlowSplit}
 }
 
 // FlagGroup names the engine's flag group (registry.Factory.Shared).
@@ -41,25 +42,30 @@ const FlagGroup = "keyrange"
 // Flags registers the engine's flag group on f and returns the Common
 // value it fills when f is parsed: the command registers it once and
 // passes it to every provider's flag group (registry.Factory.Shared). The
-// policy toggles and comparison modes are diagnostic (swath diag list);
-// -seed and the admission flags are on swath list too.
+// policy toggles, comparison modes and the limiter's slow start are
+// diagnostic (swath diag list): they exist to run an experiment. The
+// limiter switch and the request rate are on swath list too: they are how
+// an operator answers a service that throttles (docs/operating.md).
 func Flags(f *flag.FlagSet, diag bool) *Common {
 	// The command's defaults: the seed tiles the scope (--seed=false skips
 	// it), structure probes engage on their evidence (StructureAuto), and
 	// the client admits its requests through the adaptive limiter (Java's
-	// gauge rules; --limiter=false turns it off). A library caller's zero
+	// gauge rules; --limiter=false turns it off: no limit at all, not a
+	// fixed --workers, since seed and probe requests run beside the
+	// workers' pages). A library caller's zero
 	// Policy has no seed and no probes, its zero Admission no limiter.
 	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
-	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: a throttle answer lowers the requests in flight (x0.7), growth returns one per second after 10 s without one; false: a fixed --workers in flight")
-	f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first throttle answer or timeout (Java swath's slow start); applies to swath resume too")
+	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
-	f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists; not with -sequential); false: start from one range")
 	if diag {
+		f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too")
+		f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists, the first carrying the first data page, which lists a scope of one page alone; not with -sequential); false: start from one range")
 		f.Var((*structureFlag)(&p.Structure), "structure", "ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none")
+		f.BoolVar(&p.SlowSplit, "slow-split", p.SlowSplit, "ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
-		f.Var((*int64Flag)(&p.MaxKeys), "max-keys", "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
+		f.Int64Var(&p.MaxKeys, "max-keys", p.MaxKeys, "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
 	}
 	return c
 }
@@ -79,20 +85,6 @@ func (r *rateFlag) Set(s string) error {
 	}
 	*r = rateFlag(v)
 	return nil
-}
-
-type int64Flag int64
-
-func (i *int64Flag) String() string {
-	if i == nil {
-		return "0"
-	}
-	return strconv.FormatInt(int64(*i), 10)
-}
-func (i *int64Flag) Set(s string) error {
-	v, err := strconv.ParseInt(s, 0, 64)
-	*i = int64Flag(v)
-	return err
 }
 
 // structureFlag is --structure: auto, on (true, or the bare flag) or off

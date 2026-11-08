@@ -199,7 +199,7 @@ func stopSource(cause error) string {
 // (an S3 directory bucket).
 func refusal(err error) bool {
 	var mm *journal.MismatchError
-	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, source.ErrUnsupported} {
+	for _, r := range []error{dataset.ErrNotEmpty, dataset.ErrNotDataset, dataset.ErrOutIsRoot, dataset.ErrInsideRoot, listing.ErrInterrupted, listing.ErrNothingToResume, listing.ErrPrior, source.ErrUnsupported} {
 		if errors.Is(err, r) {
 			return true
 		}
