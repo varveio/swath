@@ -481,6 +481,9 @@ type Segments struct {
 	// their frames.
 	DurableFilesRead  int `json:"durable_files_read"`
 	DurableBoundaries int `json:"durable_boundaries"`
+	// DeferredRows is the rows a planned boundary moved past because they
+	// continued the group of the key before it (versions schemas).
+	DeferredRows int64 `json:"deferred_rows"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

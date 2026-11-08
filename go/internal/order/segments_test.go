@@ -30,8 +30,11 @@ import (
 // maxRows rows. The rule is stated (Plan) once its first part has closed,
 // as the router's is once part 0 has frozen its ratio. Parts record their
 // keys, whether they were closed, final, and in which order they opened.
+// groups: the router's group mode, a cut deferred while the rows continue
+// the key of the row before it.
 type partSink struct {
 	limit, maxRows int64
+	groups         bool
 	encoders       int
 	queue          int // the plan's queue depth (dataset.SegmentPlan.Queue)
 	failAt         int // the segment (1-based, in opening order) whose Write fails (0: none)
@@ -63,7 +66,7 @@ func (s *partSink) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	}
 	for _, seg := range segs {
 		for i := range seg {
-			if s.full {
+			if s.full && !(s.groups && seg[i].Key == s.cur.keys[len(s.cur.keys)-1]) {
 				s.cur.closed = true
 				s.cur, s.full = nil, false
 			}
@@ -77,7 +80,7 @@ func (s *partSink) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 			p.logical += testSchema.LogicalBytes(&seg[i])
 			if p.logical >= s.limit {
 				s.full = true
-			} else if s.maxRows > 0 && int64(len(p.keys)) >= s.maxRows {
+			} else if !s.full && s.maxRows > 0 && int64(len(p.keys)) >= s.maxRows {
 				s.full = true
 				s.rowCuts++
 			}
@@ -767,7 +770,7 @@ func TestSegmentsReleaseSpanStorage(t *testing.T) {
 	base := gcLive()
 	for i := range spans {
 		s := segment{u0: 0, r0: i * span, u1: 0, r1: (i + 1) * span}
-		if _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
+		if _, _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -794,7 +797,7 @@ func TestSegmentUnitsDroppedByLastReader(t *testing.T) {
 	o.seg.uses[0].Store(3)
 	keep := &keepSink{}
 	for i, s := range []segment{{u0: 0, r0: 0, u1: 0, r1: 30}, {u0: 0, r0: 30, u1: 0, r1: 60}, {u0: 0, r0: 60, u1: 1, r1: 0}} {
-		if _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
+		if _, _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
 			t.Fatal(err)
 		}
 		last := i == 2
@@ -900,6 +903,117 @@ func TestSegmentsCompletedPartsReleaseStorage(t *testing.T) {
 		}
 		if held > 2*min(arm.budget, 4<<20) {
 			t.Fatalf("%s: %d bytes live when the last segment finished", arm.name, held)
+		}
+	}
+}
+
+// TestSegmentsCutAtKeyChanges: group mode (a versions listing) on the
+// segment path. Every key repeats over 7 consecutive rows and the parts are
+// cut every 5 rows (or by size), so most planned boundaries fall inside a
+// key's group. The sink defers its cut to the next key change, as the
+// Parquet router does, and the planner must move each segment boundary
+// there too: the parts are exactly the serial drain's, no key spans two
+// parts (the seams stay strict), the deferral is counted
+// (SegmentStats.Deferred), and the distinct keys are the serial count, for
+// spilled and in-memory tails.
+func TestSegmentsCutAtKeyChanges(t *testing.T) {
+	anyShare(t)
+	for _, tc := range []struct {
+		name           string
+		limit, maxRows int64
+		memory         bool
+	}{
+		{"rows", 1 << 40, 5, false},
+		{"size", 2000, 0, false},
+		{"rows-memory", 1 << 40, 5, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(procs int) (*partSink, Stats) {
+				t.Helper()
+				withProcs(t, procs)
+				f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100, group: 7}
+				f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+				f.left.Store(int64(f.siblings))
+				s := &partSink{limit: tc.limit, maxRows: tc.maxRows, groups: true, encoders: 4}
+				opt := Options{Workers: 8, Budget: 500, SpillDir: t.TempDir(), Groups: true}
+				if tc.memory {
+					opt.Budget, opt.SpillDir = 1<<30, ""
+				}
+				st, err := Run[fr, tp](context.Background(), f, s, &testSchema, opt)
+				if err != nil {
+					t.Fatalf("procs %d: %v (segments %+v)", procs, err, st.Segments)
+				}
+				s.close()
+				if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
+					t.Fatalf("procs %d: rows differ", procs)
+				}
+				for i := 1; i < len(s.parts); i++ {
+					a, b := s.parts[i-1].keys, s.parts[i].keys
+					if a[len(a)-1] >= b[0] {
+						t.Fatalf("procs %d: part %d ends at %q, part %d starts at %q: a key spans a seam", procs, i-1, a[len(a)-1], i, b[0])
+					}
+				}
+				return s, st
+			}
+			serial, sst := run(1)
+			if sst.Segments.Reason == SegmentEngaged {
+				t.Fatalf("serial run's segments %+v", sst.Segments)
+			}
+			s, st := run(5)
+			if st.Segments.Reason != SegmentEngaged || st.Segments.Segments < 3 || st.Segments.Deferred == 0 {
+				t.Fatalf("segments %+v: want engaged, boundaries deferred to key changes", st.Segments)
+			}
+			if !slices.EqualFunc(s.boundaries(), serial.boundaries(), slices.Equal[[]string]) {
+				t.Fatalf("%d parts, serial %d; or their rows differ", len(s.parts), len(serial.parts))
+			}
+			if st.DistinctKeys != sst.DistinctKeys || st.DistinctKeys*7 < st.Rows {
+				t.Fatalf("%d distinct keys of %d rows, serial %d", st.DistinctKeys, st.Rows, sst.DistinctKeys)
+			}
+		})
+	}
+}
+
+// TestSegmentsSeamInsideAGroup: the negative of the rule above. Rows of
+// 7-row key groups in memory, cut every 5 rows: planned without the group
+// rule (cut with Options.Groups off, the planner before it) a boundary
+// falls inside a group, and the seam check refuses the key repeated across
+// the seam even in group mode; planned with it every seam is a key change
+// and the same rows pass, the segments' rows and distinct keys counted.
+func TestSegmentsSeamInsideAGroup(t *testing.T) {
+	rows := make([]schema.Row[tp], 70)
+	for i := range rows {
+		rows[i] = schema.Row[tp]{Key: fmt.Sprintf("k%03d", i/7), Data: tp{Size: int64(i), ETag: "e"}}
+	}
+	pl := dataset.SegmentPlan{Limit: 1 << 40, MaxRows: 5, Encoders: 4, Queue: 2}
+	for _, rule := range []bool{false, true} {
+		units := []unit[tp]{{rows: rows[:33], n: 33}, {rows: rows[33:], n: 37}}
+		o := segmentRun(t, units, 1<<30)
+		o.cancel = func(error) {}
+		o.opt.Groups = rule
+		segs, err := o.cut(units, pl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.opt.Groups = true // the run is a versions listing either way
+		for _, sg := range segs {
+			for ui := sg.u0; ui < sg.u1 || (ui == sg.u1 && sg.r1 > 0); ui++ {
+				o.seg.uses[ui].Add(1)
+			}
+		}
+		o.seg.sg = &partSink{limit: pl.Limit, maxRows: pl.MaxRows, groups: true, encoders: 4}
+		err = o.runSegments(units, segs, 3)
+		var inv *dataset.InvariantError
+		if !rule {
+			if !errors.As(err, &inv) || !strings.Contains(err.Error(), "repeats") {
+				t.Fatalf("a seam inside a group (%d segments): err %v, want the seam check's", len(segs), err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("seams at key changes: %v", err)
+		}
+		if o.seg.st.Deferred == 0 || o.rows != 70 || o.distinct != 10 || o.seg.st.Seams != int64(len(segs)-1) {
+			t.Fatalf("%d rows, %d distinct keys, %d seams of %d segments, %d deferred", o.rows, o.distinct, o.seg.st.Seams, len(segs), o.seg.st.Deferred)
 		}
 	}
 }

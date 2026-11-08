@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -42,6 +43,12 @@ func (v *versionSink[P]) bind(s *schema.Schema[P]) {
 }
 
 func (v versionSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	v.count(segs)
+	return v.Sink.Write(ctx, segs)
+}
+
+// count classifies rows handed on.
+func (v versionSink[P]) count(segs [][]schema.Row[P]) {
 	var versions, markers, noncurrent, live int64
 	for _, seg := range segs {
 		for i := range seg {
@@ -73,5 +80,38 @@ func (v versionSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error
 	v.counts.DeleteMarkers.Add(markers)
 	v.counts.Noncurrent.Add(noncurrent)
 	v.counts.Live.Add(live)
-	return v.Sink.Write(ctx, segs)
+}
+
+// versionSegmenter is versionSink over a Segmenter (the Parquet router):
+// the order stage writes the tail's segments through it as well, and each
+// segment's rows are counted as Write's are.
+type versionSegmenter[P any] struct {
+	versionSink[P]
+	sg order.Segmenter[P]
+}
+
+func (v versionSegmenter[P]) Plan() (dataset.SegmentPlan, bool) { return v.sg.Plan() }
+
+func (v versionSegmenter[P]) BeginSegments() (dataset.SegmentPlan, bool) {
+	return v.sg.BeginSegments()
+}
+
+func (v versionSegmenter[P]) AbandonSegments() { v.sg.AbandonSegments() }
+
+func (v versionSegmenter[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
+	seg, err := v.sg.OpenSegment(ctx, continueOpen)
+	if err != nil {
+		return nil, err
+	}
+	return versionPart[P]{seg, v.versionSink}, nil
+}
+
+type versionPart[P any] struct {
+	order.SegmentSink[P]
+	v versionSink[P]
+}
+
+func (p versionPart[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
+	p.v.count(segs)
+	return p.SegmentSink.Write(ctx, segs)
 }

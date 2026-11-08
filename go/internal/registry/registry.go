@@ -165,6 +165,9 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		if observer.latest != nil || observer.deleted != nil {
 			observer.Sink = sink
 			sink = observer
+			if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
+				sink = versionSegmenter[P]{observer, sg}
+			}
 		}
 	}
 	p := b.p

@@ -51,13 +51,21 @@ static source they are the cold run's rows in the cold run's order, so the pinne
 and does not raise `ErrAmbiguousTail` (`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing`
 `TestVersionsDurableSpill`, including kills at `journal-append` with K inside a live certificate).
 
-**Repeated keys and the drain tail (rule for a segmented tail).** A tail that cuts the rest of the stream into
-parallel part segments must cut where the router does. A segment boundary planned at a row count inside a
-group is moved forward to the next key change: the router defers its own cut there, so no part ends inside a
-key. With boundaries only at key changes, the seam check between segments stays strict (the first key of a
-segment is above the last of the one before). Inside a segment the per-row check accepts equality only in
-group mode, across one group's consecutive rows in provider order. `listing` `TestVersionsTailSeamsAtKeyChanges`
-documents the boundary case on the serial tail; a segmented tail must keep it passing.
+**Repeated keys and the drain tail.** The segment-parallel tail ([Segments](#segments-parts-written-in-parallel-after-listing)) cuts the rest of the stream where the
+router would close its parts, and in group mode the router defers a cut its rule asked for until the first row of
+a greater key. The planner (`cut`) does the same: a boundary that falls inside a group moves forward to the next
+key change, the rows it passes counted (`drain.segments.deferred_rows`); while a cut is pending it reads every
+row, comparing a unit's first key with the last key walked (the drainer's last, for the open part the first
+segment continues). With boundaries only at key changes the seam check between segments stays strict: a key equal
+across a seam would be a part ending inside its group, and is refused. The one boundary a group may cross is
+segment 0's first row after the drainer's last (the open part's group, continued), which segment 0's row guard
+checks as `send` does: inside a segment equality is accepted only in group mode, across one group's consecutive
+rows in provider order, never against `Options.After`. Segments count their distinct keys into
+`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
+`order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
+`TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
+`TestVersionsTailSeamsAtKeyChanges` (the serial tail) and `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
+engaged, byte-identical to the one-encoder run).
 
 A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
 marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
@@ -451,7 +459,9 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
   to find the row; the others pass whole. The first segment continues the open part. So the parts are the
   ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
-  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap).
+  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap). In group mode a
+  boundary inside a key's group moves to the next key change, as the router's deferred cut does
+  ([Repeated keys and the drain tail](#the-order-guard)).
 - **The part interval stops.** Once segments begin, the rest is cut by size and row count only:
   `--part-interval` closes no part in the tail. Its purpose, a recent durable point behind a slow frontier,
   does not arise there: every row is listed, and the parts publish as fast as they encode. With
