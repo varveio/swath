@@ -144,8 +144,7 @@ the platform behavior as its reason, never silently:
   The `order` durable-spill unit tests open the cache directly, with no journaled run in between, and run on
   Windows too. Their directory listings go through the `os.Root`, never `root.FS()`, whose slash-only paths
   reject `order.DurableDir` there (#301). A test that checks a directory is empty lists it through a helper that
-  fails on a listing error (`readDir`, `durableEntries`), so a failed listing never passes as an empty one. `TestDurableLedgerFailureEvicts` alone skips on Windows, for its
-  timing premise (#309), not for anything the platform does. The
+  fails on a listing error (`readDir`, `durableEntries`), so a failed listing never passes as an empty one. The
   process-kill tests (`cmd/swath` `sigkill_test.go`, `forcedexit_test.go`, `segments_durable_test.go`,
   `durable_campaign_test.go`) are not built there (`//go:build !windows`). Replay fixtures that only need a
   dataset list it unjournaled. Windows also refuses to rename a directory holding an open file (a running
@@ -216,7 +215,7 @@ measured value, with the measurement beside it in the test, so it fails on an or
 and never on runner variance; the shape suite's bounds follow this rule. A heap bound that `-race` distorts
 runs without it, behind `SWATH_HEAP_GATES` in `go-nonrace`; lighter heap checks (`listing` `memory_test.go`,
 the default arm of `TestWriterAdmissionCoversHeap`) run in every tier. A test that flakes is fixed in the test: a barrier or a
-deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #313), not a retry or a silently
+deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #309, #313), not a retry or a silently
 widened bound. The test runs of `go-race`, `go-nonrace`, `go-xos`, `go-race-nightly` and `go-stress.yml` pass an
 explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the shard check's `go test -list` do not.
 
@@ -702,7 +701,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 | ledger damage (flipped byte, foreign header) | `order` `TestDurableLedgerPrefix` |
 | Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` (its damaged snapshot is first resumed uninterrupted on a copy, the dataset the uninterrupted one, and must replay two captured frames or more; a snapshot that replays fewer is crashed again, at most six times) |
 | Sol 2 (shutdown order) | `listing` `TestDurableShutdownOrder` |
-| Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts`; `listing` `TestDurableLedgerTornWrite` |
+| Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts` (the frontier held until the append is torn; range 30 held until the flusher unlinks with the eviction count above zero, so a drained certificate has been evicted; it asserts the eviction); `listing` `TestDurableLedgerTornWrite` |
 | replaced output | `order` `TestDurableReplacedOutput`, `TestDurableReplacedMidCycle` |
 | credit path | `order` `TestDurableCreditWithoutOrderLock` |
 | new ancestors lost | `listing` `TestDurableNewAncestorsLost` |
