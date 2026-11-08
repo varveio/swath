@@ -192,15 +192,21 @@ func (s segSink[P]) count(segs [][]schema.Row[P]) {
 
 func (s segSink[P]) Plan() (order.SegmentPlan, bool) {
 	p, ok := s.r.Plan()
-	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full, Encoders: p.Encoders}, ok
+	return segmentPlan(p), ok
 }
 
 func (s segSink[P]) BeginSegments() (order.SegmentPlan, bool) {
 	p, ok := s.r.BeginSegments()
-	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full, Encoders: p.Encoders}, ok
+	return segmentPlan(p), ok
 }
 
 func (s segSink[P]) AbandonSegments() { s.r.AbandonSegments() }
+
+// segmentPlan is the router's plan as the order stage takes it.
+func segmentPlan(p parquetout.SegmentPlan) order.SegmentPlan {
+	return order.SegmentPlan{Limit: p.Limit, MaxRows: p.MaxRows, Logical: p.Logical, Rows: p.Rows, Open: p.Open, Full: p.Full,
+		Encoders: p.Encoders, Queue: p.Queue, OpenQueue: p.OpenQueue}
+}
 
 func (s segSink[P]) OpenSegment(ctx context.Context, continueOpen bool) (order.SegmentSink[P], error) {
 	seg, err := s.r.OpenSegment(ctx, continueOpen)

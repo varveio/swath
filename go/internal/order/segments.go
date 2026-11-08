@@ -49,12 +49,15 @@ type Segmenter[P any] interface {
 // SegmentPlan is a Segmenter's cut rule (parquetout.SegmentPlan): a part
 // closes after the row whose logical bytes bring it to Limit, or else after
 // MaxRows rows (0: none). Logical and Rows are the open part's (Open); Full:
-// it closes before the next row. Encoders is the encoders admitted.
+// it closes before the next row. Encoders is the encoders admitted; Queue
+// the batches a segment's part queues, OpenQueue the open part's, which
+// the first segment continues.
 type SegmentPlan struct {
-	Limit, MaxRows int64
-	Logical, Rows  int64
-	Open, Full     bool
-	Encoders       int
+	Limit, MaxRows   int64
+	Logical, Rows    int64
+	Open, Full       bool
+	Encoders         int
+	Queue, OpenQueue int
 }
 
 // SegmentSink is one segment's part. Close closes it (not the last);
@@ -76,10 +79,9 @@ type SegmentSink[P any] interface {
 // read, Decode of it decoding), Write (handing batches to the part, its
 // encoder's queue wait included) and the rest (opening the part, the order
 // guard). BudgetWaits are the times a worker waited for the row budget
-// before reading a spilled frame (segReserve), BudgetWait their time;
-// MaxHeld the most bytes counted against the budget at once while the
-// segments ran: the tree's, the encoders' queues' and the frames the
-// workers hold.
+// before reading or gathering a unit (segReserve), BudgetWait their time;
+// MaxHeld the most the segments held at once beside the tree: the
+// encoders' queues and the units the workers read or gathered.
 type SegmentStats struct {
 	Reason              string
 	Segments, Workers   int
@@ -91,7 +93,22 @@ type SegmentStats struct {
 	BudgetWaits         int64
 	BudgetWait          time.Duration
 	MaxHeld             int64
+	// WorkersBy names what set Workers (Workers*); PerWorker is the
+	// budget bytes one worker holds at most (segmentShare), Free the
+	// budget the segments could take when they were planned (beside the
+	// tree, less what the encoders' queues held).
+	WorkersBy       string
+	PerWorker, Free int64
 }
+
+// What set the segment workers' count (SegmentStats.WorkersBy).
+const (
+	WorkersByEncoders    = "encoders"    // the encoders admitted after listing
+	WorkersByProcessors  = "processors"  // one per spare processor, at most one per two
+	WorkersByDescriptors = "descriptors" // Options.SegmentWorkers
+	WorkersByRowBudget   = "row_budget"  // what the row budget leaves holds no more (segmentShare)
+	WorkersBySegments    = "segments"    // fewer segments than workers
+)
 
 // Why the segment-parallel replay ran, or not (SegmentStats.Reason).
 const (
@@ -101,7 +118,7 @@ const (
 	SegmentSinglePart    = "single_part"    // what was left after listing fits one part
 	SegmentNotPlanned    = "not_planned"    // the sink could not state its rule before the drain ended (part 0 not measured, a recovered boundary ahead)
 	SegmentNotListedDone = "listing_active" // the drain ended before listing did
-	SegmentRowBudget     = "row_budget"     // the row budget cannot hold two workers' largest spilled frames
+	SegmentRowBudget     = "row_budget"     // the row budget holds one segment worker only
 )
 
 // minSegmentWorkers and a worker per two processors cap the segment
@@ -185,9 +202,12 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
 		return false, nil
 	}
-	k := min(pl.Encoders, spareProcs(), max(minSegmentWorkers, aheadProcs()/2))
-	if c := o.opt.SegmentWorkers; c > 0 {
-		k = min(k, c)
+	k, by := pl.Encoders, WorkersByEncoders
+	if p := min(spareProcs(), max(minSegmentWorkers, aheadProcs()/2)); p < k {
+		k, by = p, WorkersByProcessors
+	}
+	if c := o.opt.SegmentWorkers; c > 0 && c < k {
+		k, by = c, WorkersByDescriptors
 	}
 	if k < 2 {
 		o.seg.tried, o.seg.st.Reason = true, SegmentOneEncoder
@@ -204,7 +224,23 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	}
 	t := time.Now()
 	units, files, released, releasedMeta, nodes, markers := o.flatten()
+	// What the segments may hold is the budget beside the tree: the tree
+	// holds about the budget once listing has ended (spill keeps it
+	// there), and the serial drain adds its frames and its part's queue on
+	// top as well; the segments' queues and frames together stay within
+	// one budget more (segReserve).
+	free := o.opt.Budget
+	if sh := o.opt.Shared; sh != nil {
+		free -= sh.Load()
+	}
 	o.mu.Unlock()
+	per, first := segmentShare(units, pl)
+	if hookShare != nil {
+		per, first = hookShare(per, first)
+	}
+	if kb := budgetWorkers(free, per, first); kb < k {
+		k, by = kb, WorkersByRowBudget
+	}
 	// Every spill file's trailer must count the rows replayed from it
 	// before any segment's part is closed: a part closed is a part the
 	// router may journal.
@@ -228,7 +264,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			real++
 		}
 	}
-	tight := err == nil && began && real >= 2 && 2*maxFrame(units) > o.opt.Budget
+	tight := err == nil && began && real >= 2 && k < 2
 	if err != nil || !began || real < 2 || tight {
 		if began {
 			sg.AbandonSegments() // the drainer writes on, the interval cut resumes
@@ -241,6 +277,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 			o.seg.st.Reason, o.seg.waitRows = SegmentNotPlanned, o.handed()
 		case tight:
 			o.seg.tried, o.seg.st.Reason = true, SegmentRowBudget
+			o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free = by, per, free
 		default:
 			o.seg.tried, o.seg.st.Reason = true, SegmentSinglePart
 		}
@@ -250,6 +287,10 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	// Committed: the tree's remaining items are the segments'.
 	o.mu.Lock()
 	o.seg.st.Reason, o.seg.st.Segments, o.seg.st.Workers = SegmentEngaged, len(segs), min(k, len(segs))
+	if len(segs) < k {
+		by = WorkersBySegments
+	}
+	o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free = by, per, free
 	if ra := o.ra; ra != nil {
 		// The read-ahead stops, and its reads in flight end (their
 		// descriptors and decoded rows) before the segments read.
@@ -287,25 +328,66 @@ func (o *run[R, P]) trySegments() (bool, error) {
 	return true, nil
 }
 
-// maxFrame is the largest spilled frame's budget bytes among units.
-func maxFrame[P any](units []unit[P]) int64 {
-	var m int64
+// segmentShare is the budget bytes one segment worker holds at most
+// (per), and what the first holds beside (first: the open part it
+// continues queues pl.OpenQueue batches, not pl.Queue). A worker's rows in
+// hand are consecutive: the batch it gathers, its part's queue and the
+// batch its encoder writes, at most Queue+2 batches of batchRows rows,
+// priced at the most any run of that many consecutive rows weighs
+// (runBytes: a cluster of long keys is priced as such, not at the mean);
+// beside them the largest unit (a spilled frame, or rows in memory) it
+// reads or gathers next.
+func segmentShare[P any](units []unit[P], pl SegmentPlan) (per, first int64) {
+	var frame int64 // the unit it reads or gathers next, beside them
 	for i := range units {
-		if units[i].f != nil {
-			m = max(m, units[i].units)
-		}
+		frame = max(frame, units[i].units)
 	}
-	return m
+	per = frame + runBytes(units, int64(pl.Queue+2)*batchRows)
+	if pl.Open && pl.OpenQueue > pl.Queue {
+		first = frame + runBytes(units, int64(pl.OpenQueue+2)*batchRows) - per
+	}
+	return per, first
 }
 
-// segReserve reserves c budget bytes for a spilled frame a segment worker
-// is about to read (mu not held): the tree's bytes, the encoders' queues'
-// (Shared) and the frames reserved already, with c, stay within the
-// budget; past it the worker waits (waitSegment) for the encoders or
-// another worker to release, unless nothing is held beside the tree, when
-// it goes on alone (a frame larger than what the budget leaves still
-// passes, one at a time, as on the serial drain). wait false: false at
-// once instead of waiting.
+// runBytes is the most budget bytes any run of consecutive units holding
+// rows rows weighs: over every unit it starts at, the units up to the
+// first that brings the run to rows (all of them when fewer remain).
+func runBytes[P any](units []unit[P], rows int64) int64 {
+	var most, n, bytes int64
+	j := 0
+	for i := range units {
+		for j < len(units) && n < rows {
+			n += units[j].n
+			bytes += units[j].units
+			j++
+		}
+		most = max(most, bytes)
+		n -= units[i].n
+		bytes -= units[i].units
+	}
+	return most
+}
+
+// budgetWorkers is how many segment workers the budget the segments may
+// take (free) holds, each per bytes and the first first
+// more besides: at least one.
+func budgetWorkers(free, per, first int64) int {
+	if per <= 0 || free < per+first {
+		return 1
+	}
+	return int(1 + (free-per-first)/per)
+}
+
+// segReserve reserves c budget bytes for a unit a segment worker is about
+// to read or gather (mu not held): the encoders' queues (Shared) and the
+// frames reserved already, with c, stay within the budget beside the
+// tree; past it the worker waits (waitSegment) for the encoders or
+// another worker to release, unless nothing is held, when it goes on alone
+// (a frame larger than the budget still passes, one at a time, as on the
+// serial drain). The workers are sized to the budget when planned
+// (budgetWorkers), so this is a safety: it waits only when the plan's
+// estimate (segmentShare) is short. wait false: false at once instead of
+// waiting.
 func (o *run[R, P]) segReserve(c int64, wait bool, tm *segTimes) (bool, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -318,9 +400,9 @@ func (o *run[R, P]) segReserve(c int64, wait bool, tm *segTimes) (bool, error) {
 		if s := o.opt.Shared; s != nil {
 			held += s.Load()
 		}
-		if held == 0 || o.buffered+held+c <= o.opt.Budget {
+		if held == 0 || held+c <= o.opt.Budget {
 			o.seg.held += c
-			o.seg.st.MaxHeld = max(o.seg.st.MaxHeld, o.buffered+held+c)
+			o.seg.st.MaxHeld = max(o.seg.st.MaxHeld, held+c)
 			break
 		}
 		if !wait {
@@ -351,6 +433,9 @@ func (o *run[R, P]) segRelease(c, tree int64) {
 	o.drain.Broadcast()
 	o.mu.Unlock()
 }
+
+// hookShare, if set (tests), replaces segmentShare's estimate.
+var hookShare func(per, first int64) (int64, int64)
 
 // hookSegmenter runs (tests) just before the drainer calls its Segmenter;
 // mu is the stage's lock, which must not be held then.
@@ -586,9 +671,11 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 			return 0, "", "", false, context.Cause(o.ctx)
 		}
 		u := &units[ui]
-		if u.f != nil {
-			// The frame's bytes within the budget before it is read: a
-			// batch gathered so far is written first if they are not.
+		{
+			// The unit's bytes within the budget before it is read (a
+			// frame) or gathered (rows in memory, which its part's queue
+			// then counts): a batch gathered so far is written first if
+			// they are not.
 			ok, err := o.segReserve(u.units, false, tm)
 			if err == nil && !ok {
 				if err = write(); err == nil {

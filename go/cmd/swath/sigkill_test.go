@@ -188,9 +188,9 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 // clean run must report segments engaged with more than one worker, and
 // every kill must be reached, so a fixture that stops reaching the tail
 // fails instead of passing vacuously. Two arms: a row budget that holds
-// the rest in memory (three workers), and one that spills it, so the
-// segments read spill frames on their own descriptors (two workers: the
-// budget caps them). The child runs at GOMAXPROCS 4
+// the rest in memory, and one that spills it, so the segments read spill
+// frames on their own descriptors; both large enough for three workers
+// (the budget sizes them: order.budgetWorkers). The child runs at GOMAXPROCS 4
 // whatever the box (segments need two processors beside the drainer), and
 // with --part-interval=0, so part boundaries are the size rule's alone.
 func TestSIGKILLInSegments(t *testing.T) {
@@ -201,12 +201,12 @@ func TestSIGKILLInSegments(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(60000, 13))))
+	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(200000, 13))))
 	env := append(os.Environ(), "GOMAXPROCS=4")
 	for _, arm := range []struct {
 		name, budget string
 		spilled      bool // the segments read spill frames
-	}{{"memory", "16MiB", false}, {"spill", "512KiB", true}} {
+	}{{"memory", "64MiB", false}, {"spill", "24MiB", true}} {
 		runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", arm.budget}
 		args := func(out string, extra ...string) []string {
 			a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "8",

@@ -28,11 +28,12 @@ import (
 // as the router's is once part 0 has frozen its ratio. Parts record their
 // keys, whether they were closed, final, and in which order they opened.
 type partSink struct {
-	limit, maxRows int64
-	encoders       int
-	failAt         int // the segment (1-based, in opening order) whose Write fails (0: none)
-	opened         int
-	failed         *fakePart // the failing segment's part
+	limit, maxRows   int64
+	encoders         int
+	queue, openQueue int // the plan's queue depths (SegmentPlan.Queue, OpenQueue)
+	failAt           int // the segment (1-based, in opening order) whose Write fails (0: none)
+	opened           int
+	failed           *fakePart // the failing segment's part
 
 	mu        sync.Mutex
 	parts     []*fakePart
@@ -86,7 +87,7 @@ func (s *partSink) Plan() (SegmentPlan, bool) {
 	if len(s.parts) < 2 || s.segmented {
 		return SegmentPlan{}, false
 	}
-	pl := SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders}
+	pl := SegmentPlan{Limit: s.limit, MaxRows: s.maxRows, Encoders: s.encoders, Queue: s.queue, OpenQueue: s.openQueue}
 	if s.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, s.full, s.cur.logical, int64(len(s.cur.keys))
 	}
@@ -562,32 +563,28 @@ func (s *queuedSink) close() {
 	s.partSink.close()
 }
 
-// TestSegmentsStayWithinBudget: segments replaying spilled frames, some
-// of ranges with 1,000-byte keys among 220-byte ones, into stalled
-// encoders keep what is counted against the row budget (the tree, the
-// encoders' queues, the frames the workers read) within it, but for one
-// frame when nothing else is held (the encoders' queues alone within it);
-// the rows are the serial drain's. Before
-// (sol review 2, P2) every worker queued four-thousand-row batches into
-// its part's queue (16 deep for the continued part) whatever the budget:
-// tens of megabytes downstream against a 4 MiB budget.
-func TestSegmentsStayWithinBudget(t *testing.T) {
+// budgetRun runs the long-key fixture of the segment budget tests: ranges
+// of 1,000-byte keys among 220-byte ones, spilled under the budget, the
+// tail replayed into stalled encoders whose queues are the router's (two
+// batches a segment, sixteen the continued part). It returns the stats,
+// the most counted downstream at once and the segment waits seen.
+func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
+	t.Helper()
 	withProcs(t, 5)
 	countRows = false // the budget in bytes, as the encoders' queues count them
 	defer func() { countRows = true }()
-	const budget = 4 << 20
 	var waits atomic.Int64
 	hookWait = func(site string) {
 		if site == waitSegment {
 			waits.Add(1)
 		}
 	}
-	t.Cleanup(func() { hookWait = nil })
-	f := &frontier{slowPages: 4, siblings: 60, sibPages: 6, rows: 100, long: 3}
+	defer func() { hookWait = nil }()
+	f := &frontier{slowPages: 4, siblings: siblings, sibPages: 6, rows: 100, long: 3}
 	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
 	f.left.Store(int64(f.siblings))
 	shared := &Shared{}
-	s := &queuedSink{partSink: &partSink{limit: 200_000, encoders: 4}, shared: shared, stall: 10 * time.Millisecond}
+	s := &queuedSink{partSink: &partSink{limit: 200_000, encoders: 4, queue: 2, openQueue: 16}, shared: shared, stall: 10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
@@ -598,17 +595,58 @@ func TestSegmentsStayWithinBudget(t *testing.T) {
 	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
 		t.Fatal("rows differ")
 	}
+	t.Logf("budget %d: segments %+v; downstream peak %d; %d waits; spilled %d rows", budget, st.Segments, s.peak.Load(), waits.Load(), st.SpillRows)
+	return st, s.peak.Load(), waits.Load()
+}
+
+// TestSegmentsSizedToBudget: the segment workers are sized to the row
+// budget when planned (segmentShare, budgetWorkers). A long-key fixture at
+// a budget that holds exactly two plans two (the encoders allow four),
+// and they hold their shares: the safety gate waits fewer than 16 times
+// and the segments hold within the budget beside the tree. Before
+// (2026-11-07), the gate counted the tree too and admitted every worker,
+// which then waited tens of thousands of times on Batch.
+func TestSegmentsSizedToBudget(t *testing.T) {
+	const budget = 52 << 20
+	st, peak, waits := budgetRun(t, budget, 200)
 	sg := st.Segments
-	t.Logf("segments %+v; downstream peak %d; %d waits; spilled %d rows, max buffered %d", sg, s.peak.Load(), waits.Load(), st.SpillRows, st.MaxBuffered)
-	if sg.Reason != SegmentEngaged || sg.Workers < 2 {
+	if sg.Reason != SegmentEngaged || sg.Workers != 2 || sg.WorkersBy != WorkersByRowBudget || st.SpillRows == 0 {
+		t.Fatalf("segments %+v, %d rows spilled: want two workers set by the row budget, spill read", sg, st.SpillRows)
+	}
+	if waits >= 16 || sg.BudgetWaits >= 16 || sg.MaxHeld > budget || peak > budget {
+		t.Fatalf("%d waits (%d counted), %d held at most, %d downstream, budget %d", waits, sg.BudgetWaits, sg.MaxHeld, peak, budget)
+	}
+}
+
+// TestSegmentsStayWithinBudget: with the plan's share understated
+// (hookShare), every worker is admitted at a 4 MiB budget and the safety
+// gate must hold the bound alone: the encoders' queues stay within it and
+// what the segments hold within it but for one unit, the workers waiting
+// at the segment site. Before (sol review 2, P2) every worker queued
+// four-thousand-row batches into its part's queue (16 deep for the
+// continued part) whatever the budget: 19 MB downstream.
+func TestSegmentsStayWithinBudget(t *testing.T) {
+	const budget = 4 << 20
+	hookShare = func(per, first int64) (int64, int64) { return 1, 0 }
+	defer func() { hookShare = nil }()
+	st, peak, waits := budgetRun(t, budget, 60)
+	sg := st.Segments
+	if sg.Reason != SegmentEngaged || sg.Workers < 2 || st.SpillRows == 0 {
 		t.Fatalf("segments %+v", sg)
 	}
-	// A frame of the long keys: a publish batch of them, spilled whole.
-	frame := int64(publishRows) * (1100 + int64(unsafe.Sizeof(schema.Row[tp]{})))
-	if p := s.peak.Load(); p > budget {
-		t.Fatalf("%d bytes downstream at once, budget %d", p, budget)
+	unit := int64(publishRows) * (1100 + int64(unsafe.Sizeof(schema.Row[tp]{}))) // the largest: a frame of long keys
+	if peak > budget || sg.MaxHeld > budget+unit || sg.BudgetWaits == 0 || waits == 0 {
+		t.Fatalf("%d downstream, %d held at most (budget %d), %d budget waits (%d seen)", peak, sg.MaxHeld, budget, sg.BudgetWaits, waits)
 	}
-	if sg.MaxHeld > budget+frame || sg.BudgetWaits == 0 || waits.Load() == 0 {
-		t.Fatalf("held %d at most (budget %d), %d budget waits (%d seen)", sg.MaxHeld, budget, sg.BudgetWaits, waits.Load())
+}
+
+// TestRunBytes: the heaviest run of consecutive units reaching a row
+// count, over every start.
+func TestRunBytes(t *testing.T) {
+	us := []unit[tp]{{n: 10, units: 100}, {n: 10, units: 900}, {n: 10, units: 100}, {n: 5, units: 50}}
+	for _, tc := range []struct{ rows, want int64 }{{10, 900}, {15, 1000}, {20, 1000}, {30, 1100}, {100, 1150}} {
+		if got := runBytes(us, tc.rows); got != tc.want {
+			t.Errorf("runBytes(%d) = %d, want %d", tc.rows, got, tc.want)
+		}
 	}
 }

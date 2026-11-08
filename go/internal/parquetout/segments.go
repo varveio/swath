@@ -25,12 +25,15 @@ import (
 // closes after the row whose logical bytes (schema.LogicalBytes) bring it
 // to Limit, or else after MaxRows rows (0: no row cap). Logical and Rows
 // are the open part's so far (Open); Full: the open part is closed before
-// the next row. Encoders is the encoders admitted now.
+// the next row. Encoders is the encoders admitted now; Queue the batches
+// a segment's part queues (segmentQueue), OpenQueue the open part's
+// (partQueue), which the first segment continues.
 type SegmentPlan struct {
-	Limit, MaxRows int64
-	Logical, Rows  int64
-	Open, Full     bool
-	Encoders       int
+	Limit, MaxRows   int64
+	Logical, Rows    int64
+	Open, Full       bool
+	Encoders         int
+	Queue, OpenQueue int
 }
 
 // Plan is the cut rule for the rows still to come, or false while it
@@ -57,7 +60,7 @@ func (r *Router[P]) plan() (SegmentPlan, bool) {
 			return SegmentPlan{}, false
 		}
 	}
-	pl := SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders()}
+	pl := SegmentPlan{Limit: r.limit, MaxRows: r.opt.MaxRows, Encoders: r.Encoders(), Queue: segmentQueue, OpenQueue: partQueue}
 	if r.cur != nil {
 		pl.Open, pl.Full, pl.Logical, pl.Rows = true, r.full, r.cur.logical, r.cur.n
 	}

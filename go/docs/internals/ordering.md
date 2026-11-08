@@ -151,7 +151,7 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 | publish (`drain`) | an emitter of rows facing a full budget; of markers, while the markers alone would fill it; after a refused frame | the same releases, a marker replayed while the total stays full, spill credit, the drainer awaiting its node, a stop | `TestPublishWaitWakes`, `TestMarkerSaturationWakes`, `TestRefusedSpillWakesOnCredit` |
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
 | fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
-| segment (`drain`) | a segment worker whose next spilled frame would take the tree, the encoders' queues and the frames being read past the row budget | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
+| segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
 
 The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
 not woken per frame: planning signals as many idle workers as can start a read when it queued frames
@@ -379,9 +379,14 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
-  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. The row budget does not set
-  their number; it bounds what they hold (Memory, below), and when it cannot hold two workers' largest spilled
-  frames the tail stays serial (`row_budget`). Measured: at 16 vCPU 8 workers
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
+  each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
+  gathers, the batch its encoder writes and its part's queue (`SegmentPlan.Queue`, two batches; the first,
+  continuing the open part, that part's 16): consecutive rows, priced at the heaviest run of that many
+  consecutive rows in what is left, so a cluster of long keys is priced as such (`segmentShare`); the
+  workers are as many as that fits in the budget, less what the encoders' queues already hold
+  (`budgetWorkers`), and one only leaves the tail serial (`row_budget`). The report names what decided
+  (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`). Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
   cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
 - **What bounds the tail now.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
@@ -426,22 +431,24 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   the tail (segments planned, a segment's part published with later ones open, every row handed on with the
   last part held) resumes from that prefix like any other run, and with `--part-interval=0` the resumed
   parts are the uninterrupted run's, byte for byte (`TestSIGKILLInSegments`).
-- **Memory.** What the tail holds stays within `--row-budget`: the tree's rows not yet written, the
-  encoders' queues (`Shared`: every part's batches from the moment they are queued until its encoder has
-  written them, the continued part's 16-batch queue included) and the spilled frames the workers have read
-  and not yet written. A worker reserves a frame's budget bytes before it reads it (`segReserve`): past the
-  budget it first writes the batch it has gathered, then waits (`segment`) until the encoders or the other
-  workers release; it goes on alone when nothing but the tree is held, so the tail never stops, and one
-  frame larger than what the budget leaves passes at a time, as on the serial drain. In-memory rows move
-  from the tree's share to the queues' as they are written. Tight budgets therefore make the tail serial in
-  effect, with its parts still open in parallel (`TestSegmentsStayWithinBudget`: 1,000-byte keys among
-  220-byte ones, stalled encoders, a 4 MiB budget; before, every worker queued 4,096-row batches whatever the
-  budget, 19 MB downstream). Beside its writer and that share a worker holds one batch of row headers, and
-  the read-ahead stops when segments begin.
+- **Memory.** When listing ends the tree holds about the row budget (spill keeps it there), and its rows stay
+  until the drain ends; the serial drain adds a frame and its part's 16-batch queue on top. What the segments
+  add beside the tree stays within one more `--row-budget`: the encoders' queues (`Shared`: every part's
+  batches from the moment they are queued until its encoder has written them, the continued part's 16-batch
+  queue included) and the units the workers have read or gathered and not yet written. The workers are sized
+  to it when planned (above), so each holds its share; a worker still reserves a unit's budget bytes before it
+  reads or gathers it (`segReserve`) as a safety: past the budget it writes the batch it has gathered, then waits
+  (`segment`) for the encoders or the other workers to release, and goes on alone when nothing is held, so
+  the tail never stops. `TestSegmentsSizedToBudget` plans exactly two workers at 1,000-byte keys among
+  220-byte ones into stalled encoders: they wait fewer than 16 times and hold within the budget;
+  `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. The first
+  form of that gate counted the tree too and admitted every worker: with the tree full they waited tens of
+  thousands of times on Batch, tails up to 3× longer (2026-11-07). Beside its writer and that share a worker
+  holds one batch of row headers, and the read-ahead stops when segments begin.
 
 The report's `resources.drain.segments` carries `reason` (`engaged`, `one_processor`, `one_encoder`,
 `single_part`, `not_planned`, `row_budget`, `listing_active`), `segments`, `workers`, `rows`, `max_rows`, `seam_checks`,
 `time_ns` (summed, open to close), `max_time_ns`, `plan_ns`, `max_workers` (the cap), and the time's split:
 `read_ns` (spill frames read, `decode_ns` of it decoding) and `write_ns` (handing batches to the parts, their
-encoders' queue waits included), `budget_waits`, `budget_wait_ns` and `max_held_bytes` (the row budget's hold on the tail). A tail whose `write_ns` is most of `time_ns` is bound by the parts' encoding;
+encoders' queue waits included), `workers_by`, `per_worker_bytes`, `free_bytes` (the plan), `budget_waits`, `budget_wait_ns` and `max_held_bytes` (the row budget's hold on the tail). A tail whose `write_ns` is most of `time_ns` is bound by the parts' encoding;
 one whose `read_ns` is, by the spill disk.

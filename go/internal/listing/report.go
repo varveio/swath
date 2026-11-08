@@ -398,12 +398,21 @@ type Segments struct {
 	// MaxWorkers is the cap on workers (listing.segmentWorkers).
 	MaxWorkers int `json:"max_workers"`
 	// BudgetWaits are the times a worker waited for the row budget before
-	// reading a spilled frame, BudgetWaitNs their time; MaxHeldBytes the
-	// most counted against the budget at once while the segments ran (the
-	// tree, the encoders' queues, the frames the workers read).
+	// reading or gathering a unit, BudgetWaitNs their time; MaxHeldBytes
+	// the most the segments held at once beside the tree (the encoders'
+	// queues, the units the workers read or gathered).
 	BudgetWaits  int64 `json:"budget_waits"`
 	BudgetWaitNs int64 `json:"budget_wait_ns"`
 	MaxHeldBytes int64 `json:"max_held_bytes"`
+	// WorkersBy is what set workers: encoders, processors, descriptors,
+	// row_budget or segments. PerWorkerBytes is the budget one worker
+	// holds at most, FreeBytes the budget the segments could take when
+	// planned (less what the encoders' queues held): the row budget holds
+	// 1 + (free_bytes - per_worker_bytes - the first's queue) /
+	// per_worker_bytes workers.
+	WorkersBy      string `json:"workers_by,omitempty"`
+	PerWorkerBytes int64  `json:"per_worker_bytes"`
+	FreeBytes      int64  `json:"free_bytes"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").
