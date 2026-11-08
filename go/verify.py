@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
-"""Verify a swath dataset (format 2) with DuckDB, independently of the Go writer.
+"""Verify a swath dataset (SeekParquet, draft revision 1) with DuckDB, independently of the Go writer.
 
 Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
 versions keys are nondecreasing within a part and strict across parts. Checks
+the manifest's SeekParquet members and key declaration, the swath extension,
 S3 version nullability, per-part GCS schemas, generation ordering, manifest row
-counts, byte-exact bounds and footer stamps. Optional reference-dir compares ordered
+counts, byte-exact bounds, part MD5 digests and footer stamps. Optional reference-dir compares ordered
 whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -75,12 +77,19 @@ def main(out, reference=None):
 
     with open(os.path.join(out, "manifest.json")) as manifest:
         m = json.load(manifest)
-    check(m.get("format") == "swath-dataset" and m.get("format_version") == 2, "manifest is format 2")
-    for k in ("schema_id", "published_at", "source", "scope", "coverage", "parts"):
-        check(k in m, f"manifest has {k}")
-    cov = m.get("coverage", {})
+    check(m.get("format") == "seekparquet" and m.get("format_version") == 0 and m.get("draft_revision") == 1,
+          "manifest is SeekParquet format_version 0, draft_revision 1")
+    members = {"format", "format_version", "draft_revision", "schema_id", "key", "parts", "extensions"}
+    check(set(m) == members, f"manifest has exactly the SeekParquet members (extra: {sorted(set(m) - members)})")
+    check(all(set(f) == {"path", "rows", "bytes", "min_key_base64", "max_key_base64"} for f in m.get("parts", [])),
+          "parts have exactly path, rows, bytes and the base64 key bounds")
+    ext = m.get("extensions", {}).get("swath", {})
+    for k in ("published_at", "source", "scope", "coverage", "part_md5"):
+        check(k in ext, f"extensions.swath has {k}")
+    check(list(m.get("extensions", {})) == ["swath"], "extensions holds the swath namespace only")
+    cov = ext.get("coverage", {})
     check(cov.get("snapshot") is False and isinstance(cov.get("exclusions"), list) and isinstance(cov.get("filters"), list),
-          f"coverage complete={cov.get('complete')} skipped={cov.get('skipped_entries')} scope={m.get('scope')}")
+          f"coverage complete={cov.get('complete')} skipped={cov.get('skipped_entries')} scope={ext.get('scope')}")
     for gone in ("_SUCCESS", "symlink.txt"):
         check(not os.path.exists(os.path.join(out, gone)), f"no {gone} (the manifest is the commit)")
     try:
@@ -90,7 +99,8 @@ def main(out, reference=None):
         return 1
     groups = sid in VERSION_IDS
     s3 = sid in (S3_CURRENT, S3_VERSIONS)
-    check(m["source"]["kind"] == ("s3" if s3 else "gcs" if sid in (GCS_CURRENT, GCS_VERSIONS) else "local-fs"),
+    check(m.get("key") == {"column": "key", "unique": not groups}, f"key declaration {m.get('key')} (unique unless the schema repeats keys)")
+    check(ext.get("source", {}).get("kind") == ("s3" if s3 else "gcs" if sid in (GCS_CURRENT, GCS_VERSIONS) else "local-fs"),
           "source kind agrees with schema id")
     report = "run.json"
     check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
@@ -195,10 +205,15 @@ def main(out, reference=None):
             (k.decode() if isinstance(k, (bytes, bytearray)) else k, v.decode() if isinstance(v, (bytes, bytearray)) else v)
             for k, v in con.execute(f"SELECT key, value FROM parquet_kv_metadata('{p}')").fetchall()
         )
-        want = {"swath.profile": "swath-dataset", "swath.profile_version": "2", "swath.schema_id": m["schema_id"],
+        want = {"seekparquet.format_version": "0", "seekparquet.draft_revision": "1", "seekparquet.schema_id": m["schema_id"],
+                "seekparquet.key_column": "key", "seekparquet.key_unique": "false" if groups else "true",
                 "swath.index_bound_bytes": "1024"}
-        check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: profile, version, schema id, index bound")
-        check(not [k for k in kv if k.startswith("swath.") and k not in want], "  no other swath.* stamps")
+        check(all(kv.get(k) == v for k, v in want.items()), "  footer stamps: SeekParquet version, schema id, key; value index bound")
+        check(not [k for k in kv if k.startswith(("swath.", "seekparquet.")) and k not in want], "  no other swath.* or seekparquet.* stamps")
+        with open(p, "rb") as part:
+            digest = hashlib.md5(part.read()).hexdigest()
+        md5s = ext.get("part_md5", [])
+        check(i < len(md5s) and md5s[i] == digest, "  part MD5 == extensions.swath.part_md5")
     if reference is not None:
         from bench.diffds import compare
         result = compare(out, reference)
