@@ -488,6 +488,16 @@ its checkpoint/publication state.
   or markers under `data/`, so a format-specific glob is safe by construction —
   DuckDB's directory glob (swath's own ingest) does **not** honor the Hadoop
   `_`-prefix skip rule.
+- **The Go tool's layout differs.** The Go port (`go/`) writes a
+  [SeekParquet](https://github.com/varveio/seekparquet) dataset (format 1
+  draft revision 1): `data/part-NNNNN.parquet` and a `manifest.json` that
+  is the commit (no `_SUCCESS`, `symlink.txt` or `.swath-state.json`),
+  holding SeekParquet's members (format, version, `schema_id`, the key
+  declaration, the parts with exact base64 key bounds) and swath's source,
+  scope, coverage and part MD5s under `extensions.swath`; every part's
+  footer carries the `seekparquet.*` stamps. Its guarantees are in
+  [go/docs/internals/contracts.md](../../go/docs/internals/contracts.md),
+  what changed for readers in [go/docs/upgrade.md](../../go/docs/upgrade.md).
 - parquet-mr `_metadata` summary files are deprecated/off-by-default — swath
   writes its **own consumer `manifest.json`** at the dataset root in the
   **S3-Inventory schema plus additive sortedness fields**:

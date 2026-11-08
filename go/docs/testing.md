@@ -163,7 +163,7 @@ until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 1; done
 cd go && go build -o /tmp/swath ./cmd/swath
 /tmp/swath list s3://noaa-normals-pds -endpoint http://127.0.0.1:19090 -path-style -anonymous -o /tmp/go-ds
 python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical: true
-python3 verify.py /tmp/go-ds                                         # the format-2 dataset, read by DuckDB
+python3 verify.py /tmp/go-ds                                         # the SeekParquet dataset, read by DuckDB
 ```
 
 - `bench/diffds.py A B` compares two datasets with DuckDB. It checks:
@@ -294,14 +294,41 @@ verifier tests skip. The tests stay in `go/test_dataset_readers.py` beside `veri
 `dataset_schema.py`, since they cover both the verifier and `bench/diffds.py`.
 
 `python3 /any/path/verify.py OUT [REFERENCE]` works from any working directory; its imports resolve beside
-the script. It checks a format-2 dataset independently of the Go code: schema dispatch, the manifest's
-fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts, row counts,
-exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), and the four footer stamps and no others.
+the script. It checks a SeekParquet dataset independently of the Go code: schema dispatch, the manifest's
+SeekParquet members only, its key declaration (`unique` false exactly for the versions schemas), the swath
+extension's fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts,
+row counts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), each part's MD5 against
+`extensions.swath.part_md5`, and the six footer stamps (`seekparquet.*` and `swath.index_bound_bytes`) and no
+other `seekparquet.*` or `swath.*` entry.
 Current-object keys rise strictly; version keys may repeat within a part but parts remain strictly
 key-disjoint. S3 versions retain nullable delete-marker fields; GCS schemas are checked column by column
 in every part, with generations rising within each key and `time_deleted` in UTC microseconds. An optional
 `REFERENCE` compares ordered whole-row sequences and multisets through `bench/diffds.py`, using
 `dataset_schema.py` for the shared schema contract.
+
+## SeekParquet conformance
+
+The dataset is a [SeekParquet](https://github.com/varveio/seekparquet) dataset, and the replay server reads it
+through the seekparquet Go module, so the format's own conformance suite is a gate. CI's `go-nonrace` job runs
+`scripts/ci/seekparquet-conformance.sh` (from `go/`; under a minute, most of it installing the suite's Python
+dependencies):
+
+1. It checks out the seekparquet repository at the tag of the module version `go.mod` pins (`go/v0.1.0`) and
+   runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
+   (`internal/cmd/conformance`): the `reader` target must qualify, every core and generated case passing.
+2. `listing` `TestSeekParquetFixtures` (skipped unless `SWATH_SEEKPARQUET_FIXTURES` names a directory) writes
+   three datasets with this build's writer and publication: S3 current objects over four parts whose keys roll
+   up at several depths; S3 versions, keys repeated in groups up to 3,000 rows across pages and row groups
+   (`unique` false); filesystem keys over 1,024 bytes, half led by 1,100 `0xFF` bytes.
+3. `scripts/ci/seekparquet_conformance.py` has the suite's reference adapter (a full pyarrow scan that checks
+   every rule it can, page indexes and page bounds included) validate each dataset at the `full` and `digest`
+   levels (`digest` checks nothing: swath writes no `sha256`), then requires the Go adapter to answer whole and
+   paginated ranges, lookups, prefix reads and `/`-delimited listings over keys taken from the dataset exactly
+   as the reference adapter does.
+
+Run it locally the same way: `cd go && ../scripts/ci/seekparquet-conformance.sh /tmp/spc` (Python 3 with
+`venv`, network access for the checkout and the pinned wheels). Results are recorded in
+[measurements.md](measurements.md#seekparquet-conformance).
 
 ## Fuzzing
 

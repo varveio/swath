@@ -24,8 +24,10 @@ curl 'http://127.0.0.1:19090/noaa-normals-pds?list-type=2&max-keys=10&encoding-t
 kill %1
 ```
 
-`--fixture` is a sorted listing: a dataset's `data/` directory or a format-2 dataset directory, a directory of
-sorted parts written by `swath --sort` or `swath-replay sort-fixture`, or one such part. A fixture that cannot
+`--fixture` is a sorted listing: a dataset directory this tool wrote (SeekParquet, read through the seekparquet
+module `github.com/varveio/seekparquet/go`, groups of repeated keys included), a format-2 dataset directory of an
+earlier build, a dataset's `data/` directory, a directory of sorted parts written by Java `swath --sort`, or one
+such part. A fixture that cannot
 be served sorted is refused when it opens, with the reason. A file ending
 in `.tsv` is instead a key list loaded into memory (one object per line: key, size, last-modified microseconds,
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
@@ -34,8 +36,8 @@ ETag, storage class, owner id, owner display name, checksum algorithm, checksum 
 `swath-replay --version` prints the build.
 
 `swath-replay sort-fixture --capture PATH --output DIR [--key-limit N]` turns an unsorted capture (one Parquet
-part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted format-2 dataset that
-`serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
+part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted SeekParquet dataset
+that `serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
 leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
 unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
 anything is written. On success it prints one line on stdout:
@@ -393,7 +395,7 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `request.latency{shape}` | from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
 | `request.stage.latency{protocol,stage}` | on first use | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
 | `fixture.list.latency`, `serving.path{mode}` | from startup | one S3 pager operation |
-| `serving.refused{reason}` | on first use | `row_group_disorder`, counted for every read that finds it, a range read or a rollup |
+| `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era or format-2 fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
 | `index.load.latency{source=derived}`, `index.entries` | from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | from startup | how long a store read holds its reader slot, slot wait excluded |
 | `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |

@@ -63,7 +63,9 @@ const unboundedKeyBytes = 4096
 // klauspost/compress v1.19.1 (2026-11-08, live heap after GC after every
 // page of 24 pages a writer, random values at each length). Remeasure on
 // an upgrade of either (TestWriterAdmissionCoversHeap, and the probes in
-// docs/internals/parquet-output.md).
+// docs/internals/parquet-output.md). v1.20.3, which the seekparquet module
+// requires, passed TestWriterAdmissionCoversHeap and wrote the same pages
+// (TestFooterOnlyChange); it was not remeasured.
 //   - a codec state that has compressed a page larger than one zstd block
 //     (128 KiB) keeps a history of one 8 MiB window and a block (zstd's
 //     lower encoder memory: twice the window without it), plus its match

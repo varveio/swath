@@ -64,10 +64,10 @@ decision to add it later).
 | Text directory dataset, `_SUCCESS` last | none (`-o DIR --format tsv` is refused) | removed | not ported, 2026-11-06: no value now (partitioned text datasets) |
 | `_SUCCESS` written last is the commit | `manifest.json` installed last (atomic rename, directory sync) is the commit | renamed | dataset format 2, 2026-11-05 |
 | `symlink.txt` part list | none; the manifest lists the parts | removed | not ported, 2026-11-06: no value now |
-| `manifest.json` (format 1, camelCase) | `manifest.json` format 2 with `coverage` | renamed | dataset format 2, 2026-11-05 |
+| `manifest.json` (format 1, camelCase) | `manifest.json` format 2 with `coverage`; SeekParquet with `extensions.swath.coverage` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | `.swath-state.json` | `.swath/` workspace (`lock`, `journal`, `parts/`, `spill/`) | renamed | – |
 | Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1`, 9 columns (`version_id`, `is_latest`, `is_delete_marker`, `row_type` dropped) | renamed | dataset format 2 and versions mode parked, 2026-11-05 |
-| Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id` | renamed | dataset format 2, 2026-11-05 |
+| Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id`; then `seekparquet.*` and `swath.index_bound_bytes` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `-o` directory refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
 | One run per output at a time | output lock; journaled output refused on Windows | kept | – |
 
