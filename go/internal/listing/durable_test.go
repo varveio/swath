@@ -1050,6 +1050,10 @@ func ledgerFDs(t *testing.T, out string) int {
 // descriptor on the ledger after Run returns, and writes nothing more.
 func TestDurableFailedRecoveryCloses(t *testing.T) {
 	url, _, ref, out := durableFixture(t)
+	// A live certificate's file removed: recovery always retires it, so
+	// its sync is reached (without the damage it was reached only when K
+	// happened to cover a certificate).
+	damagedSnapshot(t, out)
 	occurrences := func(dir string, cfg func(string) Config, point string) int64 {
 		cp := filepath.Join(t.TempDir(), "probe")
 		if err := os.CopyFS(cp, os.DirFS(dir)); err != nil {
