@@ -121,7 +121,7 @@ one writer (its row group, a page buffer per column, and its wide values, the ke
 `schema.Spec.MaxBytes` such as a local path's link target, priced at their longest) and one state of the router's
 codec, which every writer shares and which makes states only as encoders are admitted (a zstd state that has
 compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 31.5 MiB for S3, 32.5 for
-GCS and 55 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
+GCS and 61 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
 writers' live heap, 24 pages each at the longest values, within four encoders' price, before admission raises
 the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Before, each writer
 had a codec of its own with a state per column goroutine, against a constant 24 MiB (98.5 MiB measured for one
@@ -448,8 +448,10 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   frame decoded whole, or a chunk of rows in memory, cut at a part boundary) copies the span
   (`Schema.Detach`), so the batch does not keep the whole frame alive, and once the segments are committed the
   tree's items drop their rows and the last segment to read a unit drops the stage's reference to it
-  (`TestSegmentsReleaseSpanStorage`: eight workers, one-part spans of 1,000-row frames, encoders held, 1.6 to
-  2.6 MiB live against up to 9.5 before). `TestSegmentsSizedToBudget` plans exactly two workers at 1,000-byte keys among
+  (`TestSegmentsReleaseSpanStorage`: eight workers, each with a span of its own decoded 1,000-row frame queued,
+  encoders held: within 3 MiB, about 9 before). The seam keys a finished segment leaves for the seam check are
+  copies too, so a finished part keeps nothing of its rows (`TestSegmentsCompletedPartsReleaseStorage`: about
+  1,200 finished parts, spilled or in memory, within two budgets when the last segment finishes). `TestSegmentsSizedToBudget` plans exactly two workers at 1,000-byte keys among
   220-byte ones into stalled encoders: they wait fewer than 16 times and hold within the budget;
   `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. The first
   form of that gate counted the tree too and admitted every worker: with the tree full they waited tens of

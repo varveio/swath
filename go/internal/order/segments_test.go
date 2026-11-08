@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -505,11 +506,12 @@ func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 // batches queued a part. peak is the most counted downstream at once.
 type queuedSink struct {
 	*partSink
-	shared *Shared
-	stall  time.Duration
-	hold   chan struct{} // if set, every encoder waits on it before its first batch
-	queued atomic.Int64  // batches written to segments
-	closed atomic.Int64  // segment parts closed (their batches taken)
+	shared  *Shared
+	stall   time.Duration
+	hold    chan struct{} // if set, every encoder waits on it before its first batch
+	queued  atomic.Int64  // batches written to segments
+	closed  atomic.Int64  // segment parts closed (their batches taken)
+	closing atomic.Int64  // Close calls begun
 	// atHold, if set, runs when the last segment hands its part back,
 	// once every other segment's part is closed: every segment but the
 	// last has finished.
@@ -651,6 +653,7 @@ func TestSegmentsSizedToBudget(t *testing.T) {
 	if waits >= 16 || sg.BudgetWaits >= 16 || sg.MaxHeld > budget || peak > budget {
 		t.Fatalf("%d waits (%d counted), %d held at most, %d downstream, budget %d", waits, sg.BudgetWaits, sg.MaxHeld, peak, budget)
 	}
+
 }
 
 // TestSegmentsStayWithinBudget: with the plan's share understated
@@ -685,58 +688,109 @@ func TestRunBytes(t *testing.T) {
 	}
 }
 
-// TestSegmentsReleaseSpanStorage: a segment that hands on a span of a unit
-// (a spilled frame decoded whole, or a chunk of rows in memory) copies the
-// span, and the last segment to read a unit drops the stage's reference to
-// it, so what the encoders' queues hold is what they count. Long keys in
-// frames and chunks of 1,000 rows, parts of about 28 (every frame split
-// into many spans), eight workers, rows in memory and spilled, every
-// encoder held: the live heap, less the keys the fake parts keep, stays
-// within two budgets (the tree's and the segments'): 1.6 to 2.6 MiB here,
-// up to 9.5 before. Before (sol review 3, P2), each queued one-row span kept its
-// whole 1,024-row frame or chunk alive: megabytes the queues did not count.
+// segmentRun is a stage stopped after planning, for one worker's segments
+// alone (segment): a spiller and the segments' state, nothing listing.
+func segmentRun(t *testing.T, units []unit[tp], budget int64) *run[fr, tp] {
+	t.Helper()
+	o := &run[fr, tp]{ctx: context.Background(), schema: &testSchema, seg: &segState[tp]{}, g: &Gauges{}}
+	o.opt.Budget = budget
+	o.drain = sync.NewCond(&o.mu)
+	o.seg.uses = make([]atomic.Int32, len(units))
+	return o
+}
+
+// keepSink is a segment's part that keeps every batch it is given.
+type keepSink struct{ batches [][][]schema.Row[tp] }
+
+func (k *keepSink) Write(_ context.Context, b [][]schema.Row[tp]) error {
+	k.batches = append(k.batches, b)
+	return nil
+}
+func (k *keepSink) Close(context.Context, bool) {}
+func (k *keepSink) Hold(bool)                   {}
+
+// longRows is n rows of about 1,000-byte keys, ascending.
+func longRows(n int) []schema.Row[tp] {
+	rows := make([]schema.Row[tp], n)
+	for i := range rows {
+		rows[i] = schema.Row[tp]{Key: fmt.Sprintf("k%06d/%01000d", i, 0), Data: tp{Size: int64(i), ETag: "e"}}
+	}
+	return rows
+}
+
+// TestSegmentsReleaseSpanStorage: a segment that hands on a span of a
+// spilled frame (decoded whole, by each segment that reads it) copies the
+// span, so the batch an encoder's queue holds keeps only the span. Eight
+// segments read 28-row spans of one 1,000-row frame of 1,000-byte keys,
+// each decoding its own copy, and their batches are all kept (a stalled
+// encoder): the live heap grows by about the spans (well within 2 MiB), not
+// by eight frames (about 9 MiB before, sol review 3, P2). No goroutines, no
+// timing: the segments run one after another on the test's goroutine.
 func TestSegmentsReleaseSpanStorage(t *testing.T) {
-	withProcs(t, 9)
-	anyShare(t)
 	countRows = false
 	defer func() { countRows = true }()
-	const budget = 2 << 20
-	f := &frontier{slowPages: 1, siblings: 40, sibPages: 1, rows: 1000, long: 1}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
-	shared := &Shared{}
-	hold := make(chan struct{})
-	s := &queuedSink{partSink: &partSink{limit: 30_000, encoders: 8, queue: 2}, shared: shared, hold: hold}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	runtime.GC()
-	base := gcLive()
-	var held int64
-	go func() {
-		for s.queued.Load() == 0 {
-			time.Sleep(time.Millisecond)
-		}
-		time.Sleep(300 * time.Millisecond) // the workers fill their queues and stop
-		s.mu.Lock()
-		kept := s.keyBytes // what the fake parts keep of what reached them
-		s.mu.Unlock()
-		held = gcLive() - base - kept
-		close(hold)
-	}()
-	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
+	sp, err := newSpiller(&testSchema, t.TempDir(), false, false, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.close()
-	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
-		t.Fatal("rows differ")
+	defer sp.close()
+	f := sp.file()
+	rows := longRows(1000)
+	if err := sp.write(f, rows, true); err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("segments %+v; %d spilled; live heap %.1f MiB while the encoders were held", st.Segments, st.SpillRows, float64(held)/(1<<20))
-	if st.Segments.Reason != SegmentEngaged || st.SpillRows == 0 {
-		t.Fatalf("segments %+v, %d spilled", st.Segments, st.SpillRows)
+	at := spillAt{off: f.lastOff, size: f.lastSize, units: testSchema.RowsBytes(rows), rows: f.lastRows, logical: f.lastLogical}
+	rows = nil
+	units := []unit[tp]{{f: f, at: at, n: at.rows, logical: at.logical, units: at.units}}
+	o := segmentRun(t, units, 1<<30)
+	o.sp = sp
+	const spans, span = 8, 28
+	o.seg.uses[0].Store(spans)
+	keep := &keepSink{}
+	base := gcLive()
+	for i := range spans {
+		s := segment{u0: 0, r0: i * span, u1: 0, r1: (i + 1) * span}
+		if _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if held > 2*budget {
-		t.Fatalf("%d bytes live while the encoders were held, budget %d (the tree's and the segments')", held, budget)
+	held := gcLive() - base
+	runtime.KeepAlive(keep)
+	t.Logf("%d spans of %d rows kept: live heap %.2f MiB", spans, span, float64(held)/(1<<20))
+	if len(keep.batches) != spans || held > 2<<20 {
+		t.Fatalf("%d batches, %d bytes live", len(keep.batches), held)
+	}
+}
+
+// TestSegmentUnitsDroppedByLastReader: an in-memory unit read by three
+// segments (its rows split at two part boundaries) keeps its rows until the
+// last of them has read it, then the stage drops its reference and returns
+// its tree charge, once; each segment's span is a copy, so nothing the
+// queues hold keeps the unit's storage.
+func TestSegmentUnitsDroppedByLastReader(t *testing.T) {
+	countRows = false
+	defer func() { countRows = true }()
+	rows := longRows(90)
+	units := []unit[tp]{{rows: rows, n: 90, units: testSchema.RowsBytes(rows)}}
+	o := segmentRun(t, units, 1<<30)
+	o.buffered = units[0].units // the tree's charge for it
+	o.seg.uses[0].Store(3)
+	keep := &keepSink{}
+	for i, s := range []segment{{u0: 0, r0: 0, u1: 0, r1: 30}, {u0: 0, r0: 30, u1: 0, r1: 60}, {u0: 0, r0: 60, u1: 1, r1: 0}} {
+		if _, _, _, _, err := o.segment(units, s, false, keep, &segTimes{}); err != nil {
+			t.Fatal(err)
+		}
+		last := i == 2
+		if (units[0].rows == nil) != last || (o.buffered == 0) != last {
+			t.Fatalf("after segment %d: rows dropped %v, tree charge %d", i, units[0].rows == nil, o.buffered)
+		}
+	}
+	for _, b := range keep.batches {
+		for _, seg := range b {
+			if &seg[0] == &rows[0] || &seg[0] == &rows[30] || &seg[0] == &rows[60] {
+				t.Fatal("a span shares the unit's row array")
+			}
+		}
 	}
 }
 
