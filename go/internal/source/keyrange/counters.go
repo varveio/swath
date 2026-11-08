@@ -144,6 +144,7 @@ const (
 	cMutexWait
 	cMutexMaxHold
 	cGroupsOpenPages
+	cGroupsFenceDeferred
 	cGroupsHeldRows
 	cGroupsRelistedRows
 	cGroupsMaxRows
@@ -292,6 +293,7 @@ var Counters = table([numCounters]counters.Def{
 	cMutexWait:                    d("mutex.wait_ns", counters.Count, "ns", "time goroutines spent waiting for the engine's decision mutex (summed over goroutines)"),
 	cMutexMaxHold:                 d("mutex.max_hold_ns", counters.Max, "ns", "the longest single hold of the engine's decision mutex"),
 	cGroupsOpenPages:              d("groups.open_pages", counters.Count, "pages", "pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split)", "groups"),
+	cGroupsFenceDeferred:          d("groups.fence_deferred", counters.Count, "pages", "page ends that declared no coverage fence because the hot key's group was still open (durable spill certifies only complete keys)", "groups"),
 	cGroupsHeldRows:               d("groups.held_rows", counters.Count, "rows", "rows of a page's trailing key held back until the next page proved the key complete", "groups"),
 	cGroupsRelistedRows:           d("groups.split_relisted_rows", counters.Count, "rows", "held rows dropped at a split, listed again by the lower child", "groups"),
 	cGroupsOverfetchRows:          d("groups.overfetch_rows", counters.Count, "rows", "rows above a range end read to close its last key group (excludes resume suppression and split relisting)", "groups"),

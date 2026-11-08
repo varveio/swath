@@ -631,9 +631,16 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}
-		if done {
+		switch {
+		case done:
 			fenceAt(r.hi, r.open)
-		} else {
+		case p.d.Groups && grp.open:
+			// A hot key's group is still open: rows of key c may follow on
+			// the next page, so c is not yet a fence (every row up to it
+			// emitted). Fences, and so a certificate's cs and ce, fall only
+			// at complete keys: none cuts a version group.
+			p.c.Inc(cGroupsFenceDeferred)
+		default:
 			fenceAt(c, false)
 		}
 		p.lock()

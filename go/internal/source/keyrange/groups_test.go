@@ -642,3 +642,47 @@ func TestGroupOverfetchRows(t *testing.T) {
 		t.Fatalf("rows=%d calls=%d stats=%+v", len(e.rows), calls, p.Stats())
 	}
 }
+
+// TestGroupsFencesAtCompleteKeys: in group mode a coverage fence (and so a
+// durable spill certificate's cs or ce) falls only at a complete key. A
+// page that ends inside a hot key's group (40 versions over 7-entry pages)
+// leaves the group open, and that page end declares no fence
+// (groups.fence_deferred): a fence there would let rows of the same key
+// follow it, and a certificate starting there would replay without them.
+// Every range is driven through checkFences, which refuses a row at or
+// below the fence before it, with forced splits so ranges end at split
+// cursors too.
+func TestGroupsFencesAtCompleteKeys(t *testing.T) {
+	var keys []string
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("k%04d", i))
+	}
+	v := newVersioned(keys, func(i int) int {
+		if i%23 == 4 {
+			return 40
+		}
+		return 1 + i%3
+	}, 3)
+	for _, split := range []bool{false, true} {
+		opt := Options{Workers: 4, PageSize: 7}
+		if split {
+			opt.SplitCoin = func() bool { return true }
+		}
+		p := newGroupEngine(t, v, opt)
+		var rows []string
+		var replay []Range
+		drive(t, p, p.Root(), "", &rows, &replay)
+		want := v.want("", "")
+		if len(rows) != len(want) {
+			t.Fatalf("split=%v: %d rows, want %d", split, len(rows), len(want))
+		}
+		for i := range want {
+			if rows[i] != want[i].Key {
+				t.Fatalf("split=%v: row %d is %q, want %q", split, i, rows[i], want[i].Key)
+			}
+		}
+		if st := p.Stats(); st.Get(cGroupsFenceDeferred) == 0 {
+			t.Fatalf("split=%v: no fence deferred at an open group", split)
+		}
+	}
+}

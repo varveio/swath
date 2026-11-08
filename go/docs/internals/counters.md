@@ -223,6 +223,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
 | `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
 | `groups.open_pages` | count | pages | groups | pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split) |
+| `groups.fence_deferred` | count | pages | groups | page ends that declared no coverage fence because the hot key's group was still open (durable spill certifies only complete keys) |
 | `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
 | `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
 | `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
