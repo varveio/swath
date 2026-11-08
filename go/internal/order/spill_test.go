@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/metrics"
 	"slices"
 	"strings"
 	"sync"
@@ -593,5 +594,52 @@ func TestDeltaFrameMalformed(t *testing.T) {
 	}
 	if _, err := s.next(f); !errors.Is(err, errSpillFrame) || f.f != nil {
 		t.Fatalf("a zstd delta frame decoded past the limit: %v (reader open %v)", err, f.f != nil)
+	}
+}
+
+// TestSpillEncoderFootprint: a pooled frame encoder, once it has coded a
+// frame larger than a few hundred KiB, keeps its history buffers alive. With
+// the library's default 8 MiB window that was about 8.6 MiB per encoder, and
+// a run pools up to one per worker; spillEncoderOptions caps it near 1.5 MiB.
+// Eight encoders each code a 512 KiB frame; the live heap they keep must stay
+// under 2 MiB apiece, and the frames must still decode.
+func TestSpillEncoderFootprint(t *testing.T) {
+	live := func() int64 {
+		runtime.GC()
+		s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+		metrics.Read(s)
+		return int64(s[0].Value.Uint64())
+	}
+	var body []byte
+	for i := 0; len(body) < 512<<10; i++ {
+		body = fmt.Appendf(body, "data/2026/%07d/obj-%09d.json\t%032x\t%d\n", i/1000, i, uint64(i)*0x9e3779b97f4a7c15, i%9973)
+	}
+	const n = 8
+	base := live()
+	encs := make([]*zstd.Encoder, n)
+	frames := make([][]byte, n)
+	for i := range encs {
+		enc, err := zstd.NewWriter(nil, spillEncoderOptions...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encs[i], frames[i] = enc, enc.EncodeAll(body, nil)
+	}
+	per := (live() - base) / n
+	runtime.KeepAlive(encs)
+	t.Logf("%.2f MiB per encoder after a %d KiB frame", float64(per)/(1<<20), len(body)>>10)
+	if per > 2<<20 {
+		t.Fatalf("a pooled spill encoder keeps %.2f MiB, over 2 MiB", float64(per)/(1<<20))
+	}
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dec.Close()
+	for _, f := range frames {
+		got, err := dec.DecodeAll(f, nil)
+		if err != nil || string(got) != string(body) {
+			t.Fatalf("frame does not round-trip: %v", err)
+		}
 	}
 }
