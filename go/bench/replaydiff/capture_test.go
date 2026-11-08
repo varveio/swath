@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -569,11 +570,11 @@ func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
 		return body
 	}
 	first := runFakeLiveThrough(t, "s3", edit, &testRecorder{}, false, nil)
-	pins := map[string]string{}
+	pins := map[string]pin{}
 	walks := 0
 	for _, r := range first.Results {
 		if !r.Pass && r.diff != nil {
-			pins[r.Name] = r.Detail
+			pins[r.Name] = testPin(t, "s3", r)
 			if r.Kind == "walk" {
 				walks++
 			}
@@ -596,6 +597,30 @@ func TestPinnedDifferencesAreDocumentedInBoth(t *testing.T) {
 		}
 		t.Errorf("replay: %d failed, documented %q", rep.Failed, rep.Residuals)
 	}
+}
+
+// testPin pins a failed result's mismatch for its case as readPins binds
+// a pin to the evidence, the shape being the request's own query: a
+// matrix case's token and mutation, any token for a walk.
+func testPin(t *testing.T, protocol string, r result) pin {
+	t.Helper()
+	_, q, _ := queryToken(r.Target, tokenParamOf(protocol))
+	p := pin{mismatch: r.Detail, shape: regexp.MustCompile("^" + regexp.QuoteMeta(q) + "$"), refStatus: r.diff.Status[0], token: pinAnyToken}
+	cases := s3ProviderCases()
+	if protocol == "gcs" {
+		cases = gcsProviderCases()
+	}
+	if i := slices.IndexFunc(cases, func(c providerCase) bool { return c.ID == r.Name }); i >= 0 {
+		switch c := cases[i]; {
+		case c.Mutation == "tampered":
+			p.token = pinTampered
+		case c.TokenFrom != "":
+			p.token, p.mutation = pinSourced, c.Mutation
+		case c.Kind != "walk":
+			p.token = pinNoToken
+		}
+	}
+	return p
 }
 
 // TestCaptureTokenIssuedByTwoScopes: a provider can issue the same token
@@ -638,29 +663,213 @@ func TestCaptureTokenIssuedByTwoScopes(t *testing.T) {
 	}
 }
 
-// TestTokenMapLookup: a token issued from several requests resolves to
-// the entry of the request's own walk (the same query), else to the one
-// its annotated source case issued, else to the latest; re-issuing from
-// the same request replaces its entry and adds none.
+// TestTokenMapLookup: a token issued from several requests resolves, for
+// a request annotated with its source walk, to that walk's entry or to
+// none, whatever the request's own query issued; for one with no source,
+// to the entry of the same query (its own case's where several differ);
+// never to the latest: entries that would send different Go tokens fail
+// as ambiguous, and a token no matching request issued fails. Re-issuing
+// from the same request replaces its entry and adds none.
 func TestTokenMapLookup(t *testing.T) {
 	tm := &tokenMap{m: map[string][]capturedToken{}}
 	tm.set("T", capturedToken{got: "a", query: "q=a", caseID: "walk a"})
 	tm.set("T", capturedToken{got: "b", query: "q=b", caseID: "walk b"})
 	tm.set("T", capturedToken{got: "c", query: "q=c", caseID: "walk c"})
+	tm.set("T", capturedToken{got: "a2", query: "q=a", caseID: "walk a2"})
+	tm.set("T", capturedToken{got: "s", query: "q=s", caseID: "walk s1"})
+	tm.set("T", capturedToken{got: "s", query: "q=s", caseID: "walk s2"})
 	if tm.grows("T", "q=b", "walk b") || !tm.grows("T", "q=b", "walk d") {
 		t.Error("grows")
 	}
-	if tm.set("T", capturedToken{got: "b2", query: "q=b", caseID: "walk b"}); tm.n != 3 {
+	if tm.set("T", capturedToken{got: "b2", query: "q=b", caseID: "walk b"}); tm.n != 6 {
 		t.Errorf("%d entries", tm.n)
 	}
-	for _, c := range []struct{ query, from, want string }{
-		{"q=b", "", "b2"}, {"q=a", "walk c", "a"}, {"q=x", "walk a", "a"}, {"q=x", "", "c"}, {"q=x", "walk z", "c"},
+	for _, c := range []struct{ query, caseID, from, want string }{
+		{"q=b", "walk b", "", "b2"},
+		{"q=a", "walk a", "walk c", "c"}, // the source, not the same query
+		{"q=x", "case", "walk a", "a"},
+		{"q=a", "walk a", "", "a"}, // the own case's among differing entries
+		{"q=a", "walk a2", "", "a2"},
+		{"q=s", "case", "", "s"},      // entries that agree
+		{"q=a", "case", "", ""},       // ambiguous
+		{"q=x", "case", "", ""},       // no request of the query issued it
+		{"q=x", "case", "walk z", ""}, // the source issued none
+		{"q=b", "walk b", "walk z", ""},
 	} {
-		if got, ok := tm.lookup("T", c.query, c.from); !ok || got.got != c.want {
-			t.Errorf("lookup %s from %q: %q", c.query, c.from, got.got)
+		got, err := tm.lookup("T", c.query, c.caseID, c.from)
+		if c.want == "" && err == nil || c.want != "" && (err != nil || got.got != c.want) {
+			t.Errorf("lookup %s %s from %q: %q %v", c.query, c.caseID, c.from, got.got, err)
 		}
 	}
-	if _, ok := tm.lookup("U", "q=a", ""); ok {
-		t.Error("an unknown token was found")
+	if _, err := tm.lookup("U", "q=a", "", ""); !errors.Is(err, errNotIssued) {
+		t.Errorf("an unknown token: %v", err)
+	}
+}
+
+// TestCaptureMutationAnnotationIsVerified: an annotation that says a
+// request's token is an issued token altered is a claim about the
+// captured request, held to it: the alteration of the named token must
+// be exactly the token the request carried. A forged flip-decoded
+// annotation on a continuation whose captured answer is the provider's
+// next page fails the exchange (it would otherwise send an altered Go
+// token and document the refusal against a captured 200), as does a
+// verbatim annotation on a token an earlier answer issued; the genuine
+// annotation, on the token so altered, is replayed and documented.
+func TestCaptureMutationAnnotationIsVerified(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)[:2]
+	issued := nextToken([]byte(*xs[0].Response.Body))
+	flipped, err := mutateToken(issued, "flip-decoded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotate := func(token, carried string) capturedExchange {
+		x := xs[1]
+		x.Annotations = []capturedHeader{{recordCaseHeader, "s3-07x"}, {recordTokenHeader, token}}
+		x.Request.Query = strings.Replace(x.Request.Query, "continuation-token="+campaignEscape(issued, ""),
+			"continuation-token="+campaignEscape(carried, ""), 1)
+		return x
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	for _, c := range []struct {
+		name string
+		x    capturedExchange
+		want string // the failure; "" for documented
+	}{
+		{"forged flip-decoded", annotate(tokenNote("flip-decoded", issued), issued), "annotation does not match the captured token"},
+		{"forged truncate", annotate(tokenNote("truncate", issued), flipped), "annotation does not match the captured token"},
+		{"forged verbatim", annotate(tokenVerbatim, issued), "annotation does not match the captured token"},
+		{"genuine flip-decoded", annotate(tokenNote("flip-decoded", issued), flipped), ""},
+	} {
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "s3", gcsSynthetic,
+			exchangeItems([]capturedExchange{xs[0], c.x}), testLimits)
+		switch {
+		case c.want == "" && (len(rep.Residuals) != 1 || rep.Failed != 0):
+			t.Errorf("%s: documented %q, %d failed %+v", c.name, rep.Residuals, rep.Failed, rep.Results)
+		case c.want != "" && (len(rep.Residuals) != 0 || len(rep.Results) != 1 || !strings.Contains(rep.Results[0].Error, c.want)):
+			t.Errorf("%s: documented %q, results %+v", c.name, rep.Residuals, rep.Results)
+		}
+	}
+}
+
+// TestCaptureTokenFromNamedWalk: two GCS walks of one prefix, one from a
+// startOffset that lands where the other starts, issue the same provider
+// token at their first page, where the Go server's tokens differ (each
+// bound to its walk's scope). A request in walk B's scope annotated as
+// sending walk A's token is replayed with A's Go token, whatever B
+// issued: the provider's 200 to it then fails (the Go server refuses A's
+// token in B's scope), and a captured scope refusal passes. Before, the
+// same-query entry won and B's token turned the scope question into a
+// plain continuation.
+func TestCaptureTokenFromNamedWalk(t *testing.T) {
+	keys := liveKeys()
+	re := regexp.MustCompile(`("nextPageToken":")([^"]*)"`)
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), tokenParam: "pageToken", tokenRe: re,
+		extra: http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}}, tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	defer live.Close()
+	path := "/storage/v1/b/bkt/o"
+	qa, qb := "prefix=data/small/&maxResults=3", "prefix=data/small/&maxResults=3&startOffset=data/small/f00.csv"
+	a := captureWalk(t, live.URL, path, qa, "pageToken", gcsNextToken, false)
+	b := captureWalk(t, live.URL, path, qb, "pageToken", gcsNextToken, false)
+	tokA := gcsNextToken([]byte(*a[0].Response.Body))
+	// The provider's answer to A's token in B's scope: the backend's
+	// refusal, as a provider that binds its tokens would answer.
+	refusal := captureWalk(t, live.URL, path, qb+"&pageToken="+campaignEscape(tokA, ""), "pageToken", gcsNextToken, false)[0]
+	if refusal.Response.Status != 400 {
+		t.Fatalf("A's token in B's scope: %d %s", refusal.Response.Status, *refusal.Response.Body)
+	}
+	same := func(x *capturedExchange) {
+		tok := gcsNextToken([]byte(*x.Response.Body))
+		body := strings.Replace(*x.Response.Body, tok, "SAME", 1)
+		x.Response.Body = &body
+		x.Response.Headers = slices.DeleteFunc(slices.Clone(x.Response.Headers), func(h capturedHeader) bool { return h.Name == "Content-Length" })
+	}
+	same(&a[0])
+	same(&b[0])
+	a[0].Annotations = []capturedHeader{{recordCaseHeader, "walk-a"}}
+	b[0].Annotations = []capturedHeader{{recordCaseHeader, "walk-b"}}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), client: &http.Client{}}
+	for _, c := range []struct {
+		name   string
+		answer capturedExchange
+		pass   bool
+	}{{"the provider's page", b[1], false}, {"a scope refusal", refusal, true}} {
+		x := c.answer
+		x.Request.Query = qb + "&pageToken=SAME"
+		x.Annotations = []capturedHeader{{recordCaseHeader, "scope-case"}, {recordFromHeader, "walk-a"}}
+		xs := []capturedExchange{a[0], b[0], x}
+		for i := range xs {
+			xs[i].Seq = uint64(i + 1)
+		}
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+		wantFailed := 1
+		if c.pass {
+			wantFailed = 0
+		}
+		if rep.Passed != 3-wantFailed || rep.Failed != wantFailed {
+			for _, r := range rep.Results {
+				t.Errorf("%s: %s: %s %s", c.name, r.Name, r.Error, r.Detail)
+			}
+			t.Errorf("%s: %d passed, %d failed", c.name, rep.Passed, rep.Failed)
+		}
+	}
+	// A source walk that issued no such token fails the request; so does
+	// an unannotated request whose own walk issued none.
+	for _, notes := range [][]capturedHeader{{{recordCaseHeader, "scope-case"}, {recordFromHeader, "walk-c"}}, {{recordCaseHeader, "scope-case"}}} {
+		x := b[1]
+		x.Seq, x.Request.Query, x.Annotations = 3, "prefix=data/&maxResults=3&pageToken=SAME", notes
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "gcs", gcsSynthetic,
+			exchangeItems([]capturedExchange{a[0], b[0], x}), testLimits)
+		if rep.Failed != 1 || len(rep.Results) != 1 || rep.Results[0].Error == "" {
+			t.Errorf("%v: %d failed, %+v", notes, rep.Failed, rep.Results)
+		}
+	}
+}
+
+// TestPinsBindTheRecordedRequest: a pin documents its mismatch only for a
+// request of the shape the evidence captured for its case, answered as
+// the evidence's provider answered. Over the Go server, the pinned
+// includeTrailingDelimiter=true question refused against a captured 200
+// is documented, and so is the pinned reason pair of a refused
+// projection; an unrelated request labelled gcs-03p whose refusal gives
+// the same message fails.
+func TestPinsBindTheRecordedRequest(t *testing.T) {
+	pins, err := readPins(writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, body: `{"kind":"storage#objects"}`,
+			mismatch: "GCS HTTP status differs: expected=200 actual=400"},
+		"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: gcsRefusalBody(400, "invalidParameter"),
+			mismatch: "GCS error reason differs: expected=invalidParameter actual=invalid"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := `{"kind":"storage#objects"}`
+	exchange := func(seq uint64, caseID, query string, status int, body string) capturedExchange {
+		var x capturedExchange
+		x.Seq, x.Annotations = seq, []capturedHeader{{recordCaseHeader, caseID}}
+		x.Request.Method, x.Request.Path, x.Request.Query = "GET", "/storage/v1/b/bkt/o", query
+		x.Request.Headers = []capturedHeader{{"Accept", "application/json"}}
+		x.Response.Status, x.Response.Body = status, &body
+		x.Response.Headers = []capturedHeader{{"Content-Type", "application/json; charset=UTF-8"}}
+		return x
+	}
+	xs := []capturedExchange{
+		exchange(1, "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true", 200, page),
+		exchange(2, "gcs-11c", "prefix=data/small/&projection=bogus", 400, gcsRefusalBody(400, "invalidParameter")),
+		exchange(3, "gcs-03p", "prefix=data/tree/&delimiter=/&projection=bogus", 200, page),
+	}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, liveKeys()...), client: &http.Client{}}
+	rep := &report{}
+	replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+	if len(rep.Residuals) != 2 || !strings.HasPrefix(rep.Residuals[0], "capture 1 [gcs-03p]") || !strings.HasPrefix(rep.Residuals[1], "capture 2 [gcs-11c]") {
+		t.Errorf("documented %q", rep.Residuals)
+	}
+	if rep.Failed != 1 || len(rep.Results) != 1 || !strings.HasPrefix(rep.Results[0].Name, "capture 3 [gcs-03p]") ||
+		rep.Results[0].Detail != "GCS HTTP status differs: expected=200 actual=400" {
+		t.Errorf("%d failed: %+v", rep.Failed, rep.Results)
 	}
 }

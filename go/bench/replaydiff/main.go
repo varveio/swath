@@ -96,7 +96,8 @@ func main() {
 	flag.BoolVar(&o.liveScripted, "live-scripted", false, "live: also send the driver's own scripted matrix")
 	flag.BoolVar(&o.liveRecord, "live-record", false, "live: the endpoint is a bench/faultproxy -record proxy in front of the provider; "+
 		"each request names its case and how its token was formed in X-Record-* headers the proxy records and strips, for replaydiff -capture")
-	flag.StringVar(&o.pins, "live-pins", "", "live and capture: a replay-expectations.json of the provider evidence; a difference whose message is its case's pinned mismatch is a documented difference")
+	flag.StringVar(&o.pins, "live-pins", "", "live and capture: a replay-expectations.json of the provider evidence, beside its index.json and captures; "+
+		"a difference whose message is its case's pinned mismatch, for a request of the shape the evidence captured for the case answered as captured, is a documented difference")
 	flag.BoolVar(&o.maskMetadata, "gcs-mask-metadata", false, "gcs: compare with each item's metadata fields removed (a native fixture on the Go server against the same rows, S3-shaped, on the Java server)")
 	flag.StringVar(&o.capture, "capture", "", "replay a bench/faultproxy -record capture against the Go server on -fixture and compare with the captured answers")
 	flag.Int64Var(&o.captureLimits.maxBody, "capture-max-body", 16<<20, "capture: the largest captured body in `bytes`, as recorded; an exchange over it fails")
@@ -460,7 +461,7 @@ type driver struct {
 	maxDetails int
 	// pins are the provider evidence's pinned mismatches by case id
 	// (-live-pins), for a capture's annotated cases.
-	pins map[string]string
+	pins map[string]pin
 }
 
 func (d *driver) record(r result) {
