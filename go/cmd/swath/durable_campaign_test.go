@@ -53,9 +53,10 @@ import (
 // [max(cs, K), ce) of a certificate live in the ledger's prefix. Opt-in:
 // TestDurableMinIO runs with SWATH_MINIO_ENDPOINT (go/bench/minio.sh),
 // TestDurableCorpus with SWATH_CORPUS_ENDPOINT (go/bench/durable_corpus.sh);
-// both skip without them. With SWATH_CAMPAIGN_KEYS (and
-// SWATH_CAMPAIGN_MAX_KEYS: its first lines only) the uninterrupted dataset
-// must list exactly that key file. SWATH_CAMPAIGN_RESULTS names a file each arm
+// both skip without them, and both require SWATH_CAMPAIGN_KEYS (with
+// SWATH_CAMPAIGN_MAX_KEYS: its first lines only): the uninterrupted
+// dataset must list exactly that key file. The reuse arms (kills after
+// seals) must replay certificates. SWATH_CAMPAIGN_RESULTS names a file each arm
 // appends its result line to (go/docs/measurements.md, "Durable spill").
 
 // campaignFrontierDelay is the skewed fixture's slow frontier (contract
@@ -113,6 +114,7 @@ type campaignFixture struct {
 	bucket    string
 	anonymous bool
 	workers   string   // --workers ("": the default)
+	keys      string   // the key file the fixture serves (the oracle)
 	env       []string // the child's credentials
 }
 
@@ -213,6 +215,7 @@ type campaignArm struct {
 	keys       float64 // or: SIGKILL once this fraction of the fixture's keys was served
 	damage     func(t *testing.T, out string)
 	resumeKill string // a first resume killed here (mid recovery replay)
+	reuse      bool   // the kill falls after seals: the resume must replay certificates
 }
 
 var campaignArms = []campaignArm{
@@ -220,15 +223,15 @@ var campaignArms = []campaignArm{
 	{name: "seal", kill: "spill-seal:1"},                   // §3.4
 	{name: "ledger-append", kill: "spill-ledger-append:1"}, // §3.5
 	{name: "ledger-sync", kill: "spill-ledger-sync:1"},
-	{name: "unlink", kill: "spill-unlink:1"}, // §3.8
+	{name: "unlink", kill: "spill-unlink:1", reuse: true}, // §3.8
 	{name: "part-recorded", kill: "recorded:2"},
 	// Killed at the third ledger sync, two cycles of seals are durable:
 	// certificates the resume replays, killed at its second replayed frame.
-	{name: "mid-replay", kill: "spill-ledger-sync:3", resumeKill: "spill-replay-frame:2"},
+	{name: "mid-replay", kill: "spill-ledger-sync:3", resumeKill: "spill-replay-frame:2", reuse: true},
 	{name: "lost-unsealed", kill: "spill-seal:2", damage: loseUnsealed},
 	{name: "lost-ledger-tail", kill: "spill-ledger-sync:2", damage: tearLedgerTail},
-	{name: "keys-40", keys: 0.4},
-	{name: "keys-70", keys: 0.7},
+	{name: "keys-40", keys: 0.4, reuse: true},
+	{name: "keys-70", keys: 0.7, reuse: true},
 }
 
 // campaignRunner runs the binary for the campaign.
@@ -306,6 +309,9 @@ func (c *campaignRunner) run(args []string, killAt string, keys int64) (*campaig
 }
 
 func campaign(t *testing.T, fx campaignFixture) {
+	if fx.keys = os.Getenv("SWATH_CAMPAIGN_KEYS"); fx.keys == "" {
+		t.Fatal("SWATH_CAMPAIGN_KEYS is required: the key file the fixture serves, the reference's independent oracle")
+	}
 	up, err := url.Parse(fx.upstream)
 	if err != nil {
 		t.Fatal(err)
@@ -352,10 +358,10 @@ func campaign(t *testing.T, fx campaignFixture) {
 		}
 	}
 	rows := refRep.Output.RowsCommitted
-	if keys := os.Getenv("SWATH_CAMPAIGN_KEYS"); keys != "" {
-		limit, _ := strconv.ParseInt(os.Getenv("SWATH_CAMPAIGN_MAX_KEYS"), 10, 64)
-		sameKeys(t, ref, keys, limit)
-	}
+	// The independent oracle: a service that omits keys would otherwise
+	// be its own reference.
+	limit, _ := strconv.ParseInt(os.Getenv("SWATH_CAMPAIGN_MAX_KEYS"), 10, 64)
+	sameKeys(t, ref, fx.keys, limit)
 	slow := frontierEnd(t, ref, rows/10)
 	px.slow.Store(&slow)
 	coldDir := filepath.Join(t.TempDir(), "cold")
@@ -450,12 +456,28 @@ func campaign(t *testing.T, fx campaignFixture) {
 					}
 				}
 				req := r.value("requests")
+				elig := eligibleCerts(certs, k)
+				if arm.reuse && (elig == 0 || accepted == 0 || replayed == 0) {
+					t.Errorf("a reuse arm without reuse: %d eligible certificates, %d accepted, %d rows replayed", elig, accepted, replayed)
+				}
 				line = fmt.Sprintf("%d\t%d\t%d\t%d\t%.3f\t%d\t%d", len(certs), accepted, replayed, req, float64(req)/float64(coldReq), r.value("reuse.boundary_overfetch_keys"), inside)
 				t.Logf("live certificates %d, accepted %d, replayed %d rows, resume %d requests (%.3fx cold), %d requests inside a certificate",
 					len(certs), accepted, replayed, req, float64(req)/float64(coldReq), inside)
 			})
 		}
 	}
+}
+
+// eligibleCerts counts the certificates with keys above K: those a resume
+// replays.
+func eligibleCerts(certs []ledgerCert, k string) int {
+	n := 0
+	for _, c := range certs {
+		if c.open || c.ce > k {
+			n++
+		}
+	}
+	return n
 }
 
 // appendResult appends line to the results file (none: nothing).
