@@ -14,8 +14,7 @@ import (
 )
 
 // codec is pure-Go ZSTD (klauspost, SpeedDefault) with all-literal entropy
-// compression enabled. A router's writers share one (a writer made alone
-// owns one). Its states are single-state zstd encoders, made as calls
+// compression enabled. A router's writers share one. Its states are single-state zstd encoders, made as calls
 // need them up to limit and reused last-in first-out, so a state is only
 // made, and only grows (to the largest page it compressed, about 11 MiB
 // once a page passes one zstd block with lower encoder memory, which
@@ -34,10 +33,10 @@ type codec struct {
 	closed  bool
 }
 
-func newCodec(limit int) (*codec, error) {
+func newCodec(limit int) *codec {
 	c := &codec{limit: max(1, limit)}
 	c.cond.L = &c.mu
-	return c, nil
+	return c
 }
 
 // newState is one zstd state with the writer's options (EncodeAll's

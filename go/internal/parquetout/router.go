@@ -223,11 +223,7 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	// admitted, the most column goroutines at once across the parts
 	// (columns), however many parts are open; Admit raises them with the
 	// encoders. A codec per writer held a pool of states each.
-	c, err := newCodec(opt.Encoders)
-	if err != nil {
-		return nil, fmt.Errorf("parquet router: %w", err)
-	}
-	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: c}
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: newCodec(opt.Encoders)}
 	for range opt.MaxEncoders - opt.Encoders {
 		r.slots <- struct{}{}
 	}
@@ -489,7 +485,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.codec, 0, columns, createdBy)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.codec, columns, createdBy)
 	}
 	if err != nil {
 		p.err = err

@@ -156,7 +156,6 @@ type writer[P any] struct {
 	out       *tracking
 	w         *pq.GenericWriter[any]
 	codec     *codec
-	ownCodec  bool  // created for this writer (else the router's, shared)
 	capped    []int // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	values    [][]pq.Value
 	page      []schema.Row[P]
@@ -169,23 +168,10 @@ type writer[P any] struct {
 }
 
 // create opens path for a part, compressing with c (the router's, shared
-// by its writers), or, nil, with a codec of its own for maxColumns
-// goroutines. createdBy, if not empty, is the footer's created_by verbatim
+// by its writers; the writer does not close it). createdBy, if not empty, is the footer's created_by verbatim
 // instead of this build's (a reproduced claimed part's own,
 // Cut.CreatedBy).
-func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], c *codec, maxColumns int, columns func() int, createdBy string) (*writer[P], error) {
-	own := c == nil
-	if own {
-		var err error
-		if c, err = newCodec(max(1, maxColumns)); err != nil {
-			return nil, err
-		}
-	}
-	closeCodec := func() {
-		if own {
-			c.Close()
-		}
-	}
+func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], c *codec, columns func() int, createdBy string) (*writer[P], error) {
 	if open == nil {
 		open = func(path string) (*os.File, error) {
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -193,7 +179,6 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	}
 	f, err := open(path)
 	if err != nil {
-		closeCodec()
 		return nil, fmt.Errorf("create part: %w", err)
 	}
 	opts := []pq.WriterOption{
@@ -221,7 +206,7 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	}
 	out := &tracking{w: faults.Writer(f), digest: md5.New()}
 	w := &writer[P]{
-		schema: s, columns: columns, file: f, out: out, codec: c, ownCodec: own,
+		schema: s, columns: columns, file: f, out: out, codec: c,
 		w:    pq.NewGenericWriter[any](out, opts...),
 		page: make([]schema.Row[P], 0, pageRows),
 	}
@@ -363,9 +348,6 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	if err == nil {
 		err = w.w.Close()
 	}
-	if w.ownCodec {
-		err = errors.Join(err, w.codec.Close())
-	}
 	if err == nil {
 		err = faults.Sync(w.file)
 	}
@@ -385,9 +367,6 @@ func (w *writer[P]) close() (dataset.Part, error) {
 func (w *writer[P]) abort() {
 	if !w.closed {
 		w.closed = true
-		if w.ownCodec {
-			_ = w.codec.Close()
-		}
 		_ = w.file.Close()
 	}
 }

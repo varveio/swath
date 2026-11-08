@@ -55,7 +55,9 @@ func testRows(n int, seed int64) []row {
 
 func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part {
 	t.Helper()
-	w, err := create(nil, path, &testSchema, nil, columns, func() int { return columns }, "")
+	c := newCodec(columns)
+	defer c.Close()
+	w, err := create(nil, path, &testSchema, c, func() int { return columns }, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,10 +472,7 @@ func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
 // asserted growth from a run whose compressions need not overlap, and
 // failed at GOMAXPROCS 1.
 func TestCodecLeasesFollowLimit(t *testing.T) {
-	c, err := newCodec(2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newCodec(2)
 	defer c.Close()
 	var held []*zstd.Encoder
 	lease := func() {
@@ -539,7 +538,9 @@ func TestValueLimits(t *testing.T) {
 		}
 	}
 	write := func(link string) error {
-		w, err := create(nil, filepath.Join(t.TempDir(), "x.parquet"), &s, nil, 1, func() int { return 1 }, "")
+		c := newCodec(1)
+		defer c.Close()
+		w, err := create(nil, filepath.Join(t.TempDir(), "x.parquet"), &s, c, func() int { return 1 }, "")
 		if err != nil {
 			t.Fatal(err)
 		}
