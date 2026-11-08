@@ -328,6 +328,9 @@ Which jobs run depends on the trigger:
 | **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`) |
 | **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only) |
 
+A merge that changes only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
+tiers: the Java jobs report success with their steps skipped and no Java image is published,
+so `main` on GHCR stays on the last Java-changing commit.
 `docker-check` is the **PR-only** build gate — it validates the multi-arch build
 and runs `--help`, but never pushes. On a merge or dispatch it doesn't run,
 because `docker-publish` builds the image itself (running both would just be a
