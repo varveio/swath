@@ -166,7 +166,8 @@ func TestFencesHoldTheContract(t *testing.T) {
 }
 
 // TestReuseTilesAroundSpans: a resume handed reused certificates emits one
-// replay range per span, at its position, and lists only the gaps: the
+// replay range per span, at its position, and lists only the gaps (the
+// seed sends no first data page from K, seed.first_page_skipped_reuse): the
 // listed rows are exactly those of (K, ⊤] outside the spans, no data
 // request starts inside a span's [cs, ce), and the gaps and replay ranges
 // together tile (K, ⊤] (spans below K start at K).
@@ -188,7 +189,7 @@ func TestReuseTilesAroundSpans(t *testing.T) {
 				spans = spans[1:]
 			}
 			api := newSorted(keys, true, 1)
-			opt := Options{Seed: seed, Workers: 4}
+			opt := Options{Seed: seed, SeedFirstPage: seed, Workers: 4} // the first data page probe as the CLI sends it
 			if k != "" {
 				opt.Resume = &Resume{After: k}
 			}

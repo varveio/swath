@@ -171,7 +171,14 @@ func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) 
 	for level := 0; ; level++ {
 		var chains []*seedChain
 		var err error
-		if level == 0 && p.opt.SeedFirstPage {
+		if level == 0 && p.opt.SeedFirstPage && len(p.reuse) > 0 {
+			// The first data page starts at K and is emitted whole when the
+			// scope fits it: with reused certificates above K it would list
+			// (and could emit) keys a certificate replays. The seed tiles
+			// the gaps around them alone.
+			p.c.Set(cSeedFirstPageReuse, 1)
+		}
+		if level == 0 && p.opt.SeedFirstPage && len(p.reuse) == 0 {
 			var page *Page[P]
 			var fits bool
 			chains, page, fits, err = p.seedFirst(ctx, nodes, &b, start, after)

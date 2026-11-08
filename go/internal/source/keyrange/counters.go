@@ -40,6 +40,7 @@ const (
 	cSeedStopFlat
 	cSeedFirstPageKeys
 	cSeedFirstPageDiscarded
+	cSeedFirstPageReuse
 	cSeedFlatChains
 	cSeedResumed
 	cSeedFromParts
@@ -185,6 +186,7 @@ var Counters = table([numCounters]counters.Def{
 	cSeedStopFlat:                 d("seed.stop.flat", counters.Count, "seeds", "the seed stopped at a level with no folder, after a chain whose page held no folder was not followed", "seed"),
 	cSeedFirstPageKeys:            d("seed.first_page_keys", counters.Count, "objects", "keys the seed's first data page emitted: the whole scope, in one page", "seed"),
 	cSeedFirstPageDiscarded:       d("seed.first_page_discarded", counters.Flag, "", "the seed's first data page was truncated: discarded, the tiles list the scope from its start (one request more)", "seed"),
+	cSeedFirstPageReuse:           d("seed.first_page_skipped_reuse", counters.Flag, "", "a resume with reused certificates sent no first data page from K: it could list (and, fitting one page, emit) keys a certificate replays", "seed"),
 	cSeedFlatChains:               d("seed.flat_chains", counters.Count, "chains", "delimiter chains not followed past a page that held no folder (objects only)", "seed"),
 	cSeedResumed:                  d("seed.resumed", counters.Flag, "", "the seed tiled a resumed scope (K, ⊤]", "seed"),
 	cSeedFromParts:                d("seed.from.parts", counters.Count, "parts", "parts of the --seed-from dataset (0 for a cut file)", "seed_from"),
