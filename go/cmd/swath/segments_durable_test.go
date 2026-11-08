@@ -12,13 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -66,35 +64,32 @@ func readSegReport(t *testing.T, at, path string) segReport {
 // (the second from the start of the keyspace: the seed's is the first,
 // as listing's frontierHold) goes unanswered while every other range
 // lists, spills and seals behind a drainer that cannot move. It is
-// released once the run has sealed a durable file and the other ranges
-// have finished: no other listing request in flight or begun for
-// quietFor. Listing then ends within the frontier's own range, the drainer
-// still in it, so the sealed files ahead are the segments' to read. (A
-// 50 ms delay on the first folders' pages left that to timing: under
-// -race on CI the clean run's segments read no durable file.)
+// released on the run's own signal (SWATH_TEST_LAST_RANGE_FILE,
+// lastRangeFile): every range but the held one is done and a durable
+// file is sealed. Listing then ends within the frontier's own range, the
+// drainer still in it, so the sealed files ahead are the segments' to
+// read. (A 50 ms delay on the first folders' pages left that to timing:
+// under -race on CI the clean run's segments read no durable file.) A
+// signal that does not come within two minutes is a failure of the
+// fixture (late), not a release.
 type frontierGate struct {
-	durable  string // the run's durable spill directory
-	starts   atomic.Int64
-	held     atomic.Bool // the frontier's request was held
-	late     atomic.Bool // released by the cap, not by the run's state
-	inFlight atomic.Int64
-	last     atomic.Int64 // when the last other listing request began or ended (UnixNano)
-	release  chan struct{}
-	stop     chan struct{}
+	signal  string // the file the run creates
+	starts  atomic.Int64
+	held    atomic.Bool // the frontier's request was held
+	late    atomic.Bool // no signal within the cap
+	release chan struct{}
+	stop    chan struct{}
 }
 
-const quietFor = 500 * time.Millisecond
-
-func newFrontierGate(out string) *frontierGate {
-	g := &frontierGate{durable: filepath.Join(out, order.DurableDir), release: make(chan struct{}), stop: make(chan struct{})}
-	g.last.Store(time.Now().UnixNano())
+func newFrontierGate(signal string) *frontierGate {
+	g := &frontierGate{signal: signal, release: make(chan struct{}), stop: make(chan struct{})}
 	go g.watch()
 	return g
 }
 
-// watch opens the gate once the frontier is held, a durable file is
-// sealed (named in the ledger's directory as *.spill) and the other ranges
-// are quiet; after two minutes it opens anyway and marks the gate late.
+// watch opens the gate once the frontier is held and the run has
+// signalled; after two minutes it marks the gate late and opens it so
+// the run ends (the test fails on late).
 func (g *frontierGate) watch() {
 	defer close(g.release)
 	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
@@ -103,8 +98,7 @@ func (g *frontierGate) watch() {
 			return
 		default:
 		}
-		sealed, _ := filepath.Glob(filepath.Join(g.durable, "*.spill"))
-		if g.held.Load() && len(sealed) > 0 && g.inFlight.Load() == 0 && time.Since(time.Unix(0, g.last.Load())) >= quietFor {
+		if _, err := os.Stat(g.signal); err == nil && g.held.Load() {
 			return
 		}
 	}
@@ -123,14 +117,8 @@ func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Requ
 		case <-r.Context().Done(): // a killed run
 			return
 		}
-		h.ServeHTTP(w, r)
-		return
 	}
-	g.inFlight.Add(1)
-	g.last.Store(time.Now().UnixNano())
 	h.ServeHTTP(w, r)
-	g.last.Store(time.Now().UnixNano())
-	g.inFlight.Add(-1)
 }
 
 // TestSegmentsReplayDurableFiles: the segment tail replays durable spill
@@ -175,16 +163,18 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	run := func(at string, cmd *exec.Cmd, kill string, extra ...string) {
 		t.Helper()
 		var g *frontierGate
+		cmd.Env = append(append(env, extra...), "SWATH_TEST_KILL_AT="+kill)
 		if cmd.Args[1] == "list" {
-			g = newFrontierGate(cmd.Args[slices.Index(cmd.Args, "-o")+1])
+			signal := filepath.Join(t.TempDir(), "last-range")
+			g = newFrontierGate(signal)
+			cmd.Env = append(cmd.Env, "SWATH_TEST_LAST_RANGE_FILE="+signal)
 		}
 		gate.Store(g)
-		cmd.Env = append(append(env, extra...), "SWATH_TEST_KILL_AT="+kill)
 		out, err := cmd.CombinedOutput()
 		if g != nil {
 			g.close()
 			if kill == "" && (!g.held.Load() || g.late.Load()) {
-				t.Fatalf("%s: the frontier held %v, released by the cap %v", at, g.held.Load(), g.late.Load())
+				t.Fatalf("%s: the frontier held %v, the run's signal missing %v", at, g.held.Load(), g.late.Load())
 			}
 		}
 		if kill == "" {

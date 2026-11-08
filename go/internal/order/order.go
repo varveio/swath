@@ -847,8 +847,13 @@ func (o *run[R, P]) expandBy(n *node[R, P], direct, drainer bool) error {
 		e.kids = nil
 	}
 	n.state = done
-	if o.open.Add(-1) == 0 && err == nil && !o.stopped.Load() {
-		o.listedAt, listed = time.Now(), true
+	switch o.open.Add(-1) {
+	case 0:
+		if err == nil && !o.stopped.Load() {
+			o.listedAt, listed = time.Now(), true
+		}
+	case 1:
+		event("one-range-open") // tests: every range but one is done
 	}
 	for i := len(n.pending) - 1; i >= 0; i-- {
 		o.stack = append(o.stack, n.pending[i])
