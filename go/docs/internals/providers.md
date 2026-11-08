@@ -321,7 +321,7 @@ Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).
 
-**Generations** (built and unit-tested, not yet wired to a command or the engine). `ListInput.Versions` sends
+**Generations** (`--all-versions`, `NewGenerations`: the engine in group mode, `fetchGenerations`). `ListInput.Versions` sends
 `versions=true` and, on Google's endpoint, the field mask with `timeDeleted` (parsed to µs, 0 when absent: a live
 generation; it is not `softDeleteTime`); items stay in wire order, name ascending and generation ascending within
 a name, and pages are native, continued by the API's `pageToken`. The payload `gcs.Generation` is an `Object` and
@@ -331,7 +331,8 @@ accessors; `generation` an exact INT64) and then `time_deleted`, null for the li
 `Info.Groups` set; its delta spill codec codes integers as wrapping differences and repeated strings as flags.
 `gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
 none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
-sends `startOffset = name` and the engine's `StartInclusive` drop removes its rows.
+sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
+removes all of the name's rows, across pages. A page whose generations of one name do not ascend is invalid.
 
 **Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
 transports, one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
@@ -710,6 +711,38 @@ then marked incomplete).
 
 **Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root is
 one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
+
+### Group mode (`groups.go`)
+
+A versions listing (`Description.Groups`, which must agree with the bound schema's `Info.Groups`, and
+`Description.Detach`, the schema's) returns a key once per version, consecutive, and a page may end inside a
+key's rows. Every consumer treats the last key it saw as finished (a split's lower child starts after it, the
+journal records it as published, a resume lists after it), so within one chain (an `expandRange` call or the
+sequential chain) the engine emits a row only once its key's rows are proven complete:
+
+- *Hold-back.* A continuing page's trailing key group is held and prepended to the next page; a later key or
+  the chain's end (EOF, or a row above `hi`) completes it. A page that is all one new key is held whole; a page
+  that repeats the held or emitted key cannot be held (a key can span any number of pages), so it is emitted as
+  it arrives and the chain's group is *open*. Held rows come from at most one page; the emitted and the held
+  side of a page share no array, and the smaller is copied out of the page (`Detach`), so a few rows never pin
+  a page the order stage did not charge.
+- *Splits.* A range splits only at its last emitted key, which is complete: never while its group is open, and
+  not before it has emitted a key (a split at `lo` would hand the whole range on again). The veto is in
+  `wanted`, in `decide` (before the coin, structure boundaries and the gates) and asserted before `commit`;
+  such a range is left out of the split rank. Both children are ordinary fresh ranges; held rows are dropped
+  and listed again by whichever child owns their key (`groups.split_relisted_rows`). Nothing crosses an
+  `Expand` call: a retry, a requeue or the drainer's expansion starts fresh.
+- *Bounds.* A bounded range lists until a key above `hi` or EOF, not until `c == hi` (hi's rows may continue).
+  A resume drops every row at or below its key, across pages, without moving the cursor. The inclusive-start
+  drop removes the bound key's whole group across pages.
+- *Order and progress.* Rows are nondecreasing; a row equal to the previous page's last key is allowed only
+  when that key's group may continue. A continuing page that shows no key above the chain's last must carry a
+  token outside the window of such pages' tokens (1,024), or it is an invalid page; ever-fresh tokens over one
+  key are not caught by the window or the stall watchdog (duplicate rows count as progress), only by
+  `--max-duration`, which has no default.
+- *Units.* `st.keys` counts rows (work); density, the gauge and the pivot take distinct keys.
+- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.max_rows`,
+  `split.skipped.group_open`.
 
 ## Registry and optional interfaces
 

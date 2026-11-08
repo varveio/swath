@@ -309,7 +309,17 @@ does, stated as the contract rather than as its code:
   all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
   build that writes the column mixes parts with and without it under one id (the resume identity freezes the
   schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
-  column of every schema id is present in every part. The Java-era `version_id`, `is_latest`, `is_delete_marker`
+  column of every schema id is present in every part.
+- **Versions schemas** (`swath list --all-versions`). `swath/s3-versions/v1` is the `swath/s3-objects/v1`
+  columns in the same order, `size` nullable (null on delete markers, as are `etag`, `storage_class` and the
+  checksums), then `version_id` (verbatim; `"null"` is a real ID), `is_latest` and `is_delete_marker`
+  (required). `swath/gcs-generations/v1` is the `swath/gcs-objects/v1` columns, then `time_deleted` (null for
+  the live generation; there is no `is_latest`). In both, a key repeats once per version, on consecutive rows,
+  in the service's order within the key (S3 newest first, versions and delete markers interleaved; GCS by
+  generation, ascending), which the file order carries and no column rebuilds; parts stay key-disjoint (a key's
+  rows are never split across parts), and `sorting_columns` is `key` ascending. A reader that assumes one row
+  per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
+  is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The Java-era `version_id`, `is_latest`, `is_delete_marker`
   and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
   only.
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.

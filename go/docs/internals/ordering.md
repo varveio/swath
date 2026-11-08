@@ -29,6 +29,13 @@ same protection as Parquet. The stage also counts the rows its emitters received
 unless it handed on exactly as many (spill, compaction and replay conserve rows); the pipeline compares both
 counts with the provider's and the router's.
 
+**Group mode** (`Options.Groups`, from the schema's `Info.Groups`: a versions listing). A key may repeat, on
+consecutive rows: the guard accepts a key equal to the previous row's, never one below it, and never one equal
+to `Options.After` (a resume continues after a complete key). `Stats.DistinctKeys` counts the keys, and `Count`
+applies the same rule per range (ranges are key-disjoint in group mode too, so their distinct counts sum). That
+no part, split or resume boundary falls inside a key is the engine's and the router's work (providers.md, "Group
+mode"; parquet-output.md).
+
 A failed range stops the stream at its node: the failure is latched under the stage's mutex before the node is
 marked done, so the drainer never passes it and hands on a later sibling's rows. What a sink received is then
 a prefix of the keyspace without a gap, the prefix a resume continues after. The context's stop callback

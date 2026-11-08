@@ -101,6 +101,8 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
   --gcs-anonymous
@@ -231,6 +233,8 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
   --gcs-anonymous
@@ -333,6 +337,8 @@ Diagnostics:
         ranges: list with one continuation-token chain (no ranges; the reference)
   --max-keys N
         ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
+  --page-size N
+        ranges: ask the service for pages of N entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes
   --limiter-slow-start
         requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
   --spill-plain
