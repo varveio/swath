@@ -12,6 +12,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -256,6 +257,11 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 	// parameter); --fetch-owner decides whether they are kept.
 	out, err := api.ListObjectVersions(ctx, in)
 	if err != nil {
+		if client.Classify(err) == objhttp.ClassAccessDenied {
+			// Likely, not certain: an explicit deny or a prefix condition
+			// answers 403 too. Never retried as a current-only listing.
+			return nil, fmt.Errorf("%w (--all-versions calls ListObjectVersions, which needs s3:ListBucketVersions; s3:ListBucket alone does not grant it)", err)
+		}
 		return nil, err
 	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
