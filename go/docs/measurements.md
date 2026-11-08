@@ -1080,8 +1080,18 @@ ratios are wall against a binary run the same night (median · p90); every run's
 
 Read-ahead: on one core it took turns with the drainer (the three largest lists 5 to 11 % slower with it), so it is
 off at GOMAXPROCS 1. Locally (2M keys, 4 cores) it read about 1,200 of 1,230 frames ahead without moving the
-wall: the tail was encoder-bound, which the segments then addressed. Open ablation, not run: segments on with
-the read-ahead off, and the plan-time pricing against a fixed worker count, on the 64 lists.
+wall: the tail was encoder-bound, which the segments then addressed. It stops when segments begin, so it
+serves the tail only while they cannot (one or two processors, one encoder, a single part, `listing_active`);
+no run measures the wall with segments on and the read-ahead off.
+
+Plan-time pricing (`segmentShare`, `budgetWorkers`): `seg3` had the reservation gate alone, and that gate
+counted the tree; a95c1b12 priced the workers at plan time and took the tree out of the gate in one step, and
+`seg4` then waited 0 times on 64 of 64 lists. The two changes are not separated on Batch. Locally the gate alone
+(`TestSegmentsStayWithinBudget`, the share understated) holds the bound with waits (15 in one run) where the priced plan
+(`TestSegmentsSizedToBudget`) has none; what that costs in wall is unmeasured.
+
+Follow-up (open, not run): on the 64 lists, segments on with the read-ahead off; and the fixed gate with a
+fixed worker count (pricing off) against `seg6`.
 
 ## Smoke runs only
 
