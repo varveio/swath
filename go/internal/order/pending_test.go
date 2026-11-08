@@ -96,7 +96,7 @@ func TestDistinctCountsOnlyHandedRows(t *testing.T) {
 				}
 			}
 			t.Cleanup(func() { hookWait = nil })
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			sink := &collect{}
 			p := pendingFailure{failure: tc.failure, firstRows: tc.firstRows, frontier: frontier, childDone: make(chan struct{})}
