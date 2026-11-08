@@ -489,7 +489,7 @@ jobs:
   go-nonrace:
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: go
@@ -511,15 +511,19 @@ jobs:
           SWATH_HEAP_GATES: "1"
         run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
 
+      # The shape suite at 200,000 keys per shape (internal/shapes, go/docs/testing.md): a
+      # measurement with order-of-magnitude bounds, skipped under -race (ten times slower, and the
+      # code it drives is race-tested by its own packages), so it runs here without it.
+      - name: Shape suite (TestShapes, no -race)
+        if: needs.changes.outputs.go == 'true'
+        run: go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes
+
       # SeekParquet conformance (go/docs/testing.md): the suite's reader target against the Go
       # adapter of the seekparquet module go.mod pins, then this build's datasets validated by the
       # suite's reference adapter (full and digest) and read alike by both adapters.
       - name: SeekParquet conformance
         if: needs.changes.outputs.go == 'true'
         run: ../scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
-
-      # Hook: the shape suite (#289, TestShapes at 200 k keys, skips itself under -race) is the
-      # next step here.
 
   # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
   # Windows test compile, and the Go replay image built and smoked.

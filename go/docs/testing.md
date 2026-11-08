@@ -14,7 +14,7 @@ CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each 
 |---|---|---|
 | `go-lint` | `gofmt -l` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact (when `go/` did not change, a single step-skipped `go-race (off)` leg) | per shard |
-| `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) | ubuntu-latest |
+| `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) and the [shape suite](#shape-suite) at 200,000 keys per shape | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 
 The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
@@ -50,6 +50,17 @@ input retained) only then, and one S3 writer over six pages by default, so the p
 full arms allocate hundreds of MiB and measure the live heap, which `-race` distorts and slows (they took
 over three of the listing package's six and a half minutes under `-race` at two processors): CI runs them in
 the `go-nonrace` job, without `-race`, with their own timeout.
+
+Tiers:
+
+- **Default** (every push and pull request, the four jobs above): lint, the race shards, the tiers that must
+  not run under `-race` (`go-nonrace`: the heap gates and the [shape suite](#shape-suite) at 200,000 keys per
+  shape), and the builds.
+- **Nightly** (`.github/workflows/nightly.yml`): `go-race-nightly`, the race tests unsharded on amd64, and
+  `go-shapes`, the shape suite at full scale with the fake's service behaviours, compared with a committed
+  baseline.
+- **Opt-in**: `SWATH_PERF=1`, `SWATH_HEAP_GATES=1`, the fuzz targets, the replay oracle and the durable spill
+  campaign below, which need a backend or a recording.
 
 ## Invariant tests
 
@@ -250,6 +261,28 @@ go run ./bench/s3fake -keys keys.tsv -bucket bench -addr 127.0.0.1:9000 &   # TS
 Fake-bucket numbers are synthetic:
 they measure client CPU and coordination, not S3 latency.
 
+`bench/scalefake` (package `internal/source/scalefake`) serves a lazy generated keyspace of up to billions of
+keys, or a sorted key file (`-key-file`, one key per line), as S3 ListObjectsV2 and GCS objects.list, with
+seek and delimiter fidelity. Every listing request waits `-latency` unless a service behaviour is asked for;
+each is a flag of the command and a field of `scalefake.Options` for in-process use:
+
+| flag | `Options` | behaviour |
+|---|---|---|
+| `-latency D` | `Latency` | every listing answer waits D |
+| `-jitter D` | `Jitter` | plus a uniform draw from [0, D), the same for the same request number and seed |
+| `-slow p=D,...` | `Slow` | the longest prefix matching the key a page starts at sets its latency |
+| `-first-latency D` | `FirstLatency` | the first listing request waits D instead |
+| `-token-latency D`, `-start-latency D` | `TokenLatency`, `StartLatency` | extra wait for requests with, or without, a continuation token |
+| `-page-cap N` | `PageCap` | at most N items per page, whatever the request asks |
+| `-rate N` | `Rate` | a token bucket of N requests per second (burst N/10): a request past it is throttled at once |
+| `-fail503 F` | `Fail503` | a fraction F of listing requests answered 503 (S3 `SlowDown`) after the delay |
+
+```bash
+go run ./bench/scalefake -key-file keys.txt -addr 127.0.0.1:19500 -latency 50ms -fail503 0.01 -slow d/000=500ms &
+./swath list s3://bkt --endpoint http://127.0.0.1:19500 --path-style --anonymous --region us-east-1 --count-only
+curl -s 127.0.0.1:19500/__scalefake/stats   # requests, pages, keys, throttled, in flight
+```
+
 **Test fixtures.** Tests build their buckets from two shared packages: `internal/source/s3/s3test` (a
 gofakes3 bucket `bkt` whose bodies are the keys: `Backend` populates, `Handler` serves, `Delayed` adds
 latency, `Serve` owns the server's lifecycle, `NoCredentials` hides the host's AWS credentials) and
@@ -257,7 +290,7 @@ latency, `Serve` owns the server's lifecycle, `NoCredentials` hides the host's A
 empty and short pages and a fields selector, which the GCS provider's protocol tests run against; `Bucket`
 and `Handler` serve it for run-level tests). A test that injects faults wraps the handler; protocol oracles
 and malformed-response handlers stay in their tests. `keyrangetest` (engine laws), `scalefake` (lazy large
-keyspaces) and `faulttest` (transport disturbance) keep their own purposes.
+keyspaces, key lists and service behaviours), `shapes` (bucket shapes, below) and `faulttest` (transport disturbance) keep their own purposes.
 
 ## Fault injection
 
@@ -439,7 +472,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 |---|---|
 | kill matrix (§3.4-5, §3.8, after a part record, mid recovery replay) | campaign (all four fixtures); `listing` `TestDurableKillMatrix` (1st and 4th occurrences); `cmd/swath` `TestSIGKILLDurableSpill` (its recovery arms start from an unpublished prefix, K at ⊥, so they do not exercise recovery with K advanced; the campaign's recovery arms do) |
 | ledger damage (flipped byte, foreign header) | `order` `TestDurableLedgerPrefix` |
-| Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` |
+| Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` (its damaged snapshot is first resumed uninterrupted on a copy, the dataset the uninterrupted one, and must replay two captured frames or more; a snapshot that replays fewer is crashed again, at most six times) |
 | Sol 2 (shutdown order) | `listing` `TestDurableShutdownOrder` |
 | Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts`; `listing` `TestDurableLedgerTornWrite` |
 | replaced output | `order` `TestDurableReplacedOutput`, `TestDurableReplacedMidCycle` |
@@ -475,6 +508,65 @@ kill at a seal, and the ledger's last append is torn after a kill at its sync.
 
 `SWATH_CAMPAIGN_RESULTS` (which both wrappers set) collects one line per arm. The retained results are
 in [measurements.md](measurements.md#durable-spill).
+
+## Shape suite
+
+`internal/shapes` generates 21 bucket shapes, each hard for the range engine in one way: the reference (200
+equal folders), a long shared prefix with a counter, an unpadded counter, flat hex, hashes under 16 folders, a
+Zipf folder distribution with 90 % in one folder, a folder per key, multi-byte names, 1,024-byte keys,
+siblings that sort around `/`, a 50-level chain, a date layout whose newest day holds 99 %, a sparse top over
+one dense folder, folder-marker objects, trailing-byte variants, `%` in every key, three tiny buckets (100,
+1,000 and 10,000 keys), a top level of 200,000 folders, and a density cliff. `Shape.Keys(n)` is deterministic
+(the same keys on every machine for the same shape and scale), sorted and unique; nothing is read from disk.
+`shapes.Run` lists a shape through `scalefake` in process, with the command's engine defaults and any of its
+flags, and returns the report's numbers: wall over ideal (`(pages/workers + 7 + seed round trips) x RTT`),
+requests and HTTP attempts per 1,000 keys, `split.max_depth`, the mean of active ranges, splits, empty
+children, throttles, and for a dataset arm whether its keys are the shape's.
+
+**Default tier.** `TestShapes` lists every shape at about 200,000 keys behind a 5 ms fake to Parquet at 16
+and at 5 workers: both datasets are exactly the shape's keys and their parts are byte-identical. The 16-worker
+run is held to bounds an order of magnitude from what it measures, so a tenfold regression fails and no
+change short of that does (the measured values are beside each bound in the test): at most 10 requests per
+1,000 keys (measured 1.1 to 2.0), `split.max_depth` at most 3·(6·log2(pages)+16) (at most 34 against 55 to
+61), and a mean of at least a tenth of the workers active (8.8 to 15 of 16; shapes of 100 pages or more). The
+tiny shapes are held to 50 requests per page plus 50 instead. It takes about 15 s on the ubuntu runner (40 s
+on a busy 4-core box); under `-race` it skips (ten times slower, and the code it drives is race-tested by its
+own packages), so CI runs it in the `go-nonrace` job; under the race shards the package's other tests run in
+`rest`:
+
+```bash
+go test -count=1 -run 'TestShapes$' -v ./internal/shapes
+```
+
+**Nightly tier.** `bench/shapes` runs the arm table in `bench/shapes/arms.go` at full scale (about 2M keys
+per shape, 88 arms): every shape at 50 ms and 64 workers; a latency ladder (10 and 200 ms); 256 workers;
+pages capped at 100; at 10, 50 and 200 ms on the reference shape: jitter, 1 % and 5 % throttling (with and
+without the limiter), a 300 request/s cap, a slow prefix over half the keys and over one folder, slow
+continuations, slow seeks and a slow first page; `--slow-split` arms; and Parquet arms. Every arm checks its
+output key for key against the shape, in order: a Parquet arm reads its dataset back, every other arm writes
+its rows as an ordered TSV stream compared in memory as it arrives (`shapes.Run`), so an overlap between
+ranges cannot hide behind an equal gap. It writes one JSON summary (the workflow's `go-shapes-summary`
+artifact, `schema_version` 1) and compares it with `bench/baselines/shapes.json`:
+
+```bash
+go run ./bench/shapes -out shapes.json -baseline bench/baselines/shapes.json   # the nightly
+go run ./bench/shapes -list                                                    # the arms
+go run ./bench/shapes -run 'throttle|pq\.' -scale 200000 -out /tmp/s.json      # a subset, smaller
+```
+
+Only a wrong listing (rows that are not the shape's, an arm that fails or runs past `-arm-timeout`) fails
+the job. A number (wall over ideal, requests or attempts per 1,000 keys, depth, mean active) that moved by
+more than 20 % against the baseline, and by more than a small absolute floor, is annotated on the run and
+tabled in its summary; so is a baseline that is missing, unreadable, of another schema version or scale, or
+a summary that could not be written. None of these fails the job. Once the baselines have held steady for
+about two weeks of nightlies, the comparison switches to failing the job.
+
+**Baseline policy.** The baseline is the summary of a nightly run on GitHub's ubuntu runner (walls on another
+machine are not comparable): download the `go-shapes-summary` artifact and commit it as
+`bench/baselines/shapes.json`. A pull request that is meant to move a number updates the baseline in the same
+pull request, from a run of its branch (`gh workflow run nightly.yml --ref BRANCH -f jobs=go-shapes`), and says
+which numbers moved and why. A change that moves a number unintentionally is a regression to fix, not a
+baseline to update.
 
 ## Measurements
 
