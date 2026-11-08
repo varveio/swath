@@ -81,8 +81,8 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Resource | Flag | Default | What to know |
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
-| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (reorder storage and encoder queues). Not a cap on resident memory |
-| Encoders | `--encoders` | GOMAXPROCS | the default is admitted: each encoder against 24 MiB of a writer allowance equal to `--row-budget` and the descriptor limit; the default 128 MiB admits 5. An explicit count is kept as given, with a warning when the resources cannot carry it. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
+| Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
+| Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against its working set (one writer and one shared codec state, at the schema's longest keys: 31.5 MiB for S3, 32.5 for GCS's ten columns, 61 MiB for a local path) from an allowance equal to `--row-budget`, and the descriptor limit; the default 128 MiB admits 4 for S3 and 3 for GCS. Once listing has ended the Parquet allowance grows by 1 MiB per worker (no page is in flight any more): at 64 workers 6 for S3 and 5 for GCS, at 256 12 and 11 (report: `resources.drain.encoders_after_listing`); a given `--encoders` is never raised. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath count` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
@@ -105,9 +105,11 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 - **Rows in flight, bounded by `--row-budget`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
   not charged, and no range keeps the page it was cut from alive, see
-  [ordering](internals/ordering.md#what-a-waiting-range-retains)).
+  [ordering](internals/ordering.md#what-a-waiting-range-retains)). When listing ends the tree holds about
+  one budget (spill keeps it there), and the segment tail's queues and frames may take one more beside it:
+  about two row budgets in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`).
 - **Pages in flight, outside it:** a response body and its parsed page per worker (up to 16 MiB each in
-  the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers (24 MiB each),
+  the worst case, about 300 KB for 1,000 keys of 120 bytes), the encoders' writers and codec (each encoder's working set, above),
   compression scratch, and the garbage collector's headroom (with the default `GOGC`, up to about twice
   the live heap).
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
@@ -165,6 +167,11 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   (a stalled frontier) nothing is open to close. `part_age_ms` in the progress file is the time since a part was
   last published; it says nothing about how old the rows in the newest part are, nor how much listed work
   a resume would repeat. With 0, part boundaries do not depend on timing.
+  Once listing is done and the rest of a sorted run is written as parallel segments
+  (`resources.drain.segments.reason` `engaged`), the interval closes no part: the tail is cut by size and row
+  count only ([ordering](internals/ordering.md#segments-parts-written-in-parallel-after-listing)). The tail's
+  workers are at most one per two processors (at least 8); with them the tail is CPU-bound on Parquet encoding
+  and spill read-back (`resources.drain.segments.write_ns`, `read_ns`, `decode_ns`).
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 
@@ -188,6 +195,17 @@ stage's resources. The report written at the end keeps the curve (`history`, up 
 resources and the provider's counters (`source.stats.counters.values`: attempt latency percentiles, the
 limiter's steps, the split counters). Both schemas are listed once, under "Progress file" and "Run report" in
 [cli.md](cli.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
+
+**The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
+work-stealing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
+until the leftmost range ends, and are then replayed in order. `timings.listing_done_at` is when the provider
+finished; `listing_finished_at` when the order stage ended; `resources.drain.tail_ns` the interval between, the
+part of the run in which only the drain was left. In it idle workers read and decode spilled frames ahead of
+the drainer (`resources.drain.read_ahead`) and more encoders are admitted (above). What the drainer did:
+`replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders, with
+`encoder_wait_ns`), over the whole run, not the tail alone; and in the tail, the workers'
+`worker_idle_after_listing_done_ns`. A tail that is most of the run with `sink_write_ns` most of the drainer's
+time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 
 | Signal | Healthy | Act when |
 |---|---|---|

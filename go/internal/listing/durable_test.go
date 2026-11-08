@@ -758,7 +758,12 @@ func TestDurableOverwrite(t *testing.T) {
 // trailer's prior-bytes CRC, the whole file's CRC in its ledger record), so
 // the codec check itself decides: recovery rejects them (rejected.codec)
 // and the resume lists their intervals as gaps, instead of refusing at
-// replay; the dataset is the uninterrupted one.
+// replay; the dataset is the uninterrupted one. Files no record names (a
+// range still spilling at the kill has no trailer yet, and a seal not yet
+// appended has no record) are left as they are: the resume unlinks them.
+// Whether the kill left one is timing; a partial file (a header, no
+// trailer) under a name no record holds is planted so that one is
+// always there, and its unlink is checked by name.
 func TestDurableUnknownCodec(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
@@ -766,41 +771,90 @@ func TestDurableUnknownCodec(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no durable file after the crash")
 	}
-	recorded := 0
+	recorded, unrecorded := 0, 0
+	var sealed string
 	for _, name := range files {
 		if recodec(t, out, name) {
 			recorded++
+			sealed = name
+		} else {
+			unrecorded++
 		}
 	}
 	if recorded == 0 {
 		t.Fatal("no durable file has a ledger record")
 	}
+	partial := plantPartial(t, out, sealed)
+	unrecorded++
 	sum, err := Run(context.Background(), durableConfig(url, out, true))
 	if err != nil {
 		t.Fatal(err)
 	}
 	sameDataset(t, "unknown codec", ref, out)
 	r := sum.Resources.Spill.Durable.Resume
-	if r.Rejected["codec"] == 0 || r.Accepted != 0 || r.Rejected["corrupt"] != 0 {
-		t.Fatalf("resume %+v", r)
+	if r.Rejected["codec"] == 0 || r.Accepted != 0 || r.Rejected["corrupt"] != 0 || r.Orphans < int64(unrecorded) {
+		t.Fatalf("resume %+v (%d files unrecorded)", r, unrecorded)
 	}
+	if _, err := os.Stat(filepath.Join(out, order.DurableDir, partial)); !os.IsNotExist(err) {
+		t.Fatalf("the unrecorded partial file survived the resume: %v", err)
+	}
+}
+
+// plantPartial writes a durable file that a kill mid-range would leave,
+// the header frame of sealed and nothing after it, under a fresh name
+// no ledger record holds, and returns the name.
+func plantPartial(t *testing.T, out, sealed string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, sealed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n0 := int(binary.LittleEndian.Uint32(b))
+	name := hex.EncodeToString([]byte("unrecorded-file!")) + ".spill" // 16 bytes, no run's random ID
+	if err := os.WriteFile(filepath.Join(out, order.DurableDir, name), b[:8+n0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return name
 }
 
 // recodec rewrites durable file name in out to name another row codec (the
 // codec ID's last byte changed, its length kept), with every checksum made
 // valid again: the header frame's CRC, the trailer's CRC of the bytes
 // before it, and the whole file's CRC in its ledger record. False: no
-// record names the file (an orphan the resume unlinks).
+// record names the file (an orphan the resume unlinks), which is left as
+// it is; it may have no trailer (its range was still spilling at the
+// kill). A recorded file was sealed, so it ends in its tail.
 func recodec(t *testing.T, out, name string) bool {
 	t.Helper()
 	tab := crc32.MakeTable(crc32.Castagnoli)
 	reseal := func(fr []byte) {
 		binary.LittleEndian.PutUint32(fr[4:8], crc32.Update(crc32.Checksum(fr[:4], tab), tab, fr[8:]))
 	}
+	id, _ := hex.DecodeString(strings.TrimSuffix(name, ".spill"))
+	lp := filepath.Join(out, order.DurableDir, "ledger")
+	lb, _ := os.ReadFile(lp)
+	var recs [][]byte // the frames of the records naming the file
+	for at := 0; at+8 <= len(lb); {
+		n := int(binary.LittleEndian.Uint32(lb[at:]))
+		if at+8+n > len(lb) {
+			break
+		}
+		fr := lb[at : at+8+n]
+		if fr[8] == 'S' && bytes.Equal(fr[9:25], id) {
+			recs = append(recs, fr)
+		}
+		at += 8 + n
+	}
+	if len(recs) == 0 {
+		return false
+	}
 	path := filepath.Join(out, order.DurableDir, name)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(b) < 16 || string(b[len(b)-8:]) != "SWATHDS2" {
+		t.Fatalf("%s has a ledger record and no tail (%d bytes)", name, len(b))
 	}
 	n0 := int(binary.LittleEndian.Uint32(b))
 	body := b[9 : 8+n0]    // the H frame's body
@@ -824,25 +878,12 @@ func recodec(t *testing.T, out, name string) bool {
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	id, _ := hex.DecodeString(strings.TrimSuffix(name, ".spill"))
-	lp := filepath.Join(out, order.DurableDir, "ledger")
-	lb, _ := os.ReadFile(lp)
-	found := false
-	for at := 0; at+8 <= len(lb); {
-		n := int(binary.LittleEndian.Uint32(lb[at:]))
-		if at+8+n > len(lb) {
-			break
-		}
-		fr := lb[at : at+8+n]
-		if fr[8] == 'S' && bytes.Equal(fr[9:25], id) {
-			binary.LittleEndian.PutUint32(fr[len(fr)-4:], sum)
-			reseal(fr)
-			found = true
-		}
-		at += 8 + n
+	for _, fr := range recs {
+		binary.LittleEndian.PutUint32(fr[len(fr)-4:], sum)
+		reseal(fr)
 	}
 	os.WriteFile(lp, lb, 0o644)
-	return found
+	return true
 }
 
 // TestDurableKillMatrix kills a durable-spill run (an injected crash that

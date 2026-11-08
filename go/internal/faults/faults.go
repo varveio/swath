@@ -18,6 +18,13 @@ var ErrCrash = errors.New("injected crash")
 var Points = []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append",
 	"journal-sync", "recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"}
 
+// SegmentPoints are the crash points inside the segment-parallel tail
+// (order's segments, reached only when they engage): the segments planned
+// and committed, none opened yet; a segment's part published (its
+// neighbours still open); every segment's rows handed on and the last
+// part held, before the router's Close.
+var SegmentPoints = []string{"segments-begun", "segment-published", "segments-written"}
+
 // SpillPoints are the durable spill's crash points in a run, in order: the
 // sync of each directory the run creates (spill/, spill/durable/; twice in
 // a run), a durable file's writes (the first, carrying the header and, at a range's

@@ -290,15 +290,28 @@ swath COMMAND --help lists a command's flags.
 `)
 }
 
-// testHooks installs the crash-point test hooks the environment asks for,
-// in this order: SWATH_TEST_SERIAL_SEALS (serialSeals), then
-// SWATH_TEST_KILL_AT (the process SIGKILLs itself) and SWATH_TEST_HANG_AT
-// (the goroutine blocks forever, as on stuck I/O), each "point:n": the
-// n-th time the process reaches crash point point (package faults).
+// testHooks installs the test hooks the environment asks for: on the
+// crash points (package faults), in this order, SWATH_TEST_SERIAL_SEALS
+// (serialSeals), then SWATH_TEST_KILL_AT (the process SIGKILLs itself) and
+// SWATH_TEST_HANG_AT (the goroutine blocks forever, as on stuck I/O), each
+// "point:n": the n-th time the process reaches crash point point; and on
+// the order stage's events (order.SetDurableEvents), serialSeals' and
+// SWATH_TEST_LAST_RANGE_FILE (lastRangeFile).
 func testHooks() {
-	var hooks []func(string)
+	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
-		hooks = append(hooks, serialSeals())
+		h, e := serialSeals()
+		hooks, events = append(hooks, h), append(events, e)
+	}
+	if path := os.Getenv("SWATH_TEST_LAST_RANGE_FILE"); path != "" {
+		events = append(events, lastRangeFile(path))
+	}
+	if len(events) > 0 {
+		order.SetDurableEvents(func(e string) {
+			for _, f := range events {
+				f(e)
+			}
+		})
 	}
 	killAt := os.Getenv("SWATH_TEST_KILL_AT")
 	killed := func() {
@@ -352,17 +365,18 @@ func atNth(spec string, act func()) func(string) {
 // n-th ledger append and the matrix's fourth-cycle arms are reached by
 // construction, not by how the seals fell in the flusher's 100 ms
 // windows. A wait over 10 s gives up, and the arm it served then fails as
-// unreached (the same gate as listing's in-process sealGate).
-func serialSeals() func(string) {
+// unreached (the same gate as listing's in-process sealGate). It returns
+// the crash-point hook and the order-event hook it counts cycles with.
+func serialSeals() (hook, events func(string)) {
 	var cycles atomic.Int64
-	order.SetDurableEvents(func(e string) {
+	events = func(e string) {
 		if e == "cycle-records" {
 			cycles.Add(1)
 		}
-	})
+	}
 	var mu sync.Mutex
 	var seals int64 // seals past their crash point (mu)
-	return func(p string) {
+	hook = func(p string) {
 		if p != "spill-seal" {
 			return
 		}
@@ -372,6 +386,32 @@ func serialSeals() func(string) {
 			time.Sleep(time.Millisecond)
 		}
 		seals++
+	}
+	return hook, events
+}
+
+// lastRangeFile is SWATH_TEST_LAST_RANGE_FILE: the file is created once a
+// range is done with one left (order's "one-range-open") and a durable
+// file has been sealed ("sealed"), in whichever order they come. A test
+// that holds one range's listing from outside the process waits for the
+// file, a signal from the run's own state, instead of for the fake's
+// requests to go quiet (cmd/swath's TestSegmentsReplayDurableFiles).
+func lastRangeFile(path string) func(string) {
+	var alone, sealed, made atomic.Bool
+	return func(e string) {
+		switch e {
+		case "one-range-open":
+			alone.Store(true)
+		case "sealed":
+			sealed.Store(true)
+		default:
+			return
+		}
+		if alone.Load() && sealed.Load() && made.CompareAndSwap(false, true) {
+			if f, err := os.Create(path); err == nil {
+				f.Close()
+			}
+		}
 	}
 }
 

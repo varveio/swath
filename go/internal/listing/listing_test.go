@@ -18,7 +18,9 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 func mk(t *testing.T, root string, files ...string) {
@@ -218,20 +220,45 @@ func TestConfigRejectsInvalid(t *testing.T) {
 // default spill reserve is derived from the encoders' parts, and the
 // default spill cap is half the free space after it; a negative one is none.
 func TestResourceAdmission(t *testing.T) {
+	s3Encoder := encoderPrice("s3://bkt")
+	if s3Encoder != parquetout.EncoderBytes(&s3.Schema) || encoderPrice("scripted://x") != parquetout.DefaultEncoderBytes {
+		t.Fatalf("encoder prices %d, scripted %d", s3Encoder, encoderPrice("scripted://x"))
+	}
 	for _, tc := range []struct {
 		budget  int64
 		workers int
 		fds     int64
 		want    int
 	}{
-		{128 << 20, 4, 0, 5},                     // 128 MiB / 24 MiB
-		{512 << 20, 4, 0, 21},                    // 512 MiB / 24 MiB
-		{512 << 20, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
-		{512 << 20, 64, 100, 1},                  // the floor
-		{minRowBudget, 4, 0, 1},                  // the floor
+		{128 << 20, 4, 0, 4},                      // 128 MiB / 31.5 MiB (the S3 schema's encoder)
+		{512 << 20, 4, 0, 16},                     // 512 MiB / 31.5 MiB
+		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
+		{512 << 20, 64, 100, 1},                   // the floor
+		{minRowBudget, 4, 0, 1},                   // the floor
 	} {
-		if got := admitEncoders(tc.budget, tc.workers, tc.fds); got != tc.want {
+		if got := admitEncoders(tc.budget, s3Encoder, tc.workers, tc.fds); got != tc.want {
 			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)
+		}
+	}
+	// Once listing has ended, each worker's page (1 MiB) joins the
+	// allowance: 128 MiB at 64 workers carries 6, at 256 workers 12.
+	for _, tc := range []struct {
+		workers int
+		want    int
+	}{{64, 6}, {256, 12}, {4, 4}} {
+		if got := admitAfterListing(128<<20, s3Encoder, tc.workers, 0); got != tc.want {
+			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
+		}
+	}
+	// The tail's segment workers: the encoders admitted after listing, and
+	// the 16 spill descriptors plus what the limit leaves.
+	for _, tc := range []struct {
+		encoders, workers int
+		fds               int64
+		want              int
+	}{{32, 1024, 0, 32}, {32, 64, 1 << 20, 32}, {32, 64, 16 + 128 + 32 + 32 + 4, 20}, {32, 64, 100, 16}, {1, 64, 0, 1}} {
+		if got := segmentWorkers(tc.encoders, tc.workers, tc.fds); got != tc.want {
+			t.Errorf("segmentWorkers(%d, %d, %d) = %d, want %d", tc.encoders, tc.workers, tc.fds, got, tc.want)
 		}
 	}
 	// The reserve: one part per encoder, at least 1 GiB (the defaults' 5

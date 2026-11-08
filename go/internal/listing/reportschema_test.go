@@ -64,7 +64,7 @@ func reportPaths() []string {
 }
 
 // TestReportSchemaGolden: the run report's schema is testdata's golden
-// (report_version 2); a change to it shows in review as a diff of that
+// (report_version 3); a change to it shows in review as a diff of that
 // file, with ReportVersion and go/docs/upgrade.md to change beside it. Run
 // with UPDATE=1 to rewrite it.
 func TestReportSchemaGolden(t *testing.T) {
