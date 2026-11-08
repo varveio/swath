@@ -13,7 +13,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // writeTypedFormat2 writes rows (two keys, a and b) as the one part of a
@@ -22,13 +22,13 @@ import (
 func writeTypedFormat2[T any](t *testing.T, schemaID string, rows []T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{SchemaID: schemaID,
-		Parts: []sortedparquettest.Part{{Rows: objects("a", "b")}}}); err != nil {
+	if _, err := legacytest.WriteFormat2(dir, legacytest.Dataset{SchemaID: schemaID,
+		Parts: []legacytest.Part{{Rows: objects("a", "b")}}}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "data", "part-00000.parquet")
 	options := []parquet.WriterOption{parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key")))}
-	for k, v := range sortedparquettest.Format2Stamps(schemaID, 1024) {
+	for k, v := range legacytest.Format2Stamps(schemaID, 1024) {
 		options = append(options, parquet.KeyValueMetadata(k, v))
 	}
 	if err := parquet.WriteFile(path, rows, options...); err != nil {

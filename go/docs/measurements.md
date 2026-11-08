@@ -1193,6 +1193,38 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
 - Cold-cache medians of the local walker; `readlink` cost (80 symlinks in `realistic`).
 
+## SeekParquet conformance
+
+2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's
+`go-nonrace` job runs the same script on every Go change). seekparquet `go/v0.1.0` (commit `81e44548`), suite
+revision `0.1.0-draft.4`; the same numbers on the development host and in the pull request's CI (#299, `go-nonrace`).
+
+| Check | Result |
+|---|---|
+| Suite reader target, the module's Go adapter | 1,429 passed, 0 failed, 207 skipped (the validator targets, which the module does not claim); `reader` qualified |
+| `s3-current`: 4 parts, 9,000 rows, `unique` true | reference adapter: `full` and `digest` complete; 234 requests answered alike by both adapters |
+| `s3-versions`: 5 parts, 24,976 rows, `unique` false, a 3,000-row group | `full` and `digest` complete; 184 requests alike |
+| `local-long-keys`: 3 parts, 3,000 keys of 1,109 bytes, half led by 1,100 `0xFF` bytes (a third with link targets as long, added after the review below) | `full` and `digest` complete; 204 requests alike |
+| The same check with the versions dataset's manifest edited to `unique: true` | refused, `stamp_mismatch`, at open and at the `structural` level (the check fails as it should) |
+
+`digest` checks nothing (swath writes no `sha256`). What this does not show: the suite's indexed-access
+suite does not exist yet, so no reader claims it; the replay server's own routes over these datasets are
+held by its store and route tests, not by the suite.
+
+**Data pages unchanged.** `parquetout` `TestFooterOnlyChange` writes the same rows as the format 2 writer did
+at `a1177c7f` (short unique keys over two parts, repeated keys, 1,100-byte binary keys) and compares SHA-256
+digests recorded there: the column chunks' pages, the offset indexes, the value columns' indexes and the
+FileMetaData without its key/value metadata, `created_by` and index locations are identical; the key index is
+identical for keys within 1,024 bytes and exact for the long ones. The same digests held with
+klauspost/compress v1.20.3, brotli v1.2.8 and lz4 v4.1.33, which the seekparquet module requires (from
+v1.19.1, v1.1.1 and v4.1.21): the writer's zstd output did not change for these pages, the long keys' pages
+over one zstd block included. That is evidence for these inputs, not a general identity: v1.20.3's encoder may
+choose its entropy tables differently on other multi-block data. After the review (#299) the value columns'
+bounds are exact too, which changes only values over 1,024 bytes; the pinned digests are unchanged. The digests are recorded on linux/amd64 and pinned there (60 runs at 1, 2 and 8 CPUs agree); on macOS/arm64
+(CI's cross-OS job) the grouped scenario's compressed pages differed while its page indexes matched, so the test
+compares the pages' bytes on linux/amd64 only. Why that platform compresses those pages differently is not
+investigated.
+
 ## Downstream reader compatibility
 
 The changes in [upgrade.md](upgrade.md) were applied to a scratch copy of the downstream reader. It accepts a

@@ -15,16 +15,16 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // openParts writes parts as one Java-era fixture and opens it.
-func openParts(t *testing.T, opts Options, parts ...sortedparquettest.Part) *Sorted {
+func openParts(t *testing.T, opts Options, parts ...legacytest.Part) *Sorted {
 	t.Helper()
 	dir := t.TempDir()
 	for i := range parts {
-		parts[i].Stamps = sortedparquettest.Stamps(i+1, i == len(parts)-1)
+		parts[i].Stamps = legacytest.Stamps(i+1, i == len(parts)-1)
 		writePart(t, filepath.Join(dir, partName(i)), parts[i])
 	}
 	s, _, err := Open(context.Background(), dir, opts)
@@ -41,7 +41,7 @@ func partName(i int) string { return fmt.Sprintf("part-%05d.parquet", i+1) }
 // entry past the limit to detect truncation; adding it to math.MaxInt
 // wrapped negative and the rollup returned nothing.
 func TestRollupMaxIntLimit(t *testing.T) {
-	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a")})
+	s := openParts(t, Options{}, legacytest.Part{Rows: objects("a")})
 	got, ok, err := s.DelimitedRollup(context.Background(), nil, true, nil, nil, []byte("/"), math.MaxInt, Projection{}, true)
 	if err != nil || !ok {
 		t.Fatal(ok, err)
@@ -60,11 +60,11 @@ func TestRollupMaxIntLimit(t *testing.T) {
 // the replay server's row_group_disorder reason, naming the part, the
 // group and the row, and each failure is counted.
 func TestDisorderReasonMatchesJava(t *testing.T) {
-	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a", "c", "b", "d")})
+	s := openParts(t, Options{}, legacytest.Part{Rows: objects("a", "c", "b", "d")})
 	check := func(how string, err error) {
 		t.Helper()
-		var disorder *sortedparquet.DisorderError
-		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) || !errors.Is(err, sortedparquet.ErrCorrupt) {
+		var disorder *legacy.DisorderError
+		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) || !errors.Is(err, legacy.ErrCorrupt) {
 			t.Fatalf("%s: %v (reason %q)", how, err, Refusal(err))
 		}
 		if filepath.Base(disorder.Part) != "part-00001.parquet" || disorder.RowGroup != 0 || disorder.Row != 2 || string(disorder.Key) != "b" {
@@ -93,21 +93,21 @@ func TestDisorderReasonMatchesJava(t *testing.T) {
 // without an upper bound, at limits 1 and 2.
 func TestRowsEmptyGroupsAndOneRowParts(t *testing.T) {
 	s := openParts(t, Options{},
-		sortedparquettest.Part{Rows: objects("a", "m"), Groups: []int{0, 1, 0, 1, 0}},
-		sortedparquettest.Part{Rows: objects("z")})
+		legacytest.Part{Rows: objects("a", "m"), Groups: []int{0, 1, 0, 1, 0}},
+		legacytest.Part{Rows: objects("z")})
 	if s.reader.RowGroups() != 3 {
 		t.Fatalf("%d non-empty row groups, want 3", s.reader.RowGroups())
 	}
 	// The writer really leaves the empty groups in the footer.
 	probe := filepath.Join(t.TempDir(), "probe.parquet")
-	writePart(t, probe, sortedparquettest.Part{Rows: objects("a", "m"), Groups: []int{0, 1, 0, 1, 0}})
+	writePart(t, probe, legacytest.Part{Rows: objects("a", "m"), Groups: []int{0, 1, 0, 1, 0}})
 	f, err := os.Open(probe)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
 	info, _ := f.Stat()
-	footer, err := sortedparquet.OpenFooter(f, info.Size())
+	footer, err := legacy.OpenFooter(f, info.Size())
 	if err != nil || len(footer.Metadata().RowGroups) != 5 {
 		t.Fatalf("physical row groups: %v", err)
 	}
@@ -165,7 +165,7 @@ func deref(s *string) string {
 // [a/9] with prefix a/: no key lies in the range, so neither floor rule
 // may produce a common prefix or an object.
 func TestRollupNarrowUpperBound(t *testing.T) {
-	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a/1", "a/9"), GroupRows: 1})
+	s := openParts(t, Options{}, legacytest.Part{Rows: objects("a/1", "a/9"), GroupRows: 1})
 	for _, suppress := range []bool{true, false} {
 		for _, inclusive := range []bool{true, false} {
 			got, ok, err := s.DelimitedRollup(context.Background(), []byte("a/5"), inclusive, []byte("a/8"), []byte("a/"), []byte("/"), 10, Projection{}, suppress)
@@ -201,7 +201,7 @@ func TestCancellationAndCloseWithQueuedReaders(t *testing.T) {
 	for i := range keys {
 		keys[i] = fmt.Sprintf("k%03d", i)
 	}
-	s := openParts(t, Options{Readers: 1}, sortedparquettest.Part{Rows: objects(keys...), GroupRows: 10})
+	s := openParts(t, Options{Readers: 1}, legacytest.Part{Rows: objects(keys...), GroupRows: 10})
 	if err := s.sem.Acquire(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestCancellationAndCloseWithQueuedReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.sem.Release(1)
-	if err := <-queued; !errors.Is(err, sortedparquet.ErrClosed) {
+	if err := <-queued; !errors.Is(err, legacy.ErrClosed) {
 		t.Fatalf("read queued across Close: %v", err)
 	}
 	if !s.sem.TryAcquire(1) {
@@ -237,7 +237,7 @@ func TestCancellationAndCloseWithQueuedReaders(t *testing.T) {
 		t.Fatalf("%d descriptors open after Close", open)
 	}
 
-	busy := openParts(t, Options{Readers: 2}, sortedparquettest.Part{Rows: objects(keys...), GroupRows: 10})
+	busy := openParts(t, Options{Readers: 2}, legacytest.Part{Rows: objects(keys...), GroupRows: 10})
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for g := range 8 {
@@ -245,7 +245,7 @@ func TestCancellationAndCloseWithQueuedReaders(t *testing.T) {
 			<-start
 			for i := 0; ; i++ {
 				_, err := busy.Rows(context.Background(), []byte(keys[(g*7+i)%len(keys)]), true, nil, 7, Projection{Owner: g%2 == 0})
-				if errors.Is(err, sortedparquet.ErrClosed) {
+				if errors.Is(err, legacy.ErrClosed) {
 					return
 				}
 				if err != nil {
@@ -272,7 +272,7 @@ func TestCancellationAndCloseWithQueuedReaders(t *testing.T) {
 // read sequentially.
 func TestConcurrentRowsAndRollupsColdIndexes(t *testing.T) {
 	keys := fixtureKeys(3000)
-	part := sortedparquettest.Part{Rows: objects(keys...), GroupRows: 500, PageBytes: 2048}
+	part := legacytest.Part{Rows: objects(keys...), GroupRows: 500, PageBytes: 2048}
 	cold := openParts(t, Options{Readers: 8}, part)
 	warm := openParts(t, Options{Readers: 1}, part)
 	type call func(s *Sorted) string
@@ -346,10 +346,10 @@ func TestPageDisorderReasonMatchesJava(t *testing.T) {
 	for i := range keys {
 		keys[i] = fmt.Sprintf("k%04d", len(keys)-1-i)
 	}
-	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects(keys...), PageBytes: 512})
+	s := openParts(t, Options{}, legacytest.Part{Rows: objects(keys...), PageBytes: 512})
 	check := func(how string, err error) {
 		t.Helper()
-		var disorder *sortedparquet.DisorderError
+		var disorder *legacy.DisorderError
 		if Refusal(err) != "row_group_disorder" || !errors.As(err, &disorder) {
 			t.Fatalf("%s: %v (reason %q)", how, err, Refusal(err))
 		}
@@ -372,7 +372,7 @@ func TestPageDisorderReasonMatchesJava(t *testing.T) {
 // limit plus a window (negative at math.MaxInt, a panic that also left
 // the reader slot held).
 func TestRowsHugeLimitsThroughTheWindowCache(t *testing.T) {
-	s := openParts(t, Options{Readers: 2}, sortedparquettest.Part{Rows: objects("a")})
+	s := openParts(t, Options{Readers: 2}, legacytest.Part{Rows: objects("a")})
 	ctx := context.Background()
 	for _, limit := range []int{math.MaxInt, 4 << 20} {
 		var before, after runtime.MemStats

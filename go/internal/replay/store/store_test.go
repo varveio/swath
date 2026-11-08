@@ -13,21 +13,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
-func objects(keys ...string) []sortedparquettest.Row {
-	rows := make([]sortedparquettest.Row, len(keys))
+func objects(keys ...string) []legacytest.Row {
+	rows := make([]legacytest.Row, len(keys))
 	for i, k := range keys {
-		rows[i] = sortedparquettest.Object(k, i)
+		rows[i] = legacytest.Object(k, i)
 	}
 	return rows
 }
 
-func writePart(t *testing.T, path string, part sortedparquettest.Part) {
+func writePart(t *testing.T, path string, part legacytest.Part) {
 	t.Helper()
-	if err := sortedparquettest.Write(path, part); err != nil {
+	if err := legacytest.Write(path, part); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -36,7 +36,7 @@ func writePart(t *testing.T, path string, part sortedparquettest.Part) {
 // requires Open to name the reason the Java server's fallback names.
 func TestOpenRefusesWithTheJavaReasons(t *testing.T) {
 	stamps := func(index int, final bool, change map[string]string) map[string]string {
-		s := sortedparquettest.Stamps(index, final)
+		s := legacytest.Stamps(index, final)
 		for k, v := range change {
 			if v == "" {
 				delete(s, k)
@@ -50,31 +50,31 @@ func TestOpenRefusesWithTheJavaReasons(t *testing.T) {
 	mixed[1].RowType = "PREFIX"
 	cases := []struct {
 		reason string
-		parts  []sortedparquettest.Part
+		parts  []legacytest.Part
 	}{
-		{"no_stamp", []sortedparquettest.Part{{Rows: objects("a")}}},
-		{"no_stamp", []sortedparquettest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.order": "key_bytes_signed"})}}},
+		{"no_stamp", []legacytest.Part{{Rows: objects("a")}}},
+		{"no_stamp", []legacytest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.order": "key_bytes_signed"})}}},
 		{"no_stamp", nil},
-		{"unsupported_mode", []sortedparquettest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.mode": "versions"})}}},
-		{"unknown_format_version", []sortedparquettest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.format_version": "2"})}}},
+		{"unsupported_mode", []legacytest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.mode": "versions"})}}},
+		{"unknown_format_version", []legacytest.Part{{Rows: objects("a"), Stamps: stamps(1, true, map[string]string{"swath.sort.format_version": "2"})}}},
 		// A publish interrupted after part 1 of 2: contiguous, no final part.
-		{"incomplete_multifile", []sortedparquettest.Part{{Rows: objects("a"), Stamps: stamps(1, false, nil)}}},
-		{"incomplete_multifile", []sortedparquettest.Part{
+		{"incomplete_multifile", []legacytest.Part{{Rows: objects("a"), Stamps: stamps(1, false, nil)}}},
+		{"incomplete_multifile", []legacytest.Part{
 			{Rows: objects("a"), Stamps: stamps(1, false, nil)},
 			{Rows: objects("b"), Stamps: stamps(1, true, nil)},
 		}},
-		{"incomplete_multifile", []sortedparquettest.Part{
+		{"incomplete_multifile", []legacytest.Part{
 			{Rows: objects("a"), Stamps: stamps(1, true, nil)},
 			{Rows: objects("b"), Stamps: stamps(2, true, nil)},
 		}},
-		{"mixed_row_types", []sortedparquettest.Part{{Rows: mixed, Stamps: stamps(1, true, nil)}}},
+		{"mixed_row_types", []legacytest.Part{{Rows: mixed, Stamps: stamps(1, true, nil)}}},
 		// Part 2 starts before part 1: the first keys do not ascend.
-		{"sanity_failed", []sortedparquettest.Part{
+		{"sanity_failed", []legacytest.Part{
 			{Rows: objects("m", "n"), Stamps: stamps(1, false, nil)},
 			{Rows: objects("c", "d"), Stamps: stamps(2, true, nil)},
 		}},
 		// Within one part, row groups whose first keys repeat.
-		{"sanity_failed", []sortedparquettest.Part{{Rows: objects("a", "b", "a", "c"), Stamps: stamps(1, true, nil), GroupRows: 2}}},
+		{"sanity_failed", []legacytest.Part{{Rows: objects("a", "b", "a", "c"), Stamps: stamps(1, true, nil), GroupRows: 2}}},
 	}
 	for i, c := range cases {
 		t.Run(fmt.Sprintf("%d-%s", i, c.reason), func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestProjection(t *testing.T) {
 	dir := t.TempDir()
 	rows := objects("a", "b", "c")
 	rows[1].Size, rows[1].LastModified, rows[1].ETag = nil, nil, nil
-	writePart(t, filepath.Join(dir, "p.parquet"), sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true)})
+	writePart(t, filepath.Join(dir, "p.parquet"), legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)})
 	s, meta, err := Open(context.Background(), dir, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestClosedStore(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Rows(context.Background(), nil, true, nil, 1, Projection{}); !errors.Is(err, sortedparquet.ErrClosed) {
+	if _, err := s.Rows(context.Background(), nil, true, nil, 1, Projection{}); !errors.Is(err, legacy.ErrClosed) {
 		t.Fatalf("read after close: %v", err)
 	}
 }
@@ -244,7 +244,7 @@ func TestClosedStore(t *testing.T) {
 // fail with ErrClosed as the cache-off store's does, the windows and
 // anchors released.
 func TestClosedStoreWithWarmWindows(t *testing.T) {
-	s := openParts(t, Options{}, sortedparquettest.Part{Rows: objects("a")})
+	s := openParts(t, Options{}, legacytest.Part{Rows: objects("a")})
 	ctx := context.Background()
 	for range 2 {
 		if rows, err := s.Rows(ctx, nil, true, nil, 2, Projection{}); err != nil || len(rows) != 1 {
@@ -257,7 +257,7 @@ func TestClosedStoreWithWarmWindows(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if rows, err := s.Rows(ctx, nil, true, nil, 2, Projection{}); !errors.Is(err, sortedparquet.ErrClosed) {
+	if rows, err := s.Rows(ctx, nil, true, nil, 2, Projection{}); !errors.Is(err, legacy.ErrClosed) {
 		t.Fatalf("read after close: %d rows, %v", len(rows), err)
 	}
 	if stats, _ := s.PrefetchStats(); stats.Windows != 0 || stats.Anchors != 0 || stats.Rows != 0 {

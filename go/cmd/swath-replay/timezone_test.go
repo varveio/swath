@@ -15,7 +15,7 @@ import (
 	"testing"
 	_ "time/tzdata" // the zones below, wherever the test runs
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // serveWith starts this binary as swath-replay serve with extra
@@ -55,18 +55,18 @@ func TestTimesIgnoreTheLocalZone(t *testing.T) {
 		t.Skip("the TZ variable")
 	}
 	dir := t.TempDir()
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	// Around the epoch, a daylight change in both zones, a year boundary
 	// in UTC that is another year locally, and a pre-epoch instant.
 	for i, micros := range []int64{0, -1, 1_696_082_400_000_000 - 1, 1_696_082_400_000_000, 1_767_225_599_999_999, 1_767_225_600_000_000,
 		-86_400_000_001, 1_712_440_800_123_456} {
-		r := sortedparquettest.Object("k"+string(rune('a'+i)), i)
+		r := legacytest.Object("k"+string(rune('a'+i)), i)
 		m := micros
 		r.LastModified = &m
 		rows = append(rows, r)
 	}
-	if err := sortedparquettest.Write(filepath.Join(dir, "part-00001.parquet"),
-		sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true)}); err != nil {
+	if err := legacytest.Write(filepath.Join(dir, "part-00001.parquet"),
+		legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)}); err != nil {
 		t.Fatal(err)
 	}
 	paths := []string{

@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // The tests below port the contract's sorted-serving differential
@@ -64,10 +64,10 @@ func sortedPair(t *testing.T, keys [][]byte, perPart, groupRows int) (sorted, or
 	t.Helper()
 	keys = slices.Clone(keys)
 	slices.SortFunc(keys, bytes.Compare)
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	var objs []store.Object
 	for i, k := range keys {
-		r := sortedparquettest.Object(string(k), i)
+		r := legacytest.Object(string(k), i)
 		rows = append(rows, r)
 		lm := time.UnixMicro(*r.LastModified).UTC()
 		objs = append(objs, store.Object{Key: k, Size: r.Size, LastModified: &lm, ETag: r.ETag, StorageClass: r.StorageClass,
@@ -76,9 +76,9 @@ func sortedPair(t *testing.T, keys [][]byte, perPart, groupRows int) (sorted, or
 	dir := t.TempDir()
 	parts := (len(rows) + perPart - 1) / perPart
 	for p := range parts {
-		part := sortedparquettest.Part{Rows: rows[p*perPart : min(len(rows), (p+1)*perPart)], GroupRows: groupRows,
-			Stamps: sortedparquettest.Stamps(p+1, p == parts-1)}
-		if err := sortedparquettest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
+		part := legacytest.Part{Rows: rows[p*perPart : min(len(rows), (p+1)*perPart)], GroupRows: groupRows,
+			Stamps: legacytest.Stamps(p+1, p == parts-1)}
+		if err := legacytest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
 			t.Fatal(err)
 		}
 	}

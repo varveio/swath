@@ -5,15 +5,19 @@ package listing
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs"
+	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 // TestVerifierFixtures writes real Go Parquet parts for the independent
@@ -98,7 +102,7 @@ func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Sch
 		if err := os.MkdirAll(filepath.Join(dir, "data"), 0755); err != nil {
 			t.Fatal(err)
 		}
-		meta := dataset.Meta{SchemaID: original.ID, Source: dataset.Source{Kind: "gcs", URI: "gs://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
+		meta := dataset.Meta{SchemaID: original.ID, Groups: original.Groups, Source: dataset.Source{Kind: "gcs", URI: "gs://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
 			Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}}
 		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte("{}\n"), 0644); err != nil {
 			t.Fatal(err)
@@ -106,5 +110,87 @@ func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Sch
 		if err := dataset.Publish(dir, meta, parts, nil); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestSeekParquetFixtures writes datasets with this build's writer for the
+// SeekParquet conformance check (scripts/ci/seekparquet-conformance.sh):
+// S3 current objects over several parts and row groups, whose keys roll up
+// at several depths; S3 versions, whose keys repeat in groups that span
+// pages and row groups (unique false); and filesystem keys longer than the
+// 1,024 bytes, half of them led by 0xFF bytes, with link targets as long,
+// whose exact bounds parquet-go would have shortened below the value.
+func TestSeekParquetFixtures(t *testing.T) {
+	base := os.Getenv("SWATH_SEEKPARQUET_FIXTURES")
+	if base == "" {
+		t.Skip("SeekParquet conformance fixtures not requested")
+	}
+	var current []s3.Row
+	for i := range 9000 {
+		key := fmt.Sprintf("logs/%02d/%03d/obj-%05d.json", i%13, i%97, i)
+		if i%5 == 0 {
+			key = fmt.Sprintf("top-%05d", i)
+		}
+		current = append(current, s3.Row{Key: key, Data: s3.Object{Size: int64(i), Mtime: int64(i) * 1_000_000, ETag: fmt.Sprintf("%032x", i), StorageClass: "STANDARD"}})
+	}
+	slices.SortFunc(current, func(a, b s3.Row) int { return strings.Compare(a.Key, b.Key) })
+	current = slices.CompactFunc(current, func(a, b s3.Row) bool { return a.Key == b.Key })
+	writeSeekFixture(t, filepath.Join(base, "s3-current"), "s3", &s3.Schema, current, 2500)
+
+	var versions []s3.VersionRow
+	for k := range 400 {
+		n := 1 + k%4
+		if k%50 == 7 {
+			n = 3000 // a group over several pages and row groups
+		}
+		for v := range n {
+			versions = append(versions, s3.VersionRow{Key: fmt.Sprintf("v/%02d/key-%04d", k%9, k),
+				Data: s3.Version{Object: s3.Object{Size: int64(v), Mtime: int64(n - v)}, VersionID: fmt.Sprintf("v%05d", v), IsLatest: v == 0}})
+		}
+	}
+	slices.SortStableFunc(versions, func(a, b s3.VersionRow) int { return strings.Compare(a.Key, b.Key) })
+	writeSeekFixture(t, filepath.Join(base, "s3-versions"), "s3", &s3.VersionsSchema, versions, 4000)
+
+	var long []localfs.Row
+	for i := range 3000 {
+		lead := strings.Repeat("a", 1100)
+		if i >= 1500 {
+			lead = strings.Repeat("\xff", 1100)
+		}
+		entry := localfs.Entry{Kind: localfs.KindFile}
+		if i%3 == 0 { // link targets over 1,024 bytes, some all 0xFF
+			entry = localfs.Entry{Kind: localfs.KindSymlink, LinkTarget: lead + strings.Repeat("\xff", i%5), Present: localfs.HasLink}
+		}
+		long = append(long, localfs.Row{Key: fmt.Sprintf("%s/%02d/%05d", lead, i%7, i), Data: entry})
+	}
+	slices.SortFunc(long, func(a, b localfs.Row) int { return strings.Compare(a.Key, b.Key) })
+	writeSeekFixture(t, filepath.Join(base, "local-long-keys"), "local-fs", &localfs.Schema, long, 1000)
+}
+
+func writeSeekFixture[P any](t *testing.T, dir, kind string, s *schema.Schema[P], rows []schema.Row[P], maxRows int64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, dataset.DataDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	router, err := parquetout.NewRouter(parquetout.Options{Out: dir, PartSize: 64 << 20, Encoders: 2, MaxRows: maxRows}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < len(rows); i += 1000 {
+		if err := router.Write(context.Background(), [][]schema.Row[P]{rows[i:min(i+1000, len(rows))]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parts, err := router.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := dataset.Meta{SchemaID: s.ID, Groups: s.Groups, Source: dataset.Source{Kind: kind, URI: "fixture://" + filepath.Base(dir)},
+		Scope: dataset.Scope{Kind: "whole"}, Coverage: dataset.Coverage{Complete: true, StopReason: "completed"}}
+	if err := dataset.Publish(dir, meta, parts, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, dataset.ReportName), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

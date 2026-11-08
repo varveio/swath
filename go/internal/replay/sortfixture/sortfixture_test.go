@@ -19,17 +19,16 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
+	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/format2"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // capture writes each slice of rows as one unstamped capture part.
-func capture(t *testing.T, parts ...[]sortedparquettest.Row) string {
+func capture(t *testing.T, parts ...[]legacytest.Row) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "capture")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -37,14 +36,14 @@ func capture(t *testing.T, parts ...[]sortedparquettest.Row) string {
 	}
 	for i, rows := range parts {
 		name := filepath.Join(dir, "part-"+string(rune('a'+i))+".parquet")
-		if err := sortedparquettest.Write(name, sortedparquettest.Part{Rows: rows}); err != nil {
+		if err := legacytest.Write(name, legacytest.Part{Rows: rows}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return dir
 }
 
-func obj(key string, i int) sortedparquettest.Row { return sortedparquettest.Object(key, i) }
+func obj(key string, i int) legacytest.Row { return legacytest.Object(key, i) }
 
 // TestSortsTwoPartsIntoAFormat2Dataset sorts two capture parts, keeps only
 // OBJECT rows with their nulls, and writes the replay-owned schema.
@@ -55,7 +54,7 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	deleted.RowType, deleted.IsDeleteMarker = "DELETE_MARKER", true
 	untimed := obj("m", 0)
 	untimed.Size, untimed.LastModified = nil, nil
-	in := capture(t, []sortedparquettest.Row{untimed, obj("b", 1), marker}, []sortedparquettest.Row{obj("a", 2), deleted, obj("p/q", 3)})
+	in := capture(t, []legacytest.Row{untimed, obj("b", 1), marker}, []legacytest.Row{obj("a", 2), deleted, obj("p/q", 3)})
 	out := filepath.Join(t.TempDir(), "out")
 	var log bytes.Buffer
 	stats, err := Run(context.Background(), Options{Capture: in, Output: out}, &log)
@@ -68,12 +67,12 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
 		t.Fatalf("summary %q", log.String())
 	}
-	sorted, err := format2.Open(context.Background(), out, nil, nil)
+	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{VerifyOnOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sorted.Reader.Close()
-	rows, err := sorted.Reader.Read(context.Background(), sortedparquet.Range{Limit: 10, Columns: []string{"size", "etag"}}, nil)
+	defer sorted.Close()
+	rows, err := sorted.Range(context.Background(), seekparquet.Range{Limit: 10, Columns: []string{"size", "etag"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 }
 
 func TestRefusesDuplicateKeys(t *testing.T) {
-	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)}, []sortedparquettest.Row{obj("b", 2)})
+	in := capture(t, []legacytest.Row{obj("a", 0), obj("b", 1)}, []legacytest.Row{obj("b", 2)})
 	_, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil)
 	if !errors.Is(err, ErrDuplicateKey) || !strings.Contains(err.Error(), "'b'") {
 		t.Fatalf("duplicate: %v", err)
@@ -107,7 +106,7 @@ func TestRefusesVersionedRows(t *testing.T) {
 	versioned := obj("m", 1)
 	v := "v1"
 	versioned.VersionID = &v
-	in := capture(t, []sortedparquettest.Row{obj("a", 0), versioned})
+	in := capture(t, []legacytest.Row{obj("a", 0), versioned})
 	_, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil)
 	if !errors.Is(err, ErrVersioned) || !strings.Contains(err.Error(), "'m'") {
 		t.Fatalf("versioned: %v", err)
@@ -118,7 +117,7 @@ func TestRefusesVersionedRows(t *testing.T) {
 // the replay-owned schema, and serves them back.
 func TestKeyLimit(t *testing.T) {
 	long := strings.Repeat("n", 2010)
-	in := capture(t, []sortedparquettest.Row{obj(long+"b", 0), obj("a", 1), obj(long+"a", 2)})
+	in := capture(t, []legacytest.Row{obj(long+"b", 0), obj("a", 1), obj(long+"a", 2)})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrKeyTooLong) {
 		t.Fatalf("without a key limit: %v", err)
 	}
@@ -133,19 +132,19 @@ func TestKeyLimit(t *testing.T) {
 	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
-	sorted, err := format2.Open(context.Background(), out, nil, nil)
+	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{VerifyOnOpen: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sorted.Reader.Close()
-	rows, err := sorted.Reader.Read(context.Background(), sortedparquet.Range{From: []byte(long + "a"), FromInclusive: false, Limit: 5}, nil)
+	defer sorted.Close()
+	rows, err := sorted.Range(context.Background(), seekparquet.Range{Start: []byte(long + "a"), StartExclusive: true, Limit: 5})
 	if err != nil || len(rows) != 1 || string(rows[0].Key) != long+"b" {
 		t.Fatalf("read after a long key: %d rows, %v", len(rows), err)
 	}
 }
 
 func TestRefusesANonEmptyOutput(t *testing.T) {
-	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	in := capture(t, []legacytest.Row{obj("a", 0)})
 	out := t.TempDir()
 	if err := os.WriteFile(filepath.Join(out, "keep"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -165,7 +164,7 @@ func TestRejectsUnknownRowType(t *testing.T) {
 	for _, rowType := range []string{"PREFIX", "object", "", "OBJECT "} {
 		bad := obj("p/", 1)
 		bad.RowType = rowType
-		in := capture(t, []sortedparquettest.Row{obj("a", 0), bad})
+		in := capture(t, []legacytest.Row{obj("a", 0), bad})
 		out := filepath.Join(t.TempDir(), "o")
 		if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, ErrRowType) || !strings.Contains(err.Error(), "'p/'") {
 			t.Fatalf("row_type %q: %v", rowType, err)
@@ -214,14 +213,14 @@ func TestRejectsCaptureWithoutParts(t *testing.T) {
 func TestDuplicateAndVersionedNonObjectRows(t *testing.T) {
 	prefix := obj("d/", 5)
 	prefix.RowType, prefix.Size = "COMMON_PREFIX", nil
-	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("d/", 1)}, []sortedparquettest.Row{prefix})
+	in := capture(t, []legacytest.Row{obj("a", 0), obj("d/", 1)}, []legacytest.Row{prefix})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrDuplicateKey) || !strings.Contains(err.Error(), "'d/'") {
 		t.Fatalf("an object and a prefix with one key: %v", err)
 	}
 	marker := obj("x", 2)
 	version := "v9"
 	marker.RowType, marker.IsDeleteMarker, marker.VersionID = "DELETE_MARKER", true, &version
-	in = capture(t, []sortedparquettest.Row{obj("a", 0), marker})
+	in = capture(t, []legacytest.Row{obj("a", 0), marker})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrVersioned) || !strings.Contains(err.Error(), "'x'") {
 		t.Fatalf("a versioned delete marker: %v", err)
 	}
@@ -242,7 +241,7 @@ func TestSortFixtureRefusesOwnedOutput(t *testing.T) {
 	}
 	defer lock.Release()
 	before := tree(t, out)
-	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	in := capture(t, []legacytest.Row{obj("a", 0)})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrLocked) {
 		t.Fatalf("an owned output: %v", err)
 	}
@@ -332,7 +331,7 @@ func replaceOutputWith(t *testing.T, out, point string, parts bool) {
 func TestReplacedOutputAtPartCreation(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	replaceOutput(t, out, "part-create")
-	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)})
+	in := capture(t, []legacytest.Row{obj("a", 0), obj("b", 1)})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
 		t.Fatalf("run: %v", err)
 	}
@@ -347,7 +346,7 @@ func TestReplacedOutputAtPartCreation(t *testing.T) {
 func TestReplacedOutputAtPublication(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	replaceOutput(t, out, "published")
-	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	in := capture(t, []legacytest.Row{obj("a", 0)})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
 		t.Fatalf("run: %v", err)
 	}
@@ -384,9 +383,9 @@ func TestRefusesMalformedFooterCounts(t *testing.T) {
 		}},
 	} {
 		t.Run(change.name, func(t *testing.T) {
-			in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+			in := capture(t, []legacytest.Row{obj("a", 0)})
 			part := filepath.Join(in, "part-a.parquet")
-			if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error { change.edit(m); return nil }); err != nil {
+			if err := legacytest.RewriteFooter(part, func(m *format.FileMetaData) error { change.edit(m); return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := Run(context.Background(), Options{Capture: in, Output: filepath.Join(t.TempDir(), "o")}, nil); !errors.Is(err, ErrMalformedCapture) {
@@ -401,11 +400,11 @@ func TestRefusesMalformedFooterCounts(t *testing.T) {
 // by their statistics, and a mixed group counted from its row_type
 // column. The object array is then allocated for the objects alone.
 func TestCountsRowTypesForCapacity(t *testing.T) {
-	kind := func(row sortedparquettest.Row, rowType string) sortedparquettest.Row {
+	kind := func(row legacytest.Row, rowType string) legacytest.Row {
 		row.RowType = rowType
 		return row
 	}
-	rows := []sortedparquettest.Row{
+	rows := []legacytest.Row{
 		obj("a", 0), obj("b", 1), obj("c", 2), // all OBJECT
 		kind(obj("d/", 3), "COMMON_PREFIX"), kind(obj("e/", 4), "COMMON_PREFIX"), // none
 		obj("f", 5), kind(obj("g", 6), "DELETE_MARKER"), obj("h", 7), // mixed
@@ -414,7 +413,7 @@ func TestCountsRowTypesForCapacity(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := sortedparquettest.Write(filepath.Join(dir, "c.parquet"), sortedparquettest.Part{Rows: rows, Groups: []int{3, 2, 3}}); err != nil {
+	if err := legacytest.Write(filepath.Join(dir, "c.parquet"), legacytest.Part{Rows: rows, Groups: []int{3, 2, 3}}); err != nil {
 		t.Fatal(err)
 	}
 	objects, others, err := countRows(context.Background(), []string{filepath.Join(dir, "c.parquet")})
@@ -435,7 +434,7 @@ func TestCountsRowTypesForCapacity(t *testing.T) {
 func TestReplacedOutputDuringCaptureRead(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	replaceOutputWith(t, out, "captured", false)
-	in := capture(t, []sortedparquettest.Row{obj("a", 0)})
+	in := capture(t, []legacytest.Row{obj("a", 0)})
 	if _, err := Run(context.Background(), Options{Capture: in, Output: out}, nil); !errors.Is(err, journal.ErrOutputReplaced) {
 		t.Fatalf("run: %v", err)
 	}
@@ -452,9 +451,9 @@ func TestReplacedOutputDuringCaptureRead(t *testing.T) {
 // ErrMalformedCapture. Before, the other-row count came out at -1 and the
 // allocation from it panicked.
 func TestRefusesUndercountedRowGroup(t *testing.T) {
-	in := capture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)})
+	in := capture(t, []legacytest.Row{obj("a", 0), obj("b", 1)})
 	part := filepath.Join(in, "part-a.parquet")
-	if err := sortedparquettest.RewriteFooter(part, func(m *format.FileMetaData) error {
+	if err := legacytest.RewriteFooter(part, func(m *format.FileMetaData) error {
 		m.NumRows, m.RowGroups[0].NumRows = 1, 1
 		for i := range m.RowGroups[0].Columns {
 			if md := &m.RowGroups[0].Columns[i].MetaData; slices.Equal(md.PathInSchema, []string{"row_type"}) {

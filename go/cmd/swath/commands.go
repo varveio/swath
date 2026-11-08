@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -249,7 +250,12 @@ func show(args []string, stdout io.Writer) error {
 			rows += p.Rows
 			bytes += p.Bytes
 		}
-		fmt.Fprintf(stdout, "dataset %s (format %s %d, schema %s, published %s)\n", dir, m.Format, m.FormatVersion, m.SchemaID, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
+		version := strconv.Itoa(m.FormatVersion)
+		if m.DraftRevision > 0 {
+			version += " draft " + strconv.Itoa(m.DraftRevision)
+		}
+		fmt.Fprintf(stdout, "dataset %s (format %s %s, schema %s, key %s unique=%v, published %s)\n", dir, m.Format, version, m.SchemaID,
+			m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
 		fmt.Fprintf(stdout, "source %s, scope %s %q\n", m.Source.URI, m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
 		fmt.Fprintf(stdout, "coverage complete=%v stop=%s skipped=%d filters=%d exclusions=%d\n", c.Complete, c.StopReason, c.SkippedEntries, len(c.Filters), len(c.Exclusions))

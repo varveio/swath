@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sortedparquet_test
+package legacy_test
 
 import (
 	"context"
@@ -17,48 +17,48 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/format2"
-	"github.com/varveio/swath/go/sortedparquet/javaera"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/format2"
+	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 func TestSuccessorAndCommonPrefix(t *testing.T) {
 	for in, want := range map[string]string{"a": "b", "a/": "a0", "a\xff": "b", "a\xfe\xff\xff": "a\xff"} {
-		got, ok := sortedparquet.Successor([]byte(in))
+		got, ok := legacy.Successor([]byte(in))
 		if !ok || string(got) != want {
 			t.Fatalf("Successor(%q) = %q, %v", in, got, ok)
 		}
 	}
 	for _, in := range []string{"", "\xff\xff"} {
-		if _, ok := sortedparquet.Successor([]byte(in)); ok {
+		if _, ok := legacy.Successor([]byte(in)); ok {
 			t.Fatalf("Successor(%q) must have none", in)
 		}
 	}
-	if cp := sortedparquet.CommonPrefix([]byte("a/b/c"), []byte("a/"), '/'); string(cp) != "a/b/" {
+	if cp := legacy.CommonPrefix([]byte("a/b/c"), []byte("a/"), '/'); string(cp) != "a/b/" {
 		t.Fatalf("CommonPrefix = %q", cp)
 	}
-	if cp := sortedparquet.CommonPrefix([]byte("a/b"), []byte("a/"), '/'); cp != nil {
+	if cp := legacy.CommonPrefix([]byte("a/b"), []byte("a/"), '/'); cp != nil {
 		t.Fatalf("CommonPrefix = %q, want none", cp)
 	}
 }
 
-func writeParts(t *testing.T, parts ...sortedparquettest.Part) string {
+func writeParts(t *testing.T, parts ...legacytest.Part) string {
 	t.Helper()
 	dir := t.TempDir()
 	for i, part := range parts {
-		part.Stamps = sortedparquettest.Stamps(i+1, i == len(parts)-1)
-		if err := sortedparquettest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", i+1)), part); err != nil {
+		part.Stamps = legacytest.Stamps(i+1, i == len(parts)-1)
+		if err := legacytest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", i+1)), part); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return dir
 }
 
-func rowsOf(keys []string) []sortedparquettest.Row {
-	rows := make([]sortedparquettest.Row, len(keys))
+func rowsOf(keys []string) []legacytest.Row {
+	rows := make([]legacytest.Row, len(keys))
 	for i, k := range keys {
-		rows[i] = sortedparquettest.Object(k, i)
+		rows[i] = legacytest.Object(k, i)
 	}
 	return rows
 }
@@ -73,13 +73,13 @@ func TestTruncatedBoundsAreConservative(t *testing.T) {
 		for i := range 400 {
 			keys = append(keys, fmt.Sprintf("%s%04d", stem, i))
 		}
-		dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf(keys), PageBytes: 4096, GroupRows: 150})
+		dir := writeParts(t, legacytest.Part{Rows: rowsOf(keys), PageBytes: 4096, GroupRows: 150})
 		fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for i, key := range keys {
-			rows, err := fixture.Reader.Read(context.Background(), sortedparquet.Range{From: []byte(key), FromInclusive: true, Limit: 1}, nil)
+			rows, err := fixture.Reader.Read(context.Background(), legacy.Range{From: []byte(key), FromInclusive: true, Limit: 1}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,14 +94,14 @@ func TestTruncatedBoundsAreConservative(t *testing.T) {
 // TestDisorderIsCorrupt opens a part whose row-group first keys ascend but
 // whose keys inside a page do not, and requires the read to fail.
 func TestDisorderIsCorrupt(t *testing.T) {
-	dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf([]string{"a", "c", "b", "d"})})
+	dir := writeParts(t, legacytest.Part{Rows: rowsOf([]string{"a", "c", "b", "d"})})
 	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer fixture.Reader.Close()
-	_, err = fixture.Reader.Read(context.Background(), sortedparquet.Range{Limit: 10}, nil)
-	if !errors.Is(err, sortedparquet.ErrCorrupt) {
+	_, err = fixture.Reader.Read(context.Background(), legacy.Range{Limit: 10}, nil)
+	if !errors.Is(err, legacy.ErrCorrupt) {
 		t.Fatalf("read of unordered keys: %v", err)
 	}
 }
@@ -113,15 +113,15 @@ func TestReadDecodesOnlyNamedColumns(t *testing.T) {
 	for i := range 50 {
 		keys = append(keys, fmt.Sprintf("k%03d", i))
 	}
-	dir := writeParts(t, sortedparquettest.Part{Rows: rowsOf(keys), PageBytes: 1 << 20})
+	dir := writeParts(t, legacytest.Part{Rows: rowsOf(keys), PageBytes: 1 << 20})
 	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer fixture.Reader.Close()
 	pages := func(columns ...string) int64 {
-		var stats sortedparquet.Stats
-		rows, err := fixture.Reader.Read(context.Background(), sortedparquet.Range{Limit: 5, Columns: columns}, &stats)
+		var stats legacy.Stats
+		rows, err := fixture.Reader.Read(context.Background(), legacy.Range{Limit: 5, Columns: columns}, &stats)
 		if err != nil || len(rows) != 5 {
 			t.Fatalf("read: %d rows, %v", len(rows), err)
 		}
@@ -166,7 +166,7 @@ func TestFormat2Refusals(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := format2.Open(context.Background(), dir, nil, nil)
-			if got := sortedparquet.ReasonOf(err); got != c.reason {
+			if got := legacy.ReasonOf(err); got != c.reason {
 				t.Fatalf("refusal %q (%v), want %q", got, err, c.reason)
 			}
 		})
@@ -198,7 +198,7 @@ func writeDataset(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	rows := rowsOf(datasetKeys())
-	if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+	if _, err := legacytest.WriteFormat2(dir, legacytest.Dataset{Parts: []legacytest.Part{
 		{Rows: rows[:1061], PageBytes: 2048, GroupRows: 400},
 		{Rows: rows[1061:]},
 	}}); err != nil {
@@ -221,7 +221,7 @@ func TestFormat2RequiresBounds(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+			if _, err := legacytest.WriteFormat2(dir, legacytest.Dataset{Parts: []legacytest.Part{
 				{Rows: rowsOf([]string{"a", "z"})}, {Rows: rowsOf([]string{"m"})},
 			}}); err != nil {
 				t.Fatal(err)
@@ -237,9 +237,9 @@ func TestFormat2RequiresBounds(t *testing.T) {
 				t.Fatal(err)
 			}
 			dataset, err := format2.Open(context.Background(), dir, nil, nil)
-			if got := sortedparquet.ReasonOf(err); got != sortedparquet.ReasonInvalidManifest {
+			if got := legacy.ReasonOf(err); got != legacy.ReasonInvalidManifest {
 				if err == nil {
-					rows, _ := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: []byte("n"), FromInclusive: true, Limit: 1}, nil)
+					rows, _ := dataset.Reader.Read(context.Background(), legacy.Range{From: []byte("n"), FromInclusive: true, Limit: 1}, nil)
 					_ = dataset.Reader.Close()
 					t.Fatalf("opened; a read from n returned %d rows", len(rows))
 				}
@@ -265,7 +265,7 @@ func TestFormat2TruncatedFFBounds(t *testing.T) {
 	slices.Sort(keys)
 	rows := rowsOf(keys)
 	dir := t.TempDir()
-	if _, err := sortedparquettest.WriteFormat2(dir, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{
+	if _, err := legacytest.WriteFormat2(dir, legacytest.Dataset{Parts: []legacytest.Part{
 		{Rows: rows[:70], PageBytes: 4096, GroupRows: 40},
 		{Rows: rows[70:], PageBytes: 4096},
 	}}); err != nil {
@@ -278,7 +278,7 @@ func TestFormat2TruncatedFFBounds(t *testing.T) {
 	defer dataset.Reader.Close()
 	read := func(from []byte, inclusive bool, limit int) []string {
 		t.Helper()
-		got, err := dataset.Reader.Read(context.Background(), sortedparquet.Range{From: from, FromInclusive: inclusive, Limit: limit}, nil)
+		got, err := dataset.Reader.Read(context.Background(), legacy.Range{From: from, FromInclusive: inclusive, Limit: limit}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -315,12 +315,12 @@ func TestFormat2TruncatedFFBounds(t *testing.T) {
 // TestFormat2FooterAndSchemaRefusals refuses parts whose footers or key
 // column do not meet the profile, each with its reason.
 func TestFormat2FooterAndSchemaRefusals(t *testing.T) {
-	stamped := func(change map[string]string) sortedparquettest.Dataset {
-		return sortedparquettest.Dataset{Parts: []sortedparquettest.Part{{Rows: rowsOf([]string{"a", "b"}), Stamps: change}}}
+	stamped := func(change map[string]string) legacytest.Dataset {
+		return legacytest.Dataset{Parts: []legacytest.Part{{Rows: rowsOf([]string{"a", "b"}), Stamps: change}}}
 	}
 	cases := []struct {
 		name, reason string
-		dataset      sortedparquettest.Dataset
+		dataset      legacytest.Dataset
 		replace      func(t *testing.T, dir string) // writes a part of another schema over the part
 	}{
 		{"no profile stamp", "no_stamp", stamped(map[string]string{"swath.profile": ""}), nil},
@@ -329,8 +329,8 @@ func TestFormat2FooterAndSchemaRefusals(t *testing.T) {
 		{"zero bound", "no_stamp", stamped(map[string]string{"swath.index_bound_bytes": "0"}), nil},
 		{"footer version", "unknown_format_version", stamped(map[string]string{"swath.profile_version": "3"}), nil},
 		{"no profile version", "unknown_format_version", stamped(map[string]string{"swath.profile_version": ""}), nil},
-		{"unsorted groups", "no_stamp", sortedparquettest.Dataset{Unsorted: true, Parts: []sortedparquettest.Part{{Rows: rowsOf([]string{"a", "b"})}}}, nil},
-		{"no key page index", "no_page_index", sortedparquettest.Dataset{Parts: []sortedparquettest.Part{{Rows: rowsOf([]string{"a", "b"}), NoKeyPageIndex: true}}}, nil},
+		{"unsorted groups", "no_stamp", legacytest.Dataset{Unsorted: true, Parts: []legacytest.Part{{Rows: rowsOf([]string{"a", "b"})}}}, nil},
+		{"no key page index", "no_page_index", legacytest.Dataset{Parts: []legacytest.Part{{Rows: rowsOf([]string{"a", "b"}), NoKeyPageIndex: true}}}, nil},
 		{"optional key", "unsupported_schema", stamped(nil), func(t *testing.T, dir string) {
 			replacePart(t, dir, []struct {
 				Key *string `parquet:"key,optional"`
@@ -355,14 +355,14 @@ func TestFormat2FooterAndSchemaRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if _, err := sortedparquettest.WriteFormat2(dir, c.dataset); err != nil {
+			if _, err := legacytest.WriteFormat2(dir, c.dataset); err != nil {
 				t.Fatal(err)
 			}
 			if c.replace != nil {
 				c.replace(t, dir)
 			}
 			dataset, err := format2.Open(context.Background(), dir, nil, nil)
-			if got := sortedparquet.ReasonOf(err); got != c.reason {
+			if got := legacy.ReasonOf(err); got != c.reason {
 				if err == nil {
 					_ = dataset.Reader.Close()
 				}
@@ -380,7 +380,7 @@ func replacePart[T any](t *testing.T, dir string, rows []T) {
 	t.Helper()
 	path := filepath.Join(dir, "data", "part-00000.parquet")
 	var options []parquet.WriterOption
-	for k, v := range sortedparquettest.Format2Stamps(sortedparquettest.Format2SchemaID, 1024) {
+	for k, v := range legacytest.Format2Stamps(legacytest.Format2SchemaID, 1024) {
 		options = append(options, parquet.KeyValueMetadata(k, v))
 	}
 	options = append(options, parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))))
@@ -409,7 +409,7 @@ func replacePart[T any](t *testing.T, dir string, rows []T) {
 type scanRows struct {
 	t       *testing.T
 	columns []string
-	rows    []sortedparquet.Row
+	rows    []legacy.Row
 	run     int // the current run's first row
 	next    int // the column expected next
 	filled  int // rows of that column given so far
@@ -421,7 +421,7 @@ func (s *scanRows) Keys(keys [][]byte) {
 	}
 	s.run, s.next, s.filled = len(s.rows), 0, 0
 	for _, k := range keys {
-		s.rows = append(s.rows, sortedparquet.Row{Key: k, Columns: s.columns, Values: make([]parquet.Value, len(s.columns))})
+		s.rows = append(s.rows, legacy.Row{Key: k, Columns: s.columns, Values: make([]parquet.Value, len(s.columns))})
 	}
 }
 
@@ -457,8 +457,8 @@ func TestScanMatchesRead(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
 	}
 	dir := writeParts(t,
-		sortedparquettest.Part{Rows: rowsOf(keys[:120]), PageBytes: 256, GroupRows: 37},
-		sortedparquettest.Part{Rows: rowsOf(keys[120:]), PageBytes: 512, GroupRows: 50})
+		legacytest.Part{Rows: rowsOf(keys[:120]), PageBytes: 256, GroupRows: 37},
+		legacytest.Part{Rows: rowsOf(keys[120:]), PageBytes: 512, GroupRows: 50})
 	fixture, err := javaera.Open(context.Background(), dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestScanMatchesRead(t *testing.T) {
 	for _, from := range []string{"", "k0000", "k0036", "k0037", "k0119", "k0150x", "k0299"} {
 		for _, limit := range []int{1, 13, 40, 120, 400} {
 			for _, to := range []string{"", "k0200"} {
-				rng := sortedparquet.Range{Limit: limit, Columns: columns, FromInclusive: true}
+				rng := legacy.Range{Limit: limit, Columns: columns, FromInclusive: true}
 				if from != "" {
 					rng.From = []byte(from)
 				}

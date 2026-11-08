@@ -1,12 +1,12 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package sortedparquettest writes small sorted fixtures for tests: Java-era
+// Package legacytest writes small sorted fixtures for tests: Java-era
 // parts (the 13-column canonical schema and the footer sortedness stamps)
 // and format-2 datasets (a manifest and parts carrying the profile stamps),
 // with page and row-group geometry chosen by the test. The files are
 // synthetic: the writer is parquet-go, not either tool.
-package sortedparquettest
+package legacytest
 
 import (
 	"crypto/md5"

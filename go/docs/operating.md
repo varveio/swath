@@ -388,7 +388,7 @@ and don't compare ETags across stores. GCS gives no `md5` for composite objects 
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Both datasets list current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
-only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.
+only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.
 
 ## Listing every version
 

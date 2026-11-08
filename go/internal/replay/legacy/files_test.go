@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sortedparquet_test
+package legacy_test
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/sortedparquet"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 // TestFileCacheBoundsHandles reads ten files concurrently through a cache
@@ -22,8 +22,8 @@ import (
 // evicted is refused rather than read, and a closed file reads no more.
 func TestFileCacheBoundsHandles(t *testing.T) {
 	dir := t.TempDir()
-	cache := sortedparquet.NewFileCache(3)
-	var files []*sortedparquet.CachedFile
+	cache := legacy.NewFileCache(3)
+	var files []*legacy.CachedFile
 	for i := range 10 {
 		path := filepath.Join(dir, fmt.Sprintf("f%d", i))
 		if err := os.WriteFile(path, bytes.Repeat([]byte{byte('a' + i)}, 64), 0o644); err != nil {
@@ -73,7 +73,7 @@ func TestFileCacheBoundsHandles(t *testing.T) {
 		t.Fatal("a replaced file was read")
 	}
 	_ = files[1].Close()
-	if _, err := files[1].ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) || !errors.Is(err, sortedparquet.ErrClosed) {
+	if _, err := files[1].ReadAt(make([]byte, 1), 0); !errors.Is(err, os.ErrClosed) || !errors.Is(err, legacy.ErrClosed) {
 		t.Fatalf("read after close: %v", err)
 	}
 	for _, f := range files {

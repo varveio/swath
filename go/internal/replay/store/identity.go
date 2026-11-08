@@ -12,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/varveio/swath/go/sortedparquet/format2"
-	"github.com/varveio/swath/go/sortedparquet/javaera"
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/go/internal/replay/legacy/format2"
+	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
 )
 
 // identityDomain prefixes every fixture identity digest. A Java-era
@@ -48,6 +50,30 @@ func javaEraIdentity(path string, files []string, stamps []javaera.Stamp) (strin
 			stamp = stamps[i].String()
 		}
 		if err := identityFile(digest, root, file, stamp); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// seekIdentity is format2Identity's digest over a SeekParquet dataset: the
+// manifest's SHA-256, then every listed part with its format version,
+// draft revision and schema id in the stamp's place.
+func seekIdentity(dir string, meta seekparquet.Metadata) (string, error) {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	manifest := sha256.Sum256(meta.Manifest)
+	digest := sha256.New()
+	digest.Write([]byte(identityDomain))
+	digest.Write(binary.BigEndian.AppendUint32(nil, uint32(1+len(meta.Parts))))
+	if err := identityFile(digest, root, filepath.Join(root, format2.ManifestName), "sha256:"+hex.EncodeToString(manifest[:])); err != nil {
+		return "", err
+	}
+	stamp := fmt.Sprintf("seekparquet/%d/%d/%s", meta.Version.FormatVersion, meta.Version.DraftRevision, meta.SchemaID)
+	for _, part := range meta.Parts {
+		if err := identityFile(digest, root, filepath.Join(root, filepath.FromSlash(part.Path)), stamp); err != nil {
 			return "", err
 		}
 	}

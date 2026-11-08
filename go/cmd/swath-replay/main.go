@@ -134,7 +134,7 @@ func version() string {
 	return "swath-replay-go " + v + " (" + rev + ")"
 }
 
-// sortFixture sorts an unsorted capture into a format-2 fixture. The
+// sortFixture sorts an unsorted capture into a SeekParquet fixture. The
 // summary line goes to stdout and a refusal to stderr as one line, exit 1,
 // the split a launcher script reading the summary relies on.
 func sortFixture(args []string, stdout, stderr io.Writer) error {

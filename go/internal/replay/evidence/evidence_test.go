@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // The GCS evidence replay. Every capture in the archive's gcs/ tree is
@@ -705,7 +705,7 @@ func corpus(t *testing.T, root, dir string, index *evidenceIndex) string {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
 	}
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	latest := true
 	for _, o := range doc.Objects {
 		tm, err := time.Parse(time.RFC3339Nano, o.Updated)
@@ -713,13 +713,13 @@ func corpus(t *testing.T, root, dir string, index *evidenceIndex) string {
 			t.Fatal(err)
 		}
 		size, micros := o.Size, tm.UnixMicro()
-		rows = append(rows, sortedparquettest.Row{Key: o.Name, Size: &size, LastModified: &micros, IsLatest: &latest, RowType: "OBJECT"})
+		rows = append(rows, legacytest.Row{Key: o.Name, Size: &size, LastModified: &micros, IsLatest: &latest, RowType: "OBJECT"})
 	}
 	capture := filepath.Join(dir, "capture")
 	if err := os.MkdirAll(capture, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := sortedparquettest.Write(filepath.Join(capture, "part.parquet"), sortedparquettest.Part{Rows: rows}); err != nil {
+	if err := legacytest.Write(filepath.Join(capture, "part.parquet"), legacytest.Part{Rows: rows}); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "sorted")

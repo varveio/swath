@@ -84,7 +84,8 @@ func samePath(a, b string) bool {
 	return aa == ab
 }
 
-// datasetPrior reads a committed format-2 dataset's distribution: its
+// datasetPrior reads a committed dataset's distribution (this build's
+// SeekParquet format, or an earlier build's format 2): its
 // identity is the source kind and container (the bucket) of the manifest,
 // which must be the run's, and its scope, which the engine checks against
 // the run's prefix (Prior.Check); an endpoint or region is not in the
@@ -107,8 +108,9 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
 	switch {
-	case m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion:
-		return nil, fmt.Errorf("manifest format %s %d, want %s %d", m.Format, m.FormatVersion, dataset.Format, dataset.FormatVersion)
+	case !m.Readable():
+		return nil, fmt.Errorf("manifest format %s %d, want %s %d (draft %d) or %s %d", m.Format, m.FormatVersion,
+			dataset.Format, dataset.FormatVersion, dataset.DraftRevision, dataset.LegacyFormat, dataset.LegacyFormatVersion)
 	case m.Source.Kind != loc.Kind || m.Source.Container != loc.Container:
 		return nil, fmt.Errorf("the dataset lists %s (%s %q), the run %s (%s %q)", m.Source.URI, m.Source.Kind, m.Source.Container, loc.Root, loc.Kind, loc.Container)
 	}

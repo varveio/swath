@@ -620,7 +620,7 @@ class GoReceiptTest(unittest.TestCase):
         self.write("go/internal/replay/evidence/doc.go", "package evidence\n")
         self.write("go/internal/replay/evidence/evidence_test.go",
                    "package evidence\n\nfunc TestGCSNativeCapturesMatchReplay(t *testing.T) {}\n")
-        self.write("go/sortedparquet/sortedparquettest/sortedparquettest.go", "package sortedparquettest\n")
+        self.write("go/internal/replay/legacy/legacytest/legacytest.go", "package legacytest\n")
         self.write("go/internal/replay/azure/evidence_test.go",
                    "package azure_test\n\nfunc TestAzureEvidenceReplay(t *testing.T) {}\n")
         self.write("go/internal/replay/azure/evidencecmp_test.go", "package azure_test\n")
@@ -648,7 +648,7 @@ class GoReceiptTest(unittest.TestCase):
             capture_output=True).stdout).hexdigest() for path in (
             "go/go.mod", "go/go.sum", "go/internal/replay/evidence/doc.go",
             "go/internal/replay/evidence/evidence_test.go",
-            "go/sortedparquet/sortedparquettest/sortedparquettest.go",
+            "go/internal/replay/legacy/legacytest/legacytest.go",
             "go/internal/replay/azure/evidence_test.go", "go/internal/replay/azure/evidencecmp_test.go",
             "go/internal/replay/azure/sdk_test.go")}
         receipt = {"schema_version": "provider-match-receipt-v2", "producer": "go",
@@ -742,8 +742,8 @@ class GoReceiptTest(unittest.TestCase):
                              ("added", lambda: self.write("go/internal/replay/evidence/extra_test.go",
                                                           "package evidence\n")),
                              ("added in a staged directory", lambda: (
-                                 self.write("go/sortedparquet/sortedparquettest/extra.go", "package x\n"),
-                                 self.git("add", "go/sortedparquet/sortedparquettest/extra.go"))),
+                                 self.write("go/internal/replay/legacy/legacytest/extra.go", "package x\n"),
+                                 self.git("add", "go/internal/replay/legacy/legacytest/extra.go"))),
                              ("go.sum", lambda: self.write("go/go.sum", "x\n")),
                              ("deleted", lambda: (self.root / source).unlink())):
             with self.subTest(name):

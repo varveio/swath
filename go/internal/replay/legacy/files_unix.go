@@ -3,7 +3,7 @@
 
 //go:build unix
 
-package sortedparquet
+package legacy
 
 import (
 	"fmt"

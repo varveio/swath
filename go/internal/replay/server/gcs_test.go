@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/replay/latency"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
-	"github.com/varveio/swath/go/sortedparquet"
 )
 
 func gcsConfig(st store.Store, protocols ...string) Config {
@@ -192,7 +192,7 @@ func TestGCSFixtureAndStoreFailures(t *testing.T) {
 	if r.status != 500 || r.header.Get("x-swath-replay-error") != "internal" || strings.Contains(r.body, "secret") || !strings.Contains(buf.String(), "disk on fire") {
 		t.Errorf("%d %v %s", r.status, r.header, r.body)
 	}
-	disorder := &sortedparquet.DisorderError{Part: "p", Detail: "keys repeat"}
+	disorder := &legacy.DisorderError{Part: "p", Detail: "keys repeat"}
 	s = start(t, gcsConfig(failStore{memstore.Keys(memstore.Options{}), disorder}, ProtocolGCS))
 	if r := get(t, s, gcsList); r.status != 500 || r.header.Get("x-swath-replay-error") != "fixture_disordered" {
 		t.Errorf("disorder: %d %v %s", r.status, r.header, r.body)

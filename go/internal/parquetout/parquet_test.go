@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -137,20 +138,13 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
 				t.Fatalf("enc=%d part %d differs", enc, i)
 			}
-			// The footer carries the profile, the schema and the index
-			// bound; nothing about the part's place in the dataset.
+			// The footer carries the SeekParquet stamps and the value
+			// index bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
-			want := map[string]string{dataset.StampProfile: dataset.Format, dataset.StampProfileVersion: strconv.Itoa(dataset.FormatVersion),
-				dataset.StampSchema: testSchema.ID, dataset.StampIndexBound: "1024"}
-			for k, v := range want {
-				if kv[k] != v {
-					t.Errorf("part %d: %s = %q, want %q", i, k, kv[k], v)
-				}
-			}
-			for k := range kv {
-				if _, ok := want[k]; !ok && strings.HasPrefix(k, "swath.") {
-					t.Errorf("part %d: unexpected stamp %s", i, k)
-				}
+			want := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1",
+				dataset.StampSchema: testSchema.ID, dataset.StampKeyColumn: "key", dataset.StampKeyUnique: "true"}
+			if !maps.Equal(kv, want) {
+				t.Errorf("part %d: footer %q, want %q", i, kv, want)
 			}
 		}
 		if got := readKeys(t, parts); !slices.Equal(got, keysOf(rows)) {
@@ -344,7 +338,7 @@ func keysOf(rows []row) []string {
 
 // TestKeyLimits: a schema with a 1,024-byte key cap (S3) refuses a key over 1,024 bytes with a typed
 // error; an uncapped schema (filesystem) writes longer keys, and the footer records
-// the bound truncation, sorting_columns and readable truncated bounds.
+// sorting_columns and exact bounds: the keys' and a 1,025-byte 0xFF link target's.
 func TestKeyLimits(t *testing.T) {
 	out := t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
@@ -357,7 +351,10 @@ func TestKeyLimits(t *testing.T) {
 	out = t.TempDir()
 	os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755)
 	r, _ = NewRouter(Options{Out: out, PartSize: 1 << 20, Encoders: 1}, &testSchema)
-	rows := []row{{Key: "a" + long}, {Key: "b" + long}}
+	// A link target of 1,025 0xFF bytes: parquet-go's 1,024-byte
+	// shortening would leave a maximum of 1,024 0xFF bytes, below it.
+	high := strings.Repeat("\xff", 1025)
+	rows := []row{{Key: "a" + long, Data: tr{Link: high, Has: 2}}, {Key: "b" + long, Data: tr{Link: "t", Has: 2}}}
 	if err := r.Write(context.Background(), [][]row{rows}); err != nil {
 		t.Fatal(err)
 	}
@@ -379,8 +376,16 @@ func TestKeyLimits(t *testing.T) {
 	for _, m := range pf.Metadata().KeyValueMetadata {
 		kv[m.Key] = m.Value
 	}
-	if kv[dataset.StampIndexBound] != "1024" {
-		t.Fatalf("footer: %v", kv)
+	if _, ok := kv["swath.index_bound_bytes"]; ok {
+		t.Fatalf("footer: %v (no column index bound is shortened)", kv)
+	}
+	link, _ := pf.Schema().Lookup("link_target")
+	lci, err := pf.RowGroups()[0].ColumnChunks()[link.ColumnIndex].ColumnIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lo, hi := string(lci.MinValue(0).ByteArray()), string(lci.MaxValue(0).ByteArray()); lo != "t" || hi != high {
+		t.Fatalf("link_target bounds %d/%d bytes, want the exact minimum and the 1,025-byte maximum", len(lo), len(hi))
 	}
 	rg := pf.Metadata().RowGroups[0]
 	if len(rg.SortingColumns) != 1 || rg.SortingColumns[0].ColumnIdx != 0 || rg.SortingColumns[0].Descending {
@@ -390,9 +395,10 @@ func TestKeyLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The key's bounds are exact, never truncated (SeekParquet RG-5).
 	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
-	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
-		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
+	if string(lo) != rows[0].Key || string(hi) != rows[1].Key {
+		t.Fatalf("bounds %d/%d bytes, not the page's first and last keys", len(lo), len(hi))
 	}
 }
 

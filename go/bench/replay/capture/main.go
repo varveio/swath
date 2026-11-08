@@ -10,7 +10,7 @@
 //
 //	go run ./bench/replay/capture -rows 2000 -o /tmp/capture
 //
-// The rows are sortedparquettest.Object rows (synthetic; the writer is
+// The rows are legacytest.Object rows (synthetic; the writer is
 // parquet-go, not either lister).
 package main
 
@@ -20,7 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 func main() {
@@ -46,9 +46,9 @@ func write(dir string, n int) error {
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("%s exists", path)
 	}
-	part := sortedparquettest.Part{Rows: make([]sortedparquettest.Row, 0, n), PageBytes: 64 << 10}
+	part := legacytest.Part{Rows: make([]legacytest.Row, 0, n), PageBytes: 64 << 10}
 	for i := n - 1; i >= 0; i-- {
-		part.Rows = append(part.Rows, sortedparquettest.Object(fmt.Sprintf("logs/p%02d/obj-%06d.json", i%37, i), i))
+		part.Rows = append(part.Rows, legacytest.Object(fmt.Sprintf("logs/p%02d/obj-%06d.json", i%37, i), i))
 	}
-	return sortedparquettest.Write(path, part)
+	return legacytest.Write(path, part)
 }

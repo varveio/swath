@@ -9,15 +9,16 @@ and why.
 | Package | Role | Imports |
 |---|---|---|
 | `cmd/swath-replay` | flags (standard `flag`, the Java launcher's names and defaults), the startup line, signals, opening the fixture; `sort-fixture` as a thin command over `internal/replay/sortfixture` | server, latency, store, memstore, sortfixture |
-| `internal/replay/server` | the HTTP server: request-target checks, route classification, the S3, GCS and Azure routes' request flow, admission, response memory, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, gcs, azure, latency, metrics, output, store, sortedparquet (its disorder error) |
-| `internal/replay/gcs` | objects.list: request parsing, the pager over `store.Store` (or the GCS schema's columns through `store.Sorted`), `gcs1.` tokens, the JSON page (rendered into an `output.Output`) and error envelope, the request's latency key | s3 (key carries), output, store, sortedparquet |
+| `internal/replay/server` | the HTTP server: request-target checks, route classification, the S3, GCS and Azure routes' request flow, admission, response memory, the delay deadline, shutdown, the metrics port and the runtime attestation | s3, gcs, azure, latency, metrics, output, store, legacy and seekparquet (their disorder refusals) |
+| `internal/replay/gcs` | objects.list: request parsing, the pager over `store.Store` (or the GCS schema's columns through `store.Sorted`), `gcs1.` tokens, the JSON page (rendered into an `output.Output`) and error envelope, the request's latency key | s3 (key carries), output, store, legacy (rows) |
 | `internal/replay/azure` | Azure flat List Blobs: request parsing, the UTF-16-ordered cursor, the pager, markers, the XML (rendered into an `output.Output`) and error bodies, the request's latency key | s3, output, store, latency |
 | `internal/replay/s3` | ListObjectsV2: request parsing, the pager, continuation tokens, the XML documents, the request's latency key | output, javanum, store |
 | `internal/replay/output` | the response byte budget and the chunked sink every route renders into | – |
 | `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances, the maximum and percentile windows) and the schema-2 JSON | – |
-| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open` | – |
+| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
+| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts), `format2` (swath-dataset format 2) and `legacytest` (writes both for tests); formerly the public `go/sortedparquet` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
 | `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
@@ -224,7 +225,7 @@ registers at startup are created when the server starts, so a scrape tells a zer
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
 - **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
   `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
-  rows and failure (`parquet.query.*`), each rollup's `sortedparquet.Stats` (`delimiter.skipscan.*`) and each
+  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset these meters are absent and the store's page, key, reseek and shortcut counters unset (`Sorted.PageStats` false): the seekparquet module reports no page work, so it is unavailable, not zero) and each
   read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
   (`Config.IndexLoad`, `Config.IndexEntries`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on

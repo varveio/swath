@@ -19,7 +19,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // TestGCSETag pins gcsETag, the S3 ETag of a GCS object as Cloud Storage's
@@ -299,7 +299,7 @@ func writeGCSParts(t *testing.T, parts [][]gcsTimedRow, untimed []bool) string {
 		t.Fatal(err)
 	}
 	options := []parquet.WriterOption{parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))), parquet.PageBufferSize(512)}
-	for k, v := range sortedparquettest.Format2Stamps(schemaID, 1024) {
+	for k, v := range legacytest.Format2Stamps(schemaID, 1024) {
 		options = append(options, parquet.KeyValueMetadata(k, v))
 	}
 	var entries []map[string]any

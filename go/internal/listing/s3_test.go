@@ -131,9 +131,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 		strip := func(dir string) map[string]any {
 			var m map[string]any
 			readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-			delete(m, "published_at")
-			delete(m["coverage"].(map[string]any), "listing_started_at")
-			delete(m["coverage"].(map[string]any), "listing_finished_at")
+			stripTimes(m)
 			return m
 		}
 		if fmt.Sprint(strip(ref)) != fmt.Sprint(strip(got)) {
@@ -205,5 +203,18 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	}
 	if f := feat(m, "resources", "features"); f["spill"] != false {
 		t.Fatalf("pipeline features = %v", f)
+	}
+}
+
+// stripTimes removes from a manifest read as JSON the times that differ
+// between runs: published_at and the coverage's observation times, under
+// extensions.swath.
+func stripTimes(m map[string]any) {
+	ext, _ := m["extensions"].(map[string]any)
+	sw, _ := ext["swath"].(map[string]any)
+	delete(sw, "published_at")
+	if c, ok := sw["coverage"].(map[string]any); ok {
+		delete(c, "listing_started_at")
+		delete(c, "listing_finished_at")
 	}
 }

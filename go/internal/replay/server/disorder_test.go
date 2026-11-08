@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // TestDisorderedFixtureNamesOnlyThePart: a fixture disordered inside a row
@@ -22,7 +22,7 @@ import (
 // row group and the part's file name in the message), and the server's
 // directory layout reaches the log only.
 func TestDisorderedFixtureNamesOnlyThePart(t *testing.T) {
-	disorder := &sortedparquet.DisorderError{Part: "/srv/captures/some-bucket/part-00001.parquet", RowGroup: 7, Row: 42,
+	disorder := &legacy.DisorderError{Part: "/srv/captures/some-bucket/part-00001.parquet", RowGroup: 7, Row: 42,
 		Detail: "its keys must be in strictly ascending unsigned order"}
 	st := &hookStore{Store: memstore.Keys(memstore.Options{}, "a"), hook: func(context.Context) error { return disorder }}
 	cfg := config(st)
@@ -51,12 +51,12 @@ func TestDisorderedFixtureNamesOnlyThePart(t *testing.T) {
 // serving.refused{reason=row_group_disorder} and parquet.query.errors.
 func TestDisorderedPartOverHTTP(t *testing.T) {
 	dir := t.TempDir()
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	for i, k := range []string{"a", "c", "b", "d"} {
-		rows = append(rows, sortedparquettest.Object(k, i))
+		rows = append(rows, legacytest.Object(k, i))
 	}
-	if err := sortedparquettest.Write(filepath.Join(dir, "part-00001.parquet"),
-		sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true)}); err != nil {
+	if err := legacytest.Write(filepath.Join(dir, "part-00001.parquet"),
+		legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)}); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := store.Open(context.Background(), dir, store.Options{})

@@ -8,8 +8,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/replay/legacy"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet"
 )
 
 // NativeSchemaID is the schema id of a dataset the lister wrote from a
@@ -100,7 +100,7 @@ type nativeSource struct{ st *store.Sorted }
 var nativeColumns = []string{"size", "last_modified", "etag", "generation", "metageneration", "storage_class", "md5", "crc32c", "content_type",
 	"time_created"}
 
-func nativeItem(row *sortedparquet.Row) Item {
+func nativeItem(row *legacy.Row) Item {
 	it := Item{Key: row.Key, Native: &Native{}}
 	if v, ok := present(row, "size"); ok {
 		it.Size = v.Int64()
@@ -116,12 +116,12 @@ func nativeItem(row *sortedparquet.Row) Item {
 	return it
 }
 
-func present(row *sortedparquet.Row, name string) (parquet.Value, bool) {
+func present(row *legacy.Row, name string) (parquet.Value, bool) {
 	v, ok := row.Value(name)
 	return v, ok && !v.IsNull()
 }
 
-func text(row *sortedparquet.Row, name string) *string {
+func text(row *legacy.Row, name string) *string {
 	v, ok := present(row, name)
 	if !ok {
 		return nil
@@ -130,7 +130,7 @@ func text(row *sortedparquet.Row, name string) *string {
 	return &s
 }
 
-func integer(row *sortedparquet.Row, name string) *int64 {
+func integer(row *legacy.Row, name string) *int64 {
 	v, ok := present(row, name)
 	if !ok {
 		return nil

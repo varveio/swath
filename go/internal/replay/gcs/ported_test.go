@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // The wire contract's own unit tests for the GCS route, held here
@@ -227,13 +227,13 @@ func TestIndexedDelimiterMatchesWalkAcrossRowGroups(t *testing.T) {
 	keys = append(keys, "root/direct", "root/z")
 	slices.Sort(keys)
 	const groupRows = 37
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	for i, k := range keys {
-		rows = append(rows, sortedparquettest.Object(k, i))
+		rows = append(rows, legacytest.Object(k, i))
 	}
 	dir := t.TempDir()
-	part := sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true), GroupRows: groupRows, PageBytes: 2048}
-	if err := sortedparquettest.Write(filepath.Join(dir, "part-00001.parquet"), part); err != nil {
+	part := legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true), GroupRows: groupRows, PageBytes: 2048}
+	if err := legacytest.Write(filepath.Join(dir, "part-00001.parquet"), part); err != nil {
 		t.Fatal(err)
 	}
 	sorted, meta, err := store.Open(context.Background(), dir, store.Options{})

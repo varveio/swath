@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varveio/swath/go/sortedparquet"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 // The window cache's defaults: 192 windows of 12,500 rows, 2.4 million
@@ -239,7 +239,7 @@ type prefetcher struct {
 	maxAhead int
 
 	mu sync.Mutex
-	// closed fails every read after close with sortedparquet.ErrClosed,
+	// closed fails every read after close with legacy.ErrClosed,
 	// a hit as a fill, as the store's Close promises.
 	closed  bool
 	ahead   map[windowKey]*pending // read-aheads in flight
@@ -297,7 +297,7 @@ func call[T any](f func(T), v T) {
 // serve answers a range read from the windows, or fills one.
 func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to []byte, limit int, proj Projection) ([]Object, error) {
 	if p.isClosed() {
-		return nil, sortedparquet.ErrClosed
+		return nil, legacy.ErrClosed
 	}
 	// A walk that reaches its window's end while the next window's
 	// read-ahead is in flight waits for it rather than read the same rows.
@@ -353,7 +353,7 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 			p.mu.Lock()
 			if p.closed {
 				p.mu.Unlock()
-				return nil, sortedparquet.ErrClosed
+				return nil, legacy.ErrClosed
 			}
 			call(m.Hit, struct{}{})
 			p.touch(w)
@@ -374,7 +374,7 @@ func (p *prefetcher) serve(ctx context.Context, from []byte, inclusive bool, to 
 			p.mu.Lock()
 			if p.closed {
 				p.mu.Unlock()
-				return nil, sortedparquet.ErrClosed
+				return nil, legacy.ErrClosed
 			}
 			call(m.Join, "hit")
 			call(m.Selection, "two_window_join")
