@@ -315,10 +315,11 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
 builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
 no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
-**`docker-publish`** runs an offline smoke (`--version` and `--help` on both images) before
-pushing both dev images to GHCR. Its deep smoke (Parquet write, read and resume against the
+**`docker-publish`** runs an offline smoke before pushing both dev images to GHCR: `swath --version`
+(asserting the Gradle version and the 12-character commit) and `--help` on the CLI image, and
+`--help` on the replay image. Its deep smoke (Parquet write, read and resume against the
 public smoke bucket, then the replay image serving that capture through DuckDB and Jetty) reaches
-a real bucket, so it runs only on manual dispatch; no push or merge touches a real bucket. The
+a real bucket, so it runs only on manual dispatch; no pull request or `main` merge does; release-tag pushes and manual dispatch still run the public-bucket smoke. The
 release workflow runs the same deep smoke against the pushed digest before it applies `latest`. Tagged publication belongs
 to `.github/workflows/release.yml`, behind the protected `public-release`
 environment.

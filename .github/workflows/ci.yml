@@ -909,8 +909,12 @@ jobs:
       # runs against real buckets; the release workflow still runs it before `latest`).
       - name: Smoke — image starts offline (--version and --help)
         run: |
-          docker run --rm swath:ci --version
-          docker run --rm swath:ci --help
+          version=$(sed -n 's/^version=//p' gradle.properties)
+          out=$(docker run --rm swath:ci --version)
+          echo "$out"
+          grep -qxF "swath $version" <<<"$out"
+          grep -qF "${GITHUB_SHA:0:12}" <<<"$out"
+          docker run --rm swath:ci --help | grep -q 'Parallel, resumable S3 object lister'
 
       - name: Install DuckDB CLI
         if: github.event_name == 'workflow_dispatch'
