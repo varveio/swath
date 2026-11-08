@@ -342,7 +342,7 @@ func event(e string) {
 }
 
 // SetDurableEvents installs f to see the durable spill's lifecycle events
-// ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "flusher-joined",
+// ("sealed", "setk", "setk-detached", "detach", "close", "cycle", "cycle-records", "flusher-joined",
 // "ledger-closed", and Run's "waker-stopped"), for the shutdown-order
 // tests; nil removes it. It returns a function restoring the previous one.
 func SetDurableEvents(f func(string)) (restore func()) {
@@ -620,6 +620,9 @@ func (c *Cache) cycle() {
 	}
 	start := time.Now()
 	event("cycle")
+	if len(recs) > 0 && !failed {
+		event("cycle-records") // a cycle that appends records (the gated kill matrix counts them)
+	}
 	defer func() {
 		c.st.FlushNs.Add(int64(time.Since(start)))
 		c.st.FlushCycles.Add(1)

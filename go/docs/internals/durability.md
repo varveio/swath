@@ -55,7 +55,9 @@ retirements' append and sync, an unlink, the directory sync, a recovery replay's
 frame it replays. `TestDurableKillMatrix` (in process: each point's 1st and 4th occurrence; writes torn at
 an explicit offset inside a header, a capture start, a rows frame, a trailer, a tail and a ledger record;
 lost unsynced state) and `TestSIGKILLDurableSpill` (the real process) run them on a slow-frontier fixture
-and fail if a point is not reached.
+and fail if a point is not reached. In process the fixture is gated, not timed: each seal waits until the seal
+before it has a ledger append of its own (so four seals are four appends for the fourth-occurrence ledger
+points), and the torn-ledger test holds the frontier until its tear, so the part records it needs follow.
 `TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
 damaged snapshot, with the truncation or the retirements' append lost where the schedule says so. Each
 then resumes to the uninterrupted dataset.

@@ -618,7 +618,9 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
-			return len(b) / 2, errors.New("injected EIO")
+			// Inside the append's first frame: its header and half its
+			// payload (half the buffer could fall on a frame boundary).
+			return 8 + int(binary.LittleEndian.Uint32(b))/2, errors.New("injected EIO")
 		}
 		return 0, nil
 	})()

@@ -62,6 +62,17 @@ func slowFrontier(t *testing.T, slow string) (string, *s3mem.Backend, *reqLog) {
 				log.starts = append(log.starts, start)
 				log.mu.Unlock()
 			}
+			if h := frontierHold.Load(); h != nil && start == "" && q.Get("continuation-token") == "" && h.seen.Add(1) == 2 {
+				// The frontier's first request (the second listing from
+				// the start: the seed's is the first) waits for the
+				// hold's release.
+				select {
+				case <-h.release:
+				case <-r.Context().Done():
+				case <-time.After(20 * time.Second):
+					h.late.Store(true)
+				}
+			}
 			if q.Get("continuation-token") == "" && start < slow {
 				time.Sleep(50 * time.Millisecond)
 			}
@@ -70,6 +81,90 @@ func slowFrontier(t *testing.T, slow string) (string, *s3mem.Backend, *reqLog) {
 		h.ServeHTTP(w, r)
 	}))
 	return url, b, log
+}
+
+// sealGate makes the durable fixture's ledger history deterministic for
+// one run. Without it seals within one 100 ms flusher window coalesce into
+// one ledger append, so a 4th-occurrence ledger arm (spill-ledger-dirsync#4,
+// -append#4, -sync#4) depended on how the seals fell in time (Sol's second
+// review). With it each seal waits at its crash point until every earlier
+// seal's record has been taken by a cycle, so every seal is a ledger
+// append of its own: four seals, four appends.
+type sealGate struct {
+	mu       sync.Mutex   // serializes seals
+	seals    int64        // seals past their crash point (mu)
+	cycles   atomic.Int64 // flusher cycles that appended records
+	stop     atomic.Bool  // the run crashed: nothing more to wait for
+	timedOut atomic.Bool
+}
+
+// runGate is the gate of the run in progress (nil: none).
+var runGate atomic.Pointer[sealGate]
+
+// gateSeals installs a gate for the next run. The returned function
+// removes it and fails the test if a seal's wait timed out.
+func gateSeals(t *testing.T) func() {
+	t.Helper()
+	g := &sealGate{}
+	restore := order.SetDurableEvents(func(e string) {
+		if e == "cycle-records" {
+			g.cycles.Add(1)
+		}
+	})
+	runGate.Store(g)
+	return func() {
+		runGate.Store(nil)
+		restore()
+		if g.timedOut.Load() {
+			t.Errorf("a seal waited 10 s for the previous seal's append (%d cycles, %d seals)", g.cycles.Load(), g.seals)
+		}
+	}
+}
+
+// at is the gate's crash-point hook: a seal waits until every earlier
+// seal's record has been appended (or the run crashed).
+func (g *sealGate) at(p string) {
+	if p != "spill-seal" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); g.cycles.Load() < g.seals && !g.stop.Load(); {
+		if time.Now().After(deadline) {
+			g.timedOut.Store(true)
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	g.seals++
+}
+
+// hold holds the frontier's first request until release is closed: only
+// that request, so the ranges ahead (seed tiles, children split off it)
+// keep listing, spilling and sealing.
+type hold struct {
+	release chan struct{}
+	seen    atomic.Int64
+	late    atomic.Bool
+}
+
+// frontierHold is the hold of the run in progress (nil: none).
+var frontierHold atomic.Pointer[hold]
+
+// gated is a crash-point hook that consults the run's gate first; crash
+// marks the gate stopped when it returns an injected crash.
+func gated(crash func(p string) error) func(string) error {
+	return func(p string) error {
+		g := runGate.Load()
+		if g != nil {
+			g.at(p)
+		}
+		err := crash(p)
+		if err != nil && g != nil {
+			g.stop.Store(true)
+		}
+		return err
+	}
 }
 
 // durableConfig is crashConfig with spill on, the part interval off.
@@ -137,12 +232,12 @@ func TestDurableSpillResume(t *testing.T) {
 func crashDurable(t *testing.T, cfg Config, point string, nth int64) {
 	t.Helper()
 	var seen atomic.Int64
-	restore := faults.Set(func(p string) error {
+	restore := faults.Set(gated(func(p string) error {
 		if p == point && seen.Add(1) == nth {
 			return faults.ErrCrash
 		}
 		return nil
-	})
+	}))
 	_, err := Run(context.Background(), cfg)
 	restore()
 	if !errors.Is(err, faults.ErrCrash) {
@@ -766,8 +861,10 @@ func TestDurableKillMatrix(t *testing.T) {
 		}
 		for _, nth := range nths {
 			t.Run(fmt.Sprintf("%s#%d", point, nth), func(t *testing.T) {
+				done := gateSeals(t)
 				out := filepath.Join(t.TempDir(), "ds")
 				crashDurable(t, durableConfig(url, out, false), point, nth)
+				done()
 				resume(t, out)
 			})
 		}
@@ -780,6 +877,7 @@ func TestDurableKillMatrix(t *testing.T) {
 		nth  int64
 	}{{"H", 2}, {"C", 2}, {"rows", 4}, {"T", 2}, {"tail", 2}, {"ledger", 2}} {
 		t.Run("torn-"+tc.kind, func(t *testing.T) {
+			done := gateSeals(t)
 			out := filepath.Join(t.TempDir(), "ds")
 			var seen atomic.Int64
 			var cut, lo, hi int
@@ -796,10 +894,14 @@ func TestDurableKillMatrix(t *testing.T) {
 					return 0, nil
 				}
 				cut, lo, hi = c, l, h
+				if g := runGate.Load(); g != nil {
+					g.stop.Store(true)
+				}
 				return c, faults.ErrCrash
 			})
 			_, err := Run(context.Background(), durableConfig(url, out, false))
 			restore()
+			done()
 			if seen.Load() < tc.nth || !errors.Is(err, faults.ErrCrash) {
 				t.Fatalf("torn %s write not injected (%d seen): %v", tc.kind, seen.Load(), err)
 			}
@@ -813,10 +915,11 @@ func TestDurableKillMatrix(t *testing.T) {
 	// synced) is lost; crashed at a seal (the file not yet synced), the
 	// file's last bytes are lost.
 	t.Run("lost-ledger-append", func(t *testing.T) {
+		done := gateSeals(t)
 		out := filepath.Join(t.TempDir(), "ds")
 		var before int64 = -1
 		var seen atomic.Int64
-		restore := faults.Set(func(p string) error {
+		restore := faults.Set(gated(func(p string) error {
 			switch {
 			case p == "spill-ledger-append" && seen.Load() == 1:
 				if fi, err := os.Stat(filepath.Join(out, order.DurableDir, "ledger")); err == nil {
@@ -826,9 +929,10 @@ func TestDurableKillMatrix(t *testing.T) {
 				return faults.ErrCrash
 			}
 			return nil
-		})
+		}))
 		_, err := Run(context.Background(), durableConfig(url, out, false))
 		restore()
+		done()
 		if !errors.Is(err, faults.ErrCrash) || before < 0 {
 			t.Fatalf("crash at the second ledger sync not injected (prefix %d): %v", before, err)
 		}
@@ -838,8 +942,10 @@ func TestDurableKillMatrix(t *testing.T) {
 		resume(t, out)
 	})
 	t.Run("lost-unsealed-file", func(t *testing.T) {
+		done := gateSeals(t)
 		out := filepath.Join(t.TempDir(), "ds")
 		crashDurable(t, durableConfig(url, out, false), "spill-seal", 2)
+		done()
 		for _, name := range durableFiles(t, out) {
 			p := filepath.Join(out, order.DurableDir, name)
 			if fi, err := os.Stat(p); err == nil && fi.Size() > 64 {
@@ -865,12 +971,21 @@ func TestDurableLedgerTornWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), "ds")
-	var writes atomic.Int64
+	// The frontier is held until the tear, so all but the seed page's part
+	// records follow it (the premise is a barrier, not a race: a late
+	// flusher used to leave too few part records after it), and the tear
+	// lands inside the append's first frame, never on a frame boundary.
+	h := &hold{release: make(chan struct{})}
+	runHold := func() func() { frontierHold.Store(h); return func() { frontierHold.Store(nil) } }
+	var writes, partsBefore atomic.Int64
 	var tornAt atomic.Bool
+	var cut, hi int
 	restoreIO := faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, "ledger") && writes.Add(1) == 2 {
+			cut, _, hi = tearAt(b, "any")
 			tornAt.Store(true)
-			return len(b) / 2, errors.New("injected EIO")
+			close(h.release)
+			return cut, errors.New("injected EIO")
 		}
 		return 0, nil
 	})
@@ -878,17 +993,28 @@ func TestDurableLedgerTornWrite(t *testing.T) {
 	restore := faults.Set(func(p string) error {
 		// Publication goes on after the failure: two more part records,
 		// then the kill.
-		if p == "journal-append" && tornAt.Load() && after.Add(1) == 2 {
+		if p != "journal-append" {
+			return nil
+		}
+		if !tornAt.Load() {
+			partsBefore.Add(1)
+		} else if after.Add(1) == 2 {
 			return faults.ErrCrash
 		}
 		return nil
 	})
+	unhold := runHold()
 	_, err := Run(context.Background(), durableConfig(url, out, false))
+	unhold()
 	restore()
 	restoreIO()
-	if !tornAt.Load() || !errors.Is(err, faults.ErrCrash) {
-		t.Fatalf("torn ledger write %v, then the kill: %v", tornAt.Load(), err)
+	if h.late.Load() || !tornAt.Load() || !errors.Is(err, faults.ErrCrash) {
+		t.Fatalf("torn ledger write %v (frontier held in vain %v), then the kill: %v", tornAt.Load(), h.late.Load(), err)
 	}
+	if cut <= 8 || cut >= hi {
+		t.Fatalf("cut at %d of a frame ending at %d", cut, hi)
+	}
+	t.Logf("%d part records before the tear (the seed page's)", partsBefore.Load())
 	sum, err := Run(context.Background(), durableConfig(url, out, true))
 	if err != nil {
 		t.Fatal(err)
