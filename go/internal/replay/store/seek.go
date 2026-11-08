@@ -104,16 +104,23 @@ func (s *cachedSource) Open(ctx context.Context, path string) (seekparquet.Sourc
 }
 
 // openSeek opens the SeekParquet dataset in dir, its parts through files,
-// checking every row group's first key page and each part's last
-// (VerifyOnOpen, as the legacy core decodes them at open), and the type of
-// every column of expect a part has (legacy.CheckColumns).
+// checking every part, every row group's first key page and each part's
+// last at open (Dataset.Verify, as the legacy core decodes them at open:
+// a long-lived local reader fails fast rather than on a part's first
+// touch), and the type of every column of expect a part has
+// (legacy.CheckColumns).
 func openSeek(ctx context.Context, dir string, expect []legacy.Column, files *legacy.FileCache) (*seekReader, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
 	}
 	src := &cachedSource{root: root, dir: dir, files: files, opened: map[string]*legacy.CachedFile{}}
-	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{VerifyOnOpen: true})
+	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+	if err == nil {
+		if err = d.Verify(ctx); err != nil {
+			_ = d.Close()
+		}
+	}
 	if err != nil {
 		_ = root.Close()
 		return nil, err
