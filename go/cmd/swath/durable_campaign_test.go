@@ -49,7 +49,8 @@ import (
 // (byte-identical with --part-interval=0, row-identical with the interval
 // on), reconcile (rows retained + rows listed = the dataset; objects
 // emitted - filtered + replayed = rows listed), and list nothing a
-// replayed certificate covers: no data request of the resume starts in
+// replayed certificate covers: no data request of any resume (a killed
+// first resume included) starts in
 // [max(cs, K), ce) of a certificate live in the ledger's prefix. Opt-in:
 // TestDurableMinIO runs with SWATH_MINIO_ENDPOINT (go/bench/minio.sh),
 // TestDurableCorpus with SWATH_CORPUS_ENDPOINT (go/bench/durable_corpus.sh);
@@ -402,21 +403,35 @@ func campaign(t *testing.T, fx campaignFixture) {
 					arm.damage(t, out)
 				}
 				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json", out)
-				if arm.resumeKill != "" {
-					if _, err := run(resumeArgs, arm.resumeKill, 0); err != nil {
-						t.Fatalf("resume killed at %s: %v", arm.resumeKill, err)
+				// logged runs a resume with the request log on and checks
+				// it: no data request starts inside a certificate live
+				// in the ledger's prefix when it starts.
+				inside := 0
+				logged := func(what, killAt string) (*campaignReport, []ledgerCert, string, []string) {
+					certs, k := liveCerts(t, out), lastKey(t, out)
+					px.mu.Lock()
+					px.starts = nil
+					px.mu.Unlock()
+					px.logging.Store(true)
+					r, err := run(resumeArgs, killAt, 0)
+					px.logging.Store(false)
+					if err != nil {
+						t.Fatalf("%s: %v", what, err)
 					}
+					px.mu.Lock()
+					starts := px.starts
+					px.mu.Unlock()
+					n, first := startsInside(starts, certs, k)
+					if inside += n; n > 0 {
+						t.Errorf("%s: %d data requests start inside live certificates, the first at %q (K %q)", what, n, first, k)
+					}
+					t.Logf("%s: %d live certificates, %d eligible (above K), %d data requests logged", what, len(certs), eligibleCerts(certs, k), len(starts))
+					return r, certs, k, starts
 				}
-				certs, k := liveCerts(t, out), lastKey(t, out)
-				px.mu.Lock()
-				px.starts = nil
-				px.mu.Unlock()
-				px.logging.Store(true)
-				r, err := run(resumeArgs, "", 0)
-				px.logging.Store(false)
-				if err != nil {
-					t.Fatalf("resume: %v", err)
+				if arm.resumeKill != "" {
+					logged("the first resume, killed at "+arm.resumeKill, arm.resumeKill)
 				}
+				r, certs, k, starts := logged("the resume", "")
 				if mode.runtime[0] == zero[0] {
 					sameParts(t, arm.name, ref, out)
 				} else {
@@ -435,37 +450,40 @@ func campaign(t *testing.T, fx campaignFixture) {
 					t.Errorf("reconciliation: committed %d (want %d), retained %d + listed %d, objects %d - filtered %d + replayed %d",
 						o.RowsCommitted, rows, o.RowsRetained, o.RowsListed, r.value("objects"), o.RowsFiltered, replayed)
 				}
-				// Reuse: no data request starts inside a certificate the
-				// resume replayed. Every live certificate is replayed
-				// unless rejected, and these schedules damage none.
+				// Every live certificate is replayed unless rejected, and
+				// these schedules damage none.
 				if rejected != 0 {
 					t.Errorf("%d certificates rejected", rejected)
 				}
-				px.mu.Lock()
-				starts := px.starts
-				px.mu.Unlock()
-				inside := 0
-				for _, s := range starts {
-					for _, c := range certs {
-						if (c.open || c.ce > k) && s >= max(c.cs, k) && (c.open || s < c.ce) {
-							inside++
-							if inside <= 3 {
-								t.Errorf("a data request starts at %q inside the certificate (%q, %q] (K %q)", s, c.cs, c.ce, k)
-							}
-						}
-					}
-				}
 				req := r.value("requests")
+				if req > 0 && len(starts) == 0 {
+					t.Errorf("the resume made %d requests and the log holds no data request: the reuse check saw nothing", req)
+				}
 				elig := eligibleCerts(certs, k)
 				if arm.reuse && (elig == 0 || accepted == 0 || replayed == 0) {
 					t.Errorf("a reuse arm without reuse: %d eligible certificates, %d accepted, %d rows replayed", elig, accepted, replayed)
 				}
-				line = fmt.Sprintf("%d\t%d\t%d\t%d\t%.3f\t%d\t%d", len(certs), accepted, replayed, req, float64(req)/float64(coldReq), r.value("reuse.boundary_overfetch_keys"), inside)
-				t.Logf("live certificates %d, accepted %d, replayed %d rows, resume %d requests (%.3fx cold), %d requests inside a certificate",
-					len(certs), accepted, replayed, req, float64(req)/float64(coldReq), inside)
+				line = fmt.Sprintf("%d\t%d\t%d\t%d\t%d\t%.3f\t%d\t%d\t%d", len(certs), elig, accepted, replayed, req, float64(req)/float64(coldReq), r.value("reuse.boundary_overfetch_keys"), len(starts), inside)
+				t.Logf("accepted %d, replayed %d rows, resume %d requests (%.3fx cold)", accepted, replayed, req, float64(req)/float64(coldReq))
 			})
 		}
 	}
+}
+
+// startsInside counts the request starts inside a certificate's
+// [max(cs, K), ce) (open: no end), certificates wholly at or below K
+// excepted, and returns the first.
+func startsInside(starts []string, certs []ledgerCert, k string) (n int, first string) {
+	for _, s := range starts {
+		for _, c := range certs {
+			if (c.open || c.ce > k) && s >= max(c.cs, k) && (c.open || s < c.ce) {
+				if n++; n == 1 {
+					first = s
+				}
+			}
+		}
+	}
+	return n, first
 }
 
 // eligibleCerts counts the certificates with keys above K: those a resume
