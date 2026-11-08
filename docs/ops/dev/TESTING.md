@@ -72,7 +72,7 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
 - **`-Pdeep`** `./gradlew test -Pdeep` — runs **only** the `@Tag("deep")` tier:
   schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/timeout
   timing tests, demoted off the per-commit gate because they are slow (real `Thread.sleep`)
-  and/or flaky under CI contention. Runs on every **main merge** (ci.yml `deep-tests`,
+  and/or flaky under CI contention. Runs on every **main merge** that touches Java (a Go-only merge skips it) (ci.yml `deep-tests`,
   serial via `-PtestMaxParallelForks=1`) and **nightly** (`nightly.yml`). The *invariants*
   these guard are pinned per-commit by fast deterministic smokes (see the Tag convention
   below). This tier and `perf` always re-execute — they are opted out of Gradle's

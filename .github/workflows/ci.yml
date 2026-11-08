@@ -50,7 +50,9 @@ jobs:
           else
             # Capture the whole list first: a git failure then fails the step (set -e) instead of
             # reading as "Go-only". An empty diff also runs everything.
-            changed=$(git diff --name-only "$BASE" HEAD)
+            # --no-renames: a rename reports only its destination, so moving a Java file under go/
+            # would otherwise read as Go-only. Listing both paths keeps the source path visible.
+            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
             if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.replay-go)' >/dev/null <<<"$changed"; then
               echo "java=true" >> "$GITHUB_OUTPUT"
             else
@@ -389,7 +391,7 @@ jobs:
             # reading as "no Go change", and grep reads every line rather than exiting at the
             # first match while git still writes (git's SIGPIPE under pipefail would turn a
             # match into go=false).
-            changed=$(git diff --name-only "$BASE" HEAD)
+            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
             if grep -E '^(go/|\.github/workflows/ci\.yml$|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
@@ -522,7 +524,7 @@ jobs:
             # reading as "no Go change", and grep reads every line rather than exiting at the
             # first match while git still writes (git's SIGPIPE under pipefail would turn a
             # match into go=false).
-            changed=$(git diff --name-only "$BASE" HEAD)
+            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
             if grep -E '^(go/|\.github/workflows/ci\.yml$|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
@@ -641,7 +643,7 @@ jobs:
           fi
           echo "CI gate passed."
 
-  # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge and on
+  # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge that touches Java and on
   # manual dispatch from any branch. Tagged releases publish through release.yml
   # instead; `latest` and the semver tags are owned solely by that workflow, so this
   # job can never regress a release pointer.
