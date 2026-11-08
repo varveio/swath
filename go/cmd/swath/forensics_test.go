@@ -59,7 +59,7 @@ func TestStuckCause(t *testing.T) {
 			args := append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "2",
 				"--stall-timeout", "1s", "--report", report, "-o", dir}, c.extra...)
 			args = append(args, unjournaled...)
-			if code := exitCode(t, run(context.Background(), args, io.Discard, false)); code != exitStuck {
+			if code := exitCode(t, run(context.Background(), args, io.Discard, diagList)); code != exitStuck {
 				t.Fatalf("exit %d, want %d", code, exitStuck)
 			}
 			var o outcome

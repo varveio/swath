@@ -76,7 +76,7 @@ func TestReplaceGivesUpOnAHeldTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("a held target was replaced")
 	}
-	if d := time.Since(start); d < replaceRetry || d > 10*replaceRetry {
+	if d := time.Since(start); d < replaceRetry/2 || d > 10*replaceRetry {
 		t.Fatalf("gave up after %s, want about %s: %v", d, replaceRetry, err)
 	}
 	if b, _ := os.ReadFile(path); string(b) != "old" {

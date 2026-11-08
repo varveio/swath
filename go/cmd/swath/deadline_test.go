@@ -81,12 +81,13 @@ func (s *rowlessService) args(dir string, extra ...string) []string {
 }
 
 // unjournaled is --no-journal where a journaled run is refused (Windows),
-// for a test that needs only a dataset; empty elsewhere.
-var unjournaled = func() []string {
+// for a test that needs only a dataset; empty elsewhere. The flag is swath
+// diag list's, so such a run passes diagList to run.
+var unjournaled, diagList = func() ([]string, bool) {
 	if datasettest.NoJournal() {
-		return []string{"--no-journal"}
+		return []string{"--no-journal"}, true
 	}
-	return nil
+	return nil, false
 }()
 
 func readJSON(t *testing.T, path string, v any) []byte {

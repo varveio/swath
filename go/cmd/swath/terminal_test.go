@@ -217,7 +217,7 @@ func TestReportContinuity(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "r.json")
 		args := append([]string{src, "--endpoint", url, "--path-style", "--anonymous", "-o", filepath.Join(t.TempDir(), "ds"), "--report", file}, extra...)
 		args = append(args, unjournaled...)
-		if err := run(context.Background(), args, &out, false); err != nil {
+		if err := run(context.Background(), args, &out, diagList); err != nil {
 			t.Fatal(err)
 		}
 		var r rep

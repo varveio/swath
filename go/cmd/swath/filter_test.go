@@ -47,7 +47,7 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "r.json")
-	if err := run(context.Background(), append(append(src, "-o", dir, "--exclude", "sub1", "--min-size", "1", "--report", report), unjournaled...), io.Discard, false); err != nil {
+	if err := run(context.Background(), append(append(src, "-o", dir, "--exclude", "sub1", "--min-size", "1", "--report", report), unjournaled...), io.Discard, diagList); err != nil {
 		t.Fatal(err)
 	}
 	var m dataset.Manifest

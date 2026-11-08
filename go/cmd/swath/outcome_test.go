@@ -627,7 +627,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
 		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, false)
+			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, diagList)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)
