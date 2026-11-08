@@ -225,7 +225,7 @@ registers at startup are created when the server starts, so a scrape tells a zer
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
 - **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
   `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
-  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; zero over a SeekParquet dataset, whose module reports no page work, as are the store's page, key and reseek counters) and each
+  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset these meters are absent and the store's page, key, reseek and shortcut counters unset (`Sorted.PageStats` false): the seekparquet module reports no page work, so it is unavailable, not zero) and each
   read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
   (`Config.IndexLoad`, `Config.IndexEntries`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on

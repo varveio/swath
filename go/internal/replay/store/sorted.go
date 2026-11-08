@@ -25,6 +25,9 @@ type Counters struct {
 	// Requests counts Rows and DelimitedRollup calls that read.
 	Requests atomic.Int64
 	// PageDecodes counts data pages decoded (key and value columns).
+	// It and RowsDecoded, Reseeks and GroupShortcuts are kept only when
+	// the fixture's reader reports its page work (Sorted.PageStats): over
+	// a SeekParquet dataset they are unavailable, not zero.
 	PageDecodes atomic.Int64
 	// RowsDecoded counts key values decoded.
 	RowsDecoded atomic.Int64
@@ -62,6 +65,9 @@ type Sorted struct {
 	files    *legacy.FileCache
 	meters   Meters
 	prefetch *prefetcher
+	// pageStats: the reader reports its page work (legacy.Stats); false
+	// over a SeekParquet dataset, whose module does not.
+	pageStats bool
 	// arenaLimit bounds a packed read's arenas; zero is maxPackedArena.
 	// Tests lower it to reach the overflow path without gigabytes.
 	arenaLimit int
@@ -146,9 +152,19 @@ func (s *Sorted) acquire(ctx context.Context) (func(), error) {
 	}, nil
 }
 
+// PageStats reports whether the store measures its page work (the page,
+// key, reseek and shortcut counters and Meters.Rollup): true over a
+// Java-era or format 2 fixture, false over a SeekParquet dataset, whose
+// reader (the seekparquet module) reports none, so those measurements are
+// unavailable rather than zero.
+func (s *Sorted) PageStats() bool { return s.pageStats }
+
 // record adds a read's stats to the counters; a rollup's also go to
-// Meters.Rollup.
+// Meters.Rollup. A reader that reports no page work records nothing.
 func (s *Sorted) record(stats *legacy.Stats, rollup bool) {
+	if !s.pageStats {
+		return
+	}
 	if f := s.meters.Rollup; f != nil && rollup {
 		f(*stats)
 	}
