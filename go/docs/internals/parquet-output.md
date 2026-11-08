@@ -44,9 +44,11 @@ such paths, and the architecture alone does not decide which one a machine takes
   generic code, or on amd64 its SSE kernel. These stop only at a group of eight equal indexes.
 
 Both encodings are valid and decode to the same values. Where a dictionary-encoded column meets such a group,
-its pages, and so the chunk sizes, offsets and part MD5, differ between the two paths. The rows, part
-boundaries, row counts, statistics and the key column's index do not: the key is `DELTA_BYTE_ARRAY`, and
-boundaries are counted in logical bytes. zstd adds no difference: klauspost/compress's encoder has assembly
+its pages, and so the chunk sizes, offsets and part MD5, differ between the two paths. The rows do not. In the
+golden scenarios neither do the part boundaries, row counts, statistics or the key column's index (the key is
+`DELTA_BYTE_ARRAY`), but that is not promised: the router calibrates the limit of later parts from the first
+part's encoded size (`router.go`), and a row group closes on parquet-go's encoded-size estimate (`writer.go`),
+so a size difference near either threshold moves boundaries, and with them counts, statistics and the key index. zstd adds no difference: klauspost/compress's encoder has assembly
 only for match lengths, which return the same values, and the `noasm` tag leaves the bytes unchanged.
 `TestFooterOnlyChange` pins a golden for each path (#305). Pinning the generic path everywhere would take the
 `purego` tag, which slows every parquet-go kernel, so swath does not do it.
