@@ -40,8 +40,11 @@ ETag, storage class, owner id, owner display name, checksum algorithm, checksum 
 part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted SeekParquet dataset
 that `serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
 leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
-unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
-anything is written. On success it prints one line on stdout:
+unknown `row_type` or a key over the cap (1,024 bytes, the S3 limit; `--key-limit` raises it up to 4,096) is
+refused before anything is written. Azure names reach 1,024 UTF-16 units, 3,072 bytes of UTF-8, so a fixture
+for the Azure route that holds them needs `--key-limit 3072`; nothing else on that route is shorter (fields
+4,096 bytes, markers 8,192 characters; `server` `TestAzureServesLongestNames` serves 3,072-byte names and a
+3,072-byte `startFrom`). On success it prints one line on stdout:
 
 ```
 sort_fixture rows=10000 objects=10000 skipped=0 parts=1 bytes=230500 schema=swath-replay/objects/v1 wall_ms=40 output=/data/sorted
