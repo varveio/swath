@@ -5,6 +5,7 @@ package dataset
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -314,40 +315,58 @@ func TestManifestShape(t *testing.T) {
 }
 
 // TestManifestLimitsReadSwathsLargest: every manifest swath can write reads
-// back. The largest, MaxParts parts with keys at manifestKeyBytes, fits
-// ManifestLimits (measured from a written part entry, not built whole), and
-// 30,000 one-row parts of 1,024-byte keys, past the module's default 64 MiB,
-// parse.
+// back. A part entry written at manifestKeyBytes is within its price in
+// ManifestLimits (two base64 bounds and 1 KiB), so MaxParts of them and
+// 1 MiB for the rest fit; and 30,000 one-row parts of 1,024-byte keys, past
+// the module's default 64 MiB, parse.
 func TestManifestLimitsReadSwathsLargest(t *testing.T) {
-	manifest := func(parts, keyBytes int) []byte {
+	part := func(i, keyBytes int) ManifestPart {
+		lo := []byte(strings.Repeat("\xff", keyBytes))
+		copy(lo, fmt.Sprintf("%08d", 2*i))
+		hi := slices.Clone(lo)
+		copy(hi, fmt.Sprintf("%08d", 2*i+1))
+		return ManifestPart{Path: DataDir + "/" + PartName(i),
+			PartInfo: PartInfo{Rows: 1 << 40, Bytes: 1 << 40, MinKey: Key(lo), MaxKey: Key(hi), SHA256: strings.Repeat("f", 64)}}
+	}
+	manifest := func(parts ...ManifestPart) []byte {
 		t.Helper()
-		m := Manifest{Format: seekparquet.Format, DraftRevision: int(seekparquet.DraftRevision), SchemaID: "x/v1", Key: seekparquet.Key{Column: KeyColumn, Unique: true},
-			Coverage: Coverage{Exclusions: []string{}, Filters: []string{}}, Parts: make([]ManifestPart, parts)}
-		for i := range m.Parts {
-			lo := []byte(strings.Repeat("\xff", keyBytes))
-			copy(lo, fmt.Sprintf("%08d", 2*i))
-			hi := slices.Clone(lo)
-			copy(hi, fmt.Sprintf("%08d", 2*i+1))
-			m.Parts[i] = ManifestPart{Path: DataDir + "/" + PartName(MaxParts-parts+i),
-				PartInfo: PartInfo{Rows: 1 << 40, Bytes: 1 << 40, MinKey: Key(lo), MaxKey: Key(hi), SHA256: strings.Repeat("f", 64)}}
-		}
-		b, err := json.Marshal(m)
+		b, err := json.Marshal(Manifest{Format: seekparquet.Format, DraftRevision: int(seekparquet.DraftRevision), SchemaID: "x/v1",
+			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Coverage: Coverage{Exclusions: []string{}, Filters: []string{}}, Parts: parts})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return b
 	}
-	one, two := manifest(1, manifestKeyBytes), manifest(2, manifestKeyBytes)
-	entry := int64(len(two) - len(one))
-	if largest := int64(len(one)) + (MaxParts-1)*entry; largest > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
-		t.Fatalf("the largest manifest, %d bytes of %d parts, is past ManifestLimits %+v", largest, MaxParts, ManifestLimits)
+	entry := int64(len(manifest(part(0, manifestKeyBytes), part(1, manifestKeyBytes))) - len(manifest(part(0, manifestKeyBytes))))
+	price := 2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes)) + 1<<10
+	if entry > price || MaxParts*price+1<<20 > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
+		t.Fatalf("a part entry at %d-byte keys is %d bytes, priced %d; ManifestLimits %+v", manifestKeyBytes, entry, price, ManifestLimits)
 	}
-	b := manifest(30_000, 1024)
-	if len(b) <= 64<<20 {
-		t.Fatalf("%d bytes: not past the module's default", len(b))
+	// The trigger, written as JSON directly (MarshalManifest would check
+	// it again): one parse.
+	head := manifest()
+	i := bytes.Index(head, []byte(`"parts":[]`))
+	if i < 0 {
+		t.Fatalf("no empty parts member in %s", head)
+	}
+	var b bytes.Buffer
+	b.Write(head[:i])
+	b.WriteString(`"parts":[`)
+	for n := range 30_000 {
+		p := part(n, 1024)
+		if n > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"path":"` + p.Path + `","rows":1,"bytes":1,"min_key_base64":"` + base64.StdEncoding.EncodeToString([]byte(p.MinKey)) +
+			`","max_key_base64":"` + base64.StdEncoding.EncodeToString([]byte(p.MaxKey)) + `","sha256":"` + p.SHA256 + `"}`)
+	}
+	b.WriteByte(']')
+	b.Write(head[i+len(`"parts":[]`):])
+	if b.Len() <= 64<<20 {
+		t.Fatalf("%d bytes: not past the module's default", b.Len())
 	}
 	var m Manifest
-	if err := json.Unmarshal(b, &m); err != nil || len(m.Parts) != 30_000 {
+	if err := m.UnmarshalJSON(b.Bytes()); err != nil || len(m.Parts) != 30_000 {
 		t.Fatalf("30,000 parts: %d read, %v", len(m.Parts), err)
 	}
 }
