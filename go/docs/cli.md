@@ -728,7 +728,8 @@ began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
 `accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
 `requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
-drain's tail once listing is done ([internals/ordering.md](internals/ordering.md), every field in
+drain: its tail once listing is done, and the drainer's times over the whole run
+([internals/ordering.md](internals/ordering.md), every field in
 [internals/counters.md](internals/counters.md)): `tail_ns`,
 `worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
 `order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,

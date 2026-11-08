@@ -200,10 +200,11 @@ work-stealing finishes ranges in roughly key-uniform order, so most rows wait ah
 until the leftmost range ends, and are then replayed in order. `timings.listing_done_at` is when the provider
 finished; `listing_finished_at` when the order stage ended; `resources.drain.tail_ns` the interval between, the
 part of the run in which only the drain was left. In it idle workers read and decode spilled frames ahead of
-the drainer (`resources.drain.read_ahead`) and more encoders are admitted (above). Where the tail goes:
+the drainer (`resources.drain.read_ahead`) and more encoders are admitted (above). What the drainer did:
 `replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders, with
-`encoder_wait_ns`), and the workers' `worker_idle_after_listing_done_ns`. A tail that is most of the run with
-`sink_write_ns` most of the tail is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
+`encoder_wait_ns`), over the whole run, not the tail alone; and in the tail, the workers'
+`worker_idle_after_listing_done_ns`. A tail that is most of the run with `sink_write_ns` most of the drainer's
+time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 
 | Signal | Healthy | Act when |
 |---|---|---|

@@ -372,10 +372,12 @@ known before it reaches them, and idle workers read them ahead of it (`order/rea
   every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
   (`TestReadAheadCancelMidReplay`).
 
-The report's `resources.drain.read_ahead` and the drainer's split of `tail_ns` (fields in
-[counters.md](counters.md)) say where the tail went: a drainer whose `sink_write_ns` dominates is bound by the
-sink, one whose `replay_read_ns` or `ahead_wait_ns` does, by the spill read-back. On one processor the drainer
-may replay every frame before an idle worker is scheduled: `drainer_frames` then counts them all.
+The report's `resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
+`order_check_ns`, `sink_write_ns`; fields in [counters.md](counters.md)) say what the drainer spent its time
+on. The drainer's times accumulate over the whole run, not the tail alone, so they split `tail_ns` only to the
+extent that the tail is most of the run: then a drainer whose `sink_write_ns` dominates is bound by the sink,
+one whose `replay_read_ns` or `ahead_wait_ns` does, by the spill read-back. On one processor the drainer may
+replay every frame before an idle worker is scheduled: `drainer_frames` then counts them all.
 
 ### Segments: parts written in parallel after listing
 
