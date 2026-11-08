@@ -744,9 +744,18 @@ this MinIO answered every `start-after` inside `1950census/` with an empty page 
 when the `start-after` was a stored key. `1950census/` sorts after its siblings `1950census-descriptions/`
 and `1950census-maps/`. A sequential continuation-token listing returned all 250,000 keys in order. swath
 splits ranges by `start-after`, so it listed 107,651 keys and lost the 142,349 under `1950census/` without
-an error, identically on every run. A three-key bucket of the same shape did not reproduce it. A service
-that answers a bound inside the bucket with an empty final page is indistinguishable from an empty range,
-so the campaign's MinIO fixture is a list without that shape. The key-file oracle is what caught the loss.
+an error, identically on every run. A three-key bucket of the same shape did not reproduce it.
+
+The key-file oracle is what caught the loss. A review of swath's requests found no construction fault: a
+`start-after` is sent only without a continuation token, data queries carry no delimiter, and values are
+percent-encoded once, slashes included. `bench/minio_start_after.sh` reproduces the empty page with
+curl-signed requests alone, no swath and no SDK (re-run 2026-11-08 against the pinned image). A prefix
+query lists `1950census/43290879-Alabama/…-0001.jpg` first, yet `start-after=1950census/` and
+`start-after=` that stored key both return `KeyCount=0 IsTruncated=false`.
+
+swath trusts a page that is not truncated as the end of its range
+([providers.md](internals/providers.md#range-engine-internalsourcekeyrange)), so the campaign's MinIO fixture
+is a list without that shape.
 
 ## Smoke runs only
 
