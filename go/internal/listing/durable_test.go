@@ -409,10 +409,14 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 					}
 					return nil
 				})
-				_, err := Run(context.Background(), durableConfig(url, dir, true))
+				sum, err := Run(context.Background(), durableConfig(url, dir, true))
 				restore()
 				if seen.Load() < nth || !errors.Is(err, faults.ErrCrash) {
-					t.Fatalf("interruption %d at %s#%d not reached (%d seen): %v", i+1, point, nth, seen.Load(), err)
+					var r any
+					if sum.Resources.Spill.Durable != nil {
+						r = sum.Resources.Spill.Durable.Resume
+					}
+					t.Fatalf("interruption %d at %s#%d not reached (%d seen): %v; resume: %+v", i+1, point, nth, seen.Load(), err, r)
 				}
 				if errors.Is(err, journal.ErrCorrupt) {
 					t.Fatalf("%s: the part journal refused: %v", point, err)
