@@ -25,13 +25,16 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `crash` | `-run '^TestCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm |
 | `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm |
 | `listing-rest` | `-skip` the two patterns above, `./internal/listing` | ubuntu-24.04-arm |
-| `cmd` | `./cmd/swath` | ubuntu-24.04-arm |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm |
+| `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm |
 | `rest` | every package no row names (a new package lands here) | ubuntu-latest |
 
 A package split across rows has a remainder row that `-skip`s the union of its other rows' `-run`
 patterns, so the split is complete and disjoint by construction; `--check` also lists the package's tests
-and fails when a pattern selects none or a test is selected twice. The heavy shards run on arm64, where the
-same `-race` suite took about 30 % less time than on amd64. To find a failure, open the red
+and fails when a pattern selects none or a test is selected twice. The rule for the race lane: per push,
+`internal/listing` and `cmd/swath` are raced on arm64 only, whose weaker memory model makes it the better
+race target (and where the same `-race` suite took about 30 % less time than on amd64); the nightly full,
+unsharded race run on amd64 covers the other architecture. To find a failure, open the red
 `go-race (SHARD)` leg: its test step prints the exact `go test` command, which reruns that shard locally from
 `go/`; `scripts/ci/go-race-shards.sh SHARD` prints the arguments alone. To repeat one test on a chosen OS,
 use `go-stress.yml`.

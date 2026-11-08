@@ -13,9 +13,10 @@
 # select at least one test and no test may be selected twice. Patterns are anchored and use
 # only the syntax Go's RE2 and grep -E agree on.
 #
-# The heavy shards run on the arm64 runner: the same -race suite took ~30 % less time there
-# than on amd64 (internal/listing 490 s against 700 s). `rest` stays on amd64, so each push still
-# races part of the tree on both architectures.
+# The heavy shards race on the arm64 runner only: its weaker memory model makes it the better
+# race target, and the same -race suite took ~30 % less time there than on amd64
+# (internal/listing 490 s against 700 s). The nightly full, unsharded race run on amd64 covers
+# the other side. `rest` stays on amd64.
 set -euo pipefail
 
 arm=ubuntu-24.04-arm
@@ -25,6 +26,7 @@ table=(
   "crash        $arm ./internal/listing ^TestCrashMatrix\$"
   "durable      $arm ./internal/listing ^(TestDurable.*|TestDiskFaultMatrix)\$"
   "listing-rest $arm ./internal/listing -"
+  "cmd-kill     $arm ./cmd/swath        ^(TestSIGKILL.*|TestForcedExit.*)\$"
   "cmd          $arm ./cmd/swath        -"
   "rest         $amd -                  -"
 )
