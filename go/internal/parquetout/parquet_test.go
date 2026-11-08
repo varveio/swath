@@ -4,6 +4,7 @@
 package parquetout
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -14,7 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/klauspost/compress/zstd"
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
@@ -52,7 +55,9 @@ func testRows(n int, seed int64) []row {
 
 func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part {
 	t.Helper()
-	w, err := create(nil, path, &testSchema, columns, func() int { return columns }, "")
+	c := newCodec(columns)
+	defer c.Close()
+	w, err := create(nil, path, &testSchema, c, func() int { return columns }, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,25 +86,40 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 
 func route(t *testing.T, rows []row, encoders int, partSize int64) (string, []dataset.Part) {
 	t.Helper()
-	out := t.TempDir()
+	out, parts, _, _ := routeAdmit(t, rows, encoders, 0, -1, partSize)
+	return out, parts
+}
+
+// routeAdmit is route with MaxEncoders max, Admit called after the
+// admitAt-th Write (never when negative), with the zstd states the shared
+// codec made before Admit and by Close.
+func routeAdmit(t *testing.T, rows []row, encoders, maxEnc, admitAt int, partSize int64) (out string, parts []dataset.Part, before, after int) {
+	t.Helper()
+	out = t.TempDir()
 	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewRouter(Options{Out: out, PartSize: partSize, Encoders: encoders}, &testSchema)
+	r, err := NewRouter(Options{Out: out, PartSize: partSize, Encoders: encoders, MaxEncoders: maxEnc}, &testSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < len(rows); i += 1500 {
+		if i/1500 == admitAt {
+			before = r.codec.states()
+			if n := r.Admit(); n != max(encoders, maxEnc) {
+				t.Fatalf("admitted %d, want %d", n, max(encoders, maxEnc))
+			}
+		}
 		segs := [][]row{rows[i:min(i+700, len(rows))], rows[min(i+700, len(rows)):min(i+1500, len(rows))]}
 		if err := r.Write(context.Background(), segs); err != nil {
 			t.Fatal(err)
 		}
 	}
-	parts, err := r.Close()
+	parts, err = r.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out, parts
+	return out, parts, before, r.codec.states()
 }
 
 func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
@@ -136,6 +156,43 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 		if got := readKeys(t, parts); !slices.Equal(got, keysOf(rows)) {
 			t.Fatalf("enc=%d: keys differ after round trip", enc)
 		}
+	}
+}
+
+// TestRouterAdmitIsByteIdentical: encoders admitted mid-run (as once
+// listing has ended) change neither the parts' boundaries nor their bytes,
+// and the router honours its raised count. Its shared codec makes no more
+// zstd states than encoders admitted: before Admit, with MaxEncoders above
+// Encoders, at most Encoders; after, at most MaxEncoders. Whether a run
+// needs more than one state depends on how many compressions overlap (none
+// at GOMAXPROCS 1): TestCodecLeasesFollowLimit forces the overlap. A pool
+// of MaxEncoders handed round in turn warmed every state during listing,
+// past what admission had charged (sol review 3, P2: 148.5 MiB live
+// against 122.2 MiB priced at MaxEncoders 6).
+func TestRouterAdmitIsByteIdentical(t *testing.T) {
+	rows := testRows(60_000, 2)
+	_, base := route(t, rows, 1, 16<<10)
+	_, parts, before, after := routeAdmit(t, rows, 2, 6, 20, 16<<10)
+	if before > 2 || after > 6 {
+		t.Fatalf("%d states before admission (2 admitted), %d after (6)", before, after)
+	}
+	if len(parts) != len(base) {
+		t.Fatalf("%d parts vs %d", len(parts), len(base))
+	}
+	for i := range parts {
+		if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+			t.Fatalf("part %d differs", i)
+		}
+	}
+	r, err := NewRouter(Options{Out: t.TempDir(), PartSize: 1 << 20, Encoders: 2, MaxEncoders: 5}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Encoders() != 2 || r.Admit() != 5 || r.Admit() != 5 || r.Encoders() != 5 {
+		t.Fatalf("encoders %d after admission", r.Encoders())
+	}
+	if _, err := r.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -336,6 +393,133 @@ func TestKeyLimits(t *testing.T) {
 	lo, hi := ci.MinValue(0).ByteArray(), ci.MaxValue(0).ByteArray()
 	if len(lo) > 1024 || len(hi) > 1024 || string(lo) > rows[0].Key || string(hi) < rows[1].Key[:len(hi)] {
 		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
+	}
+}
+
+// TestLowerEncoderMemIsByteIdentical: the codec's states run with zstd's
+// lower encoder memory (a history of one window plus a block instead of
+// two windows: about 8 MiB less per state once a page passes one block),
+// which changes allocation only: every page, of one block or many, random
+// or repetitive, compresses to the same bytes as with the default.
+func TestLowerEncoderMemIsByteIdentical(t *testing.T) {
+	low, err := newState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false),
+		zstd.WithZeroFrames(true), zstd.WithAllLitEntropyCompression(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewSource(3))
+	for _, n := range []int{0, 1, 1000, 100 << 10, 128 << 10, 129 << 10, 1 << 20, 3<<20 + 7, 4 << 20, 8 << 20, 9 << 20} {
+		for _, kind := range []string{"random", "letters", "repeats"} {
+			src := make([]byte, n)
+			for i := range src {
+				switch kind {
+				case "random":
+					src[i] = byte(r.Uint32())
+				case "letters":
+					src[i] = byte('a' + r.Intn(26))
+				default:
+					src[i] = byte(i % 251 / 7)
+				}
+			}
+			a, b := low.EncodeAll(src, nil), def.EncodeAll(src, nil)
+			if !bytes.Equal(a, b) {
+				t.Fatalf("%d bytes %s: %d compressed with lower memory, %d without, or they differ", n, kind, len(a), len(b))
+			}
+		}
+	}
+}
+
+// TestCodecLeasesFollowLimit: leases held at once (the overlap forced,
+// not left to scheduling) make states up to the limit and no further: a
+// lease past it waits (observed for 50 ms) until one is returned, or until
+// setLimit raises the limit, which then makes the states asked for. Before (sol review 4, P3), the admission test
+// asserted growth from a run whose compressions need not overlap, and
+// failed at GOMAXPROCS 1.
+func TestCodecLeasesFollowLimit(t *testing.T) {
+	c := newCodec(2)
+	defer c.Close()
+	var held []*zstd.Encoder
+	lease := func() {
+		e, err := c.take()
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, e)
+	}
+	lease()
+	lease()
+	if c.states() != 2 {
+		t.Fatalf("%d states for 2 leases", c.states())
+	}
+	got := make(chan *zstd.Encoder, 4)
+	go func() {
+		e, _ := c.take()
+		got <- e
+	}()
+	select {
+	case <-got:
+		t.Fatal("a third lease past the limit of 2 did not wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.setLimit(6) // admission: the waiting lease makes a state
+	held = append(held, <-got)
+	lease()
+	lease()
+	lease()
+	if c.states() != 6 {
+		t.Fatalf("%d states for 6 leases at a limit of 6", c.states())
+	}
+	go func() {
+		e, _ := c.take()
+		got <- e
+	}()
+	select {
+	case <-got:
+		t.Fatal("a seventh lease past the limit of 6 did not wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.give(held[0]) // a returned state is reused, none made
+	if e := <-got; e != held[0] || c.states() != 6 {
+		t.Fatalf("the waiting lease got another state (%d made)", c.states())
+	}
+	for _, e := range held[1:] {
+		c.give(e)
+	}
+	c.give(held[0])
+}
+
+// TestValueLimits: a column with a Spec.MaxBytes (a local path's link
+// target, PATH_MAX) is held to it as the key is to its cap: a longer
+// value stops the part with the typed schema.ErrValueTooLong, a value at
+// the limit (any bytes) is taken. Before (sol review 4, P2) the limit
+// only priced admission, and a longer value was written past the price.
+func TestValueLimits(t *testing.T) {
+	s := testSchema
+	s.Columns = slices.Clone(testSchema.Columns)
+	for i := range s.Columns {
+		if s.Columns[i].Name == "link_target" {
+			s.Columns[i].MaxBytes = 16
+		}
+	}
+	write := func(link string) error {
+		c := newCodec(1)
+		defer c.Close()
+		w, err := create(nil, filepath.Join(t.TempDir(), "x.parquet"), &s, c, func() int { return 1 }, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.abort()
+		return w.write(&row{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}})
+	}
+	if err := write(strings.Repeat("\xff", 16)); err != nil {
+		t.Fatalf("a value at the limit: %v", err)
+	}
+	if err := write(strings.Repeat("a", 17)); !errors.Is(err, schema.ErrValueTooLong) {
+		t.Fatalf("a value over the limit: %v", err)
 	}
 }
 

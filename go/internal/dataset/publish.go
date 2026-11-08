@@ -55,6 +55,21 @@ type Part struct {
 	PartInfo
 }
 
+// SegmentPlan is a sink's cut rule for the rows still to come, as the
+// order stage cuts the rest into segments with it (order.Segmenter; the
+// Parquet router's Plan): a part closes after the row whose logical bytes
+// (schema.LogicalBytes) bring it to Limit, or else after MaxRows rows (0:
+// no row cap). Logical and Rows are the open part's so far (Open); Full:
+// the open part is closed before the next row. Encoders is the encoders
+// admitted now; Queue the batches a segment queues to its part.
+type SegmentPlan struct {
+	Limit, MaxRows int64
+	Logical, Rows  int64
+	Open, Full     bool
+	Encoders       int
+	Queue          int
+}
+
 // InvariantError is a violated dataset invariant found by the publication
 // gate: nothing is published.
 type InvariantError struct{ Reason string }

@@ -36,11 +36,77 @@ const (
 	writeQuantum    = 64      // parquet-go's WriteRows batching, kept for identical pages
 )
 
-// EncoderBytes is the working set budgeted per encoder for admission: a
-// row group of groupBytes, page buffers per column and encoding scratch.
-// Measured at about 20 MiB of heap growth for one writer of the 10-column
-// test schema (400,000 rows); rounded up.
-const EncoderBytes = 24 << 20
+// EncoderBytes is the working set admitted per encoder of schema s: one
+// writer's (writerBytes) and one of the router's codec states (stateBytes:
+// the codec is shared by the writers, a state per encoder admitted). It is
+// priced at the longest values the schema allows (its key cap, and each
+// column's schema.Spec.MaxBytes), so it holds whatever the listing.
+func EncoderBytes[P any](s *schema.Schema[P]) int64 {
+	wide := 0
+	for i := range s.Columns {
+		wide += s.Columns[i].MaxBytes
+	}
+	return encoderBytes(s.MaxKeyBytes, wide, len(s.Columns)+1)
+}
+
+// DefaultEncoderBytes prices an encoder of a schema not known yet: keys
+// without a cap, one more wide column of unboundedKeyBytes and 16
+// columns, beyond every provider's schema.
+var DefaultEncoderBytes = encoderBytes(0, unboundedKeyBytes, 16)
+
+// unboundedKeyBytes prices a key without a cap (schema.Info.MaxKeyBytes
+// 0: a local path, at most PATH_MAX on Linux).
+const unboundedKeyBytes = 4096
+
+// The writer's and its codec state's working sets are measurements, not
+// values derived from the libraries: parquet-go v0.32.0 and
+// klauspost/compress v1.19.1 (2026-11-08, live heap after GC after every
+// page of 24 pages a writer, random values at each length). Remeasure on
+// an upgrade of either (TestWriterAdmissionCoversHeap, and the probes in
+// docs/internals/parquet-output.md).
+//   - a codec state that has compressed a page larger than one zstd block
+//     (128 KiB) keeps a history of one 8 MiB window and a block (zstd's
+//     lower encoder memory: twice the window without it), plus its match
+//     tables: about 10.6 MiB measured, 12 priced (bigStateBytes); one that
+//     only saw smaller pages, about 2 MiB (smallStateBytes). A key page is
+//     1,024 keys, so keys over 128 bytes make every state a big one.
+//   - a writer holds its row group's encoded pages (groupBytes, overshot:
+//     the size is checked between pages), a page buffer per column
+//     (pageBufferBytes, grown to the page) and its wide values: the key
+//     about two and a half times over (the page being filled, its delta
+//     encoding), a column with Spec.MaxBytes four times (its dictionary
+//     attempt besides). One S3 writer at 1,024-byte keys measured 13 MiB,
+//     four 15 each (19.5 priced); four filesystem writers at binary
+//     4,096-byte keys and link targets, 24 pages each, 170 MiB in all, and
+//     216 to 218 with 800 MB of rows live beside them (244 priced, 61
+//     each: the margin, 12 %, is over that worst case).
+const (
+	bigStateBytes   = 12 << 20
+	smallStateBytes = 2 << 20
+	zstdBlockBytes  = 128 << 10
+)
+
+// stateBytes is one codec state's working set for pages of at most page
+// bytes; writerBytes one writer's, of columns columns, keys of key bytes
+// and Spec.MaxBytes columns whose widths sum to wide.
+func stateBytes(page int64) int64 {
+	if page > zstdBlockBytes {
+		return bigStateBytes
+	}
+	return smallStateBytes
+}
+
+func writerBytes(key, wide, columns int) int64 {
+	return groupBytes + int64(columns)*pageBufferBytes + 5*int64(pageRows)*int64(key)/2 + 4*int64(pageRows)*int64(wide)
+}
+
+func encoderBytes(maxKey, wide, columns int) int64 {
+	if maxKey <= 0 {
+		maxKey = unboundedKeyBytes
+	}
+	page := int64(pageRows) * int64(max(maxKey, wide))
+	return writerBytes(maxKey, wide, columns) + stateBytes(page)
+}
 
 // Recipe identifies everything about the writer that decides a part's
 // bytes apart from the build: parquet-go v0.32.0, v2 pages of 1,024 rows,
@@ -90,6 +156,7 @@ type writer[P any] struct {
 	out       *tracking
 	w         *pq.GenericWriter[any]
 	codec     *codec
+	capped    []int // the columns with a Spec.MaxBytes, enforced as the key's cap is
 	values    [][]pq.Value
 	page      []schema.Row[P]
 	rows      int64
@@ -100,14 +167,11 @@ type writer[P any] struct {
 	closed    bool
 }
 
-// create opens path for a part. createdBy, if not empty, is the footer's
-// created_by verbatim instead of this build's (a reproduced claimed part's
-// own, Cut.CreatedBy).
-func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], maxColumns int, columns func() int, createdBy string) (*writer[P], error) {
-	c, err := newCodec(max(1, maxColumns))
-	if err != nil {
-		return nil, err
-	}
+// create opens path for a part, compressing with c (the router's, shared
+// by its writers; the writer does not close it). createdBy, if not empty, is the footer's created_by verbatim
+// instead of this build's (a reproduced claimed part's own,
+// Cut.CreatedBy).
+func create[P any](open func(string) (*os.File, error), path string, s *schema.Schema[P], c *codec, columns func() int, createdBy string) (*writer[P], error) {
 	if open == nil {
 		open = func(path string) (*os.File, error) {
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -115,7 +179,6 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	}
 	f, err := open(path)
 	if err != nil {
-		c.Close()
 		return nil, fmt.Errorf("create part: %w", err)
 	}
 	opts := []pq.WriterOption{
@@ -147,6 +210,11 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 		w:    pq.NewGenericWriter[any](out, opts...),
 		page: make([]schema.Row[P], 0, pageRows),
 	}
+	for i := range s.Columns {
+		if s.Columns[i].MaxBytes > 0 && s.Columns[i].Str != nil {
+			w.capped = append(w.capped, i)
+		}
+	}
 	w.values = make([][]pq.Value, len(s.Columns)+1)
 	for i := range w.values {
 		w.values[i] = make([]pq.Value, pageRows)
@@ -159,6 +227,12 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 func (w *writer[P]) write(r *schema.Row[P]) error {
 	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
 		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
+	}
+	for _, c := range w.capped {
+		col := &w.schema.Columns[c]
+		if v, ok := col.Str(&r.Data); ok && len(v) > col.MaxBytes {
+			return fmt.Errorf("%w: %s of %.64q: %d bytes (limit %d)", schema.ErrValueTooLong, col.Name, r.Key, len(v), col.MaxBytes)
+		}
 	}
 	if w.rows > 0 && r.Key <= w.maxKey {
 		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)
@@ -274,7 +348,6 @@ func (w *writer[P]) close() (dataset.Part, error) {
 	if err == nil {
 		err = w.w.Close()
 	}
-	err = errors.Join(err, w.codec.Close())
 	if err == nil {
 		err = faults.Sync(w.file)
 	}
@@ -294,7 +367,6 @@ func (w *writer[P]) close() (dataset.Part, error) {
 func (w *writer[P]) abort() {
 	if !w.closed {
 		w.closed = true
-		_ = w.codec.Close()
 		_ = w.file.Close()
 	}
 }

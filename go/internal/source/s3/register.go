@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -19,7 +20,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
 }
 
 // flagged is the S3 flag group's value: the S3 options and the range
