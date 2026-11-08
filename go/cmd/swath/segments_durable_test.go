@@ -12,10 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -59,10 +62,82 @@ func readSegReport(t *testing.T, at, path string) segReport {
 	return r
 }
 
+// frontierGate holds the frontier of one run: its first listing request
+// (the second from the start of the keyspace: the seed's is the first,
+// as listing's frontierHold) goes unanswered while every other range
+// lists, spills and seals behind a drainer that cannot move. It is
+// released once the run has sealed a durable file and the other ranges
+// have finished: no other listing request in flight or begun for
+// quietFor. Listing then ends within the frontier's own range, the drainer
+// still in it, so the sealed files ahead are the segments' to read. (A
+// 50 ms delay on the first folders' pages left that to timing: under
+// -race on CI the clean run's segments read no durable file.)
+type frontierGate struct {
+	durable  string // the run's durable spill directory
+	starts   atomic.Int64
+	held     atomic.Bool // the frontier's request was held
+	late     atomic.Bool // released by the cap, not by the run's state
+	inFlight atomic.Int64
+	last     atomic.Int64 // when the last other listing request began or ended (UnixNano)
+	release  chan struct{}
+	stop     chan struct{}
+}
+
+const quietFor = 500 * time.Millisecond
+
+func newFrontierGate(out string) *frontierGate {
+	g := &frontierGate{durable: filepath.Join(out, order.DurableDir), release: make(chan struct{}), stop: make(chan struct{})}
+	g.last.Store(time.Now().UnixNano())
+	go g.watch()
+	return g
+}
+
+// watch opens the gate once the frontier is held, a durable file is
+// sealed (named in the ledger's directory as *.spill) and the other ranges
+// are quiet; after two minutes it opens anyway and marks the gate late.
+func (g *frontierGate) watch() {
+	defer close(g.release)
+	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		select {
+		case <-g.stop:
+			return
+		default:
+		}
+		sealed, _ := filepath.Glob(filepath.Join(g.durable, "*.spill"))
+		if g.held.Load() && len(sealed) > 0 && g.inFlight.Load() == 0 && time.Since(time.Unix(0, g.last.Load())) >= quietFor {
+			return
+		}
+	}
+	g.late.Store(true)
+}
+
+// close stops the watch (the run has ended).
+func (g *frontierGate) close() { close(g.stop) }
+
+func (g *frontierGate) serve(h http.Handler, w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("delimiter") == "" && q.Get("start-after") == "" && q.Get("continuation-token") == "" && g.starts.Add(1) == 2 {
+		g.held.Store(true)
+		select {
+		case <-g.release:
+		case <-r.Context().Done(): // a killed run
+			return
+		}
+		h.ServeHTTP(w, r)
+		return
+	}
+	g.inFlight.Add(1)
+	g.last.Store(time.Now().UnixNano())
+	h.ServeHTTP(w, r)
+	g.last.Store(time.Now().UnixNano())
+	g.inFlight.Add(-1)
+}
+
 // TestSegmentsReplayDurableFiles: the segment tail replays durable spill
 // files (order.Cache) by offset, beside run-private ones. A journaled
-// sorted run on the S3 fake whose first folders answer slowly (the ranges
-// ahead spill, capture and seal certificates) and whose row budget leaves
+// sorted run on the S3 fake whose first folder is held until the rest has
+// been served (frontierGate: the ranges ahead spill, capture and seal
+// certificates) and whose row budget leaves
 // room for several segment workers: the clean run engages segments that
 // read durable files, with part boundaries inside their frames. Then runs
 // killed after a seal, after a ledger append, and in a resume's recovery
@@ -81,10 +156,13 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(150000)))
+	var gate atomic.Pointer[frontierGate] // the run's; nil on a resume, which lists only gaps
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if _, ok := q["list-type"]; ok && q.Get("delimiter") == "" && q.Get("continuation-token") == "" && q.Get("start-after") < "d02/" {
-			time.Sleep(50 * time.Millisecond) // the slow frontier
+		if _, ok := r.URL.Query()["list-type"]; ok {
+			if g := gate.Load(); g != nil {
+				g.serve(h, w, r)
+				return
+			}
 		}
 		h.ServeHTTP(w, r)
 	}))
@@ -96,8 +174,19 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	}
 	run := func(at string, cmd *exec.Cmd, kill string, extra ...string) {
 		t.Helper()
+		var g *frontierGate
+		if cmd.Args[1] == "list" {
+			g = newFrontierGate(cmd.Args[slices.Index(cmd.Args, "-o")+1])
+		}
+		gate.Store(g)
 		cmd.Env = append(append(env, extra...), "SWATH_TEST_KILL_AT="+kill)
 		out, err := cmd.CombinedOutput()
+		if g != nil {
+			g.close()
+			if kill == "" && (!g.held.Load() || g.late.Load()) {
+				t.Fatalf("%s: the frontier held %v, released by the cap %v", at, g.held.Load(), g.late.Load())
+			}
+		}
 		if kill == "" {
 			if err != nil {
 				t.Fatalf("%s: %v\n%s", at, err, out)
@@ -145,6 +234,9 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 	run("clean run", exec.Command(bin, args(ref, "--report", report)...), "")
 	r := readSegReport(t, "clean run", report)
 	engaged("clean run", r)
+	if sg := r.Resources.Drain.Segments; sg.Reason != "engaged" || sg.DurableFilesRead < 1 {
+		t.Fatalf("clean run: segments %+v: want engaged over durable files", *sg)
+	}
 	if r.Resources.Drain.Segments.DurableBoundaries < 1 || r.Resources.Spill.Durable.SealedFiles < 1 {
 		t.Fatalf("clean run: %d segment boundaries inside durable frames, %d sealed files: want both", r.Resources.Drain.Segments.DurableBoundaries, r.Resources.Spill.Durable.SealedFiles)
 	}
