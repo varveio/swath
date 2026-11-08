@@ -37,6 +37,21 @@ func (f filtered[P]) Expand(ctx context.Context, r any, e source.Emitter[any, P]
 	return f.p.Expand(ctx, r, filterEmitter[P]{e, f.keep, f.s, f.n})
 }
 
+// Fences and Replay forward the provider's: a fence holds after filtering
+// (it is about the rows the filters keep), and a replay range's rows were
+// filtered when they were listed, so the filters never see them again.
+func (f filtered[P]) Fences() bool {
+	fc, ok := f.p.(source.Fencing)
+	return ok && fc.Fences()
+}
+
+func (f filtered[P]) Replay(r any) (int, bool) {
+	if rp, ok := f.p.(source.Replaying[any]); ok {
+		return rp.Replay(r)
+	}
+	return 0, false
+}
+
 type filteredDisposer[P any] struct {
 	filtered[P]
 	d source.Disposer[any]
@@ -49,6 +64,19 @@ type filterEmitter[P any] struct {
 	keep func(*schema.Row[P]) bool
 	s    *schema.Schema[P]
 	n    *atomic.Int64
+}
+
+// Span and Fence forward to a Fencer emitter.
+func (e filterEmitter[P]) Span(lo, hi string, open bool) {
+	if f, ok := e.Emitter.(source.Fencer); ok {
+		f.Span(lo, hi, open)
+	}
+}
+
+func (e filterEmitter[P]) Fence(x string, top bool) {
+	if f, ok := e.Emitter.(source.Fencer); ok {
+		f.Fence(x, top)
+	}
 }
 
 // Rows keeps the rows the filters accept; a page with none emits nothing.

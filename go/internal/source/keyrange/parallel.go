@@ -34,6 +34,7 @@ const (
 	seed          // delimiter listings of the folder hierarchy that emit the first tiling (of (after, ⊤] on a resume)
 	resume        // (after, ⊤] after a journaled run's last published key, without the seed
 	warm          // the tiling at a prior's cuts (SeedFrom), of (after, ⊤] on a resume
+	reused        // a reused coverage certificate: the order stage replays it (Replay), the engine never lists it
 )
 
 type origin uint8
@@ -108,6 +109,11 @@ type Range struct {
 	// (SlowSplit; 0 unknown). slow: a child of a slow split (slowQueued).
 	lat  float64
 	slow bool
+	// cert is a reused range's certificate (its index in the resume's
+	// spans); gapEnd: hi is a reused certificate's start, so keys listed
+	// past it are boundary overfetch (resume.reuse.boundary_overfetch_keys).
+	cert   int
+	gapEnd bool
 }
 
 // estimate is the range's remainder before its first page: +Inf on the
@@ -247,7 +253,7 @@ func (p *Engine[P]) Root() Range {
 		return Range{kind: warm}
 	case p.opt.Seed:
 		return Range{kind: seed}
-	case p.opt.Resume != nil:
+	case p.opt.Resume != nil || len(p.reuse) > 0:
 		return Range{kind: resume}
 	}
 	return Range{kind: interval, open: true}
@@ -264,8 +270,86 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 		return p.expandPrior(e)
 	case resume:
 		return p.expandResume(e)
+	case reused:
+		return fmt.Errorf("keyrange: reused range %d expanded: only the order stage replays it", r.cert)
 	}
 	return p.expandRange(ctx, r, e)
+}
+
+// Fences reports that the engine declares coverage fences (source.Fencing):
+// every range but the sequential chain, whose one continuation chain is
+// not a range.
+func (p *Engine[P]) Fences() bool { return !p.opt.Sequential }
+
+// Replay reports a reused range's certificate (source.Replaying).
+func (p *Engine[P]) Replay(r Range) (int, bool) { return r.cert, r.kind == reused }
+
+// Reuse lists around reused certificates (source.Reusing): the resume's
+// tiling emits a reused range at each span and lists only the gaps.
+func (p *Engine[P]) Reuse(spans []source.Span) { p.reuse = spans }
+
+// resumeKey is the run's resume key K ("" on a fresh run).
+func (p *Engine[P]) resumeKey() string {
+	if p.opt.Resume == nil {
+		return ""
+	}
+	return p.opt.Resume.After
+}
+
+// aroundReuse cuts tiles, the tiling of (K, ⊤] in key order, around the
+// reused certificates' spans: a span's part above K becomes one reused
+// range, at its position, and each tile keeps only the gaps, its pieces
+// bounded by the spans' edges (a piece starting at the tile's start keeps
+// its bounds, the resume tile's safe start below K included; a prior
+// tile's pieces keep its tile, so their keys count against the prior).
+// Spans are ascending and disjoint, each ending above K. Without spans,
+// tiles.
+func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
+	if len(p.reuse) == 0 {
+		return tiles
+	}
+	k := p.resumeKey()
+	start := func(i int) string { return max(p.reuse[i].Lo, k) }
+	out := make([]Range, 0, len(tiles)+2*len(p.reuse))
+	piece := func(t Range, lo, hi string, open, gapEnd bool) {
+		if !open && hi <= lo {
+			return
+		}
+		g := Range{lo: lo, hi: hi, open: open, id: p.ids.Add(1), born: t.born, gapEnd: gapEnd, tile: t.tile}
+		if lo == max(t.lo, t.after) {
+			g.lo, g.after = t.lo, t.after
+		}
+		out = append(out, g)
+	}
+	ci, begun := 0, false // the next span, and whether its reused range was emitted
+	for _, t := range tiles {
+		pos := max(t.lo, t.after)
+		inside := func(x string) bool { return t.open || x < t.hi }
+		for {
+			if ci < len(p.reuse) && begun {
+				// A span that began in an earlier tile (or at this tile's start).
+				s := p.reuse[ci]
+				if s.HiOpen || !inside(s.Hi) {
+					if !s.HiOpen && !t.open && s.Hi == t.hi {
+						ci, begun = ci+1, false
+					}
+					pos = ""
+					break // the span covers the rest of the tile
+				}
+				pos, ci, begun = s.Hi, ci+1, false
+				continue
+			}
+			if ci < len(p.reuse) && inside(start(ci)) {
+				piece(t, pos, start(ci), false, true)
+				out = append(out, Range{kind: reused, cert: ci, lo: start(ci), hi: p.reuse[ci].Hi, open: p.reuse[ci].HiOpen, id: p.ids.Add(1), born: fromSeed})
+				begun = true
+				continue
+			}
+			piece(t, pos, t.hi, t.open, false)
+			break
+		}
+	}
+	return out
 }
 
 // expandResume hands on (after, ⊤], the rest of the scope after a
@@ -273,7 +357,7 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 // expandSeed tiles the same scope); splits ramp it up as on a fresh run.
 // It lists nothing itself.
 func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
-	after := p.opt.Resume.After
+	after := p.resumeKey()
 	p.lock()
 	t := Range{lo: after, open: true, id: p.ids.Add(1), born: fromSeed}
 	// K is a real key and may not be a bound the provider accepts: start at
@@ -281,12 +365,35 @@ func (p *Engine[P]) expandResume(e source.Emitter[Range, P]) error {
 	if s := p.safeStart(after); s != after {
 		t.lo, t.after = s, after
 	}
+	tiles := p.aroundReuse([]Range{t})
 	p.account(time.Now())
-	p.queued++
+	p.queued += p.queue(tiles)
 	p.c.Max(cMaxQueued, int64(p.queued))
-	p.c.Set(cResumedRanges, 1)
+	p.c.Set(cResumedRanges, int64(len(tiles)))
 	p.unlock()
-	return e.Child(t)
+	for _, t := range tiles {
+		if err := e.Child(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// queue counts tiles' ranges for a worker (a reused range is the order
+// stage's), and the reused ranges and gaps among them; mu held.
+func (p *Engine[P]) queue(tiles []Range) int {
+	n := 0
+	for _, t := range tiles {
+		if t.kind == reused {
+			p.c.Inc(cReuseRanges)
+			continue
+		}
+		n++
+		if len(p.reuse) > 0 {
+			p.c.Inc(cReuseGaps)
+		}
+	}
+	return n
 }
 
 // account integrates the active count over time, and the idle demand
@@ -385,6 +492,21 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
 	head := "" // the first key this range listed
+	// Coverage fences (source.Fencer): the range's logical start, each page
+	// end, the split cursor and the end. llo is above the request bound
+	// after an unsafe resume key, whose keys up to K are dropped; a fence is
+	// declared only at a bound the provider accepts or at K itself.
+	fence, _ := e.(source.Fencer)
+	llo := max(r.lo, r.after)
+	k := p.resumeKey()
+	fenceAt := func(x string, top bool) {
+		if fence != nil && (top || (x >= llo && x >= k && (p.safe(x) || x == k))) {
+			fence.Fence(x, top)
+		}
+	}
+	if fence != nil {
+		fence.Span(llo, r.hi, r.open)
+	}
 	p.maybeProbe(pctx, st, r, c)
 	for {
 		t0 := time.Now()
@@ -464,8 +586,16 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if err := p.emit(out.Rows[:kept], e); err != nil {
 			return err
 		}
+		if done {
+			fenceAt(r.hi, r.open)
+		} else {
+			fenceAt(c, false)
+		}
 		p.lock()
 		p.c.Add(cOverfetchKeys, int64(overfetch))
+		if r.gapEnd && reached {
+			p.c.Add(cReuseBoundaryOverfetch, int64(overfetch))
+		}
 		st.keys += int64(kept)
 		if st.unsplittable {
 			p.c.Add(cUnsplittableKeys, int64(kept))
@@ -518,6 +648,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 				return err
 			}
 			p.covered(r.lo, c, false)
+			fenceAt(c, false)
 			if err := e.Child(lower); err != nil {
 				return err
 			}
@@ -853,7 +984,7 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
 		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
-		stall: stalled(c, m, r, len(p.opt.Prefix))}
+		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
 	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
 	lower.est, lower.estOK = pv.lower, pv.estOK
 	upper.est, upper.estOK = pv.upper, pv.estOK && !r.open

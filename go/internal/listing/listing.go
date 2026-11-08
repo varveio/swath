@@ -169,6 +169,11 @@ type Spill struct {
 	MaxBytes     int64 `json:"max_bytes"`
 	ReserveBytes int64 `json:"reserve_bytes"`
 	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
+	// Durable is the durable spill's account (nil when it was off: no
+	// journal, a version 7 journal, a provider without fences, a spill cap
+	// below 16 MiB); DurableOff says why it was off when it could have run.
+	Durable    *order.DurableReport `json:"durable,omitempty"`
+	DurableOff string               `json:"durable_off,omitempty"`
 	// Dir is the spill directory; FSType the filesystem it is on (Linux:
 	// tmpfs, ext4, xfs, ...; empty where it is not read). A spill on tmpfs
 	// is held in memory, outside peak_rss_bytes.
@@ -549,6 +554,12 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		// stage has removed its spill files, after success or failure.
 		defer os.RemoveAll(scratch)
 	}
+	// The cache is closed however the attempt ends, a failed Start
+	// included (it holds the ledger's descriptor; closing writes nothing).
+	defer jr.closeCache(false)
+	if err := a.startCache(&oopt, src, cancel); err != nil {
+		return a.sum.failed(err)
+	}
 	env.Order = oopt
 	var dropped atomic.Int64
 	env.Filter, env.Filtered = cfg.Filter, &dropped
@@ -598,6 +609,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		err = a.settleText(text, err)
 	}
 	if router == nil && cfg.Output.Dir != "" && err != nil {
+		a.closeCache(false)
 		return a.sum.failed(err) // the router could not start: nothing was written
 	}
 	if cfg.Output.Dir != "" && oopt.SpillDir != "" && jr.verify() == nil {
@@ -613,7 +625,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	// Rows the filters dropped were listed but never reached the order
 	// stage.
 	a.sum.Output.RowsFiltered = dropped.Load()
-	want := src.Listed() - a.sum.Output.RowsFiltered
+	// Replayed rows were listed by an earlier attempt: they reach the order
+	// stage without the provider (live_emitted - live_filtered +
+	// replayed_above_K = received).
+	want := src.Listed() - a.sum.Output.RowsFiltered + ost.ReplayedRows
 	if err != nil {
 		return a.fail(err)
 	}
@@ -758,11 +773,12 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 	if cfg.Output.Dir != "" {
 		spill := filepath.Join(cfg.Output.Dir, dataset.JournalDir, "spill")
 		// Reclaim a crashed run's orphans (the output lock is held), with
-		// spill on or off.
+		// spill on or off; a recovered durable spill stays (its directory
+		// is the cache's).
 		if err := jr.verify(); err != nil {
 			return oopt, "", err
 		}
-		if err := os.RemoveAll(spill); err != nil && cfg.Warn != nil {
+		if err := removeSpill(spill, jr.cacheOf() != nil); err != nil && cfg.Warn != nil {
 			cfg.Warn(fmt.Sprintf("a previous run's spill files could not be removed: %v", err))
 		}
 		if !cfg.Limits.Spill.Off {
@@ -795,6 +811,28 @@ func orderOptions(cfg Config, jr *runJournal, budget int64, shared *order.Shared
 		}
 	}
 	return oopt, scratch, nil
+}
+
+// removeSpill removes the spill directory, or with keep every entry in it
+// but the durable spill's.
+func removeSpill(spill string, keep bool) error {
+	if !keep {
+		return os.RemoveAll(spill)
+	}
+	ents, err := os.ReadDir(spill)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	for _, e := range ents {
+		if e.Name() != filepath.Base(order.DurableDir) {
+			errs = append(errs, os.RemoveAll(filepath.Join(spill, e.Name())))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // textScratch makes the scratch directory of one attempt writing the text
@@ -855,6 +893,81 @@ func (a *attempt) settleText(text *textout.Out, err error) error {
 	return err
 }
 
+// startCache starts the attempt's durable spill (its flusher), with the
+// certificate cap of the spill cap in effect, and hands the provider the
+// reused certificates to list around. Durable spill engages only with
+// spill on, a provider that declares fences and lists around reused
+// certificates; otherwise every certificate a recovery accepted is
+// retired (relisted) and no slot opens (cap 0).
+func (a *attempt) startCache(oopt *order.Options, src registry.Source, cancel context.CancelCauseFunc) error {
+	c := a.jr.cacheOf()
+	if c == nil {
+		return nil
+	}
+	f, fences := src.(source.Fencing)
+	ru, reusing := src.(source.Reusing)
+	slots := order.CertificateCap(oopt.SpillMax)
+	switch {
+	case oopt.SpillDir == "":
+		slots = 0
+	case !fences || !f.Fences() || !reusing:
+		slots, a.jr.off = 0, "the provider declares no coverage fences"
+	case slots == 0:
+		a.jr.off = "the spill budget (--spill-budget) is below 16 MiB"
+	}
+	if err := c.Start(slots, oopt.SpillMax, func(err error) { cancel(err) }); err != nil {
+		return err
+	}
+	if slots == 0 {
+		return nil
+	}
+	oopt.Durable = c
+	spans := c.Spans()
+	if len(spans) > 0 {
+		ss := make([]source.Span, len(spans))
+		for i, s := range spans {
+			ss[i] = source.Span{Lo: s.Lo, Hi: s.Hi, HiOpen: s.HiOpen}
+		}
+		ru.Reuse(ss)
+	}
+	c.Gaps(gaps(spans, a.jr.after()))
+	return nil
+}
+
+// gaps is the number of live gaps a resume lists: the pieces of (K, ⊤]
+// outside spans (ascending, disjoint, each ending above K).
+func gaps(spans []order.Span, k *string) int {
+	pos, open := "", true // the start of the current gap; open: (pos, ⊤] still to cover
+	if k != nil {
+		pos = *k
+	}
+	n := 0
+	for _, s := range spans {
+		if s.Lo > pos {
+			n++
+		}
+		if s.HiOpen {
+			open = false
+			break
+		}
+		pos = s.Hi
+	}
+	if open {
+		n++
+	}
+	return n
+}
+
+// closeCache closes the attempt's durable spill (runJournal.closeCache, not
+// committed) and puts its account in the report.
+func (a *attempt) closeCache(committed bool) error {
+	err := a.jr.closeCache(committed)
+	if sp := a.sum.Resources.Spill; sp != nil && a.jr.cacheOf() != nil {
+		sp.Durable = a.jr.cache.Report()
+	}
+	return err
+}
+
 // account puts the order stage's and the router's resources in the report.
 func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	res := &a.sum.Resources
@@ -866,7 +979,10 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	if oopt.SpillDir != "" {
 		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
-			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir))}
+			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
+		if c := a.jr.cacheOf(); c != nil && ost.Durable {
+			res.Spill.Durable = c.Report()
+		}
 	}
 	res.PeakAheadRows, res.FrontierStuckMaxNs = ost.PeakAhead, int64(ost.FrontierStuck)
 	res.PeakNodes, res.PeakMarkers = ost.PeakNodes, ost.PeakMarkers
@@ -912,6 +1028,13 @@ func (a *attempt) fail(err error) (Report, error) {
 	}
 	if a.router != nil {
 		a.router.Abort()
+	}
+	if errors.Is(err, faults.ErrCrash) {
+		a.jr.cacheOf().Abort(err) // a kill leaves the durable spill as it is
+	} else if cerr := a.closeCache(false); cerr != nil && !errors.Is(err, cerr) {
+		err = fmt.Errorf("%w (durable spill: %w)", err, cerr)
+	}
+	if a.router != nil {
 		// A crash leaves the output as a kill would; a journaled run
 		// keeps its temporary parts too: one may be recorded already
 		// (its rename failed), and -resume decides which are.
@@ -934,6 +1057,11 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 	closed := time.Now()
 	drain := closed.Sub(listed).Milliseconds()
 	sum.Timings.DrainMs = &drain
+	// Retirement outlives publication: the cache closes after the router
+	// (its last part records may retire files), before the manifest.
+	if err := a.closeCache(false); err != nil {
+		return a.fail(err)
+	}
 	if err := jr.unresolved(); err != nil {
 		return a.fail(err)
 	}
@@ -981,6 +1109,10 @@ func (a *attempt) commit(s schema.Info, src registry.Source, listed time.Time) (
 		}
 		a.durable()
 		return sum.failed(fmt.Errorf("publish: %w", err))
+	}
+	// Committed: the durable spill is the dataset's now; its directory goes.
+	if err := jr.closeCache(true); err != nil && cfg.Warn != nil {
+		cfg.Warn("durable spill directory not removed: " + err.Error())
 	}
 	if err := jr.verify(); err != nil {
 		if cfg.Warn != nil {

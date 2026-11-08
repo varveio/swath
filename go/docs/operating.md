@@ -86,7 +86,11 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
-filesystem (spill lives under the output directory, or beside a text file). A text file's scratch directory
+filesystem (spill lives under the output directory, or beside a text file). The spill cap includes the
+durable spill a journaled run keeps for a resume (`DIR/.swath/spill/durable/`): a certified file stays on
+disk, charged to the cap, until the published dataset covers its keys, and when the cap is reached the
+oldest file already consumed is evicted (its keys are then relisted after a crash); the report's
+`resources.spill.durable.retained_bytes` and `peak_retained_bytes` show it. A text file's scratch directory
 is its attempt's own (created exclusively, named for the file and the attempt), so two runs writing sibling
 files, or the same one, never share or remove each other's; the attempt removes it when it ends, after
 success or failure. Only a killed run leaves one behind, with its `.NAME.*.tmp`: delete both. Estimate the dataset from a representative prefix: the
@@ -263,8 +267,22 @@ time.
 
 The resume keeps every published part, verifies each against its journal record (size and MD5: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
-roughly 30-45 minutes; progress shows as `verified_bytes`), then lists again after the last published key.
-Rows listed but not yet in a published part are listed again.
+roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
+Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
+a range that spilled ahead of the frontier sealed its file with a certificate (every row of a key interval,
+as listed), and the resume replays each certificate it can validate instead of listing it, then lists only
+the gaps between them ([internals/ordering.md](internals/ordering.md#durable-spill)). The report says what it
+reused: `resources.spill.durable.resume` (`accepted`, `replayed_rows`, `gaps`, `requests_saved_est`,
+`rejected` by reason).
+
+**Retained observation.** A replayed certificate serves its rows as the interrupted attempt listed them: a key
+deleted from the bucket since stays in the dataset, one added inside a certified interval is missed, and
+metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
+during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
+that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8
+(a run interrupted under an older build resumes as before, relisting), spill on, `--spill-budget` of at least
+16 MiB, and the range engine (S3 and GCS; not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
 billed project), `--fetch-owner`, the schema and the part size are frozen. A resume whose environment or
@@ -379,8 +397,16 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
    whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time), else to stderr,
    cut at 1 MiB.
 4. **`.swath/`**: `lock` (one process per output), `journal` (`swath show --journal`), `parts/` (encoded parts
-   not yet published), `spill/` (disposable; removed by the next run), `suspect/` (a part a resume must
-   reproduce), `progress.json`. Do not edit the journal or its parts by hand.
+   not yet published), `spill/` (disposable spill, removed by the next run, and `spill/durable/`: the
+   certified spill files and their `ledger`, kept for the resume and removed when the dataset commits),
+   `suspect/` (a part a resume must reproduce), `progress.json`. Do not edit the journal or its parts by
+   hand; removing `spill/durable/` only costs a resume the relisting it would have saved.
+
+**What a kill leaves on disk.** A SIGKILL (or an OOM kill, a power loss) leaves the published parts, the
+journal, encoded parts not yet published, the disposable spill (removed by the next run) and the durable
+spill: certified files with their ledger records, and files whose record never reached the ledger. The
+resume validates every recorded file (size, checksums, every frame, its certificate) and unlinks every
+other file; a missing or damaged one is relisted, never an error.
 5. **Profiles:** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` write pprof files.
 
 For a report to the maintainers include `swath --version`, the `--report` file (redact bucket names and keys),

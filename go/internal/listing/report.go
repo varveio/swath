@@ -14,8 +14,9 @@ import (
 // (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
 // count requests.http_attempts in place of cost.api_calls, one row budget),
 // phase times, free_disk_min_bytes and the bounded progress history
-// (go/docs/upgrade.md lists every rename).
-const ReportVersion = 2
+// (go/docs/upgrade.md lists every rename). 3: resources.spill.durable
+// and durable_off (the durable spill's account) and the reuse.* counters.
+const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: readers accept

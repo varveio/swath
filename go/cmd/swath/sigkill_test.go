@@ -7,7 +7,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +22,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -194,6 +198,149 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestSIGKILLDurableSpill makes the real process SIGKILL itself at each of
+// the durable spill's steps (faults.SpillPoints: a durable file's header (with the
+// capture start), later frames and trailer writes, its seal's fsync, the flusher's
+// directory sync, ledger append, ledger sync and unlink), at the first and
+// fourth occurrence, then inside a resume's recovery (faults.
+// RecoveryPoints: the ledger's truncation, the retirements' append, their
+// sync, an unlink, the directory sync, the first recovery replay) on a
+// damaged crashed output that reaches each one; a resume follows, and the
+// parts must equal an uninterrupted run's. The fixture is the durable
+// tests' slow frontier: the first tiles' requests are slow, so the
+// ranges ahead of them spill and seal certificates. Every point must be
+// reached: a run that completes instead fails the test. The fourth-cycle
+// ledger arms are reached by construction: those children run with
+// SWATH_TEST_SERIAL_SEALS, each seal waiting for the earlier seals'
+// ledger cycles, so four seals are four appends however they fall in time.
+// The recovery arms' crashed runs are serialized too, their first part's
+// close held (SWATH_TEST_HANG_AT=part-closed:1: K stays ⊥), and killed at
+// the sixth ledger sync: six seal records are written (five synced), and
+// damageLedger leaves certificates live above K for the recovery replay
+// by construction. Before, they were killed at
+// the first unlink, which fires only once K covers a certificate, and in
+// about one run in six none was left live above K: spill-replay (or its
+// first frame) went unreached.
+func TestSIGKILLDurableSpill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	h := s3test.Handler(s3test.Backend(t, gcstest.Keys(30000)))
+	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if _, ok := q["list-type"]; ok && q.Get("delimiter") == "" && q.Get("continuation-token") == "" && q.Get("start-after") < "d06/" {
+			time.Sleep(50 * time.Millisecond) // the slow frontier
+		}
+		time.Sleep(time.Millisecond)
+		h.ServeHTTP(w, r)
+	}))
+	runtime := []string{"--part-interval=0"}
+	args := func(out string) []string {
+		return append([]string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32",
+			"-part-size", "6KiB", "-row-budget", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
+	}
+	ref := filepath.Join(t.TempDir(), "ref")
+	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
+		t.Fatalf("reference: %v\n%s", err, out)
+	}
+	// killed runs cmd with SWATH_TEST_KILL_AT=at (and env) and requires
+	// the SIGKILL.
+	killed := func(at string, cmd *exec.Cmd, env ...string) {
+		t.Helper()
+		cmd.Env = append(append(os.Environ(), "SWATH_TEST_KILL_AT="+at), env...)
+		out, err := cmd.CombinedOutput()
+		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+			t.Fatalf("%s: not killed there (not reached): %v\n%s", at, err, out)
+		}
+	}
+	resume := func(at, out string) {
+		t.Helper()
+		if o, err := exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s resume: %v\n%s", at, err, o)
+		}
+		sameParts(t, at, ref, out)
+	}
+	for _, point := range faults.SpillPoints {
+		nths := []string{"1", "4"}
+		if point == "spill-dir-sync" {
+			nths = []string{"1", "2"} // spill/ and spill/durable/: two per run
+		}
+		for _, nth := range nths {
+			at := point + ":" + nth
+			out := filepath.Join(t.TempDir(), "ds")
+			killed(at, exec.Command(bin, args(out)...), "SWATH_TEST_SERIAL_SEALS=1")
+			resume(at, out)
+		}
+	}
+	for _, point := range faults.RecoveryPoints {
+		at := "recovery " + point
+		out := filepath.Join(t.TempDir(), "ds")
+		// The first part never closes (SWATH_TEST_HANG_AT holds its close
+		// forever), so no part is published and K stays ⊥, while the
+		// ranges ahead keep spilling and sealing.
+		killed("spill-ledger-sync:6", exec.Command(bin, args(out)...), "SWATH_TEST_SERIAL_SEALS=1", "SWATH_TEST_HANG_AT=part-closed:1")
+		damageLedger(t, out)
+		if k, live := lastKey(t, out), liveCerts(t, out); k != "" || eligibleCerts(live, k) == 0 {
+			t.Fatalf("%s: with the first part held, K is %q and %d of %d live certificates lie above it", at, k, eligibleCerts(live, k), len(live))
+		}
+		killed(point+":1", exec.Command(bin, append(append([]string{"resume"}, runtime...), out)...))
+		resume(at, out)
+	}
+}
+
+// damageLedger damages a killed run's durable spill so a resume's
+// recovery reaches each of its steps: a recorded file removed (retired:
+// the append, sync, unlink and directory sync) and an interior ledger
+// record zeroed with the last one intact (the truncation); the records
+// before it stand (accepted certificates: the recovery replay).
+func damageLedger(t *testing.T, out string) {
+	t.Helper()
+	dir := filepath.Join(out, ".swath", "spill", "durable")
+	path := filepath.Join(dir, "ledger")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var offs []int
+	for off := 0; off+9 <= len(b); off += 8 + int(binary.LittleEndian.Uint32(b[off:])) {
+		offs = append(offs, off)
+	}
+	// The victim must be live in the surviving prefix (a seal with no
+	// retirement after it): killed at the first unlink, the ledger already
+	// holds that file's retirement, and removing a retired file retires
+	// nothing (listing's damagedSnapshot has the flake this avoids).
+	retired := map[string]bool{}
+	for _, off := range offs {
+		if b[off+8] == 'X' {
+			retired[string(b[off+9:off+25])] = true
+		}
+	}
+	victim := -1
+	for i := 1; i+2 < len(offs); i++ {
+		if b[offs[i]+8] != 'S' || retired[string(b[offs[i]+9:offs[i]+25])] {
+			continue
+		}
+		name := hex.EncodeToString(b[offs[i]+9:offs[i]+25]) + ".spill"
+		if os.Remove(filepath.Join(dir, name)) == nil {
+			victim = i
+			break
+		}
+	}
+	if victim < 0 {
+		t.Fatalf("no recorded file to remove among %d ledger frames", len(offs))
+	}
+	lost := len(offs) - 2 // interior (the last frame stays intact), after the victim: the records before it stand
+	if lost <= victim {
+		t.Fatalf("ledger of %d frames: no interior record after the victim's", len(offs))
+	}
+	clear(b[offs[lost]:offs[lost+1]])
+	os.WriteFile(path, b, 0o644)
 }
 
 // sameRows compares the keys of two datasets, in manifest order: parts
