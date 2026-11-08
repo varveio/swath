@@ -53,7 +53,7 @@ func TestMaxRowsRotation(t *testing.T) {
 	}
 	again, _ := routeMaxRows(t, rows, 4, 64<<20, 3000)
 	for i := range parts {
-		if again[i].MD5 != parts[i].MD5 {
+		if again[i].SHA256 != parts[i].SHA256 {
 			t.Fatalf("part %d differs across encoder counts", i)
 		}
 	}
@@ -66,7 +66,7 @@ func TestMaxRowsRotation(t *testing.T) {
 		t.Fatalf("an unbinding row bound changed the parts: %d vs %d, %d cuts", len(loose), len(bySize), cuts)
 	}
 	for i := range loose {
-		if loose[i].MD5 != bySize[i].MD5 {
+		if loose[i].SHA256 != bySize[i].SHA256 {
 			t.Fatalf("part %d differs", i)
 		}
 	}

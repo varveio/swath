@@ -21,6 +21,8 @@ import (
 	"github.com/klauspost/compress/zstd"
 	pq "github.com/parquet-go/parquet-go"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
@@ -62,10 +64,8 @@ func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range rows {
-		if err := w.write(&rows[i]); err != nil {
-			t.Fatal(err)
-		}
+	if err := w.write(rows); err != nil {
+		t.Fatal(err)
 	}
 	p, err := w.close()
 	if err != nil {
@@ -79,8 +79,8 @@ func TestColumnParallelEncodingIsByteIdentical(t *testing.T) {
 	dir := t.TempDir()
 	serial := writeFile(t, filepath.Join(dir, "1"), rows, 1)
 	for _, n := range []int{2, 4, 15} {
-		if p := writeFile(t, filepath.Join(dir, strconv.Itoa(n)), rows, n); p.MD5 != serial.MD5 {
-			t.Fatalf("columns=%d: %s != %s", n, p.MD5, serial.MD5)
+		if p := writeFile(t, filepath.Join(dir, strconv.Itoa(n)), rows, n); p.SHA256 != serial.SHA256 {
+			t.Fatalf("columns=%d: %s != %s", n, p.SHA256, serial.SHA256)
 		}
 	}
 }
@@ -135,14 +135,14 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			t.Fatalf("enc=%d: %d parts vs %d", enc, len(parts), len(base))
 		}
 		for i := range parts {
-			if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+			if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
 				t.Fatalf("enc=%d part %d differs", enc, i)
 			}
 			// The footer carries the SeekParquet stamps and the value
 			// index bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
-			want := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1",
-				dataset.StampSchema: testSchema.ID, dataset.StampKeyColumn: "key", dataset.StampKeyUnique: "true"}
+			want := map[string]string{seekparquet.StampFormatVersion: "0", seekparquet.StampDraftRevision: "1",
+				seekparquet.StampSchemaID: testSchema.ID, seekparquet.StampKeyColumn: "key", seekparquet.StampKeyUnique: "true"}
 			if !maps.Equal(kv, want) {
 				t.Errorf("part %d: footer %q, want %q", i, kv, want)
 			}
@@ -174,7 +174,7 @@ func TestRouterAdmitIsByteIdentical(t *testing.T) {
 		t.Fatalf("%d parts vs %d", len(parts), len(base))
 	}
 	for i := range parts {
-		if parts[i].MD5 != base[i].MD5 || parts[i].Rows != base[i].Rows {
+		if parts[i].SHA256 != base[i].SHA256 || parts[i].Rows != base[i].Rows {
 			t.Fatalf("part %d differs", i)
 		}
 	}
@@ -519,7 +519,7 @@ func TestValueLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.abort()
-		return w.write(&row{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}})
+		return w.write([]row{{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}}})
 	}
 	if err := write(strings.Repeat("\xff", 16)); err != nil {
 		t.Fatalf("a value at the limit: %v", err)

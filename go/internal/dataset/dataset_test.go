@@ -5,6 +5,7 @@ package dataset
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/faults"
 )
@@ -203,13 +207,13 @@ func TestManaged(t *testing.T) {
 		{"data/ alone", map[string]string{DataDir + "/x": ""}, false},
 		{"another tool's manifest with a schema id", map[string]string{ManifestName: `{"schema_id":"other/v1"}`}, false},
 		{"a schemaId manifest", map[string]string{ManifestName: `{"schemaId":"other"}`}, false},
-		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{}}}`}, false},
-		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":null}}}`}, false},
-		{"our format, coverage outside the extension", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":{}}`}, false},
-		{"another producer's SeekParquet dataset", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"other":{"coverage":{}}}}`}, false},
+		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{}}}`}, false},
+		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{"coverage":null}}}`}, false},
+		{"our format, coverage outside the extension", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","coverage":{}}`}, false},
+		{"another producer's SeekParquet dataset", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"other":{"coverage":{}}}}`}, false},
 		{"another format with coverage", map[string]string{ManifestName: `{"format":"other","coverage":{}}`}, false},
 		{"not JSON", map[string]string{ManifestName: `{`}, false},
-		{"our manifest", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
+		{"our manifest", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
 		{"an earlier build's format 2 manifest", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","coverage":{"complete":true}}`}, true},
 		{"format 2 without coverage", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","extensions":{"swath":{"coverage":{}}}}`}, false},
 		{"a lock", map[string]string{Workspace + "/" + LockName: ""}, true},
@@ -242,7 +246,7 @@ func TestManifestShape(t *testing.T) {
 		touch(t, filepath.Join(out, DataDir, "x"))
 		touch(t, TempPath(out, 0))
 		cov := Coverage{Complete: true, StopReason: "completed"}
-		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", MD5: "0123456789abcdef0123456789abcdef"}}
+		part := Part{Path: TempPath(out, 0), PartInfo: PartInfo{Rows: 2, Bytes: 9, MinKey: "a", MaxKey: "b\xff", SHA256: strings.Repeat("0123456789abcdef", 4)}}
 		if err := Publish(out, Meta{SchemaID: id, Groups: groups, Source: Source{Kind: "s3", URI: "s3://b/", Container: "b"}, Scope: Scope{Kind: "whole"}, Coverage: cov}, []Part{part}, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +273,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["parts"], &parts); err != nil {
 			t.Fatal(err)
 		}
-		if len(parts) != 1 || !slices.Equal(slices.Sorted(maps.Keys(parts[0])), []string{"bytes", "max_key_base64", "min_key_base64", "path", "rows"}) ||
+		if len(parts) != 1 || !slices.Equal(slices.Sorted(maps.Keys(parts[0])), []string{"bytes", "max_key_base64", "min_key_base64", "path", "rows", "sha256"}) ||
 			string(parts[0]["max_key_base64"]) != `"Yv8="` {
 			t.Fatalf("parts %s", raw["parts"])
 		}
@@ -277,15 +281,15 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "part_md5", "published_at", "scope", "source"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
 		}
 		var m Manifest
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
-		if !m.Current() || m.Key != (ManifestKey{"key", !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
-			len(m.Parts) != 1 || m.Parts[0].MD5 != part.MD5 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
+		if !m.Current() || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
+			len(m.Parts) != 1 || m.Parts[0].SHA256 != part.SHA256 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
 		}
 	}
@@ -296,7 +300,74 @@ func TestManifestShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(legacy), &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MD5 != "ab" || m.Parts[0].MinKey != "a" || !m.Key.Unique {
+	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MinKey != "a" || !m.Key.Unique {
 		t.Fatalf("format 2 read as %+v", m)
+	}
+	// An earlier build's SeekParquet manifest: MD5 digests under the
+	// extension, none in the parts.
+	earlier := `{"format":"seekparquet","format_version":0,"draft_revision":1,"schema_id":"x/v1","key":{"column":"key","unique":true},
+		"extensions":{"swath":{"published_at":"2026-11-08T18:00:00Z","source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},
+		"coverage":{"complete":true,"stop_reason":"completed"},"part_md5":["0123456789abcdef0123456789abcdef"]}},
+		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ=="}]}`
+	if err := json.Unmarshal([]byte(earlier), &m); err != nil || !m.Current() || !m.Coverage.Complete || m.Parts[0].SHA256 != "" || m.Parts[0].MaxKey != "a" {
+		t.Fatalf("an earlier build's manifest read as %+v: %v", m, err)
+	}
+}
+
+// TestManifestLimitsReadSwathsLargest: every manifest swath can write reads
+// back. A part entry written at manifestKeyBytes is within its price in
+// ManifestLimits (two base64 bounds and 1 KiB), so MaxParts of them and
+// 1 MiB for the rest fit: the proof. (The module's default, 64 MiB, would
+// refuse 30,000 one-row parts of 1,024-byte keys, about 82 MB.) A manifest
+// of 3,000 such parts reads within ManifestLimits, and the same manifest
+// is refused under a limit one byte short of it (ErrLimitExceeded).
+func TestManifestLimitsReadSwathsLargest(t *testing.T) {
+	part := func(i, keyBytes int) ManifestPart {
+		lo := []byte(strings.Repeat("\xff", keyBytes))
+		copy(lo, fmt.Sprintf("%08d", 2*i))
+		hi := slices.Clone(lo)
+		copy(hi, fmt.Sprintf("%08d", 2*i+1))
+		return ManifestPart{Path: DataDir + "/" + PartName(i),
+			PartInfo: PartInfo{Rows: 1 << 40, Bytes: 1 << 40, MinKey: Key(lo), MaxKey: Key(hi), SHA256: strings.Repeat("f", 64)}}
+	}
+	manifest := func(parts ...ManifestPart) []byte {
+		t.Helper()
+		b, err := json.Marshal(Manifest{Format: seekparquet.Format, DraftRevision: int(seekparquet.DraftRevision), SchemaID: "x/v1",
+			Key: seekparquet.Key{Column: KeyColumn, Unique: true}, Coverage: Coverage{Exclusions: []string{}, Filters: []string{}}, Parts: parts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	entry := int64(len(manifest(part(0, manifestKeyBytes), part(1, manifestKeyBytes))) - len(manifest(part(0, manifestKeyBytes))))
+	price := 2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes)) + 1<<10
+	if entry > price || MaxParts*price+1<<20 > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
+		t.Fatalf("a part entry at %d-byte keys is %d bytes, priced %d; ManifestLimits %+v", manifestKeyBytes, entry, price, ManifestLimits)
+	}
+	// Written as JSON directly (MarshalManifest would check it again).
+	head := manifest()
+	i := bytes.Index(head, []byte(`"parts":[]`))
+	if i < 0 {
+		t.Fatalf("no empty parts member in %s", head)
+	}
+	var b bytes.Buffer
+	b.Write(head[:i])
+	b.WriteString(`"parts":[`)
+	for n := range 3_000 {
+		p := part(n, 1024)
+		if n > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"path":"` + p.Path + `","rows":1,"bytes":1,"min_key_base64":"` + base64.StdEncoding.EncodeToString([]byte(p.MinKey)) +
+			`","max_key_base64":"` + base64.StdEncoding.EncodeToString([]byte(p.MaxKey)) + `","sha256":"` + p.SHA256 + `"}`)
+	}
+	b.WriteByte(']')
+	b.Write(head[i+len(`"parts":[]`):])
+	var m Manifest
+	if err := m.UnmarshalJSON(b.Bytes()); err != nil || len(m.Parts) != 3_000 {
+		t.Fatalf("3,000 parts: %d read, %v", len(m.Parts), err)
+	}
+	if _, err := seekparquet.ParseManifest(b.Bytes(), seekparquet.Limits{ManifestBytes: int64(b.Len() - 1)}); !errors.Is(err, seekparquet.ErrLimitExceeded) {
+		t.Fatalf("%d bytes under a limit of %d: %v", b.Len(), b.Len()-1, err)
 	}
 }

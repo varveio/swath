@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
@@ -69,7 +71,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
+	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
 		!m.Coverage.Complete || m.Coverage.SkippedEntries != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
 		t.Fatalf("manifest %+v", m)
 	}

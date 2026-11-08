@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
 // Reserved reports whether name, an entry directly in an output directory,
@@ -53,7 +55,7 @@ func Managed(dir string) bool {
 	coverage := m.Extensions.Swath.Coverage
 	if m.Format == LegacyFormat {
 		coverage = m.Coverage
-	} else if m.Format != Format {
+	} else if m.Format != seekparquet.Format {
 		return false
 	}
 	return len(coverage) > 0 && coverage[0] == '{'
