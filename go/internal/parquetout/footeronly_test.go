@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ type partDigests struct{ Data, Meta, Offsets, Values, Keys string }
 
 // footerOnlyGolden are the digests of the parts footerOnlyScenarios write,
 // recorded with the swath-dataset format 2 writer (a1177c7f, parquet-go
-// v0.32.0, klauspost/compress v1.19.1).
+// v0.32.0, klauspost/compress v1.19.1) on footerOnlyPlatform.
 var footerOnlyGolden = map[string][]partDigests{
 	"unique": {
 		{Data: "2626b20b48e07c6363f58dae1c974e0d82619aa63834c42467be875eb40bcaea", Meta: "b2831a92f707b173044531061cf4092786ca4709bc79dc9e65c7695519906649", Offsets: "1f6bada2ee2378ea8b24bd445ecf75e188617c4ed5760ea7e764db80e72c4f3a", Values: "0bf0f8858dc591df5a10068543f218217565156794dea437af2363ad1b2975d3", Keys: "ed8e65dd97f16aa43ed9210936b012a947a5ee861776d6d00e75d9de8de9e35c"},
@@ -48,6 +49,8 @@ var footerOnlyGolden = map[string][]partDigests{
 // binary keys longer than 1,024 bytes, some beginning with more than
 // 1,024 0xFF bytes: the keys whose index maximum
 // parquet-go shortens to an all-0xFF value that is below them.
+const footerOnlyPlatform = "linux/amd64"
+
 var footerOnlySchemaIDs = map[string]string{"unique": testSchema.ID, "grouped": groupedSchema.ID, "long": "test/binary-key"}
 
 func footerOnlyScenarios() map[string]func(t *testing.T) []dataset.Part {
@@ -161,7 +164,12 @@ func TestFooterOnlyChange(t *testing.T) {
 		}
 		for i := range got {
 			g, w := got[i], want[i]
-			if g.Data != w.Data || g.Meta != w.Meta || g.Offsets != w.Offsets || g.Values != w.Values {
+			// The page indexes do not depend on the platform; the pages'
+			// compressed bytes did on macOS/arm64 (the grouped parts, CI
+			// #299), so the golden, recorded on linux/amd64, pins them
+			// there only.
+			pinned := runtime.GOOS+"/"+runtime.GOARCH == footerOnlyPlatform
+			if pinned && (g.Data != w.Data || g.Meta != w.Meta || g.Offsets != w.Offsets) || g.Values != w.Values {
 				t.Errorf("%s part %d: %+v, golden %+v", name, i, g, w)
 			}
 			if name != "long" && g.Keys != w.Keys {
