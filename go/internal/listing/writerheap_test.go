@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -33,9 +34,19 @@ import (
 // before the two beyond the four admitted were charged, and the price
 // missed the residency of long runs (135.9 MiB against 122.2 at 24 pages)
 // and wide link targets (228.8 against 159.8).
+//
+// The full gate allocates hundreds of megabytes and takes minutes under
+// -race, which also distorts the heap it measures: it runs with
+// SWATH_HEAP_GATES=1 (CI's heap-gate step, without -race). The default
+// run keeps one light arm, one S3 writer over six pages, so the price is
+// still checked on every test run.
 func TestWriterAdmissionCoversHeap(t *testing.T) {
 	if testing.Short() {
-		t.Skip("allocates hundreds of megabytes")
+		t.Skip("allocates tens of megabytes")
+	}
+	if os.Getenv("SWATH_HEAP_GATES") == "" {
+		writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 6)
+		return
 	}
 	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24)
 	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24)
