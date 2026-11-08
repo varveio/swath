@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -258,7 +259,9 @@ func TestFailureSignals(t *testing.T) {
 func TestRetryAfter(t *testing.T) {
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 	for v, want := range map[string]time.Duration{"": 0, "2": 2 * time.Second, "0": 0, "-1": 0, "x": 0,
-		"Sun, 08 Nov 2026 12:00:03 GMT": 3 * time.Second, "Sun, 08 Nov 2026 11:59:00 GMT": 0} {
+		"Sun, 08 Nov 2026 12:00:03 GMT": 3 * time.Second, "Sun, 08 Nov 2026 11:59:00 GMT": 0,
+		"99999999999999999999": time.Duration(math.MaxInt64 / time.Second * time.Second), "9223372036854775807": time.Duration(math.MaxInt64 / time.Second * time.Second),
+		"Fri, 31 Dec 9999 23:59:59 GMT": time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC).Sub(now)} {
 		if got := retryAfter(v, now); got != want {
 			t.Errorf("Retry-After %q: %s, want %s", v, got, want)
 		}
@@ -369,7 +372,7 @@ func TestEncodedNameDecoding(t *testing.T) {
 	// Through the parser, mixed with plain names and prefixes in wire order.
 	body := listHead + `<Blob><Name>a+%</Name></Blob><BlobPrefix><Name Encoded="true">b%2B%25%01/</Name></BlobPrefix>` +
 		`<Blob><Name Encoded="true">c%EF%BF%BE</Name></Blob><Blob><Name>d&amp;&#13;</Name></Blob>` + listTail
-	p, err := parse([]byte(body))
+	p, err := parse(context.Background(), []byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,18 +385,29 @@ func TestEncodedNameDecoding(t *testing.T) {
 			t.Errorf("item %d: %+v, want %+v", i, p.Items[i], want[i])
 		}
 	}
-	if _, err := parse([]byte(listHead + `<Blob><Name Encoded="true">a%G1</Name></Blob>` + listTail)); !errors.Is(err, ErrInvalidPage) {
+	if _, err := parse(context.Background(), []byte(listHead+`<Blob><Name Encoded="true">a%G1</Name></Blob>`+listTail)); !errors.Is(err, ErrInvalidPage) {
 		t.Errorf("malformed escape through the parser: %v", err)
 	}
 }
 
-// TestEnvelopeRetried: a 200 whose body is not an EnumerationResults
-// document (an <Error>, another root, no XML, nothing) is retried like a
-// garbled body, counted as a parse failure, until a real page comes; an
-// empty listing is a legitimate final page.
+// TestEnvelopeRetried: a 200 whose body is not a listing envelope (an
+// <Error>, another root, no XML, nothing, an EnumerationResults without
+// Blobs or with an Error inside, content after its close) is retried like
+// a garbled body, counted as a parse failure, until a real page comes; an
+// empty listing (an empty Blobs) is a legitimate final page.
 func TestEnvelopeRetried(t *testing.T) {
 	bad := []string{"", "\xef\xbb\xbf", "null", "\xef\xbb\xbf<?xml version=\"1.0\"?><Error><Code>InternalError</Code></Error>",
-		"<Other/>", "\xef\xbb\xbf<?xml version=\"1.0\"?>"}
+		"<Other/>", "\xef\xbb\xbf<?xml version=\"1.0\"?>",
+		// the right root, but not a listing: no Blobs, an Error inside,
+		// corruption after the close
+		"\xef\xbb\xbf<EnumerationResults/>",
+		"\xef\xbb\xbf<EnumerationResults><NextMarker /></EnumerationResults>",
+		"\xef\xbb\xbf<EnumerationResults><Error><Code>InternalError</Code></Error></EnumerationResults>",
+		listHead + "</Blobs><Error><Code>InternalError</Code></Error><NextMarker /></EnumerationResults>",
+		listHead + "<Error><Code>InternalError</Code></Error>" + listTail,
+		page("") + "<Blobs>",
+		page("") + "garbage",
+		page("") + "<EnumerationResults><Blobs/></EnumerationResults>"}
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("prefix") == "empty" {
@@ -407,7 +421,7 @@ func TestEnvelopeRetried(t *testing.T) {
 		fmt.Fprint(w, page("", "a"))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: len(bad) + 1, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
 	p, err := c.List(context.Background(), &ListInput{Container: "c"})
 	if err != nil || len(p.Items) != 1 || p.Items[0].Name != "a" {
 		t.Fatalf("page %+v, err %v", p, err)
@@ -422,8 +436,8 @@ func TestEnvelopeRetried(t *testing.T) {
 }
 
 // TestRedirectRefused: a 3xx is a redirect failure, never followed, also
-// through a supplied HTTP client that would follow it; its message names
-// the target without the SAS.
+// through a supplied HTTP client that would follow it; its message never
+// quotes the target, which may carry the SAS.
 func TestRedirectRefused(t *testing.T) {
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -438,7 +452,7 @@ func TestRedirectRefused(t *testing.T) {
 		if Classify(err) != objhttp.ClassRedirect || n.Load() != 1 {
 			t.Errorf("%s: class %q after %d requests (%v)", name, Classify(err), n.Load(), err)
 		}
-		if !strings.Contains(err.Error(), "elsewhere.example") || strings.Contains(err.Error(), "S3cr3t") {
+		if strings.Contains(err.Error(), "elsewhere.example") || strings.Contains(err.Error(), "S3cr3t") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -508,12 +522,12 @@ func TestRequestShape(t *testing.T) {
 }
 
 // TestBodyCap: the cap follows the page size; a body past it is refused,
-// not parsed.
+// not parsed, as a parse failure (retried, never terminal).
 func TestBodyCap(t *testing.T) {
-	if got, want := bodyCap(0), int64(64<<10+5000*(9216+4096)); got != want || bodyCap(9999) != want {
+	if got, want := bodyCap(0), int64(64<<10+5000*(9216+6*16384+2048)); got != want || bodyCap(9999) != want {
 		t.Fatalf("bodyCap(0) %d, want %d", got, want)
 	}
-	if bodyCap(5000) < 45_000_000 || bodyCap(1) != 64<<10+9216+4096 {
+	if bodyCap(5000) < 45_000_000 || bodyCap(1) != 64<<10+9216+6*16384+2048 {
 		t.Fatalf("bodyCap(5000) %d, bodyCap(1) %d", bodyCap(5000), bodyCap(1))
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -521,7 +535,7 @@ func TestBodyCap(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	if _, err := c.List(context.Background(), &ListInput{Container: "c", MaxResults: 1}); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, err := c.List(context.Background(), &ListInput{Container: "c", MaxResults: 1}); Classify(err) != objhttp.ClassParse || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("oversized body: %v", err)
 	}
 	if _, err := c.List(context.Background(), &ListInput{Container: "c", MaxResults: 2}); err != nil {
@@ -560,5 +574,34 @@ func TestAccountInfo(t *testing.T) {
 	}
 	if _, err := c.AccountInfo(context.Background(), "denied"); Classify(err) != objhttp.ClassAccessDenied {
 		t.Errorf("denied: class %q (%v)", Classify(err), err)
+	}
+}
+
+// TestRetryAfterCapped: a Retry-After past the request timeout (a day in
+// seconds, a far-future date) is waited only up to the timeout and
+// counted; the attempt budget still ends the request, exhausted and
+// requeued.
+func TestRetryAfterCapped(t *testing.T) {
+	for _, v := range []string{"86400", "9223372036854775807", "Fri, 31 Dec 9999 23:59:59 GMT"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(headerRetryAfter, v)
+			azureError(w, 503, codeServerBusy)
+		}))
+		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 3, RequestTimeout: 200 * time.Millisecond,
+			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+		start := time.Now()
+		_, err := c.List(context.Background(), &ListInput{Container: "c"})
+		d := time.Since(start)
+		srv.Close()
+		var ex *ExhaustedError
+		if !errors.As(err, &ex) || ex.Attempts != 3 || !objhttp.Requeue(Classify)(err) {
+			t.Errorf("%s: %v, want three attempts exhausted and requeued", v, err)
+		}
+		if d < 400*time.Millisecond || d > 3*time.Second {
+			t.Errorf("%s: took %s, want two waits of the 200 ms timeout", v, d)
+		}
+		if n := c.RetryAfterCapped(); n != 3 {
+			t.Errorf("%s: retry_after_capped %d, want 3", v, n)
+		}
 	}
 }

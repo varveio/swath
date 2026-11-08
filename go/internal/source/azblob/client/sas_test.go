@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // testSAS is a SAS whose signature is easy to find in a message.
@@ -66,13 +69,19 @@ func TestSASRedacted(t *testing.T) {
 		case "400":
 			w.Header().Set(headerErrorCode, "InvalidQueryParameterValue")
 			w.WriteHeader(400)
-			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>InvalidQueryParameterValue</Code><Message>bad sig %s in %s</Message></Error>", sig, r.URL.RawQuery)
+			var msg strings.Builder
+			xml.EscapeText(&msg, []byte("bad sig "+sig+" in "+r.URL.RawQuery))
+			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>InvalidQueryParameterValue</Code><Message>%s</Message></Error>", msg.String())
 		case "403":
 			w.Header().Set(headerErrorCode, codeAuthFailed)
 			w.WriteHeader(403)
 			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>AuthenticationFailed</Code><Message>Signature %s did not match</Message></Error>", url.QueryEscape(sig))
 		case "redirect":
 			http.Redirect(w, r, "http://elsewhere.example/?"+r.URL.RawQuery, http.StatusMovedPermanently)
+		case "bad-location":
+			// net/http would quote a Location it cannot parse in its error
+			w.Header().Set("Location", "https://elsewhere/%ZZ?"+r.URL.RawQuery)
+			w.WriteHeader(http.StatusFound)
 		case "slow":
 			select {
 			case <-time.After(5 * time.Second):
@@ -89,20 +98,34 @@ func TestSASRedacted(t *testing.T) {
 	for _, x := range []struct {
 		c      *Client
 		prefix string
-	}{{c, "400"}, {c, "403"}, {c, "redirect"}, {c, "slow"}, {down, "refused"}} {
+	}{{c, "400"}, {c, "403"}, {c, "redirect"}, {c, "bad-location"}, {c, "slow"}, {down, "refused"}} {
 		_, err := x.c.List(context.Background(), &ListInput{Container: "c", Prefix: x.prefix})
 		if err == nil {
 			t.Fatalf("%s: no error", x.prefix)
 		}
-		if msg := err.Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
-			t.Errorf("%s: the SAS leaks: %s", x.prefix, msg)
+		if msg := err.Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") || strings.Contains(msg, "elsewhere") {
+			t.Errorf("%s: the SAS or a redirect target leaks: %s", x.prefix, msg)
+		}
+		if strings.Contains(x.prefix, "redirect") || x.prefix == "bad-location" {
+			if Classify(err) != objhttp.ClassRedirect {
+				t.Errorf("%s: class %q (%v)", x.prefix, Classify(err), err)
+			}
 		}
 		if _, err := x.c.AccountInfo(context.Background(), x.prefix); err != nil && strings.Contains(err.Error(), "TopSecretSig") {
 			t.Errorf("%s: account information leaks the SAS: %v", x.prefix, err)
 		}
 	}
-	if _, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "400"}); !strings.Contains(err.Error(), "prefix=400") {
-		t.Errorf("a 400 names its query (without the SAS): %v", err)
+	// The 400's message was read (the fixture is well-formed XML) and
+	// scrubbed, not dropped.
+	if _, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "400"}); !strings.Contains(err.Error(), "prefix=400") ||
+		!strings.Contains(err.Error(), "bad sig REDACTED in comp=list") {
+		t.Errorf("a 400 names its query and its scrubbed message: %v", err)
+	}
+	// Recursive redaction: a SAS quoted deep inside a wrapped error.
+	u, _ := url.Parse(srv.URL + "/acct/c?comp=list")
+	inner := &url.Error{Op: "Get", URL: srv.URL + "?" + testSAS, Err: fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: "x?" + testSAS, Err: fmt.Errorf("location %q", "https://e/?sig="+sig)})}
+	if msg := c.redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
+		t.Errorf("nested errors leak: %s", msg)
 	}
 	if _, err := New(context.Background(), Config{Account: "acct", SAS: "%zz&sig=TopSecretSig"}); err == nil || strings.Contains(err.Error(), "TopSecretSig") {
 		t.Errorf("malformed SAS: %v", err)

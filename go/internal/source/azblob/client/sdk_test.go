@@ -94,9 +94,10 @@ func utf16Less(a, b string) int {
 
 // TestClientPagesMatchSDK walks the replay's Azure route with the client
 // and with the official SDK's flat and hierarchy pagers from the same
-// inputs, page by page: the same items in the same order (the hierarchy
-// pager's blobs and prefixes merged into UTF-16 order first, as the wire
-// interleaves them), the same properties and the same NextMarker.
+// inputs, page by page: the same blobs and the same prefixes, each in the
+// SDK's order (the hierarchy pager returns the two kinds apart; the client
+// keeps the wire's interleaving, which TestCaptures checks against the
+// captured bodies), the same properties and the same NextMarker.
 func TestClientPagesMatchSDK(t *testing.T) {
 	ep := replayServer(t, replayKeys())
 	ctx := context.Background()
@@ -129,9 +130,19 @@ func TestClientPagesMatchSDK(t *testing.T) {
 			if a.NextMarker != b.NextMarker || len(a.Items) != len(b.Items) {
 				t.Fatalf("%+v page %d: ours %d items next %q, the SDK %d next %q", in, i, len(a.Items), a.NextMarker, len(b.Items), b.NextMarker)
 			}
-			for j := range a.Items {
-				if a.Items[j] != b.Items[j] {
-					t.Fatalf("%+v page %d item %d:\n ours %+v\n SDK  %+v", in, i, j, a.Items[j], b.Items[j])
+			// The SDK returns a hierarchy page's blobs and prefixes as two
+			// arrays: each must be the client's wire order of that kind,
+			// so the interleaving the client keeps is the wire's.
+			ab, ap := byKind(a.Items)
+			bb, bp := byKind(b.Items)
+			for _, pair := range [][2][]Item{{ab, bb}, {ap, bp}} {
+				if len(pair[0]) != len(pair[1]) {
+					t.Fatalf("%+v page %d: kinds differ: ours %+v, SDK %+v", in, i, a.Items, b.Items)
+				}
+				for j := range pair[0] {
+					if pair[0][j] != pair[1][j] {
+						t.Fatalf("%+v page %d item %d:\n ours %+v\n SDK  %+v", in, i, j, pair[0][j], pair[1][j])
+					}
 				}
 			}
 			total += len(a.Items)
@@ -207,10 +218,21 @@ func walkSDK(t *testing.T, ep string, in ListInput) []ListOutput {
 		for _, x := range r.Segment.BlobPrefixes {
 			p.Items = append(p.Items, Item{Name: deref(x.Name), Prefix: true})
 		}
-		slices.SortFunc(p.Items, func(a, b Item) int { return utf16Less(a.Name, b.Name) })
 		pages = append(pages, p)
 	}
 	return pages
+}
+
+// byKind splits items into blobs and prefixes, each in its order.
+func byKind(items []Item) (blobs, prefixes []Item) {
+	for _, it := range items {
+		if it.Prefix {
+			prefixes = append(prefixes, it)
+		} else {
+			blobs = append(blobs, it)
+		}
+	}
+	return blobs, prefixes
 }
 
 func sdkItem(b *container.BlobItem) Item {
