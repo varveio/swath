@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -173,12 +174,29 @@ type Router[P any] struct {
 	ticked   sync.WaitGroup
 	timeCuts atomic.Int64 // parts closed by the interval
 	rowCuts  atomic.Int64 // parts closed by MaxRows
+	// Group mode: the last routed key (owned), and the rows a pending cut
+	// let into its part because they continued that key's group.
+	last    string
+	hasLast bool
+	// byRows, byTime: the pending cut (full) was asked by MaxRows, or by
+	// the interval in group mode.
+	byRows, byTime bool
+	deferred       atomic.Int64
 
 	// segmented: the rest of the stream goes to segments (segments.go),
 	// not Write; segRows counts the rows they routed.
 	segmented bool
 	segRows   atomic.Int64
 }
+
+// ErrAmbiguousTail: a reproduced claimed part reached its recorded row
+// count while its last key's group went on (group mode), so the listing is
+// not the one the part was claimed from; nothing is acknowledged.
+var ErrAmbiguousTail = errors.New("a claimed part's last key group continues past its recorded rows")
+
+// DeferredRows is the rows a pending cut admitted to its part because
+// they continued the group of the part's last key (group mode).
+func (r *Router[P]) DeferredRows() int64 { return r.deferred.Load() }
 
 type part[P any] struct {
 	ordinal   int
@@ -260,9 +278,15 @@ func (r *Router[P]) tick(stop <-chan struct{}) {
 		case <-t.C:
 		}
 		r.mu.Lock()
-		if !r.closed && r.cur != nil && !r.cur.pinned && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
-			r.timeCuts.Add(1)
-			_ = r.cut(r.tickCtx, false) // a failure is the encoder's, and reported by it
+		if !r.closed && r.cur != nil && !r.cur.pinned && !r.full && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
+			if r.schema.Info.Groups {
+				// The last routed key's group may continue in the next
+				// Write: the cut waits for a greater key (or Close).
+				r.full, r.byTime = true, true
+			} else {
+				r.timeCuts.Add(1)
+				_ = r.cut(r.tickCtx, false) // a failure is the encoder's, and reported by it
+			}
 		}
 		r.mu.Unlock()
 	}
@@ -321,10 +345,32 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 		return errors.New("parquet router: written after its segments began")
 	}
 	var batch [][]schema.Row[P]
+	// Group mode (schema.Info.Groups): a part never ends inside a key's
+	// group, since the journal records its last key as published. A cut
+	// the size, the row cap or the interval asked for (full) waits for
+	// the first row of a greater key; rows of the same key join the part.
+	groups := r.schema.Info.Groups
+	prev, hasPrev := r.last, r.hasLast // the last routed key (a view within this call)
+	defer func() {
+		if groups && hasPrev && prev != r.last {
+			r.last, r.hasLast = strings.Clone(prev), true // owned: never a view of a page
+		}
+	}()
 	for _, seg := range segs {
 		start := 0
 		for i := range seg {
-			if r.full {
+			same := groups && hasPrev && seg[i].Key == prev
+			prev, hasPrev = seg[i].Key, groups
+			if r.full && same {
+				if r.cur.pinned {
+					// The claimed part ended at its recorded row count, so
+					// its last key's group must have ended there too: a
+					// listing that continues the group is not the one
+					// that claimed it.
+					return fmt.Errorf("%w: part %d reached its claimed %d rows inside the group of key %q", ErrAmbiguousTail, r.cur.ordinal, r.cur.n, seg[i].Key)
+				}
+				r.deferred.Add(1)
+			} else if r.full {
 				if i > start {
 					batch = append(batch, seg[start:i])
 				}
@@ -359,9 +405,9 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 			if r.cur.logical >= r.target() {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
-			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
-				r.full = true
-				r.rowCuts.Add(1)
+				r.byRows, r.byTime = false, false
+			} else if !r.full && r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
+				r.full, r.byRows = true, true
 			}
 		}
 		if start < len(seg) {
@@ -608,7 +654,17 @@ func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p.final = final
 	p.closed = true
 	close(p.segs)
-	r.cur, r.full = nil, false
+	if !final {
+		// Counted when they cut, not when asked: a cut the final part
+		// ended first never happened.
+		if r.byRows {
+			r.rowCuts.Add(1)
+		}
+		if r.byTime {
+			r.timeCuts.Add(1)
+		}
+	}
+	r.cur, r.full, r.byRows, r.byTime = nil, false, false, false
 	if r.limit == 0 && !final {
 		select {
 		case <-p.done:

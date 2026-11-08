@@ -440,7 +440,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := src.(*opened).p
+	p := src.(*opened[Object]).p
 	if !other.Policy.Seed || !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous {
 		t.Fatalf("policy not shared: %+v", p.opt)
 	}

@@ -81,6 +81,7 @@ Derived readings of the range engine's counters: the mean leaf depth is `split.l
 | `drain.segments.time_ns`, `.max_time_ns`, `.plan_ns` | ns | segments' time summed (open to close) and the longest; cutting the rest into segments |
 | `drain.segments.read_ns`, `.decode_ns`, `.write_ns`, `.max_workers` | ns, workers | of `time_ns`: spill frames read (and decoded), batches handed to the parts (encoder queue waits included); the workers' cap (`listing.segmentWorkers`) |
 | `drain.segments.durable_files_read`, `.durable_boundaries` | files, boundaries | durable spill files (`order.Cache`) whose frames the segments read, and the segment boundaries that fall inside one of their frames |
+| `drain.segments.deferred_rows` | rows | versions schemas: rows a planned segment boundary moved past because they continued the group of the key before it (no part ends inside a key) |
 | `drain.segments.tree_bytes` | bytes | what the tree held when the segments were planned: not the segments' budget, which they take beside it (two budgets in all, at most) |
 | `drain.segments.workers_by`, `.per_worker_bytes`, `.free_bytes` | reason, bytes, bytes | what set the workers: `encoders`, `processors`, `descriptors`, `row_budget` or `segments`; the budget one worker holds at most (its largest unit, a gathered and an encoding batch, its part's queue, at the heaviest run of consecutive rows), and the budget the segments could take when planned (the row budget less what the encoders' queues held) |
 | `drain.segments.budget_waits`, `.budget_wait_ns`, `.max_held_bytes` | waits, ns, bytes | workers waiting for the row budget before reading or gathering a unit, and their time; the most the segments held at once beside the tree (the encoders' queues, the units being read or gathered) |
@@ -236,11 +237,18 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `child_empty.by.structure.lower` | count | ranges | structure | empty lower children of a structure pivot |
 | `child_empty.by.structure.upper` | count | ranges | structure | empty upper children of a structure pivot |
 | `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
-| `empty_chain_pages` | count | pages |  | empty continuing pages past the 1,024th of their run: followed, but not progress for the watchdog (also in empty_pages) |
+| `empty_chain_pages` | count | pages |  | continuing pages past the first 1,024 without a greater key (empty, suppressed or same-key group pages): followed without watchdog credit |
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
 | `mutex.max_hold_ns` | max | ns |  | the longest single hold of the engine's decision mutex |
+| `groups.open_pages` | count | pages | groups | pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split) |
+| `groups.fence_deferred` | count | pages | groups | page ends that declared no coverage fence because the hot key's group was still open (durable spill certifies only complete keys) |
+| `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
+| `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
+| `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
+| `groups.overfetch_rows` | count | rows | groups | rows above a range end read to close its last key group (excludes resume suppression and split relisting) |
+| `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

@@ -39,7 +39,7 @@ var helpGroups = []helpGroup{
 		{name: "format"},
 		{name: "region"}, {name: "endpoint"}, {name: "anonymous"}, {name: "path-style"},
 		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
-		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"},
+		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
 		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
@@ -71,7 +71,7 @@ var helpGroups = []helpGroup{
 		{name: "color"},
 	}},
 	{diagnosticGroup, []helpFlag{
-		{name: "seed"}, {name: "structure"}, {name: "slow-split"}, {name: "floors"}, {name: "sequential"}, {name: "max-keys"},
+		{name: "seed"}, {name: "structure"}, {name: "slow-split"}, {name: "floors"}, {name: "sequential"}, {name: "max-keys"}, {name: "page-size"},
 		{name: "limiter-slow-start"},
 		{name: "spill-plain"}, {name: "spill-compress"}, {name: "spill-reserve"}, {name: "no-spill"},
 		{name: "no-journal"},

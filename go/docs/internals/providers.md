@@ -68,7 +68,10 @@ credential loading (service-account and authorized-user files, Application Defau
 server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/metadata`).
 
 **Ours.** The one list call per provider (ListObjectsV2; `objects.list`), built and sent by
-`internal/source/s3/client` and `internal/source/gcs/client`; S3's response parser, a hand-written scanner
+`internal/source/s3/client` and `internal/source/gcs/client` (the S3 client also sends ListObjectVersions, for
+versioned listing, on the same path; its parser keeps `<Version>` and `<DeleteMarker>` entries in one slice in
+wire order, decodes keys and the `NextKeyMarker` once, keeps version IDs verbatim, and refuses a truncated page
+without a `NextKeyMarker` as an invalid page); S3's response parser, a hand-written scanner
 over the body that allocates per page, not per object (an `<Error>` body, the cold path, goes through
 `encoding/xml`); GCS's decoding of only the listed fields with
 `encoding/json` into a fixed envelope; bodies read up to 16 MiB; envelope and page validation (a 200 that is
@@ -320,6 +323,19 @@ supplied client that does not name its route and billed project (`gcs.Routed`), 
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).
+
+**Generations** (`--all-versions`, `NewGenerations`: the engine in group mode, `fetchGenerations`). `ListInput.Versions` sends
+`versions=true` and, on Google's endpoint, the field mask with `timeDeleted` (parsed to µs, 0 when absent: a live
+generation; it is not `softDeleteTime`); items stay in wire order, name ascending and generation ascending within
+a name, and pages are native, continued by the API's `pageToken`. The payload `gcs.Generation` is an `Object` and
+`TimeDeleted`; its schema `swath/gcs-generations/v1` is the `gcs-objects/v1` columns in the same order (the same
+accessors; `generation` an exact INT64) and then `time_deleted`, null for the live generation (there is no
+`is_latest`: a name may have no live generation, and the highest generation is not taken to be live), with
+`Info.Groups` set; its delta spill codec codes integers as wrapping differences and repeated strings as flags.
+`gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
+none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
+sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
+removes all of the name's rows, across pages. A page whose generations of one name do not ascend is invalid.
 
 **Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
 transports, one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
@@ -710,6 +726,47 @@ then marked incomplete).
 
 **Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root is
 one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
+
+### Group mode (`groups.go`)
+
+A versions listing (`Description.Groups`, which must agree with the bound schema's `Info.Groups`, and
+`Description.Detach`, the schema's) returns a key once per version, consecutive, and a page may end inside a
+key's rows. Every consumer treats the last key it saw as finished (a split's lower child starts after it, the
+journal records it as published, a resume lists after it), so within one chain (an `expandRange` call or the
+sequential chain) the engine emits a row only once its key's rows are proven complete:
+
+- *Hold-back.* A continuing page's trailing key group is held and prepended to the next page; a later key or
+  the chain's end (EOF, or a row above `hi`) completes it. A page that is all one new key is held whole; a page
+  that repeats the held or emitted key cannot be held (a key can span any number of pages), so it is emitted as
+  it arrives and the chain's group is *open*. Held rows come from at most one page; the emitted and the held
+  sides of a partial page are both copied out of the page (`Detach`), so a few rows never pin
+  a page the order stage did not charge.
+- *Splits.* A range splits only at its last emitted key, which is complete: never while its group is open, and
+  not before it has emitted a key (a split at `lo` would hand the whole range on again). The veto is in
+  `wanted`, in `decide` (before the coin, structure boundaries and the gates) and asserted before `commit`;
+  such a range is left out of the split rank. Both children are ordinary fresh ranges; held rows are dropped
+  and listed again by whichever child owns their key (`groups.split_relisted_rows`). Nothing crosses an
+  `Expand` call: a retry, a requeue or the drainer's expansion starts fresh.
+- *Bounds.* A bounded range lists until a key above `hi` or EOF, not until `c == hi` (hi's rows may continue).
+  A resume drops every row at or below its key, across pages, without moving the cursor. The inclusive-start
+  drop removes the bound key's whole group across pages.
+- *Order and progress.* Rows are nondecreasing; a row equal to the previous page's last key is allowed only
+  when that key's group may continue. A continuing page that shows no key above the chain's last must carry a
+  token outside the window of such pages' tokens (1,024), or it is an invalid page; ever-fresh tokens over one
+  key earn watchdog credit only within the first 1,024 pages of a no-advance run. Raw keys are
+  validated before bound and resume suppression; suppressed rows cannot reset that window.
+- *Units.* `st.keys` counts rows (work); density, the gauge and the pivot take distinct keys.
+- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.max_rows`, `groups.overfetch_rows`,
+  `split.skipped.group_open`.
+
+Group page fragments are detached on both sides before emission or retention: their row arrays and
+string arenas cannot retain excluded rows outside the order budget. Native chains validate raw keys
+before inclusive or resume suppression. Only a strictly greater observed key resets the token window;
+same-key pages earn watchdog credit for at most the first 1,024 pages of a run. GCS also validates
+strictly ascending generation ordinals across page seams, including empty and suppressed pages,
+with state owned by each chain. `groups.max_rows` scans every group, including interior groups,
+sequential listings and seed EOF. `groups.overfetch_rows` counts only rows above a range's upper bound
+read to close its last group; resume suppression and split relisting have separate accounting.
 
 ## Registry and optional interfaces
 

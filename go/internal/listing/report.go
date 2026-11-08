@@ -14,10 +14,12 @@ import (
 // (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
 // count requests.http_attempts in place of cost.api_calls, one row budget),
 // phase times, free_disk_min_bytes and the bounded progress history
-// (go/docs/upgrade.md lists every rename). 3: resources.spill.durable
-// and durable_off (the durable spill's account) and the reuse.* counters;
-// timings.listing_done_at and resources.drain (the drain tail: read-ahead,
-// segments, encoder admission after listing).
+// (go/docs/upgrade.md lists every rename). 3 adds fields only:
+// resources.spill.durable and durable_off (the durable spill's account),
+// the reuse.* counters, timings.listing_done_at and resources.drain (the
+// drain tail: read-ahead, segments, encoder admission after listing), and
+// for versions schemas the attempt-scoped version classification and
+// distinct keys.
 const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -254,11 +256,18 @@ type Timings struct {
 // Output is the row and part accounting: this invocation (fetched,
 // filtered, emitted) versus the dataset (retained, durable, committed).
 type Output struct {
-	RowsFetched   int64 `json:"rows_fetched"`   // listed from the source by this invocation, before the filters
-	RowsFiltered  int64 `json:"rows_filtered"`  // fetched by this invocation and dropped by the filters (--include, ...)
-	RowsEmitted   int64 `json:"rows_emitted"`   // fetched, kept by the filters and handed on in order (swath count: counted)
-	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
-	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
+	// Version classification is attempt-scoped, after filtering, and
+	// present only for versions schemas (including zero counts).
+	Versions      *int64 `json:"versions,omitempty"`
+	DeleteMarkers *int64 `json:"delete_markers,omitempty"`
+	Noncurrent    *int64 `json:"noncurrent,omitempty"`
+	DistinctKeys  *int64 `json:"distinct_keys,omitempty"`
+	LiveObjects   *int64 `json:"live_objects,omitempty"`
+	RowsFetched   int64  `json:"rows_fetched"`   // listed from the source by this invocation, before the filters
+	RowsFiltered  int64  `json:"rows_filtered"`  // fetched by this invocation and dropped by the filters (--include, ...)
+	RowsEmitted   int64  `json:"rows_emitted"`   // fetched, kept by the filters and handed on in order (swath count: counted)
+	RowsRetained  int64  `json:"rows_retained"`  // kept from the interrupted run (resume)
+	RowsCommitted int64  `json:"rows_committed"` // in the committed dataset (0 unless committed)
 	// RowsDurable is the rows in parts that stay in the output: the
 	// committed dataset's, or after a failure the journaled parts' (kept
 	// for swath resume; 0 without a journal).
@@ -472,6 +481,9 @@ type Segments struct {
 	// their frames.
 	DurableFilesRead  int `json:"durable_files_read"`
 	DurableBoundaries int `json:"durable_boundaries"`
+	// DeferredRows is the rows a planned boundary moved past because they
+	// continued the group of the key before it (versions schemas).
+	DeferredRows int64 `json:"deferred_rows"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

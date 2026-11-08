@@ -265,7 +265,21 @@ finished with it or started over): `--output` is `-o`; `--force` is `--overwrite
 `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 2.** Builds of `main` before 0.4 wrote `report_version` 1; 0.4 writes 2. A reader
+**Run report: version 3.** Version 3 only adds fields; nothing of version 2 changes, and a version 2 reader
+reads version 3 by ignoring them:
+
+- **Durable spill:** `resources.spill.durable` (the durable spill's account, and on a resume what it accepted,
+  rejected and replayed), `resources.spill.durable_off`, and the counters `reuse.ranges`, `reuse.gaps` and
+  `reuse.boundary_overfetch_keys`.
+- **Drain tail:** `timings.listing_done_at` (the provider finished) and `resources.drain` (sorted Parquet: the
+  tail's times, the read-ahead's frames and waits, the parallel segments' plan and holdings, and the encoders
+  admitted at start and after listing; [cli.md](cli.md#run-report)).
+- **Versions schemas** (`--all-versions`): attempt-scoped `output.versions`, `output.distinct_keys`,
+  `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
+  schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
+  retained resume rows.
+
+Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
 is the full schema and "Run report" in [cli.md](cli.md#run-report) its description.
 
@@ -283,14 +297,6 @@ is the full schema and "Run report" in [cli.md](cli.md#run-report) its descripti
 | – | `invocation.prior` (the `--seed-from` prior) |
 | – | `output.text.formatters`, `output.text.output_wait_ns`, `output.text.compressor` (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`) |
 | `resources.spill` | adds `logical_bytes`, `format`, `decode_refused` |
-
-**Run report: version 3.** Durable spill adds `resources.spill.durable` (the durable spill's account, and on a
-resume what it accepted, rejected and replayed) and `resources.spill.durable_off`, and the counters `reuse.ranges`,
-`reuse.gaps` and `reuse.boundary_overfetch_keys`; the drain tail adds `timings.listing_done_at` (the provider
-finished) and `resources.drain` (sorted Parquet: the tail's times, the read-ahead's frames and waits, the
-parallel segments' plan and holdings, and the encoders admitted at start and after listing;
-[cli.md](cli.md#run-report)). Nothing of version 2 changes: a reader of version 2 can read version 3 by
-ignoring those fields.
 
 **Counters** (`source.stats.counters`, [internals/counters.md](internals/counters.md)), against those builds. New: `seed.from.*`
 (the warm start), `seed.first_page_keys`, `seed.flat_chains`, `seed.stop.flat`, `seed.stop.one_page`,
@@ -319,9 +325,27 @@ does, stated as the contract rather than as its code:
   all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
   build that writes the column mixes parts with and without it under one id (the resume identity freezes the
   schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
-  column of every schema id is present in every part. The Java-era `version_id`, `is_latest`, `is_delete_marker`
-  and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
-  only.
+  column of every schema id is present in every part.
+- **Versions schemas** (`swath list --all-versions`). `swath/s3-versions/v1` is the `swath/s3-objects/v1`
+  columns in the same order, `size` nullable (null on delete markers, as are `etag`, `storage_class` and the
+  checksums), then `version_id` (verbatim; `"null"` is a real ID), `is_latest` and `is_delete_marker`
+  (required). `swath/gcs-generations/v1` is the `swath/gcs-objects/v1` columns, then `time_deleted` (null for
+  the live generation; there is no `is_latest`). In both, a key repeats once per version, on consecutive rows,
+  in the service's order within the key (S3 newest first, versions and delete markers interleaved; GCS by
+  generation, ascending), which the file order carries and no column rebuilds. On S3, the first row of a
+  key's group has `is_latest`: it is the latest entry, and a delete marker means the object is deleted.
+  On GCS, the last row of a name's group is the newest generation; it is live only if `time_deleted` is
+  null, and a name may have no live generation. Parts stay key-disjoint (a key's
+  rows are never split across parts), and `sorting_columns` is `key` ascending. A reader that assumes one row
+  per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
+  is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The reserved Java-era version columns are absent from the current-object S3 schema;
+  `row_type` is absent from both Go S3 schemas. Readers dispatch on the schema id before reading them.
+  `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
+  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and
+  ordered row sequences for both versions schemas, preserving nulls and within-key order; it refuses
+  mismatched or unknown schema ids. `--ts-ms` is refused for versions so timestamps remain exact.
+  Reader fixtures: `python3 -m unittest test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB.
+
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
 - **Part footers.** Every part carries `swath.profile`, `swath.profile_version` 2, a `swath.schema_id` equal
   to the manifest's, and `key` ascending as the first sorting column.

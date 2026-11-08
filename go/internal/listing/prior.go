@@ -125,10 +125,15 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 	var cum, last int64 // rows through the latest page; through the latest cut
 	j := int64(1)
 	cut := func(key string) {
-		if n := len(pr.Cuts); n > 0 && key <= pr.Cuts[n-1].Key {
-			return // its rows join the next cut
+		n := len(pr.Cuts)
+		if n > 0 && key < pr.Cuts[n-1].Key {
+			return
 		}
-		pr.Cuts = append(pr.Cuts, source.Cut{Key: key, Rows: cum - last})
+		if n > 0 && key == pr.Cuts[n-1].Key {
+			pr.Cuts[n-1].Rows += cum - last
+		} else {
+			pr.Cuts = append(pr.Cuts, source.Cut{Key: key, Rows: cum - last})
+		}
 		last = cum
 		for j < priorCuts && threshold(j) <= cum {
 			j++

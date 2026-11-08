@@ -223,7 +223,8 @@ func create[P any](open func(string) (*os.File, error), path string, s *schema.S
 	return w, nil
 }
 
-// write appends one row; keys must be strictly ascending.
+// write appends one row; keys must be strictly ascending, or with
+// schema.Info.Groups nondecreasing (a key's group of rows).
 func (w *writer[P]) write(r *schema.Row[P]) error {
 	if n := w.schema.MaxKeyBytes; n > 0 && len(r.Key) > n {
 		return fmt.Errorf("%w: %d bytes (limit %d): %.64q…", schema.ErrKeyTooLong, len(r.Key), n, r.Key)
@@ -234,7 +235,10 @@ func (w *writer[P]) write(r *schema.Row[P]) error {
 			return fmt.Errorf("%w: %s of %.64q: %d bytes (limit %d)", schema.ErrValueTooLong, col.Name, r.Key, len(v), col.MaxBytes)
 		}
 	}
-	if w.rows > 0 && r.Key <= w.maxKey {
+	if w.rows > 0 && (r.Key < w.maxKey || r.Key == w.maxKey && !w.schema.Info.Groups) {
+		if w.schema.Info.Groups {
+			return fmt.Errorf("keys not ascending: %q after %q", r.Key, w.maxKey)
+		}
 		return fmt.Errorf("keys not strictly ascending: %q after %q", r.Key, w.maxKey)
 	}
 	if w.rows == 0 {

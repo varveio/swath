@@ -388,6 +388,52 @@ objects only; GCS's `generation` and `metageneration` describe the live object, 
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.
 
+## Listing every version
+
+```bash
+swath list --all-versions s3://BUCKET[/PREFIX] -o DIR   # every version and delete marker (ListObjectVersions)
+swath list --all-versions gs://BUCKET[/PREFIX] -o DIR   # every generation, live and noncurrent (versions=true)
+```
+
+**Rows.** One row per S3 version or delete marker, or per GCS generation, under their own schemas:
+`swath/s3-versions/v1` is the `s3-objects/v1` columns, in the same order, then `version_id`, `is_latest` and
+`is_delete_marker`; `swath/gcs-generations/v1` is the `gcs-objects/v1` columns, then `time_deleted` (null for
+the live generation). A delete marker has no size, ETag, storage class or checksums: they are null, never 0.
+`version_id` is verbatim: `"null"` is a real ID (an object written while versioning was off). The current
+objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS); a listing of the current
+objects alone is the default mode, which is cheaper.
+
+**Order.** Keys ascend; a key's rows are consecutive, in the service's order within the key: S3 newest first,
+versions and delete markers interleaved; GCS by generation, ascending. S3 can list two entries of a key with the
+same `last_modified` (to the second), so that time does not rebuild S3's order: the file order does.
+On S3, the first row of a key's group has `is_latest`: it is the latest entry, and a delete marker means
+the object is deleted. On GCS, the last row of a name's group is the newest generation; it is live only
+if `time_deleted` is null. A GCS name may have no live generation.
+
+**Parts never split a key.** A part's size target, `--part-rotation-max-rows` and `--part-interval` cut at the
+next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a
+key again. The interval no longer bounds how long a part stays open while one key's rows are still arriving.
+
+**Parallelism.** Ranges split only between keys, so one key with a very long history is listed by one worker,
+page after page, while the rest of the bucket proceeds (`groups.open_pages`, `split.skipped.group_open` in the
+report). S3's versions call is slower than ListObjectsV2: about 1.85 times the time per request at the median of
+our measurements, and pages of old versions are slow to first byte; history multiplies the pages besides. GCS
+lists generations at the cost of live objects.
+
+**Permissions and refusals.** S3 needs `s3:ListBucketVersions` (`s3:ListBucket` alone answers 403, and swath
+never falls back to a current-object listing); GCS needs the same `storage.objects.list`. Text output adds
+`VersionId` (a GCS generation in decimal), `IsLatest` (GCS: no `time_deleted`) and, on S3, `IsDeleteMarker`, and
+omits a delete marker's `Size` and `ETag`. `--min-size` and `--max-size` never match a delete marker. A resume
+continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
+no versions and stay refused.
+
+The run report's version counts describe this attempt after filtering: S3 `versions` and
+`delete_markers` sum to emitted rows; GCS `versions` includes `noncurrent` generations.
+`distinct_keys` counts surviving names, and `live_objects` counts live versions among those rows.
+Retained rows from an earlier attempt are excluded. `groups.overfetch_rows` counts rows above a
+range end fetched to finish its last group. Table output includes the version ID and latest state,
+and for S3 the delete-marker state, in wire order.
+
 ## Known limits
 
 - **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no directory sync, so
@@ -397,7 +443,11 @@ only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader 
 - **Power loss or a kernel crash:** recovery relies on the filesystem honouring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
-  committed dataset is the complete result of a live listing, exactly once per key, not a point-in-time view.
+  committed dataset is the complete result of a live listing, exactly once per key (with `--all-versions`, once
+  per version), not a point-in-time view.
+- **Versioned listing** (`--all-versions`) was checked against an independent serial listing on small public
+  buckets (seven S3, one GCS; up to 40,000 versions, pages of 1 to 1,000 entries, interrupted and resumed runs);
+  large versioned buckets are unmeasured.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
   of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
