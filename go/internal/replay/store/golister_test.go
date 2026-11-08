@@ -21,7 +21,7 @@ import (
 )
 
 // The Go lister's own datasets, written in-test by listing.Run against the
-// in-process S3 and GCS fakes and against a local tree: the format-2
+// in-process S3 and GCS fakes and against a local tree: the SeekParquet
 // datasets the replay server serves in production, with the lister's
 // part, row-group, page and index-bound geometry.
 

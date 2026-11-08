@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package sortfixture turns an unsorted Java-era capture into a sorted
-// format-2 dataset the replay server can serve sorted.
+// SeekParquet dataset the replay server can serve sorted.
 //
 // The command line is
 //
@@ -141,7 +141,7 @@ type captured struct {
 // parts (ErrNoParts), a row whose row_type is not OBJECT, COMMON_PREFIX or
 // DELETE_MARKER (ErrRowType), a versioned row (ErrVersioned) or two rows of
 // any type with one key (ErrDuplicateKey), sorts the objects by unsigned key bytes and writes
-// them as a format-2 dataset of SchemaID, nulls intact. It writes one
+// them as a SeekParquet dataset of SchemaID, nulls intact. It writes one
 // summary line to log.
 func Run(ctx context.Context, opts Options, log io.Writer) (Stats, error) {
 	start := time.Now()

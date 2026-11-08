@@ -29,7 +29,7 @@ func emptyAndNull() []legacytest.Row {
 }
 
 // TestEmptyAndNullStringsEndToEnd serves a stamped Java-era part and the
-// format-2 dataset sort-fixture makes of the same rows (captured unsorted)
+// SeekParquet dataset sort-fixture makes of the same rows (captured unsorted)
 // on the S3, GCS and Azure routes. Every answer is the Java server's for
 // the Java-era part, byte for byte (recorded from it), but for Owner,
 // which the S3 route writes before StorageClass as live S3 does
