@@ -536,15 +536,9 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 	return units, files, released, meta, nodes, markers, mem
 }
 
-// rowsOf is a unit's rows: in memory, or its frame read and decoded on its
-// own descriptor; a frame holding other than the rows its marker recorded
-// is refused.
-func (o *run[R, P]) rowsOf(u *unit[P]) ([]schema.Row[P], error) {
-	rows, _, err := o.rowsTimed(u)
-	return rows, err
-}
-
-// rowsTimed is rowsOf with the frame's decoding time.
+// rowsTimed is a unit's rows, with the frame's decoding time: in memory,
+// or its frame read and decoded on its own descriptor; a frame holding
+// other than the rows its marker recorded is refused.
 func (o *run[R, P]) rowsTimed(u *unit[P]) ([]schema.Row[P], time.Duration, error) {
 	if u.f == nil {
 		return u.rows, 0, nil
@@ -586,7 +580,7 @@ func (o *run[R, P]) cut(units []unit[P], pl SegmentPlan) ([]segment, error) {
 			rows += u.n
 			continue
 		}
-		rs, err := o.rowsOf(u)
+		rs, _, err := o.rowsTimed(u)
 		if err != nil {
 			return nil, err
 		}
