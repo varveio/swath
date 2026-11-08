@@ -16,7 +16,6 @@ import (
 // meters at zero.
 type meteredStore interface {
 	SetMeters(store.Meters)
-	PageStats() bool
 	Counters() *store.Counters
 	Files() *legacy.FileCache
 }
@@ -84,21 +83,15 @@ func (s *Server) initStoreMeters() {
 	queryRows := r.Get(metrics.ParquetQueryRows)
 	queryErrors := r.Get(metrics.ParquetQueryErrors)
 	st, ok := s.cfg.Store.(meteredStore)
-	// The skip-scan's meters exist only for a store that measures its page
-	// work: over a SeekParquet dataset they are absent (unavailable), never
-	// zeros.
-	var rollup func(legacy.Stats)
-	if !ok || st.PageStats() {
-		opens := r.Get(metrics.DelimiterSkipScanRowGroupOpens)
-		shortcuts := r.Get(metrics.DelimiterSkipScanWholeGroupShortcuts)
-		decoded := r.Get(metrics.DelimiterSkipScanDecodedKeyRows)
-		reseeks := r.Get(metrics.DelimiterSkipScanPageReseeks)
-		rollup = func(stats legacy.Stats) {
-			opens.Add(stats.GroupsOpened)
-			shortcuts.Add(stats.GroupShortcuts)
-			decoded.Observe(float64(stats.KeysDecoded))
-			reseeks.Observe(float64(stats.Reseeks))
-		}
+	opens := r.Get(metrics.DelimiterSkipScanRowGroupOpens)
+	shortcuts := r.Get(metrics.DelimiterSkipScanWholeGroupShortcuts)
+	decoded := r.Get(metrics.DelimiterSkipScanDecodedKeyRows)
+	reseeks := r.Get(metrics.DelimiterSkipScanPageReseeks)
+	rollup := func(stats legacy.Stats) {
+		opens.Add(stats.GroupsOpened)
+		shortcuts.Add(stats.GroupShortcuts)
+		decoded.Observe(float64(stats.KeysDecoded))
+		reseeks.Observe(float64(stats.Reseeks))
 	}
 	var prefetch store.PrefetchMeters
 	if c, cached := s.cfg.Store.(prefetchingStore); ok && cached {

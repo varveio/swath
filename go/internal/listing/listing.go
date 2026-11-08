@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
@@ -178,7 +180,7 @@ type Spill struct {
 	ReserveBytes int64 `json:"reserve_bytes"`
 	PeakReaders  int64 `json:"peak_readers"` // spill readers open at once (at most order.MaxSpillReaders)
 	// Durable is the durable spill's account (nil when it was off: no
-	// journal, a version 7 journal, a provider without fences, a spill cap
+	// journal, a provider without fences, a spill cap
 	// below 16 MiB); DurableOff says why it was off when it could have run.
 	Durable    *order.DurableReport `json:"durable,omitempty"`
 	DurableOff string               `json:"durable_off,omitempty"`
@@ -545,7 +547,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
-	id := journal.Identity{Tool: buildinfo.Tool, Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
+	id := journal.Identity{Tool: buildinfo.Tool, Format: int(seekparquet.FormatVersion), SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
 		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()

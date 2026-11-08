@@ -215,7 +215,7 @@ measured value, with the measurement beside it in the test, so it fails on an or
 and never on runner variance; the shape suite's bounds follow this rule. A heap bound that `-race` distorts
 runs without it, behind `SWATH_HEAP_GATES` in `go-nonrace`; lighter heap checks (`listing` `memory_test.go`,
 the default arm of `TestWriterAdmissionCoversHeap`) run in every tier. A test that flakes is fixed in the test: a barrier or a
-deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #309, #313, #319, #321), not a retry or a silently
+deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #309, #313, #319, #321, #325, #326, #332, #333), not a retry or a silently
 widened bound. The test runs of `go-race`, `go-nonrace`, `go-xos`, `go-race-nightly` and `go-stress.yml` pass an
 explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the shard check's `go test -list` do not.
 
@@ -285,7 +285,7 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
 | hostile keyspaces | `source/keyrange` `TestHostileFixturesMatchSequential`: the cardinality bomb (6,000 keys after a 200-byte shared run, plus neighbors of the prefix) and the encoding minefield (percent-encoding traps, `+`, spaces, `?#&=`, control characters, NBSP, BOM, U+FFFD, non-BMP, combining marks, long runs of one byte or scalar) list row-identical to the sequential oracle, parallel and seeded, and their ranges tile the keyspace |
 | metamorphic laws | `source/keyrange` `TestMetamorphicLaws`: one table over every fixture and hostile keyspace; the listing is invariant to the page size (pages capped at 3, 7, 13, random short pages), the range decomposition (seed on and off, the seed's pagination and descent at pages of 3, 1, 4, 8, 16, 64 workers, forced random splits, a seeded resume), the memory budget (20 rows to 1 M rows) |
 | the seed | `source/keyrange` `TestSeedDescent`: the waves, requests, levels, folders per level and stop reason on the single-root date layout (5 waves, 16 requests, 4 levels to 336 days), a 2,300-folder top level (3 pages), 95 % of the keys under the last folder (one level; no tile over 3/(4·workers) of the keys, an empty open frontier), one folder per level 100 deep (the level budget), top-level objects (the round-trip budget) and the page cap; `TestSeedListsEveryKey`: every shape, fixture and hostile keyspace row-identical, and the seed's tiles contiguous with cuts strictly ascending, safe, real folders, inside the scope; `TestSeedResume`: a resumed scope tiled with every cut above K, row-identical under random splits, on the S3-shaped and the inclusive-start providers; `TestSeedResumeAfterCrash`: seeded runs killed at random splits and range ends (`faults.At`), resumed with the seed, row-identical to the keyspace; `TestSeedChargesEmptyPages` (empty continuing pages before the first folder are seed requests and round trips: 10 on the top level stop at 6 round trips, 40 folders behind one each stop at 64 requests; `seed.requests` equals the delimiter requests sent), `TestSeedFailurePublishesCounters` (a failing or canceled second wave still reports its requests, round trips, pages and `seed.stop.failed`) |
-| dataset format contract | `listing` `TestDatasetContract`: multi-part S3 datasets (sequential, parallel, seeded) and a local one with a non-UTF-8 name, read from the manifest alone: parts are exactly `data/` in name order, bytes and MD5 match, footer rows and exact base64 bounds match, keys rise strictly within and across parts, footers carry exactly the four `swath.*` stamps and `sorting_columns` key ascending, and the three S3 runs hold the same keys |
+| dataset format contract | `listing` `TestDatasetContract`: multi-part S3 datasets (sequential, parallel, seeded) and a local one with a non-UTF-8 name, read from the manifest alone: parts are exactly `data/` in name order, bytes and SHA-256 match, footer rows and exact base64 bounds match, keys rise strictly within and across parts, footers carry exactly the five `seekparquet.*` stamps and `sorting_columns` key ascending, and the three S3 runs hold the same keys |
 | versioned listing, every path | `source/keyrange` `TestGroupsEveryRowOnceInOrder`: every version row once, in wire order within its key and byte order across keys, through both `order.Run` and `order.Count`; pages of 1, 2, 3, 7 and 50, full or random short pages with empty continuations, three random seeds, inclusive and exclusive starts, sequential, forced and demand splits, delimiter seed with structure probes, row-weighted warm starts (including a cut at the hot key), latency-ranked splits, resume after ordinary and hot keys, and a prefix scope; a slow-folder arm requires an actual slow-range split and group buffering |
 | version groups and split ownership | `source/keyrange` `TestGroupsTake` (page-by-page hold-back transitions, hot keys and empty pages), `TestGroupsSplitVetoAndRelist` (an open group vetoes a split; discarded held rows are relisted exactly once), `TestGroupsEmittedRowsOwnTheirStorage` (emitted rows release the original page arena and excluded tail headers), `TestGroupsNeedDetach` (groups require a detach function), `TestGroupsMaximumIncludesMiddleGroup`, `TestGroupMaximumAllEmissionPaths` (maximum group rows include interior groups, sequential and seed EOF), `TestGroupOverfetchRows` (rows beyond the upper key bound are counted and trimmed) |
 | version token cycles and raw progress | `source/keyrange` `TestGroupsTokenCycle` (periods 2, 3 and 100 fail in range and sequential chains), `TestGroupsRejectSuppressedTokenCycle` (cycles fail even below the resume bound), `TestGroupRawProgressBounded` (repeated suppressed rows with fresh tokens eventually stop advancing the frontier), `TestGroupRawSuppressedOrder` (descending suppressed keys still fail), `TestGroupsOutOfOrder` (descending keys or an equal key at a closed seam fail) |
@@ -565,8 +565,8 @@ verifier tests skip. The tests stay in `go/test_dataset_readers.py` beside `veri
 the script. It checks a SeekParquet dataset independently of the Go code: schema dispatch, the manifest's
 SeekParquet members only, its key declaration (`unique` false exactly for the versions schemas), the swath
 extension's fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts,
-row counts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), each part's MD5 against
-`extensions.swath.part_md5`, and the five `seekparquet.*` footer stamps and no other `seekparquet.*` or `swath.*`
+row counts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), each part's SHA-256 against
+its `parts[].sha256`, and the five `seekparquet.*` footer stamps and no other `seekparquet.*` or `swath.*`
 entry.
 Current-object keys rise strictly; version keys may repeat within a part but parts remain strictly
 key-disjoint. S3 versions retain nullable delete-marker fields; GCS schemas are checked column by column
@@ -581,17 +581,20 @@ through the seekparquet Go module, so the format's own conformance suite is a ga
 `scripts/ci/seekparquet-conformance.sh` (from `go/`; under a minute, most of it installing the suite's Python
 dependencies):
 
-1. It checks out the seekparquet repository at the tag of the module version `go.mod` pins (`go/v0.1.0`) and
-   runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
-   (`internal/cmd/conformance`): the `reader` target must qualify, every core and generated case passing.
+1. It checks out the seekparquet repository at the commit `go.mod` pins (the revision of the
+   pseudo-version, `v0.1.1-0.20261108221443-6401109d1e5d` = `6401109d`; a release's `go/vX.Y.Z` tag once
+   there is one) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
+   (`internal/cmd/conformance`): every target it claims must qualify, the `reader` and the four validator
+   levels (`validator-structural`, `-profile`, `-full`, `-digest`), every core and generated case passing.
 2. `listing` `TestSeekParquetFixtures` (skipped unless `SWATH_SEEKPARQUET_FIXTURES` names a directory) writes
    three datasets with this build's writer and publication: S3 current objects over four parts whose keys roll
    up at several depths; S3 versions, keys repeated in groups up to 3,000 rows across pages and row groups
    (`unique` false); filesystem keys over 1,024 bytes, half led by 1,100 `0xFF` bytes, a third of them symlinks whose link
 targets are as long.
-3. `scripts/ci/seekparquet_conformance.py` has the suite's reference adapter (a full pyarrow scan that checks
-   every rule it can, page indexes and page bounds included) validate each dataset at the `full` and `digest`
-   levels (`digest` checks nothing: swath writes no `sha256`), then requires the Go adapter to answer whole and
+3. `scripts/ci/seekparquet_conformance.py` requires every part to declare `sha256` (so the digest level checks
+   something), has the suite's reference adapter (a full pyarrow scan that checks every rule it can, page
+   indexes and page bounds included) and the Go adapter's validator each validate each dataset at the `full`
+   and `digest` levels, then requires the Go adapter to answer whole and
    paginated ranges, lookups, prefix reads and `/`-delimited listings over keys taken from the dataset exactly
    as the reference adapter does.
 

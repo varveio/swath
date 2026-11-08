@@ -127,7 +127,7 @@ func TestLegacyTemporaryProtocolIsRefusedOrRecovered(t *testing.T) {
 					t.Fatalf("%s, %s, attempt %d: not refused as version 6: %v", damage, change, attempt, err)
 				}
 				got, err := measure(dataset.TempPath(out, 2))
-				if err != nil || got.MD5 != acked.MD5 || got.Bytes != acked.Bytes {
+				if err != nil || got.SHA256 != acked.SHA256 || got.Bytes != acked.Bytes {
 					t.Fatalf("%s, %s, attempt %d: the acknowledged part is not kept: %v %+v", damage, change, attempt, err, got)
 				}
 				after := snapshot(t, out)

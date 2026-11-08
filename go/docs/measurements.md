@@ -444,7 +444,7 @@ repetition. *Cold* is the default (delimiter seed); *seeded* lists the same keys
 cold run's dataset (one part, its key page index read: 1,954 cuts merged into 256 tiles); *grown* replaces keys
 800,001–850,000 by ten keys each (2,450,000 keys, one segment 10×) and lists it cold and seeded from the stale
 dataset. Rows equal keys in every run; the seeded datasets are byte-identical to the cold ones (same parts, same
-MD5s).
+digests).
 
 | Arm | Wall, s (3 runs) | Requests / 1k keys | `split.max_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
 |---|---|---|---|---|---|---|---|
@@ -711,9 +711,11 @@ That run used the build of the merged port, before the pivot policy and seed of 
 
 ## Recovery and part count
 
-**Verification read rate** (resume reads every retained part and checks its MD5): a 16 GiB, 4-vCPU VM, virtio
-disk, 1 GiB in 16 files of 64 MiB: 247, 306 and 376 MiB/s with the page cache dropped before each of three
-repetitions, 511 MiB/s warm, where MD5 on one core is the limit. 10,000 retained 64 MiB parts take roughly
+**Verification read rate** (resume reads every retained part and checks its digest; MD5 when measured,
+SHA-256 since journal version 9): a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB: 247, 306 and
+376 MiB/s with the page cache dropped before each of three repetitions, 511 MiB/s warm, where MD5 on one core
+was the limit. SHA-256 on one core of a Xeon Platinum 8581C (SHA extensions, 2026-11-08): 1,504 MiB/s, against
+692 for MD5; a CPU without the SHA extensions hashes SHA-256 slower than MD5. Not remeasured end to end. 10,000 retained 64 MiB parts take roughly
 30–45 minutes. Reproduce: `SWATH_VERIFY_DIR=DIR go test -run TestVerifyThroughput -v ./internal/listing`.
 
 **Part-count growth** (synthetic GCS fake, 8 workers, one-row parts, one run each):
@@ -1192,6 +1194,35 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - The resume ramp-up after a restart, and the defaults and resume-storm campaigns (smoke only, above).
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
 - Cold-cache medians of the local walker; `readlink` cost (80 symlinks in `realistic`).
+
+## The seekparquet module's part writer, 2026-11-08
+
+The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through
+`PartWriter.WritePage`); the bytes are unchanged (`TestFooterOnlyChange`). Writer alone, 300,000 rows of
+`parquetout`'s test schema, one part, best of four alternating runs on one shared Xeon Platinum 8581C host:
+
+| | swath writer (main 5de12601) | module, `WriteRows` (6dba953c) | module, `WritePage` (6401109d) |
+|---|---|---|---|
+| one column goroutine | 1,303 k rows/s | 803 (−37 %) | 1,235 (−5 %) |
+| four column goroutines | 2,166 k rows/s | 914 (−58 %) | 1,907 (−12 %) |
+
+`WriteRows` checks and copies every row; `WritePage` borrows the values from swath's page of rows, and what
+remains is its serial key-order check. Admission is back at swath's price (31.5 MiB an S3 encoder; the heap
+gate held four local writers, inputs retained, at 219.5 of 244 MiB).
+
+Shape suite, `nightly.yml` `go-shapes` dispatched on `main` and on the `WritePage` commit together (4-CPU
+runners), nine `pq.*` arms and 79 listing-only arms:
+
+| runs (main / branch) | `pq.*` main | `pq.*` branch | listing-only main | listing-only branch |
+|---|---|---|---|---|
+| 42529681487 / 42529679501 | 24.4 s | 31.1 s (+27.6 %) | 605.9 s | 649.3 s (+7.2 %) |
+| 42530957423 / 42530955503 | 29.3 s | 26.9 s (−8.1 %) | 639.7 s | 626.7 s (−2.0 %) |
+
+A single pair moves by tens of percent between runners (the same `main` took 24.4 s and 29.3 s), so these
+two pairs do not resolve a difference. Interleaved on one host (the dev VM, 4 vCPUs, full scale, two rounds
+of `pq.baseline`, `pq.highbytes`, `pq.punct_siblings`): `main` 15.32 s, the branch 15.12 s (−1.3 %). With
+`WriteRows` (runs 42525290072 / 42525288025) the `pq.*` arms took 29.0 s against 36.0 (+24.3 %) and the
+listing-only arms moved +0.9 %. One core hashes SHA-256 at 1,504 MiB/s and MD5 at 692.
 
 ## SeekParquet conformance
 

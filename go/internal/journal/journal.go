@@ -6,7 +6,7 @@
 //
 // The journal is about committed output only. Before a part is renamed
 // into data/, one record is appended and fsynced: the part (ordinal and
-// dataset.PartInfo: rows, size, MD5, min and max key) and the writer state
+// dataset.PartInfo: rows, size, SHA-256, min and max key) and the writer state
 // needed to continue (the router's frozen part limit, the running row
 // total). A resume keeps the published parts and has the source restart
 // after K, the last published part's max key, from its normal start-up:
@@ -86,7 +86,7 @@ type Header struct {
 	Created  time.Time `json:"created"`
 	// Argv is the command that started the run; swath resume replays it.
 	Argv []string `json:"argv,omitempty"`
-	// RunUUID (version 8) names the run across every resume: Create makes
+	// RunUUID names the run across every resume: Create makes
 	// it, and it is never replaced. A durable spill file and its ledger
 	// carry it, so recovery never reuses another run's certificates.
 	RunUUID string `json:"run_uuid,omitempty"`
@@ -154,11 +154,10 @@ type Journal struct {
 	n      int     // records in the journal
 	last   *Record // the last of them, nil for none
 	sealed bool    // marked unresumable: no record follows
-	uuid   string  // the header's run UUID ("" in a version 7 journal)
+	uuid   string  // the header's run UUID
 }
 
-// RunUUID is the run's UUID (Header.RunUUID): "" for a version 7 journal,
-// which keeps no durable spill.
+// RunUUID is the run's UUID (Header.RunUUID).
 func (j *Journal) RunUUID() string { return j.uuid }
 
 // Create starts a new journal at Path(out), replacing any old one, with
@@ -236,9 +235,7 @@ func ReopenIn(r *os.Root, st *State) (*Journal, error) {
 	}
 	j := start(f)
 	j.n, j.last = len(st.Records), st.Last()
-	if st.Header.Version >= 8 {
-		j.uuid = st.Header.RunUUID
-	}
+	j.uuid = st.Header.RunUUID
 	return j, nil
 }
 
@@ -437,24 +434,22 @@ func (j *Journal) Close() error {
 }
 
 // Version is the journal format this tool writes and reads. Version 7
-// marks the claimed-part protocol: the part about to be recorded is at
-// dataset.ClaimPath, and recovery protects only that name. A version 6
-// journal's acknowledged part may still be at dataset.TempPath, which
-// version 7 recovery would remove as unrecorded, so it is refused before
-// recovery touches anything (see durability.md). The unresumable mark
-// (Unresumable) is a later frame type within version 7: a build without
-// it reads a marked journal as corrupt, which refuses the resume too.
+// marked the claimed-part protocol: the part about to be recorded is at
+// dataset.ClaimPath, and recovery protects only that name (see
+// durability.md); the unresumable mark (Unresumable) is a later frame type
+// within it. Version 8 added the run UUID (Header.RunUUID) and keeps the
+// durable spill (DIR/.swath/spill/durable, with its own ledger) across a
+// resume.
 //
-// Version 8 adds the run UUID (Header.RunUUID) and keeps the durable spill
-// (DIR/.swath/spill/durable, with its own ledger) across a resume; its
-// part records and claimed-part handling are version 7's. A version 7
-// journal is still read, and resumes as version 7: with durable spill off
-// and nothing of version 8 written (an opened journal keeps its version).
-// A version 7 build refuses version 8 (VersionError).
-const Version = 8
+// Version 9 records each part's SHA-256 (dataset.PartInfo.SHA256) where
+// earlier versions recorded its MD5. Recovery compares a retained part with
+// its record by that digest, so an earlier journal is refused before
+// recovery touches anything (VersionError), as an earlier build refuses
+// version 9; its run is listed again with --overwrite.
+const Version = 9
 
 // MinVersion is the oldest version this build reads.
-const MinVersion = 7
+const MinVersion = 9
 
 // frameCRC covers the length field and the payload, so a damaged length
 // cannot pass for a different frame boundary.

@@ -538,7 +538,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
 
 ## Durable spill
 
-A journaled run (journal version 8) keeps the spill files that certify their rows: a resume replays them
+A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 

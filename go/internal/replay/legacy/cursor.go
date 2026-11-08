@@ -29,6 +29,10 @@ type Stats struct {
 	// GroupShortcuts counts row groups a rollup skipped whole because their
 	// first key and the next group's share one common prefix.
 	GroupShortcuts int64
+	// PartsOpened counts parts a read was the first to touch and checked
+	// (a SeekParquet dataset's lazy open); the legacy core opens every
+	// part when the dataset opens, so it counts none.
+	PartsOpened int64
 }
 
 // keyCursor walks the key column of one row group forward, holding the
