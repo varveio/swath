@@ -43,7 +43,7 @@ func TestS3Dataset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s3Stats(sum) == nil || sum.Output.RowsListed != s3Stats(sum).Counters.Value("objects") || sum.Output.RowsListed == 0 {
+		if s3Stats(sum) == nil || sum.Output.RowsEmitted != s3Stats(sum).Counters.Value("objects") || sum.Output.RowsEmitted == 0 {
 			t.Fatalf("%+v", sum)
 		}
 		var m dataset.Manifest
@@ -57,14 +57,14 @@ func TestS3Dataset(t *testing.T) {
 			scope = dataset.Scope{Kind: "prefix", Prefix: "logs/03/"}
 		}
 		if m.Source != (dataset.Source{Kind: "s3", URI: tc.root, Container: "bkt"}) || m.Scope != scope || m.SchemaID != s3.Schema.ID ||
-			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsListed ||
+			!m.Coverage.Complete || m.Coverage.StopReason != "completed" || m.Coverage.Snapshot || rows != sum.Output.RowsEmitted ||
 			m.Coverage.ListingStartedAt.IsZero() || m.Coverage.ListingFinishedAt.Before(m.Coverage.ListingStartedAt) {
 			t.Fatalf("manifest %+v", m)
 		}
 		var run Report
 		readJSON(t, filepath.Join(out, dataset.ReportName), &run)
 		if run.ReportVersion != ReportVersion || run.Outcome.Status != "committed" || !run.Outcome.Complete || run.Invocation.Source != tc.target ||
-			run.Output.RowsListed != sum.Output.RowsListed || run.Output.RowsCommitted != rows || run.Output.PartsWritten != len(m.Parts) ||
+			run.Output.RowsEmitted != sum.Output.RowsEmitted || run.Output.RowsCommitted != rows || run.Output.PartsWritten != len(m.Parts) ||
 			run.Source == nil || run.Source.Name != "s3" || run.Timings.WallMs < run.Timings.ListingMs {
 			t.Fatalf("run report %+v", run)
 		}

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"slices"
 	"sort"
@@ -54,9 +55,13 @@ type Sorted struct {
 	// Latency: a small delimiter page (a structure probe's 32 entries)
 	// answers faster than a full page of keys.
 	DelimLatency time.Duration
-	mu           sync.Mutex
-	rng          *rand.Rand
-	Calls        int
+	// SlowPrefix, if set, gives data requests whose first key lies under
+	// it SlowLatency instead: a slow folder.
+	SlowPrefix  string
+	SlowLatency time.Duration
+	mu          sync.Mutex
+	seed        int64
+	Calls       int
 	// Starts are the data (non-delimiter) requests' exclusive start keys:
 	// the start-after, or for a continuation the key before its position
 	// ("" from the scope's start). Read under Lock.
@@ -70,7 +75,21 @@ func (f *Sorted) Unlock() { f.mu.Unlock() }
 func NewSorted(keys []string, short bool, seed int64) *Sorted {
 	k := slices.Clone(keys)
 	slices.Sort(k)
-	return &Sorted{Keys: slices.Compact(k), Short: short, rng: rand.New(rand.NewSource(seed))}
+	return &Sorted{Keys: slices.Compact(k), Short: short, seed: seed}
+}
+
+// firstAfter is the first key a request starts at (its token's position,
+// else the first key above its start-after under its prefix); "" past
+// the end.
+func (f *Sorted) firstAfter(in *ListInput) string {
+	i := sort.SearchStrings(f.Keys, max(in.Prefix, in.StartAfter+"\x00"))
+	if tok := in.ContinuationToken; tok != "" {
+		i, _ = strconv.Atoi(tok)
+	}
+	if i < 0 || i >= len(f.Keys) {
+		return ""
+	}
+	return f.Keys[i]
 }
 
 var ErrBadStartAfter = errors.New("400 InvalidArgument: start-after")
@@ -79,6 +98,9 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 	lat := f.Latency
 	if in.Delimiter != "" && f.DelimLatency > 0 {
 		lat = f.DelimLatency
+	}
+	if f.SlowPrefix != "" && in.Delimiter == "" && strings.HasPrefix(f.firstAfter(in), f.SlowPrefix) {
+		lat = f.SlowLatency
 	}
 	if lat > 0 {
 		select {
@@ -91,7 +113,12 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 	f.Calls++
 	size := in.MaxKeys
 	if f.Short {
-		size = 1 + f.rng.Intn(size)
+		// A short page's size is a function of the request and the seed,
+		// not of the order requests arrive in: concurrent requests (a
+		// seed's wave, its first data page) keep a run reproducible.
+		h := fnv.New64a()
+		fmt.Fprintf(h, "%d\x00%s\x00%s\x00%s\x00%s\x00%d", f.seed, in.Prefix, in.Delimiter, in.StartAfter, in.ContinuationToken, in.MaxKeys)
+		size = 1 + int(h.Sum64()%uint64(max(size, 1)))
 	}
 	if f.PageCap > 0 {
 		size = min(size, f.PageCap)
@@ -189,6 +216,12 @@ func Keyspaces() map[string][]string {
 			return string(rune(0x10000+rng.Intn(0xFFFFF-0x10000))) + string(rune(0x1F600+rng.Intn(80))) + randStr(3, alnum)
 		}),
 		"markersAndOddChars": {"a/", "a/x", "a/y/", "a/y/z", "b", "c%20d", "c%", "d\x01e", "d\x7f", "e/\x01/f", "f/%", "zz/"},
+		// '%'-rich keys: URL-encoded names (every cursor holds '%', the
+		// red team's percent_keys shape) and folders whose names hold it.
+		"percentURLs": gen(4000, func(i int) string {
+			return fmt.Sprintf("web/https%%3A%%2F%%2Fexample.com%%2Fp%%2F%08d%%3Fq%%3D%d", i, i%97)
+		}),
+		"percentFolders": gen(4000, func(i int) string { return fmt.Sprintf("f%%%02X/obj%%20%04d", i/250, i) }),
 	}
 	var deep []string
 	for a := range 5 {

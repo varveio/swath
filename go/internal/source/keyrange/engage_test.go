@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -73,8 +74,9 @@ const shapePage = 100
 // hierarchical shapes reflections reached their range's hi and fell back
 // to the midpoint.
 func TestPivotPolicyEngages(t *testing.T) {
+	all := shapes()
 	for _, name := range []string{"date", "nbm", "flat", "hash"} {
-		keys := shapes()[name]
+		keys := all[name]
 		f := newSorted(keys, false, 1)
 		f.Latency = time.Millisecond
 		got, st, leaves := runBudget(t, f, Options{PageSize: shapePage}, 64, 1<<20)
@@ -99,6 +101,108 @@ func TestPivotPolicyEngages(t *testing.T) {
 			if g(id) == 0 {
 				t.Errorf("%s: %s never fired", name, Counters[id].Key)
 			}
+		}
+	}
+}
+
+// TestPercentKeysListInParallel: keys that all hold '%' (URL-encoded
+// names, the red team's percent_keys shape) list in parallel under S3's
+// bound policy (SafeKey: a real key's '%' may be a start bound): the tree
+// stays within 4·log2(pages)+8, the run is wide, no cursor is refused, the
+// density step reads '%' as a digit, the output is the keyspace and every
+// pivot adds only safe scalars to the cursor's prefix. Under the pivot
+// alphabet alone (Safe) no cursor is a bound and one worker lists it all.
+func TestPercentKeysListInParallel(t *testing.T) {
+	keys := make([]string, 50000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("web/https%%3A%%2F%%2Fexample.com%%2Fp%%2F%08d%%3Fq%%3D%d", i, i%97)
+	}
+	slices.Sort(keys)
+	// The control: the same names without '%' ("/" and "?" where it encoded
+	// them), the width a listing of this shape reaches.
+	plain := make([]string, len(keys))
+	for i := range plain {
+		plain[i] = fmt.Sprintf("web/https:-example.com-p-%08d?q=%d", i, i%97)
+	}
+	_, ctl, _ := runPolicy(t, func() *sorted { f := newSorted(plain, false, 1); f.Latency = time.Millisecond; return f }(),
+		Options{PageSize: shapePage}, 64, 1<<20, SafeKey)
+	for _, policy := range []struct {
+		name   string
+		accept func(string) bool
+	}{{"SafeKey", SafeKey}, {"Safe", Safe}} {
+		f := newSorted(keys, false, 1)
+		f.Latency = time.Millisecond
+		got, st, leaves := runPolicy(t, f, Options{PageSize: shapePage}, 64, 1<<20, policy.accept)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("%s: %d keys, want %d", policy.name, len(got), len(keys))
+		}
+		checkTiling(t, policy.name, leaves)
+		// Every '%' in a bound was copied: the bound through it is a prefix
+		// of a real key.
+		for _, l := range leaves {
+			for _, b := range []string{l.lo, l.hi} {
+				for j := range len(b) {
+					if b[j] != '%' {
+						continue
+					}
+					if i := sort.SearchStrings(keys, b[:j+1]); i == len(keys) || !strings.HasPrefix(keys[i], b[:j+1]) {
+						t.Fatalf("%s: bound %q synthesizes '%%' at %d", policy.name, b, j)
+					}
+				}
+			}
+		}
+		g := st.Get
+		t.Logf("%s: depth=%d mean_active=%.1f (control %.1f, depth %d) splits=%d/%d unsafe_cursor=%d density=%d/%d refused.alphabet=%d",
+			policy.name, g(cSplitMaxDepth), st.MeanActive, ctl.MeanActive, ctl.Get(cSplitMaxDepth), g(cSplitAcceptedFrontier), g(cSplitAcceptedBounded),
+			g(cSplitRejectedUnsafeCursor), g(cSplitPivotDensityBounded), g(cSplitPivotDensityFrontier), g(cDensityRefusedAlphabet))
+		if policy.name == "Safe" {
+			if g(cSplitAcceptedFrontier)+g(cSplitAcceptedBounded) != 0 || g(cSplitRejectedUnsafeCursor) == 0 {
+				t.Errorf("Safe: splits %d, unsafe cursors %d: want none and some", g(cSplitAcceptedFrontier)+g(cSplitAcceptedBounded), g(cSplitRejectedUnsafeCursor))
+			}
+			continue
+		}
+		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
+			t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), shapePage, 4))
+		}
+		if st.MeanActive < 0.6*ctl.MeanActive || g(cSplitRejectedUnsafeCursor) != 0 || g(cDensityRefusedAlphabet) != 0 ||
+			g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier) == 0 {
+			t.Errorf("mean active %.1f (want >= 0.6 x the control's %.1f), unsafe cursors %d, alphabet refusals %d, density pivots %d",
+				st.MeanActive, ctl.MeanActive, g(cSplitRejectedUnsafeCursor), g(cDensityRefusedAlphabet), g(cSplitPivotDensityBounded)+g(cSplitPivotDensityFrontier))
+		}
+	}
+}
+
+// TestSlowRangeSplits: one folder of 10 pages whose pages take 80 ms among
+// 99 folders of 10 pages at 4 ms (the red team's hotcold shape, scaled;
+// the cold work keeps 16 workers busy for about a third of the slow
+// folder's serial time): with
+// SlowSplit the slow folder splits without an idle worker
+// (split.reason.slow_range), the output is the keyspace and the tiles
+// tile; without it no such split is taken. The walls are logged, not
+// gated (a shared box).
+func TestSlowRangeSplits(t *testing.T) {
+	var keys []string
+	for d := range 100 {
+		for i := range 1000 {
+			keys = append(keys, fmt.Sprintf("d/%03d/file-%05d", d, i))
+		}
+	}
+	for _, on := range []bool{false, true} {
+		f := newSorted(keys, false, 1)
+		f.Latency, f.SlowPrefix, f.SlowLatency = 4*time.Millisecond, "d/000/", 80*time.Millisecond
+		start := time.Now()
+		got, st, leaves := runPolicy(t, f, Options{Seed: true, SeedFirstPage: true, SlowSplit: on, PageSize: shapePage}, 16, 1<<20, nil)
+		wall := time.Since(start)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("slow=%v: %d keys, want %d", on, len(got), len(keys))
+		}
+		checkTiling(t, fmt.Sprint("slow=", on), leaves)
+		g := st.Get
+		t.Logf("slow=%v: wall %s, slow splits %d, splits %d, max range latency %s, run latency %s, depth %d", on, wall,
+			g(cSplitReasonSlowRange), g(cSplitAcceptedBounded)+g(cSplitAcceptedFrontier), time.Duration(g(cSlowMaxRangeLatency)),
+			time.Duration(g(cSlowRunLatency)), g(cSplitMaxDepth))
+		if on != (g(cSplitReasonSlowRange) > 0) {
+			t.Errorf("slow=%v: %d slow-range splits", on, g(cSplitReasonSlowRange))
 		}
 	}
 }
@@ -293,8 +397,11 @@ func resumeRun(t *testing.T, keys []string, after string, seed int64) ([]string,
 // FuzzPropose: whatever the page, cursor, bound, anchor, generation and
 // demand, a proposed pivot that is not a refused sliver is a valid split
 // point: strictly between the cursor and the ceiling (hi, or the scope's
-// prefixCeil on the frontier), valid UTF-8, Safe, at most 1,024 bytes. The
-// seed corpus is the fixture and hostile keyspaces' neighbouring keys.
+// prefixCeil on the frontier), valid UTF-8, at most 1,024 bytes, and it
+// synthesizes nothing unsafe (I12): past the scalars it shares with the
+// cursor it is Safe, so a '%' in it was copied from the cursor (a real
+// key's). The seed corpus is the fixture and hostile keyspaces'
+// neighbouring keys.
 func FuzzPropose(f *testing.F) {
 	spaces := keyspaces()
 	for k, v := range hostile() {
@@ -315,7 +422,7 @@ func FuzzPropose(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, first, c, hi, anchor string, gen uint8, hunger int, open bool, prefixLen int) {
 		if !utf8.ValidString(first) || !utf8.ValidString(c) || !utf8.ValidString(hi) || !utf8.ValidString(anchor) ||
-			!Safe(c) || first > c || anchor > c || len(c) > maxKeyLen || len(first) > maxKeyLen {
+			!SafeKey(c) || first > c || anchor > c || len(c) > maxKeyLen || len(first) > maxKeyLen {
 			return
 		}
 		hunger = min(max(hunger, -1024), 1024)
@@ -335,10 +442,17 @@ func FuzzPropose(f *testing.F) {
 			return
 		}
 		m := pr.m
-		if m <= c || (bounded && m >= ceil) || !utf8.ValidString(m) || !Safe(m) || len(m) > maxKeyLen {
+		if m <= c || (bounded && m >= ceil) || !utf8.ValidString(m) || !synthesizedSafe(m, c) || len(m) > maxKeyLen {
 			t.Fatalf("propose(open=%v, first=%q, c=%q, ceil=%q, anchor=%q, g=%d, hunger=%d) = %q (%v)", open, first, c, ceil, anchor, gen, hunger, m, pr.src)
 		}
 	})
+}
+
+// synthesizedSafe: m is SafeKey and Safe past the scalars it shares with
+// c, so whatever m adds to c's prefix is in the pivot alphabet.
+func synthesizedSafe(m, c string) bool {
+	cm := scalars(m)
+	return SafeKey(m) && Safe(encode(cm[commonPrefix(cm, scalars(c)):]))
 }
 
 // TestStructureEngages: with structure probes on their evidence (the
@@ -366,8 +480,9 @@ func TestStructureEngages(t *testing.T) {
 }
 
 func structureEngages(t *testing.T, inline bool) {
+	all := shapes()
 	for _, name := range []string{"date", "nbm", "flat", "hash"} {
-		keys := shapes()[name]
+		keys := all[name]
 		f := newSorted(keys, false, 1)
 		f.Latency, f.DelimLatency = time.Millisecond, 500*time.Microsecond
 		got, st, leaves := runBudget(t, f, Options{PageSize: shapePage, Structure: StructureAuto}, 64, 1<<20)
@@ -416,17 +531,26 @@ func structureEngages(t *testing.T, inline bool) {
 // TestStructureSuppressionInherited: on flat keys inside one folder, with
 // every range probing (StructureOn), the children inherit the count of
 // probes that found no folder, so no chain from the root pays more than
-// 8 and the suppression is mostly inherited.
+// 8 and the suppression is mostly inherited. Whether a probe's result is
+// absorbed before its range splits is a race the engine never waits on
+// (on one core the zero-fan-out results often land late), so the arm
+// that asserts inheritance runs the probes inline (probeInline: each lands
+// before its range's next decision); the timed arm checks only that the
+// listing is complete and no structure pivot is taken.
 func TestStructureSuppressionInherited(t *testing.T) {
 	keys := shapes()["flat"]
-	f := newSorted(keys, false, 1)
-	f.Latency, f.DelimLatency = time.Millisecond, 500*time.Microsecond
-	got, st, _ := runBudget(t, f, Options{PageSize: shapePage, Structure: StructureOn}, 64, 1<<20)
-	if len(got) != len(keys) {
-		t.Fatalf("%d keys", len(got))
-	}
-	if st.Get(cStructureSuppressedInherited) == 0 || st.Get(cSplitPivotStructure) != 0 {
-		t.Fatalf("suppressed %d, inherited %d, structure pivots %d", st.Get(cStructureSuppressed), st.Get(cStructureSuppressedInherited), st.Get(cSplitPivotStructure))
+	for _, inline := range []bool{false, true} {
+		probeInline = inline
+		f := newSorted(keys, false, 1)
+		f.Latency, f.DelimLatency = time.Millisecond, 500*time.Microsecond
+		got, st, _ := runBudget(t, f, Options{PageSize: shapePage, Structure: StructureOn}, 64, 1<<20)
+		probeInline = false
+		if len(got) != len(keys) {
+			t.Fatalf("inline=%v: %d keys", inline, len(got))
+		}
+		if (inline && st.Get(cStructureSuppressedInherited) == 0) || st.Get(cSplitPivotStructure) != 0 {
+			t.Fatalf("inline=%v: suppressed %d, inherited %d, structure pivots %d", inline, st.Get(cStructureSuppressed), st.Get(cStructureSuppressedInherited), st.Get(cSplitPivotStructure))
+		}
 	}
 	// A range that inherited the limit sends nothing.
 	p, err := newTest(newSorted(keys, false, 1), Options{Workers: 4, Structure: StructureOn})

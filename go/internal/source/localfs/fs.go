@@ -164,6 +164,10 @@ func (p *Provider) Stats() Stats {
 func (p *Provider) Dispose(r Range) { disposeChunk(r) }
 
 func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Entry]) error {
+	// A chunk's share of its descriptor is released however Expand ends,
+	// a cancellation before any work included: a range a worker has taken
+	// is no longer queued, so the order stage will not dispose it.
+	defer disposeChunk(r)
 	if done(ctx) {
 		return ctx.Err()
 	}

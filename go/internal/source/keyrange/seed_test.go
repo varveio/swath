@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/faults"
@@ -78,6 +79,11 @@ func TestSeedListsEveryKey(t *testing.T) {
 			t.Fatalf("%s: %d keys, want %d", name, len(got), len(want))
 		}
 		checkTiling(t, name, leaves)
+		got, _, leaves = run(t, newSorted(keys, true, 5), Options{Seed: true, SeedFirstPage: true, PageSize: 100}, 16)
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s with the first page: %d keys, want %d", name, len(got), len(want))
+		}
+		checkTiling(t, name+" with the first page", leaves)
 		for _, w := range []int{4, 16} {
 			api := newSorted(want, false, 1)
 			api.PageCap = 7
@@ -244,13 +250,18 @@ func TestSeedDescent(t *testing.T) {
 		{"mass under the last", massUnderLast(), 16, 0, want{1, 9, 2, 1, cSeedStopWide, []int64{8, 214}, 1}},
 		// One folder per level: 4 levels, then the level budget.
 		{"100 deep", deepChain(100, 0), 64, 0, want{4, 5, 5, 1, cSeedStopLevels, []int64{1, 1, 1, 1, 1}, 1}},
-		// Four pages of the top level (objects, then the folder) spend four
-		// waves: two levels fit in the round-trip budget.
-		{"100 deep, objects first", deepChain(100, 6), 64, 2, want{2, 6, 6, 4, cSeedStopRoundTrips, []int64{1, 1, 1}, 1}},
+		// A top level whose first page holds objects only is not followed
+		// (seed.flat_chains): the folder after them is not found, and the
+		// tiles list it. The cost of the flat rule: a top level with more
+		// than a page of objects before its folders is not tiled (before
+		// it, four waves found the folder and two levels below it).
+		{"100 deep, objects first", deepChain(100, 6), 64, 2, want{0, 1, 1, 1, cSeedStopFlat, []int64{0}, 0}},
 		// 100 folders at 10 a page stop at the page cap (truncated); the 40
 		// found are listed once more and hold no folder.
 		{"wide at the cap", seedShapes()["wide top"][:100], 64, 10, want{1, 44, 5, 4, cSeedStopLeaf, []int64{40, 0}, 0}},
-		{"flat", seedShapes()["dense flat root"], 64, 0, want{0, 3, 3, 3, cSeedStopLeaf, []int64{0}, 0}},
+		// A flat level: its first page holds no folder, the chain stops
+		// there (before the flat rule, three waves of objects).
+		{"flat", seedShapes()["dense flat root"], 64, 0, want{0, 1, 1, 1, cSeedStopFlat, []int64{0}, 0}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			keys := slices.Compact(slices.Sorted(slices.Values(c.keys)))
@@ -365,8 +376,14 @@ func TestSeedResume(t *testing.T) {
 // end (faults.At), then resumed after the last key it delivered, with the
 // seed, lists row-identical to a clean run: nothing lost, nothing twice.
 // The keyspaces include keys whose resume start is truncated at a '%' or a
-// control character.
+// control character; with and without the seed's first data page.
 func TestSeedResumeAfterCrash(t *testing.T) {
+	for _, firstPage := range []bool{false, true} {
+		t.Run(fmt.Sprint("first-page=", firstPage), func(t *testing.T) { seedResumeAfterCrash(t, firstPage) })
+	}
+}
+
+func seedResumeAfterCrash(t *testing.T, firstPage bool) {
 	spaces := map[string][]string{"date": dateLayout(), "mass under the last": massUnderLast(), "nbm-like": nbmLike()}
 	for k, v := range hostile() {
 		spaces["hostile "+k] = v
@@ -384,7 +401,7 @@ func TestSeedResumeAfterCrash(t *testing.T) {
 		points := map[string]int{}
 		var pmu sync.Mutex
 		restore := faults.Set(func(p string) error { pmu.Lock(); points[p]++; pmu.Unlock(); return nil })
-		p, err := newTest(newSorted(want, true, 0), Options{Seed: true, Workers: 16})
+		p, err := newTest(newSorted(want, true, 0), Options{Seed: true, SeedFirstPage: firstPage, Workers: 16})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -410,7 +427,7 @@ func TestSeedResumeAfterCrash(t *testing.T) {
 				return nil
 			})
 			first := &collect{}
-			p, err := newTest(newSorted(want, true, int64(s)), Options{Seed: true, Workers: 16})
+			p, err := newTest(newSorted(want, true, int64(s)), Options{Seed: true, SeedFirstPage: firstPage, Workers: 16})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -428,7 +445,7 @@ func TestSeedResumeAfterCrash(t *testing.T) {
 				t.Fatalf("%s: %v", what, err)
 			}
 			crashed++
-			opt := Options{Seed: true, Workers: 16}
+			opt := Options{Seed: true, SeedFirstPage: firstPage, Workers: 16}
 			if len(got) > 0 {
 				opt.Resume = &Resume{After: got[len(got)-1]}
 			}
@@ -567,5 +584,113 @@ func TestSeedFailurePublishesCounters(t *testing.T) {
 					st.Get(cSeedRoundTrips), st.Get(cSeedPages), st.Get(cSeedPrefixes), st.Get(cSeedLevel0Cuts), st.Get(cSeedStopFailed), st.Get(cPages))
 			}
 		})
+	}
+}
+
+// pageRec records a seed's rows and tiles.
+type pageRec struct {
+	rows  []string
+	tiles []Range
+}
+
+func (r *pageRec) Rows(rows []Row) error {
+	if len(r.tiles) > 0 {
+		return errors.New("rows after a tile")
+	}
+	r.rows = append(r.rows, keysOf(rows)...)
+	return nil
+}
+func (r *pageRec) Child(c Range) error { r.tiles = append(r.tiles, c); return nil }
+
+// TestSeedFirstPage: with SeedFirstPage the seed's first wave carries the
+// scope's first data page. A scope of one page is listed by it in one
+// round trip (seed.stop.one_page, no tile, also on a resume after K); a
+// larger scope's page is discarded (seed.first_page_discarded): the seed
+// emits no row and its tiles are those of a seed without the page, from
+// the scope's start, at one request more.
+func TestSeedFirstPage(t *testing.T) {
+	expand := func(keys []string, opt Options, accept func(string) bool) (*pageRec, Stats) {
+		t.Helper()
+		p, err := New(opt, Description[Object]{Target: "test", Listing: Listing, AcceptBound: accept}, fetchFrom(newSorted(keys, false, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := &pageRec{}
+		if err := p.Expand(context.Background(), p.Root(), rec); err != nil {
+			t.Fatal(err)
+		}
+		return rec, p.Stats()
+	}
+	small := seedShapes()["flat small"] // 300 keys under a page of 1,000
+	for _, after := range []string{"", small[99]} {
+		opt := Options{Seed: true, SeedFirstPage: true, Workers: 64}
+		want := small
+		if after != "" {
+			opt.Resume, want = &Resume{After: after}, small[100:]
+		}
+		rec, st := expand(small, opt, nil)
+		if !slices.Equal(rec.rows, want) || len(rec.tiles) != 0 || st.Get(cSeedStopOnePage) != 1 ||
+			st.Get(cSeedFirstPageKeys) != int64(len(want)) || st.Get(cSeedRoundTrips) > 1 || st.Get(cRequests) > 2 {
+			t.Fatalf("after %q: %d rows, %d tiles, one_page %d, round trips %d, requests %d", after, len(rec.rows), len(rec.tiles),
+				st.Get(cSeedStopOnePage), st.Get(cSeedRoundTrips), st.Get(cRequests))
+		}
+	}
+	keys := dateLayout() // 3,360 keys: the first page is a third of a month
+	rec, st := expand(keys, Options{Seed: true, SeedFirstPage: true, Workers: 64}, nil)
+	plain, _ := expand(keys, Options{Seed: true, Workers: 64}, nil)
+	if len(rec.rows) != 0 || st.Get(cSeedFirstPageDiscarded) != 1 || st.Get(cSeedFirstPageKeys) != 0 || st.Get(cSeedStopWide) != 1 {
+		t.Fatalf("%d rows, discarded %d, first_page_keys %d", len(rec.rows), st.Get(cSeedFirstPageDiscarded), st.Get(cSeedFirstPageKeys))
+	}
+	if !reflect.DeepEqual(rec.tiles, plain.tiles) {
+		t.Fatalf("%d tiles from %q, want the %d of a seed without the page", len(rec.tiles), rec.tiles[0].lo, len(plain.tiles))
+	}
+	var requests [2]int64
+	for i, first := range []bool{false, true} {
+		got, st, leaves := run(t, newSorted(keys, false, 1), Options{Seed: true, SeedFirstPage: first}, 64)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("first=%v: %d keys, want %d", first, len(got), len(keys))
+		}
+		checkTiling(t, fmt.Sprint("date first=", first), leaves)
+		requests[i] = st.Get(cRequests)
+	}
+	if requests[1] > requests[0]+1 {
+		t.Fatalf("the first page cost %d requests over %d", requests[1]-requests[0], requests[0])
+	}
+}
+
+// TestSeedFirstPageLargeFirstTile is the megascenes regression (12.6M
+// keys: 12 s, mean active 57, became 20 s, mean active 35, for the same
+// requests and splits, when the seed emitted its truncated first page and
+// started the first tile after it): a first folder far larger than the
+// rest, whose first 1,000 keys the first page holds. With SeedFirstPage
+// the seed's tiles start at the scope's start, as without it, and the run
+// is as wide.
+func TestSeedFirstPageLargeFirstTile(t *testing.T) {
+	var keys []string
+	for i := range 30000 {
+		keys = append(keys, fmt.Sprintf("a/img-%06d.jpg", i))
+	}
+	for d := range 300 {
+		for i := range 100 {
+			keys = append(keys, fmt.Sprintf("b%03d/img-%04d.jpg", d, i))
+		}
+	}
+	var mean [2]float64
+	for i, first := range []bool{false, true} {
+		f := newSorted(keys, false, 1)
+		f.Latency = time.Millisecond
+		got, st, leaves := runPolicy(t, f, Options{Seed: true, SeedFirstPage: first, PageSize: 100}, 64, 1<<20, nil)
+		if !slices.Equal(got, keys) {
+			t.Fatalf("first=%v: %d keys, want %d", first, len(got), len(keys))
+		}
+		checkTiling(t, fmt.Sprint("first=", first), leaves)
+		if first && (st.Get(cSeedFirstPageDiscarded) != 1 || st.Get(cSeedFirstPageKeys) != 0) {
+			t.Fatalf("the truncated first page was not discarded: %d keys", st.Get(cSeedFirstPageKeys))
+		}
+		mean[i] = st.MeanActive
+		t.Logf("first page %v: mean active %.1f, requests %d, depth %d", first, st.MeanActive, st.Get(cRequests), st.Get(cSplitMaxDepth))
+	}
+	if mean[1] < 0.7*mean[0] {
+		t.Fatalf("mean active %.1f with the first page, %.1f without", mean[1], mean[0])
 	}
 }

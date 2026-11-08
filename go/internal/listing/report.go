@@ -4,14 +4,18 @@
 package listing
 
 import (
-	"runtime/debug"
 	"time"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// ReportVersion is the run report's version.
-const ReportVersion = 1
+// ReportVersion is the run report's version. 2: the clearer names
+// (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
+// count requests.http_attempts in place of cost.api_calls, one row budget),
+// phase times, free_disk_min_bytes and the bounded progress history
+// (go/docs/upgrade.md lists every rename).
+const ReportVersion = 2
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: readers accept
@@ -35,29 +39,48 @@ type Report struct {
 	// (journal.Identity.Hash): the same for a run and its resumes; empty
 	// when the run stopped before its source opened.
 	ArgsHash string `json:"args_hash,omitempty"`
-	// Cost is this invocation's HTTP requests and their estimated price
-	// (nil for a source that makes no requests, or before it opened).
+	// Requests is this invocation's HTTP account (nil for a source that
+	// makes no requests, or before it opened).
+	Requests *Requests `json:"requests,omitempty"`
+	// Cost is the estimated price of Requests.HTTPAttempts (nil with
+	// Requests).
 	Cost *Cost `json:"cost,omitempty"`
 	// Efficiency is this invocation's throughput and request economy.
 	Efficiency *Efficiency `json:"efficiency,omitempty"`
+	// History is the run's progress, sampled (at most HistoryCap samples;
+	// nil for a run that stopped before listing).
+	History *History `json:"history,omitempty"`
 
 	report    *source.Report
+	sampler   *sampler        // the history's, stopped by finish
 	finalized bool            // Config.Finalize has accounted it
 	src       any             // the opened source, read by finish for the request account
 	live      source.Requests // its request account at the end
 }
 
-// Requests is the source's request account when the report was finished
+// Live is the source's request account when the report was finished
 // (zero for a source that makes no requests).
-func (r *Report) Requests() source.Requests { return r.live }
+func (r *Report) Live() source.Requests { return r.live }
 
-// Cost is an invocation's request account: every HTTP attempt it sent
-// (pages, probes, client retries, engine requeues) and, where the service's
-// reference tariff is known, an estimate labelled with its basis.
+// Requests is an invocation's HTTP account. HTTPAttempts is the one
+// request count: every HTTP attempt sent (pages, probes, client retries,
+// engine requeues); Retries, Throttles and Timeouts are the attempts among
+// them repeated after a retryable failure, answered with a throttle, and
+// past the per-request timeout (retried or not).
+type Requests struct {
+	HTTPAttempts int64 `json:"http_attempts"`
+	Retries      int64 `json:"retries"`
+	Throttles    int64 `json:"throttles"`
+	Timeouts     int64 `json:"timeouts"`
+}
+
+// Cost is the estimated price of an invocation's HTTP attempts
+// (Requests.HTTPAttempts), where the service's reference tariff is known,
+// labelled with its basis.
 type Cost struct {
-	APICalls int64 `json:"api_calls"`
-	// CostUSD is APICalls at Basis's rate; null without a known tariff (an
-	// S3-compatible endpoint): an unlabelled AWS figure would mislead.
+	// CostUSD is requests.http_attempts at Basis's rate; null without a
+	// known tariff (an S3-compatible endpoint): an unlabelled AWS figure
+	// would mislead.
 	CostUSD *float64   `json:"cost_usd"`
 	Basis   *CostBasis `json:"basis"`
 }
@@ -72,12 +95,13 @@ type CostBasis struct {
 // Efficiency is an invocation's throughput and request economy, over this
 // invocation's own rows (rows retained from an interrupted run excluded).
 type Efficiency struct {
-	// KeysPerSec is output.rows_listed over timings.listing_ms: listing and
+	// KeysPerSec is output.rows_emitted over timings.listing_ms: listing and
 	// ordering, not publication or the time before the run started.
 	KeysPerSec float64 `json:"keys_per_sec"`
-	// APICallsPer1kObjects is cost.api_calls per 1,000 rows listed; null
-	// with no row listed.
-	APICallsPer1kObjects *float64 `json:"api_calls_per_1k_objects"`
+	// HTTPAttemptsPer1kRows is requests.http_attempts per 1,000 rows
+	// fetched (before the filters: what the requests returned); null with
+	// no row fetched.
+	HTTPAttemptsPer1kRows *float64 `json:"http_attempts_per_1k_rows"`
 }
 
 // Attempt identifies one invocation: its report and the outcome the command
@@ -92,7 +116,7 @@ type Attempt struct {
 // Unstarted is the report of an invocation that stopped before a run began
 // (a resume refused on its journal): what was asked, and the failure.
 func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
-	r := Report{ReportVersion: ReportVersion, Build: build(), Attempt: attempt,
+	r := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: attempt,
 		Invocation: Invocation{Argv: argv, Out: out}, Outcome: Outcome{Status: StatusFailed}}
 	if err != nil {
 		r.Outcome.Error = err.Error()
@@ -108,11 +132,7 @@ func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
 }
 
 // Build names the binary.
-type Build struct {
-	Tool     string `json:"tool"` // "swath-go"
-	Version  string `json:"version"`
-	Revision string `json:"revision,omitempty"` // VCS revision, "-dirty" if modified
-}
+type Build = buildinfo.Build
 
 // Invocation is what was asked.
 type Invocation struct {
@@ -126,6 +146,7 @@ type Invocation struct {
 	Encoders       int      `json:"encoders"`
 	RowBudgetBytes int64    `json:"row_budget_bytes"`
 	PartSizeBytes  int64    `json:"part_size_bytes"`
+	Prior          *Prior   `json:"prior,omitempty"` // the --seed-from prior the range engine started from
 }
 
 // The outcome vocabulary, in one place. Three separate dimensions:
@@ -188,7 +209,11 @@ type Outcome struct {
 	Unrecorded string `json:"unrecorded,omitempty"`
 }
 
-// Timings of the run, wall and CPU.
+// Timings of the run, wall and CPU. The phase times: listing_ms, drain_ms
+// and publication_ms follow one another (each starts where the one before
+// ended); seed_ms overlaps listing_ms, at its start; wall_ms holds them all
+// and the setup before listing (credentials, the journal, a resume's
+// verification); session_ms holds wall_ms.
 type Timings struct {
 	StartedAt         time.Time `json:"started_at"`
 	ListingFinishedAt time.Time `json:"listing_finished_at,omitzero"`
@@ -198,18 +223,33 @@ type Timings struct {
 	// began) to finished_at, the credential lookup, a resume's
 	// verification and publication included.
 	SessionMs int64 `json:"session_ms"`
-	ListingMs int64 `json:"listing_ms"` // to the end of the order stage
+	// ListingMs runs from started_at to listing_finished_at, the end of the
+	// order stage: every row listed and handed on in order (to the encoders'
+	// queues, the text output, or counted). It includes the setup and the
+	// order stage's drain after the last request.
+	ListingMs int64 `json:"listing_ms"`
+	// SeedMs is the range engine's seed, from its first delimiter request to
+	// its tiles (inside listing_ms; absent where no seed ran: a local
+	// source, a seed turned off, a warm start).
+	SeedMs *int64 `json:"seed_ms,omitempty"`
+	// DrainMs runs from listing_finished_at until the encoders have written
+	// and closed the last part; PublicationMs from there until the manifest
+	// is installed (the commit). Both absent for a run that commits no
+	// dataset.
+	DrainMs       *int64 `json:"drain_ms,omitempty"`
+	PublicationMs *int64 `json:"publication_ms,omitempty"`
 	// UserCPUMs and SysCPUMs are the process's CPU times: absent (nil)
 	// where the platform does not measure them (Resources.RusageAvailable).
 	UserCPUMs *int64 `json:"user_cpu_ms,omitempty"`
 	SysCPUMs  *int64 `json:"sys_cpu_ms,omitempty"`
 }
 
-// Output is the row and part accounting: this invocation versus the
-// dataset.
+// Output is the row and part accounting: this invocation (fetched,
+// filtered, emitted) versus the dataset (retained, durable, committed).
 type Output struct {
-	RowsListed    int64 `json:"rows_listed"`    // listed and ordered (a dry run: counted) by this invocation, after the filters
-	RowsFiltered  int64 `json:"rows_filtered"`  // listed by this invocation and dropped by the filters (--include, ...)
+	RowsFetched   int64 `json:"rows_fetched"`   // listed from the source by this invocation, before the filters
+	RowsFiltered  int64 `json:"rows_filtered"`  // fetched by this invocation and dropped by the filters (--include, ...)
+	RowsEmitted   int64 `json:"rows_emitted"`   // fetched, kept by the filters and handed on in order (swath count: counted)
 	RowsRetained  int64 `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64 `json:"rows_committed"` // in the committed dataset (0 unless committed)
 	// RowsDurable is the rows in parts that stay in the output: the
@@ -218,7 +258,13 @@ type Output struct {
 	RowsDurable   int64 `json:"rows_durable"`
 	PartsWritten  int   `json:"parts_written"` // written by this invocation (after a failure: journaled, durable)
 	PartsRetained int   `json:"parts_retained"`
-	Bytes         int64 `json:"bytes"` // the dataset's part bytes
+	// ObjectBytes sums the sizes of the objects the order stage accepted
+	// from this invocation (the size column; absent for a schema without
+	// one): on a committed run exactly those of rows_emitted, on a run that
+	// stopped also rows accepted and never handed on.
+	// OutputBytes is the dataset's part bytes (a text run's: output.text.bytes).
+	ObjectBytes *int64 `json:"object_bytes,omitempty"`
+	OutputBytes int64  `json:"output_bytes"`
 	// Text is a text run's output (nil for a dataset or a dry run).
 	Text *TextOutput `json:"text,omitempty"`
 }
@@ -273,11 +319,14 @@ type Resources struct {
 	// RusageAvailable says whether this platform measured the CPU times and
 	// peak RSS; false leaves them out rather than reporting zeros.
 	RusageAvailable  bool  `json:"rusage_available"`
-	RowBudgetBytes   int64 `json:"row_budget_bytes"`   // rows in flight: reorder storage and encoder queues
-	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage
+	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage (the budget: invocation.row_budget_bytes)
+	// FreeDiskMinBytes is the least free space seen on the filesystem the
+	// run writes to (the spill directory's, else the output's), sampled
+	// every second (HistoryEvery); absent for a run that writes nothing.
+	FreeDiskMinBytes *int64 `json:"free_disk_min_bytes,omitempty"`
 	// PeakHeapLiveBytes is the peak live heap while listing (the bytes a
 	// garbage collection marked reachable, sampled every 100 ms): beside
-	// row_budget_bytes, the memory the budget does not see.
+	// invocation.row_budget_bytes, the memory the budget does not see.
 	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
 	// PeakAheadRows is the most rows listed and not yet handed on at once
 	// (ahead of the publish frontier, in memory or spilled);
@@ -328,8 +377,11 @@ func (r *Report) setSource(sr source.Report) {
 	r.Source = &SourceStats{Name: sr.Name, Stats: sr.Stats}
 }
 
-// finish stamps the end time and the resources.
+// finish stamps the end time and the resources, and stops the history.
 func (r *Report) finish() {
+	if r.sampler != nil {
+		r.History, r.Resources.FreeDiskMinBytes = r.sampler.finish()
+	}
 	now := time.Now()
 	r.Timings.FinishedAt = now.UTC()
 	r.Timings.WallMs = now.Sub(r.Timings.StartedAt).Milliseconds()
@@ -351,7 +403,8 @@ func (r *Report) setRusage(user, sys time.Duration, peak int64, ok bool) {
 	r.Timings.UserCPUMs, r.Timings.SysCPUMs, r.Resources.PeakRSSBytes = &u, &s, &peak
 }
 
-// requests fills Cost and Efficiency from the source's request account.
+// requests fills Requests, Cost and Efficiency from the source's request
+// account.
 func (r *Report) requests() {
 	rq, ok := r.src.(source.Requested)
 	if !ok {
@@ -359,7 +412,8 @@ func (r *Report) requests() {
 	}
 	r.live = rq.Requests()
 	n := r.live.Attempts
-	c := &Cost{APICalls: n}
+	r.Requests = &Requests{HTTPAttempts: n, Retries: r.live.Retries, Throttles: r.live.Throttles, Timeouts: r.live.Timeouts}
+	c := &Cost{}
 	if p, ok := r.src.(source.Priced); ok {
 		if rate, basis := p.Tariff(); basis != "" {
 			usd := float64(n) / 1000 * rate
@@ -369,47 +423,14 @@ func (r *Report) requests() {
 	r.Cost = c
 	e := &Efficiency{}
 	if ms := r.Timings.ListingMs; ms > 0 {
-		e.KeysPerSec = float64(r.Output.RowsListed) * 1000 / float64(ms)
+		e.KeysPerSec = float64(r.Output.RowsEmitted) * 1000 / float64(ms)
 	}
-	if rows := r.Output.RowsListed; rows > 0 {
+	if rows := r.Output.RowsFetched; rows > 0 {
 		v := float64(n) * 1000 / float64(rows)
-		e.APICallsPer1kObjects = &v
+		e.HTTPAttemptsPer1kRows = &v
 	}
 	r.Efficiency = e
 }
 
 // BuildInfo is this binary's name, module version and VCS revision.
-func BuildInfo() Build { return build() }
-
-// revision is the commit the binary was built from, set at link time by
-// go/build.sh and CI (-ldflags -X ...listing.revision=...); empty, the Go
-// toolchain's VCS stamp is used, which a build in a git worktree may lack.
-var revision string
-
-// build is this binary's name, module version and VCS revision.
-func build() Build {
-	b := Build{Tool: "swath-go", Version: "devel", Revision: revision}
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return b
-	}
-	if v := info.Main.Version; v != "" && v != "(devel)" {
-		b.Version = v
-	}
-	if b.Revision != "" {
-		return b
-	}
-	dirty := false
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			b.Revision = s.Value
-		case "vcs.modified":
-			dirty = s.Value == "true"
-		}
-	}
-	if b.Revision != "" && dirty {
-		b.Revision += "-dirty"
-	}
-	return b
-}
+func BuildInfo() Build { return buildinfo.Read() }

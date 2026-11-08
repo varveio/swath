@@ -70,19 +70,54 @@ type Options struct {
 	// identity); a part it closes does not calibrate the size ratio, as a
 	// time cut does not: only a part closed by size does.
 	MaxRows int64
-	// Cut, if set, fixes one part's boundary: the part with that ordinal
-	// is closed after exactly that many rows, neither by size nor by the
-	// interval. A resume sets it to reproduce a claimed part whose record
+	// Cut, if set, fixes one part as it was written before: the part with
+	// that ordinal is closed after exactly that many rows, neither by size
+	// nor by the interval, and written with the claimed part's columns and
+	// created_by. A resume sets it to reproduce a claimed part whose record
 	// was never written, whatever cut it (size, or a timer that fires
-	// differently now).
+	// differently now) and whichever build wrote it. A pinned part that
+	// reaches the size target at its boundary was cut by size, and
+	// calibrates as it did.
 	Cut *Cut
 }
 
-// Cut is a part boundary recovered from a claimed part: its ordinal and
-// its row count.
+// Cut is a part recovered from a claimed part's footer: its ordinal, its
+// row count and, when read, its columns (the key first) and created_by.
+// A build that adds an optional column writes the claimed part without it
+// and the parts after it with it, so the claimed part is reproduced byte
+// for byte; created_by names the build that wrote it, so a later build of
+// the same recipe reproduces it too. Columns the schema does not hold in
+// that order, or none, leave the schema whole, and CreatedBy empty leaves
+// this build's: the byte comparison then decides.
 type Cut struct {
-	Ordinal int
-	Rows    int64
+	Ordinal   int
+	Rows      int64
+	Columns   []string
+	CreatedBy string
+}
+
+// claimSchema is s restricted to the named columns, the key first, when
+// they are s's columns in s's order; otherwise s.
+func claimSchema[P any](s *schema.Schema[P], names []string) *schema.Schema[P] {
+	if len(names) == 0 || names[0] != "key" {
+		return s
+	}
+	names = names[1:]
+	if len(names) == len(s.Columns) {
+		return s
+	}
+	cols := make([]schema.Column[P], 0, len(names))
+	for _, c := range s.Columns {
+		if len(cols) < len(names) && c.Name == names[len(cols)] {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) != len(names) {
+		return s
+	}
+	sub := *s
+	sub.Columns = cols
+	return &sub
 }
 
 // Resume is the router state recovered from a journal.
@@ -250,14 +285,18 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 			r.cur.n++
 			r.cur.logical += r.schema.LogicalBytes(&seg[i])
 			if r.cur.pinned {
-				r.full = r.cur.n >= r.opt.Cut.Rows
+				if r.cur.n >= r.opt.Cut.Rows {
+					// The claimed boundary, whatever cut it. Whether
+					// it reached the size target is recomputed from the
+					// same rows: the cold run's part was cut by size
+					// exactly when it was, and so calibrates here too,
+					// before its successor is routed.
+					r.full = true
+					r.cur.bySize = r.cur.logical >= r.target()
+				}
 				continue
 			}
-			target := r.limit
-			if target == 0 {
-				target = r.initialTarget()
-			}
-			if r.cur.logical >= target {
+			if r.cur.logical >= r.target() {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
 			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
@@ -369,9 +408,13 @@ func (r *Router[P]) encode(p *part[P]) {
 	if err == nil {
 		err = faults.At("part-create") // tests: the output replaced after the check
 	}
+	s, createdBy := r.schema, ""
+	if p.pinned {
+		s, createdBy = claimSchema(r.schema, r.opt.Cut.Columns), r.opt.Cut.CreatedBy
+	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), r.schema, p.ordinal, r.opt.Encoders, columns)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.opt.Encoders, columns, createdBy)
 	}
 	if err != nil {
 		p.err = err
@@ -472,8 +515,14 @@ func (r *Router[P]) Routed() int64 {
 	return r.rows
 }
 
-// initialTarget is the logical bytes per part before calibration.
-func (r *Router[P]) initialTarget() int64 { return int64(float64(r.opt.PartSize) / initialRatio) }
+// target is the logical bytes that close a part by size: the frozen limit,
+// or before calibration PartSize/initialRatio.
+func (r *Router[P]) target() int64 {
+	if r.limit != 0 {
+		return r.limit
+	}
+	return int64(float64(r.opt.PartSize) / initialRatio)
+}
 
 // cut closes the current part. Until the ratio is frozen, the part is
 // waited for: it may be the calibrating part.

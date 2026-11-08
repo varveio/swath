@@ -210,7 +210,7 @@ func TestOneTerminalAccount(t *testing.T) {
 			fi, _ := os.Stat(p)
 			size += fi.Size()
 		}
-		if len(kept) == 0 || rep.Output.PartsWritten != len(kept) || rep.Output.Bytes != size || rep.Output.RowsDurable <= 0 {
+		if len(kept) == 0 || rep.Output.PartsWritten != len(kept) || rep.Output.OutputBytes != size || rep.Output.RowsDurable <= 0 {
 			t.Fatalf("report output %+v; %d parts of %d bytes kept", rep.Output, len(kept), size)
 		}
 		if _, err := os.Stat(filepath.Join(dir, dataset.ReportName)); err == nil {

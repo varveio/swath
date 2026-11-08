@@ -231,6 +231,31 @@ func TestInterruptedRunReportsStall(t *testing.T) {
 	}
 }
 
+// blockedSink accepts nothing: every Write waits for the run's context.
+type blockedSink struct{}
+
+func (blockedSink) Write(ctx context.Context, _ [][]schema.Row[tp]) error {
+	<-ctx.Done()
+	return context.Cause(ctx)
+}
+
+// TestFinalFlushReportsStall: a run whose one row is batched until the
+// drain's final flush, and whose sink then blocks until the deadline,
+// reports that wait as FrontierStuck (the interval is closed after the
+// flush, not before it).
+func TestFinalFlushReportsStall(t *testing.T) {
+	const stall = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), stall)
+	defer cancel()
+	st, err := Run[rng, tp](ctx, &tree{depth: 0, fanout: 1, rowsPer: 1}, blockedSink{}, &testSchema, Options{Workers: 1, Budget: 1000})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+	if st.FrontierStuck < stall/2 {
+		t.Fatalf("the final write blocked for %v: FrontierStuck %v", stall, st.FrontierStuck)
+	}
+}
+
 // failingRoot's root emits nothing and fails, the shape where the drainer
 // could find the tree finished between the node's completion and the
 // failure being recorded.
@@ -284,24 +309,35 @@ func (s *siblings) Expand(_ context.Context, r rng, e source.Emitter[rng, tp]) e
 // reaches the sink, however soon after the failure the drainer passes its
 // node: the rows handed on stay a prefix of the keyspace with no gap, the
 // prefix a resume continues after. The drainer must not pass a failed
-// node before it sees the run stopped. Every tenth run forces the
-// window: the drainer starts late (hookBeforeDrain), so workers expand
-// both siblings and "a" fails while it waits, and the context's stop
-// callback is delayed (hookStopCallback), so only the latch taken with the
-// failure stops the drainer at the failed node; the other runs keep the
-// undisturbed timing. It covers a failed leaf next to a finished sibling,
-// not nested split failures, cancellation mid-drain or spill-trailer
-// errors.
+// node before it sees the run stopped. Every run forces the window with
+// barriers, not sleeps: the drainer starts only after the workers have
+// expanded the root and both siblings ("a" failed after "b" finished;
+// hookAfterExpand counts the three), and the context's stop callback is
+// held until Run has returned (hookStopCallback), so only the latch taken
+// with the failure can stop the drainer at the failed node. It covers a
+// failed leaf next to a finished sibling, not nested split failures,
+// cancellation mid-drain or spill-trailer errors.
 func TestFailedRangeStopsTheStream(t *testing.T) {
-	defer func() { hookBeforeDrain, hookStopCallback = nil, nil }()
-	for i := range 300 {
-		hookBeforeDrain, hookStopCallback = nil, nil
-		if i%10 == 0 {
-			hookBeforeDrain = func() { time.Sleep(5 * time.Millisecond) }
-			hookStopCallback = func() { time.Sleep(50 * time.Millisecond) }
+	defer func() { hookBeforeDrain, hookAfterExpand, hookStopCallback = nil, nil, nil }()
+	for i := range 100 {
+		var expanded atomic.Int32
+		allExpanded, release := make(chan struct{}), make(chan struct{})
+		hookAfterExpand = func() {
+			if expanded.Add(1) == 3 { // the root, "b", then "a"
+				close(allExpanded)
+			}
 		}
+		hookBeforeDrain = func() {
+			select {
+			case <-allExpanded:
+			case <-time.After(10 * time.Second):
+				t.Error("the workers did not expand the three ranges")
+			}
+		}
+		hookStopCallback = func() { <-release }
 		c := &collect{}
 		_, err := Run[rng, tp](context.Background(), &siblings{bDone: make(chan struct{})}, c, &testSchema, Options{Workers: 2, Budget: 1 << 20})
+		close(release)
 		if err == nil || err.Error() != "provider failed" {
 			t.Fatalf("run %d: err = %v", i, err)
 		}

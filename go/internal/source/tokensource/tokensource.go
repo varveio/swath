@@ -29,8 +29,14 @@ type Shared struct {
 	g  singleflight.Group
 }
 
-// NewShared caches src's tokens until early before their expiry.
+// NewShared caches src's tokens until early before their expiry. With
+// early 0, a src that is already a reuse source (an SDK's, such as the
+// compute metadata source's 225 s margin) keeps its own margin; any other
+// src gets oauth2's default.
 func NewShared(src oauth2.TokenSource, early time.Duration) *Shared {
+	if early == 0 {
+		return &Shared{ts: oauth2.ReuseTokenSource(nil, src)}
+	}
 	return &Shared{ts: oauth2.ReuseTokenSourceWithExpiry(nil, src, early)}
 }
 

@@ -472,6 +472,7 @@ func (c *Counters) Answered() int64 { return c.answered.Load() }
 // the end-of-run summary: atomics only, nothing on the request path.
 type Live struct {
 	Attempts, Retries, Throttles int64
+	Timeouts                     int64 // as Counts
 	Inflight                     int64 // attempts in flight now
 	InflightMax, InflightNs      int64 // as Counts
 	Limit                        int   // the limiter's current limit (0 without one)
@@ -479,7 +480,7 @@ type Live struct {
 
 // Live reads the counters (Limit is the client's to fill).
 func (c *Counters) Live() Live {
-	return Live{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Inflight: c.inflight.Load(),
+	return Live{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Timeouts: c.timeouts.Load(), Inflight: c.inflight.Load(),
 		InflightMax: c.inflightMax.Load(), InflightNs: c.inflightNs.Load()}
 }
 
@@ -514,6 +515,10 @@ const (
 	CLatencyOverflow
 	CLimiterDecreases
 	CLimiterFloorThrottles
+	CLimiterStale
+	CLimiterTolerated
+	CLimiterThrottlePermille
+	CLimiterLimit
 	CLimiterIncreases
 	CLimiterCooldown
 	CLimiterLatencyFrozen
@@ -550,18 +555,22 @@ func CounterDefs(throttles, timeoutFlag string) []counters.Def {
 		d[id] = counters.Def{Key: "inflight.p" + q + "_ns", Kind: counters.Gauge, Unit: "ns", Help: "attempt latency (send to body read), " + q + "th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns"}
 	}
 	d[CLatencyOverflow] = counters.Def{Key: "inflight.latency_overflow", Kind: counters.Count, Unit: "attempts", Help: "attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket"}
-	d[CLimiterDecreases] = counters.Def{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit multiplied by 0.7 on a " + throttles + " answer"}
-	d[CLimiterFloorThrottles] = counters.Def{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers at a limit of 1: no decrease and no fresh 10 s cool-down"}
-	d[CLimiterIncreases] = counters.Def{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one (at most one per second, after 10 s without a throttle)"}
-	d[CLimiterCooldown] = counters.Def{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: a throttle answer in the last 10 s"}
+	d[CLimiterDecreases] = counters.Def{Key: "limiter.decreases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "cuts: limit multiplied by 0.7 on a " + throttles + " answer, at most one per round trip, while 15 % or more of the window's answers were throttles"}
+	d[CLimiterFloorThrottles] = counters.Def{Key: "limiter.floor_throttles", Kind: counters.Count, Unit: "answers", Feature: f, Help: "cuts due at a limit of 1: no decrease"}
+	d[CLimiterStale] = counters.Def{Key: "limiter.cuts_suppressed.round_trip", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers to attempts sent before the last cut: no further cut (one per round trip)"}
+	d[CLimiterTolerated] = counters.Def{Key: "limiter.cuts_suppressed.tolerated", Kind: counters.Count, Unit: "answers", Feature: f, Help: throttles + " answers while under 15 % of the window's answers were throttles: no cut (a background the retries absorb)"}
+	d[CLimiterThrottlePermille] = counters.Def{Key: "limiter.throttle_permille", Kind: counters.Gauge, Unit: "permille", Feature: f, Help: "throttle answers per 1,000 of the window (the last 4 x workers answers since the last cut) at the end"}
+	d[CLimiterLimit] = counters.Def{Key: "limiter.limit", Kind: counters.Gauge, Unit: "permits", Feature: f, Help: "the limit at the end: where it converged"}
+	d[CLimiterIncreases] = counters.Def{Key: "limiter.increases", Kind: counters.Count, Unit: "steps", Feature: f, Help: "growth steps: limit raised by one, at most one per second, while the window since the last cut is full with under 7.5 % throttles, or after 10 s without a throttle answer"}
+	d[CLimiterCooldown] = counters.Def{Key: "limiter.growth_cooldown", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back by throttling: the window since a cut not yet full, or 7.5 % or more of it throttles, and a throttle answer in the last 10 s"}
 	d[CLimiterLatencyFrozen] = counters.Def{Key: "limiter.growth_latency_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: successful attempts' latency EWMA above twice the baseline"}
 	d[CLimiterTimeoutFrozen] = counters.Def{Key: "limiter.growth_timeout_frozen", Kind: counters.Count, Unit: "steps", Feature: f, Help: "due growth steps held back: 3 or more attempt timeouts in the last 10 s"}
 	d[CLimiterValve] = counters.Def{Key: "limiter.valve", Kind: counters.Count, Unit: "steps", Feature: f, Help: "limit raised by one through the latency freeze (at most one per 30 s, with progress)"}
 	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
 	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
 	d[CLimiterDepth] = counters.Def{Key: "limiter.max_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
-	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first throttle or timeout)"}
-	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first throttle or timeout)"}
+	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
+	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
 	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
 	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: FeatureRequestRate, Help: "attempts that waited for a --request-rate token"}
 	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: FeatureRequestRate, Help: "time those attempts waited, summed"}
@@ -585,6 +594,10 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 	put(CLatencyOverflow, n.LatencyOverflow)
 	put(CLimiterDecreases, l.Decreases)
 	put(CLimiterFloorThrottles, l.FloorThrottles)
+	put(CLimiterStale, l.Stale)
+	put(CLimiterTolerated, l.Tolerated)
+	put(CLimiterThrottlePermille, l.ThrottlePermille)
+	put(CLimiterLimit, l.Limit)
 	put(CLimiterIncreases, l.Increases)
 	put(CLimiterCooldown, l.Cooldown)
 	put(CLimiterLatencyFrozen, l.LatencyFrozen)

@@ -63,10 +63,10 @@ const (
 	// kept, so history a truncation dropped is refunded.
 	historyCap = 40_000
 	// maxCertificates is the largest certificate cap any attempt may have
-	// (the cap of --spill-max none, and of a cap of 10,000 MiB or more):
+	// (the cap of --spill-budget none, and of a cap of 10,000 MiB or more):
 	// recovery inventories at most that many before applying its own cap.
 	maxCertificates = 10_000
-	// minCertificates is the smallest cap: below 16 MiB of --spill-max
+	// minCertificates is the smallest cap: below 16 MiB of --spill-budget
 	// durable spill is off (a certificate per MiB of the cap; sixteen is
 	// the fewest worth a ledger).
 	minCertificates = 16

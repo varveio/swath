@@ -48,8 +48,8 @@ import (
 // recovery replay, with unsynced state lost, and at 40 % and 70 % of the
 // keys, then resumed. Each resume must give the uninterrupted dataset
 // (byte-identical with --part-interval=0, row-identical with the interval
-// on), reconcile (rows retained + rows listed = the dataset; objects
-// emitted - filtered + replayed = rows listed), and list nothing a
+// on), reconcile (rows retained + rows emitted = the dataset; rows
+// fetched - filtered + replayed = rows emitted), and list nothing a
 // replayed certificate covers: no data request of any resume (a killed
 // first resume included) starts in
 // [max(cs, K), ce) of a certificate live in the ledger's prefix. Opt-in:
@@ -193,7 +193,8 @@ func (p *campaignProxy) handler(up *url.URL) http.Handler {
 // campaignReport is the part of a run's JSON report the campaign reads.
 type campaignReport struct {
 	Output struct {
-		RowsListed    int64 `json:"rows_listed"`
+		RowsFetched   int64 `json:"rows_fetched"`
+		RowsEmitted   int64 `json:"rows_emitted"`
 		RowsFiltered  int64 `json:"rows_filtered"`
 		RowsRetained  int64 `json:"rows_retained"`
 		RowsCommitted int64 `json:"rows_committed"`
@@ -347,7 +348,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 	partSize := "2MiB"
 	listArgsSized := func(out, size string, runtime []string) []string {
 		a := append([]string{"diag", "list"}, src...) // diag: --spill-reserve
-		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-max", "256MiB", "--report-format", "json", "-o", out)
+		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-budget", "256MiB", "--report-format", "json", "-o", out)
 		return append(a, runtime...)
 	}
 	listArgs := func(out string, runtime []string) []string { return listArgsSized(out, partSize, runtime) }
@@ -444,9 +445,9 @@ func campaign(t *testing.T, fx campaignFixture) {
 						rejected += n
 					}
 				}
-				if o.RowsCommitted != rows || o.RowsRetained+o.RowsListed != rows || r.value("objects")-o.RowsFiltered+replayed != o.RowsListed {
-					t.Errorf("reconciliation: committed %d (want %d), retained %d + listed %d, objects %d - filtered %d + replayed %d",
-						o.RowsCommitted, rows, o.RowsRetained, o.RowsListed, r.value("objects"), o.RowsFiltered, replayed)
+				if o.RowsCommitted != rows || o.RowsRetained+o.RowsEmitted != rows || o.RowsFetched-o.RowsFiltered+replayed != o.RowsEmitted {
+					t.Errorf("reconciliation: committed %d (want %d), retained %d + emitted %d, fetched %d - filtered %d + replayed %d",
+						o.RowsCommitted, rows, o.RowsRetained, o.RowsEmitted, o.RowsFetched, o.RowsFiltered, replayed)
 				}
 				// Every live certificate is replayed unless rejected, and
 				// these schedules damage none.
@@ -534,7 +535,7 @@ func suspectComposition(t *testing.T, rn *campaignRunner, px *campaignProxy, ref
 		// The resume rejects none of the certificates live above K when
 		// it starts (so it accepts every one), the part's certificates
 		// are among them, and it replays at least the part's rows from
-		// them. With reuse off (Sol's --spill-max 1MiB overlay) nothing is
+		// them. With reuse off (Sol's --spill-budget 1MiB overlay) nothing is
 		// accepted and this fails.
 		d := r.Resources.Spill.Durable
 		if d == nil || d.Resume == nil {

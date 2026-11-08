@@ -102,11 +102,12 @@ var _ source.Disposer[rng] = (*disposing)(nil)
 // (a local directory of n subdirectories with --no-dirs), with an empty
 // Rows batch between them; the first child cancels the run.
 type wide struct {
-	n        int
-	cancel   context.CancelFunc
-	emitted  atomic.Int64
-	disposed atomic.Int64
-	expanded atomic.Int64
+	n         int
+	childOnly bool // no Rows batches at all: only Child can see the stop
+	cancel    context.CancelFunc
+	emitted   atomic.Int64
+	disposed  atomic.Int64
+	expanded  atomic.Int64
 }
 
 func (w *wide) Root() int { return -1 }
@@ -120,8 +121,10 @@ func (w *wide) Expand(_ context.Context, r int, e source.Emitter[int, tp]) error
 		if i == 1 {
 			w.cancel()
 		}
-		if err := e.Rows(nil); err != nil {
-			return err
+		if !w.childOnly {
+			if err := e.Rows(nil); err != nil {
+				return err
+			}
 		}
 		w.emitted.Add(1)
 		if err := e.Child(i); err != nil {
@@ -137,17 +140,59 @@ func (w *wide) Dispose(int) { w.disposed.Add(1) }
 // Rows batch) returns the cause, so a range emitting only children stops at
 // once instead of after its whole width; every child it handed over is
 // disposed, none expanded.
+// Two variants: with an empty Rows batch between children (the stop is
+// seen there first) and with children only, where Child alone sees it
+// (the child accepted at the stop is disposed, not expanded).
 func TestCountStopsAChildOnlyRange(t *testing.T) {
+	for _, childOnly := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		w := &wide{n: 1_000_000, childOnly: childOnly, cancel: cancel}
+		_, err := Count(ctx, w, nil, Options{Workers: 1})
+		cancel()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("child only %v: err %v", childOnly, err)
+		}
+		if n := w.emitted.Load(); n > 2 {
+			t.Fatalf("child only %v: %d children emitted after the stop", childOnly, n)
+		}
+		if w.disposed.Load() != w.emitted.Load() || w.expanded.Load() != 1 {
+			t.Fatalf("child only %v: emitted %d, disposed %d, expanded %d", childOnly, w.emitted.Load(), w.disposed.Load(), w.expanded.Load())
+		}
+	}
+}
+
+// empties is one range that emits only empty Rows batches, never checking
+// its context, until an emit fails; the first batch cancels the run.
+type empties struct {
+	cancel  context.CancelFunc
+	batches atomic.Int64
+}
+
+func (e *empties) Root() int { return 0 }
+
+func (e *empties) Expand(_ context.Context, _ int, em source.Emitter[int, tp]) error {
+	for i := 0; i < 1_000_000; i++ {
+		if i == 1 {
+			e.cancel()
+		}
+		if err := em.Rows(nil); err != nil {
+			return err
+		}
+		e.batches.Add(1)
+	}
+	return errors.New("empty batches never stopped")
+}
+
+// TestCountStopsOnEmptyBatches: after a stop an empty Rows batch returns
+// the cause, so a range that only sends empty batches stops at its next
+// one.
+func TestCountStopsOnEmptyBatches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &wide{n: 1_000_000, cancel: cancel}
-	_, err := Count(ctx, w, nil, Options{Workers: 1})
-	if !errors.Is(err, context.Canceled) {
+	p := &empties{cancel: cancel}
+	if _, err := Count(ctx, p, nil, Options{Workers: 1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err %v", err)
 	}
-	if n := w.emitted.Load(); n > 2 {
-		t.Fatalf("%d children emitted after the stop", n)
-	}
-	if w.disposed.Load() != w.emitted.Load() || w.expanded.Load() != 1 {
-		t.Fatalf("emitted %d, disposed %d, expanded %d", w.emitted.Load(), w.disposed.Load(), w.expanded.Load())
+	if n := p.batches.Load(); n > 1 {
+		t.Fatalf("%d empty batches accepted, after the stop %d", n, n-1)
 	}
 }

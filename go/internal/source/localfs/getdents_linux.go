@@ -66,7 +66,8 @@ func (d *sharedFD) release() {
 	}
 }
 
-// disposeChunk releases a chunk range that will never be expanded.
+// disposeChunk releases a chunk range's share of its directory descriptor:
+// after its Expand, or for a range that will never be expanded.
 func disposeChunk(r Range) {
 	if c := r.chunk; c != nil {
 		c.dir.release()
@@ -78,8 +79,7 @@ func disposeChunk(r Range) {
 // entry count and one range per subdirectory; entries are sorted by key
 // before stat, so each stat lands in its final slot.
 func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	if c := r.chunk; c != nil {
-		defer c.dir.release()
+	if c := r.chunk; c != nil { // Expand releases its descriptor share
 		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.ents, st)
 		if err != nil {
 			return err

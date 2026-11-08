@@ -33,6 +33,7 @@ const (
 	whole         // sequential oracle: the scope as one continuation chain
 	seed          // delimiter listings of the folder hierarchy that emit the first tiling (of (after, ⊤] on a resume)
 	resume        // (after, ⊤] after a journaled run's last published key, without the seed
+	warm          // the tiling at a prior's cuts (SeedFrom), of (after, ⊤] on a resume
 	reused        // a reused coverage certificate: the order stage replays it (Replay), the engine never lists it
 )
 
@@ -100,6 +101,14 @@ type Range struct {
 	// remainder until its own first page gives one (running.rem).
 	est   float64
 	estOK bool
+	// tile: 1 + the index of the prior tile (expandPrior) the range lies
+	// in, inherited by its children; 0 for none. Its keys add to the
+	// tile's, which the report compares with the prior (priorErrors).
+	tile int32
+	// lat is the page latency (ns) the range starts with: its parent's
+	// (SlowSplit; 0 unknown). slow: a child of a slow split (slowQueued).
+	lat  float64
+	slow bool
 	// cert is a reused range's certificate (its index in the resume's
 	// spans); gapEnd: hi is a reused certificate's start, so keys listed
 	// past it are boundary overfetch (resume.reuse.boundary_overfetch_keys).
@@ -134,6 +143,104 @@ type running struct {
 	zeroes       uint8          // consecutive structure probes that found no folder, the ancestry's included
 	rem          float64        // estimated keys left in (cursor, hi]: +Inf on the frontier, NaN unknown (the rank)
 	refused      int            // consecutive split decisions the admission gates refused
+	lat          float64        // page latency, ns: an EWMA of its pages (weight slowLatencyWeight), from its parent's (0: unknown)
+	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
+}
+
+// slowKeys is st's keys left for the slow-range rule: its remainder, or,
+// where that is +Inf (a bound in another folder: a seed tile's hi is the
+// next folder, and a page cannot see where its own folder ends), the keys
+// it has listed, as a range that has listed k keys likely holds k more
+// (the frontier's doubling assumption); mu held.
+func (st *running) slowKeys() float64 {
+	if r := st.remainder(); !math.IsInf(r, 1) {
+		return r
+	}
+	return float64(st.keys)
+}
+
+// Slow-range splitting (Options.SlowSplit): demand is idle workers and
+// the rank counts keys, so a range whose pages are slow (one folder at 2 s
+// a page among pages of 200 ms) stays on one worker until the rest
+// drains. With SlowSplit the rank reads time left, keys left x the range's
+// page latency, and a range that is a latency outlier splits without an
+// idle worker.
+const (
+	// slowLatency: a range's page latency must be at least this multiple
+	// of the run's mean: a latency outlier, not a large range (a large
+	// range at the run's latency is the rank's and demand's business), and
+	// not jitter (uniform 20-500 ms pages average 260 ms: no range's mean
+	// reaches 1 s), nor a slow half of the keyspace (it is half the mean).
+	slowLatency = 4.0
+	// slowTimeLeft: its time left must be at least this multiple of the
+	// running ranges' mean. A page cannot see where its folder ends, so
+	// keys left are mostly keys listed (slowKeys) and the mean errs long;
+	// twice it is an outlier past that error, and a range of a few slow
+	// pages already listed is not split for its last one.
+	slowTimeLeft = 2.0
+	// slowLatencyWeight: the weight of a range's newest page in its
+	// latency, so a child's inherited latency gives way within two pages.
+	slowLatencyWeight = 0.5
+)
+
+// runLatency is the mean page latency of the run's ranges (ns; 0: none
+// yet); mu held.
+func (p *Engine[P]) runLatency() float64 {
+	if p.latN == 0 {
+		return 0
+	}
+	return p.latSum / float64(p.latN)
+}
+
+// timeLeft is st's remainder in pages times its page latency (the run's
+// when it has none yet; 1 ns before any page, so the rank is by keys and
+// +Inf stays +Inf); mu held.
+func (p *Engine[P]) timeLeft(st *running, run float64) float64 {
+	lat := st.lat
+	if lat == 0 {
+		lat = max(run, 1)
+	}
+	return st.remainder() / float64(p.opt.PageSize) * lat
+}
+
+// slowTime is timeLeft over slowKeys; mu held.
+func (p *Engine[P]) slowTime(st *running, run float64) float64 {
+	lat := st.lat
+	if lat == 0 {
+		lat = max(run, 1)
+	}
+	return st.slowKeys() / float64(p.opt.PageSize) * lat
+}
+
+// slowSplitWanted: with SlowSplit and no split of this kind waiting, st is
+// a bounded range with an estimated remainder whose page latency is at
+// least slowLatency times the run's mean and whose time left is at least
+// slowTimeLeft times the mean over the running continuing ranges. At most
+// one slow split's children wait at a time (slowQueued): the engine does
+// not split faster than workers free up to take them; mu held.
+func (p *Engine[P]) slowSplitWanted(st *running, r Range) bool {
+	if !p.opt.SlowSplit || r.open || p.slowQueued > 0 || math.IsInf(st.slowKeys(), 0) {
+		return false
+	}
+	run := p.runLatency()
+	if run == 0 || st.lat < slowLatency*run {
+		return false
+	}
+	if st.slowLine {
+		// A slow split's child that is still a latency outlier halves
+		// again: its keys left restarted at its own (a page cannot see
+		// where the folder ends), so the time-left test would stop the
+		// halving after one split.
+		return true
+	}
+	sum, n := 0.0, 0
+	for _, o := range p.running {
+		if o.continuing && !o.unsplittable && !math.IsInf(o.slowKeys(), 0) {
+			sum += p.slowTime(o, run)
+			n++
+		}
+	}
+	return n > 0 && p.slowTime(st, run) >= slowTimeLeft*sum/float64(n)
 }
 
 // Root is the scope: the sequential chain, the seed (which tiles a
@@ -142,6 +249,8 @@ func (p *Engine[P]) Root() Range {
 	switch {
 	case p.opt.Sequential:
 		return Range{kind: whole}
+	case p.opt.Prior != nil:
+		return Range{kind: warm}
 	case p.opt.Seed:
 		return Range{kind: seed}
 	case p.opt.Resume != nil || len(p.reuse) > 0:
@@ -157,6 +266,8 @@ func (p *Engine[P]) Expand(ctx context.Context, r Range, e source.Emitter[Range,
 		return p.expandSequential(ctx, e)
 	case seed:
 		return p.expandSeed(ctx, e)
+	case warm:
+		return p.expandPrior(e)
 	case resume:
 		return p.expandResume(e)
 	case reused:
@@ -302,8 +413,11 @@ func (p *Engine[P]) enter(r Range) *running {
 	if r.born != fromRoot {
 		p.queued--
 	}
-	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate()}
+	st := &running{id: r.id, open: r.open, sb: r.sb, zeroes: r.zeroes, rem: r.estimate(), lat: r.lat, slowLine: r.slow}
 	p.running[r.id] = st
+	if r.slow {
+		p.slowQueued--
+	}
 	p.c.Max(cMaxActive, int64(len(p.running)))
 	return st
 }
@@ -314,6 +428,9 @@ func (p *Engine[P]) leave(r Range, st *running, start time.Time) {
 	p.account(time.Now())
 	delete(p.running, r.id)
 	p.c.Add(cBusyNs, int64(time.Since(start)))
+	if r.tile > 0 {
+		p.tiles[r.tile-1].keys += st.keys
+	}
 	child := r.born == fromLower || r.born == fromUpper
 	if child && st.keys == 0 {
 		upper := 0
@@ -390,10 +507,12 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	}
 	p.maybeProbe(pctx, st, r, c)
 	for {
+		t0 := time.Now()
 		out, err := p.list(ctx, in)
 		if err != nil {
 			return err
 		}
+		pageNs := float64(time.Since(t0))
 		skipped := 0
 		if r.after != "" { // resume: drop keys already published
 			n := 0
@@ -403,9 +522,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			if n > 0 {
 				c, skipped = out.Rows[n-1].Key, n
 				out.Rows = out.Rows[n:]
-				p.lock()
 				p.c.Add(cOverfetchKeys, int64(n))
-				p.unlock()
 			}
 		}
 		kept, reached := len(out.Rows), false
@@ -482,14 +599,26 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Add(cUnsplittableKeys, int64(kept))
 		}
 		st.ended = done
-		if kept > 0 {
+		if p.opt.Floors && kept > 0 { // only the tail floor reads it
 			st.dens.observe(first, last, r.lo, r.hi, kept)
 		}
 		if !math.IsNaN(rem) {
 			st.rem = rem
 		}
+		if p.opt.SlowSplit {
+			if st.lat == 0 {
+				st.lat = pageNs
+			} else {
+				st.lat += slowLatencyWeight * (pageNs - st.lat)
+			}
+			p.latSum += pageNs
+			p.latN++
+			p.c.Max(cSlowMaxRangeLatency, int64(st.lat))
+			p.c.Set(cSlowRunLatency, int64(p.runLatency()))
+		}
 		hunger := p.opt.Workers - len(p.running) - p.queued
-		wanted := !done && !st.unsplittable && (hunger > 0 || p.opt.SplitCoin != nil)
+		slow := !done && hunger <= 0 && p.slowSplitWanted(st, r)
+		wanted := !done && !st.unsplittable && (hunger > 0 || p.opt.SplitCoin != nil || slow)
 		p.unlock()
 		if done {
 			p.covered(r.lo, r.hi, r.open)
@@ -501,7 +630,14 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		var pr proposal
 		if wanted {
 			ceil, bounded := p.ceiling(r)
-			pr = propose(r, page, head, c, ceil, bounded, hunger)
+			// A slow split asks the stride of a quarter of the workers: its
+			// children wait for workers to free up, so handing out one
+			// page each (hunger 1) would peel the slow folder page by page.
+			want := max(hunger, 1)
+			if slow {
+				want = max(want, p.opt.Workers/4)
+			}
+			pr = propose(r, page, head, c, ceil, bounded, want)
 			pr.gauge, pr.rem = g, rem
 		}
 		if pv, ok := p.decide(st, r, c, pr); ok {
@@ -645,20 +781,32 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	}
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	if p.opt.SplitCoin == nil {
-		if hunger <= 0 || !pr.ready { // !ready: the demand rose after the page's snapshot
+		switch {
+		case !pr.ready: // the demand rose after the page's snapshot
+			p.c.Inc(cSplitSkippedNoDemand)
+			return
+		case hunger <= 0 && p.slowSplitWanted(st, r):
+			pv.slow = true // a latency outlier: split without an idle worker, unranked
+		case hunger <= 0:
 			p.c.Inc(cSplitSkippedNoDemand)
 			return
 		}
-		rank := 0
-		for _, o := range p.running {
-			if o != st && o.continuing && !o.unsplittable && outranks(o, st) {
-				rank++
+		if !pv.slow {
+			rank := 0
+			run := p.runLatency()
+			for _, o := range p.running {
+				if o == st || !o.continuing || o.unsplittable {
+					continue
+				}
+				if (p.opt.SlowSplit && outranksTime(o, st, p.timeLeft(o, run), p.timeLeft(st, run))) || (!p.opt.SlowSplit && outranks(o, st)) {
+					rank++
+				}
 			}
-		}
-		p.c.Inc(cSplitConsidered)
-		if rank >= hunger {
-			p.c.Inc(cSplitSkippedOutranked)
-			return
+			p.c.Inc(cSplitConsidered)
+			if rank >= hunger {
+				p.c.Inc(cSplitSkippedOutranked)
+				return
+			}
 		}
 	}
 	ceil, bounded := p.ceiling(r)
@@ -700,7 +848,7 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		pv.chain = cmp.Or(pr.anchor, m)
 	}
 	pv.m = m
-	switch guard(c, m, found, ceil, bounded, false, p.safe) {
+	switch guard(c, m, found, ceil, bounded, p.safe) {
 	case clauseNoPivot:
 		p.c.Inc(cSplitRejectedNoPivot)
 		// No pivot after a safe cursor is a fact about the interval: a later
@@ -725,9 +873,6 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 		return
 	case clauseBound:
 		p.c.Inc(cSplitRejectedBound)
-		return
-	case clauseDone:
-		p.c.Inc(cSplitRejectedDone)
 		return
 	}
 	// Admission (bounded ranges; the frontier's remainder is unbounded, and
@@ -779,6 +924,9 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	}
 	p.account(time.Now())
 	p.queued += 2 // the children, reserved until commit hands them out
+	if pv.slow {
+		p.slowQueued += 2
+	}
 	return pv, true
 }
 
@@ -793,6 +941,7 @@ type pivot struct {
 	// gauge), their remainders until their own first pages.
 	lower, upper float64
 	estOK        bool
+	slow         bool // a slow-range split, taken without an idle worker
 }
 
 // commit accepts a decided split: the two children and the counters.
@@ -800,7 +949,6 @@ type pivot struct {
 // and splits afresh.
 func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upper Range) {
 	p.lock()
-	defer p.unlock()
 	m := pv.m
 	st.split = true
 	switch {
@@ -822,16 +970,20 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	} else {
 		p.c.Inc(cSplitAcceptedBounded)
 	}
+	if pv.slow {
+		p.c.Inc(cSplitReasonSlowRange)
+	}
 	p.c.Max(cGallopMaxGen, int64(r.gen))
 	p.c.Max(cMaxQueued, int64(p.queued))
 	depth := r.depth + 1
 	p.c.Max(cSplitMaxDepth, depth)
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src,
+	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc,
+	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
 		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
 		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
+	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
 	lower.est, lower.estOK = pv.lower, pv.estOK
 	upper.est, upper.estOK = pv.upper, pv.estOK && !r.open
 	// A resumed range split before its cursor passed the resume key hands
@@ -842,6 +994,7 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	if r.after > m {
 		upper.after = r.after
 	}
+	p.unlock()
 	if os.Getenv("SWATH_SPLIT_TRACE") != "" {
 		fmt.Fprintf(os.Stderr, "split id=%d lo=%q c=%q m=%q hi=%q open=%v keys=%d src=%s depth=%d g=%d anchor=%q\n",
 			r.id, r.lo, c, m, r.hi, r.open, st.keys, pv.src, depth, r.gen, pv.chain)
@@ -875,6 +1028,19 @@ func outranks(a, b *running) bool {
 	return a.id < b.id
 }
 
+// outranksTime is outranks with time left (keys left x page latency, ta
+// and tb) in place of keys left (Options.SlowSplit): the same classes and
+// tie-break, so the order stays total.
+func outranksTime(a, b *running, ta, tb float64) bool {
+	if a.open != b.open {
+		return a.open
+	}
+	if ta != tb {
+		return ta > tb
+	}
+	return a.id < b.id
+}
+
 // remainder is the rank's estimate of the keys left in the range: its
 // last page's gauge over (cursor, hi], before that its split's estimate,
 // +Inf on the frontier; without either (a page with no span), the keys it
@@ -895,21 +1061,17 @@ const (
 	clauseCursor
 	clauseUnsafePivot
 	clauseBound
-	clauseDone
 )
 
 // guard checks a split of (lo, H] at cursor c into (c, m] and (m, H]:
-//   - done: never split a range whose last page completed it;
 //   - unsafe cursor: c becomes the lower child's start-after;
 //   - cursor: m must be > c, or the upper child would list (m, c] again;
 //   - unsafe pivot: m becomes a bound; the provider may veto it
 //     (Description.AcceptBound);
 //   - bound: m must be < H (or below prefixCeil(scope) on the frontier), or
 //     the lower child would list keys of the next range.
-func guard(c, m string, found bool, ceil string, bounded, done bool, safe func(string) bool) clause {
+func guard(c, m string, found bool, ceil string, bounded bool, safe func(string) bool) clause {
 	switch {
-	case done:
-		return clauseDone
 	case !found:
 		return clauseNoPivot
 	case !safe(c):

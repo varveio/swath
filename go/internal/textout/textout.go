@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,6 +57,14 @@ type Config struct {
 	// against JobBytes each); below 2, one synchronous encoder. Gzip is one
 	// stream whatever it is.
 	Jobs int
+	// Fail, if set, is called with the first write failure when it
+	// happens: the formatters' (the sequencer's write to the compressor or
+	// the destination) and the destination's own (a parallel compressor's
+	// background flusher included). The order stage may be waiting for a
+	// page and the sequencer idle, so nothing else would see it; the
+	// caller stops the run with it (as parquetout.Options.Fail). It is
+	// called once, with whichever is seen first.
+	Fail func(error)
 }
 
 // JobBytes is the memory budgeted per concurrent zstd job for admission:
@@ -110,6 +119,12 @@ type counter struct {
 	w       io.Writer
 	n, wait atomic.Int64
 	stopped atomic.Bool
+	// err is the first failure of w itself (never errAborted); fail, if
+	// set, is told it once. On the destination this is the one place a
+	// parallel compressor's background write failure is seen when it
+	// happens: the sequencer may be idle and write nothing more.
+	err  atomic.Pointer[error]
+	fail func(error)
 }
 
 func (c *counter) Write(p []byte) (int, error) {
@@ -120,7 +135,18 @@ func (c *counter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.wait.Add(int64(time.Since(t)))
 	c.n.Add(int64(n))
+	if err != nil && c.err.CompareAndSwap(nil, &err) && c.fail != nil {
+		c.fail(err)
+	}
 	return n, err
+}
+
+// failed is w's first failure, if any.
+func (c *counter) failed() error {
+	if e := c.err.Load(); e != nil {
+		return *e
+	}
+	return nil
 }
 
 // Open prepares the destination: for a file, a temporary beside it.
@@ -131,6 +157,10 @@ func Open(cfg Config) (*Out, error) {
 		return nil, fmt.Errorf("text output: unknown format %q", cfg.Format)
 	}
 	o := &Out{cfg: cfg}
+	if f := cfg.Fail; f != nil {
+		var once sync.Once
+		o.cfg.Fail = func(err error) { once.Do(func() { f(err) }) }
+	}
 	var dst io.Writer
 	if cfg.Path == "" {
 		if cfg.Stdout == nil {
@@ -147,7 +177,7 @@ func Open(cfg Config) (*Out, error) {
 		}
 		o.f, dst = f, f
 	}
-	o.count = &counter{w: dst}
+	o.count = &counter{w: dst, fail: o.cfg.Fail}
 	o.in = o.count
 	switch cfg.Compression {
 	case "", None:
@@ -260,6 +290,20 @@ func (o *Out) Commit() error {
 	// Durable, as a dataset's commit: a visible file is complete.
 	if err := o.f.Commit(dataset.Durable); err != nil {
 		return fmt.Errorf("text output: %w", err)
+	}
+	return nil
+}
+
+// Failed is the output's first write failure, if any: the destination's
+// own (the original error, a background compressor's included), else the
+// formatters'. Abort keeps it, so a run stopped by it reports it rather
+// than the stop or the abort.
+func (o *Out) Failed() error {
+	if err := o.count.failed(); err != nil {
+		return err
+	}
+	if o.pipe != nil {
+		return o.pipe.failed()
 	}
 	return nil
 }

@@ -9,19 +9,20 @@ them is [internals/contracts.md](internals/contracts.md).
 
 ```text
 provider ──ranges──▶ order ──ascending row segments──▶ parquet router ──parts──▶ encoders ──▶ dataset publish
-(localfs, s3)           (bounded reorder)                 (boundaries, ordinals)   (one goroutine per part)
+(localfs, s3, gcs)      (bounded reorder)                 (boundaries, ordinals)   (one goroutine per part)
+                                                    └───▶ text sink (formatters ──▶ one ordered stream, one file or stdout)
 ```
 
 Order comes from the ranges, not from a sort afterwards. A provider expands a *range* into rows that are
 already ascending and into child ranges that sort between them. The order stage walks that tree depth-first,
 which is global key order, and streams rows at the frontier with bounded memory. The router cuts part
-boundaries by size (deterministic for a given listing) and, with `--part-interval`, by age (timing-dependent);
+boundaries by size (deterministic for a given listing) and, with `--part-interval` (30 s by default), by age (timing-dependent);
 per-part encoders write them in parallel; the dataset package publishes them in order. There is no external
 sort: no sorted runs staged on disk and no merge pass. What does sit on disk before publication is ordinary
 pipeline state: closed Parquet parts in `.swath/parts/` (claimed while their journal record is written,
 then renamed into `data/`) and, with spill, rows ahead of the frontier, read back in key order.
 
-A dry run (`--count-only`) has no sink that needs order, so `order.Count` takes the place of the order stage
+A count (`swath count`) has no sink that needs order, so `order.Count` takes the place of the order stage
 and everything after it: workers expand the same ranges and the rows are counted and dropped as they arrive,
 with no reorder buffer, no spill and no file ([internals/ordering.md](internals/ordering.md#counting-without-order)).
 
@@ -52,11 +53,14 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`), `Info` | – |
-| `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset |
+| `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)) | schema, dataset |
+| `internal/filter` | Java's seven row filters and the `--include` prefix narrowing | schema |
+| `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset, buildinfo |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order | faults |
 | `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
+| `internal/buildinfo` | the binary's identity (tool, module version, VCS revision, the linker's `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
 The list clients are hand-rolled on the SDKs' authentication; what is the SDK's, what is ours and why:
 [internals/providers.md](internals/providers.md#the-list-clients-hand-rolled-on-the-sdks-auth).

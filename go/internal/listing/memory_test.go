@@ -106,9 +106,9 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	// batches and the frontier path.
 	bound := int64(3*budget + workers*2*512<<10)
 	t.Logf("synthetic: %d rows; peak live heap +%d MiB (bound %d MiB, budget %d MiB); peak nodes %d, peak ahead %d rows, frontier stuck %d ms, max buffered %d KiB, spill %d rows",
-		sum.Output.RowsListed, grew>>20, bound>>20, budget>>20, res.PeakNodes, res.PeakAheadRows, res.FrontierStuckMaxNs/1e6, res.MaxBufferedBytes>>10, res.Spill.Rows)
-	if sum.Output.RowsListed != memShape.Keys {
-		t.Fatalf("listed %d of %d", sum.Output.RowsListed, memShape.Keys)
+		sum.Output.RowsEmitted, grew>>20, bound>>20, budget>>20, res.PeakNodes, res.PeakAheadRows, res.FrontierStuckMaxNs/1e6, res.MaxBufferedBytes>>10, res.Spill.Rows)
+	if sum.Output.RowsEmitted != memShape.Keys {
+		t.Fatalf("listed %d of %d", sum.Output.RowsEmitted, memShape.Keys)
 	}
 	if res.PeakNodes < 100 || res.Spill.Rows == 0 || res.FrontierStuckMaxNs < int64(time.Second) {
 		t.Fatalf("the frontier was not held up long enough to matter: %+v", res)
@@ -166,9 +166,9 @@ func TestCountOnlyHoldsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := sum.Resources
-	t.Logf("synthetic: %d rows; peak live heap +%d MiB; peak nodes %d", sum.Output.RowsListed, (res.PeakHeapLiveBytes-base)>>20, res.PeakNodes)
-	if sum.Outcome.Status != StatusListed || sum.Output.RowsListed != memShape.Keys {
-		t.Fatalf("%s: %d rows of %d", sum.Outcome.Status, sum.Output.RowsListed, memShape.Keys)
+	t.Logf("synthetic: %d rows; peak live heap +%d MiB; peak nodes %d", sum.Output.RowsEmitted, (res.PeakHeapLiveBytes-base)>>20, res.PeakNodes)
+	if sum.Outcome.Status != StatusListed || sum.Output.RowsEmitted != memShape.Keys {
+		t.Fatalf("%s: %d rows of %d", sum.Outcome.Status, sum.Output.RowsEmitted, memShape.Keys)
 	}
 	if created != 0 || res.Spill != nil || res.Features["spill"] || res.Features["order"] {
 		t.Fatalf("a dry run spilled or ordered: %d entries under TMPDIR, spill %+v, features %v", created, res.Spill, res.Features)

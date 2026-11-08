@@ -122,32 +122,54 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	slowURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 3*time.Millisecond))
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
 	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
+	// unsplit: the first occurrences the seeded arms never reach (their
+	// ranges are a page each; the s3-unseeded arm crosses split).
+	unsplit := map[string]bool{"s3 split": true, "gcs split": true, "s3-interval split": true}
 	for _, prov := range []struct {
 		name    string
 		src     []string
 		runtime []string // also given to swath resume
 		byTime  bool     // parts are closed by time: compare rows, not part bytes
 	}{
+		// Seeded (the default) and unseeded: the seed tiles these keys
+		// into ranges of a page each, so the seeded arms never split, and
+		// it moves response-read to its own requests and changes how
+		// ranges finish; the unseeded arm splits.
 		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
+		{"s3-unseeded", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, []string{"--part-interval=0"}, false},
 		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {
-			a := append(append(append(append([]string{"list"}, prov.src...), common...), prov.runtime...), "-o", out)
+			a := append(append(append(append([]string{"diag", "list"}, prov.src...), common...), prov.runtime...), "-o", out)
 			return append(a, extra...)
 		}
 		ref := filepath.Join(t.TempDir(), "ref")
 		if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
 			t.Fatalf("%s reference: %v\n%s", prov.name, err, out)
 		}
-		for _, point := range faults.Points {
-			for _, nth := range []string{"1", "5"} {
+		for _, point := range []string{"response-read", "split", "range-done", "encoding", "part-closed", "journal-append", "journal-sync",
+			"recorded", "rename", "renamed-unsynced", "renamed", "published", "manifest"} {
+			nths := []string{"1", "5"}
+			if point == "journal-append" {
+				// The first part's record (1 is the header's): the
+				// calibrating part claimed but unrecorded.
+				nths = append(nths, "2")
+			}
+			for _, nth := range nths {
 				at := prov.name + " " + point + ":" + nth
 				out := filepath.Join(t.TempDir(), "ds")
 				cmd := exec.Command(bin, args(out)...)
 				cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT="+point+":"+nth)
 				err := cmd.Run()
 				if err == nil {
+					// A later occurrence is optional (a run may hold
+					// fewer parts or splits); every first one is
+					// reached, or the matrix no longer crosses it.
+					if nth == "1" && !unsplit[prov.name+" "+point] {
+						t.Errorf("%s never reached: the run completed", at)
+						continue
+					}
 					t.Logf("%s not reached; run completed", at)
 					continue
 				}
@@ -231,7 +253,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	runtime := []string{"--part-interval=0"}
 	args := func(out string) []string {
 		return append([]string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32",
-			"-part-size", "6KiB", "-row-budget", "128KiB", "--spill-max", "64MiB", "-o", out}, runtime...)
+			"-part-size", "6KiB", "-row-budget", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {

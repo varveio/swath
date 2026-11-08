@@ -98,7 +98,7 @@ func (p *Provider) Faults() (throttles, timeouts int64) {
 func (p *Provider) Requests() source.Requests {
 	if c, ok := p.client.(live); ok {
 		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Inflight: l.Inflight,
+		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
 			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
 	}
 	return source.Requests{}
@@ -234,7 +234,7 @@ func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page
 	for i := range out.Items {
 		o, r := &out.Items[i], &rows[i]
 		r.Key = o.Name
-		r.Data = Object{Size: o.Size, Mtime: o.Updated, ETag: o.ETag, Generation: o.Generation,
+		r.Data = Object{Size: o.Size, Mtime: o.Updated, TimeCreated: o.TimeCreated, ETag: o.ETag, Generation: o.Generation,
 			Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5, CRC32C: o.CRC32C,
 			ContentType: o.ContentType}
 	}

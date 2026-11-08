@@ -16,7 +16,7 @@ decision to add it later).
 |---|---|---|---|
 | `--region REGION` | `--region` (default chain ends at `us-east-1`) | kept | – |
 | `--profile NAME` | `--profile` | kept | – |
-| `--endpoint-url URL` | `--endpoint URL`, or `--endpoint-url` (alias) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--endpoint-url URL` | `--endpoint URL` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
 | `--no-sign-request` | `--anonymous` | renamed | – |
 | `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
@@ -51,8 +51,8 @@ decision to add it later).
 | `last_modified` `...Z` with 0, 3 or 6 fraction digits | `LastModified` as the AWS CLI prints it: `+00:00`, 6 fraction digits only when not zero | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
 | TSV/table escaping: a control byte as `\xNN`, backslash unescaped | JSON's string escapes (`\\ \b \f \n \r \t \u00xx`) in all three formats | renamed | 2026-11-06 (owner: text output in the shapes people already know): reversible (the old rule was not: a key containing `\x09` read back as a tab) and one rule instead of two |
 | Table: size in 14, time in 24, key | the `aws s3 ls` line: `YYYY-MM-DD HH:MM:SS`, size in 10, key (UTC) | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
-| `--format discard` | `--count-only` (rows counted as they arrive, never ordered, buffered or spilled) | renamed | – |
-| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o`: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--format discard` | `swath count SOURCE` (rows counted as they arrive, never ordered, buffered or spilled; the Go port's `swath list --count-only` until 0.4) | renamed | command 2026-11-07 (owner: the cleanest CLI surface) |
+| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
 | `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
 | `--compression none\|gzip\|zstd` (text only) | the `-o` name's `.gz`/`.zst`; stdout through a pipe (`\| zstd`) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the name says it for a file; a pipe does it for stdout) |
@@ -68,7 +68,7 @@ decision to add it later).
 | `.swath-state.json` | `.swath/` workspace (`lock`, `journal`, `parts/`, `spill/`) | renamed | – |
 | Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1`, 9 columns (`version_id`, `is_latest`, `is_delete_marker`, `row_type` dropped) | renamed | dataset format 2 and versions mode parked, 2026-11-05 |
 | Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id` | renamed | dataset format 2, 2026-11-05 |
-| Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `--output` refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
+| Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `-o` directory refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
 | One run per output at a time | output lock; journaled output refused on Windows | kept | – |
 
 ## Sorting and parts
@@ -79,10 +79,10 @@ decision to add it later).
 | `--no-sort` (unsorted Parquet, direct dataset) | none | removed | not ported, 2026-11-06: architecture, measured first |
 | Sorted parts key-disjoint in unsigned byte order, named in key order | the same, every run | kept | – |
 | Staging under `_staging/`, k-way merge, finalization | ordered emission with disposable spill under `.swath/spill/` | removed | staging and external sort not ported, 2026-11-05; not ported, 2026-11-06: no value now (staging and merge controls) |
-| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-max` (one disk budget; the reserve is derived, `swath diag list --spill-reserve` overrides it); a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
+| Free-space checks before and during sorted listing; `--tune sort.ignore-disk-check` | `--spill-budget` (one disk budget, `--spill-max` until 0.4; the reserve is derived, `swath diag list --spill-reserve` overrides it); a full disk stops the run with exit 74, cause `no_space` | renamed | sort settings are code constants, 2026-11-05 |
 | `--tune sort.*` (three keys of Java's seven-key `--tune` registry; the other "sort" settings were JVM properties) | none | removed | sort settings are code constants, 2026-11-05 |
 | `--parquet-part-size SIZE` (256 MB) | `--part-size` (64 MiB) | renamed | – |
-| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`) |
+| `--part-rotation-interval DURATION` (30 s; 0 off) | `--part-interval` (30 s; 0 off; in the Performance help group: the resume granularity) | renamed | default restored to Java's 30 s 2026-11-06 (owner principle, `7d6d746`); kept on `swath list` 2026-11-07 (owner: an operator's resume-granularity knob) |
 | `--part-rotation-max-rows N` (2,000,000) | `--part-rotation-max-rows N` (default 0: off; part of the resume identity; `resources.part_row_cuts`) | kept (default off) | ported 2026-11-06 (owner: restore the cheap Java CLI features); default off: Go's 64 MiB parts already bound a part, and a default would move every run's boundaries |
 | Same input and configuration give the same parts at any encoder count | the same; with `--part-interval` cuts (`resources.part_time_cuts` > 0) boundaries depend on timing | kept | – |
 
@@ -95,7 +95,7 @@ decision to add it later).
 | `--checkpoint PATH` | none | removed | record journal replaces the SQLite checkpoint, 2026-11-05; not ported, 2026-11-06: no value now (the SQLite checkpoint surface) |
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
 | `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
-| `--overwrite`, `--force` | `--overwrite`, `--force` (alias) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--overwrite`, `--force` | `--overwrite` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | committed parts kept exactly once; everything after the last committed part's key re-listed | kept (coarser) | part-granular journal, re-list after the last published key, 2026-11-05 |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
@@ -116,10 +116,10 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count) | renamed | default 64: owner decision 2026-11-06 |
+| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
-| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on), the same rule; `--limiter=false` fixes `--workers` in flight | kept | – |
-| Slow start from 4, doubling per second | `--limiter-slow-start` (off by default until measured): the limit starts at 4 and doubles each second up to `--workers` until the first throttle or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |
+| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on): ×0.7 at most once per round trip while 15 % or more of the last 4 × workers answers (at least 256) are throttles, +1/s while under 7.5 % are or after 10 s without one; `--limiter=false` removes the limit (the workers' page requests, with the seed's listings and the structure probes beside them) | changed | 2026-11-07: Java's rule held the limit at its floor under 1 % random throttles ([providers](internals/providers.md)) |
+| Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` (moved to `swath diag` 2026-11-07: off by default and unmeasured, an experiment): the limit starts at 4 and doubles each second up to `--workers` until the first cut or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
@@ -139,14 +139,14 @@ decision to add it later).
 | Report: `argv`, `config` | `invocation` | renamed | – |
 | Report: `args_hash` | `args_hash`: SHA-256 of the Go run's frozen identity (filters included; not Java's value) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `started_at`, `duration_ms`, `listing_duration_ms` | `timings.started_at`, `wall_ms`, `listing_ms` | renamed | – |
-| Report: `session_duration_ms`, `keys_per_sec` | `timings.session_ms` (from `attempt.started`), `efficiency.keys_per_sec` (rows listed over `listing_ms`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Report: `objects`, `recovered_objects`, `bytes` | `output.rows_listed`, `rows_retained`, `bytes` | renamed | – |
+| Report: `session_duration_ms`, `keys_per_sec` | `timings.session_ms` (from `attempt.started`), `efficiency.keys_per_sec` (`output.rows_emitted` over `listing_ms`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| Report: `objects`, `recovered_objects`, `bytes` | this attempt: `output.rows_fetched` (from the source), `rows_emitted` (after the filters), `object_bytes`; the dataset: `rows_retained`, `rows_durable`, `rows_committed`, `output_bytes` (Java's `objects` is the dataset's rows: `rows_committed`) | renamed | report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
 | Report: `complete`, `exit_code`, `stop_reason` | `outcome.complete`, `exit_code`, `stop_reason` (a run that did not commit: `complete` false, its class as `stop_reason`, `83668d0`) | renamed | – |
 | Report: `error_class` | `outcome.cause` | renamed | – |
 | Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `engine_flags` | `resources.features` | renamed | – |
 | Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [upgrade.md](upgrade.md)) | renamed | no Java names, 2026-11-05 |
-| Report: `cost`, `efficiency` | `cost` (`api_calls`, `cost_usd`, `basis`; null on a custom endpoint), `efficiency` (`keys_per_sec`, `api_calls_per_1k_objects`) | kept (fewer efficiency fields) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
 | Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
 | Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 
@@ -168,13 +168,14 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--help`, `help` | `--help`, `help`, `swath list -h` | kept | – |
+| `--help`, `help` | `--help`, `help`, and `--help` on every command (grouped flags with when to change them) | kept | – |
 | `--version` (five lines) | `--version` (tool, version, revision) | kept | – |
 | `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `-q`, `--quiet` | `-q`, `--quiet` (no warnings, no automatic progress or statistics); `-qq` also no error line | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
-| `--tune seed.mode=none\|shallow` | `--seed=false`, `--seed` (on by default) | renamed | – |
+| `--tune seed.mode=none\|shallow` | `swath diag list --seed=false` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
+| none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [internals/providers.md](internals/providers.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |

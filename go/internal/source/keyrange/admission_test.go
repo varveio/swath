@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -65,8 +66,9 @@ func TestGaugeEstimates(t *testing.T) {
 func TestAdmissionEngages(t *testing.T) {
 	gates := []counters.ID{cSplitSkippedRemainder, cSplitSkippedLowerTiny, cSplitSkippedUpperTiny}
 	fired := map[counters.ID]int64{}
+	all := shapes()
 	for _, name := range []string{"date", "nbm", "flat", "hash"} {
-		keys := shapes()[name]
+		keys := all[name]
 		f := newSorted(keys, false, 1)
 		f.Latency = time.Millisecond
 		got, st, leaves := runBudget(t, f, Options{PageSize: shapePage}, 64, 1<<20)
@@ -94,34 +96,37 @@ func TestAdmissionEngages(t *testing.T) {
 	}
 }
 
-// TestAdmissionMillionFlat: a flat list of a million keys (1,000 pages) at
-// 64 workers ends with fewer than 360 ranges (measured 270-310), about
-// twice the 100-150 a 64-wide run needs (without the gates: 630-810),
-// within the depth bound and still about 64 wide.
-func TestAdmissionMillionFlat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("slow")
+// TestAdmissionFlat: a flat list of 1,000 pages at 64 workers ends with
+// fewer than 360 ranges (measured 270-330 at 100,000 keys in pages of 100,
+// race and GOMAXPROCS=1 included), about twice the 100-150 a 64-wide run
+// needs (without the gates: 630-810), within the depth bound and still
+// about 64 wide. The million-key, 1,000-key-page run of the same law is the
+// performance tier's (SWATH_PERF=1; measured 270-310 ranges).
+func TestAdmissionFlat(t *testing.T) {
+	n, page, lat := 100_000, shapePage, time.Millisecond
+	if os.Getenv("SWATH_PERF") != "" {
+		n, page, lat = 1_000_000, PageKeys, 5*time.Millisecond
 	}
-	keys := make([]string, 1_000_000)
+	keys := make([]string, n)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("logs/p/%09d", i)
 	}
 	f := newSorted(keys, false, 1)
-	f.Latency = 5 * time.Millisecond
-	got, st, leaves := runBudget(t, f, Options{}, 64, 131_072)
+	f.Latency = lat
+	got, st, leaves := runBudget(t, f, Options{PageSize: page}, 64, 131_072)
 	if len(got) != len(keys) {
 		t.Fatalf("%d keys", len(got))
 	}
-	checkTiling(t, "million", leaves)
+	checkTiling(t, "flat", leaves)
 	g := st.Get
-	t.Logf("requests=%d leaves=%d empty=%d/%d remainder=%d lower_tiny=%d upper_tiny=%d depth=%d max_active=%d",
-		g(cRequests), g(cLeaves), g(cChildEmptyLower), g(cChildEmptyUpper), g(cSplitSkippedRemainder), g(cSplitSkippedLowerTiny),
+	t.Logf("keys=%d requests=%d leaves=%d empty=%d/%d remainder=%d lower_tiny=%d upper_tiny=%d depth=%d max_active=%d",
+		n, g(cRequests), g(cLeaves), g(cChildEmptyLower), g(cChildEmptyUpper), g(cSplitSkippedRemainder), g(cSplitSkippedLowerTiny),
 		g(cSplitSkippedUpperTiny), g(cSplitMaxDepth), g(cMaxActive))
 	if g(cLeaves) >= 360 {
 		t.Errorf("%d ranges, want fewer than 360", g(cLeaves))
 	}
-	if d := g(cSplitMaxDepth); d > depthBound(len(keys), 1000, 4) {
-		t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), 1000, 4))
+	if d := g(cSplitMaxDepth); d > depthBound(len(keys), page, 4) {
+		t.Errorf("split.max_depth %d over %d", d, depthBound(len(keys), page, 4))
 	}
 	if g(cMaxActive) < 32 {
 		t.Errorf("max_active %d: the gates starved the workers", g(cMaxActive))

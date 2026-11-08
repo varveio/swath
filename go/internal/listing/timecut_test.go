@@ -117,7 +117,7 @@ func TestTimeCutClaimResumes(t *testing.T) {
 			if _, err := os.Stat(kept); !os.IsNotExist(err) {
 				t.Fatal("the reproduced suspect part was kept")
 			}
-			t.Logf("part 0 claimed with %d rows; resumed into %d parts, %d rows listed", claimed, len(m.Parts), sum.Output.RowsListed)
+			t.Logf("part 0 claimed with %d rows; resumed into %d parts, %d rows listed", claimed, len(m.Parts), sum.Output.RowsEmitted)
 		})
 	}
 }

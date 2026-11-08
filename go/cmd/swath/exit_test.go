@@ -242,7 +242,7 @@ func TestDiskFullExits74(t *testing.T) {
 	}
 	ctx := context.Background()
 	ref := filepath.Join(t.TempDir(), "ref")
-	if err := run(ctx, args(ref), io.Discard, false); err != nil {
+	if err := run(ctx, args(ref), io.Discard, true); err != nil {
 		t.Fatal(err)
 	}
 	for target, match := range map[string]func(string) bool{
@@ -260,7 +260,7 @@ func TestDiskFullExits74(t *testing.T) {
 			}
 			return 0, nil
 		})
-		err := run(ctx, args(out, "--report", report), io.Discard, false)
+		err := run(ctx, args(out, "--report", report), io.Discard, true)
 		restore()
 		if c := exitCode(t, err); c != exitDiskFull {
 			t.Fatalf("%s: exit %d (%v), want %d", target, c, err, exitDiskFull)
@@ -301,8 +301,8 @@ func sameParts(t *testing.T, at, ref, out string) {
 
 // TestQueuedHealthyWorkIsNotStuck: requests the service answers keep the
 // stall clock alive although no row moves; requests that fail or never
-// return do not. With the limiter at one permit (four workers, three
-// throttle answers first) the root range's first pages come back empty
+// return do not. With the limiter at one permit (one worker; the windowed
+// limiter no longer falls to one on three throttle answers) the root range's first pages come back empty
 // with a continuation for longer than twice the stall timeout before any
 // row (--seed=false: the seed would stop following them at its budgets,
 // TestSeedChargesEmptyPages): the run completes (before, it stopped as stuck with 75 while the
@@ -316,7 +316,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 	var firstEmpty, lastEmpty atomic.Int64 // unix nanoseconds
 	const empties = 50
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := served.Add(1)
+		served.Add(1)
 		m := mode.Load().(string)
 		if m == "hung" {
 			<-r.Context().Done()
@@ -326,12 +326,6 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(503)
 			fmt.Fprint(w, `{"error":{"code":503,"message":"Backend Error"}}`)
-			return
-		}
-		if n <= 3 { // three throttles: the limit falls 4 -> 2 -> 1 -> 1
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(429)
-			fmt.Fprint(w, `{"error":{"code":429,"message":"rate limit exceeded"}}`)
 			return
 		}
 		q := r.URL.Query()
@@ -364,14 +358,14 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
-		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "4", "--seed=false",
+		err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--limiter", "--workers", "1", "--seed=false",
 			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v", err)
 			}
-			if !strings.Contains(out.String(), `"limiter.decreases": 2`) {
-				t.Fatalf("the limit did not fall to one: %s", out.String())
+			if !strings.Contains(out.String(), `"limiter.limit": 1`) {
+				t.Fatalf("the limit was not one: %s", out.String())
 			}
 			if d := time.Duration(lastEmpty.Load() - firstEmpty.Load()); d < 2*stall {
 				t.Fatalf("the rowless stretch lasted %s, not over twice the stall timeout", d)
@@ -463,7 +457,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	}
 	ctx := context.Background()
 	// The number of requests a run makes, to place the invalid pages.
-	if err := run(ctx, args(filepath.Join(t.TempDir(), "count")), io.Discard, false); err != nil {
+	if err := run(ctx, args(filepath.Join(t.TempDir(), "count")), io.Discard, true); err != nil {
 		t.Fatal(err)
 	}
 	total := served.Load()
@@ -471,7 +465,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	after.Store(total * 3 / 4)
 	out := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err := run(ctx, args(out, "--report", report), io.Discard, false)
+	err := run(ctx, args(out, "--report", report), io.Discard, true)
 	if swapped.Load() == 0 {
 		t.Fatal("no invalid page was served")
 	}
@@ -518,7 +512,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	check("resume report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
 	// A resumed run (the race the command's early check cannot close)
 	// refuses under the lock.
-	if err := runWith(ctx, args(out), io.Discard, false, nil, true, nil); !errors.As(err, &ue) {
+	if err := runWith(ctx, command{diag: true}, args(out), io.Discard, nil, true, nil); !errors.As(err, &ue) {
 		t.Fatalf("resumed run: %v", err)
 	}
 	if got := tree(); !maps.Equal(before, got) {

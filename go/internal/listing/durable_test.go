@@ -221,8 +221,8 @@ func TestDurableSpillResume(t *testing.T) {
 		t.Fatalf("nothing reused: %+v %+v; files after the crash: %d", d, d.Resume, crashedFiles)
 	}
 	t.Logf("cold: %d sealed; resume: accepted %d, replayed %d rows, skipped %d, gaps %d, %d list requests (rows listed %d, retained %d)",
-		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsListed, sum.Output.RowsRetained)
-	if want := sum.Output.RowsListed; want <= d.Resume.ReplayedRows {
+		cold.Resources.Spill.Durable.SealedFiles, d.Resume.Accepted, d.Resume.ReplayedRows, d.Resume.ReplaySkippedRows, d.Resume.Gaps, log.n.Load(), sum.Output.RowsEmitted, sum.Output.RowsRetained)
+	if want := sum.Output.RowsEmitted; want <= d.Resume.ReplayedRows {
 		t.Fatalf("listed %d rows, replayed %d", want, d.Resume.ReplayedRows)
 	}
 }

@@ -63,7 +63,7 @@ type auth struct {
 // token service's 5xx or throttle, a cut connection, past its wait) keeps
 // the source, and each request's signing retries it (then the range is
 // requeued), as a refresh failure mid-run would.
-func loadAuth(cfg Config) (*auth, error) {
+func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	// The SDK's own log lines (an IMDS fallback warning on every host
 	// without instance metadata) are not for swath's users.
 	opts := []func(*config.LoadOptions) error{config.WithLogger(logging.Nop{})}
@@ -86,7 +86,7 @@ func loadAuth(cfg Config) (*auth, error) {
 			return nil, &objhttp.CredentialError{Source: "environment", Err: errors.New(why)}
 		}
 	}
-	ac, err := config.LoadDefaultConfig(context.Background(), opts...)
+	ac, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		// A profile that does not exist, a role without its token: the
 		// configuration names credentials it cannot give (class auth).
@@ -113,10 +113,14 @@ func loadAuth(cfg Config) (*auth, error) {
 	if src != "" {
 		wait = credentialWait
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	lookup, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	c, err := retrieve(ctx, ac.Credentials, tokenFile)
+	c, err := retrieve(lookup, ac.Credentials, tokenFile)
 	switch {
+	case ctx.Err() != nil:
+		// The caller gave up (a signal, its deadline): not a verdict on
+		// the credentials.
+		return nil, context.Cause(ctx)
 	case err == nil:
 		a.creds, a.source = ac.Credentials, c.Source
 	case src == "":

@@ -24,7 +24,7 @@ A format-2 manifest is never read by the format-1 rule.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape (below) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 1); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 2: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -113,31 +113,36 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 ## Versions
 
 Four versions move independently: the dataset format (`format_version` and `swath.profile_version`, 2), the
-logical schema (`schema_id`), the private journal (version 7, never read by readers; an interrupted run of an earlier build is finished
-with that build or started over with `--overwrite`) and the writer recipe
+logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
+schema id" below), the private journal (version 8, never read by readers: version 8 adds the run UUID that durable spill files
+are bound to; a version 7 journal of the previous build still resumes, with durable spill off, and a version 7
+build refuses a version 8 journal; an interrupted run of an older build is finished with that build or started
+over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r2`, in the resume identity). `created_by` names the real build, so
-parts are byte-identical within a build only.
+parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
+on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
 
 ## Run report and counters
 
-`run.json` replaces Java's run summary. It keeps the Java fields that have consumers, with their names:
-`cost.api_calls` (every HTTP attempt; the cloud importer's request count), `cost.cost_usd` and `cost.basis`
-(`null` on a custom endpoint), `efficiency.keys_per_sec` and `efficiency.api_calls_per_1k_objects`, `args_hash`
+`run.json` replaces Java's run summary (its schema: "Run report" in [cli.md](cli.md#run-report)). It keeps
+these Java fields with their names: `cost.cost_usd` and `cost.basis` (`null` on a custom endpoint),
+`efficiency.keys_per_sec`, `args_hash`
 (the cloud importer's configuration digest; SHA-256 of the Go run's frozen identity, filters included, so its
 value differs from Java's listing-scope hash), and `stop_source` (under `outcome`); Java's
 `session_duration_ms` is `timings.session_ms`. Its other Java-only fields (`steals`, `sort.arm`,
 `shape.fingerprint`, `trajectory`, `slow_ranges`, `probe_latency`, `demand_gate`, `shape`) are not kept
 ([cli-inventory.md](cli-inventory.md)). The downstream reader does not read it. A reader that tabulates runs
 (`bench/summaries.py`) maps Java's top-level fields as: `completed` → `outcome.complete`, `objects` →
-`output.rows_listed`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
+`output.rows_committed` (the dataset) or `output.rows_emitted` (this attempt), `cost.api_calls` →
+`requests.http_attempts`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
 `invocation.source`, `config.max_parallel_listings` → `invocation.workers`, `output.files` →
-`output.parts_written` + `parts_retained`, `output.compressed_size_bytes` → `output.bytes`,
+`output.parts_written` + `parts_retained`, `output.compressed_size_bytes` → `output.output_bytes`,
 `shape.fingerprint.git_sha` → `build.revision`. Java meters map to the provider's counters
 (`source.stats.counters.values`, here for S3) as follows:
 
 | Java meter or field | Go (`source.stats.counters.values` unless noted) |
 |---|---|
-| `cost.api_calls`, `swath.api.calls` | `attempts`: every HTTP request sent, client retries and engine requeues included (Java counted fetch attempts with the SDK's retries off); `requests` counts logical calls |
+| `cost.api_calls`, `swath.api.calls` | `attempts` (the report's `requests.http_attempts`): every HTTP request sent, client retries and engine requeues included (Java counted fetch attempts with the SDK's retries off); `requests` counts logical calls |
 | `swath.retries`, `recovered_errors.retries` | `retries` |
 | `swath.throttle.events` | `throttles` (every throttled attempt, the last of an exhausted call included) |
 | `engine.pages`, `swath.page.raw_count` | `pages` |
@@ -162,16 +167,19 @@ value differs from Java's listing-scope hash), and `stop_source` (under `outcome
 A policy that was off reads `false` under `features` and its counters are absent; a present zero means the
 policy was on and never fired ([internals/counters.md](internals/counters.md)).
 
+The report's changes from version 1 to version 2 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04).
+
 ## Command line
 
-Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE --output DIR` (`-o`);
+Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE -o DIR`;
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
-`-no-spill` → `swath diag list …`; `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
+`-no-spill` → `swath diag list …`; `swath list --count-only` → `swath count` (2026-11-07); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
-is `--workers`, default 64 as Java's, whatever the CPU count; `--encoders` stays CPU-derived. Java's
-`--tune seed.mode=none` is `--seed=false` (the seed is on by default, as Java's `shallow` is), and `--format discard` is
-`--count-only`, which counts without ordering or spilling.
+is `--workers`, default 64 as Java's, whatever the CPU count;
+`--encoders` stays CPU-derived. Java's `--tune seed.mode=none` is `swath diag list --seed=false` (the seed is on
+by default, as Java's `shallow` is), and `--format discard` is `swath count`, which counts without ordering or
+spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
 `--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
 shape, so they are read with what already reads S3 listings ([cli.md](cli.md), "Text output"): Java's `key`,
@@ -183,14 +191,16 @@ ported: `--output-type` and `--format parquet` (the `-o` name decides), `--compr
 file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`, `--text-writers`, the
 `.parquet` one-writer file. Text runs are not resumable: they keep no journal. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
 never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
-is not, instead of failing on its first request. `--endpoint-url` and `--force` are accepted as Java's names
-of `--endpoint` and `--overwrite`; a custom endpoint is path-style by default, as Java's. The seven filters are
+is not, instead of failing on its first request. Java's `--endpoint-url` and `--force` are `--endpoint` and
+`--overwrite`, and Java's `--output` is `-o`; a custom endpoint is path-style by default, as Java's. The seven filters are
 Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
 The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
 
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
 earlier one: `swath resume` replays the recorded command with this build's flags, and a flag this build no
-longer has is refused (exit 2); finish such a run with the build that started it, or start over.
+longer has is refused (exit 2, the flag parser's unknown-flag error); finish such a run with the build that
+started it, or start over. The last renames before 0.4 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04);
+the list below is the earlier history of the unreleased builds.
 - `--workers` defaults to 64 whatever the CPU count (it was `min(64, max(4, 3*GOMAXPROCS))`).
 - A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
   and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it
@@ -209,11 +219,11 @@ longer has is refused (exit 2); finish such a run with the build that started it
 - Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
   chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
   bare flag is `on`.
-- `--count-only` no longer runs the order stage: the report's `features.order` is false, `spill` is absent
+- `--count-only` (now `swath count`) no longer runs the order stage: the report's `features.order` is false, `spill` is absent
   and `max_buffered_bytes` is 0.
 - `swath diag list --seed-descent` was removed with the seed descent. The `seed.probes`, `seed.levels.*` and
   other counters of that descent are gone.
-- `--seed` is on by default (`--seed=false` turns it off) and no longer one delimiter page: it paginates the top
+- `--seed` is on by default (`swath diag list --seed=false` turns it off) and no longer one delimiter page: it paginates the top
   level up to 4 pages and descends levels narrower than `--workers` up to 4 deep, in parallel waves (at most 64
   requests in 6 round trips, the empty pages it follows included), and it also tiles a resumed scope. Its new
   counters are `seed.pages`, `seed.requests`, `seed.round_trips`, `seed.levels`, `seed.level.<n>.cuts`,
@@ -224,14 +234,66 @@ longer has is refused (exit 2); finish such a run with the build that started it
   `split.rejected.probe_empty` are gone.
 - `--memory N` is `--row-budget N/2`: the flag names the bytes of rows in flight it bounds, which were half of
   `--memory`; the default (128 MiB, from 256 MiB of `--memory`) and the encoders it admits are unchanged.
-  The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes` (equal to
-  `resources.row_budget_bytes`). A journal that recorded `--memory` is refused on resume.
-- `--spill-max` is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
-  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` (since back on `swath list`, below) moved to
+  The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes`. A journal that recorded `--memory` is refused on resume.
+- `--spill-max` (now `--spill-budget`) is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
+  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
   `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
-- Spill frames are delta-coded and zstd-compressed (level 1) by default; `--spill-compress=false` (on `swath list` and `swath resume`)
+- Spill frames are delta-coded and zstd-compressed (level 1) by default; `--spill-compress=false` (on `swath diag list` and `swath resume`)
   writes them uncompressed and `--spill-plain` without delta coding. The report's `resources.spill` adds
   `logical_bytes`, `format` and `decode_refused`.
+
+## Changes from 0.3 to 0.4
+
+The 0.3 releases (the repository's `v0.3.x` tags) are the Java tool; 0.4 is the first release of this Go tool,
+and the Java tool is deprecated with it. Moving from Java 0.3 to Go 0.4 changes the launcher, the flags and the
+dataset format: the flag-by-flag mapping is [from-java.md](from-java.md) and
+[cli-inventory.md](cli-inventory.md), the dataset changes are the sections above. A run interrupted under Java
+is finished with Java or started over; `swath resume` reads only this tool's journal. The current flags are
+the generated help in [cli.md](cli.md#flags).
+
+The binary reports its version (`swath --version`, the report's `build.version`) from the Go module build
+information: a binary built from a source checkout reads `devel`, and the revision it was built from is
+`build.revision`.
+
+**If you built from `main` before 0.4.** The Go port was on `main` (from `a2efe16e`) before it was released,
+without a version and without a compatibility promise. Against those builds, 0.4 renames or moves these flags
+(a removed name is an unknown flag, exit 2; there are no aliases, and a run interrupted under such a build is
+finished with it or started over): `--output` is `-o`; `--force` is `--overwrite`; `--endpoint-url` is
+`--endpoint`; `--quiet` is `-q`; `--spill-max` is `--spill-budget`; `swath list --count-only` is the command
+`swath count` (it refuses the output flags with exit 2); `--seed=false` and `--limiter-slow-start` moved to
+`swath diag list`, and `swath list` and `swath count` refuse every diagnostic flag with a message naming
+`swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+are delta coded and zstd compressed by default.
+
+**Run report: version 2.** Builds of `main` before 0.4 wrote `report_version` 1; 0.4 writes 2. A reader
+dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
+is the full schema and "Run report" in [cli.md](cli.md#run-report) its description.
+
+| Version 1 | Version 2 |
+|---|---|
+| `report_version` 1 | `report_version` 2 |
+| `output.rows_listed` (after the filters) | `output.rows_emitted`; new beside it `output.rows_fetched` (from the source, before the filters: `rows_filtered` + `rows_emitted` on a run that succeeded; a stopped run also fetched rows it never emitted) |
+| `output.bytes` (part bytes) | `output.output_bytes`; new beside it `output.object_bytes` (the sizes of the objects the order stage accepted) |
+| `cost.api_calls` | `requests.http_attempts`, with `requests.retries`, `throttles`, `timeouts` beside it; `cost` keeps `cost_usd` and `basis` |
+| `efficiency.api_calls_per_1k_objects` (per row listed after the filters) | `efficiency.http_attempts_per_1k_rows` (per row fetched) |
+| `resources.row_budget_bytes` | removed: `invocation.row_budget_bytes` holds the same value |
+| – | `timings.seed_ms`, `drain_ms`, `publication_ms` (phase times; `listing_ms` unchanged) |
+| – | `resources.free_disk_min_bytes` |
+| – | `history` (`interval_ms`, `samples`: at most 300) |
+| – | `invocation.prior` (the `--seed-from` prior) |
+| – | `output.text.formatters`, `output.text.output_wait_ns`, `output.text.compressor` (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`) |
+| `resources.spill` | adds `logical_bytes`, `format`, `decode_refused` |
+
+**Counters** (`source.stats.counters`, [internals/counters.md](internals/counters.md)), against those builds. New: `seed.from.*`
+(the warm start), `seed.first_page_keys`, `seed.flat_chains`, `seed.stop.flat`, `seed.stop.one_page`,
+`split.reason.slow_range`, `split.slow.max_range_latency_ns`, `split.slow.run_latency_ns`,
+`limiter.cuts_suppressed.round_trip`, `limiter.cuts_suppressed.tolerated`, `limiter.limit`,
+`limiter.throttle_permille`, `spill.logical_bytes`, `spill.decode_refused`. Removed: `split.rejected.done`,
+`split.skipped.not_continuing`.
+
+**Unchanged since those builds:** the dataset (format 2, the manifest, the Parquet schema and footer stamps), the journal, the
+exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
+zstd), but they are private to one run and never read across builds.
 
 ## The downstream reader: dispatch on schema id
 
@@ -242,9 +304,14 @@ does, stated as the contract rather than as its code:
   read no `_SUCCESS` and no run summary. Any other manifest is format 1 and takes the legacy path.
 - **Whole-source acceptance.** From the manifest's coverage: `complete` true, `stop_reason` `completed`,
   `skipped_entries` 0, `filters` present and empty, `scope.kind` `whole`; a missing field refuses.
-- **Schema id.** Each schema id defines the exact columns by name and type; the reader dispatches on it
-  (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
-  container against what it was asked to open. The Java-era `version_id`, `is_latest`, `is_delete_marker`
+- **Schema id.** Each schema id defines the columns a reader may rely on, by name and type; the reader dispatches
+  on it (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
+  container against what it was asked to open. A schema id is not a closed column set: a part may hold columns its
+  id does not define, which the reader ignores, and an optional column of the id may be absent from some parts or
+  all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
+  build that writes the column mixes parts with and without it under one id (the resume identity freezes the
+  schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
+  column of every schema id is present in every part. The Java-era `version_id`, `is_latest`, `is_delete_marker`
   and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
   only.
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.

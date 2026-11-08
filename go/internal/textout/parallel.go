@@ -17,6 +17,8 @@ type stopper interface {
 	// false after every queued batch is written (the first error, if
 	// any), with abort true dropping what is queued.
 	finish(abort bool) error
+	// failed is the first write failure, if any (kept after finish).
+	failed() error
 }
 
 // pipeline formats the order stage's batches on Formatters goroutines and
@@ -142,7 +144,18 @@ func (p *pipeline[P]) sequence() {
 	}
 }
 
-func (p *pipeline[P]) fail(err error) { p.err.CompareAndSwap(nil, &err) }
+// fail records the first write failure and reports it at once
+// (Config.Fail): nothing else may notice it while the drainer waits for a
+// page.
+func (p *pipeline[P]) fail(err error) {
+	if p.err.CompareAndSwap(nil, &err) {
+		if f := p.k.o.cfg.Fail; f != nil {
+			f(err)
+		}
+	}
+}
+
+func (p *pipeline[P]) failed() error { return p.loadErr() }
 
 func (p *pipeline[P]) loadErr() error {
 	if e := p.err.Load(); e != nil {

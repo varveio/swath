@@ -44,3 +44,21 @@ func vmHWM() int64 {
 	}
 	return 0
 }
+
+// residentBytes is the resident set now: /proc/self/statm's resident
+// pages (the report's history).
+func residentBytes() (int64, bool) {
+	b, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0, false
+	}
+	f := strings.Fields(string(b))
+	if len(f) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseInt(f[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return pages * int64(os.Getpagesize()), true
+}
