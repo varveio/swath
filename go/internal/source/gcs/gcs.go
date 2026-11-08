@@ -193,6 +193,21 @@ func AcceptBound(s string) bool {
 // so through+NUL is accepted unless it passes the name length.
 func acceptEnd(s string) bool { return AcceptBound(s) }
 
+// ExclusiveStart is the startOffset that lists names strictly after name,
+// and whether the provider sends it: name + NUL, the immediate successor
+// in byte order (the bound ExclusiveEnd builds for endOffset). startOffset
+// is inclusive, so a generations listing that resumes after a complete
+// name sends this bound and lists none of that name's generations again
+// (checked live on 2026-11-08: TestExclusiveStart). When AcceptBound
+// refuses it (name is 1,024 bytes, so the bound is 1,025; the live API
+// answered 200 for that too, but the cap keeps start and end bounds to one
+// rule that emulators and the replay server also meet), the provider sends
+// startOffset = name and the engine's StartInclusive drop removes the
+// name's rows, every generation of it, as for any inclusive start.
+func ExclusiveStart(name string) (string, bool) {
+	return keyrange.ExclusiveEnd(name, AcceptBound)
+}
+
 // maxName is the longest object name, in bytes.
 const maxName = 1024
 

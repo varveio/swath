@@ -71,6 +71,10 @@ type Info struct {
 	// its surrounding quotes (S3); text output restores them, so a row
 	// shows the ETag exactly as the API returned it.
 	QuotedETag bool
+	// Groups: rows may repeat a key, as consecutive rows forming one
+	// group, in the provider's within-key order (a versions listing).
+	// false: keys are strictly ascending.
+	Groups bool
 }
 
 // Schema is a producer's row schema: the key column, then Columns in
