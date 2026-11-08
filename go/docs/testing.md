@@ -258,6 +258,45 @@ KEYFAKE=/path/to/keyfake MAX_KEYS=2000000 SLICE_DIR=/dev/shm RESULTS=durable-cor
   bench/durable_corpus.sh real-changesets.keys noaa-nbm-grib2-pds.keys argoverse-6M.keys
 ```
 
+**What covers the contract's test matrix.** The durable spill contract's §6 rows, and the tier that runs each
+one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake and in `order` unit harnesses.
+
+| §6 row | Covered by |
+|---|---|
+| kill matrix (§3.4-5, §3.8, after a part record, mid recovery replay) | campaign (all four fixtures); `listing` `TestDurableKillMatrix` (1st and 4th occurrences); `cmd/swath` `TestSIGKILLDurableSpill` |
+| ledger damage (flipped byte, foreign header) | `order` `TestDurableLedgerPrefix` |
+| Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` |
+| Sol 2 (shutdown order) | `listing` `TestDurableShutdownOrder` |
+| Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts`; `listing` `TestDurableLedgerTornWrite` |
+| replaced output | `order` `TestDurableReplacedOutput`, `TestDurableReplacedMidCycle` |
+| credit path | `order` `TestDurableCreditWithoutOrderLock` |
+| new ancestors lost | `listing` `TestDurableNewAncestorsLost` |
+| lock order | `order` `ledgerOrder` hook, in `TestDurableCertifiesExactRows`, `TestDurableCreditWithoutOrderLock`, `TestDurableLedgerFailureEvicts` |
+| seal errors | `order` `TestDurableSealErrorStopsRun` |
+| slots full | `order` `TestDurableSlotsFull` |
+| history race | `order` `TestDurableHistoryRace` |
+| retire defer | `order` `TestDurableRetireDefer` |
+| repeated recovery | `listing` `TestDurableRepeatedRecovery` (each recovery step, on its own copy); not at every cleanup step twice |
+| history across attempts | `order` `TestDurableHistoryAcrossAttempts`, `TestDurableRecoveryHistory`, `TestDurableReducedCap` |
+| reuse (kill at 40 %, skewed fixture) | campaign: kills at 40 % and 70 %, slow frontier, request log; `keyrange` `TestReuseTilesAroundSpans` |
+| pre-capture | `order` `TestDurableZeroRowCertificate`, `TestDurableReplayAboveK` |
+| abandon | `order` `TestDurableAbandonThenSpill` |
+| fence vs chunks | `order` `TestDurableCertifiesExactRows` (pages of 1, 999, 1,025, 3,000) |
+| filtered | `order` `TestDurableZeroRowCertificate`; a long wholly filtered range: not covered |
+| unsafe K, then crash again | `keyrange` `TestFencesHoldTheContract` (unsafe resume keys, no crash); crash again after an unsafe K: not covered |
+| corruption | `order` `TestDurableCorruption`, `TestDurableFrameClaims` |
+| foreign | `order` `TestDurableCorruption` (another run's file renamed into a recorded ID) |
+| compression | `listing` `TestDurableCompressionFlip` |
+| versions | `listing` `TestDurableVersions` |
+| exclusion | `listing` `TestDurableOverwrite`; a second process: the output lock's tests, not durable-specific |
+| changed source | `listing` `TestDurableChangedSource` |
+| time cuts on (suspect part over two replay files and a gap) | campaign `suspect-composition` (1 s interval) |
+| reduced cap, ENOSPC | `order` `TestDurableReducedCap`; `listing` `TestDurableSealENOSPC`; ENOSPC on a captured frame: not covered |
+| eviction | `order` `TestDurableEviction`, `TestDurableLedgerFailureEvicts` |
+
+On the campaign's fixtures, unsynced loss is emulated in two ways only: unrecorded files are cut short after a
+kill at a seal, and the ledger's last append is torn after a kill at its sync.
+
 `SWATH_CAMPAIGN_RESULTS` (which both wrappers set) collects one line per arm. The retained results are
 in [measurements.md](measurements.md#durable-spill).
 
