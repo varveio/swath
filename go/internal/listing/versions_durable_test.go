@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -31,10 +32,11 @@ import (
 // keys, every 37th with 40 versions (a group spanning several 7-entry
 // pages, so page boundaries fall inside groups), the rest 1 to 3; a slow
 // frontier (fresh requests below the 10 % key wait), so the ranges ahead
-// spill and seal certificates. It logs the key-marker of each fresh data
-// request (no version-id-marker, no delimiter) while logging is on: with
-// versions the key-marker is the request's exclusive start, as start-after
-// is for ListObjectsV2.
+// spill and seal certificates. It logs each data request (no delimiter)
+// while logging is on: its key-marker and whether it continues a page
+// (a version-id-marker). A fresh request's key-marker is its exclusive
+// start, as start-after is for ListObjectsV2; a continuation lists from
+// the rest of its key-marker's group.
 type hotVersions struct {
 	rows    []client.Version
 	slow    string
@@ -42,7 +44,14 @@ type hotVersions struct {
 	held    atomic.Int64 // fresh requests from the scope's start this run
 	logging atomic.Bool
 	mu      sync.Mutex
-	starts  []string
+	starts  []versionsReq
+}
+
+// versionsReq is a logged data request: its key-marker, and whether it
+// carried a version-id-marker (a page continuation).
+type versionsReq struct {
+	marker string
+	cont   bool
 }
 
 func newHotVersions() *hotVersions {
@@ -77,12 +86,12 @@ func (p *hotVersions) ListObjectVersions(_ context.Context, in *client.VersionsI
 			time.Sleep(time.Millisecond)
 		}
 	}
+	if in.Delimiter == "" && p.logging.Load() {
+		p.mu.Lock()
+		p.starts = append(p.starts, versionsReq{in.KeyMarker, in.VersionIDMarker != ""})
+		p.mu.Unlock()
+	}
 	if in.Delimiter == "" && in.VersionIDMarker == "" {
-		if p.logging.Load() {
-			p.mu.Lock()
-			p.starts = append(p.starts, in.KeyMarker)
-			p.mu.Unlock()
-		}
 		if in.KeyMarker < p.slow {
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -195,6 +204,12 @@ func TestVersionsDurableSpill(t *testing.T) {
 		{"spill-ledger-append", 2, ""},
 		{"spill-unlink", 1, ""},
 		{"spill-unlink", 1, "spill-replay-frame"},
+		// A part claimed, its record not written: the resume reproduces
+		// it pinned at its claimed row count from replayed and listed
+		// rows, the same stream as the cold run's, so it neither cuts
+		// inside a group nor refuses with ErrAmbiguousTail.
+		{"journal-append", 12, ""},
+		{"journal-append", 12, "spill-replay-frame"},
 	} {
 		name := kill.point
 		if kill.resumeKill != "" {
@@ -203,6 +218,27 @@ func TestVersionsDurableSpill(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "ds")
 			crashDurable(t, hotVersionsConfig(api, out, false), kill.point, kill.nth)
+			if kill.point == "journal-append" {
+				st, err := journal.Read(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := 0
+				for _, r := range st.Records {
+					if r.Type == "part" {
+						n++
+					}
+				}
+				if _, err := os.Stat(dataset.ClaimPath(out, n)); err != nil {
+					t.Fatalf("no claimed part %d to reproduce: %v", n, err)
+				}
+				k := versionsK(t, out)
+				for _, c := range liveVersionCerts(t, out) {
+					if c.cs <= k && (c.open || k < c.ce) {
+						t.Logf("the claimed part after K %q starts inside the certificate (%q, %q]: replayed", k, c.cs, c.ce)
+					}
+				}
+			}
 			if kill.resumeKill != "" {
 				crashDurable(t, hotVersionsConfig(api, out, true), kill.resumeKill, 2)
 			}
@@ -218,10 +254,20 @@ func TestVersionsDurableSpill(t *testing.T) {
 			}
 			sameDataset(t, name, ref, out)
 			api.mu.Lock()
-			for _, s := range api.starts {
+			for _, r := range api.starts {
 				for _, c := range certs {
-					if (c.open || c.ce > k) && s >= max(c.cs, k) && (c.open || s < c.ce) {
-						t.Errorf("a data request starts at %q inside the certificate (%q, %q] (K %q)", s, c.cs, c.ce, k)
+					lo := max(c.cs, k)
+					if !c.open && c.ce <= k {
+						continue // covered by K: nothing of it is replayed
+					}
+					// A fresh request returns keys above its marker; a
+					// continuation also the rest of its marker's group.
+					// Either is inside when it can return a key of
+					// (max(cs, K), ce]. A continuation at cs or K finishes
+					// a complete key below the replay.
+					if in := !r.cont && r.marker >= lo && (c.open || r.marker < c.ce) ||
+						r.cont && r.marker > lo && (c.open || r.marker <= c.ce); in {
+						t.Errorf("a data request (key-marker %q, continuation %v) lists inside the certificate (%q, %q] (K %q)", r.marker, r.cont, c.cs, c.ce, k)
 					}
 				}
 			}

@@ -42,9 +42,14 @@ leaving the group open, declares no page-end fence (`groups.fence_deferred`). A 
 and its split fence at a complete key. So no certificate bound cuts a version group: every version of `cs` lies
 before the capture, and every version of `ce` inside the certificate. K is a whole key too (no part ends inside
 a key), so recovery replay's rows above `max(cs, K)` drop or repeat no version. Replay accepts a key repeated
-within its group, and only in group mode. With versions a range's fresh data request starts at its key-marker
-(a continuation adds the version-id marker), which stands in for `start-after` in the reuse checks
-(`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing` `TestVersionsDurableSpill`).
+within its group, and only in group mode. With versions a range's fresh data request starts after its
+key-marker, which stands in for `start-after` in the reuse checks; a continuation (key-marker and version-id
+marker) lists the rest of its marker's group, so it lies inside a certificate only when its key-marker is
+above `max(cs, K)`, which the test's request log rules out as well. A claimed part whose record was lost is
+reproduced after K at its claimed row count (parquet-output.md) from the replayed and listed rows; on a
+static source they are the cold run's rows in the cold run's order, so the pinned cut falls where it did
+and does not raise `ErrAmbiguousTail` (`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing`
+`TestVersionsDurableSpill`, including kills at `journal-append` with K inside a live certificate).
 
 **Repeated keys and the drain tail (rule for a segmented tail).** A tail that cuts the rest of the stream into
 parallel part segments must cut where the router does. A segment boundary planned at a row count inside a
