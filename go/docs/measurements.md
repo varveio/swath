@@ -697,8 +697,8 @@ lists, at 16 cores and 1 core, are the orchestrator's Batch arms.
 - **Skew.** Pages below the key at 10 % of the list wait 200 ms more.
 - **Flags.** `--row-budget 1MiB --spill-max 256MiB --spill-reserve 64MiB`. Parts are sized to give about 16
   per dataset, 58 KiB to 1 MiB.
-- **Build.** `go/p2-durable-spill` at `22fe7cda` for the kill arms. The suspect-composition arm ran at `26d57641`, which moved its interval to 3 s and its
-  resumes off the slow frontier. 2026-11-08, 4 shared
+- **Build.** `go/p2-durable-spill` at `22fe7cda` for the kill arms. The suspect-composition arm's figures are
+  from its rerun at `c0ffc6cf`, which checks replay provenance and logs every resume of the arm. 2026-11-08, 4 shared
   vCPU.
 - **Oracle.** For every fixture, the uninterrupted reference lists exactly its key file.
 
@@ -709,10 +709,11 @@ fixtures. Every arm checks the following:
   is row-identical in every column.
 - Rows reconcile in every resume.
 - No certificate is rejected.
-- Every resume, including the killed first resume of the mid-replay arm, is checked against the request log.
-  The resumes logged 47,548 data requests, and none of them started in `[max(cs, K), ce)` of a certificate
-  live in the ledger's prefix when that resume started. Delimiter probes and continuations are not data
-  requests and are not checked.
+- Every resume is checked against the request log, and none of the logged data requests started in
+  `[max(cs, K), ce)` of a certificate live in the ledger's prefix when that resume started. In the kill arms
+  the resumes logged 52,222 data requests: 47,548 from the completing resumes and 4,674 from the killed first
+  resumes of the mid-replay arm. The suspect-composition arm's resumes are counted in its own table below.
+  Delimiter probes and continuations are not data requests and are not checked.
 - Every reuse arm (the unlink, mid-replay, 40 % and 70 % kills) found certificates above K, and its resume
   accepted and replayed some.
 
@@ -744,16 +745,25 @@ unlink.
 The kill percentages count `<Key>` elements returned to the binary before their delayed delivery. Overfetch
 and probe keys are included, so a percentage approximates the keys served, not distinct keys processed.
 
-**Suspect composition** (§6 "time cuts on", `--part-interval 3s`, 64 MiB parts). On every fixture a part
-closed by time held rows replayed from several certificates and rows listed live between them. It was claimed,
-the run was killed before its record, and the next resume reproduced it byte for byte:
+**Suspect composition** (§6 "time cuts on", `--part-interval 3s`, 64 MiB parts; rerun at `c0ffc6cf`,
+2026-11-08). On every fixture a part closed by time held rows from several certificates' intervals and rows
+listed live between them. It was claimed, and the run was killed before its record. The next resume then:
 
-| Fixture | Killed at | Part | Certificates in it | Live rows between them | Bytes |
-|---|---|---:|---:|---:|---:|
-| MinIO | journal append #5 | 5 | 4 | 18,570 | 226,278 |
-| `real-changesets` | journal append #1 | 0 | 6 | 324,041 | 2,960,064 |
-| `noaa-nbm-grib2-pds` | journal append #1 | 0 | 6 | 375,319 | 4,103,476 |
-| `argoverse-6M` | journal append #2 | 1 | 6 | 130,566 | 9,797,853 |
+- rejected no certificate;
+- accepted every certificate live above K, the part's among them;
+- replayed at least the part's certificate rows, so those rows are replay's;
+- reproduced the claimed file at its ordinal byte for byte. This is the suspect-part invariant, not identity
+  with a cold run's part, which only the interval-0 arms assert.
+
+Every try and the final resume were checked against the request log, and no logged request started inside a
+live certificate. With reuse off (`--spill-max 1MiB` on the arm's resumes) the arm fails.
+
+| Fixture | Killed at | Part | Certificates in it | Live rows between them | Bytes | Accepted | Rows replayed | Resumes (data requests logged) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| MinIO | journal append #7 | 7 | 3 | 20,171 | 825,207 | 120 | 203,796 | 8 (825) |
+| `real-changesets` | journal append #1 | 0 | 6 | 324,041 | 2,960,064 | 256 | 453,476 | 2 (2,216) |
+| `noaa-nbm-grib2-pds` | journal append #1 | 0 | 6 | 362,875 | 4,103,476 | 256 | 1,759,471 | 2 (828) |
+| `argoverse-6M` | journal append #2 | 1 | 6 | 172,709 | 9,459,146 | 254 | 911,631 | 3 (2,425) |
 
 **Full scale (GCP Batch).** Runs `dur1` (build `79bafbc6`) and `dur2` (`7af71ece`) listed 64 production
 lists of 20 to 150 million keys. Each list ran cold and was SIGKILLed at 40 % and at 70 %, then resumed.
