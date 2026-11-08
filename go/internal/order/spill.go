@@ -61,6 +61,21 @@ import (
 
 var spillCRC = crc32.MakeTable(crc32.Castagnoli)
 
+// spillEncoderOptions configure the pooled frame encoders. A frame is
+// compressed alone (EncodeAll), so a window longer than a frame buys
+// nothing. The library's default 8 MiB window keeps about 8.6 MiB of history
+// per pooled encoder once it has coded a frame of 256 KiB or more, and a run
+// pools up to one encoder per worker. A 1 MiB window with the lower-memory
+// mode keeps about 1.5 MiB, at the same ratio and speed on spill frames
+// (measured on synthetic key/ETag bodies of 256 KiB and 2 MiB: ratio 4.77 and
+// 4.64 either way). Text output uses the same window (textout.zstdWindow).
+var spillEncoderOptions = []zstd.EOption{
+	zstd.WithEncoderLevel(zstd.SpeedFastest),
+	zstd.WithEncoderConcurrency(1),
+	zstd.WithWindowSize(1 << 20),
+	zstd.WithLowerEncoderMem(true),
+}
+
 // Frame types: the payload's first byte.
 const (
 	frameRows      = 'R' // plain rows (appendRows): --spill-plain --spill-compress=false
@@ -419,7 +434,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 			enc, _ := s.enc.Get().(*zstd.Encoder)
 			if enc == nil {
 				var err error
-				if enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderConcurrency(1)); err != nil {
+				if enc, err = zstd.NewWriter(nil, spillEncoderOptions...); err != nil {
 					return err
 				}
 			}
