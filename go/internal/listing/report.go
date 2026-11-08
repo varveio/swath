@@ -16,8 +16,10 @@ import (
 // phase times, free_disk_min_bytes and the bounded progress history
 // (go/docs/upgrade.md lists every rename). 3 adds fields only:
 // resources.spill.durable and durable_off (the durable spill's account),
-// the reuse.* counters, and for versions schemas the attempt-scoped version
-// classification and distinct keys.
+// the reuse.* counters, timings.listing_done_at and resources.drain (the
+// drain tail: read-ahead, segments, encoder admission after listing), and
+// for versions schemas the attempt-scoped version classification and
+// distinct keys.
 const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -218,7 +220,11 @@ type Outcome struct {
 // and the setup before listing (credentials, the journal, a resume's
 // verification); session_ms holds wall_ms.
 type Timings struct {
-	StartedAt         time.Time `json:"started_at"`
+	StartedAt time.Time `json:"started_at"`
+	// ListingDoneAt is when the provider finished (every range listed, none
+	// in flight); ListingFinishedAt when the order stage ended, its drain
+	// handed on: the drain's tail lies between (Resources.Drain.TailNs).
+	ListingDoneAt     time.Time `json:"listing_done_at,omitzero"`
 	ListingFinishedAt time.Time `json:"listing_finished_at,omitzero"`
 	FinishedAt        time.Time `json:"finished_at"`
 	WallMs            int64     `json:"wall_ms"` // from started_at (the run's start, after the command line was read) to finished_at
@@ -350,6 +356,8 @@ type Resources struct {
 	// without output).
 	EncoderWaitNs *int64 `json:"encoder_wait_ns,omitempty"`
 	Spill         *Spill `json:"spill,omitempty"` // nil: spill was off
+	// Drain is the order stage's drain (nil for a dry run).
+	Drain *Drain `json:"drain,omitempty"`
 	// Features are the pipeline's policies and whether this run had them
 	// on; an off policy reports no counters, so a zero always means "on,
 	// never fired" (docs/internals/counters.md).
@@ -364,6 +372,115 @@ type Resources struct {
 	// PartRowCuts counts parts closed by --part-rotation-max-rows before
 	// their size target (deterministic, unlike time cuts).
 	PartRowCuts int64 `json:"part_row_cuts"`
+}
+
+// Drain is the order stage's drain after listing and the time it took.
+// Durations sum over goroutines where several wait.
+type Drain struct {
+	// TailNs is from listing_done_at to the drain's last row: the part of
+	// the run in which only the drain was left (0: listing never finished).
+	TailNs int64 `json:"tail_ns"`
+	// The workers' idle time after listing_done_at (nothing queued to
+	// list; read-ahead waits included), summed over workers.
+	WorkerIdleAfterNs int64 `json:"worker_idle_after_listing_done_ns"`
+	// The drainer's time beside frontier_wait_ns: reading spilled frames
+	// itself (decoding included, and counted again in ReplayDecodeNs),
+	// waiting for a frame the read-ahead was reading, the order guard, and
+	// handing batches to the sink (encoder_wait_ns included).
+	ReplayReadNs   int64 `json:"replay_read_ns"`
+	ReplayDecodeNs int64 `json:"replay_decode_ns"`
+	AheadWaitNs    int64 `json:"ahead_wait_ns"`
+	OrderCheckNs   int64 `json:"order_check_ns"`
+	SinkWriteNs    int64 `json:"sink_write_ns"`
+	// ReadAhead is the spill read-ahead (nil: spill off).
+	ReadAhead *ReadAhead `json:"read_ahead,omitempty"`
+	// Segments is the segment-parallel replay after listing (nil without
+	// a dataset).
+	Segments *Segments `json:"segments,omitempty"`
+	// The Parquet encoders admitted at the start and once listing ended,
+	// and why the second is what it is (EncoderAdmission*); absent without
+	// a dataset.
+	EncodersAtStart      int    `json:"encoders_at_start,omitempty"`
+	EncodersAfterListing int    `json:"encoders_after_listing,omitempty"`
+	EncoderAdmission     string `json:"encoder_admission,omitempty"`
+}
+
+// Why the encoders after listing are what they are (Drain.EncoderAdmission).
+const (
+	AdmissionListingDone = "listing_done" // raised when the provider finished (admitAfterListing)
+	AdmissionExplicit    = "explicit"     // --encoders was given: never raised
+	AdmissionAtCap       = "at_cap"       // the start already admitted the most the host carries
+	AdmissionNotReached  = "not_reached"  // listing never finished (a failed or stopped run)
+)
+
+// ReadAhead counts the spill read-ahead: frames idle workers read and
+// decoded before the drainer reached them, and their rows; frames planned
+// that the drainer took over unread and frames it reached with nothing
+// planned (both read by the drainer itself); the drainer's waits for a
+// frame being read; workers' waits at the read-ahead's share of the row
+// budget; and the workers' read and decode time.
+type ReadAhead struct {
+	Frames        int64 `json:"frames"`
+	Rows          int64 `json:"rows"`
+	DrainerFrames int64 `json:"drainer_frames"`
+	Unplanned     int64 `json:"unplanned_frames"`
+	Waits         int64 `json:"drainer_waits"`
+	CappedWaits   int64 `json:"capped_waits"`
+	ReadNs        int64 `json:"read_ns"`
+	DecodeNs      int64 `json:"decode_ns"`
+	// MaxReads is the reads allowed at once (8, at most one fewer than
+	// GOMAXPROCS): 0 is off, the drainer replaying alone (one processor).
+	MaxReads int `json:"max_reads"`
+}
+
+// Segments is the segment-parallel replay: once listing was done, the rest
+// of the stream cut into parts by the order stage and written by several
+// workers at once (order.SegmentStats).
+type Segments struct {
+	// Reason: engaged, one_processor, one_encoder, single_part,
+	// not_planned, row_budget or listing_active.
+	Reason   string `json:"reason"`
+	Segments int    `json:"segments"`
+	Workers  int    `json:"workers"`
+	Rows     int64  `json:"rows"`
+	MaxRows  int64  `json:"max_rows"`
+	Seams    int64  `json:"seam_checks"`
+	TimeNs   int64  `json:"time_ns"`     // summed over segments, open to close
+	MaxNs    int64  `json:"max_time_ns"` // the longest segment
+	PlanNs   int64  `json:"plan_ns"`     // cutting the rest into segments (boundary frames decoded)
+	// The segments' time by what it did: reading spill frames (DecodeNs
+	// of it decoding), handing batches to their parts (WriteNs: the
+	// encoders' queue waits included); the rest of time_ns is the order
+	// guard and opening parts.
+	ReadNs   int64 `json:"read_ns"`
+	DecodeNs int64 `json:"decode_ns"`
+	WriteNs  int64 `json:"write_ns"`
+	// MaxWorkers is the cap on workers (listing.segmentWorkers).
+	MaxWorkers int `json:"max_workers"`
+	// BudgetWaits are the times a worker waited for the row budget before
+	// reading or gathering a unit, BudgetWaitNs their time; MaxHeldBytes
+	// the most the segments held at once beside the tree (the encoders'
+	// queues, the units the workers read or gathered).
+	BudgetWaits  int64 `json:"budget_waits"`
+	BudgetWaitNs int64 `json:"budget_wait_ns"`
+	MaxHeldBytes int64 `json:"max_held_bytes"`
+	// WorkersBy is what set workers: encoders, processors, descriptors,
+	// row_budget or segments. PerWorkerBytes is the budget one worker
+	// holds at most, FreeBytes the budget the segments could take when
+	// planned (less what the encoders' queues held): the row budget holds
+	// 1 + (free_bytes - per_worker_bytes - the first's queue) /
+	// per_worker_bytes workers.
+	WorkersBy      string `json:"workers_by,omitempty"`
+	PerWorkerBytes int64  `json:"per_worker_bytes"`
+	FreeBytes      int64  `json:"free_bytes"`
+	// TreeBytes is the budget bytes the tree held when the segments were
+	// planned, beside what they may take (two budgets in all, at most).
+	TreeBytes int64 `json:"tree_bytes"`
+	// DurableFilesRead is the durable spill files the segments read
+	// frames of; DurableBoundaries the segment boundaries inside one of
+	// their frames.
+	DurableFilesRead  int `json:"durable_files_read"`
+	DurableBoundaries int `json:"durable_boundaries"`
 }
 
 // SourceStats is the provider's statistics under its name ("s3", "local").

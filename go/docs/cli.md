@@ -511,7 +511,8 @@ Diagnostics:
   instead of delta-coding them, the comparison arm
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
-  (24 MiB) each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
+  and one state of the shared codec, priced from the provider's schema at its longest keys (31.5 MiB for S3, 32.5 for GCS, 61 MiB for a
+  local path), each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
   when the resources cannot carry it, a warning names the shortfall. For a `.zst` text file the same flag
   is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
@@ -742,7 +743,17 @@ began), `capture_pending_dropped`, `no_slot`, `history_exhausted`, `abandoned` (
 `sealed_durable`, `flush_ns`, `flush_cycles`, `ledger_failed`, `retained_bytes`, `peak_retained_bytes`, `retired`
 (by reason), `retire_deferred`, and on a resume `resume`: `ledger_dropped_bytes`, `ledger_cut`, `accepted`,
 `accepted_bytes`, `rejected` (by reason), `orphans`, `replayed_rows`, `replay_skipped_rows`, `gaps`,
-`requests_saved_est`. `durable_off` says why durable spill is off when it could have run.
+`requests_saved_est`. `durable_off` says why durable spill is off when it could have run. `drain` (sorted Parquet; absent otherwise) is the
+drain: its tail once listing is done, and the drainer's times over the whole run
+([internals/ordering.md](internals/ordering.md), every field in
+[internals/counters.md](internals/counters.md)): `tail_ns`,
+`worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
+`order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
+`drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
+`segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
+`decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
+`per_worker_bytes`, `free_bytes`, `tree_bytes`, `durable_files_read`, `durable_boundaries`); and `encoders_at_start`, `encoders_after_listing`,
+`encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](internals/counters.md)).

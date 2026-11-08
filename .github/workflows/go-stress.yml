@@ -1,0 +1,104 @@
+name: Go stress
+
+# On-demand repetition of one Go test (or a regex of tests) to hunt flakes on a chosen OS and
+# scheduler width, e.g.
+#   gh workflow run go-stress.yml --ref <branch> -f package=./internal/listing -f run='^TestX$'
+# The dispatch ref is the code under test. Inputs reach the shell only through env, never
+# through ${{ inputs.* }} in a run script, so a crafted regex cannot inject commands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package pattern relative to go/ (e.g. ./internal/listing)
+        required: true
+        default: ./...
+      run:
+        description: Test regex passed to -run
+        required: true
+      count:
+        description: Repetitions (-count)
+        required: true
+        default: "50"
+      race:
+        description: Race detector (ignored on windows)
+        type: boolean
+        default: true
+      gomaxprocs:
+        description: GOMAXPROCS (empty = unset)
+        required: false
+        default: ""
+      os:
+        description: Runner
+        type: choice
+        default: ubuntu-latest
+        options: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      # Same setup as the ci.yml go job: version from go.mod, module/build cache keyed on go.sum.
+      - name: Set up Go (version from go/go.mod)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: go test (repeated)
+        env:
+          PKG: ${{ inputs.package }}
+          RUN: ${{ inputs.run }}
+          COUNT: ${{ inputs.count }}
+          RACE: ${{ inputs.race }}
+          MAXPROCS: ${{ inputs.gomaxprocs }}
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          set -uo pipefail
+          args=(-run "$RUN" -count "$COUNT" -timeout 60m -json)
+          # The race detector needs cgo, which the Windows runner lacks by default.
+          if [ "$RACE" = true ] && [ "$RUNNER_OS_NAME" != Windows ]; then args+=(-race); fi
+          if [ -n "$MAXPROCS" ]; then export GOMAXPROCS="$MAXPROCS"; fi
+          go test "${args[@]}" "$PKG" | tee "$RUNNER_TEMP/go-stress.json" >/dev/null
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Summary
+        if: always()
+        env:
+          RUN: ${{ inputs.run }}
+          COUNT: ${{ inputs.count }}
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/go-stress.json"
+          [ -f "$f" ] || { echo "no test output" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          # Count test-level (not package-level) outcomes.
+          pass=$(jq -c 'select(.Test != null and .Action == "pass")' "$f" | wc -l)
+          fail=$(jq -c 'select(.Test != null and .Action == "fail")' "$f" | wc -l)
+          {
+            echo "### Go stress"
+            echo
+            echo "run \`$RUN\` x $COUNT on $RUNNER_OS: **$pass passed, $fail failed**"
+            echo
+            jq -r 'select(.Test != null and .Action == "fail") | .Test' "$f" | sort | uniq -c | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test JSON
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-stress-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/go-stress.json
+          if-no-files-found: ignore
+
+      - name: Fail if any test failed
+        run: exit "${status:-1}"

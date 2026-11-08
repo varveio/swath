@@ -53,6 +53,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed; there is no `-one-file-system` yet.
+- A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
+  admission prices it at that width, and a longer target stops the run with the typed `schema.ErrValueTooLong`, as
+  a key over its cap does; a target within it is written byte for byte.
 
 ## The list clients: hand-rolled on the SDK's auth
 

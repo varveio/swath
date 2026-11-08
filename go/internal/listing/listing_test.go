@@ -12,12 +12,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/source/localfs"
+	"github.com/varveio/swath/go/internal/source/s3"
 )
 
 func mk(t *testing.T, root string, files ...string) {
@@ -112,6 +115,16 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 	}
 }
 
+// TestCancellationLeavesNothing: a run cancelled mid-walk, while its first
+// part is being written, fails with the cancellation and leaves no
+// scratch. The cancel point is established by construction: the encoder
+// cancels at its first batch (crash point "encoding", the part's temporary
+// file created), and a part size of one row makes the router wait for
+// that encoder before it moves past the first cut, so the ordered walk
+// cannot finish before the cancellation is requested. The row budget only
+// bounds memory; spill stays on, so the source traversal itself is not
+// held back. (A goroutine polling for the temporary file every 50 µs raced
+// the walk: on one core the walk could finish before it looked.)
 func TestCancellationLeavesNothing(t *testing.T) {
 	src := t.TempDir()
 	for i := range 20000 {
@@ -120,21 +133,24 @@ func TestCancellationLeavesNothing(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { // cancel mid-walk: once the first part is being written
-		for {
-			if _, err := os.Stat(dataset.TempPath(out, 0)); err == nil {
-				cancel()
-				return
+	var partOpen atomic.Bool
+	restore := faults.Set(func(p string) error {
+		if p == "encoding" && !partOpen.Swap(true) {
+			if _, err := os.Stat(dataset.TempPath(out, 0)); err != nil {
+				t.Errorf("the first batch's part is not open: %v", err)
 			}
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(50 * time.Microsecond)
+			cancel()
 		}
-	}()
-	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 1, Workers: 1}})
+		return nil
+	})
+	defer restore()
+	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out},
+		Limits: Limits{PartSize: 1, Workers: 1, RowBudget: minRowBudget}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if !partOpen.Load() {
+		t.Fatal("cancelled before the first part was written")
 	}
 	if sum.Output.RowsEmitted >= 20200 {
 		t.Fatalf("walk finished (%d rows) before cancellation took effect", sum.Output.RowsEmitted)
@@ -204,20 +220,45 @@ func TestConfigRejectsInvalid(t *testing.T) {
 // default spill reserve is derived from the encoders' parts, and the
 // default spill cap is half the free space after it; a negative one is none.
 func TestResourceAdmission(t *testing.T) {
+	s3Encoder := encoderPrice("s3://bkt")
+	if s3Encoder != parquetout.EncoderBytes(&s3.Schema) || encoderPrice("scripted://x") != parquetout.DefaultEncoderBytes {
+		t.Fatalf("encoder prices %d, scripted %d", s3Encoder, encoderPrice("scripted://x"))
+	}
 	for _, tc := range []struct {
 		budget  int64
 		workers int
 		fds     int64
 		want    int
 	}{
-		{128 << 20, 4, 0, 5},                     // 128 MiB / 24 MiB
-		{512 << 20, 4, 0, 21},                    // 512 MiB / 24 MiB
-		{512 << 20, 64, 180, 180 - 8 - 128 - 32}, // 12: the descriptors
-		{512 << 20, 64, 100, 1},                  // the floor
-		{minRowBudget, 4, 0, 1},                  // the floor
+		{128 << 20, 4, 0, 4},                      // 128 MiB / 31.5 MiB (the S3 schema's encoder)
+		{512 << 20, 4, 0, 16},                     // 512 MiB / 31.5 MiB
+		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
+		{512 << 20, 64, 100, 1},                   // the floor
+		{minRowBudget, 4, 0, 1},                   // the floor
 	} {
-		if got := admitEncoders(tc.budget, tc.workers, tc.fds); got != tc.want {
+		if got := admitEncoders(tc.budget, s3Encoder, tc.workers, tc.fds); got != tc.want {
 			t.Errorf("admitEncoders(%d, %d, %d) = %d, want %d", tc.budget, tc.workers, tc.fds, got, tc.want)
+		}
+	}
+	// Once listing has ended, each worker's page (1 MiB) joins the
+	// allowance: 128 MiB at 64 workers carries 6, at 256 workers 12.
+	for _, tc := range []struct {
+		workers int
+		want    int
+	}{{64, 6}, {256, 12}, {4, 4}} {
+		if got := admitAfterListing(128<<20, s3Encoder, tc.workers, 0); got != tc.want {
+			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
+		}
+	}
+	// The tail's segment workers: the encoders admitted after listing, and
+	// the 16 spill descriptors plus what the limit leaves.
+	for _, tc := range []struct {
+		encoders, workers int
+		fds               int64
+		want              int
+	}{{32, 1024, 0, 32}, {32, 64, 1 << 20, 32}, {32, 64, 16 + 128 + 32 + 32 + 4, 20}, {32, 64, 100, 16}, {1, 64, 0, 1}} {
+		if got := segmentWorkers(tc.encoders, tc.workers, tc.fds); got != tc.want {
+			t.Errorf("segmentWorkers(%d, %d, %d) = %d, want %d", tc.encoders, tc.workers, tc.fds, got, tc.want)
 		}
 	}
 	// The reserve: one part per encoder, at least 1 GiB (the defaults' 5

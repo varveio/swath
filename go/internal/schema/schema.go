@@ -33,6 +33,12 @@ type Spec struct {
 	Name     string
 	Type     Type
 	Required bool
+	// MaxBytes is a string or binary column's longest value, when it can
+	// be long (a symlink target): the writer's admission prices its pages
+	// at it (parquetout.EncoderBytes), and the writer refuses a longer
+	// value (ErrValueTooLong), as it refuses a key over MaxKeyBytes.
+	// 0: short values, not checked.
+	MaxBytes int
 }
 
 // Row is one listed entry: its key and the producer's typed payload P.
@@ -120,10 +126,13 @@ type DeltaCodec[P any] interface {
 // ErrKeyTooLong reports a key over the schema's MaxKeyBytes.
 var ErrKeyTooLong = errors.New("key longer than the schema allows")
 
+// ErrValueTooLong reports a value over its column's Spec.MaxBytes.
+var ErrValueTooLong = errors.New("value longer than the schema allows")
+
 // Specs returns the column specs in order, the key first.
 func (s *Schema[P]) Specs() []Spec {
 	out := make([]Spec, 0, len(s.Columns)+1)
-	out = append(out, Spec{"key", s.Key, true})
+	out = append(out, Spec{Name: "key", Type: s.Key, Required: true})
 	for _, c := range s.Columns {
 		out = append(out, c.Spec)
 	}

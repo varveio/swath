@@ -114,7 +114,11 @@ type Server struct {
 
 	slots     chan struct{}
 	responses atomic.Int64
-	budget    *output.Budget
+	// responsesPeak is the most permits held at once, recorded at
+	// admission: a ceiling test reads it, so an over-admission that
+	// ends before the test samples the count still shows.
+	responsesPeak atomic.Int64
+	budget        *output.Budget
 
 	stopCtx  context.Context
 	stop     context.CancelFunc
@@ -374,7 +378,12 @@ func (s *Server) tryResponse() bool {
 			return false
 		}
 		if s.responses.CompareAndSwap(cur, cur+1) {
-			return true
+			for {
+				p := s.responsesPeak.Load()
+				if cur+1 <= p || s.responsesPeak.CompareAndSwap(p, cur+1) {
+					return true
+				}
+			}
 		}
 	}
 }

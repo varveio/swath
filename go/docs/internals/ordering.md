@@ -145,15 +145,35 @@ worst case), arena slack (a surviving string keeps its page's allocation alive, 
 approximates), compression scratch (a pooled spill encoder per concurrent writer, about 1.5 MiB each with its 1 MiB
 window), open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
 largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
-at `parquetout.EncoderBytes`, 24 MiB each, apart from it: below) and the garbage collector's
+at `parquetout.EncoderBytes` each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
 by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
-a floor of one: as many writers as fit in an allowance equal to the row budget, kept apart from it (24 MiB each,
-measured at about 20 MiB of heap for one writer) and as many descriptors as the soft limit leaves after 8
-spill readers, two per worker and a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 5). An
-explicit `--encoders` above that is honoured with a warning.
+a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it, each priced
+from the provider's schema before the source opens (`parquetout.EncoderBytes`, `registry.Factory.EncoderBytes`):
+one writer (its row group, a page buffer per column, and its wide values, the key and any column with
+`schema.Spec.MaxBytes` such as a local path's link target, priced at their longest) and one state of the router's
+codec, which every writer shares and which makes states only as encoders are admitted (a zstd state that has
+compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 31.5 MiB for S3, 32.5 for
+GCS and 61 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
+writers' live heap, 24 pages each at the longest values, within four encoders' price, before admission raises
+the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Before, each writer
+had a codec of its own with a state per column goroutine, against a constant 24 MiB (98.5 MiB measured for one
+S3 writer at four encoders). Descriptors bound the count
+too: as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker and
+a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 4 for S3). An explicit `--encoders` above that is honoured with a warning.
+
+Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
+the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
+in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
+1,000-key S3 response and its arena) is added to the writer allowance, still at most `GOMAXPROCS` and the
+descriptors. 128 MiB at 64 workers carries 6 for S3, at 256 workers 12. The router holds the extra slots from the
+start and releases them then (`parquetout.Router.Admit`); each writer is created with that many column
+goroutines, so a part opened before the raise uses them too (the bytes are identical whatever the count).
+An explicit `--encoders` is never raised. The report's `resources.drain` carries `encoders_at_start`,
+`encoders_after_listing` and `encoder_admission`: `listing_done`, `explicit`, `at_cap` (the start already
+admitted the most the host carries) or `not_reached` (listing never finished).
 
 ## The waits
 
@@ -163,12 +183,19 @@ and released by one event in a test with a deterministic barrier (`hookWait`):
 
 | Wait | Who | Released by | Test |
 |---|---|---|---|
-| idle (`work`) | a worker, nothing queued | a range completing with children (pushed then), the drain ending, a stop | `TestIdleWorkerWakesOnChildren` |
+| idle (`work`) | a worker, nothing queued and no spilled frame planned to read | a range completing with children (pushed then), frames planned for the read-ahead, the drain ending, a stop | `TestIdleWorkerWakesOnChildren` |
+| ahead (`work`) | a worker, nothing queued, the read-ahead holding its share of the budget | the drainer taking read frames until the read-ahead holds half its share or less, the drain ending, a stop | `TestAheadWaitWakes` |
 | admission (`work`) | a worker, ranges queued, the budget used and spill unavailable (off, or the disk budget refused) | drained bytes released, bytes released downstream, spill credit returned (a drained range's file deleted), a stop | `TestAdmissionWaitWakes` |
 | publish (`drain`) | an emitter of rows facing a full budget; of markers, while the markers alone would fill it; after a refused frame | the same releases, a marker replayed while the total stays full, spill credit, the drainer awaiting its node, a stop | `TestPublishWaitWakes`, `TestMarkerSaturationWakes`, `TestRefusedSpillWakesOnCredit` |
 | frontier (`drain`) | the drainer, the range it needs being listed | that range publishing, completing (with rows, children only, or nothing), a stop | `TestFrontierWaitWakes` |
+| fetch (`drain`) | the drainer, its next frame being read by a worker (read-ahead) | that read completing, a stop | `TestFetchWaitWakes` |
+| segment (`drain`) | a segment worker whose next unit would take the encoders' queues and the units being read or gathered past the row budget (a safety: the workers are sized to the budget when planned) | an encoder taking a batch (bytes released downstream), another worker writing its frames, a stop | `TestSegmentsStayWithinBudget` |
 
-A release of drained bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
+The read-ahead's waits are woken on transitions only, not on every frame, so hundreds of idle workers are
+not woken per frame: planning signals as many idle workers as can start a read when it queued frames
+(refilling at half of its window), and the drainer wakes the workers held at the share once the read-ahead
+holds half of it. A release of drained
+bytes wakes every waiter, not only when it ends a full budget: an emitter of markers
 waits for the marker bytes alone, which can fall while the total stays full. A deleted spill file returns
 its credit and wakes every waiter, so a worker held at admission and an emitter whose frame was refused retry
 at once. Publishing only children waits only while the metadata in memory would by itself fill the budget
@@ -294,10 +321,12 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   lengths longer than the previous key, lengths past the frame, an unknown ETag form, a foreign payload
   coding and trailing bytes are refused too (`TestDeltaFrameMalformed`), and the stream-wide order guard
   checks every replayed row as before.
-- **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 readers
-  (a descriptor and a 64 KiB buffer each, `order.MaxSpillReaders`) are open; past that the least recently
-  used one is closed and reopened at its position when the drainer comes back to it
-  (`TestSpillReadersAreCapped`).
+- **Readers are capped.** A deep walk leaves a partly replayed file per spilled ancestor. At most 8 drainer
+  readers (a descriptor and a 64 KiB buffer each) are open; past that the least recently used one is closed
+  and reopened at its position when the drainer comes back to it (`TestSpillReadersAreCapped`). The
+  read-ahead opens one descriptor per frame it reads, at most 8 at once, and closes it after the read:
+  `order.MaxSpillReaders` (16) is both, for descriptor admission (`peak_readers` counts both). A read-ahead
+  read decodes into fresh buffers (it runs beside the drainer); only the drainer reuses its own.
 - **Disposable.** A drained range's file is deleted. Run removes the whole spill directory when it returns,
   on success or failure. A crash leaves at most an orphan directory. The next run on the same output removes it (spill on or off; a failed removal is a warning), under the output
   lock, and the resume relists from the durable frontier. The exception is a journaled run's durable
@@ -337,6 +366,164 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   (`TestSpillDiskBudget`: a cap at a quarter of the uncapped peak is held with identical output; a reserve
   larger than the disk spills nothing).
 - `swath diag list --no-spill` restores waiting on the budget.
+
+### Read-ahead
+
+After listing ends, or wherever nothing is queued, the workers are idle while one drainer replays the spill:
+read, decode, order check and hand-on, frame after frame (on Batch at 256 workers about half of a sorted run's
+wall time, every worker idle). A finished node's items never change, so the frames the drainer replays next are
+known before it reaches them, and idle workers read them ahead of it (`order/readahead.go`):
+
+- **Planning.** Each spill marker records its frame's offset, size and the budget units its rows were
+  published with. The drainer plans: a cursor walks the finished nodes ahead of it in drain order and queues
+  each marker it meets (at most 64 frames, `aheadFrames`, refilled at half; at most 1,024 items per step,
+  `aheadScan`). It enters finished nodes only, and restarts at the drainer's position whenever nothing is
+  queued: the drainer may then have passed it, or a node it stopped at have been compacted since.
+- **Reading.** An idle worker (nothing queued to list) claims the next queued frame, reads it with one
+  `pread` on its own descriptor and decodes it through the same frame decoder as the drainer's own reads
+  (frames are independently decodable); at most 8 at once (`aheadReads`), each with its own zstd decoder,
+  and at most one fewer than `GOMAXPROCS`, so the drainer keeps a processor. With one processor there is no
+  read-ahead: an idle worker's read would only take turns with the drainer (on Batch, one core, the three
+  largest lists ran 5 to 11 % slower with it), and the drainer replays alone (`max_reads` 0,
+  `TestReadAheadOffOnOneProcessor`). Planning wakes as many workers as can start a read (`Signal`), not every
+  idle one.
+- **Order.** The drainer takes frames from the head of the queue: it must be the marker the drainer is at,
+  or the run fails with an invariant error. A frame still queued is read by the drainer itself; one being
+  read is waited for (`fetch`); then the drainer only checks order and hands on. Its sequential reader skips
+  the frames read ahead (reopened at its position), so the trailer check still counts every row.
+  `TestReadAheadKeepsOrder` (random node shapes, frame sizes, budgets and compression) matches the oracle
+  row for row, and every spilled frame is replayed exactly once through one path.
+- **Memory.** A claimed frame's rows are charged to the row budget until the drainer takes them, so producers
+  still listing see them. Past a full budget the read-ahead holds at most a quarter of it (`aheadShare`, as
+  the awaited node's lead), or one frame when it holds nothing; a worker past that waits (`ahead`)
+  (`TestReadAheadMemoryIsBounded`).
+- **Failure.** A frame that fails its CRC or its decoding fails the run when the drainer reaches it: the rows
+  before it were handed on, none of its own or after (`TestReadAheadCorruptFrame`). A stop wakes both waits;
+  every read closes its descriptor, and the run's `WaitGroup` waits for reads in flight
+  (`TestReadAheadCancelMidReplay`).
+
+The report's `resources.drain.read_ahead` and the drainer's times (`replay_read_ns`, `ahead_wait_ns`,
+`order_check_ns`, `sink_write_ns`; fields in [counters.md](counters.md)) say what the drainer spent its time
+on. The drainer's times accumulate over the whole run, not the tail alone, so they split `tail_ns` only to the
+extent that the tail is most of the run: then a drainer whose `sink_write_ns` dominates is bound by the sink,
+one whose `replay_read_ns` or `ahead_wait_ns` does, by the spill read-back. On one processor the drainer may
+replay every frame before an idle worker is scheduled: `drainer_frames` then counts them all.
+
+### Segments: parts written in parallel after listing
+
+The read-ahead removes the replay from the drain, but on Batch (16 cores) the tail stayed at half the wall:
+the drainer hands rows to one open part at a time, and one part encodes one page at a time, so more encoders
+did not help (`sink_write_ns` 86 % of the tail, unchanged from 5 to 16 encoders). Queuing a later part's rows
+while an earlier one encodes would hold a whole part's rows in memory (a median 13.9M rows). So once listing
+is done, the order stage cuts the rest of the stream into parts itself and writes several at once
+(`order/segments.go`, `parquetout/segments.go`):
+
+- **When.** Listing is done (every range finished, so the rest is immutable), the sink states its cut rule
+  (`order.Segmenter`: the Parquet router once part 0 has frozen its size ratio, and no recovered boundary,
+  `parquetout.Options.Cut`, lies ahead), at least two encoders are admitted and two processors are spare
+  beside the drainer's. With two processors or one nothing changes.
+- **How many workers.** Each feeds one part's writer and reads one frame at a time: at most the encoders
+  admitted after listing (each writer's working set, `parquetout.EncoderBytes`, is that admission's), one per
+  processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
+  spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
+  leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
+  (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
+  each worker holds at most the next unit it reads (a spilled frame) or gathers (rows in memory), the batch it
+  gathers, the batch its encoder writes and its part's queue (`dataset.SegmentPlan.Queue`, two batches; the open part
+  the first continues has the serial part's 16-batch queue, and the router holds that segment to two queued
+  batches as well, with tokens returned as its encoder takes them; and a worker closing a part waits until its
+  encoder has taken that part's batches, so it holds one part's queue at a time): consecutive rows, priced at the heaviest run of that many
+  consecutive rows in what is left, so a cluster of long keys is priced as such (`segmentShare`); the
+  workers are as many as that fits in the budget, less what the encoders' queues already hold
+  (`budgetWorkers`), and one only leaves the tail serial (`row_budget`). The report names what decided
+  (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`). Measured: at 16 vCPU 8 workers
+  beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
+  cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
+- **What bounds the tail now.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
+  (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
+  the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
+  machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming
+  nearer the publish frontier), not more workers. Before listing is done nothing changes either: the drainer walks the tree as
+  always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
+- **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
+  (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
+  listed. The cut follows the router's rule exactly: a part closes after the row whose logical bytes bring it
+  to the frozen limit, or else at `--part-rotation-max-rows` rows. A frame that may hold a boundary is decoded
+  to find the row; the others pass whole. The first segment continues the open part. So the parts are the
+  ones the serial drain writes, row for row, and their bytes the same (`TestSegmentsCutWhereTheSinkWould`,
+  2, 3 and 8 encoders admitted against the serial drain, with and without a row cap).
+- **The part interval stops.** Once segments begin, the rest is cut by size and row count only:
+  `--part-interval` closes no part in the tail. Its purpose, a recent durable point behind a slow frontier,
+  does not arise there: every row is listed, and the parts publish as fast as they encode. With
+  `--part-interval 0` the parts are identical either way; with it on, boundaries already depend on timing.
+- **Order.** A worker takes the next segment, opens its part in order (ordinals stay dense), reads its
+  frames on its own descriptor, checks every row against the one before (the first segment also against the
+  drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
+  the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
+  earlier one; the order stage checks each seam again. A seam that descends stops the run before the first
+  row of the later segment is published (`TestSegmentsSeamError`; `TestSegmentsDescentAtASeam`: a descent at
+  exactly a seam, into a sink with no adjacency check, is the stage's check alone). Every spill file's trailer is checked
+  against the rows the drainer and the segments replay from it before any segment opens
+  (`TestSegmentsTrailerFailureClosesNoPart`), and the last segment does not close its part: it hands it
+  back as the router's open part, which the router's `Close` marks final once the stage's conservation
+  check and the pipeline's reconciliation have passed, as on the serial path. A resume therefore never
+  finds a final record from a run that failed its checks.
+- **Locks.** The drainer calls the router without the stage's lock: the router's interval cut holds the
+  router's lock while it waits for part 0's encoder, whose byte accounting wakes the stage under its lock
+  (`TestSegmenterCalledUnlocked`). `BeginSegments` stops the interval cut and states the rule in one step,
+  so no cut closes the open part after it was planned against; `AbandonSegments` restarts it when the rest
+  turns out to be one part. The read-ahead's reads in flight end before the segments read.
+- **Failure.** Any failure stops every worker. A segment that did not finish leaves its part unclosed, and
+  the router's abort discards it: no partial part is published (`TestSegmentsFailureClosesNoPart`). The
+  parts before it that finished may publish, in order: a durable prefix, as always. A segment refused at the
+  part ceiling (`dataset.MaxParts`) waits for the part before it to publish, but not past a cancellation, and
+  gives its encoder slot back: a failed segment's part is never published, and the abort that discards it runs
+  only once every worker has returned (`TestSegmentPastLimitCancels`). A process killed inside
+  the tail (segments planned, a segment's part published with later ones open, every row handed on with the
+  last part held) resumes from that prefix like any other run, and with `--part-interval=0` the resumed
+  parts are the uninterrupted run's, byte for byte (`TestSIGKILLInSegments`).
+- **Memory.** When listing ends the tree holds about the row budget (spill keeps it there), and its rows stay
+  until the drain ends; the serial drain adds a frame and its part's 16-batch queue on top. What the segments
+  add beside the tree stays within one more `--row-budget`: the encoders' queues (`Shared`: every part's
+  batches from the moment they are queued until its encoder has written them, what the serial drain left in
+  the continued part's queue included) and the units the workers have read or gathered and not yet written. The workers are sized
+  to it when planned (above), so each holds its share; a worker still reserves a unit's budget bytes before it
+  reads or gathers it (`segReserve`) as a safety: past the budget it writes the batch it has gathered, then waits
+  (`segment`) for the encoders or the other workers to release, and goes on alone when nothing is held, so
+  the tail never stops. What a queue counts is what it keeps: a segment that hands on a span of a unit (a
+  frame decoded whole, or a chunk of rows in memory, cut at a part boundary) copies the span
+  (`Schema.Detach`), so the batch does not keep the whole frame alive, and once the segments are committed the
+  tree's items drop their rows and the last segment to read a unit drops the stage's reference to it
+  (`TestSegmentsReleaseSpanStorage`: eight workers, each with a span of its own decoded 1,000-row frame queued,
+  encoders held: within 3 MiB, about 9 before). The seam keys a finished segment leaves for the seam check are
+  copies too, so a finished part keeps nothing of its rows (`TestSegmentsCompletedPartsReleaseStorage`: about
+  1,200 finished parts, spilled or in memory, within two budgets when the last segment finishes). `TestSegmentsSizedToBudget` plans exactly two workers at 1,000-byte keys among
+  220-byte ones into stalled encoders: they wait fewer than 16 times and hold within the budget;
+  `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. The first
+  form of that gate counted the tree too and admitted every worker: with the tree full they waited tens of
+  thousands of times on Batch, tails up to 3× longer (2026-11-07). Beside its writer and that share a worker
+  holds one batch of row headers, and the read-ahead stops when segments begin.
+
+The report's `resources.drain.segments` (fields in [counters.md](counters.md)) gives the engagement `reason`,
+what sized the workers (`workers_by`, with both sides of the plan), and the time's split. A tail whose
+`write_ns` is most of `time_ns` is bound by the parts' encoding; one whose `read_ns` is, by the spill disk;
+`budget_waits` well above zero means the plan's share was short and the safety gate held the bound.
+
+- **Durable files.** The read-ahead and the segments read a durable spill file's rows frames as they read a
+  run-private file's, by the offset its marker records (a header or capture frame may precede a rows frame:
+  the offset is the rows frame's own), checking the version-2 CRC; the drainer's reader skips to the end of a
+  frame read ahead, past any capture frame before it. The segments check a durable file's trailer (its total
+  rows) before any segment opens, and once they are done hand each file they finished back as the drainer's
+  trailer read would: a run-private file removed, a durable one to its cache (`drainedFile`: retired when K
+  covers it). The report counts what the segments read: `durable_files_read` and `durable_boundaries`.
+- **Known limitation: a resume that reuses certificates.** A reused certificate is a replay range that only
+  the drainer expands, when it reaches it in key order. Listing is therefore not done, and the segments cannot
+  begin (they need the rest of the stream immutable and known), until the drainer has passed the last
+  certificate. When the certificates lie near the end of the keyspace, such a resume's tail stays serial and
+  the report says so (`reason` `listing_active`; `TestSegmentsReplayDurableFiles`). The output is the same
+  either way; only the tail's speed differs. Follow-up ([#288](https://github.com/varveio/swath/issues/288)): let the segments take a reused certificate's frames
+  as units of the rest (its file's rows are already on disk and certified), so they can begin before the
+  drainer reaches it.
 
 ## Durable spill
 

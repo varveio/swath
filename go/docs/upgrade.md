@@ -271,6 +271,9 @@ reads version 3 by ignoring them:
 - **Durable spill:** `resources.spill.durable` (the durable spill's account, and on a resume what it accepted,
   rejected and replayed), `resources.spill.durable_off`, and the counters `reuse.ranges`, `reuse.gaps` and
   `reuse.boundary_overfetch_keys`.
+- **Drain tail:** `timings.listing_done_at` (the provider finished) and `resources.drain` (sorted Parquet: the
+  tail's times, the read-ahead's frames and waits, the parallel segments' plan and holdings, and the encoders
+  admitted at start and after listing; [cli.md](cli.md#run-report)).
 - **Versions schemas** (`--all-versions`): attempt-scoped `output.versions`, `output.distinct_keys`,
   `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
   schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude

@@ -34,6 +34,11 @@ type Options struct {
 	Out      string // dataset directory; parts go to .swath/parts/
 	PartSize int64  // target encoded bytes per part
 	Encoders int    // parts encoded concurrently (>= 1)
+	// MaxEncoders, if above Encoders, is how many Admit raises them to
+	// (the pipeline: once listing has ended); 0 is Encoders. Writers are
+	// created for that many column goroutines, so a part opened before
+	// the raise uses them too.
+	MaxEncoders int
 
 	// Publish, if set, publishes each part as soon as it is closed, in
 	// ordinal order (part i only after part i-1): the journaled run makes
@@ -136,27 +141,30 @@ type Resume struct {
 // only on the rows, never on timing or the encoder count. Ordinals are dense and the router marks
 // the last part final.
 //
-// Each part is encoded by its own goroutine with its own writer and codec,
-// fed through a bounded queue while the part is still open; at most
-// Encoders parts are in flight. When fewer parts than encoders are active, a
-// part encodes its page columns in parallel (byte-identical), so a single
-// part still uses every core.
+// Each part is encoded by its own goroutine with its own writer (the codec
+// is the router's, shared), fed through a bounded queue while the part is still open; at most
+// Encoders parts (MaxEncoders after Admit) are in flight. When fewer parts
+// than encoders are active, a part encodes its page columns in parallel
+// (byte-identical), so a single part still uses every core.
 type Router[P any] struct {
-	schema  *schema.Schema[P]
-	opt     Options
-	slots   chan struct{}
-	active  atomic.Int32
-	cur     *part[P]
-	parts   []*part[P]
-	limit   int64 // logical bytes per part; 0 until part 0 is measured
-	rows    int64
-	full    bool
-	errMu   sync.Mutex
-	err     error // first encoder error
-	aborted atomic.Bool
-	waitNs  atomic.Int64 // time Write waited for an encoder (queue or slot)
-	closed  bool
-	done    []dataset.Part // resumed parts, already published
+	schema   *schema.Schema[P]
+	opt      Options
+	codec    *codec        // every writer's (closed once every part has ended)
+	slots    chan struct{} // MaxEncoders; the reserved part held until Admit
+	reserved atomic.Int32  // slots held for Admit
+	encoders atomic.Int32  // encoders admitted
+	active   atomic.Int32
+	cur      *part[P]
+	parts    []*part[P]
+	limit    int64 // logical bytes per part; 0 until part 0 is measured
+	rows     int64
+	full     bool
+	errMu    sync.Mutex
+	err      error // first encoder error
+	aborted  atomic.Bool
+	waitNs   atomic.Int64 // time Write waited for an encoder (queue or slot)
+	closed   bool
+	done     []dataset.Part // resumed parts, already published
 
 	// mu serializes Write, Close and Abort with the interval cut.
 	mu       sync.Mutex
@@ -174,6 +182,11 @@ type Router[P any] struct {
 	// the interval in group mode.
 	byRows, byTime bool
 	deferred       atomic.Int64
+
+	// segmented: the rest of the stream goes to segments (segments.go),
+	// not Write; segRows counts the rows they routed.
+	segmented bool
+	segRows   atomic.Int64
 }
 
 // ErrAmbiguousTail: a reproduced claimed part reached its recorded row
@@ -192,15 +205,21 @@ type part[P any] struct {
 	segs      chan batch[P]
 	done      chan struct{}
 	published chan struct{} // closed once published (or failed), with Publish set
+	drained   chan struct{} // closed once the encoder has taken every batch of its closed queue
 	logical   int64
 	n         int64 // rows routed into this part
 	pinned    bool  // its boundary is Options.Cut
 	bySize    bool  // closed because it reached the size target
 	final     bool
-	limit     int64 // logical bytes per part in effect after this part
-	rows      int64 // rows in parts 0..ordinal
-	info      dataset.Part
-	err       error
+	segment   bool // written as a segment (OpenSegment)
+	// tokens bound the batches a segment queues to the part it continues
+	// (its queue is partQueue deep) to segmentQueue, as a new segment's.
+	tokens chan struct{}
+	closed bool  // its queue is closed (r.mu)
+	limit  int64 // logical bytes per part in effect after this part
+	rows   int64 // rows in parts 0..ordinal
+	info   dataset.Part
+	err    error
 }
 
 // NewRouter returns a router writing into opt.Out.
@@ -216,17 +235,35 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	if err := os.MkdirAll(filepath.Join(opt.Out, dataset.Workspace, dataset.PartsDir), 0o755); err != nil {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}
-	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.Encoders)}
+	opt.MaxEncoders = max(opt.Encoders, opt.MaxEncoders)
+	// One codec for every writer: its zstd states (each grows to the
+	// largest page it compressed and keeps it) are at most one per encoder
+	// admitted, the most column goroutines at once across the parts
+	// (columns), however many parts are open; Admit raises them with the
+	// encoders. A codec per writer held a pool of states each.
+	r := &Router[P]{schema: s, opt: opt, slots: make(chan struct{}, opt.MaxEncoders), codec: newCodec(opt.Encoders)}
+	for range opt.MaxEncoders - opt.Encoders {
+		r.slots <- struct{}{}
+	}
+	r.reserved.Store(int32(opt.MaxEncoders - opt.Encoders))
+	r.encoders.Store(int32(opt.Encoders))
 	if res := opt.Resume; res != nil {
 		r.done, r.limit, r.rows = res.Parts, res.Limit, res.Rows
 	}
-	if opt.Interval > 0 {
-		r.stopTick = make(chan struct{})
-		r.tickCtx, r.tickStop = context.WithCancel(context.Background())
-		r.ticked.Add(1)
-		go r.tick(r.stopTick)
-	}
+	r.startTick()
 	return r, nil
+}
+
+// startTick starts the interval cut, if the router has one (mu held, or
+// before the router is shared).
+func (r *Router[P]) startTick() {
+	if r.opt.Interval <= 0 || r.stopTick != nil {
+		return
+	}
+	r.stopTick = make(chan struct{})
+	r.tickCtx, r.tickStop = context.WithCancel(context.Background())
+	r.ticked.Add(1)
+	go r.tick(r.stopTick)
 }
 
 // tick closes the open part once it is Interval old, until stopped.
@@ -269,6 +306,26 @@ func (r *Router[P]) stop() {
 	r.mu.Lock()
 }
 
+// Admit raises the encoders to MaxEncoders, once, and returns how many are
+// admitted. Safe at any time, from any goroutine.
+func (r *Router[P]) Admit() int {
+	if n := r.reserved.Swap(0); n > 0 {
+		for range n {
+			<-r.slots // a slot token, held since NewRouter: never blocks
+		}
+		r.encoders.Add(n)
+		r.codec.setLimit(r.Encoders())
+	}
+	return r.Encoders()
+}
+
+// Encoders is the encoders admitted now.
+func (r *Router[P]) Encoders() int { return int(r.encoders.Load()) }
+
+// CodecStates is the zstd states the router's codec has made so far: at
+// most the encoders admitted (tests: every admitted state warmed).
+func (r *Router[P]) CodecStates() int { return r.codec.states() }
+
 // RowCuts is the number of parts MaxRows closed (before their size target).
 func (r *Router[P]) RowCuts() int64 { return r.rowCuts.Load() }
 
@@ -284,6 +341,9 @@ func (r *Router[P]) EncoderWait() time.Duration { return time.Duration(r.waitNs.
 func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.segmented {
+		return errors.New("parquet router: written after its segments began")
+	}
 	var batch [][]schema.Row[P]
 	// Group mode (schema.Info.Groups): a part never ends inside a key's
 	// group, since the journal records its last key as published. A cut
@@ -361,13 +421,21 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 type batch[P any] struct {
 	segs  [][]schema.Row[P]
 	bytes int64
+	// tokens: the batch holds one of its part's tokens (Segment.Write on
+	// the continued part), returned once it is written or dropped.
+	tokens chan struct{}
 }
 
 func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
+	return r.sendTo(ctx, r.cur, segs, nil)
+}
+
+// sendTo queues segs to part p's encoder (the open part, or a segment's).
+func (r *Router[P]) sendTo(ctx context.Context, p *part[P], segs [][]schema.Row[P], tokens chan struct{}) error {
 	if len(segs) == 0 {
 		return nil
 	}
-	b := batch[P]{segs: segs}
+	b := batch[P]{segs: segs, tokens: tokens}
 	if r.opt.Account != nil {
 		for _, s := range segs {
 			b.bytes += r.schema.RowsBytes(s)
@@ -375,18 +443,18 @@ func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
 		r.opt.Account(b.bytes)
 	}
 	select {
-	case r.cur.segs <- b:
+	case p.segs <- b:
 		return nil
 	default: // the part's queue is full: the encoder is the bottleneck
 	}
 	t := time.Now()
 	defer func() { r.waitNs.Add(int64(time.Since(t))) }()
 	select {
-	case r.cur.segs <- b:
+	case p.segs <- b:
 		return nil
-	case <-r.cur.done: // the encoder stopped early
+	case <-p.done: // the encoder stopped early
 		r.done1(b)
-		return r.cur.err
+		return p.err
 	case <-ctx.Done():
 		r.done1(b)
 		return context.Cause(ctx)
@@ -397,6 +465,9 @@ func (r *Router[P]) send(ctx context.Context, segs [][]schema.Row[P]) error {
 func (r *Router[P]) done1(b batch[P]) {
 	if r.opt.Account != nil && b.bytes != 0 {
 		r.opt.Account(-b.bytes)
+	}
+	if b.tokens != nil {
+		<-b.tokens
 	}
 }
 
@@ -426,7 +497,7 @@ func (r *Router[P]) open(ctx context.Context) error {
 		return fmt.Errorf("%w: part %d cannot be opened (%d rows so far; part size %d bytes, row cap %d)",
 			dataset.ErrPartLimit, o, r.rows, r.opt.PartSize, r.opt.MaxRows)
 	}
-	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}),
+	p := &part[P]{ordinal: len(r.done) + len(r.parts), opened: time.Now(), segs: make(chan batch[P], partQueue), done: make(chan struct{}), drained: make(chan struct{}),
 		published: make(chan struct{}), limit: r.limit}
 	p.pinned = r.opt.Cut != nil && r.opt.Cut.Ordinal == p.ordinal
 	if n := len(r.parts); n > 0 {
@@ -446,7 +517,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		close(p.done)
 	}()
 	defer close(p.published)
-	columns := func() int { return max(1, r.opt.Encoders/max(1, int(r.active.Load()))) }
+	columns := func() int { return max(1, int(r.encoders.Load())/max(1, int(r.active.Load()))) }
 	var err error
 	if r.opt.Verify != nil {
 		err = r.opt.Verify()
@@ -460,7 +531,7 @@ func (r *Router[P]) encode(p *part[P]) {
 	}
 	var w *writer[P]
 	if err == nil {
-		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.opt.Encoders, columns, createdBy)
+		w, err = create(r.opt.Open, dataset.TempPath(r.opt.Out, p.ordinal), s, r.codec, columns, createdBy)
 	}
 	if err != nil {
 		p.err = err
@@ -468,6 +539,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		for b := range p.segs { // drain so the router never blocks
 			r.done1(b)
 		}
+		close(p.drained)
 		return
 	}
 	for b := range p.segs {
@@ -496,6 +568,7 @@ func (r *Router[P]) encode(p *part[P]) {
 		}
 		r.done1(b)
 	}
+	close(p.drained)
 	if p.err != nil || r.aborted.Load() {
 		w.abort()
 		return
@@ -537,6 +610,10 @@ func (r *Router[P]) encode(p *part[P]) {
 	if r.opt.Publish != nil && !r.aborted.Load() {
 		if p.info, p.err = r.opt.Publish(p.ordinal, p.info, p.limit, p.rows, p.final); p.err != nil {
 			r.fail(p.err)
+		} else if p.segment {
+			if p.err = faults.At("segment-published"); p.err != nil { // tests: killed with later segments open
+				r.fail(p.err)
+			}
 		}
 	}
 }
@@ -556,9 +633,9 @@ func adjacent(before *dataset.Part, ordinal int, info dataset.Part) error {
 // Routed is the rows routed into parts by this run (not the resumed ones).
 func (r *Router[P]) Routed() int64 {
 	if res := r.opt.Resume; res != nil {
-		return r.rows - res.Rows
+		return r.rows + r.segRows.Load() - res.Rows
 	}
-	return r.rows
+	return r.rows + r.segRows.Load()
 }
 
 // target is the logical bytes that close a part by size: the frozen limit,
@@ -575,6 +652,7 @@ func (r *Router[P]) target() int64 {
 func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p := r.cur
 	p.final = final
+	p.closed = true
 	close(p.segs)
 	if !final {
 		// Counted when they cut, not when asked: a cut the final part
@@ -644,13 +722,15 @@ func (r *Router[P]) Close() ([]dataset.Part, error) {
 		}
 		out = append(out, p.info)
 	}
+	_ = r.codec.Close()
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	if len(out) == 0 && r.rows == 0 {
+	rows := r.rows + r.segRows.Load()
+	if len(out) == 0 && rows == 0 {
 		return out, nil
 	}
-	if err := dataset.Check(out, r.rows); err != nil {
+	if err := dataset.Check(out, rows); err != nil {
 		return nil, fmt.Errorf("publication gate: %w", err)
 	}
 	return out, nil
@@ -671,13 +751,17 @@ func (r *Router[P]) abort() {
 	}
 	r.closed = true
 	r.aborted.Store(true)
-	if r.cur != nil {
-		close(r.cur.segs)
-		r.cur = nil
+	for _, p := range r.parts { // the open part, and every segment's
+		if !p.closed {
+			p.closed = true
+			close(p.segs)
+		}
 	}
+	r.cur = nil
 	for _, p := range r.parts {
 		<-p.done
 	}
+	_ = r.codec.Close()
 }
 
 // Encoder is a router seen without its row type: what the pipeline does
@@ -686,6 +770,10 @@ type Encoder interface {
 	Close() ([]dataset.Part, error)
 	Abort()
 	EncoderWait() time.Duration
+	// Admit raises the encoders to Options.MaxEncoders and returns how
+	// many are admitted; Encoders is that count now.
+	Admit() int
+	Encoders() int
 	TimeCuts() int64
 	RowCuts() int64
 	// Routed is the rows this run routed into parts: after listing it
