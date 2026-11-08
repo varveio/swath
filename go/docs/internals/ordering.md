@@ -429,7 +429,8 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   drainer's last key), and closes the part. The router publishes in ordinal order, each part checked against
   the one before it (`adjacent`) before it is journaled, so a later part never becomes durable before an
   earlier one; the order stage checks each seam again. A seam that descends stops the run before the first
-  row of the later segment is published (`TestSegmentsSeamError`). Every spill file's trailer is checked
+  row of the later segment is published (`TestSegmentsSeamError`; `TestSegmentsDescentAtASeam`: a descent at
+  exactly a seam, into a sink with no adjacency check, is the stage's check alone). Every spill file's trailer is checked
   against the rows the drainer and the segments replay from it before any segment opens
   (`TestSegmentsTrailerFailureClosesNoPart`), and the last segment does not close its part: it hands it
   back as the router's open part, which the router's `Close` marks final once the stage's conservation

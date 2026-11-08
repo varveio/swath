@@ -353,6 +353,30 @@ func TestSegmentsSeamError(t *testing.T) {
 	}
 }
 
+// TestSegmentsDescentAtASeam: a stream that descends exactly where one
+// segment's part ends and the next one's begins. The row cap (200 rows)
+// cuts parts at every sibling's first row (the slow range holds 200, each
+// sibling 600), and sibling 30 repeats sibling 29's keys, so the descent
+// is the first row of a segment: no segment's row guard sees it, and this
+// sink, like any Segmenter but the Parquet router, does not compare its
+// parts. The stage's own seam check must refuse it.
+func TestSegmentsDescentAtASeam(t *testing.T) {
+	anyShare(t)
+	withProcs(t, 5)
+	f := &frontier{slowPages: 2, siblings: 40, sibPages: 6, rows: 100}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	s := &partSink{limit: 1 << 40, maxRows: 200, encoders: 4}
+	st, err := Run[fr, tp](context.Background(), badFrontier{f, 30}, s, &testSchema, Options{Workers: 8, Budget: 500, SpillDir: t.TempDir()})
+	if st.Segments.Reason != SegmentEngaged || st.Segments.Segments < 2 {
+		t.Fatalf("segments %+v, want engaged", st.Segments)
+	}
+	var inv *dataset.InvariantError
+	if !errors.As(err, &inv) {
+		t.Fatalf("err %v, want the seam check's (segments %+v)", err, st.Segments)
+	}
+}
+
 // TestSegmentsMemoryIsBounded: the segments hold no more than the serial
 // drain: the stage's bound with the read-ahead's share it had when they
 // began (heldBoundRun).
