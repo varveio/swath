@@ -70,7 +70,7 @@ $ swath list --help
 usage: swath list SOURCE [-o DIR|FILE|-] [flags]
   -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text
   file; no -o, or -o -, text rows on stdout
-  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
+  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
 
 Source and output:
   -o directory
@@ -111,6 +111,12 @@ Source and output:
         GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
   --gcs-user-project project
         GCS: bill a requester-pays bucket's requests to this project
+  --azblob-endpoint URL
+        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
+  --azblob-anonymous
+        Azure Blob: send no credentials, ignoring any in the environment
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -176,6 +182,9 @@ Limits:
   --gcs-request-timeout duration
         GCS: per-request timeout; a request that exceeds it is retried (default 30s)
         change it: raise it for a slow GCS endpoint or emulator
+  --azblob-request-timeout duration
+        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow Azure endpoint or Azurite
 
 Output and reporting:
   --report file
@@ -201,14 +210,14 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-anonymous, azblob-sas, azblob-request-timeout (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath count --help
 usage: swath count SOURCE [flags]
   lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
   arrive, never ordered, buffered or spilled; prints one line, or the run report
-  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
+  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
 
 Source and output:
   --region string
@@ -243,6 +252,12 @@ Source and output:
         GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
   --gcs-user-project project
         GCS: bill a requester-pays bucket's requests to this project
+  --azblob-endpoint URL
+        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
+  --azblob-anonymous
+        Azure Blob: send no credentials, ignoring any in the environment
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -290,6 +305,9 @@ Limits:
   --gcs-request-timeout duration
         GCS: per-request timeout; a request that exceeds it is retried (default 30s)
         change it: raise it for a slow GCS endpoint or emulator
+  --azblob-request-timeout duration
+        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow Azure endpoint or Azurite
 
 Output and reporting:
   --report file
@@ -315,14 +333,14 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval (operational) may change.
+profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-anonymous, azblob-sas, azblob-request-timeout (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath diag list --help
 usage: swath diag list SOURCE [flags]
   every swath list flag (swath list --help), and the diagnostic flags below:
   they exist to run an experiment or a comparison, not to operate the tool
-  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]
+  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
 
 Diagnostics:
   --seed
@@ -360,10 +378,20 @@ Diagnostics:
   one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
   not `1.3b`).
-- **Provider flags** (`S3:` and `GCS:` in the list, and the range-engine flags both object stores share) apply
-  to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
-  `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint`; an S3 flag on a local tree) is refused (exit 2)
-  rather than ignored.
+- **Provider flags** (`S3:`, `GCS:` and `Azure Blob:` in the list, and the range-engine flags the object stores
+  share) apply to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
+  `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint` or `--azblob-endpoint`; an S3 flag on a local tree)
+  is refused (exit 2) rather than ignored.
+- **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--azblob-endpoint URL` replaces
+  `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
+  `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--azblob-anonymous`, else a SAS (`--azblob-sas`, the
+  root's query when it carries `sig`, or `AZURE_STORAGE_SAS_TOKEN`), else an account key (`AZURE_STORAGE_KEY`),
+  else Entra ID (`DefaultAzureCredential`). A SAS is never recorded: `swath resume` must be given one again, and
+  may be given another. Only accounts that report a flat namespace are listed: a hierarchical-namespace account,
+  or one whose namespace cannot be read (an anonymous caller is never told), is refused before any listing
+  request (exit 2, cause `unsupported`), as is `--all-versions`. A run that meets a name at U+E000 and above stops
+  refused (exit 2, cause `unsupported`, resumable) until a later build lists such names
+  ([internals/providers.md](internals/providers.md#azure-blob-internalsourceazblob)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,
   by `swath list` and by `swath resume` before it settles anything;
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
@@ -371,7 +399,7 @@ Diagnostics:
   queues); it is not a cap on resident memory. See [internals/ordering.md](internals/ordering.md).
 - **`-o DIR`** is refused when non-empty unless `--overwrite`, which replaces only
   a previous dataset of this tool and never anything inside the listed root.
-- **Text output** (S3 and GCS sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
+- **Text output** (S3, GCS and Azure Blob sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
   dataset: `swath list DIR` without `-o DIR`, or with a text `-o`, is refused with exit 2, naming `-o DIR` and `swath count`). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
   format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
   auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe

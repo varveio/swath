@@ -41,6 +41,7 @@ var helpGroups = []helpGroup{
 		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
 		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
+		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"},
 		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
 		{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},
@@ -62,6 +63,7 @@ var helpGroups = []helpGroup{
 		{name: "limiter", when: "turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1"},
 		{name: "request-timeout", when: "raise it for a slow S3-compatible store whose pages take longer to answer"},
 		{name: "gcs-request-timeout", when: "raise it for a slow GCS endpoint or emulator"},
+		{name: "azblob-request-timeout", when: "raise it for a slow Azure endpoint or Azurite"},
 	}},
 	{"Output and reporting", []helpFlag{
 		{name: "report"}, {name: "report-format"},
@@ -142,7 +144,7 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 		fmt.Fprintln(w, "  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text")
 		fmt.Fprintln(w, "  file; no -o, or -o -, text rows on stdout")
 	}
-	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix]")
+	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]")
 	for _, g := range helpGroups {
 		if cmd.diag != (g.title == diagnosticGroup) {
 			continue

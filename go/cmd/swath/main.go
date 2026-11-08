@@ -37,6 +37,7 @@ import (
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
+	"github.com/varveio/swath/go/internal/source/azblob"
 	_ "github.com/varveio/swath/go/internal/source/gcs"
 	_ "github.com/varveio/swath/go/internal/source/localfs"
 	_ "github.com/varveio/swath/go/internal/source/s3"
@@ -285,7 +286,7 @@ func commands(w io.Writer) {
   swath show [--journal] DIR              show a dataset or an interrupted run
   swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
   swath --version                         print the build (tool, module version, VCS revision)
-SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix].
+SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix].
 swath COMMAND --help lists a command's flags.
 `)
 }
@@ -450,25 +451,26 @@ var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-b
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
 var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
-	"bearer-token-command", "bearer-token-refresh-interval"}
+	"bearer-token-command", "bearer-token-refresh-interval", "azblob-anonymous", "azblob-sas", "azblob-request-timeout"}
 
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
 // resume must be given it again.
-var secretFlags = []string{"bearer-token-command"}
+var secretFlags = []string{"bearer-token-command", "azblob-sas"}
 
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
 // redactArgv is argv with every secret flag's value replaced by redacted,
-// in both spellings (--flag VALUE and --flag=VALUE).
+// in both spellings (--flag VALUE and --flag=VALUE), and an az:// root's
+// SAS query by azblob.RedactedSAS (a resume must be given it again).
 func redactArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
 		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
-			out = append(out, a)
+			out = append(out, azblob.RedactRoot(a))
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
