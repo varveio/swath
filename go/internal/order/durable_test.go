@@ -663,28 +663,23 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 //     certain while it is held: each range spills about 8 KiB, so the
 //     ranges in flight cannot fill the 24 KiB cap before one of them
 //     seals, and the ledger's first append is that seal's record.
-//   - Range 30, until a file is unlinked and the cap has refused a frame.
-//     The drainer stops there with the certificates before it drained
-//     and, never retired without K, holding credit; the ranges after it
-//     spill until the cap refuses, and a refusal evicts a drained
-//     certificate. The refused emitter then waits ("publish"), or a
-//     worker cannot take a range ("admission"): both only after a refusal.
+//   - Range 30, until a certificate has been evicted: the flusher's
+//     unlink ("spill-unlink") finds the cache's eviction count above zero
+//     (an eviction counts before its unlink is queued; any other unlink
+//     does not release it). The drainer stops at range 30 with the
+//     certificates before it drained and, never retired without K,
+//     holding credit; the ranges after it spill until the cap refuses,
+//     and each refusal evicts a drained certificate.
 func TestDurableLedgerFailureEvicts(t *testing.T) {
 	ledgerOrder(t)
 	const held = 30
 	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 },
 		gates: map[int]chan struct{}{0: make(chan struct{}), held: make(chan struct{})}}
-	var torn, unlinked, refused atomic.Bool
-	var tornOnce, heldOnce sync.Once
-	release := func() {
-		if unlinked.Load() && refused.Load() {
-			heldOnce.Do(func() { close(f.gates[held]) })
-		}
-	}
+	c, _, _ := newDurable(t)
+	var tornOnce, evictedOnce sync.Once
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
-			torn.Store(true)
 			tornOnce.Do(func() { close(f.gates[0]) })
 			// Inside the append's first frame: its header and half its
 			// payload (half the buffer could fall on a frame boundary).
@@ -693,20 +688,11 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 		return 0, nil
 	})()
 	defer faults.Set(func(point string) error {
-		if point == "spill-unlink" {
-			unlinked.Store(true)
-			release()
+		if point == "spill-unlink" && c.st.RetiredEvicted.Load() > 0 {
+			evictedOnce.Do(func() { close(f.gates[held]) })
 		}
 		return nil
 	})()
-	hookWait = func(site string) {
-		if site == waitPublish || site == waitAdmission {
-			refused.Store(true)
-			release()
-		}
-	}
-	defer func() { hookWait = nil }()
-	c, _, _ := newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
 	sink := &collect{}
@@ -716,14 +702,14 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	defer cancel()
 	st, err := Run[fz, tp](ctx, f, sink, &testSchema, Options{Workers: 2, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
 	if err != nil {
-		t.Fatalf("%v (append torn %v, a file unlinked %v, a frame refused %v)", err, torn.Load(), unlinked.Load(), refused.Load())
+		t.Fatalf("%v (ledger writes %d, evicted %d)", err, writes.Load(), c.st.RetiredEvicted.Load())
 	}
 	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
 		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
 	}
 	c.Close()
 	rep := c.Report()
-	if !rep.LedgerFailed || c.st.Unlinked.Load() == 0 || st.SpillRefused == 0 {
+	if !rep.LedgerFailed || rep.Retired["evicted"] == 0 || c.st.Unlinked.Load() == 0 || st.SpillRefused == 0 {
 		t.Fatalf("ledger failed %v, unlinked %d, refused %d, evicted %d, sealed %d", rep.LedgerFailed, c.st.Unlinked.Load(), st.SpillRefused, rep.Retired["evicted"], rep.SealedFiles)
 	}
 	t.Logf("refused %d, evicted %d, unlinked %d, sealed %d", st.SpillRefused, rep.Retired["evicted"], c.st.Unlinked.Load(), rep.SealedFiles)
