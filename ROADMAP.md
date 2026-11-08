@@ -25,9 +25,10 @@ and likely listing constraints—without performing the full inventory.
 
 ### Versioned listing
 
-Add `--all-versions` support for object versions and delete markers. The Parquet schema
-already reserves `version_id`, `is_latest`, `is_delete_marker`, and `row_type`; current
-object-listing runs leave the version fields unpopulated.
+Add `--all-versions` support for object versions and delete markers (S3) and noncurrent
+generations (GCS). Versioned listings will use their own schema ids, `swath/s3-versions/v1`
+and `swath/gcs-generations/v1`: the current-object columns plus the version fields. The
+current-object schemas have no version columns and do not change.
 
 ### Supplied keyspace hints
 

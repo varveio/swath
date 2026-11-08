@@ -301,7 +301,13 @@ group (`keyrange.Flags`, registered once by the command); the GCS flags are pref
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed),
 `content_type` and, last, `time_created` (`timeCreated`, µs, the logical type of `last_modified`). `time_created`
 is an optional column of the schema id: a part written before the lister listed it has no such column, and a
-run resumed across that change holds parts of both kinds ([../upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)). **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
+run resumed across that change holds parts of both kinds ([../upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)). Two columns share
+S3's names but not its meaning. `last_modified` is `updated`, which GCS also moves when only the object's metadata
+changes; S3's `LastModified` moves only when the object is written. `time_created` is the generation's write
+time and never changes. `etag` is the JSON API's opaque entity tag, which also changes with metadata and is not a
+content hash, so compare content with `md5` or `crc32c`, never an ETag across stores
+([object resource](https://cloud.google.com/storage/docs/json_api/v1/objects),
+[ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
 client requests it; scheme and host case are the only equivalence) and the billed project the client sends
 (`--gcs-user-project` for the built-in client); credentials may change. A run with `--max-keys`, or through a
 supplied client that does not name its route and billed project (`gcs.Routed`), cannot resume.
