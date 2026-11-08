@@ -1,0 +1,702 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build !windows
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/crc32"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	pq "github.com/parquet-go/parquet-go"
+
+	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
+	"github.com/varveio/swath/go/internal/order"
+)
+
+// The durable spill's validation campaign (contract §6: a real
+// S3-compatible backend and production key lists): the real binary,
+// SIGKILLed at the durable spill's steps, after a part record, mid
+// recovery replay, with unsynced state lost, and at 40 % and 70 % of the
+// keys, then resumed. Each resume must give the uninterrupted dataset
+// (byte-identical with --part-interval=0, row-identical with the interval
+// on), reconcile (rows retained + rows listed = the dataset; objects
+// emitted - filtered + replayed = rows listed), and list nothing a
+// replayed certificate covers: no data request of the resume starts in
+// [max(cs, K), ce) of a certificate live in the ledger's prefix. Opt-in:
+// TestDurableMinIO runs with SWATH_MINIO_ENDPOINT (go/bench/minio.sh),
+// TestDurableCorpus with SWATH_CORPUS_ENDPOINT (go/bench/durable_corpus.sh);
+// both skip without them. With SWATH_CAMPAIGN_KEYS (and
+// SWATH_CAMPAIGN_MAX_KEYS: its first lines only) the uninterrupted dataset
+// must list exactly that key file. SWATH_CAMPAIGN_RESULTS names a file each arm
+// appends its result line to (go/docs/measurements.md, "Durable spill").
+
+// campaignFrontierDelay is the skewed fixture's slow frontier (contract
+// §6, "reuse"): a data request (fresh or continued) for keys below the key
+// at 10 % of the list waits this long, so the ranges ahead spill and seal
+// certificates the kills at 40 % and 70 % find live.
+const campaignFrontierDelay = 200 * time.Millisecond
+
+// firstKey is a ListObjectsV2 page's first key (as the service escaped it;
+// the frontier's keys are plain).
+var firstKey = regexp.MustCompile(`<Key>([^<]*)</Key>`)
+
+// campaignInterval is the part interval of the interval-on mode: parts
+// close by time within a run of seconds, so K advances while ranges spill.
+const campaignInterval = "1s"
+
+// TestDurableMinIO runs the campaign against a MinIO bucket
+// (SWATH_MINIO_ENDPOINT, SWATH_MINIO_BUCKET, SWATH_MINIO_ACCESS_KEY,
+// SWATH_MINIO_SECRET_KEY; go/bench/minio.sh up starts and fills one).
+func TestDurableMinIO(t *testing.T) {
+	ep := os.Getenv("SWATH_MINIO_ENDPOINT")
+	if ep == "" {
+		t.Skip("SWATH_MINIO_ENDPOINT is not set (go/bench/minio.sh up)")
+	}
+	bucket := orDefault(os.Getenv("SWATH_MINIO_BUCKET"), "swath-durable")
+	// 16 workers: at 64 concurrent listings the single-drive MinIO's heap
+	// outgrew its container and requests timed out (go/bench/minio.sh).
+	campaign(t, campaignFixture{name: "minio/" + bucket, upstream: ep, bucket: bucket, workers: orDefault(os.Getenv("SWATH_MINIO_WORKERS"), "16"), env: []string{
+		"AWS_ACCESS_KEY_ID=" + orDefault(os.Getenv("SWATH_MINIO_ACCESS_KEY"), "swath"),
+		"AWS_SECRET_ACCESS_KEY=" + orDefault(os.Getenv("SWATH_MINIO_SECRET_KEY"), "swath-secret"),
+	}})
+}
+
+// TestDurableCorpus runs the campaign against a key list served by the
+// bench's static fake (SWATH_CORPUS_ENDPOINT, SWATH_CORPUS_NAME;
+// go/bench/durable_corpus.sh serves each list and runs it).
+func TestDurableCorpus(t *testing.T) {
+	ep := os.Getenv("SWATH_CORPUS_ENDPOINT")
+	if ep == "" {
+		t.Skip("SWATH_CORPUS_ENDPOINT is not set (go/bench/durable_corpus.sh)")
+	}
+	campaign(t, campaignFixture{name: orDefault(os.Getenv("SWATH_CORPUS_NAME"), "corpus"), upstream: ep, bucket: "bkt", anonymous: true})
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+type campaignFixture struct {
+	name      string // the results' label
+	upstream  string // the S3 endpoint
+	bucket    string
+	anonymous bool
+	workers   string   // --workers ("": the default)
+	env       []string // the child's credentials
+}
+
+// campaignProxy fronts the fixture: it counts the keys served (the kills
+// by key count), logs the start of each fresh data request while logging
+// is on (the reuse assertion), and holds the slow frontier. It keeps the
+// Host header, so a signed request still verifies upstream.
+type campaignProxy struct {
+	keys    atomic.Int64
+	slow    atomic.Pointer[string] // the frontier's end (nil: no frontier)
+	logging atomic.Bool
+	mu      sync.Mutex
+	starts  []string
+}
+
+func (p *campaignProxy) handler(up *url.URL) http.Handler {
+	rp := httputil.NewSingleHostReverseProxy(up)
+	rp.ErrorLog = log.New(io.Discard, "", 0) // a killed child's requests end canceled
+	direct := rp.Director
+	rp.Director = func(r *http.Request) {
+		direct(r)
+		r.Header.Del("Accept-Encoding") // count keys in plain bodies
+	}
+	rp.ModifyResponse = func(r *http.Response) error {
+		if _, ok := r.Request.URL.Query()["list-type"]; !ok {
+			return nil
+		}
+		b, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			return err
+		}
+		p.keys.Add(int64(bytes.Count(b, []byte("<Key>"))))
+		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
+		r.Header.Set("Content-Length", strconv.Itoa(len(b)))
+		return nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		_, list := q["list-type"]
+		if list && q.Get("delimiter") == "" && q.Get("continuation-token") == "" && p.logging.Load() {
+			p.mu.Lock()
+			p.starts = append(p.starts, q.Get("start-after"))
+			p.mu.Unlock()
+		}
+		if !list || q.Get("delimiter") != "" {
+			rp.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		rp.ServeHTTP(rec, r)
+		// A page below the frontier's end waits before it is answered.
+		if s := p.slow.Load(); s != nil && rec.Body.Len() > 0 {
+			if m := firstKey.FindSubmatch(rec.Body.Bytes()); m != nil && string(m[1]) < *s {
+				time.Sleep(campaignFrontierDelay)
+			}
+		}
+		for k, v := range rec.Header() {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(rec.Code)
+		w.Write(rec.Body.Bytes())
+	})
+}
+
+// campaignReport is the part of a run's JSON report the campaign reads.
+type campaignReport struct {
+	Output struct {
+		RowsListed    int64 `json:"rows_listed"`
+		RowsFiltered  int64 `json:"rows_filtered"`
+		RowsRetained  int64 `json:"rows_retained"`
+		RowsCommitted int64 `json:"rows_committed"`
+		Bytes         int64 `json:"bytes"`
+	} `json:"output"`
+	Resources struct {
+		Spill struct {
+			Durable *order.DurableReport `json:"durable"`
+		} `json:"spill"`
+	} `json:"resources"`
+	Source struct {
+		Stats struct {
+			Counters struct {
+				Values map[string]any `json:"values"`
+			} `json:"counters"`
+		} `json:"stats"`
+	} `json:"source"`
+}
+
+func (r *campaignReport) value(name string) int64 {
+	f, _ := r.Source.Stats.Counters.Values[name].(float64)
+	return int64(f)
+}
+
+// campaignArm is one kill schedule.
+type campaignArm struct {
+	name       string
+	kill       string  // the list's SWATH_TEST_KILL_AT
+	keys       float64 // or: SIGKILL once this fraction of the fixture's keys was served
+	damage     func(t *testing.T, out string)
+	resumeKill string // a first resume killed here (mid recovery replay)
+}
+
+var campaignArms = []campaignArm{
+	{name: "capture-frames", kill: "spill-write-frames:1"}, // §3.2, §3.4
+	{name: "seal", kill: "spill-seal:1"},                   // §3.4
+	{name: "ledger-append", kill: "spill-ledger-append:1"}, // §3.5
+	{name: "ledger-sync", kill: "spill-ledger-sync:1"},
+	{name: "unlink", kill: "spill-unlink:1"}, // §3.8
+	{name: "part-recorded", kill: "recorded:2"},
+	// Killed at the third ledger sync, two cycles of seals are durable:
+	// certificates the resume replays, killed at its second replayed frame.
+	{name: "mid-replay", kill: "spill-ledger-sync:3", resumeKill: "spill-replay-frame:2"},
+	{name: "lost-unsealed", kill: "spill-seal:2", damage: loseUnsealed},
+	{name: "lost-ledger-tail", kill: "spill-ledger-sync:2", damage: tearLedgerTail},
+	{name: "keys-40", keys: 0.4},
+	{name: "keys-70", keys: 0.7},
+}
+
+func campaign(t *testing.T, fx campaignFixture) {
+	up, err := url.Parse(fx.upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	px := &campaignProxy{}
+	srv := httptest.NewServer(px.handler(up))
+	defer srv.Close()
+	src := []string{"s3://" + fx.bucket, "--endpoint", srv.URL, "--path-style", "--region", "us-east-1"}
+	if fx.anonymous {
+		src = append(src, "--anonymous")
+	}
+	partSize := "2MiB"
+	listArgs := func(out string, runtime []string) []string {
+		a := append([]string{"diag", "list"}, src...) // diag: --spill-reserve
+		a = append(a, "--part-size", partSize, "--row-budget", "1MiB", "--spill-max", "256MiB", "--report-format", "json", "-o", out)
+		return append(a, runtime...)
+	}
+	env := append(os.Environ(), fx.env...)
+	// run runs the binary: killAt (SWATH_TEST_KILL_AT) or keys (a SIGKILL
+	// once that many keys were served) must kill it; otherwise it must
+	// succeed, and its report is returned.
+	run := func(args []string, killAt string, keys int64) (*campaignReport, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Env = env
+		if killAt != "" {
+			cmd.Env = append(cmd.Env, "SWATH_TEST_KILL_AT="+killAt)
+		}
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		px.keys.Store(0)
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		done := make(chan struct{})
+		if keys > 0 {
+			go func() {
+				for {
+					select {
+					case <-done:
+						return
+					case <-time.After(time.Millisecond):
+						if px.keys.Load() >= keys {
+							cmd.Process.Signal(syscall.SIGKILL)
+							return
+						}
+					}
+				}
+			}()
+		}
+		err := cmd.Wait()
+		close(done)
+		ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
+		killed := ws.Signaled() && ws.Signal() == syscall.SIGKILL
+		switch {
+		case killAt != "" || keys > 0:
+			if !killed {
+				return nil, fmt.Errorf("not killed (not reached): %v\n%s", err, stderr.Bytes())
+			}
+			return nil, nil
+		case err != nil:
+			return nil, fmt.Errorf("%v\n%s", err, stderr.Bytes())
+		}
+		var r campaignReport
+		if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
+			return nil, fmt.Errorf("report: %v", err)
+		}
+		return &r, nil
+	}
+
+	// The spill reserve is lowered from its 1 GiB default so whether the
+	// fixture spills does not depend on the host's free disk.
+	common := []string{"--spill-reserve", "64MiB"}
+	if fx.workers != "" {
+		common = append(common, "--workers", fx.workers)
+	}
+	zero := append([]string{"--part-interval=0"}, common...)
+	ref := filepath.Join(t.TempDir(), "ref")
+	refRep, err := run(listArgs(ref, zero), "", 0)
+	if err != nil {
+		t.Fatalf("reference: %v", err)
+	}
+	// At least about 16 parts, so K advances during a run (part records,
+	// retirements by publication, the part-recorded arm).
+	if b := refRep.Output.Bytes; b < 16*2<<20 {
+		partSize = fmt.Sprintf("%dKiB", max(b/16>>10, 16))
+		os.RemoveAll(ref)
+		if refRep, err = run(listArgs(ref, zero), "", 0); err != nil {
+			t.Fatalf("reference: %v", err)
+		}
+	}
+	rows := refRep.Output.RowsCommitted
+	if keys := os.Getenv("SWATH_CAMPAIGN_KEYS"); keys != "" {
+		limit, _ := strconv.ParseInt(os.Getenv("SWATH_CAMPAIGN_MAX_KEYS"), 10, 64)
+		sameKeys(t, ref, keys, limit)
+	}
+	slow := frontierEnd(t, ref, rows/10)
+	px.slow.Store(&slow)
+	coldDir := filepath.Join(t.TempDir(), "cold")
+	cold, err := run(listArgs(coldDir, zero), "", 0)
+	if err != nil {
+		t.Fatalf("cold: %v", err)
+	}
+	sameParts(t, "cold", ref, coldDir)
+	coldReq := cold.value("requests")
+	d := cold.Resources.Spill.Durable
+	if d == nil || d.SealedFiles == 0 {
+		t.Fatalf("the cold run sealed no certificate: %+v", d)
+	}
+	t.Logf("%s: %d rows, parts of %s, cold %d requests, %d certificates sealed", fx.name, rows, partSize, coldReq, d.SealedFiles)
+	results := os.Getenv("SWATH_CAMPAIGN_RESULTS")
+	for _, mode := range []struct {
+		name    string
+		runtime []string
+	}{{"interval-0", zero}, {"interval-" + campaignInterval, append([]string{"--part-interval", campaignInterval}, common...)}} {
+		for _, arm := range campaignArms {
+			t.Run(mode.name+"/"+arm.name, func(t *testing.T) {
+				var line string
+				t.Cleanup(func() {
+					status := "pass"
+					if t.Failed() {
+						status = "FAIL"
+					}
+					appendResult(t, results, fmt.Sprintf("%s\t%s\t%s\t%s\t%s", fx.name, mode.name, arm.name, status, line))
+				})
+				out := filepath.Join(t.TempDir(), "ds")
+				if _, err := run(listArgs(out, mode.runtime), arm.kill, int64(arm.keys*float64(rows))); err != nil {
+					t.Fatalf("kill at %s%v: %v", arm.kill, arm.keys, err)
+				}
+				_, offs, _, _ := ledgerPrefix(t, out)
+				ents, _ := os.ReadDir(filepath.Join(out, order.DurableDir))
+				t.Logf("killed: %d ledger frames, %d durable entries, K %q", len(offs), len(ents), lastKey(t, out))
+				if arm.damage != nil {
+					arm.damage(t, out)
+				}
+				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json", out)
+				if arm.resumeKill != "" {
+					if _, err := run(resumeArgs, arm.resumeKill, 0); err != nil {
+						t.Fatalf("resume killed at %s: %v", arm.resumeKill, err)
+					}
+				}
+				certs, k := liveCerts(t, out), lastKey(t, out)
+				px.mu.Lock()
+				px.starts = nil
+				px.mu.Unlock()
+				px.logging.Store(true)
+				r, err := run(resumeArgs, "", 0)
+				px.logging.Store(false)
+				if err != nil {
+					t.Fatalf("resume: %v", err)
+				}
+				if mode.runtime[0] == zero[0] {
+					sameParts(t, arm.name, ref, out)
+				} else {
+					sameRowsStreamed(t, arm.name, ref, out)
+				}
+				// Reconciliation.
+				o := r.Output
+				var replayed, accepted, rejected int64
+				if d := r.Resources.Spill.Durable; d != nil && d.Resume != nil {
+					replayed, accepted = d.Resume.ReplayedRows, d.Resume.Accepted
+					for _, n := range d.Resume.Rejected {
+						rejected += n
+					}
+				}
+				if o.RowsCommitted != rows || o.RowsRetained+o.RowsListed != rows || r.value("objects")-o.RowsFiltered+replayed != o.RowsListed {
+					t.Errorf("reconciliation: committed %d (want %d), retained %d + listed %d, objects %d - filtered %d + replayed %d",
+						o.RowsCommitted, rows, o.RowsRetained, o.RowsListed, r.value("objects"), o.RowsFiltered, replayed)
+				}
+				// Reuse: no data request starts inside a certificate the
+				// resume replayed. Every live certificate is replayed
+				// unless rejected, and these schedules damage none.
+				if rejected != 0 {
+					t.Errorf("%d certificates rejected", rejected)
+				}
+				px.mu.Lock()
+				starts := px.starts
+				px.mu.Unlock()
+				inside := 0
+				for _, s := range starts {
+					for _, c := range certs {
+						if (c.open || c.ce > k) && s >= max(c.cs, k) && (c.open || s < c.ce) {
+							inside++
+							if inside <= 3 {
+								t.Errorf("a data request starts at %q inside the certificate (%q, %q] (K %q)", s, c.cs, c.ce, k)
+							}
+						}
+					}
+				}
+				req := r.value("requests")
+				line = fmt.Sprintf("%d\t%d\t%d\t%d\t%.3f\t%d\t%d", len(certs), accepted, replayed, req, float64(req)/float64(coldReq), r.value("reuse.boundary_overfetch_keys"), inside)
+				t.Logf("live certificates %d, accepted %d, replayed %d rows, resume %d requests (%.3fx cold), %d requests inside a certificate",
+					len(certs), accepted, replayed, req, float64(req)/float64(coldReq), inside)
+			})
+		}
+	}
+}
+
+// appendResult appends line to the results file (none: nothing).
+func appendResult(t *testing.T, path, line string) {
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, line)
+}
+
+// sameKeys is the independent oracle: the dataset in dir lists exactly
+// the key file's first limit lines (all with limit 0), in order.
+func sameKeys(t *testing.T, dir, path string, limit int64) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	rs := rowStream(t, dir)
+	defer rs.close()
+	var n int64
+	for ; limit == 0 || n < limit; n++ {
+		if !sc.Scan() {
+			break
+		}
+		r, ok := rs.next()
+		if !ok {
+			t.Fatalf("the dataset ends at row %d; the key file goes on with %q", n, sc.Text())
+		}
+		if got := string(r[0].ByteArray()); got != sc.Text() {
+			t.Fatalf("row %d is %q; the key file has %q", n, got, sc.Text())
+		}
+	}
+	if _, ok := rs.next(); ok {
+		t.Fatalf("the dataset has more than the key file's %d keys", n)
+	}
+}
+
+// frontierEnd is the last key of the first part reaching rows rows of the
+// dataset in dir: the skewed fixture's slow frontier ends there.
+func frontierEnd(t *testing.T, dir string, rows int64) string {
+	t.Helper()
+	m := readManifest(t, dir)
+	var n int64
+	for _, p := range m.Parts {
+		n += p.Rows
+		if n >= rows {
+			return string(p.MaxKey)
+		}
+	}
+	t.Fatalf("%s: fewer than %d rows", dir, rows)
+	return ""
+}
+
+func readManifest(t *testing.T, dir string) dataset.Manifest {
+	t.Helper()
+	var m dataset.Manifest
+	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("manifest of %s: %v", dir, err)
+	}
+	return m
+}
+
+// sameRowsStreamed compares two datasets row by row, every column, in
+// manifest order, holding one batch of each at a time: parts closed by time
+// differ between runs, their rows may not.
+func sameRowsStreamed(t *testing.T, at, ref, out string) {
+	t.Helper()
+	a, b := rowStream(t, ref), rowStream(t, out)
+	defer a.close()
+	defer b.close()
+	for n := 0; ; n++ {
+		ra, oka := a.next()
+		rb, okb := b.next()
+		if !oka || !okb {
+			if oka != okb {
+				t.Fatalf("%s: row counts differ at row %d", at, n)
+			}
+			return
+		}
+		if !ra.Equal(rb) {
+			t.Fatalf("%s: row %d differs", at, n)
+		}
+	}
+}
+
+type rowReader struct {
+	t     *testing.T
+	dir   string
+	parts []dataset.ManifestPart
+	f     *os.File
+	r     *pq.Reader
+	buf   []pq.Row
+	i, n  int
+}
+
+func rowStream(t *testing.T, dir string) *rowReader {
+	return &rowReader{t: t, dir: dir, parts: readManifest(t, dir).Parts, buf: make([]pq.Row, 1024)}
+}
+
+func (s *rowReader) next() (pq.Row, bool) {
+	for s.i == s.n {
+		if s.r != nil {
+			n, err := s.r.ReadRows(s.buf)
+			s.i, s.n = 0, n
+			if n > 0 {
+				break
+			}
+			if err != nil && !errors.Is(err, io.EOF) {
+				s.t.Fatal(err)
+			}
+			s.close()
+		}
+		if len(s.parts) == 0 {
+			return nil, false
+		}
+		p := s.parts[0]
+		s.parts = s.parts[1:]
+		f, err := os.Open(filepath.Join(s.dir, p.Path))
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		pf, err := pq.OpenFile(f, p.Bytes)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		s.f, s.r = f, pq.NewReader(pf)
+	}
+	s.i++
+	return s.buf[s.i-1], true
+}
+
+func (s *rowReader) close() {
+	if s.r != nil {
+		s.r.Close()
+		s.f.Close()
+		s.r, s.f = nil, nil
+	}
+}
+
+// ledgerCert is a sealed certificate's interval (cs, ce].
+type ledgerCert struct {
+	cs, ce string
+	open   bool
+}
+
+// ledgerPrefix is the ledger's durable prefix in out (contract §2: frames
+// up to the first invalid one): each frame's offset, type and body.
+func ledgerPrefix(t *testing.T, out string) (b []byte, offs []int, types []byte, bodies [][]byte) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, "ledger"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil, nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab := crc32.MakeTable(crc32.Castagnoli)
+	for off := 0; off+9 <= len(b); {
+		n := int(binary.LittleEndian.Uint32(b[off:]))
+		if n < 1 || off+8+n > len(b) {
+			break
+		}
+		if crc32.Update(crc32.Checksum(b[off:off+4], tab), tab, b[off+8:off+8+n]) != binary.LittleEndian.Uint32(b[off+4:]) {
+			break
+		}
+		offs, types, bodies = append(offs, off), append(types, b[off+8]), append(bodies, b[off+9:off+8+n])
+		off += 8 + n
+	}
+	return b, offs, types, bodies
+}
+
+// liveCerts is the certificates sealed and not retired in out's ledger
+// prefix: what a resume's recovery accepts when their files are intact.
+func liveCerts(t *testing.T, out string) []ledgerCert {
+	t.Helper()
+	_, _, types, bodies := ledgerPrefix(t, out)
+	live := map[string]ledgerCert{}
+	str := func(b []byte) (string, []byte) {
+		n, k := binary.Uvarint(b)
+		if k <= 0 || uint64(len(b)-k) < n {
+			t.Fatalf("malformed ledger record")
+		}
+		return string(b[k : k+int(n)]), b[k+int(n):]
+	}
+	for i, typ := range types {
+		body := bodies[i]
+		switch {
+		case typ == 'S' && len(body) > 16:
+			cs, rest := str(body[16:])
+			ce, rest := str(rest)
+			live[string(body[:16])] = ledgerCert{cs: cs, ce: ce, open: len(rest) > 0 && rest[0] == 1}
+		case typ == 'X' && len(body) >= 16:
+			delete(live, string(body[:16]))
+		}
+	}
+	certs := make([]ledgerCert, 0, len(live))
+	for _, c := range live {
+		certs = append(certs, c)
+	}
+	return certs
+}
+
+// lastKey is K: the last key of the last part the journal in out records
+// ("" with none).
+func lastKey(t *testing.T, out string) string {
+	t.Helper()
+	st, err := journal.Read(out)
+	if err != nil {
+		t.Fatalf("journal: %v", err)
+	}
+	k := ""
+	for _, r := range st.Records {
+		if r.Type == "part" {
+			k = string(r.Part.MaxKey)
+		}
+	}
+	return k
+}
+
+// loseUnsealed is the power loss after a kill at a seal: every durable
+// file without a record in the ledger (not yet synced) loses its last 32
+// bytes.
+func loseUnsealed(t *testing.T, out string) {
+	t.Helper()
+	_, _, types, bodies := ledgerPrefix(t, out)
+	recorded := map[string]bool{}
+	for i, typ := range types {
+		if typ == 'S' && len(bodies[i]) >= 16 {
+			recorded[fmt.Sprintf("%x.spill", bodies[i][:16])] = true
+		}
+	}
+	ents, _ := os.ReadDir(filepath.Join(out, order.DurableDir))
+	cut := 0
+	for _, e := range ents {
+		p := filepath.Join(out, order.DurableDir, e.Name())
+		if fi, err := os.Stat(p); err == nil && strings.HasSuffix(e.Name(), ".spill") && !recorded[e.Name()] && fi.Size() > 64 {
+			os.Truncate(p, fi.Size()-32)
+			cut++
+		}
+	}
+	if cut == 0 {
+		t.Fatal("no unsealed durable file to cut")
+	}
+}
+
+// tearLedgerTail is the power loss after a kill at a ledger sync: the
+// unsynced append is torn inside its last frame.
+func tearLedgerTail(t *testing.T, out string) {
+	t.Helper()
+	b, offs, _, _ := ledgerPrefix(t, out)
+	if len(offs) < 3 {
+		t.Fatalf("a ledger of %d frames: nothing to tear after the header", len(offs))
+	}
+	last := offs[len(offs)-1]
+	if err := os.Truncate(filepath.Join(out, order.DurableDir, "ledger"), int64(last+(len(b)-last)/2)); err != nil {
+		t.Fatal(err)
+	}
+}
