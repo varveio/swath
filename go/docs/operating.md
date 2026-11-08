@@ -346,8 +346,8 @@ and the optional `time_created`, absent from parts written before it was listed:
 `read_parquet(..., union_by_name = true)` does, to see it). S3's `checksum_algorithm` is the first algorithm S3
 lists for the object. On GCS, `last_modified` also changes when only the object's metadata changes
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
-and don't compare ETags across stores. GCS gives no `md5` for composite objects and neither hash for objects
-encrypted with customer-managed keys, so a null there means no hash to compare. Both datasets list current
+and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
+encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Both datasets list current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.

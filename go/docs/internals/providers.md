@@ -306,8 +306,9 @@ S3's names but not its meaning. `last_modified` is `updated`, which GCS also mov
 changes; S3's `LastModified` moves only when the object is written. `time_created` is the generation's write
 time and never changes. `etag` is the JSON API's opaque entity tag, which also changes with metadata and is not a
 content hash, so compare content with `md5` or `crc32c`, never an ETag across stores. GCS omits `md5Hash` for
-composite objects and both hashes for objects encrypted with customer-managed keys (CMEK); those columns are then
-null, and a comparison needs a hash from elsewhere
+composite objects, whose `crc32c` remains, and omits both hashes from listings of objects encrypted with
+customer-managed (CMEK) or customer-supplied (CSEK) keys. A missing hash is a null column, and when both are null
+a comparison needs a hash from elsewhere
 ([object resource](https://cloud.google.com/storage/docs/json_api/v1/objects),
 [ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
 client requests it; scheme and host case are the only equivalence) and the billed project the client sends
