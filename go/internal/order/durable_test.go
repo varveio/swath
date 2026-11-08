@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
@@ -131,6 +130,23 @@ func (f *fencedTree) keys(in func(string) bool) []string {
 }
 
 const testUUID = "00112233445566778899aabbccddeeff"
+
+// durableEntries lists the durable directory under root. It goes through
+// the os.Root, which takes DurableDir's platform separators, not through
+// root.FS(), whose slash-only paths refuse it on Windows.
+func durableEntries(t *testing.T, root *os.Root) []fs.DirEntry {
+	t.Helper()
+	d, err := root.Open(DurableDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ents, err := d.ReadDir(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ents
+}
 
 // newDurable is a fresh durable spill under a temporary output.
 func newDurable(t *testing.T) (*Cache, *os.Root, string) {
@@ -615,7 +631,11 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 // path deterministically; listing's TestDurableLedgerTornWrite resumes
 // after it.)
 func TestDurableLedgerFailureEvicts(t *testing.T) {
-	datasettest.RequireJournal(t)
+	if runtime.GOOS == "windows" {
+		// Not a platform behavior: the torn append needs a seal behind the
+		// slow frontier, a timing premise that fails there under load.
+		t.Skip("#309: the seal this test needs is timing-dependent (3 of 10 failed in the TestDurable suite on Windows)")
+	}
 	ledgerOrder(t)
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
@@ -645,7 +665,7 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	c.Close()
 	rep := c.Report()
 	if !rep.LedgerFailed || c.st.Unlinked.Load() == 0 || st.SpillRefused == 0 {
-		t.Fatalf("ledger failed %v, unlinked %d, refused %d, evicted %d", rep.LedgerFailed, c.st.Unlinked.Load(), st.SpillRefused, rep.Retired["evicted"])
+		t.Fatalf("ledger failed %v, unlinked %d, refused %d, evicted %d, sealed %d", rep.LedgerFailed, c.st.Unlinked.Load(), st.SpillRefused, rep.Retired["evicted"], rep.SealedFiles)
 	}
 	t.Logf("refused %d, evicted %d, unlinked %d, sealed %d", st.SpillRefused, rep.Retired["evicted"], c.st.Unlinked.Load(), rep.SealedFiles)
 }
@@ -1026,7 +1046,6 @@ var _ = io.EOF
 // unlinked, and the replacement is fatal (the run's cause, recovery's
 // error).
 func TestDurableReplacedMidCycle(t *testing.T) {
-	datasettest.RequireJournal(t)
 	replaced := errors.New("the output directory was moved or replaced")
 	for _, point := range []string{"spill-ledger-append", "spill-ledger-sync", "spill-unlink"} {
 		t.Run(point, func(t *testing.T) {
@@ -1075,10 +1094,7 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 	for _, point := range []string{"spill-recovery-sync", "spill-recovery-unlink", "spill-recovery-dirsync"} {
 		t.Run(point, func(t *testing.T) {
 			root, _ := sealedSpill(t, 6)
-			files := func() int {
-				ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
-				return len(ents)
-			}
+			files := func() int { return len(durableEntries(t, root)) }
 			before := files()
 			if before < 3 {
 				t.Fatalf("%d durable entries", before)
@@ -1196,7 +1212,6 @@ func TestDurableReplacedMidCycle(t *testing.T) {
 // are rejected by recovery (rejected.codec), retired and unlinked: never
 // accepted into the reuse plan, so replay never meets them.
 func TestDurableCodecRejected(t *testing.T) {
-	datasettest.RequireJournal(t)
 	root, _ := sealedSpill(t, 6)
 	probe, err := RecoverDurable(root, nil, testUUID, "ident", "test", nil)
 	if err != nil {
@@ -1218,8 +1233,7 @@ func TestDurableCodecRejected(t *testing.T) {
 	if rep.Rejected["codec"] != int64(n) || rep.Accepted != 0 || rep.Rejected["corrupt"] != 0 || len(r.Spans()) != 0 {
 		t.Fatalf("%d certificates of another codec: %+v", n, rep)
 	}
-	ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
-	if len(ents) != 1 { // the ledger
+	if ents := durableEntries(t, root); len(ents) != 1 { // the ledger
 		t.Fatalf("%d entries left in the durable directory", len(ents))
 	}
 }
@@ -1366,8 +1380,7 @@ func TestDurableRecoveryHistory(t *testing.T) {
 			lf.Write(buf)
 			lf.Close()
 			if missing {
-				ents, _ := root.FS().(fs.ReadDirFS).ReadDir(DurableDir)
-				for _, e := range ents {
+				for _, e := range durableEntries(t, root) {
 					if strings.HasSuffix(e.Name(), ".spill") {
 						root.Remove(filepath.Join(DurableDir, e.Name()))
 					}
