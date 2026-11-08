@@ -32,7 +32,8 @@ type frontier struct {
 	group                               int // consecutive rows of a page share a key, group at a time (0: none; Options.Groups)
 	slowDelay, sibDelay                 time.Duration
 	// hold, if set, holds the slow range after its first page until every
-	// sibling has emitted all its rows (left counts them down).
+	// sibling has emitted all its rows (left counts them down), or, with
+	// left nil, until the test closes it.
 	hold chan struct{}
 	left *atomic.Int64
 }
@@ -81,7 +82,7 @@ func (f *frontier) Expand(ctx context.Context, r fr, e source.Emitter[fr, tp]) e
 			}
 		}
 	}
-	if f.hold != nil && r.i > 0 && f.left.Add(-1) == 0 {
+	if f.left != nil && r.i > 0 && f.left.Add(-1) == 0 {
 		close(f.hold)
 	}
 	return nil
