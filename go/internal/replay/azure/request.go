@@ -57,6 +57,18 @@ var allowed = map[string]bool{
 	"maxresults": true, "startFrom": true, "timeout": true, "include": true,
 }
 
+// sasParameters are the query parameters of a shared access signature
+// (service, account and user delegation SAS, with their response-header
+// overrides). A SAS client appends them to every request, so both
+// operations accept and ignore them: the replay does not authenticate, and
+// validates no signature.
+var sasParameters = map[string]bool{
+	"sv": true, "ss": true, "srt": true, "sp": true, "se": true, "st": true, "spr": true, "sig": true,
+	"sr": true, "si": true, "sip": true, "skoid": true, "sktid": true, "skt": true, "ske": true, "sks": true,
+	"skv": true, "saoid": true, "suoid": true, "scid": true, "ses": true, "sdd": true,
+	"rscc": true, "rscd": true, "rsce": true, "rscl": true, "rsct": true,
+}
+
 // header returns a request header's value (the last one sent) and whether
 // it was sent more than once.
 func header(h http.Header, name string) (value string, present, duplicate bool) {
@@ -168,8 +180,9 @@ func parseHeaders(h http.Header) (*Request, error) {
 	return &Request{Version: version, ClientRequestID: clientID, HasClientRequestID: hasClientID}, nil
 }
 
-// parseQuery decodes the query strictly: every name in known, none
-// repeated, every component a valid escape of UTF-8.
+// parseQuery decodes the query strictly: every name in known or a SAS
+// parameter (sasParameters, ignored by the caller), none repeated, every
+// component a valid escape of UTF-8.
 func parseQuery(rawQuery string, known map[string]bool) (map[string]string, error) {
 	params := map[string]string{}
 	if rawQuery == "" {
@@ -185,7 +198,7 @@ func parseQuery(rawQuery string, known map[string]bool) (map[string]string, erro
 		if err != nil {
 			return nil, err
 		}
-		if !known[key] {
+		if !known[key] && !sasParameters[key] {
 			return nil, fail(Unsupported, "unsupported_query_parameter")
 		}
 		if _, dup := params[key]; dup {
@@ -227,20 +240,18 @@ func SelectsAccountInformation(rawQuery string) bool {
 }
 
 // ParseAccountInfo validates a Get Account Information request
-// (restype=account&comp=properties) on the account path (/{account}, or
-// /{account}/ as a client joins it to the ServiceEndpoint) or the container
-// path /{account}/{container}; any other path is ContainerNotFound. HEAD is refused as on the list route and any other
-// method but GET is UnsupportedHttpVerb; the headers are checked as Parse
-// checks them, then the query, which may carry only restype, comp and
-// timeout.
+// (restype=account&comp=properties). Azure answers it on any resource path
+// of the account, existing or not, so every path the route claims is
+// accepted (the account path, with or without its trailing slash, and any
+// container path); GET and HEAD are the operation's methods, any other is
+// UnsupportedHttpVerb. The headers are checked as Parse checks them, then
+// the query, which may carry only restype, comp, timeout and SAS
+// parameters.
 func ParseAccountInfo(method, path, rawQuery string, h http.Header, account, container string) (*Request, error) {
-	if path != "/"+account && path != "/"+account+"/" && path != "/"+account+"/"+container {
+	if path != "/"+account && !strings.HasPrefix(path, "/"+account+"/") {
 		return nil, fail(NotFound, "container_not_found")
 	}
-	if method == http.MethodHead {
-		return nil, fail(Unsupported, "account_head_unsupported")
-	}
-	if method != http.MethodGet {
+	if method != http.MethodGet && method != http.MethodHead {
 		return nil, fail(WrongMethod, "wrong_method")
 	}
 	r, err := parseHeaders(h)
