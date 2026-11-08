@@ -18,12 +18,12 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// The ListObjectsV2 parser is a hand-rolled scanner over the whole response
-// body. It allocates per page, not per object: values are collected in a
+// The ListObjectsV2 and ListObjectVersions parser is a hand-rolled scanner
+// over the whole response body. It allocates per page, not per object: values are collected in a
 // pooled scratch arena, and every string of a page (keys, ETags, owner,
 // checksum fields, the continuation token) is a substring of one
 // exact-size copy of it made for that page, and repeated values
-// (storage class, owner, checksum fields) share one copy. It follows
+// (storage class, owner, checksum fields, version IDs) share one copy. It follows
 // encoding/xml's semantics for what S3 sends: element local names,
 // character data with the five predefined entities and character
 // references, CDATA, comments and processing instructions, \r\n
@@ -41,6 +41,9 @@ type objSpan struct {
 	key, etag, class, ownerID, ownerName, algo, ctype span
 	size, mtime                                       int64
 	hasAlgo                                           bool
+	// ListObjectVersions only.
+	vid                  span
+	latest, deleteMarker bool
 }
 
 type parser struct {
@@ -50,12 +53,16 @@ type parser struct {
 	tmp      []byte
 	objs     []objSpan
 	prefixes []span
+	versions bool // a ListVersionsResult: entries also carry VersionId and IsLatest
 
 	truncated bool
 	token     span
 	hasToken  bool
 	keyCount  int
 	encoding  span
+
+	// ListObjectVersions only.
+	nextKey, nextVID, prefix, keyMarker span
 }
 
 const (
@@ -67,9 +74,14 @@ func syntax(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrSyntax, fmt.Sprintf(format, a...))
 }
 
+// reset starts a parse of body, keeping the scratch buffers.
+func (p *parser) reset(body []byte, versions bool) {
+	*p = parser{b: body, tmp: p.tmp[:0], arena: p.arena[:0], objs: p.objs[:0], prefixes: p.prefixes[:0], versions: versions}
+}
+
 // parseList parses a ListBucketResult document.
 func (p *parser) parseList(body []byte) (*Page, error) {
-	*p = parser{b: body, tmp: p.tmp[:0], arena: p.arena[:0], objs: p.objs[:0], prefixes: p.prefixes[:0]}
+	p.reset(body, false)
 	name, empty, err := p.root()
 	if err != nil {
 		return nil, err
@@ -83,6 +95,34 @@ func (p *parser) parseList(body []byte) (*Page, error) {
 		}
 	}
 	return p.finish()
+}
+
+// parseVersions parses a ListVersionsResult document: its <Version> and
+// <DeleteMarker> entries in one slice, in wire order. A truncated page
+// without a NextKeyMarker is an invalid page: nothing says where the
+// listing continues.
+func (p *parser) parseVersions(body []byte) (*VersionPage, error) {
+	p.reset(body, true)
+	name, empty, err := p.root()
+	if err != nil {
+		return nil, err
+	}
+	if string(local(name)) != "ListVersionsResult" {
+		return nil, syntax("root element <%s>, want <ListVersionsResult>", name)
+	}
+	if !empty {
+		if err := p.versionsBody(name); err != nil {
+			return nil, err
+		}
+	}
+	pg, err := p.finishVersions()
+	if err != nil {
+		return nil, err
+	}
+	if pg.IsTruncated && pg.NextKeyMarker == "" {
+		return nil, fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", ErrInvalidPage)
+	}
+	return pg, nil
 }
 
 // root skips the prolog (anything before the first start tag) and returns
@@ -111,25 +151,11 @@ func (p *parser) listBody(self []byte) error {
 		}
 		switch string(local(name)) {
 		case "Contents":
-			p.objs = append(p.objs, objSpan{})
-			if !empty {
-				if err := p.contents(name, len(p.objs)-1); err != nil {
-					return err
-				}
-			}
-		case "CommonPrefixes":
-			p.prefixes = append(p.prefixes, span{})
-			if !empty {
-				if err := p.commonPrefix(name, &p.prefixes[len(p.prefixes)-1]); err != nil {
-					return err
-				}
-			}
-		case "IsTruncated":
-			t, err := p.scalar(name, empty)
-			if err != nil {
+			if err := p.entry(name, empty, false); err != nil {
 				return err
 			}
-			if p.truncated, err = parseBool(t); err != nil {
+		case "CommonPrefixes", "IsTruncated", "EncodingType":
+			if err := p.common(name, empty); err != nil {
 				return err
 			}
 		case "NextContinuationToken":
@@ -148,18 +174,86 @@ func (p *parser) listBody(self []byte) error {
 				return err
 			}
 			p.keyCount = int(n)
-		case "EncodingType":
-			t, err := p.scalar(name, empty)
-			if err != nil {
-				return err
-			}
-			p.encoding = p.store(t)
 		default:
 			if err := p.skip(name, empty); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (p *parser) versionsBody(self []byte) error {
+	for {
+		k, name, empty, err := p.next()
+		if err != nil {
+			return err
+		}
+		if k == tEnd {
+			return p.closes(self, name)
+		}
+		var s *span
+		switch string(local(name)) {
+		case "Version", "DeleteMarker":
+			if err := p.entry(name, empty, string(local(name)) == "DeleteMarker"); err != nil {
+				return err
+			}
+			continue
+		case "CommonPrefixes", "IsTruncated", "EncodingType":
+			if err := p.common(name, empty); err != nil {
+				return err
+			}
+			continue
+		case "NextKeyMarker":
+			s = &p.nextKey
+		case "NextVersionIdMarker":
+			s = &p.nextVID
+		case "Prefix":
+			s = &p.prefix
+		case "KeyMarker":
+			s = &p.keyMarker
+		default:
+			if err := p.skip(name, empty); err != nil {
+				return err
+			}
+			continue
+		}
+		t, err := p.scalar(name, empty)
+		if err != nil {
+			return err
+		}
+		*s = p.store(t)
+	}
+}
+
+// entry appends one <Contents>, <Version> or <DeleteMarker> entry.
+func (p *parser) entry(name []byte, empty, deleteMarker bool) error {
+	p.objs = append(p.objs, objSpan{deleteMarker: deleteMarker})
+	if empty {
+		return nil
+	}
+	return p.contents(name, len(p.objs)-1)
+}
+
+// common reads an element both listings share: CommonPrefixes,
+// IsTruncated or EncodingType.
+func (p *parser) common(name []byte, empty bool) error {
+	if string(local(name)) == "CommonPrefixes" {
+		p.prefixes = append(p.prefixes, span{})
+		if empty {
+			return nil
+		}
+		return p.commonPrefix(name, &p.prefixes[len(p.prefixes)-1])
+	}
+	t, err := p.scalar(name, empty)
+	if err != nil {
+		return err
+	}
+	if string(local(name)) == "EncodingType" {
+		p.encoding = p.store(t)
+		return nil
+	}
+	p.truncated, err = parseBool(t)
+	return err
 }
 
 func (p *parser) contents(self []byte, i int) error {
@@ -172,7 +266,27 @@ func (p *parser) contents(self []byte, i int) error {
 			return p.closes(self, name)
 		}
 		o := &p.objs[i]
-		switch string(local(name)) {
+		field := string(local(name))
+		if !p.versions && (field == "VersionId" || field == "IsLatest") {
+			field = "" // not ListObjectsV2's: skipped
+		}
+		switch field {
+		case "VersionId":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			// Kept verbatim (never URL-decoded); "null" repeats on every
+			// entry of an unversioned bucket, so it is shared.
+			o.vid = p.shared(t, i, func(o *objSpan) span { return o.vid })
+		case "IsLatest":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			if o.latest, err = parseBool(t); err != nil {
+				return err
+			}
 		case "Key":
 			t, err := p.scalar(name, empty)
 			if err != nil {
@@ -304,46 +418,96 @@ func (p *parser) shared(t []byte, i int, field func(*objSpan) span) span {
 	return p.store(t)
 }
 
-// finish URL-decodes keys and prefixes when the response says
-// encoding-type=url (in place: decoding only shrinks) and turns the arena
-// into the page's strings.
-func (p *parser) finish() (*Page, error) {
-	if p.text(p.encoding) == "url" {
-		for i := range p.objs {
-			if err := p.unescape(&p.objs[i].key); err != nil {
-				return nil, err
-			}
-		}
-		for i := range p.prefixes {
-			if err := p.unescape(&p.prefixes[i]); err != nil {
-				return nil, err
-			}
+// decode URL-decodes keys, prefixes and the spans given when the response
+// says encoding-type=url, once and in place (decoding only shrinks).
+func (p *parser) decode(more ...*span) error {
+	if p.text(p.encoding) != "url" {
+		return nil
+	}
+	for i := range p.objs {
+		if err := p.unescape(&p.objs[i].key); err != nil {
+			return err
 		}
 	}
-	// The pooled scratch arena becomes the page's own arena, sized exactly:
-	// rows hold it until they are encoded, so slack would be retained too.
+	for i := range p.prefixes {
+		if err := p.unescape(&p.prefixes[i]); err != nil {
+			return err
+		}
+	}
+	for _, s := range more {
+		if err := p.unescape(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// own makes the page's arena: the pooled scratch arena is copied to one
+// sized exactly (rows hold it until they are encoded, so slack would be
+// retained too). The returned function gives the scratch back to the
+// parser once the page's strings are taken.
+func (p *parser) own() (release func()) {
 	scratch := p.arena
 	p.arena = make([]byte, len(scratch))
 	copy(p.arena, scratch)
-	defer func() { p.arena = scratch[:0] }()
+	return func() { p.arena, p.b = scratch[:0], nil }
+}
+
+// object is an entry's ListObjectsV2 fields.
+func (p *parser) object(s *objSpan) Object {
+	return Object{Key: p.text(s.key), ETag: p.text(s.etag), StorageClass: p.text(s.class),
+		OwnerID: p.text(s.ownerID), OwnerDisplayName: p.text(s.ownerName),
+		ChecksumAlgorithm: p.text(s.algo), ChecksumType: p.text(s.ctype), Size: s.size, Mtime: s.mtime}
+}
+
+// prefixStrings is the page's common prefixes, or nil.
+func (p *parser) prefixStrings() []string {
+	if len(p.prefixes) == 0 {
+		return nil
+	}
+	out := make([]string, len(p.prefixes))
+	for i, s := range p.prefixes {
+		out[i] = p.text(s)
+	}
+	return out
+}
+
+// finish turns a ListBucketResult's spans into its page.
+func (p *parser) finish() (*Page, error) {
+	if err := p.decode(); err != nil {
+		return nil, err
+	}
+	defer p.own()()
 	pg := &Page{IsTruncated: p.truncated, KeyCount: p.keyCount, HasContinuation: p.hasToken}
 	pg.NextContinuationToken = p.text(p.token)
 	pg.EncodingType = p.text(p.encoding)
 	pg.Contents = make([]Object, len(p.objs))
 	for i := range p.objs {
-		s, o := &p.objs[i], &pg.Contents[i]
-		o.Key, o.ETag, o.StorageClass = p.text(s.key), p.text(s.etag), p.text(s.class)
-		o.OwnerID, o.OwnerDisplayName = p.text(s.ownerID), p.text(s.ownerName)
-		o.ChecksumAlgorithm, o.ChecksumType = p.text(s.algo), p.text(s.ctype)
-		o.Size, o.Mtime = s.size, s.mtime
+		pg.Contents[i] = p.object(&p.objs[i])
 	}
-	if len(p.prefixes) > 0 {
-		pg.CommonPrefixes = make([]string, len(p.prefixes))
-		for i, s := range p.prefixes {
-			pg.CommonPrefixes[i] = p.text(s)
-		}
+	pg.CommonPrefixes = p.prefixStrings()
+	return pg, nil
+}
+
+// finishVersions turns a ListVersionsResult's spans into its page. The
+// NextKeyMarker and the echoed Prefix and KeyMarker are decoded like keys;
+// version IDs and the NextVersionIdMarker are not encoded by S3 and are
+// kept verbatim.
+func (p *parser) finishVersions() (*VersionPage, error) {
+	if err := p.decode(&p.nextKey, &p.prefix, &p.keyMarker); err != nil {
+		return nil, err
 	}
-	p.b = nil
+	defer p.own()()
+	pg := &VersionPage{IsTruncated: p.truncated, EncodingType: p.text(p.encoding),
+		NextKeyMarker: p.text(p.nextKey), NextVersionIDMarker: p.text(p.nextVID),
+		Prefix: p.text(p.prefix), KeyMarker: p.text(p.keyMarker)}
+	pg.Versions = make([]Version, len(p.objs))
+	for i := range p.objs {
+		s := &p.objs[i]
+		pg.Versions[i] = Version{Object: p.object(s), VersionID: p.text(s.vid), IsLatest: s.latest,
+			DeleteMarker: s.deleteMarker}
+	}
+	pg.CommonPrefixes = p.prefixStrings()
 	return pg, nil
 }
 

@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>covid19-lake</Name><Prefix>a</Prefix><KeyMarker></KeyMarker><VersionIdMarker></VersionIdMarker><NextKeyMarker>archived/</NextKeyMarker><MaxKeys>3</MaxKeys><Delimiter>/</Delimiter><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated><CommonPrefixes><Prefix>ai/</Prefix></CommonPrefixes><CommonPrefixes><Prefix>alleninstitute/</Prefix></CommonPrefixes><CommonPrefixes><Prefix>archived/</Prefix></CommonPrefixes></ListVersionsResult>

@@ -6,6 +6,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -137,11 +138,29 @@ func (c *Client) Counters() Counters {
 // failures with full-jitter exponential backoff (objhttp.Do).
 func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error) {
 	u := c.url(in)
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, u) })
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) {
+		return attempt(c, ctx, u, "ListObjectsV2", (*parser).parseList)
+	})
+}
+
+// ListObjectVersions sends one ListObjectVersions request (GET /?versions)
+// on ListObjectsV2's path: the same signing, admission, retries and
+// classification. A 200 that is not a ListVersionsResult is a parse
+// failure (retried); a truncated page without a NextKeyMarker is an
+// invalid page (ErrInvalidPage, not retried).
+func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*VersionPage, error) {
+	if in.VersionIDMarker != "" && in.KeyMarker == "" {
+		return nil, errors.New("ListObjectVersions: a version-id marker without a key marker")
+	}
+	u := c.versionsURL(in)
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (*VersionPage, error) {
+		return attempt(c, ctx, u, "ListObjectVersions", (*parser).parseVersions)
+	})
 }
 
 // A ListObjectsV2 page of 1,000 keys of 1,024 bytes with owners and
-// checksums stays under 4 MiB; a larger body is refused, not buffered.
+// checksums stays under 4 MiB (a ListObjectVersions page, with a version
+// ID per entry, a little more); a larger body is refused, not buffered.
 const (
 	maxResponse = 16 << 20
 	maxPooled   = 4 << 20
@@ -172,39 +191,70 @@ func (c *Client) Route(bucket string) string {
 // SigV4 encoding), so the signature covers exactly what is sent.
 func (c *Client) url(in *ListInput) *url.URL {
 	u := c.route(in.Bucket)
-	var q strings.Builder
-	add := func(k, v string) {
-		if q.Len() > 0 {
-			q.WriteByte('&')
-		}
-		q.WriteString(k)
-		q.WriteByte('=')
-		// SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~ is
-		// percent-encoded with upper-case hex, "/" included.
-		q.WriteString(httpbinding.EscapePath(v, true))
-	}
+	var q query
 	if in.ContinuationToken != "" {
-		add("continuation-token", in.ContinuationToken)
+		q.add("continuation-token", in.ContinuationToken)
 	}
 	if in.Delimiter != "" {
-		add("delimiter", in.Delimiter)
+		q.add("delimiter", in.Delimiter)
 	}
-	add("encoding-type", "url")
+	q.add("encoding-type", "url")
 	if in.FetchOwner {
-		add("fetch-owner", "true")
+		q.add("fetch-owner", "true")
 	}
-	add("list-type", "2")
+	q.add("list-type", "2")
 	if in.MaxKeys > 0 {
-		add("max-keys", strconv.Itoa(in.MaxKeys))
+		q.add("max-keys", strconv.Itoa(in.MaxKeys))
 	}
 	if in.Prefix != "" {
-		add("prefix", in.Prefix)
+		q.add("prefix", in.Prefix)
 	}
 	if in.StartAfter != "" {
-		add("start-after", in.StartAfter)
+		q.add("start-after", in.StartAfter)
 	}
 	u.RawQuery = q.String()
 	return &u
+}
+
+// versionsURL is url's ListObjectVersions form, its keys sorted the same
+// way.
+func (c *Client) versionsURL(in *VersionsInput) *url.URL {
+	u := c.route(in.Bucket)
+	var q query
+	if in.Delimiter != "" {
+		q.add("delimiter", in.Delimiter)
+	}
+	q.add("encoding-type", "url")
+	if in.KeyMarker != "" {
+		q.add("key-marker", in.KeyMarker)
+	}
+	if in.MaxKeys > 0 {
+		q.add("max-keys", strconv.Itoa(in.MaxKeys))
+	}
+	if in.Prefix != "" {
+		q.add("prefix", in.Prefix)
+	}
+	if in.KeyMarker != "" && in.VersionIDMarker != "" {
+		q.add("version-id-marker", in.VersionIDMarker)
+	}
+	q.add("versions", "")
+	u.RawQuery = q.String()
+	return &u
+}
+
+// query builds a canonical query string: the caller adds the keys in
+// sorted order.
+type query struct{ strings.Builder }
+
+func (q *query) add(k, v string) {
+	if q.Len() > 0 {
+		q.WriteByte('&')
+	}
+	q.WriteString(k)
+	q.WriteByte('=')
+	// SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~ is
+	// percent-encoded with upper-case hex, "/" included.
+	q.WriteString(httpbinding.EscapePath(v, true))
 }
 
 // awsHost is the regional S3 endpoint host: FIPS and dual-stack variants,
@@ -248,7 +298,9 @@ func virtualHostable(b string) bool {
 	return true
 }
 
-func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
+// attempt sends one request for u and parses a 200's body with parse
+// (call names the operation in errors).
+func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, parse func(*parser, []byte) (*T, error)) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(actx, http.MethodGet, u.String(), nil)
@@ -288,7 +340,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	if buf.Len() > maxResponse {
-		return nil, fmt.Errorf("ListObjectsV2 response larger than %d bytes", maxResponse)
+		return nil, fmt.Errorf("%s response larger than %d bytes", call, maxResponse)
 	}
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
@@ -298,10 +350,12 @@ func (c *Client) attempt(ctx context.Context, u *url.URL) (*Page, error) {
 		p = new(parser)
 	}
 	defer c.parsers.Put(p)
-	page, err := p.parseList(buf.Bytes())
+	page, err := parse(p, buf.Bytes())
 	if err != nil {
-		c.counts.ParseFailure()
-		return nil, fmt.Errorf("ListObjectsV2 response (%d bytes): %w", buf.Len(), err)
+		if errors.Is(err, ErrSyntax) {
+			c.counts.ParseFailure()
+		}
+		return nil, fmt.Errorf("%s response (%d bytes): %w", call, buf.Len(), err)
 	}
 	return page, nil
 }
