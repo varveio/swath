@@ -289,6 +289,9 @@ func stall(h http.Handler, stalled chan<- struct{}) http.Handler {
 		for k, v := range rec.Header() {
 			w.Header()[k] = v
 		}
+		// The body is object bytes; never let a client take it for a page.
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(rec.Code)
 		body := rec.Body.Bytes()
 		_, _ = w.Write(body[:len(body)/2])
