@@ -488,7 +488,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   begin (they need the rest of the stream immutable and known), until the drainer has passed the last
   certificate. When the certificates lie near the end of the keyspace, such a resume's tail stays serial and
   the report says so (`reason` `listing_active`; `TestSegmentsReplayDurableFiles`). The output is the same
-  either way; only the tail's speed differs. Follow-up: let the segments take a reused certificate's frames
+  either way; only the tail's speed differs. Follow-up ([#288](https://github.com/varveio/swath/issues/288)): let the segments take a reused certificate's frames
   as units of the rest (its file's rows are already on disk and certified), so they can begin before the
   drainer reaches it.
 
