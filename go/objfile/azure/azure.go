@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package azure opens blobs of an Azure Blob Storage container as objfile
-// Files with the azblob SDK. Open learns the blob's size and ETag from its
+// Objects with the azblob SDK. Open learns the blob's size and ETag from its
 // properties; OpenSized takes the ETag from the first read. Every later read
 // is a ranged download with If-Match on that ETag. A 412, a 404, or a
 // response naming another ETag or size fails the read with
@@ -35,7 +35,7 @@ type opener struct {
 	container *container.Client
 }
 
-func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
+func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	b := o.container.NewBlobClient(name)
 	props, err := b.GetProperties(ctx, nil)
 	if err != nil {
@@ -51,7 +51,7 @@ func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
 	return ranged.New(name, deref(props.ContentLength), pin, getter(b)), nil
 }
 
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.File, error) {
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
 	return ranged.New(name, size, ranged.Pin{}, getter(o.container.NewBlobClient(name))), nil
 }
 

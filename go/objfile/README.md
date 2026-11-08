@@ -11,7 +11,7 @@ on it brings in only the SDK of the store you use.
 ## API
 
 ```go
-type File interface {
+type Object interface {
 	io.ReaderAt                                 // io.EOF at the end, as io.ReaderAt says
 	Size() int64                                // the size when opened
 	Identity() string                           // the pinned version
@@ -20,8 +20,8 @@ type File interface {
 }
 
 type Opener interface {
-	Open(ctx context.Context, name string) (File, error)                  // one metadata request, then pinned
-	OpenSized(ctx context.Context, name string, size int64) (File, error) // no request; the first read pins
+	Open(ctx context.Context, name string) (Object, error)                  // one metadata request, then pinned
+	OpenSized(ctx context.Context, name string, size int64) (Object, error) // no request; the first read pins
 }
 
 var ErrObjectChanged error                     // the pinned version is gone
@@ -39,8 +39,8 @@ has no credential handling. A missing object fails `Open`, or the first read of 
 error wrapping `fs.ErrNotExist`. Requests are retried by the SDK; objfile adds only this: a response body cut
 short is requested again from where it stopped, at most twice, which is safe because the request is pinned.
 
-A `File` satisfies SeekParquet's `SourceFile` and `ContextBinder`. Its `Source.Open` returns SeekParquet's own
-interface type, which Go does not match against `File`, so a reader adapts an `Opener` in four lines:
+An `Object` satisfies SeekParquet's `SourceFile` and `ContextBinder`. Its `Source.Open` returns SeekParquet's own
+interface type, which Go does not match against `Object`, so a reader adapts an `Opener` in four lines:
 
 ```go
 type source struct{ objfile.Opener }
@@ -58,15 +58,21 @@ d, err := seekparquet.OpenDataset(ctx, source{objfile.Root(s3.New(client, "bucke
 
 ## The pinning guarantee
 
-Every read of a `File` returns bytes of the version it pinned, or fails with `ErrObjectChanged` and returns
+Every read of a `Object` returns bytes of the version it pinned, or fails with `ErrObjectChanged` and returns
 none of another version's bytes. A read also fails with `ErrObjectChanged` when the response states a total
 size other than the file's.
 
-| Store | Pinned by | Each read |
-|---|---|---|
-| S3 | ETag, and the version id in a versioned bucket (from HeadObject, or the first GetObject) | ranged GetObject with `If-Match: <ETag>` and `VersionId`; a 412 or 404, or a response naming another ETag or version, is `ErrObjectChanged`. In a versioned bucket a replaced key still reads the pinned version. |
-| GCS | generation (from the object's attributes, or the first read) | range reader of that generation, of the stored bytes (`ReadCompressed`, so no decompressive transcoding); a generation that no longer exists is `ErrObjectChanged`. |
-| Azure | ETag (from the blob's properties, or the first read) | ranged download with `If-Match: <ETag>`; a 412 or 404, or a response naming another ETag, is `ErrObjectChanged`. |
+What each store pins with, taken from the metadata request of `Open` or the first read of an `OpenSized` file:
+
+- **S3:** the ETag, sent as `If-Match` on every ranged GetObject, and in a versioned bucket also the version id
+  (`VersionId`), so a replaced key still reads the pinned version.
+- **GCS:** the generation, set on the object handle (`Generation`) of every range reader, which reads the stored
+  bytes (`ReadCompressed`, no decompressive transcoding).
+- **Azure:** the ETag, sent as `If-Match` on every ranged download.
+
+A 412, a 404 after open, or a response naming another ETag or version is `ErrObjectChanged`. Pinning is a
+cheap guard over the reads, not a versions API: there are no options to choose a pinning mode, and no Azure
+snapshot or version-id reads.
 
 `Identity` is the S3 version id (else the ETag), the GCS generation, or the Azure ETag; an `OpenSized` file
 returns `""` until its first read.

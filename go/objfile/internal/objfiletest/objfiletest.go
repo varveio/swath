@@ -43,13 +43,13 @@ func Data(n int, seed byte) []byte {
 }
 
 // opener opens name, of size bytes, one way.
-type opener func(t *testing.T, s Store, name string, size int) objfile.File
+type opener func(t *testing.T, s Store, name string, size int) objfile.Object
 
 // Run tests the Opener newStore builds: each case through Open and through
 // OpenSized, then what is particular to each.
 func Run(t *testing.T, newStore NewStore) {
 	t.Run("Open", func(t *testing.T) {
-		run(t, newStore, func(t *testing.T, s Store, name string, _ int) objfile.File {
+		run(t, newStore, func(t *testing.T, s Store, name string, _ int) objfile.Object {
 			t.Helper()
 			f, err := s.Opener.Open(context.Background(), name)
 			if err != nil {
@@ -62,7 +62,7 @@ func Run(t *testing.T, newStore NewStore) {
 		})
 	})
 	t.Run("OpenSized", func(t *testing.T) {
-		run(t, newStore, func(t *testing.T, s Store, name string, size int) objfile.File {
+		run(t, newStore, func(t *testing.T, s Store, name string, size int) objfile.Object {
 			t.Helper()
 			f, err := s.Opener.OpenSized(context.Background(), name, int64(size))
 			if err != nil {

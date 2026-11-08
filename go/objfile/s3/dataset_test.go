@@ -23,7 +23,7 @@ import (
 )
 
 // source adapts an Opener to seekparquet.Source, whose Open returns its own
-// file interface; an objfile.File satisfies it.
+// file interface; an objfile.Object satisfies it.
 type source struct{ objfile.Opener }
 
 func (s source) Open(ctx context.Context, name string) (seekparquet.SourceFile, error) {
@@ -34,7 +34,7 @@ func (s source) Open(ctx context.Context, name string) (seekparquet.SourceFile, 
 	return f, nil
 }
 
-var _ seekparquet.ContextBinder = objfile.File(nil)
+var _ seekparquet.ContextBinder = objfile.Object(nil)
 
 type row struct {
 	Key  string `parquet:"key"`

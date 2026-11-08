@@ -158,7 +158,7 @@ func TestETagCheck(t *testing.T) {
 	}
 }
 
-// TestVersionPinned: in a versioned bucket the File reads the version it
+// TestVersionPinned: in a versioned bucket the Object reads the version it
 // opened, after the key has a newer one.
 func TestVersionPinned(t *testing.T) {
 	f := newFake(t, ifMatch)

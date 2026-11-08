@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package ranged is the File the store packages share: io.ReaderAt semantics,
+// Package ranged is the Object the store packages share: io.ReaderAt semantics,
 // the pinned version, the closed state and the context binding over one
 // ranged-read function.
 package ranged
@@ -50,9 +50,9 @@ type Getter func(ctx context.Context, off, n int64, pin Pin) (Response, error)
 // is safe because every request is pinned to one version.
 const BodyRetries = 2
 
-// New returns the File of the object name of size bytes, read through get.
+// New returns the Object of the object name of size bytes, read through get.
 // A zero pin is taken from the first read's response.
-func New(name string, size int64, pin Pin, get Getter) objfile.File {
+func New(name string, size int64, pin Pin, get Getter) objfile.Object {
 	return &file{name: name, size: size, pin: pin, get: get}
 }
 

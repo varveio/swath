@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package gcs opens objects of a Google Cloud Storage bucket as objfile Files
+// Package gcs opens objects of a Google Cloud Storage bucket as objfile Objects
 // with cloud.google.com/go/storage. Open learns the object's size and
 // generation from its attributes; OpenSized takes the generation from the
 // first read. Every later read is a range reader of that generation, of the
@@ -33,7 +33,7 @@ type opener struct {
 	bucket *storage.BucketHandle
 }
 
-func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
+func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	attrs, err := o.bucket.Object(name).Attrs(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
@@ -45,7 +45,7 @@ func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
 	return ranged.New(name, attrs.Size, pin, o.getter(name)), nil
 }
 
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.File, error) {
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
 	return ranged.New(name, size, ranged.Pin{}, o.getter(name)), nil
 }
 

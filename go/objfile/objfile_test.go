@@ -18,12 +18,12 @@ import (
 	"github.com/varveio/swath/go/objfile"
 )
 
-// A File is a SeekParquet SourceFile and ContextBinder. Source's Open returns
+// An Object is a SeekParquet SourceFile and ContextBinder. Source's Open returns
 // SeekParquet's own interface type, so an Opener needs a one-method adapter
 // (README).
 var (
-	_ seekparquet.SourceFile    = objfile.File(nil)
-	_ seekparquet.ContextBinder = objfile.File(nil)
+	_ seekparquet.SourceFile    = objfile.Object(nil)
+	_ seekparquet.ContextBinder = objfile.Object(nil)
 )
 
 func TestCheckPath(t *testing.T) {
@@ -49,26 +49,26 @@ type fakeOpener struct {
 	peak     atomic.Int32
 }
 
-func (o *fakeOpener) Open(_ context.Context, name string) (objfile.File, error) {
+func (o *fakeOpener) Open(_ context.Context, name string) (objfile.Object, error) {
 	o.mu.Lock()
 	o.names = append(o.names, name)
 	o.mu.Unlock()
-	return fakeFile{o}, nil
+	return fakeObject{o}, nil
 }
 
-func (o *fakeOpener) OpenSized(ctx context.Context, name string, _ int64) (objfile.File, error) {
+func (o *fakeOpener) OpenSized(ctx context.Context, name string, _ int64) (objfile.Object, error) {
 	return o.Open(ctx, name)
 }
 
-type fakeFile struct{ o *fakeOpener }
+type fakeObject struct{ o *fakeOpener }
 
-func (f fakeFile) ReadAt(p []byte, off int64) (int, error) {
+func (f fakeObject) ReadAt(p []byte, off int64) (int, error) {
 	return f.WithContext(context.Background()).ReadAt(p, off)
 }
-func (f fakeFile) Size() int64      { return 1 }
-func (f fakeFile) Identity() string { return "v" }
-func (f fakeFile) Close() error     { return nil }
-func (f fakeFile) WithContext(context.Context) io.ReaderAt {
+func (f fakeObject) Size() int64      { return 1 }
+func (f fakeObject) Identity() string { return "v" }
+func (f fakeObject) Close() error     { return nil }
+func (f fakeObject) WithContext(context.Context) io.ReaderAt {
 	return readerFunc(func(p []byte, _ int64) (int, error) {
 		n := f.o.inFlight.Add(1)
 		for {

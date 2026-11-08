@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package s3 opens objects of an S3 bucket as objfile Files with the AWS SDK
+// Package s3 opens objects of an S3 bucket as objfile Objects with the AWS SDK
 // for Go v2. Open learns the object's size, ETag and, in a versioned bucket,
 // its version id with HeadObject; OpenSized takes them from the first read.
 // Every later read is a ranged GetObject with If-Match on that ETag and, when
@@ -34,7 +34,7 @@ type opener struct {
 	bucket string
 }
 
-func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
+func (o opener) Open(ctx context.Context, name string) (objfile.Object, error) {
 	head, err := o.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &o.bucket, Key: &name})
 	if err != nil {
 		if status(err) == http.StatusNotFound {
@@ -49,7 +49,7 @@ func (o opener) Open(ctx context.Context, name string) (objfile.File, error) {
 	return ranged.New(name, aws.ToInt64(head.ContentLength), pin, o.getter(name)), nil
 }
 
-func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.File, error) {
+func (o opener) OpenSized(_ context.Context, name string, size int64) (objfile.Object, error) {
 	return ranged.New(name, size, ranged.Pin{}, o.getter(name)), nil
 }
 
