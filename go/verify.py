@@ -5,8 +5,8 @@
 
 Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
 versions keys are nondecreasing within a part and strict across parts. Checks
-S3 version nullability and GCS generation ordering, manifest row counts,
-byte-exact bounds and footer stamps. Optional reference-dir compares ordered
+S3 version nullability, per-part GCS schemas, generation ordering, manifest row
+counts, byte-exact bounds and footer stamps. Optional reference-dir compares ordered
 whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
 import base64
@@ -14,7 +14,54 @@ import json
 import os
 import sys
 
-from dataset_schema import schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT, GCS_VERSIONS, VERSION_IDS
+from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
+                            GCS_VERSIONS, VERSION_IDS, GCS_COLUMNS, sql_string)
+
+
+# Physical type, repetition and logical annotation for every declared GCS
+# column. Nullable values still require a column in each part; only the
+# historical current-object time_created column may be absent (upgrade.md).
+GCS_CONTRACT = {
+    name: ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
+    if name in {"key", "etag", "storage_class", "md5", "crc32c", "content_type"}
+    else ("INT64", "OPTIONAL", "Timestamp" if name in {"last_modified", "time_created"} else "Int")
+    for name in GCS_COLUMNS
+}
+
+
+def check_gcs_schema(con, path, sid, check):
+    contract = dict(GCS_CONTRACT)
+    if sid == GCS_VERSIONS:
+        contract["time_deleted"] = ("INT64", "OPTIONAL", "Timestamp")
+    rows = con.execute(f"SELECT name, type, repetition_type, logical_type, converted_type, num_children "
+                       f"FROM parquet_schema({sql_string(path)})").fetchall()[1:]
+    # Inspect top-level fields only: an extra struct's nested field cannot
+    # stand in for a required schema column with the same name.
+    got, descendants = [], 0
+    for row in rows:
+        if descendants:
+            descendants -= 1
+        else:
+            got.append(row[:5])
+        descendants += row[5] or 0
+    valid = True
+    print(f"\nColumn-by-column against {sid}: {path}")
+    for name, (physical, repetition, annotation) in contract.items():
+        matches = [row for row in got if row[0] == name]
+        if not matches and sid == GCS_CURRENT and name == "time_created":
+            continue
+        row = matches[0] if matches else (name, None, None, None, None)
+        logical = str(row[3] or "")
+        good = len(matches) == 1 and row[1:3] == (physical, repetition)
+        if annotation == "String":
+            good = good and logical.startswith("String")
+        elif annotation == "Int":
+            good = good and logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64"
+        else:
+            good = good and logical.startswith("Timestamp") and "isAdjustedToUTC=1" in logical and "MICROS=MicroSeconds" in logical
+        check(good, f"  {name}: {row[1]} {row[2]} {row[3]}")
+        valid = valid and good
+    return valid
 
 
 def main(out, reference=None):
@@ -26,7 +73,8 @@ def main(out, reference=None):
         print(("PASS " if cond else "FAIL ") + msg)
         ok = ok and cond
 
-    m = json.load(open(os.path.join(out, "manifest.json")))
+    with open(os.path.join(out, "manifest.json")) as manifest:
+        m = json.load(manifest)
     check(m.get("format") == "swath-dataset" and m.get("format_version") == 2, "manifest is format 2")
     for k in ("schema_id", "published_at", "source", "scope", "coverage", "parts"):
         check(k in m, f"manifest has {k}")
@@ -54,6 +102,14 @@ def main(out, reference=None):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
+    if sid in (GCS_CURRENT, GCS_VERSIONS):
+        schemas_valid = True
+        for path in paths:
+            schemas_valid = check_gcs_schema(con, path, sid, check) and schemas_valid
+        if not schemas_valid:
+            con.close()
+            print("\nRESULT: FAILED")
+            return 1
     total = con.execute(f"SELECT count(*) FROM read_parquet('{glob}', union_by_name = true)").fetchone()[0]
     check(total == rows, f"DuckDB count {total} == sum of manifest rows {rows}")
 
@@ -91,11 +147,6 @@ def main(out, reference=None):
                 OR (NOT is_delete_marker AND size IS NULL) OR etag LIKE '"%'"""
         bad = con.execute(f"SELECT count(*) FROM read_parquet('{glob}', union_by_name=true) WHERE {invalid}").fetchone()[0]
         check(bad == 0, "every row agrees with the selected S3 schema and nullability")
-
-    if sid == GCS_VERSIONS:
-        have = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name=true)").fetchall())
-        check(have.get("generation") == "BIGINT" and "time_deleted" in have,
-              "generations have exact int64 generation and nullable time_deleted")
 
     print("\nSchema as DuckDB sees it (DESCRIBE):")
     for name, typ, null, *_ in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)").fetchall():
@@ -152,6 +203,7 @@ def main(out, reference=None):
         from bench.diffds import compare
         result = compare(out, reference)
         check(result["identical"], "whole-row ordered sequence and multiset match reference: " + json.dumps(result))
+    con.close()
     print("\nRESULT:", "OK" if ok else "FAILED")
     return 0 if ok else 1
 

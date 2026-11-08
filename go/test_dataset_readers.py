@@ -91,5 +91,65 @@ class DuckDBComparison(unittest.TestCase):
                         self.assertGreater(result["sequence_differences"][0], 0)
 
 
+@unittest.skipUnless(importlib.util.find_spec("duckdb"), "DuckDB is not installed")
+class VerifierSchema(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        import subprocess
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.base = Path(cls.temp.name)
+        env = dict(os.environ, SWATH_VERIFIER_FIXTURES=str(cls.base), GOTOOLCHAIN="auto")
+        subprocess.run(["go", "test", "./internal/listing", "-run", "^TestVerifierFixtures$", "-count=1"],
+                       cwd=Path(__file__).parent, env=env, check=True, text=True)
+
+    def verify(self, path):
+        import contextlib
+        import io
+        from verify import main
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = main(str(path))
+        return status, output.getvalue()
+
+    def test_verifier_rejects_missing_generation_column(self):
+        import subprocess
+        import sys
+        proc = subprocess.run([sys.executable, str(Path(__file__).parent / "verify.py"),
+                               str(self.base / "generations/missing_size")], text=True, capture_output=True)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("FAIL   size:", proc.stdout)
+        self.assertIn("RESULT: FAILED", proc.stdout)
+
+    def test_complete_gcs_contract_in_every_part(self):
+        for schema in ("current", "generations"):
+            for dataset in sorted((self.base / schema).iterdir()):
+                with self.subTest(schema=schema, mutation=dataset.name):
+                    status, output = self.verify(dataset)
+                    allowed = dataset.name == "valid" or (schema == "current" and dataset.name == "missing_time_created")
+                    self.assertEqual(status == 0, allowed, output)
+                    if not allowed:
+                        column = dataset.name.split("_", 1)[1].removeprefix("type_")
+                        self.assertIn("FAIL   " + column + ":", output)
+
+    def test_time_deleted_requires_utc_microseconds(self):
+        import duckdb
+        from verify import check_gcs_schema
+        from dataset_schema import GCS_VERSIONS
+        source = self.base / "generations/valid/data/part-00000.parquet"
+        with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
+            for typ in ("TIMESTAMP", "TIMESTAMP_MS", "TIMESTAMP_NS", "TIMESTAMPTZ"):
+                with self.subTest(type=typ):
+                    part = Path(td) / (typ + ".parquet")
+                    con.execute(f"COPY (SELECT * REPLACE (CAST(time_deleted AS {typ}) AS time_deleted) "
+                                f"FROM read_parquet({sql_string(source)}) UNION ALL "
+                                f"SELECT * REPLACE (CAST(NULL AS {typ}) AS time_deleted) "
+                                f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
+                    verdicts = {}
+                    check_gcs_schema(con, part, GCS_VERSIONS, lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
+                    self.assertEqual(verdicts["time_deleted"], typ == "TIMESTAMPTZ")
+
+
 if __name__ == "__main__":
     unittest.main()
