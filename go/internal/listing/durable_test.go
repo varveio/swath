@@ -358,9 +358,33 @@ func damagedSnapshot(t *testing.T, out string) {
 // retirements durable), the second is at the first recovery replay. Then
 // a resume completes: the part journal is never refused, and the dataset
 // is the uninterrupted one.
+//
+// The replay schedules need a snapshot whose resume replays two captured
+// frames or more. How many certificates the fixture's crash leaves above
+// K, and how many survive the damage, depends on how far the ranges ahead
+// of the frontier got before the first retirement: on a loaded runner
+// none, or one single-page certificate, so the replay points did not
+// exist and the run completed without them (#292). The snapshot is
+// therefore resumed once, uninterrupted, on a copy first (the product
+// contract: the dataset is the uninterrupted one, whatever was replayed),
+// counting the captured frames replayed; a snapshot with fewer than two
+// is crashed again, a bounded number of times, and never skipped.
 func TestDurableRepeatedRecovery(t *testing.T) {
 	url, _, ref, out := durableFixture(t)
-	damagedSnapshot(t, out)
+	const tries = 6
+	for try := 1; ; try++ {
+		damagedSnapshot(t, out)
+		frames, r := replayedFrames(t, url, ref, out)
+		t.Logf("snapshot %d: its resume replays %d captured frames: %+v", try, frames, r)
+		if frames >= 2 {
+			break
+		}
+		if try == tries {
+			t.Fatalf("%d snapshots, none replaying two captured frames: the replay schedules cannot be reached", tries)
+		}
+		out = filepath.Join(t.TempDir(), "ds")
+		crashDurable(t, durableConfig(url, out, false), "spill-unlink", 1)
+	}
 	ledger := func(dir string) string { return filepath.Join(dir, order.DurableDir, "ledger") }
 	for _, sc := range []struct {
 		first, second string
@@ -409,10 +433,14 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 					}
 					return nil
 				})
-				_, err := Run(context.Background(), durableConfig(url, dir, true))
+				sum, err := Run(context.Background(), durableConfig(url, dir, true))
 				restore()
 				if seen.Load() < nth || !errors.Is(err, faults.ErrCrash) {
-					t.Fatalf("interruption %d at %s#%d not reached (%d seen): %v", i+1, point, nth, seen.Load(), err)
+					var r any
+					if sum.Resources.Spill.Durable != nil {
+						r = sum.Resources.Spill.Durable.Resume
+					}
+					t.Fatalf("interruption %d at %s#%d not reached (%d seen): %v; resume: %+v", i+1, point, nth, seen.Load(), err, r)
 				}
 				if errors.Is(err, journal.ErrCorrupt) {
 					t.Fatalf("%s: the part journal refused: %v", point, err)
@@ -444,6 +472,35 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 			sameDataset(t, name, ref, dir)
 		})
 	}
+}
+
+// replayedFrames resumes a copy of the snapshot out, uninterrupted: the
+// dataset must be the uninterrupted one (ref); it returns the captured
+// frames the resume replayed and its durable account.
+func replayedFrames(t *testing.T, url, ref, out string) (int64, any) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "probe")
+	if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+		t.Fatal(err)
+	}
+	var frames atomic.Int64
+	restore := faults.Set(func(p string) error {
+		if p == "spill-replay-frame" {
+			frames.Add(1)
+		}
+		return nil
+	})
+	sum, err := Run(context.Background(), durableConfig(url, dir, true))
+	restore()
+	if err != nil {
+		t.Fatalf("the damaged snapshot's resume: %v", err)
+	}
+	sameDataset(t, "damaged snapshot", ref, dir)
+	var r any
+	if sum.Resources.Spill.Durable != nil {
+		r = sum.Resources.Spill.Durable.Resume
+	}
+	return frames.Load(), r
 }
 
 // TestDurableNewAncestorsLost: a power loss before the spill directories'
