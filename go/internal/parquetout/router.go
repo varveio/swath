@@ -302,6 +302,10 @@ func (r *Router[P]) Admit() int {
 // Encoders is the encoders admitted now.
 func (r *Router[P]) Encoders() int { return int(r.encoders.Load()) }
 
+// CodecStates is the zstd states the router's codec has made so far: at
+// most the encoders admitted (tests: every admitted state warmed).
+func (r *Router[P]) CodecStates() int { return r.codec.states() }
+
 // RowCuts is the number of parts MaxRows closed (before their size target).
 func (r *Router[P]) RowCuts() int64 { return r.rowCuts.Load() }
 

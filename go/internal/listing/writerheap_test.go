@@ -40,6 +40,7 @@ func TestWriterAdmissionCoversHeap(t *testing.T) {
 	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24)
 	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24)
 	writerHeap(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24)
+	writerHeapRetained(t, &localfs.Schema, fsBinaryRow(4096, 4096), 4, 6, 24)
 }
 
 // s3Row makes S3 rows with random keys of n bytes.
@@ -110,7 +111,7 @@ func gcHeap() int64 {
 // heap after every page within the writers' admission.
 func writerHeap[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) {
 	t.Helper()
-	peak := writerPeak(t, s, mk, writers, maxEncoders, pages)
+	peak := writerPeak(t, s, mk, writers, maxEncoders, pages, false)
 	admitted := int64(writers) * parquetout.EncoderBytes(s)
 	t.Logf("%s: %d writers, %d pages each, held %.1f MiB at most, admitted %.1f MiB", s.ID, writers, pages, float64(peak)/(1<<20), float64(admitted)/(1<<20))
 	if peak > admitted {
@@ -118,17 +119,38 @@ func writerHeap[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand
 	}
 }
 
-func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) int64 {
+// writerHeapRetained is writerHeap with every row made before the writers
+// start and kept until they finish (the input in the baseline, excluded
+// from the peak), as a listing keeps its rows: the case that measured the
+// narrowest margin, 216 to 218 MiB of 244 for four local writers (sol
+// review 5). It also requires every admitted codec state made, so each
+// has compressed pages of several zstd blocks.
+func writerHeapRetained[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int) {
+	t.Helper()
+	peak := writerPeak(t, s, mk, writers, maxEncoders, pages, true)
+	admitted := int64(writers) * parquetout.EncoderBytes(s)
+	t.Logf("%s, input retained: %d writers, %d pages each, held %.1f MiB at most, admitted %.1f MiB", s.ID, writers, pages, float64(peak)/(1<<20), float64(admitted)/(1<<20))
+	if peak > admitted {
+		t.Fatalf("%s, input retained: %d writers held %d bytes, admitted %d", s.ID, writers, peak, admitted)
+	}
+}
+
+func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand.Rand) schema.Row[P], writers, maxEncoders, pages int, retain bool) int64 {
 	const page = 1024
 	r0 := rand.New(rand.NewPCG(1, 2))
-	// Rows are made a page at a time, just before they are written: the
-	// heap holds the writers' working sets, not the input.
+	// Rows are made a page at a time, just before they are written (the
+	// heap holds the writers' working sets, not the input), or, retain,
+	// all at first, in the baseline.
 	rows := func(from, n int) []schema.Row[P] {
 		out := make([]schema.Row[P], n)
 		for i := range out {
 			out[i] = mk(from+i, r0)
 		}
 		return out
+	}
+	if retain {
+		all := rows(0, writers*pages*page+1)
+		rows = func(from, n int) []schema.Row[P] { return all[from : from+n] }
 	}
 	var queued atomic.Int64
 	r, err := parquetout.NewRouter(parquetout.Options{Out: t.TempDir(), PartSize: 1 << 40, Encoders: writers, MaxEncoders: maxEncoders,
@@ -162,6 +184,9 @@ func writerPeak[P any](t *testing.T, s *schema.Schema[P], mk func(i int, r *rand
 			time.Sleep(time.Millisecond)
 		}
 		peak = max(peak, gcHeap()-base)
+	}
+	if retain && r.CodecStates() != writers {
+		t.Fatalf("%d codec states made for %d writers: not every admitted state warmed", r.CodecStates(), writers)
 	}
 	return peak
 }
