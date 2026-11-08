@@ -74,12 +74,14 @@ data request starts inside a replayed certificate ([testing.md](../testing.md#du
 The results, and the full-scale Batch runs (64 lists of 20 to 150 million keys, killed at 40 % and 70 %), are
 in [measurements.md](../measurements.md#durable-spill).
 
-**Priors and certificates.** This branch has no `--seed-from` (a prior dataset's listing used as seed
-tiles); the merge with the branch that adds it must keep these rules. A prior, like `--seed`, only shapes
-the tiling of the live gaps: its tiles are clipped around the accepted certificates (no data request starts
-inside a certificate's `(cs, ce]`, as `keyrange.aroundReuse` does for the seed), and it confers no
-coverage: no key range is skipped or certified because a prior listed it. Coverage above K comes only from
-certificates this run's ledger and files prove, and a certificate never depends on a prior.
+**Priors and certificates.** A prior (`--seed-from`: a previous dataset's or a cut file's keys used as seed
+tiles), like `--seed`, only shapes the tiling of the live gaps. On a resume with reused certificates the
+prior's tiles of `(K, ⊤]` are cut around the certificates (`keyrange.aroundReuse`, as for the seed and the
+plain resume tiling). A certificate becomes a reused range that the order stage replays, and no data request
+starts inside its `[max(cs, K), ce)`. A prior confers no coverage: no key range is skipped or certified because
+a prior listed it. Coverage above K comes only from certificates that this run's ledger and files prove, and
+a certificate never depends on a prior. The tests are `keyrange` `TestPriorTilesOnlyGaps` (prior cuts inside
+and around spans; without the cut the resume listed every key) and the campaign's `seed-from` arm.
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
 target or, on a slow frontier, once it has been open for the part interval (default 30 s,

@@ -227,6 +227,7 @@ type campaignArm struct {
 	damage     func(t *testing.T, out string)
 	resumeKill string // a first resume killed here (mid recovery replay)
 	reuse      bool   // the kill falls after seals: the resume must replay certificates
+	seedFrom   bool   // the resumes run with --seed-from the reference dataset (a prior)
 }
 
 var campaignArms = []campaignArm{
@@ -243,6 +244,10 @@ var campaignArms = []campaignArm{
 	{name: "lost-ledger-tail", kill: "spill-ledger-sync:2", damage: tearLedgerTail},
 	{name: "keys-40", keys: 0.4, reuse: true},
 	{name: "keys-70", keys: 0.7, reuse: true},
+	// A prior (--seed-from) on the resume only tiles the live gaps around
+	// the certificates: it never confers coverage, so the reuse and
+	// request checks hold as without it.
+	{name: "seed-from", keys: 0.5, reuse: true, seedFrom: true},
 }
 
 // campaignRunner runs the binary for the campaign.
@@ -420,7 +425,11 @@ func campaign(t *testing.T, fx campaignFixture) {
 				if arm.damage != nil {
 					arm.damage(t, out)
 				}
-				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json", out)
+				resumeArgs := append(append([]string{"resume"}, mode.runtime...), "--report-format", "json")
+				if arm.seedFrom {
+					resumeArgs = append(resumeArgs, "--seed-from", ref)
+				}
+				resumeArgs = append(resumeArgs, out)
 				inside := 0
 				logged := func(what, killAt string) (*campaignReport, []ledgerCert, string, []string) {
 					r, certs, k, starts, n := px.loggedResume(t, rn, what, out, resumeArgs, killAt)
@@ -457,6 +466,9 @@ func campaign(t *testing.T, fx campaignFixture) {
 				req := r.value("requests")
 				if req > 0 && len(starts) == 0 {
 					t.Errorf("the resume made %d requests and the log holds no data request: the reuse check saw nothing", req)
+				}
+				if arm.seedFrom && r.value("seed.from.tiles") == 0 {
+					t.Errorf("the resume did not start from the prior: seed.from.tiles is 0")
 				}
 				elig := eligibleCerts(certs, k)
 				if arm.reuse && (elig == 0 || accepted == 0 || replayed == 0) {

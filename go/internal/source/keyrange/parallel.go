@@ -300,8 +300,10 @@ func (p *Engine[P]) resumeKey() string {
 // reused certificates' spans: a span's part above K becomes one reused
 // range, at its position, and each tile keeps only the gaps, its pieces
 // bounded by the spans' edges (a piece starting at the tile's start keeps
-// its bounds, the resume tile's safe start below K included). Spans are
-// ascending and disjoint, each ending above K. Without spans, tiles.
+// its bounds, the resume tile's safe start below K included; a prior
+// tile's pieces keep its tile, so their keys count against the prior).
+// Spans are ascending and disjoint, each ending above K. Without spans,
+// tiles.
 func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 	if len(p.reuse) == 0 {
 		return tiles
@@ -313,7 +315,7 @@ func (p *Engine[P]) aroundReuse(tiles []Range) []Range {
 		if !open && hi <= lo {
 			return
 		}
-		g := Range{lo: lo, hi: hi, open: open, id: p.ids.Add(1), born: t.born, gapEnd: gapEnd}
+		g := Range{lo: lo, hi: hi, open: open, id: p.ids.Add(1), born: t.born, gapEnd: gapEnd, tile: t.tile}
 		if lo == max(t.lo, t.after) {
 			g.lo, g.after = t.lo, t.after
 		}

@@ -289,7 +289,9 @@ or with SIGKILL once a given share of the keys has been served:
   frame);
 - unsynced state lost, either unrecorded durable files cut short after a kill at a seal, or the ledger's
   last append torn after a kill at its sync;
-- 40 % and 70 % of the keys served.
+- 40 % and 70 % of the keys served;
+- 50 % of the keys served, then resumed with `--seed-from` the reference dataset (the `seed-from` arm). The
+  prior must engage, and it must leave the reuse and request checks holding as without it.
 
 The arm then resumes. Each schedule runs with `--part-interval=0` and again with a 1 s interval. A kill counts
 only as the fault that was asked for: a hook kill must leave its marker on stderr, and a key-count kill must
@@ -304,7 +306,7 @@ the following:
   durable prefix when that resume starts. Every resume is checked: the killed first resume of the mid-replay
   arm, and each try and the final resume of the suspect-composition arm. A resume that made requests must
   have logged some.
-- The reuse arms are the unlink, mid-replay, 40 % and 70 % kills, all of which fall after seals. Each needs
+- The reuse arms are the unlink, mid-replay, 40 %, 70 % and seed-from kills, all of which fall after seals. Each needs
   certificates above K, and the resume must accept and replay some. The kills before the first seal are not
   asked to reuse.
 
@@ -370,6 +372,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 | versions | `listing` `TestDurableVersions` |
 | exclusion | `listing` `TestDurableOverwrite`; a second process: the output lock's tests, not durable-specific |
 | changed source | `listing` `TestDurableChangedSource` |
+| a prior (`--seed-from`) on a resume with certificates (not a §6 row; the contract's priors rule) | `keyrange` `TestPriorTilesOnlyGaps`; campaign `seed-from` |
 | time cuts on (suspect part over two replay files and a gap) | campaign `suspect-composition` (3 s interval) |
 | reduced cap, ENOSPC | `order` `TestDurableReducedCap`; `listing` `TestDurableSealENOSPC`; ENOSPC on a captured frame: not covered |
 | eviction | `order` `TestDurableEviction`, `TestDurableLedgerFailureEvicts` |
