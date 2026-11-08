@@ -215,7 +215,7 @@ measured value, with the measurement beside it in the test, so it fails on an or
 and never on runner variance; the shape suite's bounds follow this rule. A heap bound that `-race` distorts
 runs without it, behind `SWATH_HEAP_GATES` in `go-nonrace`; lighter heap checks (`listing` `memory_test.go`,
 the default arm of `TestWriterAdmissionCoversHeap`) run in every tier. A test that flakes is fixed in the test: a barrier or a
-deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #309, #313, #319, #321, #325), not a retry or a silently
+deterministic assertion replaces the sleep, the spin or the ratio (#276, #291, #296, #300, #306, #309, #313, #319, #321, #325, #326), not a retry or a silently
 widened bound. The test runs of `go-race`, `go-nonrace`, `go-xos`, `go-race-nightly` and `go-stress.yml` pass an
 explicit `-timeout`, so a hang ends in a goroutine dump; `go-fixtures` and the shard check's `go test -list` do not.
 
