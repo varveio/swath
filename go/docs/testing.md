@@ -458,7 +458,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 |---|---|
 | kill matrix (§3.4-5, §3.8, after a part record, mid recovery replay) | campaign (all four fixtures); `listing` `TestDurableKillMatrix` (1st and 4th occurrences); `cmd/swath` `TestSIGKILLDurableSpill` (its recovery arms start from an unpublished prefix, K at ⊥, so they do not exercise recovery with K advanced; the campaign's recovery arms do) |
 | ledger damage (flipped byte, foreign header) | `order` `TestDurableLedgerPrefix` |
-| Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` |
+| Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` (its damaged snapshot is first resumed uninterrupted on a copy, the dataset the uninterrupted one, and must replay two captured frames or more; a snapshot that replays fewer is crashed again, at most six times) |
 | Sol 2 (shutdown order) | `listing` `TestDurableShutdownOrder` |
 | Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts`; `listing` `TestDurableLedgerTornWrite` |
 | replaced output | `order` `TestDurableReplacedOutput`, `TestDurableReplacedMidCycle` |
