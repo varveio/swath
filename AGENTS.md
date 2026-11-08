@@ -86,10 +86,12 @@ The contributor reference is
   statement of the invariants, ordering, Parquet output, providers, testing, CLI); a change
   to `go/` is not done until its page there is current. Measurements are recorded in
   [`go/docs/measurements.md`](go/docs/measurements.md).
-- Test it with `cd go && go vet ./... && go test -race ./...`. Static builds use
-  `CGO_ENABLED=0`.
-- A commit that touches `go/` needs the `go` CI job green (vet, race tests, cross-builds
-  for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64).
+- The gate is `cd go && go vet ./... && go test -race ./...`; CI runs it sharded. Locally
+  run the tests you change, not the whole suite; repeats go through `go-stress.yml`. Static
+  builds use `CGO_ENABLED=0`.
+- A commit that touches `go/` needs the Go jobs of `ci.yml` green (`go-lint`, the `go-race`
+  shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them).
+  [`go/docs/testing.md`](go/docs/testing.md) says what each job and tier runs and when.
 
 ## Repository discipline
 

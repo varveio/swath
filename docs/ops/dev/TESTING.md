@@ -4,7 +4,9 @@ This is the **operational** view of swath's test suite: how it is partitioned fo
 speed and the hard rule that keeps it from "going insane." The contracts the suite
 tests against (the invariants tagged `I1`–`I12` and friends) are authoritative in
 [`contracts.md`](../../internals/contracts.md); this file only covers tiering,
-speed, and the `MockPageFetcher`-driven no-mass-populate discipline.
+speed, and the `MockPageFetcher`-driven no-mass-populate discipline. The Go port's
+tests, and the summary of every CI job across both languages, are in
+[`go/docs/testing.md`](../../../go/docs/testing.md).
 
 ## The golden rule: never mass-populate a real store
 Listing is cheap; **populating** a store object-by-object is not — 50M `PutObject`
@@ -18,18 +20,18 @@ LocalStack/MinIO/AWS one object at a time. Instead:
 | **"Millions of objects" realism** | **swath-replay** (`:swath-replay`) — serves one captured fixture through S3 ListObjectsV2 and optional native GCS JSON/Azure Blob XML listing subsets. Native profiles remain provisional pending live-provider evidence; see [replay toolkit](../../swath-replay.md). | fixture-backed, cheap |
 | **Simulator policy/model checks** | `:swath-sim` deterministic defaults (`SimKernelTest`, `PolicyInvariantsTest`), store/pager differential checks (`SimStoreDifferentialTest`, `SimListingViewProtocolTest`), and opt-in `@Tag("perf")` corpus/real-listing runs (`CorpusSweepRunTest`, `RealListingRunTest`) | in-memory or local fixture; no object-store population |
 | **Real-SDK integration** (pagination, continuation tokens, real byte order) | LocalStack/MinIO with **modest** counts (~1–2k zero-byte objects = a few pages) | seconds |
-| **Real-world ground truth** | the public-bucket `aws s3api --no-sign-request` differential at the **gates** | none (read-only) |
+| **Real-world ground truth** | the public-bucket `aws s3api --no-sign-request` differential, run by hand (no workflow runs it; `nightly.yml` carries it as a TODO) | none (read-only) |
 
 Zero-byte bodies everywhere — listing only reads keys + metadata (size/etag/mtime),
 never object content. If a real-store mass-populate is ever truly unavoidable, it must
 be: opt-in (`@Tag("perf")`), **capped** (small default, env override for the big run),
 parallel/batched, and the populated volume **snapshotted and reused** — not re-seeded.
 
-## Speed tiers (how the default suite stays ~1 min)
+## Speed tiers
 - **Default** `./gradlew build` / `test` — unit + property (jqwik) + concurrency +
   the LocalStack integration ITs + a fast `MockPageFetcher` work-stealing smoke
   (`WorkStealingScanSmokeTest`, ~2k keys). Fast. **Excludes the `perf` and `deep` tiers**
-  (see below) so it stays the ~1-min per-commit gate.
+  (see below) so it stays the per-commit gate.
   `:swath-sim`'s deterministic kernel, policy, model, and fixture-differential tests run here too;
   its corpus sweeps, throughput benches, and real-listing fixtures are opt-in `@Tag("perf")` tests.
 - **`-Pperf`** `./gradlew test -Pperf` — adds the gated `@Tag("perf")` tier. This is
@@ -105,6 +107,29 @@ build-independent step, **Instrumentation-drift guard**, before the Gradle build
 table in `docs/internals/metrics-internals.md`, or if that table carries a ghost row no
 code emits.
 
+## When CI runs each tier
+
+A **Java change** is any changed path outside `go/` and `Dockerfile.replay-go*` (`ci.yml` `changes`), so a
+documentation or script change counts; a pull request that changes only the Go port runs these jobs with
+their steps skipped. A manual dispatch of `ci.yml` sets both change flags and runs every job a dispatch is
+eligible for (`docker-check` is pull-request-only).
+
+| Tier | Command | Pull request push | Merge to `main` | Nightly (07:00 UTC) | Release tag `v*` |
+| --- | --- | --- | --- | --- | --- |
+| Fast, drift guard, license gate | `./gradlew build -PnoIntegration ...`, `check-instrumentation-drift.sh`, `checkLicense` | `ci.yml` `fast-tests` (Java change) | `ci.yml` `fast-tests` (Java change) | — | `release.yml` `fast-tests` |
+| Integration | `./gradlew test -PonlyIntegration` | `ci.yml` `integration-tests` (Java change) | `ci.yml` `integration-tests` (Java change) | — | `release.yml` `integration-tests` |
+| Deep and the `kill -9` ITs | `./gradlew test -Pdeep -PtestMaxParallelForks=1`; `HardCrashSigkillResume{Process,Matrix}IT` with `-Dswath.it.sigkill=true` | — | `ci.yml` `deep-tests` (Java change) | `nightly.yml` `deep-and-perf` | `release.yml` `deep-tests` |
+| Perf | `./gradlew test -PonlyPerf` | — | — | `nightly.yml` `deep-and-perf` | — |
+| Image build check | multi-arch `docker build`, `--help` smoke | `ci.yml` `docker-check` (Java change) | — | — | — |
+| Image smoke and publish | `scripts/ci/smoke-container.sh` (a public bucket, anonymous), `smoke-replay-container.sh` | — | `ci.yml` `docker-publish` (Java change) | — | `release.yml` `publish` (public repository and `PUBLIC_RELEASE_ENABLED`) |
+| OSV scan | `scripts/ci/osv-scan.sh` | — | — | `nightly.yml` `osv-scan` | — |
+
+All run on `ubuntu-latest`. `ci-gate`, the one required check, needs `fast-tests`, `integration-tests` and
+`docker-check`; `deep-tests` gates `docker-publish` instead. The nightly jobs run with no path filter;
+`gh workflow run nightly.yml -f jobs=deep-and-perf` (or `osv-scan`) runs one on demand, and the Go
+`go-race-nightly` job runs with every dispatch. In `ci.yml` and `nightly.yml`, `report-test-counts.sh` after each deep, `kill -9` and perf step fails
+the job when the tier executed no test; `release.yml` `deep-tests` has no such check.
+
 ### Before pushing an engine change
 
 `./gradlew build -PnoIntegration` is **not** sufficient — two CI gates live outside it, and each
@@ -129,7 +154,7 @@ or moves a seed cut count should assume the default build cannot see it.
 ## Finalization pipeline harness
 
 `ParallelMergeBenchmark` measures the production finalization pipeline over page-run staging;
-every result is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never
+every result is labeled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never
 evidence for live `swath list --sort` listing throughput.
 
 By default it generates and validates a non-empty corpus. To use external staging, create it through
