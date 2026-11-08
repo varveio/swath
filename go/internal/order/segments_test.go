@@ -10,7 +10,9 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +43,7 @@ type partSink struct {
 	full      bool
 	segmented bool
 	rowCuts   int
+	keyBytes  int64 // the keys' bytes the parts keep (mu)
 }
 
 type fakePart struct {
@@ -68,7 +71,8 @@ func (s *partSink) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 				s.parts = append(s.parts, s.cur)
 			}
 			p := s.cur
-			p.keys = append(p.keys, seg[i].Key)
+			p.keys = append(p.keys, strings.Clone(seg[i].Key)) // not the rows' storage
+			s.keyBytes += int64(len(seg[i].Key))
 			p.logical += testSchema.LogicalBytes(&seg[i])
 			if p.logical >= s.limit {
 				s.full = true
@@ -148,7 +152,8 @@ func (f *fakeSeg) Write(_ context.Context, segs [][]schema.Row[tp]) error {
 	defer f.s.mu.Unlock()
 	for _, seg := range segs {
 		for i := range seg {
-			f.p.keys = append(f.p.keys, seg[i].Key)
+			f.p.keys = append(f.p.keys, strings.Clone(seg[i].Key))
+			f.s.keyBytes += int64(len(seg[i].Key))
 		}
 	}
 	return nil
@@ -502,6 +507,8 @@ type queuedSink struct {
 	*partSink
 	shared *Shared
 	stall  time.Duration
+	hold   chan struct{} // if set, every encoder waits on it before its first batch
+	queued atomic.Int64  // batches written to segments
 	wg     sync.WaitGroup
 	peak   atomic.Int64
 	held   *queuedSeg
@@ -523,6 +530,9 @@ func (s *queuedSink) OpenSegment(ctx context.Context, cont bool) (SegmentSink[tp
 	// segment continues is held to as many by its tokens).
 	g := &queuedSeg{fakeSeg: out.(*fakeSeg), q: s, c: make(chan [][]schema.Row[tp], 2), drained: make(chan struct{})}
 	s.wg.Go(func() {
+		if s.hold != nil {
+			<-s.hold
+		}
 		for b := range g.c {
 			time.Sleep(s.stall)
 			_ = g.fakeSeg.Write(ctx, b)
@@ -543,6 +553,7 @@ func (g *queuedSeg) Write(ctx context.Context, b [][]schema.Row[tp]) error {
 		n += testSchema.RowsBytes(seg)
 	}
 	g.q.shared.Add(n)
+	g.q.queued.Add(1)
 	for v := g.q.shared.Load(); v > g.q.peak.Load(); v = g.q.shared.Load() {
 		g.q.peak.Store(v)
 	}
@@ -660,4 +671,67 @@ func TestRunBytes(t *testing.T) {
 			t.Errorf("runBytes(%d) = %d, want %d", tc.rows, got, tc.want)
 		}
 	}
+}
+
+// TestSegmentsReleaseSpanStorage: a segment that hands on a span of a unit
+// (a spilled frame decoded whole, or a chunk of rows in memory) copies the
+// span, and the last segment to read a unit drops the stage's reference to
+// it, so what the encoders' queues hold is what they count. Long keys in
+// frames and chunks of 1,000 rows, parts of about 28 (every frame split
+// into many spans), eight workers, rows in memory and spilled, every
+// encoder held: the live heap, less the keys the fake parts keep, stays
+// within two budgets (the tree's and the segments'): 1.6 to 2.6 MiB here,
+// up to 9.5 before. Before (sol review 3, P2), each queued one-row span kept its
+// whole 1,024-row frame or chunk alive: megabytes the queues did not count.
+func TestSegmentsReleaseSpanStorage(t *testing.T) {
+	withProcs(t, 9)
+	anyShare(t)
+	countRows = false
+	defer func() { countRows = true }()
+	const budget = 2 << 20
+	f := &frontier{slowPages: 1, siblings: 40, sibPages: 1, rows: 1000, long: 1}
+	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
+	f.left.Store(int64(f.siblings))
+	shared := &Shared{}
+	hold := make(chan struct{})
+	s := &queuedSink{partSink: &partSink{limit: 30_000, encoders: 8, queue: 2}, shared: shared, hold: hold}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	runtime.GC()
+	base := gcLive()
+	var held int64
+	go func() {
+		for s.queued.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond) // the workers fill their queues and stop
+		s.mu.Lock()
+		kept := s.keyBytes // what the fake parts keep of what reached them
+		s.mu.Unlock()
+		held = gcLive() - base - kept
+		close(hold)
+	}()
+	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	if got := slices.Concat(s.boundaries()...); !slices.Equal(got, f.keys()) {
+		t.Fatal("rows differ")
+	}
+	t.Logf("segments %+v; %d spilled; live heap %.1f MiB while the encoders were held", st.Segments, st.SpillRows, float64(held)/(1<<20))
+	if st.Segments.Reason != SegmentEngaged || st.SpillRows == 0 {
+		t.Fatalf("segments %+v, %d spilled", st.Segments, st.SpillRows)
+	}
+	if held > 2*budget {
+		t.Fatalf("%d bytes live while the encoders were held, budget %d (the tree's and the segments')", held, budget)
+	}
+}
+
+// gcLive is the live heap after a collection.
+func gcLive() int64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return int64(m.HeapAlloc)
 }

@@ -153,6 +153,9 @@ type segState[P any] struct {
 	// reserved and not yet written (mu); freed: the tree's bytes the
 	// workers released, written rows held in memory (mu).
 	held, freed int64
+	// uses counts, per unit, the segments that have yet to read it: the
+	// last drops the stage's reference to its rows (segment).
+	uses []atomic.Int32
 }
 
 // unit is a run of rows still to hand on: an in-memory item's rows, or a
@@ -224,7 +227,7 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		return false, err
 	}
 	t := time.Now()
-	units, files, released, releasedMeta, nodes, markers := o.flatten()
+	units, files, released, releasedMeta, nodes, markers, mem := o.flatten()
 	// What the segments may hold is the budget beside the tree: the tree
 	// holds about the budget once listing has ended (spill keeps it
 	// there), and the serial drain adds its frames and its part's queue on
@@ -292,6 +295,17 @@ func (o *run[R, P]) trySegments() (bool, error) {
 		by = WorkersBySegments
 	}
 	o.seg.st.WorkersBy, o.seg.st.PerWorker, o.seg.st.Free = by, per, free
+	// The units are the rows' only reference now: the tree's items drop
+	// theirs, and the last segment to read a unit drops it (segment).
+	for _, it := range mem {
+		it.rows = nil
+	}
+	o.seg.uses = make([]atomic.Int32, len(units))
+	for _, sg := range segs {
+		for ui := sg.u0; ui < sg.u1 || (ui == sg.u1 && sg.r1 > 0); ui++ {
+			o.seg.uses[ui].Add(1)
+		}
+	}
 	if ra := o.ra; ra != nil {
 		// The read-ahead stops, and its reads in flight end (their
 		// descriptors and decoded rows) before the segments read.
@@ -444,8 +458,9 @@ var hookSegmenter func(mu *sync.Mutex)
 // flatten lists the rows still to hand on, in drain order, from the
 // drainer's walk (mu held; every node is done), with the rows each spill
 // file must account for at its trailer, the budget units the items hold,
-// and the nodes and markers they release.
-func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, released, meta, nodes, markers int64) {
+// the nodes and markers they release, and the items holding rows in memory
+// (whose rows the segments, once committed, own instead).
+func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, released, meta, nodes, markers int64, mem []*item[R, P]) {
 	files = map[*spillFile]int64{}
 	path := append([]drainFrame[R, P](nil), o.path...)
 	for len(path) > 0 {
@@ -471,6 +486,7 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 			files[it.spill] += it.at.rows
 			units = append(units, unit[P]{f: it.spill, at: it.at, n: it.at.rows, logical: it.at.logical, units: it.at.units})
 		case len(it.rows) > 0:
+			mem = append(mem, &f.n.items[f.i-1])
 			var l int64
 			for i := range it.rows {
 				l += o.schema.LogicalBytes(&it.rows[i])
@@ -478,7 +494,7 @@ func (o *run[R, P]) flatten() (units []unit[P], files map[*spillFile]int64, rele
 			units = append(units, unit[P]{rows: it.rows, n: int64(len(it.rows)), logical: l, units: it.units})
 		}
 	}
-	return units, files, released, meta, nodes, markers
+	return units, files, released, meta, nodes, markers, mem
 }
 
 // rowsOf is a unit's rows: in memory, or its frame read and decoded on its
@@ -703,10 +719,25 @@ func (o *run[R, P]) segment(units []unit[P], s segment, first bool, out SegmentS
 		if ui == s.u1 {
 			b = s.r1
 		}
-		if u.f == nil && b == len(rs) {
-			tree += u.units // its last rows: the tree holds it no longer once written
-		}
+		whole := a == 0 && b == len(rs)
 		rs = rs[a:b]
+		if !whole && len(rs) > 0 {
+			// A span of the unit: copied, so the batch does not keep the
+			// whole frame (or the whole in-memory chunk) alive while its
+			// queue counts the span alone.
+			rs = o.schema.Detach(rs)
+		}
+		if o.seg.uses[ui].Add(-1) == 0 && u.f == nil {
+			// The last segment to read the unit: its rows are referenced
+			// only by this batch now (whole: their charge moves to the
+			// queue as it is written), or by nothing (spans were copied).
+			u.rows = nil
+			if whole {
+				tree += u.units
+			} else {
+				o.segRelease(0, u.units)
+			}
+		}
 		if len(rs) == 0 {
 			continue
 		}
