@@ -168,9 +168,12 @@ type Router[P any] struct {
 	rowCuts  atomic.Int64 // parts closed by MaxRows
 	// Group mode: the last routed key (owned), and the rows a pending cut
 	// let into its part because they continued that key's group.
-	last     string
-	hasLast  bool
-	deferred atomic.Int64
+	last    string
+	hasLast bool
+	// byRows, byTime: the pending cut (full) was asked by MaxRows, or by
+	// the interval in group mode.
+	byRows, byTime bool
+	deferred       atomic.Int64
 }
 
 // ErrAmbiguousTail: a reproduced claimed part reached its recorded row
@@ -239,12 +242,12 @@ func (r *Router[P]) tick(stop <-chan struct{}) {
 		}
 		r.mu.Lock()
 		if !r.closed && r.cur != nil && !r.cur.pinned && !r.full && time.Since(r.cur.opened) >= r.opt.Interval && r.firstErr() == nil {
-			r.timeCuts.Add(1)
 			if r.schema.Info.Groups {
 				// The last routed key's group may continue in the next
 				// Write: the cut waits for a greater key (or Close).
-				r.full = true
+				r.full, r.byTime = true, true
 			} else {
+				r.timeCuts.Add(1)
 				_ = r.cut(r.tickCtx, false) // a failure is the encoder's, and reported by it
 			}
 		}
@@ -346,8 +349,7 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
 			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
-				r.full = true
-				r.rowCuts.Add(1)
+				r.full, r.byRows = true, true
 			}
 		}
 		if start < len(seg) {
@@ -576,7 +578,17 @@ func (r *Router[P]) cut(ctx context.Context, final bool) error {
 	p := r.cur
 	p.final = final
 	close(p.segs)
-	r.cur, r.full = nil, false
+	if !final {
+		// Counted when they cut, not when asked: a cut the final part
+		// ended first never happened.
+		if r.byRows {
+			r.rowCuts.Add(1)
+		}
+		if r.byTime {
+			r.timeCuts.Add(1)
+		}
+	}
+	r.cur, r.full, r.byRows, r.byTime = nil, false, false, false
 	if r.limit == 0 && !final {
 		select {
 		case <-p.done:
