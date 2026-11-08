@@ -343,7 +343,12 @@ The S3 schema is `swath/s3-objects/v1` (`key`, `size`, `last_modified`, `etag`, 
 `owner_display_name`, `checksum_algorithm`, `checksum_type`); GCS is `swath/gcs-objects/v1` (`key`, `size`,
 `last_modified`, `etag`, `generation`, `metageneration`, `storage_class`, `md5`, `crc32c`, `content_type`,
 and the optional `time_created`, absent from parts written before it was listed: read the parts by name, as
-`read_parquet(..., union_by_name = true)` does, to see it). `python3
+`read_parquet(..., union_by_name = true)` does, to see it). S3's `checksum_algorithm` is the first algorithm S3
+lists for the object. On GCS, `last_modified` also changes when only the object's metadata changes
+(`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
+and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
+encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Both datasets list current
+objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open format 2.
 
