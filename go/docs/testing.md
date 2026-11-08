@@ -201,6 +201,50 @@ go test -run XXX -fuzz FuzzPropose -fuzztime 1m ./internal/source/keyrange   # p
 
 Failing inputs land in `testdata/fuzz/` and run as regular tests from then on.
 
+## Durable spill campaign (opt-in)
+
+The durable spill's crash tests above run on a 30,000-key fake bucket. The campaign repeats their schedule on
+a real S3-compatible backend and on production key lists, through the real binary (`cmd/swath`
+`durable_campaign_test.go`). For each fixture a reference run is listed first, and then a cold run with a
+slow frontier: a page below the key at 10 % of the list waits 200 ms more, so the ranges ahead of it spill
+and seal certificates. Each arm then kills a run with `SWATH_TEST_KILL_AT` at one of the following,
+or with SIGKILL once a given share of the keys has been served:
+
+- a durable file's capture frames, its seal, the ledger append, the ledger sync, and the first unlink;
+- after the second part record;
+- mid recovery replay (killed at the third ledger sync, then the resume killed at its second replayed
+  frame);
+- unsynced state lost, either unrecorded durable files cut short after a kill at a seal, or the ledger's
+  last append torn after a kill at its sync;
+- 40 % and 70 % of the keys served.
+
+The arm then resumes. Each schedule runs with `--part-interval=0` and again with a 1 s interval. Every arm
+asserts the following:
+
+- The dataset is byte-identical to the reference (row-identical, every column, with the interval on).
+- Rows reconcile: retained plus listed rows equal the dataset, and the objects emitted, less the filtered
+  rows, plus the replayed rows, equal the rows listed.
+- No certificate is rejected.
+- No data request of the resume starts in `[max(cs, K), ce)` of a certificate that is live in the ledger's
+  durable prefix.
+
+With a key file, the reference must also list exactly that file, an oracle independent of swath. Both
+tiers skip without their environment, so CI never runs them:
+
+```bash
+# MinIO in Docker, a bucket filled from a key file (one empty object per key; idempotent)
+bench/minio.sh up keys.txt
+SWATH_MINIO_ENDPOINT=http://127.0.0.1:9000 SWATH_CAMPAIGN_KEYS=keys.txt \
+  go test -p 1 ./cmd/swath -run TestDurableMinIO -v -timeout 1h
+bench/minio.sh down
+
+# production key lists: each list's first 3,000,000 keys behind the private key-list fake (keyfake) at 5 ms
+KEYFAKE=/path/to/keyfake RESULTS=durable-corpus.tsv bench/durable_corpus.sh A.keys B.keys C.keys
+```
+
+`SWATH_CAMPAIGN_RESULTS` (which the corpus script sets) collects one line per arm. The retained results are
+in [measurements.md](measurements.md#durable-spill).
+
 ## Measurements
 
 The measurements, their configurations and the commands that reproduce them are in

@@ -60,7 +60,17 @@ before it has a ledger append of its own (so four seals are four appends for the
 points), and the torn-ledger test holds the frontier until its tear, so the part records it needs follow.
 `TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
 damaged snapshot, with the truncation or the retirements' append lost where the schedule says so. Each
-then resumes to the uninterrupted dataset.
+then resumes to the uninterrupted dataset. In the real process the same seal gating is
+`SWATH_TEST_SERIAL_SEALS`, a test hook beside `SWATH_TEST_KILL_AT`: each seal waits until the earlier seals'
+records were appended by ledger cycles of their own, so `TestSIGKILLDurableSpill` reaches its fourth-cycle
+arms by construction.
+
+The same schedule also runs, opt-in, against MinIO and against production key lists, through the real
+binary: SIGKILLs at the durable steps, after a part record, mid recovery replay, with unsynced state lost,
+and at 40 % and 70 % of the keys. Each resume is checked for oracle equality, reconciliation, and that no
+data request starts inside a replayed certificate ([testing.md](../testing.md#durable-spill-campaign-opt-in)).
+The results, and the full-scale Batch runs (64 lists of 20 to 150 million keys, killed at 40 % and 70 %), are
+in [measurements.md](../measurements.md#durable-spill).
 
 **Priors and certificates.** This branch has no `--seed-from` (a prior dataset's listing used as seed
 tiles); the merge with the branch that adds it must keep these rules. A prior, like `--seed`, only shapes

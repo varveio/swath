@@ -6,7 +6,8 @@
 # usage: durable_corpus.sh KEYFILE...
 # Environment: KEYFAKE (the static key-list fake: -keys FILE -addr HOST:PORT -delay D), PORT
 #   (default 19620), MAX_KEYS, DELAY (default 5ms), RESULTS (the results file each arm appends a
-#   line to, default durable-corpus.tsv; each list's test log goes beside it), GOTEST_FLAGS (extra go test flags).
+#   line to, default durable-corpus.tsv; each list's test log goes beside it), GOTEST_FLAGS (extra go test flags),
+#   SLICE_DIR (where the fake's key slice is written, default $TMPDIR or /tmp; /dev/shm keeps it off disk).
 # The results' columns: list, mode, arm, status, live certificates before the final resume,
 # accepted, replayed rows, resume requests, resume/cold requests, boundary overfetch keys,
 # requests inside a replayed certificate (must be 0).
@@ -24,9 +25,11 @@ cd "$(dirname "$0")/.."
 failed=0
 for f in "${LISTS[@]}"; do
   name=$(basename "$f" .keys)
-  "$KF" -keys <(head -n "$MAX_KEYS" "$f") -addr "127.0.0.1:$PORT" -delay "$DELAY" > "/dev/null" 2>&1 &
+  slice=$(mktemp "${SLICE_DIR:-${TMPDIR:-/tmp}}/durable-corpus.XXXXXX")
+  head -n "$MAX_KEYS" "$f" > "$slice"
+  "$KF" -keys "$slice" -addr "127.0.0.1:$PORT" -delay "$DELAY" > /dev/null 2>&1 &
   kf=$!
-  trap 'kill $kf 2>/dev/null' EXIT
+  trap 'kill $kf 2>/dev/null; rm -f "$slice"' EXIT
   until curl -s -o /dev/null "http://127.0.0.1:$PORT/bkt?list-type=2&max-keys=1"; do
     kill -0 "$kf" || { echo "the fake did not start for $f" >&2; exit 1; }
     sleep 1
@@ -40,6 +43,7 @@ for f in "${LISTS[@]}"; do
   [ "$rc" = 0 ] || failed=1
   kill "$kf" 2>/dev/null
   wait "$kf" 2>/dev/null || true
+  rm -f "$slice"
   trap - EXIT
 done
 exit "$failed"
