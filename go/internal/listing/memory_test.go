@@ -6,6 +6,7 @@ package listing
 import (
 	"context"
 	"encoding/base64"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,9 +68,16 @@ func liveHeap() int64 {
 // the page, each waiting range would keep its parent's whole page arena
 // alive (about 1,000 × key and ETag), which the budget charges as a node of
 // about 150 bytes. The peak live heap must stay within a bound of the
-// budget and the pages in flight: measured +17 MiB (+30 MiB under -race)
-// against a 44 MiB bound, and +62 MiB (+63 MiB) with the cursor left a view
-// of its page.
+// budget and the pages in flight: +62 MiB (+63 MiB under -race) with the
+// cursor left a view of its page, against a 44 MiB bound.
+//
+// The peak is the live heap the last collection marked, sampled every
+// 100 ms, so a collection that lands while the pages in flight and the spill
+// writers' buffers peak together reads high for one sample. Under -race,
+// ten runs read +30 to +47 MiB (2026-11-08), one over the bound. That noise
+// is transient and the defect is systematic, so the run is repeated and the
+// smallest of the peaks is held to the bound: a pinned page shows in every
+// run, a transient high in rarely more than one.
 func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a 400,000-key listing")
@@ -80,44 +88,48 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(slowFirst(scalefake.NewServer(ks, scalefake.Options{}), ks.Key(3000), 3*time.Second, time.Millisecond))
-	t.Cleanup(srv.Close)
-	const workers, budget = 32, 4 << 20
-	runtime.GC()
-	base := liveHeap()
-	out := filepath.Join(t.TempDir(), "keys.tsv")
-	sum, err := Run(context.Background(), Config{
-		Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Policy: keyrange.Policy{}}},
-		Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.TSV}},
-		// Four formatters (beyond what the budget admits, as asked): their
-		// queued batches are charged to the same budget.
-		Limits: Limits{Workers: workers, RowBudget: budget, Encoders: 4}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sum.Output.Text.Formatters != 4 {
-		t.Fatalf("%d formatters, want 4", sum.Output.Text.Formatters)
-	}
-	res := sum.Resources
-	grew := res.PeakHeapLiveBytes - base
+	const workers, budget, runs = 32, 4 << 20, 3
 	// The pages in flight: a response body and its arena per worker,
 	// about 300 KB each at this shape, twice over for the parser's pooled
 	// scratch; the budget three times over for row structs, publish
 	// batches and the frontier path.
 	bound := int64(3*budget + workers*2*512<<10)
-	t.Logf("synthetic: %d rows; peak live heap +%d MiB (bound %d MiB, budget %d MiB); peak nodes %d, peak ahead %d rows, frontier stuck %d ms, max buffered %d KiB, spill %d rows",
-		sum.Output.RowsEmitted, grew>>20, bound>>20, budget>>20, res.PeakNodes, res.PeakAheadRows, res.FrontierStuckMaxNs/1e6, res.MaxBufferedBytes>>10, res.Spill.Rows)
-	if sum.Output.RowsEmitted != memShape.Keys {
-		t.Fatalf("listed %d of %d", sum.Output.RowsEmitted, memShape.Keys)
+	least := int64(math.MaxInt64)
+	for i := range runs {
+		srv := httptest.NewServer(slowFirst(scalefake.NewServer(ks, scalefake.Options{}), ks.Key(3000), 3*time.Second, time.Millisecond))
+		runtime.GC()
+		base := liveHeap()
+		out := filepath.Join(t.TempDir(), "keys.tsv")
+		sum, err := Run(context.Background(), Config{
+			Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Policy: keyrange.Policy{}}},
+			Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.TSV}},
+			// Four formatters (beyond what the budget admits, as asked): their
+			// queued batches are charged to the same budget.
+			Limits: Limits{Workers: workers, RowBudget: budget, Encoders: 4}})
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum.Output.Text.Formatters != 4 {
+			t.Fatalf("%d formatters, want 4", sum.Output.Text.Formatters)
+		}
+		res := sum.Resources
+		grew := res.PeakHeapLiveBytes - base
+		least = min(least, grew)
+		t.Logf("run %d: %d rows; peak live heap +%d MiB (bound %d MiB, budget %d MiB); peak nodes %d, peak ahead %d rows, frontier stuck %d ms, max buffered %d KiB, spill %d rows",
+			i+1, sum.Output.RowsEmitted, grew>>20, bound>>20, budget>>20, res.PeakNodes, res.PeakAheadRows, res.FrontierStuckMaxNs/1e6, res.MaxBufferedBytes>>10, res.Spill.Rows)
+		if sum.Output.RowsEmitted != memShape.Keys {
+			t.Fatalf("listed %d of %d", sum.Output.RowsEmitted, memShape.Keys)
+		}
+		if res.PeakNodes < 100 || res.Spill.Rows == 0 || res.FrontierStuckMaxNs < int64(time.Second) {
+			t.Fatalf("the frontier was not held up long enough to matter: %+v", res)
+		}
+		if fi, err := os.Stat(out); err != nil || fi.Size() == 0 {
+			t.Fatalf("no output: %v", err)
+		}
 	}
-	if res.PeakNodes < 100 || res.Spill.Rows == 0 || res.FrontierStuckMaxNs < int64(time.Second) {
-		t.Fatalf("the frontier was not held up long enough to matter: %+v", res)
-	}
-	if grew > bound {
-		t.Fatalf("peak live heap grew by %d MiB, over %d MiB: retained ranges pin their pages", grew>>20, bound>>20)
-	}
-	if fi, err := os.Stat(out); err != nil || fi.Size() == 0 {
-		t.Fatalf("no output: %v", err)
+	if least > bound {
+		t.Fatalf("peak live heap grew by at least %d MiB in each of %d runs, over %d MiB: retained ranges pin their pages", least>>20, runs, bound>>20)
 	}
 }
 
