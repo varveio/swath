@@ -701,6 +701,23 @@ func TestTokenMapLookup(t *testing.T) {
 			t.Errorf("lookup %s %s from %q: %q %v", c.query, c.caseID, c.from, got.got, err)
 		}
 	}
+	// Another page size of the same query continues its walk; two such
+	// issuers whose Go tokens differ are ambiguous.
+	tm.pageParam = "maxResults"
+	tm.set("P", capturedToken{got: "p", query: "prefix=p&maxResults=3"})
+	if got, err := tm.lookup("P", "prefix=p&maxResults=2", "", ""); err != nil || got.got != "p" {
+		t.Errorf("another page size: %q %v", got.got, err)
+	}
+	if _, err := tm.lookup("P", "prefix=q&maxResults=2", "", ""); err == nil {
+		t.Error("another prefix continued the walk")
+	}
+	tm.set("P", capturedToken{got: "p4", query: "prefix=p&maxResults=4"})
+	if got, err := tm.lookup("P", "prefix=p&maxResults=2", "", ""); err == nil {
+		t.Errorf("two page sizes with differing Go tokens: %q", got.got)
+	}
+	if got, err := tm.lookup("P", "prefix=p&maxResults=4", "", ""); err != nil || got.got != "p4" {
+		t.Errorf("the exact query: %q %v", got.got, err)
+	}
 	if _, err := tm.lookup("U", "q=a", "", ""); !errors.Is(err, errNotIssued) {
 		t.Errorf("an unknown token: %v", err)
 	}
@@ -871,5 +888,125 @@ func TestPinsBindTheRecordedRequest(t *testing.T) {
 	if rep.Failed != 1 || len(rep.Results) != 1 || !strings.HasPrefix(rep.Results[0].Name, "capture 3 [gcs-03p]") ||
 		rep.Results[0].Detail != "GCS HTTP status differs: expected=200 actual=400" {
 		t.Errorf("%d failed: %+v", rep.Failed, rep.Results)
+	}
+}
+
+// TestSourcedPinNeedsAnIssuedToken: a pin for a case that sends a token
+// its source walk issued applies only where the replay mapped such a
+// token. A mid-walk exchange labelled gcs-07i and annotated verbatim
+// sends the provider's unmapped token to the Go server, which refuses
+// it: the pinned 200 -> 400 must not document that (it would hide the
+// missing issuer), so the exchange fails. The same pin documents the
+// case's request when its token is the mapped one its source issued.
+func TestSourcedPinNeedsAnIssuedToken(t *testing.T) {
+	status := "GCS HTTP status differs: expected=200 actual=400"
+	pins, err := readPins(writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-07i": {query: "prefix=probe/r1/x/&maxResults=2&pageToken=TOK", status: 200, body: `{"kind":"storage#objects"}`, mismatch: status},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := liveKeys()
+	f := &fakeProvider{backend: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), tokenParam: "pageToken",
+		tokenRe: regexp.MustCompile(`("nextPageToken":")([^"]*)"`), extra: http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}},
+		tokens: map[string]string{}}
+	live := httptest.NewServer(f)
+	defer live.Close()
+	walk := captureWalk(t, live.URL, "/storage/v1/b/bkt/o", "prefix=data/small/&maxResults=2", "pageToken", gcsNextToken, false)
+	tok := gcsNextToken([]byte(*walk[0].Response.Body))
+	source := walk[0]
+	source.Annotations = []capturedHeader{{recordCaseHeader, "gcs-07q"}}
+	sourced := walk[1]
+	sourced.Seq, sourced.Request.Query = 2, "prefix=data/tree/&maxResults=2&pageToken="+campaignEscape(tok, "")
+	sourced.Annotations = []capturedHeader{{recordCaseHeader, "gcs-07i"}, {recordFromHeader, "gcs-07q"}}
+	orphan := sourced
+	orphan.Seq, orphan.Annotations = 1, []capturedHeader{{recordCaseHeader, "gcs-07i"}, {recordTokenHeader, tokenVerbatim}}
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolGCS}, keys...), client: &http.Client{}}
+	replay := func(xs ...capturedExchange) *report {
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true, pins: pins}, "gcs", gcsSynthetic, exchangeItems(xs), testLimits)
+		return rep
+	}
+	if rep := replay(orphan); len(rep.Residuals) != 0 || rep.Failed != 1 || rep.Results[0].Detail != status {
+		t.Errorf("verbatim provider token: documented %q, %d failed %+v", rep.Residuals, rep.Failed, rep.Results)
+	}
+	if rep := replay(source, sourced); len(rep.Residuals) != 1 || !strings.HasPrefix(rep.Residuals[0], "capture 2 [gcs-07i]") || rep.Failed != 0 {
+		t.Errorf("mapped token: documented %q, %d failed %+v", rep.Residuals, rep.Failed, rep.Results)
+	}
+}
+
+// TestCaptureWalkChangesPageSize: a client may continue a walk with
+// another page size (the GCS and S3 token contracts accept the same scope
+// with another maxResults or max-keys). An unannotated captured walk
+// whose pages ask 3, then 2, then 4 names replays with each token mapped
+// and passes; two issuers of one token in that scope with different Go
+// tokens still fail as ambiguous (TestTokenMapLookup).
+func TestCaptureWalkChangesPageSize(t *testing.T) {
+	keys := liveKeys()
+	for _, c := range []struct {
+		protocol, path, query, size, param string
+		next                               func([]byte) string
+		re                                 *regexp.Regexp
+	}{
+		{"gcs", "/storage/v1/b/bkt/o", "prefix=data/small/", "maxResults", "pageToken", gcsNextToken, regexp.MustCompile(`("nextPageToken":")([^"]*)"`)},
+		{"s3", "/bkt", "list-type=2&prefix=data/small/", "max-keys", "continuation-token", nextToken, regexp.MustCompile(`(<NextContinuationToken>)([^<]*)<`)},
+	} {
+		protocols, extra := []string{server.ProtocolS3}, http.Header{"X-Amz-Request-Id": {"R1"}, "Server": {"AmazonS3"}}
+		if c.protocol == "gcs" {
+			protocols, extra = []string{server.ProtocolGCS}, http.Header{"X-Guploader-Uploadid": {"U1"}, "Server": {"UploadServer"}}
+		}
+		f := &fakeProvider{backend: startGoProtocols(t, protocols, keys...), tokenParam: c.param, tokenRe: c.re, extra: extra, tokens: map[string]string{}}
+		live := httptest.NewServer(f)
+		defer live.Close()
+		var xs []capturedExchange
+		token := ""
+		for page, size := range []int{3, 2, 4} {
+			q := fmt.Sprintf("%s&%s=%d", c.query, c.size, size)
+			if token != "" {
+				q += "&" + c.param + "=" + campaignEscape(token, "")
+			}
+			x := captureWalk(t, live.URL, c.path, q, c.param, func([]byte) string { return "" }, false)[0]
+			x.Seq = uint64(page + 1)
+			xs = append(xs, x)
+			if token = c.next([]byte(*x.Response.Body)); token == "" && page < 2 {
+				t.Fatalf("%s: page %d issued no token", c.protocol, page+1)
+			}
+		}
+		got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: &http.Client{}}
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, c.protocol, gcsSynthetic, exchangeItems(xs), testLimits)
+		if rep.Passed != 3 || rep.Failed != 0 {
+			for _, r := range rep.Results {
+				t.Errorf("%s: %s: %s %+v", c.protocol, r.Name, r.Error, r.diff)
+			}
+			t.Errorf("%s: %d passed, %d failed", c.protocol, rep.Passed, rep.Failed)
+		}
+	}
+}
+
+// TestCaptureEmptyMutationSource: an X-Record-Token naming an alteration
+// of no token ("flip ", "truncate ", "flip-decoded ") is a malformed
+// annotation: the exchange fails with a reported reason, the replay does
+// not stop, and the exchanges after it are still replayed.
+func TestCaptureEmptyMutationSource(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)[:2]
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	for _, mutation := range []string{"flip", "truncate", "flip-decoded"} {
+		bad := xs[1]
+		bad.Annotations = []capturedHeader{{recordCaseHeader, "s3-07r"}, {recordTokenHeader, mutation + " "}}
+		later := xs[0]
+		later.Seq = 3
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "s3", gcsSynthetic,
+			exchangeItems([]capturedExchange{xs[0], bad, later}), testLimits)
+		if rep.Failed != 1 || rep.Passed != 2 || len(rep.Results) != 1 || !strings.Contains(rep.Results[0].Error, recordTokenHeader) {
+			t.Errorf("%s: %d passed, %d failed, %+v", mutation, rep.Passed, rep.Failed, rep.Results)
+		}
+	}
+	for _, mutation := range []string{"flip", "truncate", "flip-decoded"} {
+		if _, err := mutateToken("", mutation); err == nil {
+			t.Errorf("%s of an empty token: no error", mutation)
+		}
 	}
 }

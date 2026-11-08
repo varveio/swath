@@ -536,7 +536,9 @@ the request's shape and both answers' shapes, never the case name alone, so the 
 way still fails (`TestDocumentedDifferences`): a mismatch the provider evidence pins for its case, message for
 message (`-live-pins`; on a walk, the page that differs ends the walk), for a request of the shape the evidence
 captured for that case, answered with the captured provider status and, where the provider refused, its reason
-(GCS) or code (S3). The shape is the case's query template (its literal parameters exactly, each name any name),
+(GCS) or code (S3), and carrying the token the case sends as the replay formed it: for a case that sends an issued
+token, one the replay mapped from an earlier answer (a provider token sent unmapped documents nothing,
+`TestSourcedPinNeedsAnIssuedToken`). The shape is the case's query template (its literal parameters exactly, each name any name),
 and the pins file is read with the evidence beside it (`index.json` and the captures): a pin whose case is not in
 the matrix, whose capture is missing, or whose template does not render the captured query over the evidence's run
 prefix is an error, so no pin documents by its case label alone (`TestReadPins`,
@@ -752,7 +754,9 @@ A provider may issue the same token from requests of different scope (a GCS toke
 at, whatever the query asked), while the Go server's tokens carry their scope and are refused with another. The
 replay therefore keeps one Go token per issuing request. A request annotated with its source walk sends that walk's
 Go token, or fails when that walk issued no such token, whatever its own query was issued; only a request without a
-source continues the token an earlier request of its own query was issued (its own case's where several were).
+source continues the token an earlier request of its own query was issued, else one of the same query but its page
+size (`maxResults`, `max-keys`: a client may change it mid-walk, and both token contracts accept the same scope with
+another page size; `TestCaptureWalkChangesPageSize`), its own case's where several were.
 Where the candidates would send different Go tokens the request fails as ambiguous; none is chosen by recency
 (`TestCaptureTokenIssuedByTwoScopes`, `TestCaptureTokenFromNamedWalk`, `TestTokenMapLookup`). A live run sent through a recorder replays with the
 live run's verdicts: no failure the live run did not have, every documented difference documented again, and a

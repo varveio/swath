@@ -119,6 +119,11 @@ func noteMutation(note string) (mutation, source string, err error) {
 	if source, err = url.QueryUnescape(esc); err != nil {
 		return "", "", fmt.Errorf("annotation %s: %w", recordTokenHeader, err)
 	}
+	if source == "" {
+		// Every alteration is of an issued token, and no answer issues
+		// an empty one.
+		return "", "", fmt.Errorf("annotation %s %q: the altered token is empty", recordTokenHeader, note)
+	}
 	return mutation, source, nil
 }
 
@@ -436,6 +441,10 @@ type capturedToken struct {
 type tokenMap struct {
 	m map[string][]capturedToken
 	n int
+	// pageParam is the page-size parameter (maxResults, max-keys): a
+	// walk may continue with another page size, which both token
+	// contracts accept within the same scope.
+	pageParam string
 }
 
 // grows reports whether setting tok for a request of query and caseID
@@ -469,9 +478,11 @@ var errNotIssued = errors.New("not issued")
 // walk's token: its entry, or none (the annotation names a walk that
 // issued no such token), whatever other walks issued the same provider
 // token. Only a request with no source sends its own walk's token: the
-// entry an earlier request of the same query issued, the request's own
-// case's where several did. Entries that would send different Go tokens
-// are never chosen between: the request fails as ambiguous.
+// entry an earlier request of the same query issued, else one of the
+// same query but its page size (a client may change it mid-walk), the
+// request's own case's where several did. Entries that would send
+// different Go tokens are never chosen between: the request fails as
+// ambiguous.
 func (tm *tokenMap) lookup(tok, query, caseID, from string) (capturedToken, error) {
 	list := tm.m[tok]
 	if len(list) == 0 {
@@ -488,16 +499,11 @@ func (tm *tokenMap) lookup(tok, query, caseID, from string) (capturedToken, erro
 		}
 	} else {
 		what = "an earlier request of the same query"
-		for _, t := range list {
-			if t.query == query {
-				match = append(match, t)
-			}
-		}
-		if !agree(match) {
-			own := slices.DeleteFunc(slices.Clone(match), func(t capturedToken) bool { return t.caseID != caseID })
-			if len(own) > 0 {
-				match = own
-			}
+		match = issuers(list, query, caseID, func(q string) string { return q })
+		if len(match) == 0 && tm.pageParam != "" {
+			what = "an earlier request of the same query but its page size"
+			scope := func(q string) string { return withoutParam(q, tm.pageParam) }
+			match = issuers(list, scope(query), caseID, scope)
 		}
 	}
 	switch {
@@ -507,6 +513,31 @@ func (tm *tokenMap) lookup(tok, query, caseID, from string) (capturedToken, erro
 		return capturedToken{}, fmt.Errorf("its token was issued to %d earlier requests of %s whose Go tokens differ: the source is ambiguous", len(match), what)
 	}
 	return match[0], nil
+}
+
+// issuers are the entries whose query, as key reads it, is query; where
+// they disagree, those of caseID when it has any.
+func issuers(list []capturedToken, query, caseID string, key func(string) string) []capturedToken {
+	var match []capturedToken
+	for _, t := range list {
+		if key(t.query) == query {
+			match = append(match, t)
+		}
+	}
+	if !agree(match) {
+		own := slices.DeleteFunc(slices.Clone(match), func(t capturedToken) bool { return t.caseID != caseID })
+		if len(own) > 0 {
+			match = own
+		}
+	}
+	return match
+}
+
+// withoutParam is a raw query with every name parameter removed.
+func withoutParam(query, name string) string {
+	parts := strings.Split(query, "&")
+	parts = slices.DeleteFunc(parts, func(p string) bool { n, _, _ := strings.Cut(p, "="); return n == name })
+	return strings.Join(parts, "&")
 }
 
 // agree reports whether the entries all send the same Go token (or all
@@ -523,13 +554,13 @@ func agree(list []capturedToken) bool {
 // replayCapture sends each captured request to d.got in order and
 // compares the answers.
 func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[captureItem], lim captureLimits) {
-	tokenParam, next := "continuation-token", nextToken
+	tokenParam, next, pageParam := "continuation-token", nextToken, "max-keys"
 	if protocol == "gcs" {
-		tokenParam, next = "pageToken", gcsNextToken
+		tokenParam, next, pageParam = "pageToken", gcsNextToken, "maxResults"
 	}
 	d.maxDetails = lim.maxDetails
-	tokens := &tokenMap{m: map[string][]capturedToken{}} // a captured token -> the Go server's for the same point
-	unread := 0                                          // exchanges whose captured answer could not be read
+	tokens := &tokenMap{m: map[string][]capturedToken{}, pageParam: pageParam} // a captured token -> the Go server's for the same point
+	unread := 0                                                                // exchanges whose captured answer could not be read
 	for it := range items {
 		if it.err != nil {
 			unread++
@@ -584,6 +615,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			}
 		}
 		gotTok, mutation, source := "", "", refTok
+		origin := originNone // how the request's token was formed, as verified here
 		switch {
 		case note.token == tokenVerbatim:
 			// A token the case wrote itself is one no answer issued: one
@@ -596,6 +628,9 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 				continue
 			}
 			gotTok = refTok
+			if refTok != "" {
+				origin = originVerbatim
+			}
 		case note.token != "":
 			var err error
 			if mutation, source, err = noteMutation(note.token); err != nil {
@@ -637,8 +672,9 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 				d.record(result{Kind: "capture", Name: name, Skipped: fmt.Sprintf("its token was issued by capture %d, whose replay failed", t.failedAt)})
 				continue
 			}
-			gotTok = t.got
+			gotTok, origin = t.got, originIssued
 			if mutation != "" {
+				origin = originMutated
 				var err error
 				if gotTok, err = mutateToken(gotTok, mutation); err != nil {
 					failed(x.Seq)
@@ -671,7 +707,7 @@ func replayCapture(d *driver, protocol string, meta gcsMetadata, items iter.Seq[
 			failed(x.Seq) // the Go server issued no token where the provider did
 		}
 		if why := documentedDifference(judgement{protocol: protocol, bucket: d.o.bucket, caseID: note.caseID,
-			query: rest, mutation: mutation, refTok: refTok, gotTok: gotTok, ref: ref, got: b, df: df}, d.pins); why != "" {
+			query: rest, mutation: mutation, refTok: refTok, gotTok: gotTok, origin: origin, ref: ref, got: b, df: df}, d.pins); why != "" {
 			d.noteDocumented(name, why, df)
 			continue
 		}

@@ -379,12 +379,16 @@ func (lr *liveRun) exchange(c liveCase) {
 		note.token = tokenVerbatim // a token the case wrote itself, no answer issued
 	}
 	a, b, df, err := lr.send(c, "", "", note)
-	lr.finish(&res, lr.judgement(c, "", "", "", a, b, df), err)
+	origin := originNone
+	if note.token == tokenVerbatim {
+		origin = originVerbatim
+	}
+	lr.finish(&res, lr.judgement(c, "", "", "", origin, a, b, df), err)
 }
 
 // judgement is what the documented differences are matched against.
-func (lr *liveRun) judgement(c liveCase, mutation, refTok, gotTok string, a, b *response, df diff) judgement {
-	return judgement{protocol: lr.protocol, bucket: lr.d.o.bucket, caseID: c.id, query: c.query, mutation: mutation,
+func (lr *liveRun) judgement(c liveCase, mutation, refTok, gotTok string, origin tokenOrigin, a, b *response, df diff) judgement {
+	return judgement{protocol: lr.protocol, bucket: lr.d.o.bucket, caseID: c.id, query: c.query, mutation: mutation, origin: origin,
 		refTok: refTok, gotTok: gotTok, ref: a, got: b, df: df}
 }
 
@@ -556,7 +560,11 @@ func (lr *liveRun) walk(c liveCase) {
 		a, b, df, err := lr.send(c, refTok, gotTok, recordNote{})
 		res.Pages++
 		if err == nil && !df.OK {
-			if why := documentedDifference(lr.judgement(c, "", refTok, gotTok, a, b, df), lr.pins); why != "" {
+			origin := originIssued
+			if refTok == "" {
+				origin = originNone
+			}
+			if why := documentedDifference(lr.judgement(c, "", refTok, gotTok, origin, a, b, df), lr.pins); why != "" {
 				documented = why
 				lr.d.noteDocumented(res.Name, fmt.Sprintf("page %d: %s", res.Pages, why), df)
 				break
@@ -620,7 +628,14 @@ func (lr *liveRun) token(c liveCase) {
 		}
 	}
 	a, b, df, err := lr.send(c, toks[0], toks[1], note)
-	lr.finish(&res, lr.judgement(c, mutation, toks[0], toks[1], a, b, df), err)
+	origin := originIssued
+	switch {
+	case src.Mutation == "tampered":
+		origin = originVerbatim
+	case mutation != "":
+		origin = originMutated
+	}
+	lr.finish(&res, lr.judgement(c, mutation, toks[0], toks[1], origin, a, b, df), err)
 }
 
 // mutateToken is the campaign's token alteration (matrix.py
@@ -630,9 +645,13 @@ func (lr *liveRun) token(c liveCase) {
 // about the unused bits of the last character or the padding, as the
 // campaign's is not.
 func mutateToken(token, mutation string) (string, error) {
-	switch mutation {
-	case "":
+	switch {
+	case mutation == "":
 		return token, nil
+	case token == "":
+		return "", fmt.Errorf("an empty token has no %s alteration", mutation)
+	}
+	switch mutation {
 	case "flip":
 		last := "A"
 		if strings.HasSuffix(token, "A") {
