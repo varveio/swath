@@ -282,7 +282,12 @@ func testHooks() {
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
 		hooks = append(hooks, serialSeals())
 	}
-	for _, h := range []func(string){atNth(os.Getenv("SWATH_TEST_KILL_AT"), kill), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })} {
+	killAt := os.Getenv("SWATH_TEST_KILL_AT")
+	killed := func() {
+		fmt.Fprintln(os.Stderr, killMarker(killAt)) // the harness tells this kill from its own
+		kill()
+	}
+	for _, h := range []func(string){atNth(killAt, killed), atNth(os.Getenv("SWATH_TEST_HANG_AT"), func() { select {} })} {
 		if h != nil {
 			hooks = append(hooks, h)
 		}
@@ -296,6 +301,12 @@ func testHooks() {
 		}
 		return nil
 	})
+}
+
+// killMarker is the line SWATH_TEST_KILL_AT=spec writes to stderr just
+// before the process kills itself.
+func killMarker(spec string) string {
+	return "swath: test hook: SWATH_TEST_KILL_AT=" + spec + " reached"
 }
 
 // atNth is a hook running act the n-th time the process reaches point,

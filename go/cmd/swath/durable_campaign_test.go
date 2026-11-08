@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
 // The durable spill's validation campaign (contract §6: a real
@@ -229,6 +231,80 @@ var campaignArms = []campaignArm{
 	{name: "keys-70", keys: 0.7},
 }
 
+// campaignRunner runs the binary for the campaign.
+type campaignRunner struct {
+	bin     string
+	env     []string
+	keys    *atomic.Int64 // the keys the fixture served (reset per run)
+	timeout time.Duration // the watchdog: a run past it fails, whatever ended it
+}
+
+// run runs the binary with args. With killAt (SWATH_TEST_KILL_AT) the
+// child must kill itself there: SIGKILLed, with the hook's marker on
+// stderr. With keys, the harness's key-count killer must fire and the
+// child die of it. Otherwise the run must succeed, and its report is
+// returned. A run the watchdog ended fails in every case: its SIGKILL is
+// not the requested fault.
+func (c *campaignRunner) run(args []string, killAt string, keys int64) (*campaignReport, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, c.bin, args...)
+	cmd.Env = c.env
+	if killAt != "" {
+		cmd.Env = append(slices.Clone(cmd.Env), "SWATH_TEST_KILL_AT="+killAt)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	c.keys.Store(0)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan struct{})
+	var fired atomic.Bool
+	if keys > 0 {
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				case <-time.After(time.Millisecond):
+					if c.keys.Load() >= keys {
+						fired.Store(true)
+						cmd.Process.Signal(syscall.SIGKILL)
+						return
+					}
+				}
+			}
+		}()
+	}
+	err := cmd.Wait()
+	close(done)
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("watchdog: the run did not end within %s (the harness killed it; not the requested fault)\n%s", c.timeout, stderr.Bytes())
+	}
+	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	sigkilled := ws.Signaled() && ws.Signal() == syscall.SIGKILL
+	switch {
+	case killAt != "":
+		if !sigkilled || !bytes.Contains(stderr.Bytes(), []byte(killMarker(killAt))) {
+			return nil, fmt.Errorf("not killed at %s (not reached): %v\n%s", killAt, err, stderr.Bytes())
+		}
+		return nil, nil
+	case keys > 0:
+		if !sigkilled || !fired.Load() {
+			return nil, fmt.Errorf("not killed at %d keys (fired %v): %v\n%s", keys, fired.Load(), err, stderr.Bytes())
+		}
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("%v\n%s", err, stderr.Bytes())
+	}
+	var r campaignReport
+	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
+		return nil, fmt.Errorf("report: %v", err)
+	}
+	return &r, nil
+}
+
 func campaign(t *testing.T, fx campaignFixture) {
 	up, err := url.Parse(fx.upstream)
 	if err != nil {
@@ -251,59 +327,8 @@ func campaign(t *testing.T, fx campaignFixture) {
 		a = append(a, "--part-size", partSize, "--row-budget", "1MiB", "--spill-max", "256MiB", "--report-format", "json", "-o", out)
 		return append(a, runtime...)
 	}
-	env := append(os.Environ(), fx.env...)
-	// run runs the binary: killAt (SWATH_TEST_KILL_AT) or keys (a SIGKILL
-	// once that many keys were served) must kill it; otherwise it must
-	// succeed, and its report is returned.
-	run := func(args []string, killAt string, keys int64) (*campaignReport, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, bin, args...)
-		cmd.Env = env
-		if killAt != "" {
-			cmd.Env = append(cmd.Env, "SWATH_TEST_KILL_AT="+killAt)
-		}
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		px.keys.Store(0)
-		if err := cmd.Start(); err != nil {
-			return nil, err
-		}
-		done := make(chan struct{})
-		if keys > 0 {
-			go func() {
-				for {
-					select {
-					case <-done:
-						return
-					case <-time.After(time.Millisecond):
-						if px.keys.Load() >= keys {
-							cmd.Process.Signal(syscall.SIGKILL)
-							return
-						}
-					}
-				}
-			}()
-		}
-		err := cmd.Wait()
-		close(done)
-		ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
-		killed := ws.Signaled() && ws.Signal() == syscall.SIGKILL
-		switch {
-		case killAt != "" || keys > 0:
-			if !killed {
-				return nil, fmt.Errorf("not killed (not reached): %v\n%s", err, stderr.Bytes())
-			}
-			return nil, nil
-		case err != nil:
-			return nil, fmt.Errorf("%v\n%s", err, stderr.Bytes())
-		}
-		var r campaignReport
-		if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
-			return nil, fmt.Errorf("report: %v", err)
-		}
-		return &r, nil
-	}
+	rn := &campaignRunner{bin: bin, env: append(os.Environ(), fx.env...), keys: &px.keys, timeout: 20 * time.Minute}
+	run := rn.run
 
 	// The spill reserve is lowered from its 1 GiB default so whether the
 	// fixture spills does not depend on the host's free disk.
@@ -698,5 +723,39 @@ func tearLedgerTail(t *testing.T, out string) {
 	last := offs[len(offs)-1]
 	if err := os.Truncate(filepath.Join(out, order.DurableDir, "ledger"), int64(last+(len(b)-last)/2)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestCampaignRunnerFaults: the campaign accepts a kill only as the fault
+// it asked for. A run its watchdog ends fails although a SIGKILL ended it
+// (before, any SIGKILL passed: an unreached hook in a hung run counted as
+// reached after the 20-minute watchdog); an unreached hook and a key
+// threshold never crossed fail; a reached hook passes.
+func TestCampaignRunnerFaults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := filepath.Join(t.TempDir(), "swath")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	url := s3test.Serve(t, s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 7))))
+	args := func() []string {
+		return []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--part-interval=0", "-o", filepath.Join(t.TempDir(), "ds")}
+	}
+	var keys atomic.Int64
+	rn := &campaignRunner{bin: bin, env: os.Environ(), keys: &keys, timeout: time.Minute}
+	if _, err := rn.run(args(), "response-read:2", 0); err != nil {
+		t.Fatalf("a reached hook: %v", err)
+	}
+	if _, err := rn.run(args(), "spill-replay-frame:1", 0); err == nil || !strings.Contains(err.Error(), "not reached") {
+		t.Fatalf("an unreached hook on a completing run: %v", err)
+	}
+	if _, err := rn.run(args(), "", 1<<40); err == nil || !strings.Contains(err.Error(), "not killed at") {
+		t.Fatalf("a key threshold never crossed: %v", err)
+	}
+	hung := &campaignRunner{bin: bin, env: append(os.Environ(), "SWATH_TEST_HANG_AT=response-read:1"), keys: &keys, timeout: 3 * time.Second}
+	if _, err := hung.run(args(), "spill-replay-frame:1", 0); err == nil || !strings.Contains(err.Error(), "watchdog") {
+		t.Fatalf("a hung run the watchdog killed: %v", err)
 	}
 }
