@@ -184,10 +184,11 @@ func NewRouter[P any](opt Options, s *schema.Schema[P]) (*Router[P], error) {
 	}
 	opt.MaxEncoders = max(opt.Encoders, opt.MaxEncoders)
 	// One codec for every writer: its zstd states (each grows to the
-	// largest page it compressed and keeps it) are one per encoder, the
-	// most column goroutines at once across the parts (columns), however
-	// many parts are open. A codec per writer held a pool of states each.
-	c, err := newCodec(opt.MaxEncoders)
+	// largest page it compressed and keeps it) are at most one per encoder
+	// admitted, the most column goroutines at once across the parts
+	// (columns), however many parts are open; Admit raises them with the
+	// encoders. A codec per writer held a pool of states each.
+	c, err := newCodec(opt.Encoders)
 	if err != nil {
 		return nil, fmt.Errorf("parquet router: %w", err)
 	}
@@ -258,6 +259,7 @@ func (r *Router[P]) Admit() int {
 			<-r.slots // a slot token, held since NewRouter: never blocks
 		}
 		r.encoders.Add(n)
+		r.codec.setLimit(r.Encoders())
 	}
 	return r.Encoders()
 }

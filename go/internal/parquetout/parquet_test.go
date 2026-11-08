@@ -359,3 +359,45 @@ func TestKeyLimits(t *testing.T) {
 		t.Fatalf("bounds %d/%d bytes not conservative", len(lo), len(hi))
 	}
 }
+
+// TestCodecStatesFollowAdmission: the router's shared codec makes no more
+// zstd states than encoders admitted. Before Admit, with MaxEncoders above
+// Encoders, its writers use at most Encoders states; after, up to
+// MaxEncoders. A pool of MaxEncoders handed round in turn warmed every
+// state during listing, past what admission had charged (sol review 3,
+// P2: 148.5 MiB live against 122.2 MiB priced at MaxEncoders 6).
+func TestCodecStatesFollowAdmission(t *testing.T) {
+	rows := testRows(60_000, 2)
+	out := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, dataset.DataDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRouter(Options{Out: out, PartSize: 16 << 10, Encoders: 2, MaxEncoders: 6}, &testSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := len(rows) / 2
+	for i := 0; i < half; i += 1500 {
+		if err := r.Write(context.Background(), [][]row{rows[i:min(i+1500, half)]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := r.codec.states()
+	r.Admit()
+	for i := half; i < len(rows); i += 1500 {
+		if err := r.Write(context.Background(), [][]row{rows[i:min(i+1500, len(rows))]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parts, err := r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := r.codec.states()
+	if before > 2 || after > 6 || after <= before {
+		t.Fatalf("%d states before admission (2 admitted), %d after (6)", before, after)
+	}
+	if _, base := route(t, rows, 1, 16<<10); !slices.EqualFunc(parts, base, func(a, b dataset.Part) bool { return a.MD5 == b.MD5 }) {
+		t.Fatal("parts differ from one encoder's")
+	}
+}
