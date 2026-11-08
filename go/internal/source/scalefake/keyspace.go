@@ -1,10 +1,13 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package scalefake serves a lazy, deterministic synthetic keyspace of up to
-// billions of keys over the S3 ListObjectsV2 and GCS objects.list wire
-// shapes, for scale tests and long measured runs. Nothing is materialized:
-// key i is computed from the seed and the shape in O(depth), keys are
+// Package scalefake serves a keyspace over the S3 ListObjectsV2 and GCS
+// objects.list wire shapes, for tests, scale runs and long measured runs,
+// with optional service behaviours (latency, jitter, throttling, a rate cap,
+// slow prefixes, slow continuations, capped pages: Options). The keyspace
+// is either generated lazily from a Shape (New: up to billions of keys,
+// nothing materialized: key i is computed from the seed and the shape in
+// O(depth)) or a given sorted key list (FromKeys, ReadKeys). Keys are
 // strictly ascending in i, and every query (prefix, start-after or
 // startOffset, endOffset, delimiter, page size, continuation) is answered
 // by binary search over i plus O(page) key computations. Test and bench
@@ -12,10 +15,12 @@
 package scalefake
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"sort"
@@ -69,6 +74,10 @@ type Keyspace struct {
 	stemN  int     // bytes of the per-directory stem in a leaf name
 	stem   string  // the stem's shared tail (all but its per-directory head)
 	maxLen int
+	// A given key list (FromKeys) instead of a generated shape: key i is
+	// list[offs[i] : offs[i+1]-1], each key followed by a newline.
+	list string
+	offs []int
 }
 
 type level struct {
@@ -148,20 +157,86 @@ func New(s Shape) (*Keyspace, error) {
 	return k, nil
 }
 
+// FromKeys serves keys, which must be strictly ascending as bytes and
+// hold no newline. Metadata is synthetic, from the key's index (Meta).
+func FromKeys(keys []string) (*Keyspace, error) {
+	var b strings.Builder
+	n := 0
+	for _, key := range keys {
+		n += len(key) + 1
+	}
+	b.Grow(n)
+	for _, key := range keys {
+		if strings.IndexByte(key, '\n') >= 0 {
+			return nil, fmt.Errorf("scalefake: key %q holds a newline", key)
+		}
+		b.WriteString(key)
+		b.WriteByte('\n')
+	}
+	return fromList(b.String())
+}
+
+// ReadKeys serves the key file r holds: one key per line (newline
+// terminated, the last newline optional), strictly ascending as bytes.
+func ReadKeys(r io.Reader) (*Keyspace, error) {
+	b, err := io.ReadAll(bufio.NewReader(r))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		b = append(b, '\n')
+	}
+	return fromList(string(b))
+}
+
+// fromList indexes list, keys each followed by a newline.
+func fromList(list string) (*Keyspace, error) {
+	k := &Keyspace{list: list, offs: make([]int, 0, strings.Count(list, "\n")+1)}
+	prev := ""
+	for off := 0; off < len(list); {
+		e := off + strings.IndexByte(list[off:], '\n')
+		key := list[off:e]
+		if len(k.offs) > 0 && key <= prev {
+			return nil, fmt.Errorf("scalefake: key %d %q is not above the key before it %q", len(k.offs), key, prev)
+		}
+		k.offs = append(k.offs, off)
+		k.maxLen = max(k.maxLen, len(key))
+		prev, off = key, e+1
+	}
+	k.shape.Keys = int64(len(k.offs))
+	k.offs = append(k.offs, len(list))
+	return k, nil
+}
+
+// listed is key i of a given list.
+func (k *Keyspace) listed(i int64) string { return k.list[k.offs[i] : k.offs[i+1]-1] }
+
+// String describes the keyspace for logs and reports.
+func (k *Keyspace) String() string {
+	if k.offs != nil {
+		return fmt.Sprintf("keys=%d list", k.shape.Keys)
+	}
+	return k.shape.String()
+}
+
 // Len is the number of keys.
 func (k *Keyspace) Len() int64 { return k.shape.Keys }
 
-// Shape is the shape k was built from.
+// Shape is the shape k was built from (a given list's: its key count).
 func (k *Keyspace) Shape() Shape { return k.shape }
 
-// Dirs is the number of leaf directories (some may be empty).
-func (k *Keyspace) Dirs() int { return len(k.cum) - 1 }
+// Dirs is the number of leaf directories (some may be empty; none for a
+// given list).
+func (k *Keyspace) Dirs() int { return max(0, len(k.cum)-1) }
 
 // Key is key i (0 <= i < Len).
 func (k *Keyspace) Key(i int64) string { return string(k.AppendKey(nil, i)) }
 
 // AppendKey appends key i to b.
 func (k *Keyspace) AppendKey(b []byte, i int64) []byte {
+	if k.offs != nil {
+		return append(b, k.listed(i)...)
+	}
 	// The leaf directory holding i: the last j with cum[j] <= i.
 	j := sort.Search(len(k.cum)-1, func(j int) bool { return k.cum[j+1] > i })
 	n := uint64(k.cum[j+1] - k.cum[j])
@@ -187,8 +262,14 @@ func (k *Keyspace) AppendKey(b []byte, i int64) []byte {
 // Search is the first index whose key is at least s (strict: greater than
 // s), in [lo, Len].
 func (k *Keyspace) Search(s string, strict bool, lo int64) int64 {
-	buf, target := make([]byte, 0, k.maxLen), []byte(s)
 	n := k.shape.Keys - lo
+	if k.offs != nil {
+		return lo + int64(sort.Search(int(n), func(d int) bool {
+			key := k.listed(lo + int64(d))
+			return key > s || (key == s && !strict)
+		}))
+	}
+	buf, target := make([]byte, 0, k.maxLen), []byte(s)
 	return lo + int64(sort.Search(int(n), func(d int) bool {
 		buf = k.AppendKey(buf[:0], lo+int64(d))
 		c := bytes.Compare(buf, target)
@@ -244,12 +325,19 @@ var ErrToken = errors.New("scalefake: bad continuation token")
 // MaxPage is the largest page, as both services cap it.
 const MaxPage = 1000
 
-// List answers q.
-func (k *Keyspace) List(q Query) (Page, error) {
-	limit := q.Max
-	if limit <= 0 || limit > MaxPage {
-		limit = MaxPage
+// First is the first key at or past q's start (its prefix, bound and
+// continuation), whether or not it is in q's scope, and false past the
+// last key: the key a page starting there is about.
+func (k *Keyspace) First(q Query) (string, bool, error) {
+	i, err := k.start(q)
+	if err != nil || i >= k.shape.Keys {
+		return "", false, err
 	}
+	return k.Key(i), true, nil
+}
+
+// start is the index q's first page item is at or past.
+func (k *Keyspace) start(q Query) (int64, error) {
 	i := k.Search(q.Prefix, false, 0)
 	if q.After != "" {
 		i = max(i, k.Search(q.After, !q.Inclusive, 0))
@@ -257,7 +345,7 @@ func (k *Keyspace) List(q Query) (Page, error) {
 	if q.Token != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(q.Token)
 		if err != nil || len(raw) == 0 || (raw[0] != 'k' && raw[0] != 'p') {
-			return Page{}, ErrToken
+			return 0, ErrToken
 		}
 		last := string(raw[1:])
 		if raw[0] == 'k' {
@@ -267,6 +355,19 @@ func (k *Keyspace) List(q Query) (Page, error) {
 		} else {
 			i = k.shape.Keys
 		}
+	}
+	return i, nil
+}
+
+// List answers q.
+func (k *Keyspace) List(q Query) (Page, error) {
+	limit := q.Max
+	if limit <= 0 || limit > MaxPage {
+		limit = MaxPage
+	}
+	i, err := k.start(q)
+	if err != nil {
+		return Page{}, err
 	}
 	var p Page
 	buf, prefix, delim := make([]byte, 0, k.maxLen), []byte(q.Prefix), []byte(q.Delimiter)

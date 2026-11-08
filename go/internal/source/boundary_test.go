@@ -51,7 +51,7 @@ func deps(t *testing.T, root, pkg string) map[string]bool {
 // source and registry. listing, order, parquetout, dataset, schema, journal
 // and registry import nothing under internal/source/ (directly or not),
 // internal/source imports no provider, the command imports providers only
-// to register them, and never test support (scalefake).
+// to register them, and never test support (scalefake, shapes).
 func TestImportBoundary(t *testing.T) {
 	root := moduleDir(t)
 	providers := mod + "/internal/source/"
@@ -68,9 +68,9 @@ func TestImportBoundary(t *testing.T) {
 		t.Fatal("the dependency walk does not see cmd/swath's providers")
 	}
 	// Test and bench support stays out of the binary.
-	for _, p := range []string{"scalefake"} {
-		if cmd[providers+p] {
-			t.Errorf("cmd/swath depends on test support %s", p)
+	for _, p := range []string{providers + "scalefake", mod + "/internal/shapes"} {
+		if cmd[p] {
+			t.Errorf("cmd/swath depends on test support %s", strings.TrimPrefix(p, mod+"/"))
 		}
 	}
 	fset := token.NewFileSet()

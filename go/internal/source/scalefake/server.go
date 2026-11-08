@@ -18,20 +18,46 @@ import (
 	"time"
 )
 
-// Options configure a Server.
+// Options configure a Server. Every service behaviour is off at its zero
+// value: each listing request then waits Latency and is answered.
 type Options struct {
 	Bucket string // the one bucket served; default "bkt"
 	// Latency delays every listing answer, plus a uniform draw from
 	// [0, Jitter); a request cancelled meanwhile is dropped.
 	Latency, Jitter time.Duration
+	// Slow replaces Latency for the pages it names: the longest matching
+	// Prefix of the key a page starts at (Keyspace.First; past the last
+	// key, the request's start bound) sets the page's latency. Jitter
+	// still adds to it.
+	Slow []Slow
+	// FirstLatency, if positive, replaces the first listing request's
+	// latency (a slow first page).
+	FirstLatency time.Duration
+	// TokenLatency is added to every listing request that carries a
+	// continuation token, StartLatency to every one that does not (a
+	// fresh listing or a seek).
+	TokenLatency, StartLatency time.Duration
+	// PageCap, if positive, caps every page at that many items, whatever
+	// the request asks.
+	PageCap int
+	// Rate, if positive, caps listing requests with a token bucket: Rate
+	// per second, a burst of Rate/10 (at least 1). A request past it is
+	// answered with the throttle at once, before any delay.
+	Rate float64
 	// Fail503 is the fraction of listing requests answered 503 (S3
 	// SlowDown, GCS backendError) after the delay, drawn from FaultSeed
-	// and the request's sequence number.
+	// and the request's sequence number, as the jitter is.
 	Fail503   float64
 	FaultSeed uint64
 	// Log, if set, receives one tab-separated line per listing request:
 	// unix ms, api, status, keys, prefixes, microseconds, prefix, bound.
 	Log io.Writer
+}
+
+// Slow is a prefix whose pages take Latency (Options.Slow).
+type Slow struct {
+	Prefix  string
+	Latency time.Duration
 }
 
 // Server answers S3 ListObjectsV2 (path-style: GET /BUCKET?list-type=2)
@@ -55,6 +81,12 @@ type Server struct {
 	busyNs     atomic.Int64 // summed request durations: mean inflight = d(busy)/dt
 	logMu      sync.Mutex
 	started    time.Time
+
+	first     atomic.Bool // the first listing request has been seen
+	rateMu    sync.Mutex
+	tokens    float64 // the rate cap's bucket
+	refilled  time.Time
+	rateBurst float64
 }
 
 // NewServer serves ks.
@@ -62,7 +94,12 @@ func NewServer(ks *Keyspace, opt Options) *Server {
 	if opt.Bucket == "" {
 		opt.Bucket = "bkt"
 	}
-	return &Server{ks: ks, opt: opt, started: time.Now()}
+	s := &Server{ks: ks, opt: opt, started: time.Now()}
+	if opt.Rate > 0 {
+		s.rateBurst = max(1, opt.Rate/10)
+		s.tokens, s.refilled = s.rateBurst, s.started
+	}
+	return s
 }
 
 // Stats is the server's accounting.
@@ -91,7 +128,7 @@ func (s *Server) Stats(reset bool) Stats {
 		Requests: s.requests.Load(), Pages: s.pages.Load(), Keys: s.keys.Load(), Prefixes: s.prefixes.Load(),
 		Throttled: s.throttled.Load(), Errors: s.errors.Load(), Bytes: s.bytesOut.Load(),
 		Inflight: s.inflight.Load(), PeakInflight: s.peak.Load(), BusyNs: s.busyNs.Load(),
-		KeyspaceKeys: s.ks.Len(), Shape: s.ks.Shape().String()}
+		KeyspaceKeys: s.ks.Len(), Shape: s.ks.String()}
 	if reset {
 		st.WindowPeak = s.windowPeak.Swap(st.Inflight)
 	} else {
@@ -149,15 +186,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.busyNs.Add(int64(time.Since(start)))
 	}()
 	seq := s.seq.Add(1)
-	if d := s.delay(seq); d > 0 {
-		t := time.NewTimer(d)
-		select {
-		case <-t.C:
-		case <-r.Context().Done():
-			t.Stop()
-			return
-		}
-	}
 	var status, keys, prefixes int
 	var q Query
 	if gcs {
@@ -177,10 +205,67 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) delay(seq uint64) time.Duration {
+// admit applies the service behaviours to listing request seq before it is
+// answered: the rate cap (a throttle answer at once), then the delay.
+// false: the request has been answered or was cancelled while it waited
+// (status 0: dropped).
+func (s *Server) admit(w http.ResponseWriter, r *http.Request, seq uint64, q Query, throttle func(http.ResponseWriter)) (int, bool) {
+	if s.opt.Rate > 0 && !s.take() {
+		s.throttled.Add(1)
+		throttle(w)
+		return http.StatusServiceUnavailable, false
+	}
+	if d := s.delay(seq, q); d > 0 {
+		t := time.NewTimer(d)
+		select {
+		case <-t.C:
+		case <-r.Context().Done():
+			t.Stop()
+			return 0, false
+		}
+	}
+	return 0, true
+}
+
+// take takes a token from the rate cap's bucket.
+func (s *Server) take() bool {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	now := time.Now()
+	s.tokens = min(s.rateBurst, s.tokens+now.Sub(s.refilled).Seconds()*s.opt.Rate)
+	s.refilled = now
+	if s.tokens < 1 {
+		return false
+	}
+	s.tokens--
+	return true
+}
+
+// delay is listing request seq's wait.
+func (s *Server) delay(seq uint64, q Query) time.Duration {
 	d := s.opt.Latency
+	if len(s.opt.Slow) > 0 {
+		at, ok, _ := s.ks.First(q)
+		if !ok {
+			at = q.After
+		}
+		best := -1
+		for _, r := range s.opt.Slow {
+			if len(r.Prefix) > best && strings.HasPrefix(at, r.Prefix) {
+				best, d = len(r.Prefix), r.Latency
+			}
+		}
+	}
+	if s.opt.FirstLatency > 0 && s.first.CompareAndSwap(false, true) {
+		d = s.opt.FirstLatency
+	}
 	if s.opt.Jitter > 0 {
 		d += time.Duration(hash2(s.opt.FaultSeed^0x1a7e, seq) % uint64(s.opt.Jitter))
+	}
+	if q.Token != "" {
+		d += s.opt.TokenLatency
+	} else {
+		d += s.opt.StartLatency
 	}
 	return d
 }
@@ -204,6 +289,14 @@ func s3Error(w http.ResponseWriter, status int, code, msg string) {
 	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Message>%s</Message><RequestId>scalefake</RequestId></Error>`, code, msg)
 }
 
+func s3Throttle(w http.ResponseWriter) {
+	s3Error(w, http.StatusServiceUnavailable, "SlowDown", "Please reduce your request rate.")
+}
+
+func gcsThrottle(w http.ResponseWriter) {
+	gcsError(w, http.StatusServiceUnavailable, "backendError", "Backend Error")
+}
+
 var bufs = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, seq uint64) (int, int, int, Query) {
@@ -223,9 +316,15 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request, seq uint64) (in
 		}
 		q.Max = max(n, 1) // 0 would be an empty page; the client never sends it
 	}
+	if s.opt.PageCap > 0 {
+		q.Max = min(pageMax(q.Max), s.opt.PageCap)
+	}
+	if status, ok := s.admit(w, r, seq, q, s3Throttle); !ok {
+		return status, 0, 0, q
+	}
 	if s.fail(seq) {
 		s.throttled.Add(1)
-		s3Error(w, http.StatusServiceUnavailable, "SlowDown", "Please reduce your request rate.")
+		s3Throttle(w)
 		return 503, 0, 0, q
 	}
 	p, err := s.ks.List(q)
@@ -352,9 +451,15 @@ func (s *Server) serveGCS(w http.ResponseWriter, r *http.Request, seq uint64) (i
 		}
 		q.Max = n
 	}
+	if s.opt.PageCap > 0 {
+		q.Max = min(pageMax(q.Max), s.opt.PageCap)
+	}
+	if status, ok := s.admit(w, r, seq, q, gcsThrottle); !ok {
+		return status, 0, 0, q
+	}
 	if s.fail(seq) {
 		s.throttled.Add(1)
-		gcsError(w, http.StatusServiceUnavailable, "backendError", "Backend Error")
+		gcsThrottle(w)
 		return 503, 0, 0, q
 	}
 	p, err := s.ks.List(q)

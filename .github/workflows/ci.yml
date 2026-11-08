@@ -300,7 +300,7 @@ jobs:
   # request, fails the gate.
   go:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: go
@@ -346,6 +346,13 @@ jobs:
       - name: go test -race
         if: steps.changes.outputs.go == 'true'
         run: go test -race -timeout 30m ./...
+
+      # The shape suite at 200,000 keys per shape (internal/shapes, go/docs/testing.md): a
+      # measurement with loose bounds, skipped under -race (ten times slower, and the code it
+      # drives is race-tested by its own packages), so it runs here without it.
+      - name: go test shapes (no race)
+        if: steps.changes.outputs.go == 'true'
+        run: go test -count=1 -run 'TestShapes$' ./internal/shapes
 
       - name: Static cross-builds (CGO_ENABLED=0)
         if: steps.changes.outputs.go == 'true'

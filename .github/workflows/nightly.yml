@@ -20,8 +20,15 @@ on:
   schedule:
     # 07:00 UTC daily (~midnight US Pacific). Cron runs on the default branch only.
     - cron: "0 7 * * *"
-  # Manual trigger for on-demand deep/perf runs from any branch.
+  # Manual trigger for on-demand deep/perf runs from any branch; `jobs`
+  # picks one job (go-shapes: the Go shape suite alone, which is how its
+  # baseline is regenerated on a branch).
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Jobs to run: all, deep-and-perf, osv-scan or go-shapes"
+        required: false
+        default: all
 
 permissions:
   contents: read
@@ -32,6 +39,7 @@ concurrency:
 
 jobs:
   deep-and-perf:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'deep-and-perf'
     runs-on: ubuntu-latest
     # The perf tier (1M-key SORT-PERF, 100k PERF-1/2) is the long pole; deep is ~minutes.
     timeout-minutes: 90
@@ -108,6 +116,7 @@ jobs:
   # high/critical/unknown priority while reporting lower Canonical priorities. See
   # scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
   osv-scan:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'osv-scan'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -167,4 +176,37 @@ jobs:
         with:
           name: osv-image-reports
           path: build/reports/osv/*.json
+          if-no-files-found: ignore
+
+  # The Go port's shape suite at full scale (go/bench/shapes; go/docs/testing.md): every bucket
+  # shape at about 2M keys behind the in-process fake, with its service behaviours (latency
+  # 10/50/200 ms, jitter, 1 % and 5 % throttling, a rate cap, slow prefixes, slow continuations
+  # and seeks, a slow first page). A wrong listing fails the job. A number that moved by more
+  # than 20 % against the committed baseline (go/bench/baselines/shapes.json) is annotated, not
+  # failed, until the baselines have held steady for about two weeks.
+  go-shapes:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-shapes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Shape suite against the baseline
+        run: go run ./bench/shapes -out "$RUNNER_TEMP/shapes.json" -scratch "$RUNNER_TEMP/shapes" -baseline bench/baselines/shapes.json
+
+      - name: Upload the shape summary
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: go-shapes-summary
+          path: ${{ runner.temp }}/shapes.json
           if-no-files-found: ignore
