@@ -317,8 +317,10 @@ func TestManifestShape(t *testing.T) {
 // TestManifestLimitsReadSwathsLargest: every manifest swath can write reads
 // back. A part entry written at manifestKeyBytes is within its price in
 // ManifestLimits (two base64 bounds and 1 KiB), so MaxParts of them and
-// 1 MiB for the rest fit; and 30,000 one-row parts of 1,024-byte keys, past
-// the module's default 64 MiB, parse.
+// 1 MiB for the rest fit: the proof. (The module's default, 64 MiB, would
+// refuse 30,000 one-row parts of 1,024-byte keys, about 82 MB.) A manifest
+// of 3,000 such parts reads within ManifestLimits, and the same manifest
+// is refused under a limit one byte short of it (ErrLimitExceeded).
 func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	part := func(i, keyBytes int) ManifestPart {
 		lo := []byte(strings.Repeat("\xff", keyBytes))
@@ -342,8 +344,7 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	if entry > price || MaxParts*price+1<<20 > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
 		t.Fatalf("a part entry at %d-byte keys is %d bytes, priced %d; ManifestLimits %+v", manifestKeyBytes, entry, price, ManifestLimits)
 	}
-	// The trigger, written as JSON directly (MarshalManifest would check
-	// it again): one parse.
+	// Written as JSON directly (MarshalManifest would check it again).
 	head := manifest()
 	i := bytes.Index(head, []byte(`"parts":[]`))
 	if i < 0 {
@@ -352,7 +353,7 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	var b bytes.Buffer
 	b.Write(head[:i])
 	b.WriteString(`"parts":[`)
-	for n := range 30_000 {
+	for n := range 3_000 {
 		p := part(n, 1024)
 		if n > 0 {
 			b.WriteByte(',')
@@ -362,11 +363,11 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	}
 	b.WriteByte(']')
 	b.Write(head[i+len(`"parts":[]`):])
-	if b.Len() <= 64<<20 {
-		t.Fatalf("%d bytes: not past the module's default", b.Len())
-	}
 	var m Manifest
-	if err := m.UnmarshalJSON(b.Bytes()); err != nil || len(m.Parts) != 30_000 {
-		t.Fatalf("30,000 parts: %d read, %v", len(m.Parts), err)
+	if err := m.UnmarshalJSON(b.Bytes()); err != nil || len(m.Parts) != 3_000 {
+		t.Fatalf("3,000 parts: %d read, %v", len(m.Parts), err)
+	}
+	if _, err := seekparquet.ParseManifest(b.Bytes(), seekparquet.Limits{ManifestBytes: int64(b.Len() - 1)}); !errors.Is(err, seekparquet.ErrLimitExceeded) {
+		t.Fatalf("%d bytes under a limit of %d: %v", b.Len(), b.Len()-1, err)
 	}
 }

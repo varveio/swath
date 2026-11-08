@@ -95,7 +95,8 @@ the identity, so a resume would stop at the same part); its journal and parts ar
 over with a larger `--part-size` ([parquet-output.md](parquet-output.md)). Its readers accept a manifest of every dataset within the limit:
 `dataset.ManifestLimits` sizes the manifest for 100,000 parts with keys up to 4,096 bytes (about 1.1 GiB),
 where the seekparquet module's default (64 MiB) would refuse, for example, 30,000 one-row parts of 1,024-byte
-keys (`TestManifestLimitsReadSwathsLargest`).
+keys (about 82 MB). `TestManifestLimitsReadSwathsLargest` proves the sizing by arithmetic from a measured part
+entry, reads a 3,000-part manifest within it, and shows a smaller limit refusing the same manifest.
 
 **The promise:**
 - On a static source, recovery is byte-identical to an uninterrupted run when no part was cut by time;
