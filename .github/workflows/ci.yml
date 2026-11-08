@@ -489,6 +489,14 @@ jobs:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
+      # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
+      # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
+      - name: Heap gates (SWATH_HEAP_GATES=1, no -race)
+        if: steps.changes.outputs.go == 'true'
+        env:
+          SWATH_HEAP_GATES: "1"
+        run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
+
       - name: Static cross-builds (CGO_ENABLED=0)
         if: needs.changes.outputs.go == 'true'
         run: |

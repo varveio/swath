@@ -286,8 +286,11 @@ is the full schema and "Run report" in [cli.md](cli.md#run-report) its descripti
 
 **Run report: version 3.** Durable spill adds `resources.spill.durable` (the durable spill's account, and on a
 resume what it accepted, rejected and replayed) and `resources.spill.durable_off`, and the counters `reuse.ranges`,
-`reuse.gaps` and `reuse.boundary_overfetch_keys`; nothing of version 2 changes. A reader of version 2 can read
-version 3 by ignoring those fields.
+`reuse.gaps` and `reuse.boundary_overfetch_keys`; the drain tail adds `timings.listing_done_at` (the provider
+finished) and `resources.drain` (sorted Parquet: the tail's times, the read-ahead's frames and waits, the
+parallel segments' plan and holdings, and the encoders admitted at start and after listing;
+[cli.md](cli.md#run-report)). Nothing of version 2 changes: a reader of version 2 can read version 3 by
+ignoring those fields.
 
 **Counters** (`source.stats.counters`, [internals/counters.md](internals/counters.md)), against those builds. New: `seed.from.*`
 (the warm start), `seed.first_page_keys`, `seed.flat_chains`, `seed.stop.flat`, `seed.stop.one_page`,

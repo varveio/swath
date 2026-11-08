@@ -103,12 +103,15 @@ var Schema = schema.Schema[Entry]{
 		timeCol("metadata_changed_at", HasCtime, func(e *Entry) int64 { return e.Ctime }),
 		timeCol("atime", HasAtime, func(e *Entry) int64 { return e.Atime }),
 		timeCol("birth_time", HasBtime, func(e *Entry) int64 { return e.Btime }),
-		{Spec: schema.Spec{Name: "link_target", Type: schema.Binary}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
+		{Spec: schema.Spec{Name: "link_target", Type: schema.Binary, MaxBytes: pathMax}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
 	},
 	Bytes: entryBytes,
 	Heap:  func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
 	Codec: entryCodec{},
 }
+
+// pathMax is the longest link target (Linux PATH_MAX).
+const pathMax = 4096
 
 func int64Col(name string, p Presence, get func(*Entry) int64) schema.Column[Entry] {
 	return schema.Column[Entry]{Spec: schema.Spec{Name: name, Type: schema.Int64}, Int: func(e *Entry) (int64, bool) { return get(e), e.Has(p) }}
