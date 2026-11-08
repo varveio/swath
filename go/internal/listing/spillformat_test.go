@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -20,6 +21,7 @@ import (
 // plain and plain+zstd. The report names the format and the logical bytes
 // the frames stood for.
 func TestSpillFormatsIdentical(t *testing.T) {
+	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	b := s3test.Backend(t, gcstest.Keys(20000))
 	url := s3test.Serve(t, slowFirst(s3test.Handler(b), "d01", 150*time.Millisecond, time.Millisecond))
