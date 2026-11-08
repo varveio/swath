@@ -26,12 +26,10 @@ import (
 // through a client with few attempts, neither fail a run nor change its
 // output: exhausted pages are requeued, and the report counts throttles,
 // timeouts and requeues. Admission refuses on any failure
-// (TestAdmission), so here it is taken as passed.
+// (TestAdmission), so each arm's proxy leaves its first request (Get
+// Account Information) alone.
 func TestFaultsRequeued(t *testing.T) {
 	defer keyrange.SetRequeueBackoff(5*time.Millisecond, 20*time.Millisecond)()
-	admit := admitHNS
-	admitHNS = func(context.Context, API, string) (bool, error) { return false, nil }
-	defer func() { admitHNS = admit }()
 	keys := lowKeys()
 	r := azblobtest.Serve(t, keys)
 	var timeouts, delayed, reset int64
@@ -41,9 +39,9 @@ func TestFaultsRequeued(t *testing.T) {
 			workers = 1
 		}
 		px, err := faulttest.New(base(r), faulttest.Plan{Seed: 5, Dialect: "azure", Windows: []faulttest.Window{
-			{N1: 60, Fraction: 0.8, Fault: faulttest.Throttle},
-			{Fraction: 0.05, Fault: faulttest.Latency, Delay: 600 * time.Millisecond},
-			{Fraction: 0.05, Fault: faulttest.Reset}}})
+			{N0: 1, N1: 60, Fraction: 0.8, Fault: faulttest.Throttle},
+			{N0: 1, Fraction: 0.05, Fault: faulttest.Latency, Delay: 600 * time.Millisecond},
+			{N0: 1, Fraction: 0.05, Fault: faulttest.Reset}}})
 		if err != nil {
 			t.Fatal(err)
 		}

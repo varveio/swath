@@ -635,7 +635,7 @@ func TestAccountInfo(t *testing.T) {
 			t.Errorf("%s: %v, %v", container, got, err)
 		}
 	}
-	if _, err := c.AccountInfo(context.Background(), "unknown"); !errors.Is(err, errHNSUnknown) {
+	if _, err := c.AccountInfo(context.Background(), "unknown"); !errors.Is(err, ErrHNSUnknown) {
 		t.Errorf("no header: %v", err)
 	}
 	if _, err := c.AccountInfo(context.Background(), "denied"); Classify(err) != objhttp.ClassAccessDenied {

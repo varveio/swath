@@ -41,6 +41,12 @@ type API interface {
 	List(ctx context.Context, in *client.ListInput) (*client.ListOutput, error)
 }
 
+// namespaced is implemented by clients that can also ask the account's
+// Data Lake host (client.Client.NamespaceInfo), admission's fallback.
+type namespaced interface {
+	NamespaceInfo(ctx context.Context, container string) (hns bool, err error)
+}
+
 type counted interface{ Counters() client.Counters }
 
 // pooled is implemented by clients that spread requests over a transport
@@ -80,11 +86,15 @@ type Options struct {
 	Endpoint  string
 	Anonymous bool   // send no credentials, whatever the environment holds
 	SAS       string // shared access signature; else the root's, else EnvSAS
-	Timeout   time.Duration
-	Workers   int
-	Warn      func(string) // one-time warnings for the user; may be nil
-	Client    API          // optional; built from the options above when nil
-	Resume    *Resume      // continue after a journaled run's last published key
+	// Flat asserts a flat namespace where admission cannot establish it
+	// (--azblob-flat); an answered hierarchical namespace still refuses.
+	// It is part of the resume identity and the report.
+	Flat    bool
+	Timeout time.Duration
+	Workers int
+	Warn    func(string) // one-time warnings for the user; may be nil
+	Client  API          // optional; built from the options above when nil
+	Resume  *Resume      // continue after a journaled run's last published key
 	// AllVersions is refused: versions, snapshots and deleted blobs are a
 	// later lane.
 	AllVersions bool
@@ -179,10 +189,13 @@ func (p *Provider) Answered() int64 {
 
 // Stats are the provider's part of the run report.
 type Stats struct {
-	Anonymous   bool              `json:"anonymous"`
-	Credentials string            `json:"credentials,omitempty"`
-	MeanActive  float64           `json:"mean_active"`
-	Counters    counters.Snapshot `json:"counters"`
+	Anonymous   bool   `json:"anonymous"`
+	Credentials string `json:"credentials,omitempty"`
+	// Namespace is how admission found the namespace flat: "account
+	// information", "filesystem properties" or "asserted" (--azblob-flat).
+	Namespace  string            `json:"namespace"`
+	MeanActive float64           `json:"mean_active"`
+	Counters   counters.Snapshot `json:"counters"`
 }
 
 // Provider is the range engine bound to List Blobs.
@@ -193,6 +206,7 @@ type Provider struct {
 	anonymous bool
 	creds     string
 	route     string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
+	namespace string // how admission found the namespace flat (Stats.Namespace)
 }
 
 // Range is the engine's range.
@@ -200,11 +214,10 @@ type Range = keyrange.Range
 
 var _ source.Provider[Range, Object] = (*Provider)(nil)
 
-// New builds a provider and admits the account: Get Account Information
-// must answer that its namespace is flat (x-ms-is-hns-enabled: false).
-// Anything else, a hierarchical namespace, a refused call, a missing
-// header or a failure, refuses the run (source.Unsupported) before any
-// listing request: on a hierarchical-namespace account '/' sorts lowest,
+// New builds a provider and admits the account (admit): its namespace
+// must be positively flat, or the run is refused (source.Unsupported)
+// before any listing request: on a hierarchical-namespace account '/'
+// sorts lowest,
 // and after a byte cursor "a.z" the key "a/child" is still in range, but a
 // seek that sorts '/' lowest skips it while every page still ascends, so
 // nothing downstream could notice.
@@ -240,21 +253,52 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	return p, nil
 }
 
-// admitHNS is the namespace admission (tests replace it).
-var admitHNS = func(ctx context.Context, c API, container string) (bool, error) { return c.AccountInfo(ctx, container) }
-
-// admit refuses the run unless the account's namespace is positively flat.
+// admit refuses the run unless the account's namespace is flat: (1) Get
+// Account Information on the blob endpoint, whose x-ms-is-hns-enabled
+// false passes and true refuses; (2) when that call is refused (401, the
+// answer to any anonymous caller, or 403) or the header is absent,
+// Filesystem Get Properties on the account's Data Lake host (only for an
+// ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
+// false passes and true refuses; (3) anything else is unknown, which
+// refuses unless Options.Flat asserts a flat namespace.
 func (p *Provider) admit(ctx context.Context) error {
-	hns, err := admitHNS(ctx, p.client, p.opt.Container)
+	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
+	how := "account information"
+	if err != nil && ctx.Err() == nil && fallback(err) {
+		if n, ok := p.client.(namespaced); ok {
+			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
+				hns, err, how = h, nil, "filesystem properties"
+			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
+				err = fmt.Errorf("%v; filesystem properties: %v", err, nerr)
+			}
+		}
+	}
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return context.Cause(ctx)
-	case err != nil:
-		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%v); only flat accounts are listed", p.opt.Account, err))
-	case hns:
-		return source.Unsupported(fmt.Errorf("azblob: account %s has a hierarchical namespace; only flat accounts are listed", p.opt.Account))
+	case err == nil && hns:
+		return source.Unsupported(fmt.Errorf("azblob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
+	case err == nil:
+		p.namespace = how
+	case p.opt.Flat:
+		p.namespace = "asserted"
+		if p.opt.Warn != nil {
+			p.opt.Warn(fmt.Sprintf("azblob: account %s: the namespace could not be read (%v); listing as flat, as --azblob-flat asserts", p.opt.Account, err))
+		}
+	default:
+		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%v); only flat accounts are listed (--azblob-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
+}
+
+// fallback: Get Account Information was refused or answered without the
+// header, so the Data Lake host may tell.
+func fallback(err error) bool {
+	switch client.Classify(err) {
+	case objhttp.ClassAuth, objhttp.ClassAccessDenied:
+		return true
+	}
+	return errors.Is(err, client.ErrHNSUnknown)
 }
 
 // connect builds the client unless Options.Client supplies one (own).
@@ -350,7 +394,7 @@ func (p *Provider) Stats() Stats {
 		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // highByte reports whether s holds a byte in EE..F4: a lead byte of a

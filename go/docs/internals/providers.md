@@ -97,8 +97,10 @@ validation of every page.
 `x-ms-version: 2026-10-06` pinned (the replay also serves 2026-06-06; the two behave alike), a fresh
 `x-ms-client-request-id` per attempt and the swath user agent; the default endpoint is
 `https://ACCOUNT.blob.core.windows.net`, any other one takes the account as its first path segment (the replay,
-Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`; a
-refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
+Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`;
+`NamespaceInfo` sends Filesystem Get Properties (a HEAD) on the account's Data Lake host and reads
+`x-ms-namespace-enabled`, for anonymous admission (an endpoint other than `ACCOUNT.blob.core.windows.net` has
+no such host: `ErrNoDFSEndpoint`); in both a refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
 before `encoding/xml`'s streaming decoder reads `EnumerationResults` one entry at a time, keeping `Blob` and
 `BlobPrefix` in one slice in wire order and only the listed properties. A `<Name Encoded="true">` (a name with
 U+FFFE or U+FFFF) is percent-decoded once with path semantics (`+` stays `+`); a malformed escape or invalid
@@ -404,15 +406,21 @@ reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted
 as `?sig=[redacted]`, and a resume of either needs a SAS again (`--azblob-sas` or the environment); the root in
 the identity, the manifest, the reports and the errors has no query.
 
-**Admission.** Before any listing request, Get Account Information on the container path must answer
-`x-ms-is-hns-enabled: false`. A hierarchical namespace, a refused call (403, and the 401 Azure answers an
-anonymous caller), a missing header or any other failure refuses the run (`source.Unsupported`: exit 2, class
-`refused`, cause `unsupported`, the message naming the account and the reason). The order defences cannot
-stand in: on a hierarchical-namespace account `/` sorts lowest, and after a byte cursor `a.z` the key
-`a/child` is still in range, but a seek that sorts `/` lowest skips it while every page still ascends. So
-anonymous listing of a public container is refused too, because Azure does not tell an anonymous caller the
-namespace (checked live on 2026-11-08). `--all-versions` is refused the same way (versions, snapshots and deleted
-blobs are a later lane).
+**Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
+the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
+which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
+account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
+the blob host with its `blob` label replaced, so only for an `ACCOUNT.blob.core.windows.net` endpoint; with
+`--azblob-endpoint` elsewhere there is no such host and this step is skipped): `x-ms-namespace-enabled` `false`
+passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
+Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
+unless `--azblob-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
+The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
+`filesystem properties` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
+reason). The order defences cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
+byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
+still ascends. `--all-versions` is refused the same way (versions, snapshots and deleted blobs are a later lane).
 
 **Order and the staged refusal.** Azure lists in UTF-16 code-unit order, which differs from byte order only
 between names whose first differing scalars are one in U+E000..U+FFFF (lead byte EE or EF) and one at U+10000 and
@@ -445,7 +453,7 @@ with `content_md5` (absent for blobs uploaded in blocks without one), never an E
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
-are the only equivalence), `account`, `container`. Credentials may change, a SAS among them. A run with
+are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-flat`). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles` (503 `ServerBusy` and 429),
 `timeouts`, `parse_failures`, the admission's) and `transport.pool_size`. **Connections**: the GCS pool, one
@@ -896,7 +904,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | S3 | Azure Blob | fs |
 |---|---|---|---|---|
-| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container | – |
+| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
 | `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | `(K, ⊤]` | – |
 | `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |

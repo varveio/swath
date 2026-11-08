@@ -117,6 +117,8 @@ Source and output:
         Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
         Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -258,6 +260,8 @@ Source and output:
         Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
         Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -387,9 +391,12 @@ Diagnostics:
   `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--azblob-anonymous`, else a SAS (`--azblob-sas`, the
   root's query when it carries `sig`, or `AZURE_STORAGE_SAS_TOKEN`), else an account key (`AZURE_STORAGE_KEY`),
   else Entra ID (`DefaultAzureCredential`). A SAS is never recorded: `swath resume` must be given one again, and
-  may be given another. Only accounts that report a flat namespace are listed: a hierarchical-namespace account,
-  or one whose namespace cannot be read (an anonymous caller is never told), is refused before any listing
-  request (exit 2, cause `unsupported`), as is `--all-versions`. A run that meets a name at U+E000 and above stops
+  may be given another. Only accounts that report a flat namespace are listed, by Get Account Information or,
+  when that is refused (an anonymous caller always is) or silent, by the account's Data Lake host
+  (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; not asked with a custom `--azblob-endpoint`).
+  A hierarchical-namespace account is refused before any listing request (exit 2, cause `unsupported`), as is
+  `--all-versions`; so is one whose namespace neither answer gives, unless `--azblob-flat` asserts it flat (the
+  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). A run that meets a name at U+E000 and above stops
   refused (exit 2, cause `unsupported`, resumable) until a later build lists such names
   ([internals/providers.md](internals/providers.md#azure-blob-internalsourceazblob)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,

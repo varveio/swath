@@ -41,7 +41,7 @@ var helpGroups = []helpGroup{
 		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
 		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
-		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"},
+		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"}, {name: "azblob-flat"},
 		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
 		{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},

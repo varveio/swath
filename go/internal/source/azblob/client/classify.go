@@ -35,18 +35,19 @@ const (
 
 // The headers and values the client sends or reads.
 const (
-	headerErrorCode       = "x-ms-error-code"
-	headerRetryAfter      = "Retry-After"
-	headerHNSEnabled      = "x-ms-is-hns-enabled"
-	headerClientRequestID = "x-ms-client-request-id"
-	headerVersion         = "x-ms-version"
-	headerDate            = "x-ms-date"
-	headerAuthorization   = "Authorization"
-	headerAccept          = "Accept"
-	headerUserAgent       = "User-Agent"
-	headerLocation        = "Location"
-	acceptXML             = "application/xml"
-	maxErrorBody          = 64 << 10 // an error body read for its code and message
+	headerErrorCode        = "x-ms-error-code"
+	headerRetryAfter       = "Retry-After"
+	headerHNSEnabled       = "x-ms-is-hns-enabled"
+	headerNamespaceEnabled = "x-ms-namespace-enabled"
+	headerClientRequestID  = "x-ms-client-request-id"
+	headerVersion          = "x-ms-version"
+	headerDate             = "x-ms-date"
+	headerAuthorization    = "Authorization"
+	headerAccept           = "Accept"
+	headerUserAgent        = "User-Agent"
+	headerLocation         = "Location"
+	acceptXML              = "application/xml"
+	maxErrorBody           = 64 << 10 // an error body read for its code and message
 )
 
 // Error is a non-200 answer.

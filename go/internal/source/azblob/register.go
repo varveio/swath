@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ func flags(f *flag.FlagSet, diag bool, shared any) any {
 	f.StringVar(&o.Endpoint, "azblob-endpoint", "", "Azure Blob: blob service `URL` replacing "+client.DefaultEndpoint+" (Azurite, the replay server); the account is then its first path segment")
 	f.BoolVar(&o.Anonymous, "azblob-anonymous", false, "Azure Blob: send no credentials, ignoring any in the environment")
 	f.StringVar(&o.SAS, "azblob-sas", "", "Azure Blob: shared access signature `TOKEN` (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else "+EnvSAS+"; with none, an account key in "+EnvKey+" (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials")
+	f.BoolVar(&o.Flat, "azblob-flat", false, "Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report")
 	f.DurationVar(&o.Timeout, "azblob-request-timeout", 30*time.Second, "Azure Blob: per-request timeout; a request that exceeds it is retried")
 	return o
 }
@@ -126,8 +128,9 @@ func (o *opened) endpoint() string {
 // Identity freezes what a resume must list the same: the source (account,
 // container, prefix), the endpoint requests go to (scheme and host case
 // are the only equivalence), the account and the container. Credentials
-// may change, a SAS among them. A supplied client must name its route
-// (Routed), or the run declines resume.
+// may change, a SAS among them. flat_asserted is --azblob-flat, so a
+// resume cannot add or drop the assertion. A supplied client must name its
+// route (Routed), or the run declines resume.
 func (o *opened) Identity() source.Identity {
 	ep := o.endpoint()
 	return source.Identity{Provider: "azblob", Fields: []source.IdentityField{
@@ -135,6 +138,7 @@ func (o *opened) Identity() source.Identity {
 		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
 		{Name: "account", Value: o.p.opt.Account},
 		{Name: "container", Value: o.p.opt.Container},
+		{Name: "flat_asserted", Value: strconv.FormatBool(o.p.opt.Flat)},
 	}}
 }
 

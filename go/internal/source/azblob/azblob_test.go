@@ -5,12 +5,14 @@ package azblob
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -347,6 +349,11 @@ func TestAdmission(t *testing.T) {
 	if lists.Load() != 0 {
 		t.Fatalf("%d list requests before the refusal", lists.Load())
 	}
+	flat := azblobtest.Serve(t, []string{"a"})
+	p, err := New(context.Background(), Options{Account: flat.Account, Container: flat.Container, Endpoint: base(flat), Anonymous: true, Workers: 1})
+	if err != nil || p.Stats().Namespace != "account information" {
+		t.Fatalf("flat replay: %v", err)
+	}
 	c := &pages{err: errors.New("x-ms-is-hns-enabled missing")}
 	if _, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c}); !errors.Is(err, source.ErrUnsupported) {
 		t.Fatalf("unknown namespace: %v", err)
@@ -359,6 +366,123 @@ func TestAdmission(t *testing.T) {
 	src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: c, AllVersions: true}, Workers: 1})
 	if src != nil || !errors.Is(err, source.ErrUnsupported) || c.lists.Load() != 0 {
 		t.Fatalf("all versions through open: %v", err)
+	}
+}
+
+// hostFake answers each host the client addresses with its own handler:
+// the account's blob and Data Lake hosts on the default endpoint.
+type hostFake map[string]http.HandlerFunc
+
+func (h hostFake) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	f, ok := h[req.URL.Host]
+	if !ok {
+		return nil, fmt.Errorf("no host %s", req.URL.Host)
+	}
+	f(rec, req)
+	return rec.Result(), nil
+}
+
+// TestAdmissionFallback: when Get Account Information is refused (401,
+// as Azure answers any anonymous caller, or 403) or silent, the Data Lake
+// host's Filesystem Get Properties decides: false lists, true refuses; an
+// absent header or a refusal there is unknown, which refuses unless
+// --azblob-flat asserts a flat namespace (frozen in the identity, shown in
+// the report, warned about). A hierarchical namespace refuses whatever is
+// asserted, and an endpoint that is not ACCOUNT.blob.core.windows.net has
+// no Data Lake host to ask.
+func TestAdmissionFallback(t *testing.T) {
+	blob := func(status int, hns string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if hns != "" {
+				w.Header().Set("x-ms-is-hns-enabled", hns)
+			}
+			w.WriteHeader(status)
+		}
+	}
+	dfs := func(status int, enabled string, asked *int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			*asked++
+			if r.Method != http.MethodHead || r.URL.Query().Get("resource") != "filesystem" || r.URL.Path != "/c" {
+				w.WriteHeader(400)
+				return
+			}
+			if enabled != "" {
+				w.Header().Set("x-ms-namespace-enabled", enabled)
+			}
+			w.WriteHeader(status)
+		}
+	}
+	for _, c := range []struct {
+		name         string
+		blob         http.HandlerFunc
+		dfsStatus    int
+		dfsEnabled   string
+		flat         bool
+		admitted     string // Stats.Namespace, "" when refused
+		hierarchical bool
+		dfsNotAsked  bool
+	}{
+		{"401, dfs false", blob(401, ""), 200, "false", false, "filesystem properties", false, false},
+		{"403, dfs false", blob(403, ""), 200, "false", false, "filesystem properties", false, false},
+		{"silent, dfs false", blob(200, ""), 200, "false", false, "filesystem properties", false, false},
+		{"401, dfs true", blob(401, ""), 200, "true", false, "", true, false},
+		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "", true, false},
+		{"401, dfs absent", blob(401, ""), 200, "", false, "", false, false},
+		{"401, dfs absent, asserted", blob(401, ""), 200, "", true, "asserted", false, false},
+		{"401, dfs 401, asserted", blob(401, ""), 401, "", true, "asserted", false, false},
+		{"blob false", blob(200, "false"), 200, "true", false, "account information", false, true},
+		{"blob true, asserted", blob(200, "true"), 200, "false", true, "", true, true},
+		{"blob 500, asserted", blob(500, ""), 200, "false", true, "asserted", false, true},
+	} {
+		asked := 0
+		hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": c.blob, "acct.dfs.core.windows.net": dfs(c.dfsStatus, c.dfsEnabled, &asked)}}
+		cl, err := client.New(context.Background(), client.Config{Account: "acct", Anonymous: true, HTTPClient: hc, MaxAttempts: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var warned []string
+		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: cl, Flat: c.flat}, Workers: 1,
+			Warn: func(s string) { warned = append(warned, s) }})
+		switch {
+		case c.admitted == "":
+			if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" ||
+				strings.Contains(err.Error(), "hierarchical namespace") != c.hierarchical {
+				t.Fatalf("%s: %v, want a refusal (hierarchical %v)", c.name, err, c.hierarchical)
+			}
+		case err != nil:
+			t.Fatalf("%s: %v", c.name, err)
+		default:
+			o := src.(*opened)
+			if n := o.p.Stats().Namespace; n != c.admitted {
+				t.Fatalf("%s: admitted by %q, want %q", c.name, n, c.admitted)
+			}
+			var asserted string
+			for _, f := range o.Identity().Fields {
+				if f.Name == "flat_asserted" {
+					asserted = f.Value
+				}
+			}
+			if asserted != strconv.FormatBool(c.flat) || (c.admitted == "asserted") != (len(warned) == 1) {
+				t.Fatalf("%s: flat_asserted %q, warnings %q", c.name, asserted, warned)
+			}
+			if b, _ := json.Marshal(o.Report().Stats); !strings.Contains(string(b), `"namespace":"`+c.admitted+`"`) {
+				t.Fatalf("%s: report stats %s", c.name, b)
+			}
+		}
+		if (asked == 0) != c.dfsNotAsked {
+			t.Fatalf("%s: the Data Lake host asked %d times", c.name, asked)
+		}
+	}
+	// --azblob-flat on a custom endpoint, which has no Data Lake host:
+	// the 401 alone is unknown, and the assertion admits it.
+	srv := httptest.NewServer(blob(401, ""))
+	t.Cleanup(srv.Close)
+	for _, flat := range []bool{false, true} {
+		_, err := New(context.Background(), Options{Account: "acct", Container: "c", Endpoint: srv.URL, Anonymous: true, Flat: flat, Workers: 1})
+		if (err == nil) != flat {
+			t.Fatalf("custom endpoint, flat %v: %v", flat, err)
+		}
 	}
 }
 
@@ -444,7 +568,7 @@ func TestIdentity(t *testing.T) {
 	root := "az://replay/corpus/p"
 	a, loc := ident(root+"?sv=1&sig=SECRET1", base(r), "")
 	b, _ := ident(root, "HTTP://"+strings.TrimPrefix(base(r), "http://")+"/", "sv=1&sig=SECRET2")
-	want := []string{"source=az://replay/corpus/p", "endpoint=" + base(r) + "/replay", "account=replay", "container=corpus"}
+	want := []string{"source=az://replay/corpus/p", "endpoint=" + base(r) + "/replay", "account=replay", "container=corpus", "flat_asserted=false"}
 	if !slices.Equal(canon(a), want) || !slices.Equal(canon(a), canon(b)) || a.Provider != "azblob" {
 		t.Fatalf("identities %q %q, want %q", canon(a), canon(b), want)
 	}

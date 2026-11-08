@@ -5,27 +5,21 @@ package azblob
 
 import (
 	"context"
-	"errors"
 	"os"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
-	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
 // TestLiveAnonymous lists a public container (AZBLOB_LIVE_ROOT, e.g.
 // az://azureopendatastorage/holidaydatacontainer; skipped without it, never
 // run in CI) anonymously with 64 workers and the seed, and compares its
-// keys and sizes with a flat walk by the official SDK (test only).
-//
-// Anonymous Get Account Information is answered 401
-// NoAuthenticationInformation by Azure, so admission refuses every
-// anonymous run: the test checks that refusal first, then lists with the
-// admission taken as passed, which is the listing the comparison is about.
+// keys and sizes with a flat walk by the official SDK (test only). Azure
+// answers an anonymous Get Account Information with 401, so the listing is
+// admitted through the Data Lake host's Filesystem Get Properties.
 func TestLiveAnonymous(t *testing.T) {
 	root := os.Getenv("AZBLOB_LIVE_ROOT")
 	if root == "" {
@@ -36,16 +30,14 @@ func TestLiveAnonymous(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	_, err = open(ctx, registry.Request{Root: root, Options: &Options{Anonymous: true}, Workers: 1})
-	if !errors.Is(err, source.ErrUnsupported) {
-		t.Fatalf("anonymous admission: %v, want a refusal", err)
+	p, err := New(ctx, Options{Account: account, Container: container, Anonymous: true, Workers: 1})
+	if err != nil {
+		t.Fatalf("admission: %v", err)
 	}
-	t.Logf("admission, as specified: %v", err)
-
-	admit := admitHNS
-	admitHNS = func(context.Context, API, string) (bool, error) { return false, nil }
-	defer func() { admitHNS = admit }()
-	t0 := time.Now()
+	if n := p.Stats().Namespace; n != "filesystem properties" {
+		t.Fatalf("admitted by %q, want the filesystem properties", n)
+	}
+	t0 := time.Now() // the listing, its own admission included
 	rows, st := list(t, Options{Account: account, Container: container, Prefix: prefix, Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureAuto}}, 64)
 	took := time.Since(t0)
 
