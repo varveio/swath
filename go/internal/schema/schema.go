@@ -33,6 +33,10 @@ type Spec struct {
 	Name     string
 	Type     Type
 	Required bool
+	// MaxBytes is a string or binary column's longest value, when it can
+	// be long (a symlink target): the writer's admission prices its pages
+	// at it (parquetout.EncoderBytes). 0: short values.
+	MaxBytes int
 }
 
 // Row is one listed entry: its key and the producer's typed payload P.
@@ -118,7 +122,7 @@ var ErrKeyTooLong = errors.New("key longer than the schema allows")
 // Specs returns the column specs in order, the key first.
 func (s *Schema[P]) Specs() []Spec {
 	out := make([]Spec, 0, len(s.Columns)+1)
-	out = append(out, Spec{"key", s.Key, true})
+	out = append(out, Spec{Name: "key", Type: s.Key, Required: true})
 	for _, c := range s.Columns {
 		out = append(out, c.Spec)
 	}

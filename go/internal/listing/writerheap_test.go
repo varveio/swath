@@ -21,21 +21,25 @@ import (
 // TestWriterAdmissionCoversHeap is the writer admission's heap gate: four
 // parts open at once (the open part continued as a segment, three more),
 // four encoders admitted of six (MaxEncoders 6, as the default at 64
-// listing workers, before Admit), keys at the schema's longest (1,024 bytes
-// for S3, 4,096 for a local path) and random so nothing compresses them
-// away; after every page the live heap the writers and their codec hold
-// stays within the four encoders' admission (parquetout.EncoderBytes
-// each). Before (sol review 2, P2) each writer held a codec of its own with
+// listing workers, before Admit), values at the schema's longest (1,024-
+// byte keys for S3, 24 pages a writer, and one S3 writer alone; 4,096-byte
+// keys and link targets for a local path) and random so nothing
+// compresses them away; after every page the live heap the writers and
+// their codec hold stays within the encoders' admission
+// (parquetout.EncoderBytes each). Before (sol review 2, P2) each writer held a codec of its own with
 // a zstd state per column goroutine, each about 18 MiB once it has
 // compressed a page over one zstd block, against a constant 24 MiB per
 // encoder; then (sol review 3) the shared codec's six states all warmed
-// before the two beyond the four admitted were charged.
+// before the two beyond the four admitted were charged, and the price
+// missed the residency of long runs (135.9 MiB against 122.2 at 24 pages)
+// and wide link targets (228.8 against 159.8).
 func TestWriterAdmissionCoversHeap(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates hundreds of megabytes")
 	}
-	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 6)
-	writerHeap(t, &localfs.Schema, fsRow(4096, 0), 4, 6, 6)
+	writerHeap(t, &s3.Schema, s3Row(1024), 4, 6, 24)
+	writerHeap(t, &s3.Schema, s3Row(1024), 1, 1, 24)
+	writerHeap(t, &localfs.Schema, fsRow(4096, 4095), 4, 6, 6)
 }
 
 // s3Row makes S3 rows with random keys of n bytes.

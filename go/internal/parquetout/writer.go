@@ -38,59 +38,71 @@ const (
 
 // EncoderBytes is the working set admitted per encoder of schema s: one
 // writer's (writerBytes) and one of the router's codec states (stateBytes:
-// the codec is shared by the writers, a state per encoder). It is priced
-// at the longest key the schema allows, so it holds whatever the keys.
+// the codec is shared by the writers, a state per encoder admitted). It is
+// priced at the longest values the schema allows (its key cap, and each
+// column's schema.Spec.MaxBytes), so it holds whatever the listing.
 func EncoderBytes[P any](s *schema.Schema[P]) int64 {
-	return encoderBytes(s.MaxKeyBytes, len(s.Columns)+1)
+	wide := 0
+	for i := range s.Columns {
+		wide += s.Columns[i].MaxBytes
+	}
+	return encoderBytes(s.MaxKeyBytes, wide, len(s.Columns)+1)
 }
 
 // DefaultEncoderBytes prices an encoder of a schema not known yet: keys
-// without a cap and 16 columns, beyond every provider's schema.
-var DefaultEncoderBytes = encoderBytes(0, 16)
+// without a cap, one more wide column of unboundedKeyBytes and 16
+// columns, beyond every provider's schema.
+var DefaultEncoderBytes = encoderBytes(0, unboundedKeyBytes, 16)
 
 // unboundedKeyBytes prices a key without a cap (schema.Info.MaxKeyBytes
 // 0: a local path, at most PATH_MAX on Linux).
 const unboundedKeyBytes = 4096
 
-// The writer's and its codec state's working sets, measured with
-// parquet-go v0.32.0 and klauspost/compress v1.19.1 (2026-11-07, live
-// heap after GC across a part of random keys at each length):
+// The writer's and its codec state's working sets are measurements, not
+// values derived from the libraries: parquet-go v0.32.0 and
+// klauspost/compress v1.19.1 (2026-11-08, live heap after GC after every
+// page of 24 pages a writer, random values at each length). Remeasure on
+// an upgrade of either (TestWriterAdmissionCoversHeap, and the probes in
+// docs/internals/parquet-output.md).
 //   - a codec state that has compressed a page larger than one zstd block
 //     (128 KiB) keeps a history of twice the 8 MiB window, plus its match
 //     tables: about 18 MiB measured, 19 priced (bigStateBytes); one that
 //     only saw smaller pages, about 2 MiB (smallStateBytes). A key page is
 //     1,024 keys, so keys over 128 bytes make every state a big one.
-//   - a writer holds its row group's encoded pages (groupBytes, overshot by
-//     up to one page: the size is checked between pages), the key page
-//     being filled and encoded (two more copies of pageRows keys) and a
-//     page buffer per column (columnPageBytes): four writers and four
-//     states measured 114 MiB for the S3 schema at 1,024-byte keys (122
-//     priced) and 143 for the filesystem schema at 4,096 (160 priced).
+//   - a writer holds its row group's encoded pages (groupBytes, overshot:
+//     the size is checked between pages), a page buffer per column
+//     (pageBufferBytes, grown to the page) and its wide values (the key,
+//     and columns with Spec.MaxBytes) about two and a half times over:
+//     the page being filled, its encoding, the dictionary attempt. One S3
+//     writer at 1,024-byte keys measured 13 MiB, four 15 each (19.5
+//     priced); the filesystem schema with 4,096-byte keys and link targets
+//     38 (43 priced).
 const (
 	bigStateBytes   = 19 << 20
 	smallStateBytes = 2 << 20
 	zstdBlockBytes  = 128 << 10
-	columnPageBytes = 64 << 10
 )
 
-// stateBytes is one codec state's working set for keys of at most key
-// bytes; writerBytes one writer's, of columns columns.
-func stateBytes(key int) int64 {
-	if int64(pageRows)*int64(key) > zstdBlockBytes {
+// stateBytes is one codec state's working set for pages of at most page
+// bytes; writerBytes one writer's, of columns columns whose wide values
+// (the key and the Spec.MaxBytes columns) sum to wide bytes a row.
+func stateBytes(page int64) int64 {
+	if page > zstdBlockBytes {
 		return bigStateBytes
 	}
 	return smallStateBytes
 }
 
-func writerBytes(key, columns int) int64 {
-	return groupBytes + 3*int64(pageRows)*int64(key) + int64(columns)*columnPageBytes
+func writerBytes(wide, columns int) int64 {
+	return groupBytes + int64(columns)*pageBufferBytes + 5*int64(pageRows)*int64(wide)/2
 }
 
-func encoderBytes(maxKey, columns int) int64 {
+func encoderBytes(maxKey, wide, columns int) int64 {
 	if maxKey <= 0 {
 		maxKey = unboundedKeyBytes
 	}
-	return writerBytes(maxKey, columns) + stateBytes(maxKey)
+	page := int64(pageRows) * int64(max(maxKey, wide))
+	return writerBytes(maxKey+wide, columns) + stateBytes(page)
 }
 
 // Recipe identifies everything about the writer that decides a part's
