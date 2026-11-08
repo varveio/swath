@@ -218,7 +218,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
 | `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
 | `groups.max_rows` | max | rows | groups | the most rows one key's group held |
-| `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages) was not split |
+| `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

@@ -282,8 +282,8 @@ func TestGroupsTake(t *testing.T) {
 	}{
 		{"split-at-last-key", []step{{"A,B,B", false, "A", "B,B", false}, {"B,C", false, "B,B,B", "C", false}, {"C,D", true, "C,C,D", "", false}}},
 		{"hot-key", []step{{"A,B", false, "A", "B", false}, {"B", false, "B,B", "", true}, {"B", false, "B", "", true}, {"B,C", false, "B", "C", false}}},
-		{"hot-then-other-hot", []step{{"B", false, "B", "", true}, {"C", false, "C", "", true}}},
-		{"empty-keeps-state", []step{{"B", false, "B", "", true}, {"", false, "", "", true}, {"", true, "", "", false}}},
+		{"one-key-pages-held", []step{{"B", false, "", "B", false}, {"C", false, "B", "C", false}, {"C", false, "C,C", "", true}, {"D", false, "", "D", false}}},
+		{"empty-keeps-state", []step{{"B", false, "", "B", false}, {"", false, "", "B", false}, {"B", false, "B,B", "", true}, {"", false, "", "", true}, {"", true, "", "", false}}},
 		{"held-then-one-key", []step{{"A,B", false, "A", "B", false}, {"C,C", false, "B", "C,C", false}, {"", true, "C,C", "", false}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

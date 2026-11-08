@@ -71,7 +71,7 @@ var helpGroups = []helpGroup{
 		{name: "color"},
 	}},
 	{diagnosticGroup, []helpFlag{
-		{name: "seed"}, {name: "structure"}, {name: "slow-split"}, {name: "floors"}, {name: "sequential"}, {name: "max-keys"},
+		{name: "seed"}, {name: "structure"}, {name: "slow-split"}, {name: "floors"}, {name: "sequential"}, {name: "max-keys"}, {name: "page-size"},
 		{name: "limiter-slow-start"},
 		{name: "spill-plain"}, {name: "spill-compress"}, {name: "spill-reserve"}, {name: "no-spill"},
 		{name: "no-journal"},

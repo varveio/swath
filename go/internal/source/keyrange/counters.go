@@ -286,7 +286,7 @@ var Counters = table([numCounters]counters.Def{
 	cGroupsHeldRows:               d("groups.held_rows", counters.Count, "rows", "rows of a page's trailing key held back until the next page proved the key complete", "groups"),
 	cGroupsRelistedRows:           d("groups.split_relisted_rows", counters.Count, "rows", "held rows dropped at a split, listed again by the lower child", "groups"),
 	cGroupsMaxRows:                d("groups.max_rows", counters.Max, "rows", "the most rows one key's group held", "groups"),
-	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages) was not split", "groups"),
+	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is

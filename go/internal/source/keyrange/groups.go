@@ -38,9 +38,13 @@ import (
 type groups[P any] struct {
 	held  []schema.Row[P] // the trailing group of the last page, not yet emitted
 	owned bool            // held was copied out of its page (Description.Detach)
-	open  bool            // the last emitted key's group may continue
-	run   int64           // rows of the open group emitted so far
-	win   *tokenWindow    // tokens of continuing pages that showed no greater key
+	// emitted: the chain has emitted a row, so its cursor is a complete
+	// key it listed (before that it is the range's lo, and a split there
+	// would hand on the whole range again without progress).
+	emitted bool
+	open    bool         // the last emitted key's group may continue
+	run     int64        // rows of the open group emitted so far
+	win     *tokenWindow // tokens of continuing pages that showed no greater key
 }
 
 // order checks a page's rows in group mode: nondecreasing, the first above
@@ -92,6 +96,14 @@ func (g *groups[P]) prev(c string) (string, bool) {
 func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string) (emit []schema.Row[P], last string, fresh bool) {
 	top, _ := g.prev(c)
 	fresh = len(rows) > 0 && (top == "" || rows[len(rows)-1].Key > top)
+	if len(rows) == 0 && !done {
+		return nil, c, false // an empty continuing page: nothing changes
+	}
+	defer func() {
+		if len(emit) > 0 {
+			g.emitted = true
+		}
+	}()
 	old, owned := g.held, g.owned
 	all := rows
 	if len(old) > 0 {
@@ -128,8 +140,17 @@ func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string
 		g.open = false
 		return all, k, fresh
 	}
+	if j == 0 && len(old) == 0 && !(g.open && k == c) {
+		// All one new key: held whole (one page), so the key before it is
+		// complete and the range may split there; a small page size makes
+		// every page one key.
+		g.open, g.held = false, slices.Clone(all)
+		p.c.Add(cGroupsHeldRows, int64(len(all)))
+		return nil, c, fresh
+	}
 	if j == 0 {
-		// All one key: emitted as it arrives, its group left open.
+		// The held or open key again: emitted as it arrives (holding it
+		// would grow past a page), its group left open.
 		g.open, g.run = true, first
 		p.c.Inc(cGroupsOpenPages)
 		return all, k, fresh
@@ -181,3 +202,7 @@ func distinct[P any](rows []schema.Row[P]) []string {
 	}
 	return keys
 }
+
+// unsplittable: the chain may not split now: its last emitted key's group
+// may continue, or it has emitted nothing (its cursor is still lo).
+func (g *groups[P]) unsplittable() bool { return g.open || !g.emitted }

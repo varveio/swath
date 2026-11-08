@@ -140,7 +140,7 @@ type running struct {
 	refused      int            // consecutive split decisions the admission gates refused
 	lat          float64        // page latency, ns: an EWMA of its pages (weight slowLatencyWeight), from its parent's (0: unknown)
 	slowLine     bool           // a slow split made it: its time left is not asked again (slowSplitWanted)
-	groupOpen    bool           // group mode: its last page was all one key, whose group may continue (no split, unranked)
+	groupOpen    bool           // group mode: its last emitted key's group may continue, or it emitted none yet (no split, unranked)
 }
 
 // slowKeys is st's keys left for the slow-range rule: its remainder, or,
@@ -512,7 +512,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Add(cUnsplittableKeys, int64(n))
 		}
 		st.ended = done
-		st.groupOpen = grp.open
+		st.groupOpen = p.d.Groups && grp.unsplittable()
 		if p.opt.Floors && n > 0 { // only the tail floor reads it
 			st.dens.observe(first, last, r.lo, r.hi, names)
 		}
@@ -555,10 +555,11 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			pr.gauge, pr.rem = g, rem
 		}
 		if pv, ok := p.decide(st, r, c, pr); ok {
-			if grp.open {
-				// decide refuses a range whose group is open: the lower
-				// child would start after the key, past its other rows.
-				return fmt.Errorf("keyrange: split inside the open group of %q", c)
+			if p.d.Groups && grp.unsplittable() {
+				// decide refuses a range whose group is open (the lower
+				// child would start after the key, past its other rows)
+				// or which emitted nothing yet (no progress).
+				return fmt.Errorf("keyrange: split at %q inside an open group or before a complete key", c)
 			}
 			if len(grp.held) > 0 {
 				p.c.Add(cGroupsRelistedRows, int64(len(grp.held)))
