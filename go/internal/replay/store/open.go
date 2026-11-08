@@ -11,11 +11,12 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
+	seekparquet "github.com/varveio/seekparquet/go"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/format2"
-	"github.com/varveio/swath/go/sortedparquet/javaera"
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/format2"
+	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
 )
 
 // expect states the type of every column a projection reads, by name,
@@ -28,7 +29,7 @@ import (
 // (unsupported_schema, naming the column), so no read decodes a value as a
 // type it is not. No schema the store serves uses one of these names for
 // another meaning.
-var expect = []sortedparquet.Column{
+var expect = []legacy.Column{
 	{Name: "size", Kind: parquet.Int64, Check: signedInt64},
 	{Name: "last_modified", Kind: parquet.Int64, Check: timestampMicros},
 	{Name: "etag", Kind: parquet.ByteArray, Check: stringColumn},
@@ -98,9 +99,20 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 	if err != nil {
 		return nil, Metadata{}, err
 	}
-	s := &Sorted{sem: semaphore.NewWeighted(int64(readers)), readers: readers, files: sortedparquet.NewFileCache(opts.MaxOpenFiles)}
+	s := &Sorted{sem: semaphore.NewWeighted(int64(readers)), readers: readers, files: legacy.NewFileCache(opts.MaxOpenFiles)}
 	meta := Metadata{Ordering: OrderingProfile}
-	if info.IsDir() && format2.IsDataset(path) {
+	if info.IsDir() && isSeekParquet(path) {
+		dataset, err := openSeek(ctx, path, expect, s.files)
+		if err != nil {
+			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
+		}
+		s.reader = dataset
+		meta.Kind, meta.SchemaID = KindSeekParquet, dataset.meta.SchemaID
+		if meta.Identity, err = seekIdentity(path, dataset.meta); err != nil {
+			_ = s.reader.Close()
+			return nil, Metadata{}, err
+		}
+	} else if info.IsDir() && format2.IsDataset(path) {
 		dataset, err := format2.Open(ctx, path, expect, s.files)
 		if err != nil {
 			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
@@ -134,10 +146,15 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 
 // Refusal returns the reason Open refused a fixture as not servable sorted
 // (no_stamp, unsupported_mode, unknown_format_version, incomplete_multifile,
-// mixed_row_types, sanity_failed, and for manifest datasets
+// mixed_row_types, sanity_failed, and for format 2 datasets
 // unsupported_schema, invalid_manifest, no_page_index), row_group_disorder
-// for a read that found a row group's keys out of order, or "" when err is
-// none of these.
+// for a read that found a row group's keys out of order, a SeekParquet
+// refusal code (spec/refusal-codes.json: invalid_manifest, stamp_mismatch,
+// key_order, ...) for a SeekParquet dataset, or "" when err is none of
+// these.
 func Refusal(err error) string {
-	return sortedparquet.ReasonOf(err)
+	if code := seekparquet.CodeOf(err); code != "" {
+		return string(code)
+	}
+	return legacy.ReasonOf(err)
 }

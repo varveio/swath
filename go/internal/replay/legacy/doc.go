@@ -1,10 +1,13 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package sortedparquet reads sorted Parquet listings the way an sstable is
-// read: a lower bound is routed to a part and row group by the actual first
-// key of every row group, the key column's ColumnIndex and OffsetIndex locate
-// the page that can hold it, and only that page onward is decoded, a bounded
+// Package legacy reads the sorted Parquet listings the replay server
+// serves besides SeekParquet datasets: the Java tool's footer-stamped
+// parts (javaera) and the swath-dataset format 2 earlier Go builds wrote
+// (format2). It reads them the way an sstable is read: a lower bound is
+// routed to a part and row group by the actual first key of every row
+// group, the key column's ColumnIndex and OffsetIndex locate the page that
+// can hold it, and only that page onward is decoded, a bounded
 // number of rows at a time, in unsigned byte order of the keys.
 //
 // The package is format-neutral. Open takes the parts in key order and the
@@ -28,6 +31,7 @@
 // Parquet type (a null size or time is returned as null), or that the files
 // are unchanged after Open.
 //
-// It imports only the standard library and parquet-go, so a module outside
-// this repository can import it.
-package sortedparquet
+// SeekParquet datasets, the format this tool writes, are read through the
+// seekparquet module instead (internal/replay/store); this package serves
+// old fixtures. It imports only the standard library and parquet-go.
+package legacy

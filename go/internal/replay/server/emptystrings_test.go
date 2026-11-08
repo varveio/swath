@@ -12,20 +12,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // emptyAndNull returns two objects: "empty", whose six string columns are
 // non-null empty strings, and "null", whose string columns are null.
-func emptyAndNull() []sortedparquettest.Row {
+func emptyAndNull() []legacytest.Row {
 	e := ""
-	empty := sortedparquettest.Object("empty", 1)
+	empty := legacytest.Object("empty", 1)
 	empty.ETag, empty.StorageClass, empty.OwnerID, empty.OwnerDisplayName, empty.ChecksumAlgorithm, empty.ChecksumType = &e, &e, &e, &e, &e, &e
-	null := sortedparquettest.Object("null", 2)
+	null := legacytest.Object("null", 2)
 	null.ETag, null.StorageClass, null.OwnerID, null.OwnerDisplayName, null.ChecksumAlgorithm, null.ChecksumType = nil, nil, nil, nil, nil, nil
-	return []sortedparquettest.Row{empty, null}
+	return []legacytest.Row{empty, null}
 }
 
 // TestEmptyAndNullStringsEndToEnd serves a stamped Java-era part and the
@@ -48,10 +48,10 @@ func TestEmptyAndNullStringsEndToEnd(t *testing.T) {
 		}
 	}
 	rows := emptyAndNull()
-	if err := sortedparquettest.Write(filepath.Join(javaEra, "part-00001.parquet"), sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true)}); err != nil {
+	if err := legacytest.Write(filepath.Join(javaEra, "part-00001.parquet"), legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sortedparquettest.Write(filepath.Join(capture, "part-00000.parquet"), sortedparquettest.Part{Rows: []sortedparquettest.Row{rows[1], rows[0]}}); err != nil {
+	if err := legacytest.Write(filepath.Join(capture, "part-00000.parquet"), legacytest.Part{Rows: []legacytest.Row{rows[1], rows[0]}}); err != nil {
 		t.Fatal(err)
 	}
 	converted := filepath.Join(dir, "converted")

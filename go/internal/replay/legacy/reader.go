@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sortedparquet
+package legacy
 
 import (
 	"bytes"
@@ -221,22 +221,32 @@ func openPart(src PartSource, expect []Column) (*part, error) {
 			p.leaves[path[0]] = leaf.ColumnIndex
 		}
 	}
+	if err := CheckColumns(src.Name, footer, expect); err != nil {
+		return nil, err
+	}
+	p.index = make([]atomic.Pointer[groupIndex], len(footer.Metadata().RowGroups))
+	return p, nil
+}
+
+// CheckColumns refuses (unsupported_schema) a part named name whose footer
+// has a column of expect that is nested, repeated, of another physical
+// type or that fails the column's Check. A column the part lacks passes.
+func CheckColumns(name string, footer *parquet.File, expect []Column) error {
 	for _, column := range expect {
 		leaf, ok := footer.Schema().Lookup(column.Name)
 		if !ok {
 			continue
 		}
 		if !leaf.Node.Leaf() || leaf.Node.Repeated() || leaf.Node.Type().Kind() != column.Kind || leaf.MaxRepetitionLevel != 0 {
-			return nil, Refuse(ReasonUnsupportedSchema, "%s: column %s is not a non-repeated %s", src.Name, column.Name, column.Kind)
+			return Refuse(ReasonUnsupportedSchema, "%s: column %s is not a non-repeated %s", name, column.Name, column.Kind)
 		}
 		if column.Check != nil {
 			if err := column.Check(leaf.Node); err != nil {
-				return nil, Refuse(ReasonUnsupportedSchema, "%s: column %s: %v", src.Name, column.Name, err)
+				return Refuse(ReasonUnsupportedSchema, "%s: column %s: %v", name, column.Name, err)
 			}
 		}
 	}
-	p.index = make([]atomic.Pointer[groupIndex], len(footer.Metadata().RowGroups))
-	return p, nil
+	return nil
 }
 
 // checkRowCounts checks that the row groups hold non-negative counts that

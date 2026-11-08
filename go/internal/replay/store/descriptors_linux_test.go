@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/sortedparquet"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 const (
@@ -40,7 +40,7 @@ func TestOpenManyPartsWithinDescriptorBudget(t *testing.T) {
 	dir := t.TempDir()
 	const parts = 300
 	for i := range parts {
-		part := sortedparquettest.Part{Rows: objects(fmt.Sprintf("k%04d", i)), Stamps: sortedparquettest.Stamps(i+1, i == parts-1)}
+		part := legacytest.Part{Rows: objects(fmt.Sprintf("k%04d", i)), Stamps: legacytest.Stamps(i+1, i == parts-1)}
 		writePart(t, filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", i+1)), part)
 	}
 	for _, limit := range []string{"128", "64"} {
@@ -69,7 +69,7 @@ func descriptorChildRun(t *testing.T, dir string) {
 	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil {
 		t.Fatal(err)
 	}
-	bound := sortedparquet.DefaultMaxOpenFiles()
+	bound := legacy.DefaultMaxOpenFiles()
 	if bound != int(soft/2) {
 		t.Fatalf("default bound %d under a soft limit of %d", bound, soft)
 	}
@@ -150,8 +150,8 @@ func TestReopenRefusesAFIFO(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	writePart(t, filepath.Join(dir, "part-00001.parquet"), sortedparquettest.Part{Rows: objects("a"), Stamps: sortedparquettest.Stamps(1, false)})
-	writePart(t, filepath.Join(dir, "part-00002.parquet"), sortedparquettest.Part{Rows: objects("m"), Stamps: sortedparquettest.Stamps(2, true)})
+	writePart(t, filepath.Join(dir, "part-00001.parquet"), legacytest.Part{Rows: objects("a"), Stamps: legacytest.Stamps(1, false)})
+	writePart(t, filepath.Join(dir, "part-00002.parquet"), legacytest.Part{Rows: objects("m"), Stamps: legacytest.Stamps(2, true)})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestReopenRefusesAFIFO$", "-test.v", "-test.count=1")
@@ -187,7 +187,7 @@ func fifoChildRun(t *testing.T, dir string) {
 	if err := syscall.Mkfifo(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := read("a"); !errors.Is(err, sortedparquet.ErrNotRegular) {
+	if err := read("a"); !errors.Is(err, legacy.ErrNotRegular) {
 		t.Fatalf("read of a part replaced by a FIFO: %v", err)
 	}
 	if err := s.Close(); err != nil {

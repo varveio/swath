@@ -48,7 +48,7 @@ func textFields(o *Object) [8]**string {
 	return [8]**string{&o.ETag, &o.StorageClass, &o.OwnerID, &o.OwnerDisplayName, &o.ChecksumAlgorithm, &o.ChecksumType, &o.ContentType, &o.MD5}
 }
 
-// packer is the sortedparquet.ColumnSink that packs a read for the
+// packer is the legacy.ColumnSink that packs a read for the
 // projection: the Objects it unpacks are those objectProjection.object
 // makes of the same rows (a column the read did not project, or a null
 // value, is a nil field). Offsets are uint32 to keep a window's index

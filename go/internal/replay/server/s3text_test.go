@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // TestControlCharacterKeysAreReferences serves a fixture whose keys hold
@@ -21,12 +21,12 @@ import (
 // with encoding-type=url as %XX.
 func TestControlCharacterKeysAreReferences(t *testing.T) {
 	dir := t.TempDir()
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	for i, k := range []string{"a\x01/k1", "a\x01/k2", "b\t\x1f\x7fk", "c\x0b\nk"} {
-		rows = append(rows, sortedparquettest.Object(k, i))
+		rows = append(rows, legacytest.Object(k, i))
 	}
-	if err := sortedparquettest.Write(filepath.Join(dir, "part-00001.parquet"),
-		sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(1, true)}); err != nil {
+	if err := legacytest.Write(filepath.Join(dir, "part-00001.parquet"),
+		legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(1, true)}); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := store.Open(context.Background(), dir, store.Options{})

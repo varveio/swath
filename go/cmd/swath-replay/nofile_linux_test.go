@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // nofileEnv lowers the soft descriptor limit of a served child before it
@@ -60,13 +60,13 @@ func TestServeWithinADescriptorLimit(t *testing.T) {
 	const parts, rows, limit, walks = 120, 100, 64, 12
 	dir := t.TempDir()
 	for p := range parts {
-		var rs []sortedparquettest.Row
+		var rs []legacytest.Row
 		for r := range rows {
 			i := p*rows + r
-			rs = append(rs, sortedparquettest.Object(fmt.Sprintf("logs/%05d", i), i))
+			rs = append(rs, legacytest.Object(fmt.Sprintf("logs/%05d", i), i))
 		}
-		part := sortedparquettest.Part{Rows: rs, Stamps: sortedparquettest.Stamps(p+1, p == parts-1)}
-		if err := sortedparquettest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
+		part := legacytest.Part{Rows: rs, Stamps: legacytest.Stamps(p+1, p == parts-1)}
+		if err := legacytest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
 			t.Fatal(err)
 		}
 	}

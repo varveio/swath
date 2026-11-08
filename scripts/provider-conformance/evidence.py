@@ -108,7 +108,7 @@ GO_RECEIPT_FIELDS = JAVA_RECEIPT_FIELDS | {"producer", "test_sources", "go_toolc
 # the SDK versions the SDK runs use.
 GO_EVIDENCE_TEST_SOURCES = ("go/go.mod", "go/go.sum",
                             "go/internal/replay/evidence/",
-                            "go/sortedparquet/sortedparquettest/",
+                            "go/internal/replay/legacy/legacytest/",
                             "go/internal/replay/azure/evidence_test.go",
                             "go/internal/replay/azure/evidencecmp_test.go",
                             "go/internal/replay/azure/sdk_test.go")

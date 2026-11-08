@@ -20,8 +20,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // recordedRoot returns the fixture root named by SWATH_REPLAY_FIXTURES, or
@@ -309,11 +309,11 @@ func writePrefixCapture(t *testing.T, dir string, n int) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	w := parquet.NewGenericWriter[sortedparquettest.Row](f)
-	batch := make([]sortedparquettest.Row, 0, 10_000)
+	w := parquet.NewGenericWriter[legacytest.Row](f)
+	batch := make([]legacytest.Row, 0, 10_000)
 	for i := range n {
 		// Descending, so the part is not already sorted.
-		batch = append(batch, sortedparquettest.Row{Key: fmt.Sprintf("logs/p%07d/", n-i), RowType: "COMMON_PREFIX"})
+		batch = append(batch, legacytest.Row{Key: fmt.Sprintf("logs/p%07d/", n-i), RowType: "COMMON_PREFIX"})
 		if len(batch) == cap(batch) || i == n-1 {
 			if _, err := w.Write(batch); err != nil {
 				t.Fatal(err)

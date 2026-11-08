@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // subcommand runs this test binary as swath-replay with args and returns
@@ -37,12 +37,12 @@ func subcommand(t *testing.T, args ...string) (string, string, int) {
 }
 
 // writeCapture writes an unsorted Java-era capture of two parts.
-func writeCapture(t *testing.T, parts ...[]sortedparquettest.Row) string {
+func writeCapture(t *testing.T, parts ...[]legacytest.Row) string {
 	t.Helper()
 	dir := t.TempDir()
 	for i, rows := range parts {
 		name := filepath.Join(dir, "part-0000"+string(rune('0'+i))+".parquet")
-		if err := sortedparquettest.Write(name, sortedparquettest.Part{Rows: rows}); err != nil {
+		if err := legacytest.Write(name, legacytest.Part{Rows: rows}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,10 +57,10 @@ func TestSortFixtureThenServe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("signals")
 	}
-	obj := sortedparquettest.Object
+	obj := legacytest.Object
 	capture := writeCapture(t,
-		[]sortedparquettest.Row{obj("logs/b c", 3), obj("logs/a", 1), obj("z", 4)},
-		[]sortedparquettest.Row{obj("logs/é", 5), obj("a/1", 2)})
+		[]legacytest.Row{obj("logs/b c", 3), obj("logs/a", 1), obj("z", 4)},
+		[]legacytest.Row{obj("logs/é", 5), obj("a/1", 2)})
 	output := filepath.Join(t.TempDir(), "sorted")
 
 	stdout, stderr, code := subcommand(t, "sort-fixture", "--capture", capture, "--output="+output, "--key-limit", "2048")
@@ -116,8 +116,8 @@ func TestSortFixtureThenServe(t *testing.T) {
 // sorter's message, exit 1, and nothing on stdout; a bad command line is
 // exit 2.
 func TestSortFixtureRefusals(t *testing.T) {
-	obj := sortedparquettest.Object
-	dup := writeCapture(t, []sortedparquettest.Row{obj("a", 0), obj("b", 1)}, []sortedparquettest.Row{obj("b", 2)})
+	obj := legacytest.Object
+	dup := writeCapture(t, []legacytest.Row{obj("a", 0), obj("b", 1)}, []legacytest.Row{obj("b", 2)})
 	stdout, stderr, code := subcommand(t, "sort-fixture", "--capture", dup, "--output", filepath.Join(t.TempDir(), "out"))
 	if code != 1 || stdout != "" || stderr != "sort-fixture: duplicate key 'b'\n" {
 		t.Errorf("duplicate: exit %d stdout %q stderr %q", code, stdout, stderr)

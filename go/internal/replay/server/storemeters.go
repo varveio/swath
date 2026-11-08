@@ -6,9 +6,9 @@ package server
 import (
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet"
 )
 
 // meteredStore is a store that reports its reads and its descriptor cache
@@ -17,7 +17,7 @@ import (
 type meteredStore interface {
 	SetMeters(store.Meters)
 	Counters() *store.Counters
-	Files() *sortedparquet.FileCache
+	Files() *legacy.FileCache
 }
 
 // prefetchingStore is a store with a window cache (store.Sorted).
@@ -109,7 +109,7 @@ func (s *Server) initStoreMeters() {
 				queryErrors.Inc()
 			}
 		},
-		Rollup: func(stats sortedparquet.Stats) {
+		Rollup: func(stats legacy.Stats) {
 			opens.Add(stats.GroupsOpened)
 			shortcuts.Add(stats.GroupShortcuts)
 			decoded.Observe(float64(stats.KeysDecoded))

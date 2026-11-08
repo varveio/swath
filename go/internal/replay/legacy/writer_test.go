@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sortedparquet_test
+package legacy_test
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // keyIndexOrders returns the key column's declared boundary order in each
@@ -58,14 +58,14 @@ func TestTestWriterDeclaresAscendingKeyIndex(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("k%04d", i))
 	}
 	dir := t.TempDir()
-	cases := map[string]sortedparquettest.Part{
+	cases := map[string]legacytest.Part{
 		"one page":   {Rows: rowsOf(keys[:5])},
 		"many pages": {Rows: rowsOf(keys), PageBytes: 512, GroupRows: 150},
 	}
 	for name, part := range cases {
-		part.Stamps = sortedparquettest.Stamps(1, true)
+		part.Stamps = legacytest.Stamps(1, true)
 		path := filepath.Join(dir, name+".parquet")
-		if err := sortedparquettest.Write(path, part); err != nil {
+		if err := legacytest.Write(path, part); err != nil {
 			t.Fatal(err)
 		}
 		for _, order := range keyIndexOrders(t, path) {
@@ -75,7 +75,7 @@ func TestTestWriterDeclaresAscendingKeyIndex(t *testing.T) {
 		}
 	}
 	f2 := filepath.Join(dir, "f2")
-	if _, err := sortedparquettest.WriteFormat2(f2, sortedparquettest.Dataset{Parts: []sortedparquettest.Part{{Rows: rowsOf(keys), PageBytes: 512}}}); err != nil {
+	if _, err := legacytest.WriteFormat2(f2, legacytest.Dataset{Parts: []legacytest.Part{{Rows: rowsOf(keys), PageBytes: 512}}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, order := range keyIndexOrders(t, filepath.Join(f2, "data", "part-00000.parquet")) {
@@ -88,7 +88,7 @@ func TestTestWriterDeclaresAscendingKeyIndex(t *testing.T) {
 		reversed[len(keys)-1-i] = k
 	}
 	path := filepath.Join(dir, "descending.parquet")
-	if err := sortedparquettest.Write(path, sortedparquettest.Part{Rows: rowsOf(reversed), PageBytes: 512}); err != nil {
+	if err := legacytest.Write(path, legacytest.Part{Rows: rowsOf(reversed), PageBytes: 512}); err != nil {
 		t.Fatal(err)
 	}
 	if orders := keyIndexOrders(t, path); orders[0][len(orders[0])-10:] != "DESCENDING" {

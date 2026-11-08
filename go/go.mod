@@ -14,8 +14,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.7
 	github.com/aws/smithy-go v1.28.8
 	github.com/johannesboyne/gofakes3 v1.2.0
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.20.3
 	github.com/parquet-go/parquet-go v0.32.0
+	github.com/varveio/seekparquet/go v0.1.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
@@ -27,7 +28,7 @@ require (
 	cloud.google.com/go/auth v0.24.1-0.20261001053825-dbc26066f70a // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.3.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
-	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/andybalholm/brotli v1.2.8 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.26 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.14 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.9 // indirect
@@ -51,7 +52,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.27.0 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

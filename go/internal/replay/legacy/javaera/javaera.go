@@ -4,7 +4,7 @@
 // Package javaera is the sorted-Parquet profile of the Java tool's sorted
 // output: footer-stamped parts of the 13-column canonical schema, in a
 // directory or as one file, with no manifest. It decides whether such a set
-// can be served sorted and opens it with sortedparquet.
+// can be served sorted and opens it with legacy.
 package javaera
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 
-	"github.com/varveio/swath/go/sortedparquet"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 // Footer stamps and the values this profile accepts.
@@ -189,7 +189,7 @@ func PureObjects(file *parquet.File, group *format.RowGroup) bool {
 
 // Fixture is an opened Java-era fixture.
 type Fixture struct {
-	Reader *sortedparquet.Reader
+	Reader *legacy.Reader
 	// Files are the resolved parts in key order; Stamps their stamps.
 	Files  []string
 	Stamps []Stamp
@@ -206,20 +206,20 @@ type Fixture struct {
 //
 // The parts are read through files, which bounds the descriptors they hold
 // open whatever their number; nil uses a cache of its own with
-// sortedparquet.DefaultMaxOpenFiles.
-func Open(ctx context.Context, path string, expect []sortedparquet.Column, files *sortedparquet.FileCache) (*Fixture, error) {
+// legacy.DefaultMaxOpenFiles.
+func Open(ctx context.Context, path string, expect []legacy.Column, files *legacy.FileCache) (*Fixture, error) {
 	names, err := Resolve(path)
 	if err != nil {
 		return nil, err
 	}
 	if len(names) == 0 {
-		return nil, sortedparquet.Refuse(sortedparquet.ReasonNoStamp, "%s holds no *.parquet parts", path)
+		return nil, legacy.Refuse(legacy.ReasonNoStamp, "%s holds no *.parquet parts", path)
 	}
 	if files == nil {
-		files = sortedparquet.NewFileCache(0)
+		files = legacy.NewFileCache(0)
 	}
 	fixture := &Fixture{Files: names}
-	var sources []sortedparquet.PartSource
+	var sources []legacy.PartSource
 	ok := false
 	defer func() {
 		if !ok {
@@ -233,33 +233,33 @@ func Open(ctx context.Context, path string, expect []sortedparquet.Column, files
 		if err != nil {
 			return nil, err
 		}
-		source := sortedparquet.PartSource{Name: name, File: file, Size: file.Size(), BoundBytes: BoundBytes}
+		source := legacy.PartSource{Name: name, File: file, Size: file.Size(), BoundBytes: BoundBytes}
 		sources = append(sources, source)
 		// An unreadable or foreign footer is not stamped.
-		footer, err := sortedparquet.OpenFooter(file, file.Size())
+		footer, err := legacy.OpenFooter(file, file.Size())
 		if err != nil {
-			return nil, sortedparquet.Refuse(sortedparquet.ReasonNoStamp, "%s: %v", name, err)
+			return nil, legacy.Refuse(legacy.ReasonNoStamp, "%s: %v", name, err)
 		}
 		stamp, stamped := ReadStamp(footer)
 		switch {
 		case !stamped:
-			return nil, sortedparquet.Refuse(sortedparquet.ReasonNoStamp, "%s carries no recognised sortedness stamp%s", name, format2Hint(footer))
+			return nil, legacy.Refuse(legacy.ReasonNoStamp, "%s carries no recognised sortedness stamp%s", name, format2Hint(footer))
 		case stamp.Mode != ModeObjects:
-			return nil, sortedparquet.Refuse(sortedparquet.ReasonUnsupportedMode, "%s is stamped mode=%s, not objects", name, stamp.Mode)
+			return nil, legacy.Refuse(legacy.ReasonUnsupportedMode, "%s is stamped mode=%s, not objects", name, stamp.Mode)
 		case stamp.FormatVersion != FormatVersion:
-			return nil, sortedparquet.Refuse(sortedparquet.ReasonUnknownFormatVersion, "%s is stamped format_version=%d", name, stamp.FormatVersion)
+			return nil, legacy.Refuse(legacy.ReasonUnknownFormatVersion, "%s is stamped format_version=%d", name, stamp.FormatVersion)
 		}
 		sources[len(sources)-1].Footer = footer
 		fixture.Stamps = append(fixture.Stamps, stamp)
 	}
 	if violation := CompletenessViolation(fixture.Stamps); violation != "" {
-		return nil, sortedparquet.Refuse(sortedparquet.ReasonIncompleteMultifile, "%s", violation)
+		return nil, legacy.Refuse(legacy.ReasonIncompleteMultifile, "%s", violation)
 	}
-	reader, err := sortedparquet.Open(ctx, sources, sortedparquet.Options{
+	reader, err := legacy.Open(ctx, sources, legacy.Options{
 		Expect: expect,
 		CheckGroup: func(part string, footer *parquet.File, physical int, group *format.RowGroup) error {
 			if !PureObjects(footer, group) {
-				return sortedparquet.Refuse(sortedparquet.ReasonMixedRowTypes,
+				return legacy.Refuse(legacy.ReasonMixedRowTypes,
 					"row group %d of %s is not provably OBJECT-only (row_type statistics absent or not OBJECT..OBJECT)", physical, part)
 			}
 			return nil

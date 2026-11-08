@@ -103,8 +103,12 @@ const (
 	// KindJavaEra is a directory of footer-stamped sorted parts (or one
 	// such file) written by the Java sort-fixture command.
 	KindJavaEra Kind = "java-era"
-	// KindFormat2 is a manifest-described sorted dataset (format 2).
+	// KindFormat2 is a manifest-described sorted dataset (format 2),
+	// written by earlier builds.
 	KindFormat2 Kind = "format-2"
+	// KindSeekParquet is a SeekParquet dataset, the format this build
+	// writes, read through the seekparquet module.
+	KindSeekParquet Kind = "seekparquet"
 )
 
 // OrderingProfile is the key order every Store serves.
@@ -117,7 +121,7 @@ type Options struct {
 	Readers int
 	// MaxOpenFiles bounds the descriptors the fixture's parts hold open,
 	// whatever their number: an evicted part is reopened when next read.
-	// Zero selects sortedparquet.DefaultMaxOpenFiles(), half the soft
+	// Zero selects legacy.DefaultMaxOpenFiles(), half the soft
 	// descriptor limit, at most 4,096.
 	MaxOpenFiles int
 	// Prefetch configures the window cache in front of Rows; the zero

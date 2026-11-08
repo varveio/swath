@@ -19,10 +19,10 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/format2"
+	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
-	"github.com/varveio/swath/go/sortedparquet/format2"
-	"github.com/varveio/swath/go/sortedparquet/javaera"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // fixtureKeys returns n distinct keys in a directory-shaped keyspace: a
@@ -55,32 +55,51 @@ func writeJavaEra(t testing.TB, dir string, keys []string, parts, groupRows int)
 	}
 	per := (len(keys) + parts - 1) / parts
 	for p := range parts {
-		var rows []sortedparquettest.Row
+		var rows []legacytest.Row
 		for i := p * per; i < min((p+1)*per, len(keys)); i++ {
-			rows = append(rows, sortedparquettest.Object(keys[i], i))
+			rows = append(rows, legacytest.Object(keys[i], i))
 		}
-		part := sortedparquettest.Part{Rows: rows, Stamps: sortedparquettest.Stamps(p+1, p == parts-1), GroupRows: groupRows, PageBytes: 2048}
-		if err := sortedparquettest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
+		part := legacytest.Part{Rows: rows, Stamps: legacytest.Stamps(p+1, p == parts-1), GroupRows: groupRows, PageBytes: 2048}
+		if err := legacytest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return dir
 }
 
-// writeFormat2 writes keys, shuffled into an unstamped capture, and sorts
-// them into a format-2 dataset with sort-fixture.
-func writeFormat2(t testing.TB, dir string, keys []string, keyLimit int) string {
+// writeLegacyFormat2 writes keys into a format-2 dataset of parts parts
+// (legacytest.WriteFormat2), the format earlier builds wrote.
+func writeLegacyFormat2(t testing.TB, dir string, keys []string, parts int) string {
+	t.Helper()
+	d := legacytest.Dataset{}
+	per := (len(keys) + parts - 1) / parts
+	for p := 0; p*per < len(keys); p++ {
+		var rows []legacytest.Row
+		for i := p * per; i < min((p+1)*per, len(keys)); i++ {
+			rows = append(rows, legacytest.Object(keys[i], i))
+		}
+		d.Parts = append(d.Parts, legacytest.Part{Rows: rows, GroupRows: 1500, PageBytes: 2048})
+	}
+	if _, err := legacytest.WriteFormat2(dir, d); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// writeSorted writes keys, shuffled into an unstamped capture, and sorts
+// them into a SeekParquet dataset with sort-fixture.
+func writeSorted(t testing.TB, dir string, keys []string, keyLimit int) string {
 	t.Helper()
 	capture := filepath.Join(dir, "capture")
 	if err := os.MkdirAll(capture, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var rows []sortedparquettest.Row
+	var rows []legacytest.Row
 	for i, key := range keys {
-		rows = append(rows, sortedparquettest.Object(key, i))
+		rows = append(rows, legacytest.Object(key, i))
 	}
 	rand.New(rand.NewPCG(1, 2)).Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
-	if err := sortedparquettest.Write(filepath.Join(capture, "c.parquet"), sortedparquettest.Part{Rows: rows}); err != nil {
+	if err := legacytest.Write(filepath.Join(capture, "c.parquet"), legacytest.Part{Rows: rows}); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "dataset")

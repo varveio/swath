@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // TestAzureSmallCapsAgainstJava is a differential test of the order
@@ -40,13 +40,13 @@ func TestAzureSmallCapsAgainstJava(t *testing.T) {
 	if err := os.MkdirAll(capture, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	row := func(key string, size, micros int64) sortedparquettest.Row {
-		r := sortedparquettest.Object(key, 1)
+	row := func(key string, size, micros int64) legacytest.Row {
+		r := legacytest.Object(key, 1)
 		r.Size, r.LastModified = &size, &micros
 		return r
 	}
 	const ok = 1_700_000_000_000_000
-	rows := []sortedparquettest.Row{
+	rows := []legacytest.Row{
 		row(strings.Repeat("q", 1024), 1, 253402300800000000),
 		row("neg", -1, ok),
 		row("c\x01", 1, ok),
@@ -55,7 +55,7 @@ func TestAzureSmallCapsAgainstJava(t *testing.T) {
 		row("ok/2", 8, ok),
 		row("z"+strings.Repeat("Z", 300), 9, ok),
 	}
-	if err := sortedparquettest.Write(filepath.Join(capture, "part-00000.parquet"), sortedparquettest.Part{Rows: rows}); err != nil {
+	if err := legacytest.Write(filepath.Join(capture, "part-00000.parquet"), legacytest.Part{Rows: rows}); err != nil {
 		t.Fatal(err)
 	}
 	sortCtx, cancelSort := context.WithTimeout(context.Background(), javaReady)

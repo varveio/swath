@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // TestTestWriterPartAgainstJava serves a Java-era fixture written by
-// sortedparquettest.Write (two stamped parts, several row groups of one
+// legacytest.Write (two stamped parts, several row groups of one
 // and of many pages) from the Java server and the Go route and requires
 // the same S3 answers to delimiter and plain listings, judged as the
 // driver judges every S3 request against the Java server (compareS3):
@@ -54,17 +54,17 @@ func TestTestWriterPartAgainstJava(t *testing.T) {
 	}
 	keys = append(keys, "top-a", "top-b")
 	slices.Sort(keys) // byte order, the order both servers keep
-	rows := make([]sortedparquettest.Row, len(keys))
+	rows := make([]legacytest.Row, len(keys))
 	for i, k := range keys {
-		rows[i] = sortedparquettest.Object(k, i)
+		rows[i] = legacytest.Object(k, i)
 	}
 	half := len(rows) / 2
-	parts := []sortedparquettest.Part{
-		{Rows: rows[:half], GroupRows: 60, PageBytes: 512, Stamps: sortedparquettest.Stamps(1, false)},
-		{Rows: rows[half:], GroupRows: 1000, Stamps: sortedparquettest.Stamps(2, true)}, // one group, one page
+	parts := []legacytest.Part{
+		{Rows: rows[:half], GroupRows: 60, PageBytes: 512, Stamps: legacytest.Stamps(1, false)},
+		{Rows: rows[half:], GroupRows: 1000, Stamps: legacytest.Stamps(2, true)}, // one group, one page
 	}
 	for i, p := range parts {
-		if err := sortedparquettest.Write(filepath.Join(fixture, fmt.Sprintf("part-%05d.parquet", i+1)), p); err != nil {
+		if err := legacytest.Write(filepath.Join(fixture, fmt.Sprintf("part-%05d.parquet", i+1)), p); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/varveio/swath/go/sortedparquet"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 type fixture struct {
@@ -39,9 +39,11 @@ func TestMain(m *testing.M) {
 }
 
 // fixtures builds the conformance fixtures once: a 10,000-key Java-era
-// fixture of three parts, the same keys sorted into a format-2 dataset by
-// sort-fixture, a format-2 dataset of keys longer than its 1,024-byte index
-// bound, and the Go lister's own S3 and local datasets (golister_test.go).
+// fixture of three parts, the same keys in a format-2 dataset of four parts
+// (an earlier build's format), the same keys sorted into a SeekParquet
+// dataset by sort-fixture, a SeekParquet dataset of keys longer than the
+// 1,024-byte value index bound, and the Go lister's own S3 and local
+// datasets (golister_test.go).
 func fixtures(t *testing.T) []fixture {
 	t.Helper()
 	fixturesOnce.Do(func() {
@@ -59,10 +61,11 @@ func fixtures(t *testing.T) []fixture {
 		slices.Sort(long)
 		fixturesList = []fixture{
 			{"java-era-10k", writeJavaEra(t, filepath.Join(dir, "java"), keys, 3, 1500), KindJavaEra},
-			{"format2-10k", writeFormat2(t, filepath.Join(dir, "f2"), keys, 0), KindFormat2},
-			{"format2-long-keys", writeFormat2(t, filepath.Join(dir, "long"), long, 4096), KindFormat2},
-			{"go-lister-s3", listS3(t, dir), KindFormat2},
-			{"go-lister-local", listLocal(t, dir), KindFormat2},
+			{"format2-10k", writeLegacyFormat2(t, filepath.Join(dir, "legacy"), keys, 4), KindFormat2},
+			{"seekparquet-10k", writeSorted(t, filepath.Join(dir, "f2"), keys, 0), KindSeekParquet},
+			{"seekparquet-long-keys", writeSorted(t, filepath.Join(dir, "long"), long, 4096), KindSeekParquet},
+			{"go-lister-s3", listS3(t, dir), KindSeekParquet},
+			{"go-lister-local", listLocal(t, dir), KindSeekParquet},
 		}
 	})
 	if fixturesErr != nil {
@@ -210,7 +213,7 @@ func TestDelimitedRollupMatchesRangeWalk(t *testing.T) {
 			bounds := probes(rows, boundaries)
 			var engaged, sampled int64
 			for _, prefix := range prefixes {
-				upper, ok := sortedparquet.Successor([]byte(prefix))
+				upper, ok := legacy.Successor([]byte(prefix))
 				if !ok {
 					upper = nil
 				}
@@ -284,11 +287,11 @@ func rangeWalk(next func(cursor []byte, inclusive bool) (Object, bool), from []b
 		if !ok {
 			break
 		}
-		if cp := sortedparquet.CommonPrefix(o.Key, prefix, '/'); cp != nil {
+		if cp := legacy.CommonPrefix(o.Key, prefix, '/'); cp != nil {
 			if !suppress || from == nil || string(cp) > string(from) {
 				out = append(out, DelimitedEntry{CommonPrefix: append([]byte(nil), cp...)})
 			}
-			successor, ok := sortedparquet.Successor(cp)
+			successor, ok := legacy.Successor(cp)
 			if !ok {
 				break
 			}

@@ -16,9 +16,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/metrics"
 	"github.com/varveio/swath/go/internal/replay/store"
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
 )
 
 // meterMix is the request mix the meter set is pinned on: on S3 a full
@@ -47,12 +47,12 @@ func sortedFixture(t *testing.T, keys []string, perPart, groupRows, readers int)
 	dir := t.TempDir()
 	parts := (len(keys) + perPart - 1) / perPart
 	for p := range parts {
-		var rows []sortedparquettest.Row
+		var rows []legacytest.Row
 		for i := p * perPart; i < min(len(keys), (p+1)*perPart); i++ {
-			rows = append(rows, sortedparquettest.Object(keys[i], i))
+			rows = append(rows, legacytest.Object(keys[i], i))
 		}
-		part := sortedparquettest.Part{Rows: rows, GroupRows: groupRows, Stamps: sortedparquettest.Stamps(p+1, p == parts-1)}
-		if err := sortedparquettest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
+		part := legacytest.Part{Rows: rows, GroupRows: groupRows, Stamps: legacytest.Stamps(p+1, p == parts-1)}
+		if err := legacytest.Write(filepath.Join(dir, fmt.Sprintf("part-%05d.parquet", p+1)), part); err != nil {
 			t.Fatal(err)
 		}
 	}

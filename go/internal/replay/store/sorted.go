@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	seekparquet "github.com/varveio/seekparquet/go"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/varveio/swath/go/sortedparquet"
+	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 // Counters are the store's work counters, plain atomics read by whoever
@@ -41,7 +42,8 @@ type Counters struct {
 	// least one undecoded page.
 	Reseeks atomic.Int64
 	// DisorderRefusals counts reads that failed because a row group's
-	// keys do not ascend strictly (Refusal reports row_group_disorder).
+	// keys are out of order (Refusal reports row_group_disorder, or
+	// key_order for a SeekParquet dataset).
 	DisorderRefusals atomic.Int64
 }
 
@@ -51,13 +53,13 @@ type Counters struct {
 // provider's object fields) reads through the same cursor and reader
 // slots without the Object projection.
 type Sorted struct {
-	reader   *sortedparquet.Reader
+	reader   reader
 	sem      *semaphore.Weighted
 	readers  int
 	schemaID string
 	objects  objectProjection
 	counters Counters
-	files    *sortedparquet.FileCache
+	files    *legacy.FileCache
 	meters   Meters
 	prefetch *prefetcher
 	// arenaLimit bounds a packed read's arenas; zero is maxPackedArena.
@@ -76,7 +78,7 @@ type Meters struct {
 	// whether it failed.
 	Query func(d time.Duration, rows int, failed bool)
 	// Rollup is one skip-scan's work.
-	Rollup func(sortedparquet.Stats)
+	Rollup func(legacy.Stats)
 	// Refused is a read that failed for a fixture reason
 	// (row_group_disorder).
 	Refused func(reason string)
@@ -112,7 +114,7 @@ func (s *Sorted) Counters() *Counters { return &s.counters }
 
 // Files returns the descriptor cache the fixture's parts are read through,
 // for its counts.
-func (s *Sorted) Files() *sortedparquet.FileCache { return s.files }
+func (s *Sorted) Files() *legacy.FileCache { return s.files }
 
 // FirstKeys returns the first key of every non-empty row group, in key
 // order: the routing keys.
@@ -146,7 +148,7 @@ func (s *Sorted) acquire(ctx context.Context) (func(), error) {
 
 // record adds a read's stats to the counters; a rollup's also go to
 // Meters.Rollup.
-func (s *Sorted) record(stats *sortedparquet.Stats, rollup bool) {
+func (s *Sorted) record(stats *legacy.Stats, rollup bool) {
 	if f := s.meters.Rollup; f != nil && rollup {
 		f(*stats)
 	}
@@ -158,7 +160,7 @@ func (s *Sorted) record(stats *sortedparquet.Stats, rollup bool) {
 
 // ReadRows returns up to limit rows with key in [from, toExclusive), as
 // Rows, decoding only the named value columns.
-func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, columns []string) ([]sortedparquet.Row, error) {
+func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, limit int, columns []string) ([]legacy.Row, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -167,11 +169,11 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := func() ([]sortedparquet.Row, error) {
+	rows, err := func() ([]legacy.Row, error) {
 		defer release()
-		var stats sortedparquet.Stats
+		var stats legacy.Stats
 		defer s.record(&stats, false)
-		return s.reader.Read(ctx, sortedparquet.Range{
+		return s.reader.Read(ctx, legacy.Range{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Limit: limit, Columns: columns,
 		}, &stats)
@@ -202,9 +204,9 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		// not find, and a longer read grows as it goes.
 		sink = s.objects.packer(columns, proj, min(limit, s.windowRows()), s.arenaLimit)
 		sink.stop = stop
-		var stats sortedparquet.Stats
+		var stats legacy.Stats
 		defer s.record(&stats, false)
-		return s.reader.Scan(ctx, sortedparquet.Range{
+		return s.reader.Scan(ctx, legacy.Range{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Limit: limit, Columns: columns,
 		}, &stats, sink)
@@ -235,7 +237,7 @@ func (s *Sorted) finished(started time.Time, rows int, err error) error {
 	if f := s.meters.Query; f != nil {
 		f(time.Since(started), rows, err != nil)
 	}
-	if reason := sortedparquet.ReasonOf(err); reason == sortedparquet.ReasonRowGroupDisorder {
+	if reason := Refusal(err); reason == legacy.ReasonRowGroupDisorder || reason == string(seekparquet.CodeKeyOrder) {
 		s.counters.DisorderRefusals.Add(1)
 		if f := s.meters.Refused; f != nil {
 			f(reason)
@@ -246,7 +248,7 @@ func (s *Sorted) finished(started time.Time, rows int, err error) error {
 
 // RollupRows is DelimitedRollup returning the reader's entries with the
 // named value columns; ok=false declines.
-func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, prefix, delimiter []byte, limit int, columns []string, suppressPrefixAtOrBeforeFloor bool) ([]sortedparquet.Entry, bool, error) {
+func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool, toExclusive []byte, prefix, delimiter []byte, limit int, columns []string, suppressPrefixAtOrBeforeFloor bool) ([]legacy.Entry, bool, error) {
 	if len(delimiter) != 1 || delimiter[0] != '/' {
 		s.counters.DelimiterDeclines.Add(1)
 		return nil, false, nil
@@ -260,11 +262,11 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 		return nil, true, err
 	}
 	s.counters.DelimiterEngagements.Add(1)
-	entries, err := func() ([]sortedparquet.Entry, error) {
+	entries, err := func() ([]legacy.Entry, error) {
 		defer release()
-		var stats sortedparquet.Stats
+		var stats legacy.Stats
 		defer s.record(&stats, true)
-		return s.reader.RollupRead(ctx, sortedparquet.Rollup{
+		return s.reader.RollupRead(ctx, legacy.Rollup{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
 			SuppressAtOrBeforeFrom: suppressPrefixAtOrBeforeFloor, Columns: columns,
@@ -474,7 +476,7 @@ func (p objectProjection) columns(proj Projection) []string {
 	return names
 }
 
-func (p objectProjection) object(row *sortedparquet.Row, proj Projection) Object {
+func (p objectProjection) object(row *legacy.Row, proj Projection) Object {
 	o := Object{Key: row.Key}
 	if v, ok := value(row, p.size); ok {
 		size := v.Int64()
@@ -521,7 +523,7 @@ func (p objectProjection) object(row *sortedparquet.Row, proj Projection) Object
 }
 
 // value returns a projected, non-null value.
-func value(row *sortedparquet.Row, name string) (parquet.Value, bool) {
+func value(row *legacy.Row, name string) (parquet.Value, bool) {
 	if name == "" {
 		return parquet.Value{}, false
 	}
@@ -529,7 +531,7 @@ func value(row *sortedparquet.Row, name string) (parquet.Value, bool) {
 	return v, ok && !v.IsNull()
 }
 
-func text(row *sortedparquet.Row, name string) *string {
+func text(row *legacy.Row, name string) *string {
 	v, ok := value(row, name)
 	if !ok {
 		return nil

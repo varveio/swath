@@ -1,4 +1,9 @@
-# sortedparquet
+# legacy (internal/replay/legacy)
+
+The replay server's reader of the sorted Parquet listings that came before SeekParquet: the Java tool's
+footer-stamped parts and the swath-dataset format 2 earlier Go builds wrote. SeekParquet datasets, which
+this tool writes now, are read through `github.com/varveio/seekparquet/go` (`internal/replay/store`); this
+package was the public `go/sortedparquet` until then.
 
 An sstable-style reader over sorted Parquet listings. A lower bound is routed to a part and row group by the
 decoded first key of every row group; the key column's ColumnIndex and OffsetIndex locate the page that can
@@ -9,10 +14,10 @@ keys. It imports only the standard library and `github.com/parquet-go/parquet-go
 
 | Package | What it is |
 |---|---|
-| `sortedparquet` | the format-neutral core: `Open` over parts given in key order, `Reader.Read` (a bounded range read), `Reader.Scan` (the same read handed to a sink column by column, the values aliasing the decoded pages, for a caller that keeps its own copy), `Reader.RollupRead` (a prefix and single-byte-delimiter skip-scan), `Successor`, `CommonPrefix`, the refusal vocabulary |
-| `sortedparquet/javaera` | the Java tool's sorted output: footer-stamped parts of the 13-column canonical schema |
-| `sortedparquet/format2` | manifest datasets (format 2): `manifest.json` lists the parts with exact base64 key bounds |
-| `sortedparquet/sortedparquettest` | writes small synthetic Java-era parts for tests |
+| `legacy` | the format-neutral core: `Open` over parts given in key order, `Reader.Read` (a bounded range read), `Reader.Scan` (the same read handed to a sink column by column, the values aliasing the decoded pages, for a caller that keeps its own copy), `Reader.RollupRead` (a prefix and single-byte-delimiter skip-scan), `Successor`, `CommonPrefix`, the refusal vocabulary |
+| `legacy/javaera` | the Java tool's sorted output: footer-stamped parts of the 13-column canonical schema |
+| `legacy/format2` | manifest datasets (format 2): `manifest.json` lists the parts with exact base64 key bounds |
+| `legacy/legacytest` | writes small synthetic Java-era parts and format 2 datasets for tests |
 
 The core knows no stamp names. A profile decides whether a set of files is a sorted listing, then calls `Open`.
 
@@ -89,4 +94,4 @@ on every read path. The Java replay server instead refuses a row group whose key
 `ASCENDING`, and only on its delimiter (rollup) path, when it reads that group; so a part whose bounds
 ascend but whose index declares `UNORDERED` (parquet-go's default for a one-page index) is served by both
 on plain listings and refused by the Java server alone on delimiter listings. The Java writer and the Go
-writer both declare `ASCENDING` for sorted output, as `sortedparquettest` does.
+writer both declare `ASCENDING` for sorted output, as `legacytest` does.

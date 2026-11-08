@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sortedparquet
+package legacy
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/go/sortedparquet/sortedparquettest"
+	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // openTwoParts writes two one-group parts and opens them through a
@@ -23,12 +23,12 @@ func openTwoParts(t *testing.T) (*Reader, *FileCache, []*CachedFile) {
 	var sources []PartSource
 	var files []*CachedFile
 	for i, keys := range [][]string{{"a", "b"}, {"m", "n"}} {
-		var rows []sortedparquettest.Row
+		var rows []legacytest.Row
 		for j, k := range keys {
-			rows = append(rows, sortedparquettest.Object(k, j))
+			rows = append(rows, legacytest.Object(k, j))
 		}
 		path := filepath.Join(dir, fmt.Sprintf("part-%d.parquet", i))
-		if err := sortedparquettest.Write(path, sortedparquettest.Part{Rows: rows}); err != nil {
+		if err := legacytest.Write(path, legacytest.Part{Rows: rows}); err != nil {
 			t.Fatal(err)
 		}
 		f, err := cache.Open(context.Background(), path, nil)
