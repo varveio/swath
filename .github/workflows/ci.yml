@@ -451,28 +451,8 @@ jobs:
           go test -race -timeout 25m "${args[@]}"
 
   # The tests that measure the process and so must not run under -race, which distorts heap and
-  # time: each opted in by its own gate, one step per tier. The heap gates (SWATH_HEAP_GATES)
-  # land here with #281 and the shape suite with #289.
+  # time: each opted in by its own gate, one step per tier.
   go-nonrace:
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: go
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-
-      - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
-        with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
-
-  # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
-  # Windows test compile, and the Go replay image built and smoked.
-  go-build:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -492,10 +472,32 @@ jobs:
       # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
       - name: Heap gates (SWATH_HEAP_GATES=1, no -race)
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true'
         env:
           SWATH_HEAP_GATES: "1"
         run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
+
+      # Hook: the shape suite (#289, TestShapes at 200 k keys, skips itself under -race) is the
+      # next step here.
+
+  # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
+  # Windows test compile, and the Go replay image built and smoked.
+  go-build:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
 
       - name: Static cross-builds (CGO_ENABLED=0)
         if: needs.changes.outputs.go == 'true'

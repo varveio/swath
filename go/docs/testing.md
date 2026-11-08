@@ -6,8 +6,35 @@ go vet ./...
 go test -race ./...
 ```
 
-CI runs the same in the `go` job of `.github/workflows/ci.yml`, plus `CGO_ENABLED=0` builds for
-linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. A commit touching `go/` needs that job green.
+CI runs the same in four jobs of `.github/workflows/ci.yml`, side by side, each doing its work only when
+`go/`, the workflow, `Dockerfile.replay-go`, the replay smoke script or the shard table changed (the
+`changes` job decides). A commit touching `go/` needs all four green; `ci-gate` requires them.
+
+| job | runs | runner |
+|---|---|---|
+| `go-lint` | `gofmt -l` (must be empty), `go vet ./...`, `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
+| `go-race (SHARD)` | `go test -race -timeout 25m` on one shard, one leg per shard below | per shard |
+| `go-nonrace` | the tiers that must not run under `-race`: the heap gates (`SWATH_HEAP_GATES=1`, below) | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, the journal's Windows test compile, the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+
+The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
+`changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
+
+| shard | `go test -race` arguments | runner |
+|---|---|---|
+| `crash` | `-run '^TestCrashMatrix$' ./internal/listing` | ubuntu-24.04-arm |
+| `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/listing` | ubuntu-24.04-arm |
+| `listing-rest` | `-skip` the two patterns above, `./internal/listing` | ubuntu-24.04-arm |
+| `cmd` | `./cmd/swath` | ubuntu-24.04-arm |
+| `rest` | every package no row names (a new package lands here) | ubuntu-latest |
+
+A package split across rows has a remainder row that `-skip`s the union of its other rows' `-run`
+patterns, so the split is complete and disjoint by construction; `--check` also lists the package's tests
+and fails when a pattern selects none or a test is selected twice. The heavy shards run on arm64, where the
+same `-race` suite took about 30 % less time than on amd64. To find a failure, open the red
+`go-race (SHARD)` leg: its test step prints the exact `go test` command, which reruns that shard locally from
+`go/`; `scripts/ci/go-race-shards.sh SHARD` prints the arguments alone. To repeat one test on a chosen OS,
+use `go-stress.yml`.
 
 `SWATH_PERF=1` is the performance tier: a test whose law holds at a small scale runs that scale by default
 and the full one (seconds, more memory) only then. CI does not set it.
@@ -17,7 +44,7 @@ S3 writers and one, 24 pages each; four local writers at their declared widths, 
 input retained) only then, and one S3 writer over six pages by default, so the price is still checked. The
 full arms allocate hundreds of MiB and measure the live heap, which `-race` distorts and slows (they took
 over three of the listing package's six and a half minutes under `-race` at two processors): CI runs them in
-the `go` job's heap-gate step, without `-race`, with their own timeout.
+the `go-nonrace` job, without `-race`, with their own timeout.
 
 ## Invariant tests
 
