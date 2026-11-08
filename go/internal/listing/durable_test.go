@@ -24,6 +24,7 @@ import (
 
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
@@ -182,6 +183,7 @@ func durableConfig(url, out string, resume bool) Config {
 // is byte-identical to an uninterrupted run. No request of the resume
 // starts inside a replayed certificate's [cs, ce).
 func TestDurableSpillResume(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, log := slowFrontier(t, "d06/")
 	ref := filepath.Join(t.TempDir(), "ref")
 	cold, err := Run(context.Background(), durableConfig(url, ref, false))
@@ -359,6 +361,7 @@ func damagedSnapshot(t *testing.T, out string) {
 // a resume completes: the part journal is never refused, and the dataset
 // is the uninterrupted one.
 func TestDurableRepeatedRecovery(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	damagedSnapshot(t, out)
 	ledger := func(dir string) string { return filepath.Join(dir, order.DurableDir, "ledger") }
@@ -450,6 +453,7 @@ func TestDurableRepeatedRecovery(t *testing.T) {
 // entries were synced loses the whole durable spill: the resume relists,
 // without an error.
 func TestDurableNewAncestorsLost(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	if err := os.RemoveAll(filepath.Join(out, filepath.Dir(order.DurableDir))); err != nil {
 		t.Fatal(err)
@@ -470,6 +474,7 @@ func TestDurableNewAncestorsLost(t *testing.T) {
 // the same: a durable file's frames are self-describing, and the header's
 // row codec version covers all four rows frame types.
 func TestDurableCompressionFlip(t *testing.T) {
+	datasettest.RequireJournal(t)
 	for _, flip := range []struct {
 		name                string
 		plain, uncompressed bool
@@ -494,6 +499,7 @@ func TestDurableCompressionFlip(t *testing.T) {
 // writing nothing of version 8; a version 9 journal is refused before
 // recovery changes anything.
 func TestDurableVersions(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	setVersion := func(dir string, v int) {
 		path := journal.Path(dir)
@@ -550,6 +556,7 @@ func TestDurableVersions(t *testing.T) {
 // observed (the deleted key stays, the added one is missed), the gap is
 // listed as it is now.
 func TestDurableChangedSource(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, b, _, out := durableFixture(t)
 	// The certificates the resume will accept: recover a copy.
 	cp := filepath.Join(t.TempDir(), "copy")
@@ -637,6 +644,7 @@ func TestDurableChangedSource(t *testing.T) {
 // waker stopped before the held publication; the run, failed or not,
 // resumes to the uninterrupted dataset.
 func TestDurableShutdownOrder(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, _ := durableFixture(t)
 	out := filepath.Join(t.TempDir(), "held")
 	var mu sync.Mutex
@@ -703,6 +711,7 @@ func TestDurableShutdownOrder(t *testing.T) {
 // TestDurableSealENOSPC: no space for a seal's sync stops the run as a
 // full disk (resumable), and the resume completes the dataset.
 func TestDurableSealENOSPC(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, log := slowFrontier(t, "d06/")
 	_ = log
 	ref := filepath.Join(t.TempDir(), "ref")
@@ -731,6 +740,7 @@ func TestDurableSealENOSPC(t *testing.T) {
 // TestDurableOverwrite: --overwrite starts over on an output holding a
 // durable spill, which goes with the rest of the workspace.
 func TestDurableOverwrite(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	cfg := durableConfig(url, out, false)
 	cfg.Output.Replace = true
@@ -750,6 +760,7 @@ func TestDurableOverwrite(t *testing.T) {
 // and the resume lists their intervals as gaps, instead of refusing at
 // replay; the dataset is the uninterrupted one.
 func TestDurableUnknownCodec(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	files := durableFiles(t, out)
 	if len(files) == 0 {
@@ -848,6 +859,7 @@ func recodec(t *testing.T, out, name string) bool {
 // uninterrupted dataset, and reuses only certificates whose record
 // survived in the prefix (the resume never refuses).
 func TestDurableKillMatrix(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, _ := slowFrontier(t, "d06/")
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
@@ -975,6 +987,7 @@ func TestDurableKillMatrix(t *testing.T) {
 // the torn frame (dropping it), relists what lost its record, and the
 // dataset is the uninterrupted one.
 func TestDurableLedgerTornWrite(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, _ := slowFrontier(t, "d06/")
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), durableConfig(url, ref, false)); err != nil {
@@ -1059,6 +1072,7 @@ func ledgerFDs(t *testing.T, out string) int {
 // retires every accepted certificate, interrupted there) leaves no
 // descriptor on the ledger after Run returns, and writes nothing more.
 func TestDurableFailedRecoveryCloses(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
 	// A live certificate's file removed: recovery always retires it, so
 	// its sync is reached (without the damage it was reached only when K

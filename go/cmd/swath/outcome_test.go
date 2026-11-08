@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
@@ -39,6 +40,7 @@ import (
 // outcome is reported, on stderr and in the report (durability
 // review).
 func TestOutcomeIsCurrent(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var hang atomic.Bool // every request waits: no progress
 	hang.Store(true)
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +258,7 @@ func crashRun(t *testing.T, args []string, nth int64) {
 // (--report) names this attempt with the reason in outcome.unrecorded
 // (durability review: the source that does not open gave no reason).
 func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
+	datasettest.RequireJournal(t)
 	good, broken := fakeADC(t)
 	stderr := captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
@@ -341,6 +344,7 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 // lock is created and error.json is not replaced. The same through a run
 // asked to resume directly (the library path the command does not reach).
 func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ep := gcstest.Bucket(t, gcstest.Keys(100), 0)
 	ctx := context.Background()
@@ -379,6 +383,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 // that compares them never takes the old outcome for the current one; the
 // same for a refusal before the run (durability review).
 func TestAttemptIdentifiesTheOutcome(t *testing.T) {
+	datasettest.RequireJournal(t)
 	gcs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // no progress: every attempt is stuck
 	}))
@@ -455,6 +460,7 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 // is not in error.json into the report and on stderr (durability
 // review). Before, outcome.unrecorded was empty for these.
 func TestEarlyRefusalSaysWhy(t *testing.T) {
+	datasettest.RequireJournal(t)
 	stderr := captureStderr(t)
 	ctx := context.Background()
 	srv := gcstest.Bucket(t, gcstest.Keys(50), 0)
@@ -484,6 +490,7 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 // the same for a resumed run that finds the dataset committed (another
 // process finished it first). Before, both exited 1 ("already complete").
 func TestResumeCompleteIsIdempotent(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(200), 0)
@@ -542,6 +549,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 // nothing to resume; an unknown scheme is a usage error. Run failures stay
 // 1. Before, every refusal but the malformed command line exited 1.
 func TestRefusalsExit2(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
@@ -601,6 +609,7 @@ func TestRefusalsExit2(t *testing.T) {
 // run's report said complete true and stop_reason completed (the source's
 // coverage, final once its listing loop ended).
 func TestReportCompletionFollowsOutcome(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	for status, cause := range map[int]string{403: "access_denied", 401: "auth"} {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -98,6 +99,7 @@ func readJSON(t *testing.T, path string, v any) []byte {
 // completes the dataset of an uninterrupted run byte for byte, the kept
 // parts unchanged (durability review).
 func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
+	datasettest.RequireJournal(t)
 	const stall = time.Second
 	captureStderr(t)
 	s := newRowlessService(t)
@@ -160,6 +162,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 // timeout passes after it; before, every answered page kept the watchdog
 // alive and the run went on forever (review R3, 2026-11-06).
 func TestEndlessEmptyPagesAreStuck(t *testing.T) {
+	datasettest.RequireJournal(t)
 	const stall = time.Second
 	captureStderr(t)
 	s := newRowlessService(t)
@@ -194,6 +197,7 @@ func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 // error.json only for the current attempt cannot accept the stale one
 // (durability review).
 func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
+	datasettest.RequireJournal(t)
 	stderr := captureStderr(t)
 	s := newRowlessService(t)
 	ctx := context.Background()
@@ -249,6 +253,7 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 // as it exits after a signal (before, only a signal had the forced exit and
 // the process hung).
 func TestDeadlineExitsAfterGrace(t *testing.T) {
+	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}

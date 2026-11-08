@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -37,6 +38,7 @@ func manifestOf(t *testing.T, dir string) dataset.Manifest {
 // the same rows into the same parts, from tiles cut at the predecessor's
 // key pages (no delimiter seed request), and its report names the prior.
 func TestSeedFromDataset(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 6000)
 	dir := t.TempDir()
 	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")

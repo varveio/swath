@@ -17,6 +17,7 @@ import (
 	pq "github.com/parquet-go/parquet-go"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -117,6 +118,7 @@ func checkContract(t *testing.T, out string) []string {
 // seeded) and a local dataset with a name that is not UTF-8 meet the
 // format contract, and the S3 ones hold the same keys.
 func TestDatasetContract(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := fakeS3(t, 3000)
 	var ref []string
 	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
@@ -138,7 +140,7 @@ func TestDatasetContract(t *testing.T) {
 	}
 	src := t.TempDir()
 	names := []string{"a/1", "a/2", "b", "c/d/e"}
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" { // NTFS and APFS refuse names that are not UTF-8
 		names = append(names, "z\xff")
 	}
 	mk(t, src, names...)

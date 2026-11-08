@@ -76,8 +76,8 @@ func TestEndToEnd(t *testing.T) {
 // Keys are bytes: a name that is not UTF-8 is listed, and the manifest
 // carries its exact bytes (base64), not a replacement character.
 func TestKeysAreBytes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("NTFS names are UTF-16")
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		t.Skip("NTFS and APFS refuse names that are not UTF-8")
 	}
 	src := t.TempDir()
 	mk(t, src, "a", "z\xff")

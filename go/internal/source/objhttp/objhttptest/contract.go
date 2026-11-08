@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,11 +114,11 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			err := cl.List(context.Background())
 			got := cl.Counters()
 			// one attempt at a time, each in flight for some time
-			if want := min(c.want.Attempts, 1); got.InflightMax != want || (want > 0) != (got.InflightNs > 0) {
+			if want := min(c.want.Attempts, 1); got.InflightMax != want || mistimed(want > 0, got.InflightNs) {
 				t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
 			}
 			// every attempt is timed: ordered percentiles, a timed-out one at the top
-			if (c.want.Attempts > 0) != (got.P50Ns > 0) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
+			if mistimed(c.want.Attempts > 0, got.P50Ns) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
 				(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
 				t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
 			}
@@ -182,4 +183,15 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 			t.Fatalf("err %v class %q after %s", err, classify(err), time.Since(start))
 		}
 	})
+}
+
+// coarseClock: the monotonic clock advances in ticks of about half a
+// millisecond (Windows), so a request to a local server can take 0 ns.
+var coarseClock = runtime.GOOS == "windows"
+
+// mistimed reports a mismatch between whether something ran (ran) and its
+// measured duration ns: nothing ran and time was measured, or it ran and
+// none was, where the clock can see it.
+func mistimed(ran bool, ns int64) bool {
+	return (!ran && ns != 0) || (ran && ns == 0 && !coarseClock)
 }

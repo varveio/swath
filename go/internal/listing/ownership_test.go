@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/journal"
 )
 
@@ -20,6 +21,7 @@ import (
 // all for a run that never owned the output; a refused foreign directory
 // is left untouched (durability review, ownership).
 func TestEveryOutputIsOwned(t *testing.T) {
+	datasettest.RequireJournal(t)
 	src := t.TempDir()
 	mk(t, src, "a", "b", "c")
 	out := filepath.Join(t.TempDir(), "ds")

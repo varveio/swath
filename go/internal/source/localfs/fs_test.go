@@ -24,6 +24,14 @@ type collect struct {
 	rows []Row
 }
 
+// unicodeNames: the file system refuses names that are not UTF-8 (NTFS names
+// are UTF-16; APFS requires UTF-8).
+var unicodeNames = runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+
+// permissionBits: chmod 0 makes a directory unreadable (Windows keeps only a
+// read-only attribute, which does not stop a directory being listed).
+var permissionBits = runtime.GOOS != "windows"
+
 func (c *collect) Write(_ context.Context, segs [][]Row) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -81,6 +89,8 @@ func buildTree(t *testing.T) string {
 	must(os.Symlink("/nonexistent", filepath.Join(root, "dangling")))
 	if runtime.GOOS != "windows" {
 		must(mkfifo(filepath.Join(root, "mixed", "fifo")))
+	}
+	if !unicodeNames {
 		must(os.WriteFile(filepath.Join(root, "bad\xffname"), nil, 0o644))
 		mk(t, root, "bad\xffdir/hidden", false)
 	}
@@ -146,10 +156,10 @@ func TestListingEqualsSortedOracle(t *testing.T) {
 							t.Fatalf("sequence differs: got %d keys, want %d", len(keys), len(want))
 						}
 						// Names that are not UTF-8 are listed with their exact bytes.
-						if runtime.GOOS != "windows" && (!slices.Contains(keys, "bad\xffname") || !slices.Contains(keys, "bad\xffdir/hidden")) {
+						if !unicodeNames && (!slices.Contains(keys, "bad\xffname") || !slices.Contains(keys, "bad\xffdir/hidden")) {
 							t.Error("names that are not UTF-8 were not listed byte for byte")
 						}
-						if os.Geteuid() != 0 && st.OpenErrors == 0 {
+						if permissionBits && os.Geteuid() != 0 && st.OpenErrors == 0 {
 							t.Error("unreadable directory not counted")
 						}
 						if !portable && nativeEngine && fields != Names && st.Chunks == 0 {

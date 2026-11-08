@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 )
@@ -54,6 +55,7 @@ func fileTree(t *testing.T, dir string) map[string]string {
 // dataset. Before, the run went on writing parts by pathname into the
 // impostor and renamed them over its published parts.
 func TestReplacedOutputIsNeverTouched(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -160,6 +162,7 @@ func copyTree(t *testing.T, dir, dst string) {
 // writer rewrote the impostor's progress.json and the spill cleanup
 // removed the impostor's spill directory.
 func TestReplacedOutputWithLiveWriters(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -266,6 +269,7 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 // at its next check. Before, the file was created by pathname, in the
 // impostor's .swath/parts.
 func TestReplacedAfterCheckGetsNoPart(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 20000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))

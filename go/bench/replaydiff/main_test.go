@@ -10,6 +10,8 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +74,14 @@ func TestDriverFindsNoDifferenceBetweenRollupAndWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	rng := rand.New(rand.NewPCG(9, 9))
-	d.runCases("case", s3Matrix(all, rng, o.maxPrefixes))
+	cases := s3Matrix(all, rng, o.maxPrefixes)
+	if runtime.GOOS == "windows" {
+		// The residual cases end with the server closing a connection that
+		// has unread input: Windows then resets it, which can discard the 400
+		// before the client reads it.
+		cases = slices.DeleteFunc(cases, func(r request) bool { return r.Compare == "residual" })
+	}
+	d.runCases("case", cases)
 	d.runWalks(s3Walks(all, []int{1, 7, 1000}, o.maxTop))
 	var random []request
 	for range 200 {

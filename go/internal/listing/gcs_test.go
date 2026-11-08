@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
 	gcsclient "github.com/varveio/swath/go/internal/source/gcs/client"
@@ -44,6 +45,7 @@ func gcsConfig(ep, out string, resume bool) Config {
 // retained is refused on resume through another route or another billed
 // project (the crash points themselves: TestCrashMatrix).
 func TestGCSResumeRefusesAnotherRoute(t *testing.T) {
+	datasettest.RequireJournal(t)
 	ep := gcsBucket(t, 8000)
 	for name, change := range map[string]func(*GCSConfig){
 		"route":   func(o *GCSConfig) { o.Endpoint = strings.Replace(ep, "127.0.0.1", "localhost", 1) },
@@ -79,6 +81,7 @@ func TestGCSResumeRefusesAnotherRoute(t *testing.T) {
 // cause redirect, no manifest appears and the retained files are untouched;
 // a fresh run through a redirecting endpoint is refused the same way.
 func TestGCSRedirectCannotChangeResumeSource(t *testing.T) {
+	datasettest.RequireJournal(t)
 	b, c := gcsBucket(t, 8000), gcsBucket(t, 5000)
 	var redirect atomic.Bool
 	bu, _ := url.Parse(b)
@@ -157,6 +160,7 @@ func tree(t *testing.T, dir string) map[string]string {
 // committed a dataset missing those keys; now each is retried and the run
 // completes only when valid pages return, with exactly the reference rows.
 func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
+	datasettest.RequireJournal(t)
 	ep := gcsBucket(t, 8000)
 	ref := filepath.Join(t.TempDir(), "ref")
 	if _, err := Run(context.Background(), gcsConfig(ep, ref, false)); err != nil {
@@ -225,6 +229,7 @@ func TestGCSInvalidEnvelopeNeverCommits(t *testing.T) {
 // dataset; the rotated credential together with another billed project is
 // refused for the project. The bucket refuses unsigned requests.
 func TestGCSCredentialRotationResumes(t *testing.T) {
+	datasettest.RequireJournal(t)
 	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		w.Header().Set("Content-Type", "application/json")

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -32,6 +33,7 @@ import (
 // goroutines as they hung in DIR/.swath/stacks-stuck.txt (Java recorded
 // stuck_throttle or stuck_api_timeouts and logged a forensic snapshot).
 func TestStuckCause(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	for _, c := range []struct {
 		mode, want string
@@ -81,6 +83,7 @@ func TestStuckCause(t *testing.T) {
 // outcome in error.json and the report (it wrote neither). The graceful
 // codes are TestExitCodes'.
 func TestForcedExitCode(t *testing.T) {
+	datasettest.RequireJournal(t)
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
@@ -144,6 +147,7 @@ func TestForcedExitCode(t *testing.T) {
 // fails after journaling parts reports those durable parts, their bytes
 // and rows (they were reported as none).
 func TestOneTerminalAccount(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	ctx := context.Background()
 	same := func(t *testing.T, name string, a, b listing.Outcome) {

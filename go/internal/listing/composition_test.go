@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -32,6 +33,7 @@ import (
 // its engagement is gated by keyrange TestSlowRangeSplits): slow-split is
 // composed here for correctness only.
 func TestPriorSlowSplitPercentThrottleCompose(t *testing.T) {
+	datasettest.RequireJournal(t)
 	s3test.NoCredentials(t)
 	var keys []string
 	for d := range 40 {

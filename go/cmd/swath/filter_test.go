@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 )
 
 // TestFiltersThroughTheCommand: the filters drop rows before the order
@@ -23,6 +24,7 @@ import (
 // keeps the filters (they are part of the identity: another value is not
 // accepted).
 func TestFiltersThroughTheCommand(t *testing.T) {
+	datasettest.RequireJournal(t)
 	src, keys := textBucket(t, 3000)
 	var want []string
 	for _, k := range keys {

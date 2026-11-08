@@ -20,8 +20,8 @@ import (
 // (never journaled) run still work. Before, the journaled run went ahead
 // with a warning and no lock.
 func TestUnenforcedPlatformRefusesJournal(t *testing.T) {
+	defer func(was bool) { dataset.DirSyncEnforced = was }(dataset.DirSyncEnforced)
 	dataset.DirSyncEnforced = false
-	defer func() { dataset.DirSyncEnforced = true }()
 	keys := []string{"a", "b", "c"}
 	out := filepath.Join(t.TempDir(), "ds")
 	for _, resume := range []bool{false, true} {

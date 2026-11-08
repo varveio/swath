@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
@@ -135,6 +136,7 @@ func runScripted(t *testing.T, p *scripted, out string, resume bool) (Report, er
 // the final gate refused the manifest: the journal then named overlapping
 // parts and a resume continued after them.
 func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 40000 {
 		keys = append(keys, fmt.Sprintf("k%06d", i))
@@ -199,6 +201,7 @@ func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
 // the one part closes at the end and the age grows with the run. Both
 // datasets hold the same rows.
 func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
+	datasettest.RequireJournal(t)
 	var keys []string
 	for i := range 50 {
 		keys = append(keys, fmt.Sprintf("k%04d", i))

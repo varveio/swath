@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -25,6 +26,7 @@ import (
 // that started it: before the first release no build promises to resume
 // another's runs.
 func TestResumeRefusesRemovedFlag(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
@@ -61,6 +63,7 @@ func slowBucket(t *testing.T) string {
 // diagnostic disk overrides (--spill-reserve, --spill-compress), and the
 // report states the reserve in effect.
 func TestResumeTakesDiagnosticDiskFlags(t *testing.T) {
+	datasettest.RequireJournal(t)
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()

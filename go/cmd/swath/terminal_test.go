@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -107,7 +108,12 @@ func TestProgressGating(t *testing.T) {
 		{termOptions{}, true, 80, "dumb", true, false},
 		{termOptions{}, true, 20, "xterm", true, false},
 	} {
+		// A redraw also needs escape sequences to act on stderr: on Windows
+		// a console, which a test's stderr is not.
 		show, redraw := progressPrefs(tc.opt, tc.tty, tc.width, tc.term)
+		if tc.redraw && !enableVT() {
+			tc.redraw = false
+		}
 		if show != tc.show || redraw != tc.redraw {
 			t.Errorf("%d: show %v redraw %v, want %v %v", i, show, redraw, tc.show, tc.redraw)
 		}
@@ -186,6 +192,7 @@ func TestStatsBlock(t *testing.T) {
 // another prefix); --stats prints the block on stderr, the summary line
 // stays on stdout, and progress.json carries the request account.
 func TestReportContinuity(t *testing.T) {
+	datasettest.RequireJournal(t)
 	url := s3test.Bucket(t, []string{"a/1", "a/2", "b/1"})
 	stderr := captureStderr(t)
 	type rep struct {
