@@ -235,16 +235,22 @@ curl -H 'x-ms-version: 2026-06-06' 'http://127.0.0.1:19090/replay/replay-fixture
 `--protocols s3,azure` serves Azure Blob's flat `List Blobs` beside S3 from the same fixture, store, admission
 and meters: `GET /{account}/{container}?restype=container&comp=list`, where `--bucket` is the container (it must
 be a valid container name) and `--azure-account` the account, and Get Account Information (below). A request
-whose path is `/{account}`, `/{account}/` or `/{account}/{one segment}` and whose query has `restype` or `comp`
-belongs to this route before its method is checked; one that also has
-`list-type` is a replay `400 {"error":"replay_ambiguous_request"}`; every other request stays on the S3 route,
-or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
+whose path is `/{account}/{one segment}` and whose query has `restype` or `comp`, or a Get Account Information
+request (`restype=account`) on `/{account}`, `/{account}/` or `/{account}/{one segment}/`, belongs to this route
+before its method is checked; one that also has `list-type` is a replay `400 {"error":"replay_ambiguous_request"}`;
+every other request stays on the S3 route, or, with S3 off, is a replay `404 {"error":"replay_not_found"}`. So
+with the Azure route enabled and the S3 bucket named like the account, an account-path request carrying both
+the S3 selector and the account-information selector is now that ambiguous-request `400`, while one carrying
+the list selector stays on the S3 route as before.
 
 - `x-ms-version` must be `2026-06-06` or `2026-10-06` and is echoed; anything else is `400 InvalidHeaderValue`.
   `x-ms-client-request-id` (at most 1,024 bytes, no CR or LF) is echoed. `Accept` must allow `application/xml`.
 - Parameters: `prefix`, `delimiter` (any string), `marker`, `maxresults` (1 to 2,147,483,647 ASCII digits; a page
   holds at most 5,000, the default; the value is echoed as sent), `startFrom` (inclusive), `timeout` (1 to
-  3,600), and an empty `include`. A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
+  3,600), an empty `include`, and the parameters of a shared access signature (`sv`, `ss`, `srt`, `sp`, `se`,
+  `st`, `spr`, `sig`, `sr`, `si`, `sip`, `skoid`, `sktid`, `skt`, `ske`, `sks`, `skv`, `saoid`, `suoid`, `scid`,
+  `ses`, `sdd`, `rscc`, `rscd`, `rsce`, `rscl`, `rsct`), accepted and ignored on both operations: the replay does
+  not authenticate (`server` `TestAzureSASQueries`). A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
   malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
   and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
   matrix in [`../../docs/replay-provider-conformance.md`](../../docs/replay-provider-conformance.md) records.
@@ -269,14 +275,17 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
 - The injected latency profile applies alike: a delimiter request is a structure probe, `maxresults=1` a pivot
   probe.
 
-Get Account Information, `GET /{account}?restype=account&comp=properties` (also on `/{account}/`, the path a
-client joins to the `ServiceEndpoint`, and on the container path `/{account}/{container}`, as a container SAS
-sends it), answers `200` with an empty body, no `Content-Type`, `x-ms-is-hns-enabled: false` (`true` under
-`--azure-hns`), `x-ms-account-kind: StorageV2`, `x-ms-sku-name: Standard_LRS` and the headers above. It reads
-nothing from the fixture. Its refusals are the list route's: `x-ms-version` and `x-ms-client-request-id` as above,
-another container `404 ContainerNotFound`, `HEAD` `400` without a body, other methods `405 UnsupportedHttpVerb`;
-the query may carry only `restype`, `comp` and `timeout` (`server` `TestAzureAccountInformation`, and the Azure
-SDK's container and service clients in `TestAzureAccountInformationSDK`).
+Get Account Information, `GET` or `HEAD /{account}?restype=account&comp=properties`, is answered on every path
+the route claims for it, as Azure answers it on any resource path of the account: `/{account}`, `/{account}/`
+(the path a client joins to the `ServiceEndpoint`), and any container path, existing or not, with or without a
+trailing slash (a container SAS sends it there). It answers `200` with an empty body, no `Content-Type`,
+`x-ms-is-hns-enabled: false` (`true` under `--azure-hns`), `x-ms-account-kind: StorageV2`,
+`x-ms-sku-name: Standard_LRS` and the headers above, and reads nothing from the fixture. Its refusals are the list
+route's: `x-ms-version` and `x-ms-client-request-id` as above, other methods `405 UnsupportedHttpVerb` with
+`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters (`server`
+`TestAzureAccountInformation`, and the Azure SDK's container and service clients in
+`TestAzureAccountInformationSDK`, through `azblobtest.PinVersion`: the pinned SDK sends a service version the
+replay does not answer).
 
 A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
 capture `azure-12a`; `azure` `TestRenderRefusals`).

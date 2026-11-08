@@ -510,7 +510,8 @@ holds `Keys` (a deterministic corpus of about 5,000 names: EE/EF against F0..F4 
 level down and three deep, pairs nested inside a branch, only-child parents, names of 1,024, 2,010 and 3,072
 bytes, `a/` beside `a/b`, and filler past a 5,000-name page), `Serve` (swath-replay in-process over a sorted
 fixture of any keys, `--protocols=s3,azure`, optionally an HNS account; short pages come from `maxresults`, as
-the Go replay injects none) and `CompareUTF16` (UTF-16 code-unit order written from its definition, independent
+the Go replay injects none), `PinVersion` (an Azure SDK transport that sends an `x-ms-version` the replay answers,
+since the pinned SDK sends a newer one) and `CompareUTF16` (UTF-16 code-unit order written from its definition, independent
 of the replay's `azure.Compare` and tested against it, for fakes to sort with). A test
 that injects faults wraps the handler; protocol oracles
 and malformed-response handlers stay in their tests. `keyrangetest` (engine laws), `scalefake` (lazy large

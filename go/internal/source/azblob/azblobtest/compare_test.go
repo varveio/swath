@@ -15,9 +15,16 @@ import (
 
 func sign(n int) int { return cmp.Compare(n, 0) }
 
-// alphabet is every scalar in the corpus, with the UTF-16 boundaries.
+// alphabet is every scalar in the corpus, with the UTF-8 length
+// boundaries, the UTF-16 boundaries (around the surrogates, U+FFFF, the
+// first high surrogate's last low pair U+103FF / U+10400) and scalars with
+// each four-byte lead F0..F4.
 func alphabet() []rune {
-	set := map[rune]bool{0xd7ff: true, 0xe000: true, 0xffff: true, 0x10000: true, 0x10ffff: true}
+	set := map[rune]bool{}
+	for _, r := range []rune{0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xe000, 0xffff, 0x10000, 0x103ff, 0x10400,
+		0x40000, 0x80000, 0x100000, 0x10ffff} {
+		set[r] = true
+	}
 	for _, k := range Keys() {
 		for _, r := range k {
 			set[r] = true
