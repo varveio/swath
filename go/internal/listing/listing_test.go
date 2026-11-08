@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
@@ -69,7 +71,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
+	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.Source.Kind != "local-fs" || m.Scope.Kind != "whole" ||
 		!m.Coverage.Complete || m.Coverage.SkippedEntries != 0 || len(m.Parts) != 1 || m.Parts[0].Rows != 7 || m.Parts[0].Path != "data/part-00000.parquet" {
 		t.Fatalf("manifest %+v", m)
 	}
@@ -230,8 +232,8 @@ func TestResourceAdmission(t *testing.T) {
 		fds     int64
 		want    int
 	}{
-		{128 << 20, 4, 0, 4},                      // 128 MiB / 31.5 MiB (the S3 schema's encoder)
-		{512 << 20, 4, 0, 16},                     // 512 MiB / 31.5 MiB
+		{128 << 20, 4, 0, 3},                      // 128 MiB / 32.5 MiB (the S3 schema's encoder)
+		{512 << 20, 4, 0, 15},                     // 512 MiB / 32.5 MiB
 		{512 << 20, 64, 180, 180 - 16 - 128 - 32}, // 4: the descriptors (16 spill: 8 drainer readers, 8 read-ahead reads)
 		{512 << 20, 64, 100, 1},                   // the floor
 		{minRowBudget, 4, 0, 1},                   // the floor
@@ -241,11 +243,11 @@ func TestResourceAdmission(t *testing.T) {
 		}
 	}
 	// Once listing has ended, each worker's page (1 MiB) joins the
-	// allowance: 128 MiB at 64 workers carries 6, at 256 workers 12.
+	// allowance: 128 MiB at 64 workers carries 5, at 256 workers 11.
 	for _, tc := range []struct {
 		workers int
 		want    int
-	}{{64, 6}, {256, 12}, {4, 4}} {
+	}{{64, 5}, {256, 11}, {4, 4}} {
 		if got := admitAfterListing(128<<20, s3Encoder, tc.workers, 0); got != tc.want {
 			t.Errorf("admitAfterListing(128 MiB, %d) = %d, want %d", tc.workers, got, tc.want)
 		}

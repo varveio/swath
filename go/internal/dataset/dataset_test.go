@@ -14,6 +14,8 @@ import (
 	"slices"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/faults"
 )
 
@@ -203,13 +205,13 @@ func TestManaged(t *testing.T) {
 		{"data/ alone", map[string]string{DataDir + "/x": ""}, false},
 		{"another tool's manifest with a schema id", map[string]string{ManifestName: `{"schema_id":"other/v1"}`}, false},
 		{"a schemaId manifest", map[string]string{ManifestName: `{"schemaId":"other"}`}, false},
-		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{}}}`}, false},
-		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":null}}}`}, false},
-		{"our format, coverage outside the extension", map[string]string{ManifestName: `{"format":"` + Format + `","coverage":{}}`}, false},
-		{"another producer's SeekParquet dataset", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"other":{"coverage":{}}}}`}, false},
+		{"our format, no coverage", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{}}}`}, false},
+		{"our format, null coverage", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{"coverage":null}}}`}, false},
+		{"our format, coverage outside the extension", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","coverage":{}}`}, false},
+		{"another producer's SeekParquet dataset", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"other":{"coverage":{}}}}`}, false},
 		{"another format with coverage", map[string]string{ManifestName: `{"format":"other","coverage":{}}`}, false},
 		{"not JSON", map[string]string{ManifestName: `{`}, false},
-		{"our manifest", map[string]string{ManifestName: `{"format":"` + Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
+		{"our manifest", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
 		{"an earlier build's format 2 manifest", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","coverage":{"complete":true}}`}, true},
 		{"format 2 without coverage", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","extensions":{"swath":{"coverage":{}}}}`}, false},
 		{"a lock", map[string]string{Workspace + "/" + LockName: ""}, true},
@@ -284,7 +286,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
-		if !m.Current() || m.Key != (ManifestKey{"key", !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
+		if !m.Current() || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
 			len(m.Parts) != 1 || m.Parts[0].MD5 != part.MD5 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
 		}

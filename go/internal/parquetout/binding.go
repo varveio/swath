@@ -11,15 +11,13 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
-	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
 
 // nodeOf builds the Parquet schema for s: the key column, then s.Columns in
-// declaration order. The key column is delta-encoded with an ascending
-// single-page index, and integer columns carry the standard INT annotation
-// (signed or not).
+// declaration order. The key column is delta-encoded, and integer columns
+// carry the standard INT annotation (signed or not).
 func nodeOf[P any](s *schema.Schema[P]) *pq.Schema {
 	specs := s.Specs()
 	delta := make([]bool, len(specs))
@@ -70,6 +68,8 @@ func insertOptional(tag string) string {
 	return tag + ",optional"
 }
 
+// root sets the encoding of the fields with schema.Column.Delta; the
+// module's part writer marks the key column's index ascending.
 type root struct {
 	pq.Node
 	delta []bool // per field: DELTA_BYTE_ARRAY (schema.Column.Delta)
@@ -77,10 +77,7 @@ type root struct {
 
 func (r root) Fields() []pq.Field {
 	fields := append([]pq.Field(nil), r.Node.Fields()...)
-	for i, f := range fields {
-		if i == 0 {
-			fields[i] = ascendingKey{f}
-		}
+	for i := range fields {
 		if r.delta[i] {
 			fields[i] = encoded{fields[i], &pq.DeltaByteArray}
 		}
@@ -96,39 +93,21 @@ type encoded struct {
 
 func (f encoded) Encoding() encoding.Encoding { return f.enc }
 
-// ascendingKey stamps BoundaryOrder ASCENDING on a one-page column index
-// (accepted by older Java readers); multi-page indexes are untouched.
-type ascendingKey struct{ pq.Field }
-
-func (f ascendingKey) Type() pq.Type { return ascendingType{f.Field.Type()} }
-
-type ascendingType struct{ pq.Type }
-
-func (t ascendingType) NewColumnIndexer(sizeLimit int) pq.ColumnIndexer {
-	return ascendingIndexer{t.Type.NewColumnIndexer(sizeLimit)}
-}
-
-type ascendingIndexer struct{ pq.ColumnIndexer }
-
-func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
-	index := ix.ColumnIndexer.ColumnIndex()
-	if len(index.NullPages) == 1 {
-		index.BoundaryOrder = format.Ascending
-	}
-	return index
-}
-
-// fillKey writes the key column (column 0) of rows into dst.
-func fillKey[P any](dst []pq.Value, rows []schema.Row[P]) {
+// fill writes rows into dst, one parquet row each of s's columns (the
+// key, then s.Columns), a column at a time: the single row-to-column
+// mapping, driven by the schema's accessors. Byte values view the rows'
+// strings.
+func fill[P any](s *schema.Schema[P], dst []pq.Row, rows []schema.Row[P]) {
 	for i := range rows {
-		dst[i] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
+		dst[i][0] = pq.ByteArrayValue(unsafeBytes(rows[i].Key)).Level(0, 0, 0)
+	}
+	for c := range s.Columns {
+		fillColumn(&s.Columns[c], c+1, dst, rows)
 	}
 }
 
-// fill writes column c (c >= 1; schema column c-1) of rows into dst as
-// parquet values: the single row-to-column mapping, driven by the schema's
-// accessors.
-func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row[P]) {
+// fillColumn writes column col (schema column c) of rows into dst.
+func fillColumn[P any](c *schema.Column[P], col int, dst []pq.Row, rows []schema.Row[P]) {
 	def := 1
 	if c.Required {
 		def = 0
@@ -137,33 +116,33 @@ func fill[P any](c *schema.Column[P], col int, dst []pq.Value, rows []schema.Row
 	case c.Str != nil:
 		for i := range rows {
 			if v, ok := c.Str(&rows[i].Data); ok {
-				dst[i] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
+				dst[i][col] = pq.ByteArrayValue(unsafeBytes(v)).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i][col] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	case c.Type == schema.Int32 || c.Type == schema.Uint32:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i].Data); ok {
-				dst[i] = pq.Int32Value(int32(v)).Level(0, def, col)
+				dst[i][col] = pq.Int32Value(int32(v)).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i][col] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	case c.Bool != nil:
 		for i := range rows {
 			if v, ok := c.Bool(&rows[i].Data); ok {
-				dst[i] = pq.BooleanValue(v).Level(0, def, col)
+				dst[i][col] = pq.BooleanValue(v).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i][col] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	default:
 		for i := range rows {
 			if v, ok := c.Int(&rows[i].Data); ok {
-				dst[i] = pq.Int64Value(v).Level(0, def, col)
+				dst[i][col] = pq.Int64Value(v).Level(0, def, col)
 			} else {
-				dst[i] = pq.NullValue().Level(0, 0, col)
+				dst[i][col] = pq.NullValue().Level(0, 0, col)
 			}
 		}
 	}

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -45,14 +47,14 @@ func TestCutReproducesClaimedFooter(t *testing.T) {
 		}
 		return parts
 	}
-	footer := func(p dataset.Part) Footer {
+	footer := func(p dataset.Part) seekparquet.Footer {
 		t.Helper()
 		f, err := os.Open(p.Path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer f.Close()
-		ft, err := ReadFooter(f)
+		ft, err := seekparquet.InspectFooter(f, p.Bytes)
 		if err != nil {
 			t.Fatal(err)
 		}

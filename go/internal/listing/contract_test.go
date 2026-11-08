@@ -17,6 +17,8 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -34,7 +36,7 @@ func checkContract(t *testing.T, out string) []string {
 	t.Helper()
 	var m dataset.Manifest
 	readJSON(t, filepath.Join(out, dataset.ManifestName), &m)
-	if m.Format != dataset.Format || m.FormatVersion != dataset.FormatVersion || m.SchemaID == "" || m.PublishedAt.IsZero() {
+	if m.Format != seekparquet.Format || m.FormatVersion != int(seekparquet.FormatVersion) || m.SchemaID == "" || m.PublishedAt.IsZero() {
 		t.Fatalf("manifest header %+v", m)
 	}
 	for _, gone := range []string{"_SUCCESS", "symlink.txt"} {
@@ -76,8 +78,8 @@ func checkContract(t *testing.T, out string) []string {
 		for _, e := range pf.Metadata().KeyValueMetadata {
 			kv[e.Key] = e.Value
 		}
-		want := map[string]string{dataset.StampFormatVersion: strconv.Itoa(dataset.FormatVersion), dataset.StampDraftRevision: strconv.Itoa(dataset.DraftRevision),
-			dataset.StampSchema: m.SchemaID, dataset.StampKeyColumn: m.Key.Column, dataset.StampKeyUnique: strconv.FormatBool(m.Key.Unique)}
+		want := map[string]string{seekparquet.StampFormatVersion: strconv.FormatInt(seekparquet.FormatVersion, 10), seekparquet.StampDraftRevision: strconv.FormatInt(seekparquet.DraftRevision, 10),
+			seekparquet.StampSchemaID: m.SchemaID, seekparquet.StampKeyColumn: m.Key.Column, seekparquet.StampKeyUnique: strconv.FormatBool(m.Key.Unique)}
 		if !m.Current() || m.Key.Column != dataset.KeyColumn {
 			t.Fatalf("manifest %s %d draft %d, key %+v", m.Format, m.FormatVersion, m.DraftRevision, m.Key)
 		}

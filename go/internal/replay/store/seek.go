@@ -58,7 +58,7 @@ func isSeekParquet(dir string) bool {
 		return false
 	}
 	var head manifestHead
-	return json.Unmarshal(b, &head) == nil && head.Format == "seekparquet"
+	return json.Unmarshal(b, &head) == nil && head.Format == seekparquet.Format
 }
 
 // seekReader serves a SeekParquet dataset through the seekparquet module:

@@ -13,18 +13,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 )
 
-// Format identifies the dataset format in the manifest and the footers: a
-// SeekParquet dataset (format 1, draft revision 1, stamped format_version
-// 0), keyed by KeyColumn. swath's own metadata (what was listed, how much
-// of it, the parts' MD5 digests) is the manifest's Extension.
+// A dataset is a SeekParquet dataset (the seekparquet module's Format,
+// FormatVersion and DraftRevision, its footer stamps and its manifest),
+// keyed by KeyColumn. swath's own metadata (what was listed, how much of
+// it, the parts' digests) is the manifest's Extension.
 const (
-	Format        = "seekparquet"
-	FormatVersion = 0
-	DraftRevision = 1
-	KeyColumn     = "key"
-	Extension     = "swath"
+	KeyColumn = "key"
+	Extension = "swath"
 )
 
 // LegacyFormat is the swath-dataset format 2 earlier builds wrote: still
@@ -38,7 +37,7 @@ const (
 // File and directory names inside a dataset.
 const (
 	DataDir      = "data"
-	ManifestName = "manifest.json"
+	ManifestName = seekparquet.ManifestName
 	// ReportName is the run report, operational, written after the commit.
 	ReportName = "run.json"
 	// ErrorName is the outcome of a run that did not complete (class, exit
@@ -58,18 +57,6 @@ const (
 	// journal record that reads as torn: the record may have been
 	// acknowledged and damaged since (see listing's recovery).
 	SuspectDir = "suspect"
-)
-
-// Footer key/value stamps on every part (SeekParquet STAMP-1): they repeat
-// the manifest's version, schema id and key declaration. Order within a
-// part is the standard sorting_columns; order across parts, bounds and
-// completeness are the manifest's.
-const (
-	StampFormatVersion = "seekparquet.format_version" // FormatVersion
-	StampDraftRevision = "seekparquet.draft_revision" // DraftRevision
-	StampSchema        = "seekparquet.schema_id"
-	StampKeyColumn     = "seekparquet.key_column" // KeyColumn
-	StampKeyUnique     = "seekparquet.key_unique" // "true", "false" with repeated keys
 )
 
 // PartName is the published name of part ordinal i: dense, zero-based,

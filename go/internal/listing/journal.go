@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
@@ -124,7 +126,7 @@ type suspect struct {
 	// resume's timing does not repeat, and writes it with its columns and
 	// created_by, since the build that resumes may write an optional
 	// column the claimed part lacks, or name itself differently.
-	footer parquetout.Footer
+	footer seekparquet.Footer
 }
 
 // openJournal takes ownership of the output and prepares it: a fresh
@@ -658,7 +660,7 @@ func measureSuspect(v verifier, r *os.Root, out, rel string, n int) (*suspect, e
 	if err != nil {
 		return nil, fmt.Errorf("resume: suspect part: %w", err)
 	}
-	footer, _ := parquetout.ReadFooter(f) // unreadable: no boundary, the comparison refuses
+	footer, _ := seekparquet.InspectFooter(f, info.Bytes) // unreadable: no boundary, the comparison refuses
 	return &suspect{ordinal: n, path: path, rel: rel, info: info, footer: footer}, nil
 }
 

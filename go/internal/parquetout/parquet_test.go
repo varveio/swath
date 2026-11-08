@@ -21,6 +21,8 @@ import (
 	"github.com/klauspost/compress/zstd"
 	pq "github.com/parquet-go/parquet-go"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
@@ -62,10 +64,8 @@ func writeFile(t *testing.T, path string, rows []row, columns int) dataset.Part 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range rows {
-		if err := w.write(&rows[i]); err != nil {
-			t.Fatal(err)
-		}
+	if err := w.write(rows); err != nil {
+		t.Fatal(err)
 	}
 	p, err := w.close()
 	if err != nil {
@@ -141,8 +141,8 @@ func TestRouterIsDeterministicAcrossEncoders(t *testing.T) {
 			// The footer carries the SeekParquet stamps and the value
 			// index bound; nothing about the part's place in the dataset.
 			kv := footer(t, parts[i].Path)
-			want := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1",
-				dataset.StampSchema: testSchema.ID, dataset.StampKeyColumn: "key", dataset.StampKeyUnique: "true"}
+			want := map[string]string{seekparquet.StampFormatVersion: "0", seekparquet.StampDraftRevision: "1",
+				seekparquet.StampSchemaID: testSchema.ID, seekparquet.StampKeyColumn: "key", seekparquet.StampKeyUnique: "true"}
 			if !maps.Equal(kv, want) {
 				t.Errorf("part %d: footer %q, want %q", i, kv, want)
 			}
@@ -519,7 +519,7 @@ func TestValueLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.abort()
-		return w.write(&row{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}})
+		return w.write([]row{{Key: "k", Data: tr{Kind: "LINK", Link: link, Has: 3}}})
 	}
 	if err := write(strings.Repeat("\xff", 16)); err != nil {
 		t.Fatalf("a value at the limit: %v", err)

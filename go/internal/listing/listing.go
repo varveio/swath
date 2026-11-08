@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
@@ -240,7 +242,7 @@ const (
 	minSpillReserve = 1 << 30
 	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
 	// worker's pages at the default 64 workers to queue behind a slow
-	// frontier, and the allowance that admits 4 encoders of the object
+	// frontier, and the allowance that admits 3 encoders of the object
 	// stores' schemas (admitEncoders).
 	DefaultRowBudget = 128 << 20
 	// DefaultWorkers is the default listing concurrency, whatever the CPU
@@ -338,8 +340,8 @@ func admitEncoders(rowBudget, per int64, workers int, fds int64) int {
 // row budget (listingPageBytes each) goes to writers instead, on top of
 // the allowance equal to the row budget; descriptors as admitEncoders
 // (the workers' idle connections stay open). Each encoder costs per
-// (encoderPrice). 128 MiB and 64 workers carry 6 of the object stores'
-// schemas, 256 workers 12.
+// (encoderPrice). 128 MiB and 64 workers carry 5 of the object stores'
+// schemas, 256 workers 11.
 func admitAfterListing(rowBudget, per int64, workers int, fds int64) int {
 	return admitEncoders(rowBudget+int64(workers)*listingPageBytes, per, workers, fds)
 }
@@ -545,7 +547,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 // identity is the run's resume identity: what the pipeline freezes, and
 // what the source names (source.Identified).
 func identity(src registry.Source, s schema.Info, cfg Config) journal.Identity {
-	id := journal.Identity{Tool: buildinfo.Tool, Format: dataset.FormatVersion, SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
+	id := journal.Identity{Tool: buildinfo.Tool, Format: int(seekparquet.FormatVersion), SchemaID: s.ID, KeyCap: s.MaxKeyBytes, Writer: parquetout.Recipe,
 		PartSize: cfg.Limits.PartSize, PartMaxRows: cfg.Limits.PartMaxRows, Provider: src.Locator().Kind, Filters: cfg.Filter.Descriptions()}
 	if idf, ok := src.(source.Identified); ok {
 		sid := idf.Identity()

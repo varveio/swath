@@ -4,8 +4,6 @@
 package dataset
 
 import (
-	"github.com/varveio/swath/go/internal/faults"
-
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/go/internal/faults"
 )
 
 // Key is a key's exact bytes, held in a Go string and compared as unsigned
@@ -105,51 +107,22 @@ func Check(parts []Part, rows int64) error {
 // bounds) whose swath extension says what was listed (source, scope), how
 // much of it (coverage), when it was published and each part's MD5.
 //
-// The fields are flat in Go; the JSON nests swath's under
-// extensions.swath (MarshalJSON). UnmarshalJSON reads that form and the
-// swath-dataset format 2 manifest earlier builds wrote (LegacyFormat), whose
-// fields are top-level and whose parts carry their md5.
+// The fields are flat in Go; the JSON is the module's
+// (seekparquet.MarshalManifest, ParseManifest), with swath's fields under
+// extensions.swath. UnmarshalJSON reads that form and the swath-dataset
+// format 2 manifest earlier builds wrote (LegacyFormat), whose fields are
+// top-level and whose parts carry their md5.
 type Manifest struct {
-	Format        string // Format, or LegacyFormat when read from an earlier build's dataset
-	FormatVersion int    // FormatVersion (LegacyFormatVersion)
-	DraftRevision int    // DraftRevision (0 in format 2)
+	Format        string // seekparquet.Format, or LegacyFormat when read from an earlier build's dataset
+	FormatVersion int    // seekparquet.FormatVersion (LegacyFormatVersion)
+	DraftRevision int    // seekparquet.DraftRevision (0 in format 2)
 	SchemaID      string
-	Key           ManifestKey // KeyColumn (zero in format 2: key, unique)
+	Key           seekparquet.Key // KeyColumn (in format 2: key, unique)
 	PublishedAt   time.Time
 	Source        Source
 	Scope         Scope
 	Coverage      Coverage
 	Parts         []ManifestPart // in key order; part i is data/part-%05d.parquet
-}
-
-// ManifestKey is the manifest's key declaration: the key column and
-// whether keys are unique (false when a key's rows repeat as a group,
-// schema.Info.Groups).
-type ManifestKey struct {
-	Column string `json:"column"`
-	Unique bool   `json:"unique"`
-}
-
-// seekManifest is a Manifest as JSON: SeekParquet's members, swath's
-// under extensions.swath.
-type seekManifest struct {
-	Format        string      `json:"format"`
-	FormatVersion int         `json:"format_version"`
-	DraftRevision int         `json:"draft_revision,omitempty"`
-	SchemaID      string      `json:"schema_id"`
-	Key           ManifestKey `json:"key"`
-	Extensions    struct {
-		Swath swathExtension `json:"swath"`
-	} `json:"extensions"`
-	Parts []seekPart `json:"parts"`
-}
-
-type seekPart struct {
-	Path   string `json:"path"`
-	Rows   int64  `json:"rows"`
-	Bytes  int64  `json:"bytes"`
-	MinKey Key    `json:"min_key_base64"`
-	MaxKey Key    `json:"max_key_base64"`
 }
 
 // swathExtension is extensions.swath: PartMD5 holds each part's MD5 in
@@ -176,18 +149,23 @@ type legacyManifest struct {
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	w := seekManifest{Format: m.Format, FormatVersion: m.FormatVersion, DraftRevision: m.DraftRevision, SchemaID: m.SchemaID, Key: m.Key,
-		Parts: make([]seekPart, len(m.Parts))}
-	w.Extensions.Swath = swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
-		PartMD5: make([]string, len(m.Parts))}
+	x := swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage, PartMD5: make([]string, len(m.Parts))}
+	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
+		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
-		w.Parts[i] = seekPart{Path: p.Path, Rows: p.Rows, Bytes: p.Bytes, MinKey: p.MinKey, MaxKey: p.MaxKey}
-		w.Extensions.Swath.PartMD5[i] = p.MD5
+		sm.Parts[i] = seekparquet.PartInfo{Path: p.Path, Rows: p.Rows, Bytes: p.Bytes, MinKey: []byte(p.MinKey), MaxKey: []byte(p.MaxKey)}
+		x.PartMD5[i] = p.MD5
 	}
-	return json.Marshal(w)
+	ext, err := json.Marshal(map[string]swathExtension{Extension: x})
+	if err != nil {
+		return nil, err
+	}
+	sm.Extensions = ext
+	return seekparquet.MarshalManifest(sm)
 }
 
-// UnmarshalJSON reads either form, by its format member.
+// UnmarshalJSON reads either form, by its format member: the SeekParquet
+// one as the module parses it (strictly, its version one this build reads).
 func (m *Manifest) UnmarshalJSON(b []byte) error {
 	var head struct {
 		Format string `json:"format"`
@@ -200,22 +178,27 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		if err := json.Unmarshal(b, &l); err != nil {
 			return err
 		}
-		*m = Manifest{Format: l.Format, FormatVersion: l.FormatVersion, SchemaID: l.SchemaID, Key: ManifestKey{Column: KeyColumn, Unique: true},
+		*m = Manifest{Format: l.Format, FormatVersion: l.FormatVersion, SchemaID: l.SchemaID, Key: seekparquet.Key{Column: KeyColumn, Unique: true},
 			PublishedAt: l.PublishedAt, Source: l.Source, Scope: l.Scope, Coverage: l.Coverage, Parts: l.Parts}
 		return nil
 	}
-	var w seekManifest
-	if err := json.Unmarshal(b, &w); err != nil {
+	sm, err := seekparquet.ParseManifest(b, seekparquet.Limits{})
+	if err != nil {
 		return err
 	}
-	x := w.Extensions.Swath
-	*m = Manifest{Format: w.Format, FormatVersion: w.FormatVersion, DraftRevision: w.DraftRevision, SchemaID: w.SchemaID, Key: w.Key,
-		PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(w.Parts))}
-	if len(x.PartMD5) != len(w.Parts) && len(x.PartMD5) != 0 {
-		return fmt.Errorf("manifest: %d part digests for %d parts", len(x.PartMD5), len(w.Parts))
+	var x swathExtension
+	if raw, ok := sm.Extension(Extension); ok {
+		if err := json.Unmarshal(raw, &x); err != nil {
+			return fmt.Errorf("manifest: extensions.%s: %w", Extension, err)
+		}
 	}
-	for i, p := range w.Parts {
-		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: p.MinKey, MaxKey: p.MaxKey}}
+	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
+		Key: sm.Key, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(sm.Parts))}
+	if len(x.PartMD5) != len(sm.Parts) && len(x.PartMD5) != 0 {
+		return fmt.Errorf("manifest: %d part digests for %d parts", len(x.PartMD5), len(sm.Parts))
+	}
+	for i, p := range sm.Parts {
+		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey)}}
 		if len(x.PartMD5) > 0 {
 			m.Parts[i].MD5 = x.PartMD5[i]
 		}
@@ -225,7 +208,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 
 // Current reports whether m is in the format this build writes.
 func (m *Manifest) Current() bool {
-	return m.Format == Format && m.FormatVersion == FormatVersion && m.DraftRevision == DraftRevision
+	return m.Format == seekparquet.Format && m.FormatVersion == int(seekparquet.FormatVersion) && m.DraftRevision == int(seekparquet.DraftRevision)
 }
 
 // Readable reports whether m is a format this build reads: the current one
@@ -308,8 +291,8 @@ func WriteReport(out string, v any) error {
 // the same step, or refuses it (an error without calling install).
 func Publish(out string, meta Meta, parts []Part, commit func(install func() error) error) error {
 	data := filepath.Join(out, DataDir)
-	m := Manifest{Format: Format, FormatVersion: FormatVersion, DraftRevision: DraftRevision, SchemaID: meta.SchemaID,
-		Key: ManifestKey{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
+	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
+		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Parts: []ManifestPart{}}
 	if m.Coverage.Exclusions == nil {
 		m.Coverage.Exclusions = []string{}
 	}
