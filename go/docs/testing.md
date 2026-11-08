@@ -505,7 +505,14 @@ gofakes3 bucket `bkt` whose bodies are the keys: `Backend` populates, `Handler` 
 latency, `Serve` owns the server's lifecycle, `NoCredentials` hides the host's AWS credentials) and
 `internal/source/gcs/gcstest` (`Strict`, the objects.list fake with opaque page tokens bound to their query,
 empty and short pages and a fields selector, which the GCS provider's protocol tests run against; `Bucket`
-and `Handler` serve it for run-level tests). A test that injects faults wraps the handler; protocol oracles
+and `Handler` serve it for run-level tests). For the Azure Blob provider, `internal/source/azblob/azblobtest`
+holds `Keys` (a deterministic corpus of about 5,000 names: EE/EF against F0..F4 sibling pairs at the root, one
+level down and three deep, pairs nested inside a branch, only-child parents, names of 1,024, 2,010 and 3,072
+bytes, `a/` beside `a/b`, and filler past a 5,000-name page), `Serve` (swath-replay in-process over a sorted
+fixture of any keys, `--protocols=s3,azure`, optionally an HNS account; short pages come from `maxresults`, as
+the Go replay injects none) and `CompareUTF16` (UTF-16 code-unit order written from its definition, independent
+of the replay's `azure.Compare` and tested against it, for fakes to sort with). A test
+that injects faults wraps the handler; protocol oracles
 and malformed-response handlers stay in their tests. `keyrangetest` (engine laws), `scalefake` (lazy large
 keyspaces, key lists and service behaviors), `shapes` (bucket shapes, below) and `faulttest` (transport disturbance) keep their own purposes.
 
@@ -515,6 +522,7 @@ keyspaces, key lists and service behaviors), `shapes` (bucket shapes, below) and
 |---|---|---|---|
 | gofakes3 (`s3test`, `bench/s3fake`) | a real S3 implementation: small buckets with object bodies | protocol, oracle and run-level tests; the `go-build` image smoke | the default suite: `go-race`, `go-xos`, `go-race-nightly` |
 | `gcstest` | the GCS JSON API with opaque page tokens bound to their query | GCS protocol and run-level tests, the GCS arms of `TestCrashMatrix` | the default suite |
+| `azblobtest` | swath-replay's Azure and S3 routes over one sorted fixture, in-process | Azure Blob provider tests | the default suite |
 | `scalefake` | lazy keyspaces and key files up to billions of keys, with service behaviors | the shape suite, `listing` memory and spill-format tests, measurements | the default suite, `go-nonrace`; full scale in `go-shapes` |
 | `keyfake` | a sorted production key list as ListObjectsV2 at a fixed page latency | measurements and the durable spill campaign; private, not in this repository | never |
 

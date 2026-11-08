@@ -40,8 +40,11 @@ ETag, storage class, owner id, owner display name, checksum algorithm, checksum 
 part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted SeekParquet dataset
 that `serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
 leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
-unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
-anything is written. On success it prints one line on stdout:
+unknown `row_type` or a key over the cap (1,024 bytes, the S3 limit; `--key-limit` raises it up to 4,096) is
+refused before anything is written. Azure names reach 1,024 UTF-16 units, 3,072 bytes of UTF-8, so a fixture
+for the Azure route that holds them needs `--key-limit 3072`; nothing else on that route is shorter (fields
+4,096 bytes, markers 8,192 characters; `server` `TestAzureServesLongestNames` serves 3,072-byte names and a
+3,072-byte `startFrom`). On success it prints one line on stdout:
 
 ```
 sort_fixture rows=10000 objects=10000 skipped=0 parts=1 bytes=230500 schema=swath-replay/objects/v1 wall_ms=40 output=/data/sorted
@@ -77,6 +80,7 @@ word.
 | `--serving-mode` | `sorted` | `sorted` only; `duckdb` is refused with the reason |
 | `--protocols` | `s3` | any of `s3`, `gcs` and `azure`, comma-separated (below). With `gcs` the bucket must be a valid GCS bucket name, and `storage` is refused with both `s3` and `gcs`; with `azure` it must be a valid container name |
 | `--azure-account` | `replay` | the Azure route's account path segment (3 to 24 lower-case letters and digits); refused without `azure` |
+| `--azure-hns` | off | Get Account Information reports a hierarchical-namespace account (`x-ms-is-hns-enabled: true`) instead of a flat one; refused without `azure` |
 | `--advertised-host` | `--host` | the host the Azure `ServiceEndpoint` and `native_endpoints` name; required for a wildcard bind with `azure` |
 
 The durations take `500ms`, `10s` or ISO-8601 (`PT10S`). A bad value is a usage error (exit 2) naming the
@@ -230,8 +234,9 @@ curl -H 'x-ms-version: 2026-06-06' 'http://127.0.0.1:19090/replay/replay-fixture
 
 `--protocols s3,azure` serves Azure Blob's flat `List Blobs` beside S3 from the same fixture, store, admission
 and meters: `GET /{account}/{container}?restype=container&comp=list`, where `--bucket` is the container (it must
-be a valid container name) and `--azure-account` the account. A request whose path is `/{account}/{one segment}`
-and whose query has `restype` or `comp` belongs to this route before its method is checked; one that also has
+be a valid container name) and `--azure-account` the account, and Get Account Information (below). A request
+whose path is `/{account}`, `/{account}/` or `/{account}/{one segment}` and whose query has `restype` or `comp`
+belongs to this route before its method is checked; one that also has
 `list-type` is a replay `400 {"error":"replay_ambiguous_request"}`; every other request stays on the S3 route,
 or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
 
@@ -263,6 +268,15 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
   `503 ServerBusy`. Answers carry `x-ms-request-id` (`replay-` and a counter) and `Date`.
 - The injected latency profile applies alike: a delimiter request is a structure probe, `maxresults=1` a pivot
   probe.
+
+Get Account Information, `GET /{account}?restype=account&comp=properties` (also on `/{account}/`, the path a
+client joins to the `ServiceEndpoint`, and on the container path `/{account}/{container}`, as a container SAS
+sends it), answers `200` with an empty body, no `Content-Type`, `x-ms-is-hns-enabled: false` (`true` under
+`--azure-hns`), `x-ms-account-kind: StorageV2`, `x-ms-sku-name: Standard_LRS` and the headers above. It reads
+nothing from the fixture. Its refusals are the list route's: `x-ms-version` and `x-ms-client-request-id` as above,
+another container `404 ContainerNotFound`, `HEAD` `400` without a body, other methods `405 UnsupportedHttpVerb`;
+the query may carry only `restype`, `comp` and `timeout` (`server` `TestAzureAccountInformation`, and the Azure
+SDK's container and service clients in `TestAzureAccountInformationSDK`).
 
 A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
 capture `azure-12a`; `azure` `TestRenderRefusals`).
