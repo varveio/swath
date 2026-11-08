@@ -14,8 +14,10 @@ import (
 // (output.rows_fetched/rows_emitted, object_bytes/output_bytes, one request
 // count requests.http_attempts in place of cost.api_calls, one row budget),
 // phase times, free_disk_min_bytes and the bounded progress history
-// (go/docs/upgrade.md lists every rename).
-const ReportVersion = 2
+// (go/docs/upgrade.md lists every rename). 3: timings.listing_done_at
+// and resources.drain (the drain tail: read-ahead, segments, encoder
+// admission after listing).
+const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: readers accept

@@ -24,7 +24,7 @@ A format-2 manifest is never read by the format-1 rule.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape (below) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 2: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 3: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -281,6 +281,11 @@ is the full schema and "Run report" in [cli.md](cli.md#run-report) its descripti
 | – | `invocation.prior` (the `--seed-from` prior) |
 | – | `output.text.formatters`, `output.text.output_wait_ns`, `output.text.compressor` (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`) |
 | `resources.spill` | adds `logical_bytes`, `format`, `decode_refused` |
+
+**Run report: version 3** adds, beside version 2's fields: `timings.listing_done_at` (the provider finished)
+and `resources.drain` (sorted Parquet: the drain tail's times, the read-ahead's frames and waits, the parallel
+segments' plan and holdings, and the encoders admitted at start and after listing; [cli.md](cli.md#run-report)).
+Nothing of version 2 is renamed or removed.
 
 **Counters** (`source.stats.counters`, [internals/counters.md](internals/counters.md)), against those builds. New: `seed.from.*`
 (the warm start), `seed.first_page_keys`, `seed.flat_chains`, `seed.stop.flat`, `seed.stop.one_page`,

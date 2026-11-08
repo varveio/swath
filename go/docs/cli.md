@@ -664,7 +664,7 @@ Diagnostics:
 ## Run report
 
 <!-- report:begin -->
-One schema (`listing.Report`, `report_version` 2) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`listing.Report`, `report_version` 3) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report-format json` prints. It is operational: readers accept a dataset by its manifest, never by
 this report. The schema is pinned by `internal/listing/testdata/report-schema.golden` (`TestReportSchemaGolden`;
 a change bumps `report_version` and is listed in [upgrade.md](upgrade.md#run-report-and-counters)), and
@@ -720,7 +720,16 @@ output's; absent for swath count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `peak_bytes`, `refused`,
-`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`.
+`max_bytes`, `reserve_bytes`, `peak_readers`, `dir`, `fs_type`. `drain` (sorted Parquet; absent otherwise) is the
+drain's tail once listing is done ([internals/ordering.md](internals/ordering.md), every field in
+[internals/counters.md](internals/counters.md)): `tail_ns`, `worker_idle_before_listing_done_ns`,
+`worker_idle_after_listing_done_ns`, the drainer's `replay_read_ns`, `replay_decode_ns`, `ahead_wait_ns`,
+`order_check_ns` and `sink_write_ns`; `read_ahead` (`frames`, `rows`, `drainer_frames`, `unplanned_frames`,
+`drainer_waits`, `capped_waits`, `read_ns`, `decode_ns`, `max_reads`); `segments`, the parallel tail (`reason`,
+`segments`, `workers`, `rows`, `max_rows`, `seam_checks`, `time_ns`, `max_time_ns`, `plan_ns`, `read_ns`,
+`decode_ns`, `write_ns`, `max_workers`, `budget_waits`, `budget_wait_ns`, `max_held_bytes`, `workers_by`,
+`per_worker_bytes`, `free_bytes`, `tree_bytes`); and `encoders_at_start`, `encoders_after_listing`,
+`encoder_admission`. In `timings`, `listing_done_at` is when the provider finished (every range expanded).
 
 **Source** (`source`: `name`, `stats`). The provider's own account: its counters under `counters` (one
 namespace, [internals/counters.md](internals/counters.md)).
