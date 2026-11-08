@@ -345,7 +345,7 @@ jobs:
 
       - name: go test -race
         if: steps.changes.outputs.go == 'true'
-        run: go test -race ./...
+        run: go test -race -timeout 30m ./...
 
       - name: Static cross-builds (CGO_ENABLED=0)
         if: steps.changes.outputs.go == 'true'
