@@ -12,10 +12,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/localfs"
 )
@@ -112,6 +113,14 @@ func TestOutputInsideRootIsSkipped(t *testing.T) {
 	}
 }
 
+// TestCancellationLeavesNothing: a run cancelled mid-walk, while its first
+// part is being written, fails with the cancellation and leaves no
+// scratch. The cancel point is established by construction: the encoder
+// cancels at its first batch (crash point "encoding", the part's temporary
+// file created), and the smallest row budget keeps the walk within a
+// budget of rows of that batch, so it cannot finish first. (A goroutine
+// polling for the temporary file every 50 µs raced the walk: on one core
+// the walk could finish before it looked.)
 func TestCancellationLeavesNothing(t *testing.T) {
 	src := t.TempDir()
 	for i := range 20000 {
@@ -120,21 +129,24 @@ func TestCancellationLeavesNothing(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "ds")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { // cancel mid-walk: once the first part is being written
-		for {
-			if _, err := os.Stat(dataset.TempPath(out, 0)); err == nil {
-				cancel()
-				return
+	var partOpen atomic.Bool
+	restore := faults.Set(func(p string) error {
+		if p == "encoding" && !partOpen.Swap(true) {
+			if _, err := os.Stat(dataset.TempPath(out, 0)); err != nil {
+				t.Errorf("the first batch's part is not open: %v", err)
 			}
-			if ctx.Err() != nil {
-				return
-			}
-			time.Sleep(50 * time.Microsecond)
+			cancel()
 		}
-	}()
-	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out}, Limits: Limits{PartSize: 1, Workers: 1}})
+		return nil
+	})
+	defer restore()
+	sum, err := Run(ctx, Config{Source: SourceConfig{URI: src}, Output: OutputConfig{Dir: out},
+		Limits: Limits{PartSize: 1, Workers: 1, RowBudget: minRowBudget}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if !partOpen.Load() {
+		t.Fatal("cancelled before the first part was written")
 	}
 	if sum.Output.RowsListed >= 20200 {
 		t.Fatalf("walk finished (%d rows) before cancellation took effect", sum.Output.RowsListed)
