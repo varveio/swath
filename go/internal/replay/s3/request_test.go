@@ -12,7 +12,7 @@ import (
 )
 
 func TestParseRequest(t *testing.T) {
-	r, err := ParseRequest("bkt", "list-type=2&prefix=a%2F&delimiter=%2F&start-after=a%2F1&max-keys=5000&encoding-type=url&fetch-owner=TRUE")
+	r, err := ParseRequest("bkt", "list-type=2&prefix=a%2F&delimiter=%2F&start-after=a%2F1&max-keys=5000&encoding-type=url&fetch-owner=true")
 	if err != nil {
 		t.Fatal(err)
 	}

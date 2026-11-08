@@ -5,6 +5,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/replay/s3"
 	"github.com/varveio/swath/go/internal/replay/server"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
@@ -118,6 +121,14 @@ func (f *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte) *report {
 	t.Helper()
+	return runFakeLiveThrough(t, protocol, edit, nil, false, nil)
+}
+
+// runFakeLiveThrough is runFakeLive with the provider behind rec, when
+// set (the live driver then runs with -live-record), and with the
+// scripted matrix when scripted is set, and pins as -live-pins.
+func runFakeLiveThrough(t *testing.T, protocol string, edit func(string, []byte) []byte, rec *testRecorder, scripted bool, pins map[string]pin) *report {
+	t.Helper()
 	keys := liveKeys()
 	protocols := []string{server.ProtocolS3}
 	f := &fakeProvider{tokenParam: "continuation-token", tokenRe: regexp.MustCompile(`(<NextContinuationToken>)([^<]*)<`),
@@ -130,19 +141,27 @@ func runFakeLive(t *testing.T, protocol string, edit func(string, []byte) []byte
 			"Cache-Control": {"private, max-age=0"}}
 	}
 	f.backend = startGoProtocols(t, protocols, keys...)
-	live := httptest.NewServer(f)
+	var h http.Handler = f
+	if rec != nil {
+		rec.next, h = f, rec
+	}
+	live := httptest.NewServer(h)
 	t.Cleanup(live.Close)
 	client := &http.Client{}
 	got := &target{name: "go", base: startGoProtocols(t, protocols, keys...), client: client}
-	ref := &target{name: "live", base: live.URL, client: client}
-	o := options{bucket: "bkt", parallel: 4, maxTop: 5, walkSizes: "7,1000", liveWalkPages: 300, livePrefix: "data/"}
+	ref := &target{name: "live", base: live.URL, client: client, recorder: rec != nil}
+	o := options{bucket: "bkt", parallel: 4, maxTop: 5, walkSizes: "7,1000", liveWalkPages: 300, livePrefix: "data/",
+		liveScripted: scripted, liveRecord: rec != nil, maxPrefixes: 5, seed: 1}
+	if rec != nil {
+		o.walkSizes = "1000" // the scope walks at 7 add pages, not shapes
+	}
 	listed, _, err := listScope(got, protocol, "bkt", "data/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	rep := &report{}
 	lr := &liveRun{d: &driver{o: o, ref: ref, got: got, rep: rep}, protocol: protocol, scope: "data/",
-		roles: deriveRoles(listed, "data/"), tokens: map[string][2][]string{}}
+		roles: deriveRoles(listed, "data/"), tokens: map[string][2][]string{}, pins: pins}
 	lr.run(listed)
 	return rep
 }
@@ -175,20 +194,26 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 		// token of its own to a position; the S3 route refuses any
 		// alteration (its token carries a checksum), so of the S3 token
 		// mutations only the decoded-byte flip, sent now that the token is
-		// base64 as a whole, differs.
-		expected := map[string]bool{"gcs-07r": true, "gcs-07s": true, "s3-07x": true}
+		// base64 as a whole, differs: a documented difference, listed
+		// apart, not a failure.
+		expected := map[string]bool{"gcs-07r": true, "gcs-07s": true}
+		documented := 0
 		if protocol == "s3" {
-			delete(expected, "gcs-07r")
-			delete(expected, "gcs-07s")
-		} else {
-			delete(expected, "s3-07x")
+			expected = map[string]bool{}
+			documented = 1
+			if len(rep.Residuals) != 1 || !strings.HasPrefix(rep.Residuals[0], "s3-07x: an issued token with a decoded byte flipped") {
+				t.Errorf("s3: documented %q", rep.Residuals)
+			}
+		}
+		if len(rep.Residuals) != documented {
+			t.Errorf("%s: documented %q", protocol, rep.Residuals)
 		}
 		for _, r := range rep.Results {
 			if r.Pass == expected[r.Name] {
 				t.Errorf("%s %s %q: pass %v %s %+v", protocol, r.Kind, r.Name, r.Pass, r.Error, r.diff)
 			}
 		}
-		if rep.Failed != len(expected) || rep.Passed < sent-len(expected) {
+		if rep.Failed != len(expected) || rep.Passed < sent-len(expected)-documented {
 			t.Fatalf("%s: %d passed, %d failed, skipped %v", protocol, rep.Passed, rep.Failed, rep.Skipped)
 		}
 		for _, s := range rep.Skipped {
@@ -207,7 +232,7 @@ func TestLiveModesAgreeWithAFaithfulProvider(t *testing.T) {
 	for _, protocol := range []string{"s3", "gcs"} {
 		rep := runFakeLive(t, protocol, edit)
 		// More than the token differences of the faithful run.
-		if base := map[string]int{"s3": 1, "gcs": 2}[protocol]; rep.Failed <= base {
+		if base := map[string]int{"s3": 0, "gcs": 2}[protocol]; rep.Failed <= base {
 			t.Errorf("%s: a changed name compared equal", protocol)
 		}
 	}
@@ -278,8 +303,9 @@ func TestS3LiveComparatorPolicy(t *testing.T) {
 }
 
 // TestGCSLiveComparatorMetadata: with a native fixture the stored fields
-// are compared exactly; with a synthetic one the replay's fixed values
-// are required and the provider's are not compared.
+// are compared exactly (timeCreated where the replay lists it); with a
+// synthetic one the replay's fixed values are required and the
+// provider's are not compared.
 func TestGCSLiveComparatorMetadata(t *testing.T) {
 	item := func(etag, gen, md5 string) string {
 		s := `{"kind":"storage#object","bucket":"b","name":"a","size":"1","updated":"2026-01-01T00:00:00.123456Z","etag":"` + etag +
@@ -306,6 +332,23 @@ func TestGCSLiveComparatorMetadata(t *testing.T) {
 	if d := gcsLive(live, &response{200, h, page(item("CJ+", "17", ""))}, "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "md5Hash 0") {
 		t.Errorf("a missing md5Hash passed: %+v", d)
 	}
+	// A recording that stored timeCreated lists it, compared as an instant
+	// with six fractional digits; one that did not lists none.
+	withCreated := func(v string) *response {
+		return &response{200, h, page(strings.Replace(item("CJ+", "17", "bWQ="), `"updated"`, `"timeCreated":"`+v+`","updated"`, 1))}
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.000000Z"), "b", false, gcsNative); !d.OK {
+		t.Errorf("native timeCreated: %s", d.Detail)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.001000Z"), "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "timeCreated 0") {
+		t.Errorf("another timeCreated passed: %+v", d)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00Z"), "b", false, gcsNative); d.OK || !strings.Contains(d.Detail, "six UTC fractional digits") {
+		t.Errorf("a timeCreated without six digits passed: %+v", d)
+	}
+	if d := gcsLive(live, withCreated("2026-01-01T00:00:00.000000Z"), "b", false, gcsSynthetic); d.OK {
+		t.Error("a synthetic profile listing timeCreated passed")
+	}
 	e := func(reason string) *response {
 		return &response{400, h, []byte(`{"error":{"code":400,"message":"m","errors":[{"message":"m","domain":"global","reason":"` + reason + `"}]}}`)}
 	}
@@ -331,22 +374,64 @@ func TestMutateToken(t *testing.T) {
 	}
 }
 
+// TestReadPins: a pinned mismatch is bound to the evidence's capture of
+// its case. It documents the case's request, of the captured shape over
+// other names, answered as the evidence's provider answered; any other
+// message, a request of another shape under the same label, or a
+// provider refusing for another reason fails. A pin the evidence cannot
+// bind (a template that does not render the captured query, a case
+// outside the matrix, no capture) is an error.
 func TestReadPins(t *testing.T) {
-	path := t.TempDir() + "/pins.json"
-	if err := os.WriteFile(path, []byte(`{"gcs-01a":"match","gcs-03p":{"mismatch":"GCS HTTP status differs: expected=200 actual=400"}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	status := "GCS HTTP status differs: expected=200 actual=400"
+	refused := "GCS HTTP status differs: expected=400 actual=200"
+	path := writeEvidence(t, "gcs", "probe/r1/", map[string]evidenceCapture{
+		"gcs-01a": {query: "prefix=probe/r1/r/&startOffset=probe/r1/r/k02", status: 200, body: `{"kind":"storage#objects"}`},
+		"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, body: `{"kind":"storage#objects"}`, mismatch: status},
+		"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: gcsRefusalBody(400, "invalidParameter"), mismatch: refused},
+	})
 	pins, err := readPins(path)
-	if err != nil || len(pins) != 1 || pins["gcs-03p"] != "GCS HTTP status differs: expected=200 actual=400" {
-		t.Errorf("%v %v", pins, err)
+	if err != nil || len(pins) != 2 || pins["gcs-03p"].mismatch != status || pins["gcs-11c"].refReason != "invalidParameter" {
+		t.Fatalf("%v %v", pins, err)
 	}
-	lr := &liveRun{d: &driver{rep: &report{}}, pins: pins}
-	res := result{Name: "gcs-03p"}
-	lr.finish(&res, diff{Detail: pins["gcs-03p"]}, nil)
-	other := result{Name: "gcs-03p"}
-	lr.finish(&other, diff{Detail: "GCS HTTP status differs: expected=200 actual=500"}, nil)
-	if r := lr.d.rep.Results; len(r) != 2 || !r[0].Pinned || r[1].Pinned {
-		t.Errorf("%+v", r)
+	lr := &liveRun{d: &driver{rep: &report{}}, protocol: "gcs", pins: pins}
+	page := &response{Status: 200}
+	for _, c := range []struct {
+		name, caseID, query, detail string
+		ref, got                    *response
+		documented                  bool
+	}{
+		{"pinned", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true", status, page, &response{Status: 400}, true},
+		{"another message", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=true",
+			"GCS HTTP status differs: expected=200 actual=500", page, &response{Status: 500}, false},
+		{"another shape", "gcs-03p", "prefix=data/tree/&delimiter=/", status, page, &response{Status: 400}, false},
+		{"a value changed", "gcs-03p", "prefix=data/tree/&delimiter=/&includeTrailingDelimiter=True", status, page, &response{Status: 400}, false},
+		{"pinned refusal", "gcs-11c", "prefix=data/small/&projection=bogus", refused,
+			&response{Status: 400, Body: []byte(gcsRefusalBody(400, "invalidParameter"))}, page, true},
+		{"refused for another reason", "gcs-11c", "prefix=data/small/&projection=bogus", refused,
+			&response{Status: 400, Body: []byte(gcsRefusalBody(400, "notFound"))}, page, false},
+		{"a case pinned as a match", "gcs-01a", "prefix=data/small/&startOffset=data/small/f02.csv", status, page, &response{Status: 400}, false},
+	} {
+		before := len(lr.d.rep.Residuals)
+		res := result{Name: c.name}
+		lr.finish(&res, judgement{protocol: "gcs", caseID: c.caseID, query: c.query, ref: c.ref, got: c.got, df: diff{Detail: c.detail}}, nil)
+		if documented := len(lr.d.rep.Residuals) > before; documented != c.documented {
+			t.Errorf("%s: documented %v", c.name, documented)
+		}
+	}
+	for name, ev := range map[string]map[string]evidenceCapture{
+		"another query":  {"gcs-03p": {query: "prefix=probe/r1/d/&delimiter=/", status: 200, mismatch: status}},
+		"not a case":     {"gcs-99z": {query: "prefix=probe/r1/d/", status: 200, mismatch: status}},
+		"another prefix": {"gcs-03p": {query: "prefix=probe/r2/d/&delimiter=/&includeTrailingDelimiter=true", status: 200, mismatch: status}},
+		"no reason":      {"gcs-11c": {query: "prefix=probe/r1/s/&projection=bogus", status: 400, body: "{}", mismatch: refused}},
+	} {
+		if _, err := readPins(writeEvidence(t, "gcs", "probe/r1/", ev)); err == nil {
+			t.Errorf("%s: bound", name)
+		}
+	}
+	dir := t.TempDir()
+	writeJSON(t, dir+"/replay-expectations.json", map[string]any{"gcs-03p": map[string]string{"mismatch": status}})
+	if _, err := readPins(dir + "/replay-expectations.json"); err == nil {
+		t.Error("a pin without evidence was bound")
 	}
 }
 
@@ -396,4 +481,121 @@ func TestGCSLiveRejectsTrailingData(t *testing.T) {
 			t.Errorf("reference side %q passed", suffix)
 		}
 	}
+}
+
+// TestDocumentedDifferences: each documented difference is matched by
+// the request's shape and both answers' shapes, so the same request
+// answered any other way, or a near request, still fails.
+func TestDocumentedDifferences(t *testing.T) {
+	xmlHeader := func() http.Header { return http.Header{"Content-Type": {"application/xml"}} }
+	page := func(extra, contents string) *response {
+		return &response{Status: 200, Header: xmlHeader(), Body: []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+			`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix>a/</Prefix>` + extra +
+			`<KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` + contents + `</ListBucketResult>`)}
+	}
+	contents := func(key, owner string) string {
+		return `<Contents><Key>` + key + `</Key><LastModified>2026-01-02T03:04:05.000Z</LastModified><ETag>"e"</ETag><Size>1</Size>` +
+			owner + `<StorageClass>STANDARD</StorageClass></Contents>`
+	}
+	v1 := &response{Status: 200, Header: xmlHeader(), Body: []byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" +
+		`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bkt</Name><Prefix>a/</Prefix><Marker>a/0</Marker>` +
+		`<MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>` + contents("a/1", "") + `</ListBucketResult>`)}
+	refusal := func(arg string) *response {
+		return &response{Status: 400, Header: xmlHeader(), Body: s3.AppendError(nil, &s3.Error{Status: 400, Code: "InvalidArgument",
+			Message: "m", Details: []s3.Detail{{Name: "ArgumentName", Value: arg}}})}
+	}
+	owner := `<Owner><ID>abc</ID></Owner>`
+	gcsJSON := func(status int, body string) *response {
+		return &response{Status: status, Header: http.Header{"Content-Type": {"application/json; charset=UTF-8"}}, Body: []byte(body)}
+	}
+	gcsPage := gcsJSON(200, `{"kind":"storage#objects"}`)
+	gcsRefusal := func(reason string) *response {
+		return gcsJSON(400, `{"error":{"code":400,"message":"m","errors":[{"domain":"global","reason":"`+reason+`","message":"m"}]}}`)
+	}
+	for _, c := range []struct {
+		name, protocol, query, mutation string
+		ref, got                        *response
+		want                            string // a prefix of the reason; "" for not documented
+	}{
+		{"V1 refused", "s3", "prefix=a/&marker=a/0", "", v1, refusal("list-type"), "ListObjects V1"},
+		{"V1 list-type=3", "s3", "list-type=3&prefix=a/", "", v1, refusal("list-type"), "ListObjects V1"},
+		{"V1 refused otherwise", "s3", "prefix=a/&marker=a/0", "", v1, refusal("marker"), ""},
+		{"V1 answered", "s3", "prefix=a/&marker=a/0", "", v1, page("", contents("a/1", "")), ""},
+		{"V2 refused", "s3", "list-type=2&prefix=a/", "", page("", contents("a/1", "")), refusal("list-type"), ""},
+		{"owner missing", "s3", "list-type=2&prefix=a/&fetch-owner=true", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), "fetch-owner=true over a recording"},
+		{"owner missing, key differs", "s3", "list-type=2&prefix=a/&fetch-owner=true", "", page("", contents("a/1", owner)), page("", contents("a/2", "")), ""},
+		{"owner missing, not asked exactly", "s3", "list-type=2&prefix=a/&fetch-owner=TRUE", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), ""},
+		{"owner where none asked", "s3", "list-type=2&prefix=a/", "", page("", contents("a/1", owner)), page("", contents("a/1", "")), ""},
+		{"decoded flip refused", "s3", "list-type=2&prefix=a/", "flip-decoded", page("", contents("a/1", "")), refusal("continuation-token"), "an issued token with a decoded byte flipped"},
+		{"decoded flip answered", "s3", "list-type=2&prefix=a/", "flip-decoded", page("", contents("a/1", "")), page("", contents("a/2", "")), ""},
+		{"last character flip refused", "s3", "list-type=2&prefix=a/", "flip", page("", contents("a/1", "")), refusal("continuation-token"), ""},
+		{"softDeleted refused", "gcs", "prefix=a/&softDeleted=true", "", gcsPage, gcsRefusal("invalid"), "softDeleted=true"},
+		{"softDeleted refused otherwise", "gcs", "prefix=a/&softDeleted=true", "", gcsPage, gcsRefusal("required"), ""},
+		{"softDeleted=false refused", "gcs", "prefix=a/&softDeleted=false", "", gcsPage, gcsRefusal("invalid"), ""},
+	} {
+		var df diff
+		if c.protocol == "gcs" {
+			df = gcsLive(c.ref, c.got, "bkt", false, gcsSynthetic)
+		} else {
+			df = s3Live(c.ref, c.got, "bkt", "", "")
+		}
+		if df.OK {
+			t.Fatalf("%s: the answers agree", c.name)
+		}
+		why := documentedDifference(judgement{protocol: c.protocol, bucket: "bkt", query: c.query, mutation: c.mutation,
+			ref: c.ref, got: c.got, df: df}, nil)
+		if c.want == "" && why != "" || !strings.HasPrefix(why, c.want) {
+			t.Errorf("%s: %q (%s)", c.name, why, df.Detail)
+		}
+	}
+}
+
+// evidenceCapture is one native exchange of a test evidence tree.
+type evidenceCapture struct {
+	query    string
+	status   int
+	body     string
+	mismatch string // its pin; "" for match
+}
+
+// writeEvidence writes a provider evidence tree as the campaign lays it
+// out (replay-expectations.json beside index.json and captures/) and
+// returns the expectations' path.
+func writeEvidence(t *testing.T, provider, runPrefix string, captures map[string]evidenceCapture) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(dir+"/captures", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expect, index := map[string]any{}, map[string]any{}
+	for id, c := range captures {
+		expect[id] = "match"
+		if c.mismatch != "" {
+			expect[id] = map[string]string{"mismatch": c.mismatch}
+		}
+		index[id] = map[string]string{"file": "captures/" + id + ".json", "kind": "exchange"}
+		doc := map[string]any{"schema_version": "provider-capture-v1", "probe_id": id, "provider": provider,
+			"request":  map[string]any{"method": "GET", "path": "/storage/v1/b/{bucket}/o", "query": c.query, "headers": []any{}},
+			"response": map[string]any{"status": c.status, "headers": []any{}, "body_base64": base64.StdEncoding.EncodeToString([]byte(c.body))}}
+		writeJSON(t, dir+"/captures/"+id+".json", doc)
+	}
+	writeJSON(t, dir+"/index.json", map[string]any{"provider": provider, "run_prefix": runPrefix, "captures": index})
+	writeJSON(t, dir+"/replay-expectations.json", expect)
+	return dir + "/replay-expectations.json"
+}
+
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gcsRefusalBody is a GCS error document with one reason.
+func gcsRefusalBody(status int, reason string) string {
+	return fmt.Sprintf(`{"error":{"code":%d,"message":"m","errors":[{"domain":"global","reason":%q,"message":"m"}]}}`, status, reason)
 }

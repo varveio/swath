@@ -185,8 +185,8 @@ func gcsListAll(t *target, bucket string) ([][]byte, error) {
 type gcsComparator struct{ maskMetadata bool }
 
 // itemMetadata matches one item metadata field with its leading comma
-// (each follows "updated", so a comma always precedes it).
-var itemMetadata = regexp.MustCompile(`,"(?:etag|generation|metageneration|storageClass|contentType|md5Hash|crc32c)":"(?:[^"\\]|\\.)*"`)
+// (each follows "size", so a comma always precedes it).
+var itemMetadata = regexp.MustCompile(`,"(?:timeCreated|etag|generation|metageneration|storageClass|contentType|md5Hash|crc32c)":"(?:[^"\\]|\\.)*"`)
 
 func (c gcsComparator) masked(r *response) *response {
 	if !c.maskMetadata || r == nil {

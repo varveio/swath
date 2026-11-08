@@ -338,6 +338,9 @@ type objectProjection struct {
 	// contentType names the content type column, read with
 	// Projection.Content.
 	contentType string
+	// timeCreated names the creation time column, read with
+	// Projection.Created: its non-null value is the LastModified.
+	timeCreated string
 	// fixedETag and fixedStorageClass, when set, are the placeholder
 	// every row answers with, for a schema with no column the field maps
 	// from.
@@ -356,9 +359,13 @@ var s3Objects = objectProjection{
 // gcsObjects is the S3 view of the GCS recording schema, the answer Cloud
 // Storage's own S3-compatible XML API gives for the same object (probed
 // 2026-11-07, server TestLiveGCSXMLAPIContents): the ETag from the MD5 or
-// the etag (gcsETag), and no StorageClass, Owner or checksum element,
-// which that API's listing never carries, whatever the object's class.
-var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5", contentType: "content_type"}
+// the etag (gcsETag), no StorageClass, Owner or checksum element,
+// which that API's listing never carries, whatever the object's class,
+// and with Projection.Created the LastModified from time_created, the
+// object's timeCreated, which that API lists (server
+// TestLiveGCSXMLAPIContents, TestGCSRecordingLastModifiedFromTimeCreated).
+var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", etag: "etag", md5: "md5", contentType: "content_type",
+	timeCreated: "time_created"}
 
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.
@@ -428,18 +435,22 @@ func objectProjectionFor(schemaID string) objectProjection {
 	return objectProjections[schemaID]
 }
 
-// projection is proj as this schema reads it: Content dropped when the
-// schema has no column it reads, so such reads key the window cache as
-// reads without it do.
+// projection is proj as this schema reads it: Content and Created
+// dropped when the schema has no column they read, so such reads key the
+// window cache as reads without them do.
 func (p objectProjection) projection(proj Projection) Projection {
 	if p.contentType == "" && p.md5 == "" {
 		proj.Content = false
+	}
+	if p.timeCreated == "" {
+		proj.Created = false
 	}
 	return proj
 }
 
 // columns returns the columns proj needs decoded: owner columns only with
-// Owner, the content type only with Content.
+// Owner, the content type only with Content, the creation time only with
+// Created.
 func (p objectProjection) columns(proj Projection) []string {
 	var names []string
 	for _, name := range []string{p.size, p.lastModified, p.etag, p.storageClass, p.checksumAlgorithm, p.checksumType, p.md5} {
@@ -457,6 +468,9 @@ func (p objectProjection) columns(proj Projection) []string {
 	if proj.Content && p.contentType != "" {
 		names = append(names, p.contentType)
 	}
+	if proj.Created && p.timeCreated != "" {
+		names = append(names, p.timeCreated)
+	}
 	return names
 }
 
@@ -467,6 +481,10 @@ func (p objectProjection) object(row *sortedparquet.Row, proj Projection) Object
 		o.Size = &size
 	}
 	if v, ok := value(row, p.lastModified); ok {
+		t := time.UnixMicro(v.Int64()).UTC()
+		o.LastModified = &t
+	}
+	if v, ok := value(row, p.timeCreated); ok && proj.Created {
 		t := time.UnixMicro(v.Int64()).UTC()
 		o.LastModified = &t
 	}
