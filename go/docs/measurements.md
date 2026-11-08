@@ -684,55 +684,76 @@ lists, at 16 cores and 1 core, are the orchestrator's Batch arms.
 
 **Fixtures.** One MinIO bucket and three production key lists. Every arm resumes through the real binary
 (`cmd/swath` `TestDurableMinIO` and `TestDurableCorpus`; the schedule and the assertions are described in
-[testing.md](testing.md#durable-spill-campaign-opt-in)).
+[testing.md](testing.md#durable-spill-campaign-opt-in), with the commands that reproduce this table).
 
 - **MinIO.** `RELEASE.2026-10-23T20-06-51Z`, the Chainguard image pinned in `bench/minio.sh`: a single drive
   on a tmpfs, 3 GiB, heap target 1 GiB. The bucket holds the first 250,000 keys of `noaa-nbm-grib2-pds`
-  (date paths), filled by `bench/s3fill`. The runs are signed and use 16 workers.
+  (date paths), filled by `bench/s3fill`. The runs are signed and use 32 workers. At 16 workers the captured
+  ranges were still open at the 40 % kill, so that arm had no certificate; at 64, MinIO outgrew its container.
 - **Corpus.** The first 2,000,000 keys of `real-changesets` (flat numeric names), `noaa-nbm-grib2-pds` (deep
   date paths) and `argoverse-6M` (long keys, about 130 B), each served by the private key-list fake at
-  5 ms a page through `bench/durable_corpus.sh`. The cap is 2,000,000 keys and not 3,000,000 because the
-  shared host had under 1 GB of free disk. The runs are anonymous and use the default workers.
+  5 ms a page through `bench/durable_corpus.sh` (`MAX_KEYS=2000000`). The runs are anonymous and use the
+  default workers.
 - **Skew.** Pages below the key at 10 % of the list wait 200 ms more.
 - **Flags.** `--row-budget 1MiB --spill-max 256MiB --spill-reserve 64MiB`. Parts are sized to give about 16
   per dataset, 58 KiB to 1 MiB.
-- **Build.** `665e3afb` (`go/p2-durable-spill`), 2026-11-08, 4 shared vCPU.
+- **Build.** `go/p2-durable-spill` at `22fe7cda` for the kill arms. The suspect-composition arm ran at `26d57641`, which moved its interval to 3 s and its
+  resumes off the slow frontier. 2026-11-08, 4 shared
+  vCPU.
 - **Oracle.** For every fixture, the uninterrupted reference lists exactly its key file.
 
-**Result: 88 of 88 arms pass** (11 kill schedules, 2 interval modes, 4 fixtures):
+**Result: 92 of 92 arms pass.** That is 11 kill schedules at 2 intervals, plus the suspect composition, on 4
+fixtures. Every arm checks the following:
 
 - With `--part-interval=0`, every resumed dataset is byte-identical to the reference. With a 1 s interval it
   is row-identical in every column.
 - Rows reconcile in every resume.
 - No certificate is rejected.
-- No data request of any resume starts inside a live certificate (0 of the logged requests).
+- Every resume, including the killed first resume of the mid-replay arm, is checked against the request log.
+  The resumes logged 47,548 data requests, and none of them started in `[max(cs, K), ce)` of a certificate
+  live in the ledger's prefix when that resume started. Delimiter probes and continuations are not data
+  requests and are not checked.
+- Every reuse arm (the unlink, mid-replay, 40 % and 70 % kills) found certificates above K, and its resume
+  accepted and replayed some.
 
 Each cell below is the resume's requests over the cold run's, with the accepted certificates in brackets.
-The cold run made 287 requests on MinIO, 2,119 on `real-changesets`, 2,250 on `noaa-nbm-grib2-pds` and
-2,412 on `argoverse-6M`.
+"No seal yet" marks a kill that, by design, falls before the first certificate is recorded. The cold run made
+386 requests on MinIO, 2,112 on `real-changesets`, 2,223 on `noaa-nbm-grib2-pds` and 2,379 on `argoverse-6M`.
 
 | Kill | MinIO, interval 0 | MinIO, 1 s | changesets, 0 | changesets, 1 s | nbm, 0 | nbm, 1 s | argoverse, 0 | argoverse, 1 s |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| capture frames #1 | 0.99 (0) | 1.03 (0) | 0.99 (0) | 1.00 (0) | 0.99 (0) | 0.99 (0) | 0.99 (0) | 0.99 (0) |
-| seal #1 | 0.99 (0) | 1.03 (0) | 1.00 (0) | 1.00 (0) | 0.99 (0) | 0.99 (0) | 0.99 (0) | 0.99 (0) |
-| ledger append #1 | 1.03 (0) | 0.99 (0) | 0.99 (0) | 1.00 (0) | 0.99 (0) | 1.00 (0) | 0.99 (0) | 1.00 (0) |
-| ledger sync #1 | 0.99 (1) | 0.97 (1) | 0.99 (1) | 1.00 (1) | 0.99 (1) | 0.99 (1) | 0.99 (1) | 0.99 (1) |
-| unlink #1 | 0.08 (56) | 0.30 (21) | 0.62 (247) | 0.54 (251) | 0.12 (255) | 0.12 (254) | 0.15 (254) | 0.13 (254) |
-| after part record #2 | 0.08 (56) | 1.01 (0) | 0.47 (250) | 0.65 (242) | 0.08 (246) | 0.12 (256) | 0.59 (256) | 0.67 (256) |
-| mid recovery replay (ledger sync #3, then replay frame #2) | 0.07 (49) | 0.07 (30) | 0.74 (255) | 0.74 (256) | 0.04 (236) | 0.07 (231) | 0.15 (255) | 0.15 (254) |
-| lost unsealed tail | 0.99 (1) | 0.80 (0) | 1.00 (1) | 1.00 (0) | 0.98 (1) | 0.99 (0) | 0.99 (1) | 0.99 (1) |
-| torn ledger append | 0.97 (1) | 0.97 (1) | 0.97 (55) | 0.98 (52) | 0.93 (13) | 0.92 (15) | 0.96 (24) | 0.96 (19) |
-| 40 % of keys | 1.02 (0) | 1.03 (0) | 0.76 (203) | 0.76 (221) | 0.76 (42) | 0.77 (41) | 0.75 (150) | 0.75 (152) |
-| 70 % of keys | 0.98 (1) | 0.83 (0) | 0.67 (240) | 0.66 (245) | 0.52 (84) | 0.53 (83) | 0.60 (256) | 0.66 (256) |
+| capture frames #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| seal #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| ledger append #1 | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet | no seal yet |
+| ledger sync #1 | 0.99 (1) | 0.85 (1) | 1.00 (1) | 0.99 (2) | 1.00 (1) | 0.99 (1) | 1.00 (1) | 1.00 (1) |
+| unlink #1 | 0.76 (27) | 0.81 (14) | 0.48 (254) | 0.55 (254) | 0.11 (255) | 0.14 (254) | 0.15 (254) | 0.14 (255) |
+| after part record #2 | 0.80 (25) | 0.85 (6) | 0.46 (246) | 0.57 (248) | 0.10 (247) | 0.14 (256) | 0.60 (256) | 0.68 (256) |
+| mid recovery replay (ledger sync #3, then replay frame #2) | 0.81 (25) | 0.75 (17) | 0.72 (255) | 0.72 (256) | 0.05 (235) | 0.10 (246) | 0.14 (254) | 0.14 (255) |
+| lost unsealed tail (seal #2) | 0.99 (1) | 0.87 (1) | 0.99 (1) | 1.00 (1) | 1.00 (1) | 0.99 (1) | 1.00 (1) | 1.01 (1) |
+| torn ledger append (sync #2) | 0.99 (1) | 0.98 (2) | 0.98 (55) | 0.97 (56) | 0.93 (14) | 0.93 (15) | 0.96 (25) | 0.95 (28) |
+| 40 % of keys | 0.85 (23) | 0.82 (17) | 0.80 (188) | 0.78 (205) | 0.77 (42) | 0.76 (43) | 0.75 (158) | 0.76 (149) |
+| 70 % of keys | 0.68 (7) | 0.70 (5) | 0.68 (234) | 0.68 (246) | 0.54 (83) | 0.56 (79) | 0.59 (256) | 0.69 (256) |
 
-The arms that kill at a durable step's first occurrence fall before most certificates exist, so they test
-correctness, not savings. Savings follow the certificates live at the kill.
+Savings follow the certificates that are live at the kill.
 
-On MinIO the kills at 40 % found no sealed certificate. With 16 workers on 250,000 keys, the captured ranges
-were still open at the kill (16 durable files, no seal record), and a certificate exists only once its range
-completes. The later kills (the unlink, a part record, mid replay) resumed with 0.07-0.30x of the requests.
-On the corpus lists the kill at 40 % reused 42-221 certificates for 0.75-0.77x of the requests, and the kill
-at 70 % gave 0.52-0.67x.
+Request counts depend on scheduling and vary from run to run. In this run the MinIO resumes after the unlink
+and mid-replay kills needed 0.75-0.81x the cold run's requests, against 0.07-0.30x in the first campaign at
+16 workers. More workers seal more and smaller certificates, earlier, and K had advanced further by the first
+unlink.
+
+The kill percentages count `<Key>` elements returned to the binary before their delayed delivery. Overfetch
+and probe keys are included, so a percentage approximates the keys served, not distinct keys processed.
+
+**Suspect composition** (§6 "time cuts on", `--part-interval 3s`, 64 MiB parts). On every fixture a part
+closed by time held rows replayed from several certificates and rows listed live between them. It was claimed,
+the run was killed before its record, and the next resume reproduced it byte for byte:
+
+| Fixture | Killed at | Part | Certificates in it | Live rows between them | Bytes |
+|---|---|---:|---:|---:|---:|
+| MinIO | journal append #5 | 5 | 4 | 18,570 | 226,278 |
+| `real-changesets` | journal append #1 | 0 | 6 | 324,041 | 2,960,064 |
+| `noaa-nbm-grib2-pds` | journal append #1 | 0 | 6 | 375,319 | 4,103,476 |
+| `argoverse-6M` | journal append #2 | 1 | 6 | 130,566 | 9,797,853 |
 
 **Full scale (GCP Batch).** Runs `dur1` (build `79bafbc6`) and `dur2` (`7af71ece`) listed 64 production
 lists of 20 to 150 million keys. Each list ran cold and was SIGKILLed at 40 % and at 70 %, then resumed.
