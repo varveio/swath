@@ -701,7 +701,7 @@ one. "Campaign" is this tier; the in-process tests run on the 30,000-key fake an
 | ledger damage (flipped byte, foreign header) | `order` `TestDurableLedgerPrefix` |
 | Sol 1 (reordered persistence, crash again in recovery) | `order` `TestDurableLedgerPrefix` (reordered); `listing` `TestDurableRepeatedRecovery` (its damaged snapshot is first resumed uninterrupted on a copy, the dataset the uninterrupted one, and must replay two captured frames or more; a snapshot that replays fewer is crashed again, at most six times) |
 | Sol 2 (shutdown order) | `listing` `TestDurableShutdownOrder` |
-| Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts` (the frontier held until the append is torn and the cap has refused a frame); `listing` `TestDurableLedgerTornWrite` |
+| Sol 3 (ledger failure, eviction, credit) | `order` `TestDurableLedgerFailureEvicts` (the frontier held until the append is torn, a later range until a refusal has evicted a drained certificate); `listing` `TestDurableLedgerTornWrite` |
 | replaced output | `order` `TestDurableReplacedOutput`, `TestDurableReplacedMidCycle` |
 | credit path | `order` `TestDurableCreditWithoutOrderLock` |
 | new ancestors lost | `listing` `TestDurableNewAncestorsLost` |

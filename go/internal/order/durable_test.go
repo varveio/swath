@@ -42,8 +42,8 @@ type fencedTree struct {
 	hold          chan struct{}
 	left          atomic.Int64
 	spans         []Span
-	noEnd         bool          // no fence at a range's end
-	gate          chan struct{} // range 0 waits for its close before listing (a frontier held until a signal)
+	noEnd         bool                  // no fence at a range's end
+	gates         map[int]chan struct{} // range i waits for gates[i] to close before listing (held until a signal)
 }
 
 const fzWidth = 4
@@ -84,9 +84,9 @@ func (f *fencedTree) Expand(ctx context.Context, r fz, e source.Emitter[fz, tp])
 	}
 	fence := e.(source.Fencer)
 	fence.Span(f.lo(r.i), f.lo(r.i+1), false)
-	if f.gate != nil && r.i == 0 {
+	if g := f.gates[r.i]; g != nil {
 		select {
-		case <-f.gate:
+		case <-g:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -657,44 +657,55 @@ func TestDurableCreditWithoutOrderLock(t *testing.T) {
 // path deterministically; listing's TestDurableLedgerTornWrite resumes
 // after it.)
 //
-// The frontier is held until the append has been torn and the spill cap
-// has refused a frame, so neither depends on the schedule (#309). Two
-// workers make the seal certain while it is held: each range spills about
-// 8 KiB, so the ranges in flight cannot fill the 24 KiB cap before one of
-// them seals, and the ledger's first append is that seal's record. The
-// cap then fills with certificates and refuses, and the refused emitter
-// waits ("publish") or a worker cannot take a range ("admission"), both
-// only after a refusal. Once released, the certificates are drained and,
-// never retired without K, hold the cap; later frames refuse and evict.
+// Two ranges are held, each until the run has reached what the test
+// needs, so nothing depends on the schedule (#309):
+//   - The frontier, until the append is torn. Two workers make the seal
+//     certain while it is held: each range spills about 8 KiB, so the
+//     ranges in flight cannot fill the 24 KiB cap before one of them
+//     seals, and the ledger's first append is that seal's record.
+//   - Range 30, until a file is unlinked and the cap has refused a frame.
+//     The drainer stops there with the certificates before it drained
+//     and, never retired without K, holding credit; the ranges after it
+//     spill until the cap refuses, and a refusal evicts a drained
+//     certificate. The refused emitter then waits ("publish"), or a
+//     worker cannot take a range ("admission"): both only after a refusal.
 func TestDurableLedgerFailureEvicts(t *testing.T) {
 	ledgerOrder(t)
-	release := make(chan struct{})
-	var torn, refused atomic.Bool
-	var once sync.Once
-	opened := func() {
-		if torn.Load() && refused.Load() {
-			once.Do(func() { close(release) })
+	const held = 30
+	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 },
+		gates: map[int]chan struct{}{0: make(chan struct{}), held: make(chan struct{})}}
+	var torn, unlinked, refused atomic.Bool
+	var tornOnce, heldOnce sync.Once
+	release := func() {
+		if unlinked.Load() && refused.Load() {
+			heldOnce.Do(func() { close(f.gates[held]) })
 		}
 	}
 	var writes atomic.Int64
 	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
 		if op == "write" && strings.HasSuffix(name, ledgerName) && writes.Add(1) == 2 {
 			torn.Store(true)
-			opened()
+			tornOnce.Do(func() { close(f.gates[0]) })
 			// Inside the append's first frame: its header and half its
 			// payload (half the buffer could fall on a frame boundary).
 			return 8 + int(binary.LittleEndian.Uint32(b))/2, errors.New("injected EIO")
 		}
 		return 0, nil
 	})()
+	defer faults.Set(func(point string) error {
+		if point == "spill-unlink" {
+			unlinked.Store(true)
+			release()
+		}
+		return nil
+	})()
 	hookWait = func(site string) {
 		if site == waitPublish || site == waitAdmission {
 			refused.Store(true)
-			opened()
+			release()
 		}
 	}
 	defer func() { hookWait = nil }()
-	f := &fencedTree{ranges: 60, pages: 4, rows: func(int, int) int { return 200 }, gate: release}
 	c, _, _ := newDurable(t)
 	c.Start(1000, 0, nil)
 	defer c.Close()
@@ -705,7 +716,7 @@ func TestDurableLedgerFailureEvicts(t *testing.T) {
 	defer cancel()
 	st, err := Run[fz, tp](ctx, f, sink, &testSchema, Options{Workers: 2, Budget: 300, SpillDir: t.TempDir(), Durable: c, SpillMax: 24 << 10})
 	if err != nil {
-		t.Fatalf("%v (append torn %v, a frame refused %v)", err, torn.Load(), refused.Load())
+		t.Fatalf("%v (append torn %v, a file unlinked %v, a frame refused %v)", err, torn.Load(), unlinked.Load(), refused.Load())
 	}
 	if want := f.keys(nil); !slices.Equal(sink.keys, want) {
 		t.Fatalf("%d keys, want %d", len(sink.keys), len(want))
