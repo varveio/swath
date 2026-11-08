@@ -29,12 +29,19 @@ import (
 // and disjointness are the provider's tiling, as in Run. If counted is set
 // it is advanced with every row (the progress file's "ordered").
 func Count[R, P any](ctx context.Context, p source.Provider[R, P], counted *atomic.Int64, opt Options) (Stats, error) {
+	return CountWithSink(ctx, p, counted, opt, nil)
+}
+
+// CountWithSink is Count with an optional observer of the counted batches.
+// The sink receives validated rows concurrently from independent ranges;
+// it must be safe for concurrent use and must not retain or modify rows.
+func CountWithSink[R, P any](ctx context.Context, p source.Provider[R, P], counted *atomic.Int64, opt Options, sink Sink[P]) (Stats, error) {
 	if opt.Workers < 1 {
 		return Stats{}, errors.New("order: workers must be positive")
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	c := &counter[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, counted: counted, g: opt.Gauges}
+	c := &counter[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, counted: counted, g: opt.Gauges, sink: sink}
 	if c.g == nil {
 		c.g = &Gauges{}
 	}
@@ -67,6 +74,7 @@ type counter[R, P any] struct {
 	ctx     context.Context
 	cancel  context.CancelCauseFunc
 	p       source.Provider[R, P]
+	sink    Sink[P]
 	opt     Options
 	counted *atomic.Int64
 	g       *Gauges
@@ -162,6 +170,11 @@ func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
 			names++
 		}
 		e.last, e.hasLast, e.sent = k, true, true
+	}
+	if e.c.sink != nil {
+		if err := e.c.sink.Write(e.c.ctx, [][]schema.Row[P]{rows}); err != nil {
+			return err
+		}
 	}
 	e.c.names.Add(names)
 	n := int64(len(rows))

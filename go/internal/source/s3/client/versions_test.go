@@ -511,3 +511,12 @@ func TestListObjectVersionsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseVersionsMissingVersionMarker(t *testing.T) {
+	for _, kind := range []string{"Version", "DeleteMarker"} {
+		body := "<ListVersionsResult><IsTruncated>true</IsTruncated><NextKeyMarker>k</NextKeyMarker><" + kind + "><Key>k</Key><VersionId>null</VersionId></" + kind + "></ListVersionsResult>"
+		if _, err := parseVersions([]byte(body)); !errors.Is(err, ErrInvalidPage) {
+			t.Fatalf("%s: %v", kind, err)
+		}
+	}
+}

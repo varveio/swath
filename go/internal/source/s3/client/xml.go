@@ -119,8 +119,8 @@ func (p *parser) parseVersions(body []byte) (*VersionPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if pg.IsTruncated && pg.NextKeyMarker == "" {
-		return nil, fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", ErrInvalidPage)
+	if err := pg.Validate(); err != nil {
+		return nil, err
 	}
 	return pg, nil
 }

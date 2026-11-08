@@ -342,13 +342,11 @@ func (r *Router[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
 				}
 				continue
 			}
-			if r.full {
-				continue // a cut already waits for the group's end
-			}
 			if r.cur.logical >= r.target() {
 				r.full = true // cut before the next row
 				r.cur.bySize = true
-			} else if r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
+				r.byRows, r.byTime = false, false
+			} else if !r.full && r.opt.MaxRows > 0 && r.cur.n >= r.opt.MaxRows {
 				r.full, r.byRows = true, true
 			}
 		}

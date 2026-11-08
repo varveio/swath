@@ -209,7 +209,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `child_empty.by.structure.lower` | count | ranges | structure | empty lower children of a structure pivot |
 | `child_empty.by.structure.upper` | count | ranges | structure | empty upper children of a structure pivot |
 | `empty_pages` | count | pages |  | continuing pages with no entry, followed by their token (also counted in requests) |
-| `empty_chain_pages` | count | pages |  | empty continuing pages past the 1,024th of their run: followed, but not progress for the watchdog (also in empty_pages) |
+| `empty_chain_pages` | count | pages |  | continuing pages past the first 1,024 without a greater key (empty, suppressed or same-key group pages): followed without watchdog credit |
 | `prefixes_normalized` | count | pages |  | pages whose common prefixes came unsorted or repeated, sorted and deduplicated |
 | `bound_drops` | count | keys |  | keys equal to an inclusive start bound and common prefixes at or below it, listed again and dropped (not in overfetch_keys) |
 | `mutex.wait_ns` | count | ns |  | time goroutines spent waiting for the engine's decision mutex (summed over goroutines) |
@@ -217,7 +217,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `groups.open_pages` | count | pages | groups | pages that were all one key's rows, emitted while that key's group may continue (a hot key: its range does not split) |
 | `groups.held_rows` | count | rows | groups | rows of a page's trailing key held back until the next page proved the key complete |
 | `groups.split_relisted_rows` | count | rows | groups | held rows dropped at a split, listed again by the lower child |
-| `groups.max_rows` | max | rows | groups | the most rows one key's group held |
+| `groups.max_rows` | max | rows | groups | the largest observed key group in emitted or held rows (all emission paths, before filters) |
+| `groups.overfetch_rows` | count | rows | groups | rows above a range end read to close its last key group (excludes resume suppression and split relisting) |
 | `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |

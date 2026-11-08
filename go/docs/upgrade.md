@@ -24,7 +24,7 @@ A format-2 manifest is never read by the format-1 rule.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape (below) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 2: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 3: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -263,7 +263,11 @@ finished with it or started over): `--output` is `-o`; `--force` is `--overwrite
 `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 2.** Builds of `main` before 0.4 wrote `report_version` 1; 0.4 writes 2. A reader
+**Run report: version 3.** Version 3 adds attempt-scoped `output.versions`,
+`output.distinct_keys`, `output.live_objects` and S3 `output.delete_markers` or GCS
+`output.noncurrent`, present only for versions schemas (zero counts included).
+These count filtered rows handed on by order, or counted, and exclude retained resume rows.
+Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
 is the full schema and "Run report" in [cli.md](cli.md#run-report) its description.
 
@@ -319,9 +323,9 @@ does, stated as the contract rather than as its code:
   generation, ascending), which the file order carries and no column rebuilds; parts stay key-disjoint (a key's
   rows are never split across parts), and `sorting_columns` is `key` ascending. A reader that assumes one row
   per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
-  is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The Java-era `version_id`, `is_latest`, `is_delete_marker`
-  and `row_type` columns are absent in format 2, not read as null; checks on those columns apply to format 1
-  only.
+  is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The reserved Java-era version columns are absent from the current-object S3 schema;
+  `row_type` is absent from both Go S3 schemas. Readers dispatch on the schema id before reading them.
+
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
 - **Part footers.** Every part carries `swath.profile`, `swath.profile_version` 2, a `swath.schema_id` equal
   to the manifest's, and `key` ascending as the first sorting column.

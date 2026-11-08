@@ -102,6 +102,8 @@ type Env struct {
 	// Sizes, if set, sums the object sizes of the rows handed to the order
 	// stage (after the filters): the report's output.object_bytes.
 	Sizes *Sizes
+	// Versions counts the attempt's emitted version rows after filtering.
+	Versions *VersionCounts
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a
@@ -152,6 +154,14 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if env.Ordered != nil {
 		sink = countSink[P]{sink, env.Ordered}
 	}
+	observer := versionSink[P]{counts: env.Versions}
+	if env.Versions != nil && b.s.Groups {
+		observer.bind(b.s)
+		if observer.latest != nil || observer.deleted != nil {
+			observer.Sink = sink
+			sink = observer
+		}
+	}
 	p := b.p
 	if env.Empty {
 		p = source.Empty[P]{}
@@ -165,7 +175,12 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		}
 	}
 	if env.Count {
-		st, err := order.Count(ctx, p, env.Ordered, env.Order)
+		var observe order.Sink[P]
+		if observer.latest != nil || observer.deleted != nil {
+			observer.Sink = discard[P]{}
+			observe = observer
+		}
+		st, err := order.CountWithSink(ctx, p, env.Ordered, env.Order, observe)
 		return st, nil, err
 	}
 	st, err := order.Run(ctx, p, sink, b.s, env.Order)

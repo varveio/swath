@@ -212,11 +212,11 @@ func versionsInput(bucket string, q *keyrange.Query) (*client.VersionsInput, err
 // kept when owner is set (--fetch-owner); ETags lose their quotes as
 // Object's do.
 func versionsPage(out *client.VersionPage, owner bool) (*keyrange.Page[Version], error) {
+	if err := out.Validate(); err != nil {
+		return nil, err
+	}
 	pg := &keyrange.Page[Version]{Rows: versionRows(out, owner), Prefixes: out.CommonPrefixes, Truncated: out.IsTruncated}
 	if out.IsTruncated {
-		if out.NextKeyMarker == "" {
-			return nil, fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", client.ErrInvalidPage)
-		}
 		pg.Token = versionsToken(out.NextKeyMarker, out.NextVersionIDMarker)
 	}
 	return pg, nil

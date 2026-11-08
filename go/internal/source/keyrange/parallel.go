@@ -410,6 +410,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 					c = out.Rows[n-1].Key
 				}
 				out.Rows = out.Rows[n:]
+				if p.d.Groups && p.d.Detach != nil {
+					out.Rows = p.d.Detach(out.Rows)
+				}
 				p.c.Add(cOverfetchKeys, int64(n))
 			}
 		}
@@ -429,13 +432,11 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			// A bounded range whose last key is hi still lists until a key
 			// above it or the chain's end: hi's group may continue.
 			done = reached || !truncated
-			var fresh bool
-			rows, c, fresh = p.take(&grp, out.Rows[:kept], done, c)
-			if !done {
-				if err := p.progress(&grp, fresh || skipped > 0, in.Token, out.Token); err != nil {
-					return err
-				}
+			keptRows := out.Rows[:kept]
+			if kept < len(out.Rows) && p.d.Detach != nil {
+				keptRows = p.d.Detach(keptRows)
 			}
+			rows, c, _ = p.take(&grp, keptRows, done, c)
 		} else {
 			kept, reached = len(out.Rows), false
 			for i := range out.Rows {
@@ -502,6 +503,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			names = len(distinct(rows))
 		}
 		overfetch := len(out.Rows) - kept
+		if p.d.Groups {
+			p.c.Add(cGroupsOverfetchRows, int64(overfetch))
+		}
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}

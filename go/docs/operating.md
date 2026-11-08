@@ -388,6 +388,13 @@ omits a delete marker's `Size` and `ETag`. `--min-size` and `--max-size` never m
 continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
 no versions and stay refused.
 
+The run report's version counts describe this attempt after filtering: S3 `versions` and
+`delete_markers` sum to emitted rows; GCS `versions` includes `noncurrent` generations.
+`distinct_keys` counts surviving names, and `live_objects` counts live versions among those rows.
+Retained rows from an earlier attempt are excluded. `groups.overfetch_rows` counts rows above a
+range end fetched to finish its last group. Table output includes the version ID and latest state,
+and for S3 the delete-marker state, in wire order.
+
 ## Known limits
 
 - **Windows:** a journaled (object-store) run and `swath resume` are refused: there is no directory sync, so

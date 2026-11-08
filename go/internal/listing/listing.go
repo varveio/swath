@@ -576,6 +576,8 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	}
 	sizes := &registry.Sizes{}
 	env.Sizes = sizes
+	versions := &registry.VersionCounts{}
+	env.Versions = versions
 	a.retained.Store(a.sum.Output.RowsRetained)
 	a.sum.sampler = startHistory(a.sample, historyDisk(cfg, oopt))
 	defer a.sum.sampler.finish()
@@ -605,6 +607,17 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		_ = os.Remove(filepath.Dir(oopt.SpillDir))
 	}
 	a.account(ost, oopt, dropped.Load())
+	if versions.Enabled {
+		n, live, distinct := versions.Versions.Load(), versions.Live.Load(), ost.DistinctKeys
+		a.sum.Output.Versions, a.sum.Output.LiveObjects, a.sum.Output.DistinctKeys = &n, &live, &distinct
+		if versions.S3 {
+			markers := versions.DeleteMarkers.Load()
+			a.sum.Output.DeleteMarkers = &markers
+		} else {
+			noncurrent := versions.Noncurrent.Load()
+			a.sum.Output.Noncurrent = &noncurrent
+		}
+	}
 	listed := time.Now()
 	a.sum.Timings.ListingFinishedAt, a.sum.Timings.ListingMs = listed.UTC(), listed.Sub(a.sum.Timings.StartedAt).Milliseconds()
 	if r, ok := src.(source.Reporter); ok {

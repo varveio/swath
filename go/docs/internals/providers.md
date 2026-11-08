@@ -724,7 +724,7 @@ sequential chain) the engine emits a row only once its key's rows are proven com
   the chain's end (EOF, or a row above `hi`) completes it. A page that is all one new key is held whole; a page
   that repeats the held or emitted key cannot be held (a key can span any number of pages), so it is emitted as
   it arrives and the chain's group is *open*. Held rows come from at most one page; the emitted and the held
-  side of a page share no array, and the smaller is copied out of the page (`Detach`), so a few rows never pin
+  sides of a partial page are both copied out of the page (`Detach`), so a few rows never pin
   a page the order stage did not charge.
 - *Splits.* A range splits only at its last emitted key, which is complete: never while its group is open, and
   not before it has emitted a key (a split at `lo` would hand the whole range on again). The veto is in
@@ -738,11 +738,20 @@ sequential chain) the engine emits a row only once its key's rows are proven com
 - *Order and progress.* Rows are nondecreasing; a row equal to the previous page's last key is allowed only
   when that key's group may continue. A continuing page that shows no key above the chain's last must carry a
   token outside the window of such pages' tokens (1,024), or it is an invalid page; ever-fresh tokens over one
-  key are not caught by the window or the stall watchdog (duplicate rows count as progress), only by
-  `--max-duration`, which has no default.
+  key earn watchdog credit only within the first 1,024 pages of a no-advance run. Raw keys are
+  validated before bound and resume suppression; suppressed rows cannot reset that window.
 - *Units.* `st.keys` counts rows (work); density, the gauge and the pivot take distinct keys.
-- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.max_rows`,
+- *Counters:* `groups.open_pages`, `groups.held_rows`, `groups.split_relisted_rows`, `groups.max_rows`, `groups.overfetch_rows`,
   `split.skipped.group_open`.
+
+Group page fragments are detached on both sides before emission or retention: their row arrays and
+string arenas cannot retain excluded rows outside the order budget. Native chains validate raw keys
+before inclusive or resume suppression. Only a strictly greater observed key resets the token window;
+same-key pages earn watchdog credit for at most the first 1,024 pages of a run. GCS also validates
+strictly ascending generation ordinals across page seams, including empty and suppressed pages,
+with state owned by each chain. `groups.max_rows` scans every group, including interior groups,
+sequential listings and seed EOF. `groups.overfetch_rows` counts only rows above a range's upper bound
+read to close its last group; resume suppression and split relisting have separate accounting.
 
 ## Registry and optional interfaces
 

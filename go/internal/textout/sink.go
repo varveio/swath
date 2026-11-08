@@ -178,7 +178,7 @@ func (k *Sink[P]) appendRow(b []byte, r *schema.Row[P]) []byte {
 		var num [20]byte
 		n := strconv.AppendInt(num[:0], size, 10)
 		if !hasSize {
-			n = append(num[:0], "-"...) // a delete marker has no size
+			n = num[:0] // a delete marker has no size: an empty column
 		}
 		for i := len(n); i < 10; i++ {
 			b = append(b, ' ')
@@ -188,6 +188,10 @@ func (k *Sink[P]) appendRow(b []byte, r *schema.Row[P]) []byte {
 		b = appendEscaped(b, r.Key, false)
 		if k.versions {
 			b = appendEscaped(append(b, ' '), vid, false)
+			b = strconv.AppendBool(append(b, ' '), isLatest)
+			if k.marker != nil {
+				b = strconv.AppendBool(append(b, ' '), isMarker)
+			}
 		}
 	case JSONL:
 		b = append(b, `{"Key":`...)

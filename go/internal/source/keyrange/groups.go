@@ -42,9 +42,8 @@ type groups[P any] struct {
 	// key it listed (before that it is the range's lo, and a split there
 	// would hand on the whole range again without progress).
 	emitted bool
-	open    bool         // the last emitted key's group may continue
-	run     int64        // rows of the open group emitted so far
-	win     *tokenWindow // tokens of continuing pages that showed no greater key
+	open    bool  // the last emitted key's group may continue
+	run     int64 // rows of the open group emitted so far
 }
 
 // order checks a page's rows in group mode: nondecreasing, the first above
@@ -87,12 +86,8 @@ func (g *groups[P]) prev(c string) (string, bool) {
 // page; last is after it (c when none). fresh: the page showed a key above
 // every key before it (progress).
 //
-// The emitted rows and the held rows share no array, and where a page is
-// split between them the smaller side by rows is copied out of the page
-// (Description.Detach): a few emitted rows must not pin a page whose rest
-// is held (the order stage charges only the rows it is handed), nor a few
-// held rows a page that was emitted. The held side then views at most one
-// page beside the one in flight.
+// Partial pages are detached on both sides: neither an outgoing batch's
+// hidden row headers nor its strings may pin excluded rows or their arena.
 func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string) (emit []schema.Row[P], last string, fresh bool) {
 	top, _ := g.prev(c)
 	fresh = len(rows) > 0 && (top == "" || rows[len(rows)-1].Key > top)
@@ -124,17 +119,7 @@ func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string
 	for j > 0 && all[j-1].Key == k {
 		j--
 	}
-	// groups.max_rows: the batch's first group, continuing the open
-	// group's emitted rows when it repeats its key, and its trailing one.
-	lead := 1
-	for lead < len(all) && all[lead].Key == all[0].Key {
-		lead++
-	}
-	first := int64(lead)
-	if g.open && all[0].Key == c {
-		first += g.run
-	}
-	p.c.Max(cGroupsMaxRows, max(first, int64(len(all)-j)))
+	first := p.measureGroups(all, c, g.open, g.run)
 	g.run = 0
 	if done {
 		g.open = false
@@ -158,37 +143,21 @@ func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string
 	g.open = false
 	emit, held := all[:j:j], all[j:]
 	p.c.Add(cGroupsHeldRows, int64(len(held)))
-	switch fromPage := j - len(old); {
-	case fromPage == 0 && owned:
-		// The emitted rows are the previous held rows, already copied.
-		g.held = slices.Clone(held)
-	case fromPage < len(held) && p.d.Detach != nil:
+	if j == len(old) && owned {
+		// Reuse the previously detached allocation, without combining it
+		// with the next page's excluded headers.
+		emit = old
+	} else if p.d.Detach != nil {
 		emit = p.d.Detach(emit)
-		g.held = slices.Clone(held)
-	case p.d.Detach != nil:
+	} else {
+		emit = slices.Clone(emit)
+	}
+	if p.d.Detach != nil {
 		g.held, g.owned = p.d.Detach(held), true
-	default:
+	} else {
 		g.held = slices.Clone(held)
 	}
 	return emit, all[j-1].Key, fresh
-}
-
-// progress checks a continuing page that showed no key above the chain's
-// last (a hot key's page, or one whose rows a resume dropped): its token
-// must not be among the window of such pages' tokens since the last fresh
-// page, or the chain cycles. A fresh page clears the window.
-func (p *Engine[P]) progress(g *groups[P], fresh bool, sent, token string) error {
-	if fresh {
-		g.win = nil
-		return nil
-	}
-	if g.win == nil {
-		g.win = newTokenWindow(strings.Clone(sent))
-	}
-	if !g.win.add(strings.Clone(token)) {
-		return fmt.Errorf("%w: a continuing page within one key's group makes no progress (its token repeats)", p.d.invalid())
-	}
-	return nil
 }
 
 // distinct is rows' keys without consecutive repeats (the density and
@@ -206,3 +175,79 @@ func distinct[P any](rows []schema.Row[P]) []string {
 // unsplittable: the chain may not split now: its last emitted key's group
 // may continue, or it has emitted nothing (its cursor is still lo).
 func (g *groups[P]) unsplittable() bool { return g.open || !g.emitted }
+
+// measureGroups scans every run, including groups wholly inside a page.
+// prior belongs only to the leading run when it continues the previous page.
+// The return value is the leading run's cumulative size (take's hot key).
+func (p *Engine[P]) measureGroups(rows []schema.Row[P], prev string, open bool, prior int64) int64 {
+	var first int64
+	for i := 0; i < len(rows); {
+		j := i + 1
+		for j < len(rows) && rows[j].Key == rows[i].Key {
+			j++
+		}
+		n := int64(j - i)
+		if i == 0 && open && rows[i].Key == prev {
+			n += prior
+		}
+		if i == 0 {
+			first = n
+		}
+		p.c.Max(cGroupsMaxRows, n)
+		i = j
+	}
+	return first
+}
+
+// chainState follows the raw native chain before inclusive/resume drops.
+// It is request-local, never provider-global, and never handed to a split.
+type chainState struct {
+	last    string
+	seen    bool
+	ordinal int64
+	idle    int
+	win     *tokenWindow
+}
+
+func (p *Engine[P]) observe(in *Query, out *Page[P]) error {
+	g := in.chain
+	top := g.last
+	for i := range out.Rows {
+		r := &out.Rows[i]
+		if (g.seen || in.After != "") && (r.Key < g.last || (!g.seen && r.Key == in.After && !p.inclusive(in.After))) {
+			return fmt.Errorf("%w: raw listing out of order: %q after %q", p.d.invalid(), r.Key, g.last)
+		}
+		if p.d.GroupOrdinal != nil {
+			ordinal := p.d.GroupOrdinal(&r.Data)
+			if g.seen && r.Key == g.last && ordinal <= g.ordinal {
+				return fmt.Errorf("%w: ordinal %d of %q after %d", p.d.invalid(), ordinal, r.Key, g.ordinal)
+			}
+			g.ordinal = ordinal
+		}
+		g.last, g.seen = r.Key, true
+	}
+	fresh := len(out.Rows) > 0 && g.last > top
+	g.last = strings.Clone(g.last)
+	if out.Truncated {
+		if out.Token == "" {
+			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+		}
+		if fresh {
+			g.win, g.idle = nil, 0
+		} else {
+			if g.win == nil {
+				g.win = newTokenWindow(strings.Clone(in.Token))
+			}
+			if !g.win.add(strings.Clone(out.Token)) {
+				return fmt.Errorf("%w: a continuing page makes no progress (its token repeats)", p.d.invalid())
+			}
+			g.idle++
+		}
+	}
+	if fresh || !out.Truncated || g.idle <= EmptyChainLive {
+		p.frontier.Add(1)
+	} else {
+		p.c.Inc(cEmptyChainPages)
+	}
+	return nil
+}

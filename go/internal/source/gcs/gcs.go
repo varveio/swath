@@ -198,6 +198,7 @@ func NewGenerations(ctx context.Context, opt Options) (*GenerationsProvider, err
 		Requeue:        requeue,
 		InvalidPage:    client.ErrInvalidPage,
 		Groups:         GenerationSchema.Groups,
+		GroupOrdinal:   func(g *Generation) int64 { return g.Generation },
 		Detach:         GenerationSchema.Detach,
 		Size:           func(g *Generation) int64 { return g.Size },
 		Counters:       clientCounters,

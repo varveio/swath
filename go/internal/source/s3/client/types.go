@@ -136,3 +136,19 @@ func (e *Error) Retryable() bool {
 	}
 	return false
 }
+
+// Validate checks the continuation contract, including supplied clients.
+// A key-only marker is valid at a prefix boundary; at the last version's
+// key it would skip the rest of that key's history.
+func (p *VersionPage) Validate() error {
+	if !p.IsTruncated {
+		return nil
+	}
+	if p.NextKeyMarker == "" {
+		return fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", ErrInvalidPage)
+	}
+	if n := len(p.Versions); n > 0 && p.Versions[n-1].Key == p.NextKeyMarker && p.NextVersionIDMarker == "" {
+		return fmt.Errorf("%w: a truncated ListObjectVersions page ending at its NextKeyMarker without a NextVersionIdMarker", ErrInvalidPage)
+	}
+	return nil
+}

@@ -33,6 +33,7 @@ import (
 
 // Query is one listing request in the engine's terms.
 type Query struct {
+	chain     *chainState // raw group ordering/progress, owned by this request chain
 	Prefix    string
 	Delimiter string // "" or "/"
 	// After: keys strictly above After ("" from the start of Prefix). A
@@ -89,6 +90,9 @@ type Description[P any] struct {
 	// trailing group until a later key or the chain's end proves it
 	// complete, and never splits inside a group (groups.go).
 	Groups bool
+	// GroupOrdinal, when set, must strictly ascend within an equal-key
+	// group, including native page seams and rows suppressed at a bound.
+	GroupOrdinal func(*P) int64
 	// Detach copies rows out of their page so they share no memory with
 	// it (the bound schema's Detach); group mode needs it, to emit or hold
 	// a few rows of a page without pinning the rest (groups.go).
@@ -337,6 +341,9 @@ func (p *Engine[P]) list(ctx context.Context, in *Query) (*Page[P], error) {
 // followed page to its budgets this way.
 func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() bool) (*Page[P], error) {
 	p.c.Inc(cRequests)
+	if p.d.Groups && in.chain == nil {
+		in.chain = &chainState{last: strings.Clone(in.After)}
+	}
 	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
 	empties := 0          // the run's length
 	// chainStart: no page of this chain has held an entry yet, so its first
@@ -347,6 +354,11 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 	for {
 		out, err := p.fetch(ctx, in)
 		if err == nil {
+			if p.d.Groups {
+				if err := p.observe(in, out); err != nil {
+					return nil, err
+				}
+			}
 			if chainStart && in.After != "" && p.inclusive(in.After) {
 				dropped := 0
 				// One row at the bound, or in group mode the bound key's
@@ -357,6 +369,9 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 					dropped++
 				}
 				out.Rows = out.Rows[dropped:]
+				if dropped > 0 && p.d.Groups && p.d.Detach != nil {
+					out.Rows = p.d.Detach(out.Rows)
+				}
 				// A delimiter page from an inclusive start also rolls the
 				// keys at or after the bound up into a common prefix at or
 				// below it (GCS returns "a/" for startOffset "a/" or
@@ -370,12 +385,16 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 					p.c.Add(cBoundDrops, int64(dropped))
 				}
 			}
-			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 {
+			// A data chain follows prefix-only pages too; delimiter probes
+			// return prefixes to their discovery caller.
+			if !out.Truncated || len(out.Rows) > 0 || len(out.Prefixes) > 0 && (in.Delimiter != "" || !p.d.Groups) {
 				if !strictlyAscending(out.Prefixes) {
 					out.Prefixes = slices.Compact(slices.Sorted(slices.Values(out.Prefixes)))
 					p.c.Inc(cPrefixesNormalized)
 				}
-				p.frontier.Add(1)
+				if !p.d.Groups {
+					p.frontier.Add(1)
+				}
 				return out, nil
 			}
 			if out.Token == "" {
@@ -398,10 +417,10 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 			in, wait = &next, requeueBase
 			p.c.Inc(cRequests)
 			p.c.Inc(cEmptyPages)
-			if empties++; empties > EmptyChainLive {
+			if empties++; !p.d.Groups && empties > EmptyChainLive {
 				p.c.Inc(cEmptyChainPages)
 			}
-			if empties <= EmptyChainLive {
+			if !p.d.Groups && empties <= EmptyChainLive {
 				p.frontier.Add(1)
 			}
 			continue
@@ -473,8 +492,13 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err != nil {
 			return err
 		}
-		for skip != "" && len(out.Rows) > 0 && out.Rows[0].Key <= skip {
-			out.Rows = out.Rows[1:] // resume: already published
+		dropped := 0
+		for dropped < len(out.Rows) && skip != "" && out.Rows[dropped].Key <= skip {
+			dropped++
+		}
+		out.Rows = out.Rows[dropped:]
+		if dropped > 0 && p.d.Groups && p.d.Detach != nil {
+			out.Rows = p.d.Detach(out.Rows)
 		}
 		n := len(out.Rows)
 		stop := false
@@ -485,6 +509,9 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			}
 		}
 		rows := out.Rows[:n]
+		if p.d.Groups && n < len(out.Rows) && p.d.Detach != nil {
+			rows = p.d.Detach(rows)
+		}
 		if p.d.Groups {
 			// One chain, no splits: a page is emitted whole, its last
 			// group continued by the next page's first rows (the order
@@ -496,10 +523,19 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			if n > 0 {
 				last, open = strings.Clone(rows[n-1].Key), true
 			}
-			fresh := n > 0 && (top == "" || last > top)
-			if !stop && out.Truncated {
-				if err := p.progress(&grp, fresh, in.Token, out.Token); err != nil {
-					return err
+			first := p.measureGroups(rows, top, grp.open, grp.run)
+			if n > 0 {
+				j := n - 1
+				for j > 0 && rows[j-1].Key == last {
+					j--
+				}
+				grp.run = int64(n - j)
+				if j == 0 {
+					grp.run = first
+				}
+				grp.open = out.Truncated
+				if j == 0 && out.Truncated {
+					p.c.Inc(cGroupsOpenPages)
 				}
 			}
 		} else {

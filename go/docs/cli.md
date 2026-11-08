@@ -669,7 +669,7 @@ Diagnostics:
 ## Run report
 
 <!-- report:begin -->
-One schema (`listing.Report`, `report_version` 2) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`listing.Report`, `report_version` 3) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report-format json` prints. It is operational: readers accept a dataset by its manifest, never by
 this report. The schema is pinned by `internal/listing/testdata/report-schema.golden` (`TestReportSchemaGolden`;
 a change bumps `report_version` and is listed in [upgrade.md](upgrade.md#run-report-and-counters)), and
@@ -680,7 +680,7 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 2 |
+| `report_version` | 3 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (secret flags `[redacted]`), `source` (the root, narrowed by an anchored `--include`), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
@@ -707,6 +707,16 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`).
+
+For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
+rows after filtering at the order stage's handoff (swath count: validated, counted rows).
+`versions` excludes S3 delete markers; S3 also reports `delete_markers`, with
+`rows_emitted` = `versions` + `delete_markers`. GCS reports `noncurrent` among its
+`versions`, with `versions` = `noncurrent` + `live_objects`. A live S3 object has
+`is_latest` true and `is_delete_marker` false; a live GCS generation has null
+`time_deleted`. Zero counts are present. Retained resume rows, held tails, relisting,
+and raw overfetch are excluded. `distinct_keys` comes from `order.Stats.DistinctKeys`;
+a failed order run can also have validated a pending batch that never reached its sink.
 
 **Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
 is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,

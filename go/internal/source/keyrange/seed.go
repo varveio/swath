@@ -378,6 +378,12 @@ func (p *Engine[P]) seedEmit(page *Page[P], start, after string, e source.Emitte
 		skip++
 	}
 	rows = rows[skip:]
+	if p.d.Groups && skip > 0 && p.d.Detach != nil {
+		rows = p.d.Detach(rows)
+	}
+	if p.d.Groups {
+		p.measureGroups(rows, "", false, 0)
+	}
 	if len(rows) > 0 {
 		if err := p.emit(rows, e); err != nil {
 			return 0, err
