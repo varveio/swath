@@ -264,5 +264,8 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		}
 		return nil, err
 	}
+	if out.IsTruncated && out.NextKeyMarker == in.KeyMarker && out.NextVersionIDMarker == in.VersionIDMarker {
+		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", client.ErrInvalidPage)
+	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
 }
