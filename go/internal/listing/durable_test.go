@@ -751,6 +751,9 @@ func TestDurableOverwrite(t *testing.T) {
 // replay; the dataset is the uninterrupted one. Files no record names (a
 // range still spilling at the kill has no trailer yet, and a seal not yet
 // appended has no record) are left as they are: the resume unlinks them.
+// Whether the kill left one is timing; a partial file (a header, no
+// trailer) under a name no record holds is planted so that one is
+// always there, and its unlink is checked by name.
 func TestDurableUnknownCodec(t *testing.T) {
 	url, _, ref, out := durableFixture(t)
 	files := durableFiles(t, out)
@@ -758,9 +761,11 @@ func TestDurableUnknownCodec(t *testing.T) {
 		t.Fatal("no durable file after the crash")
 	}
 	recorded, unrecorded := 0, 0
+	var sealed string
 	for _, name := range files {
 		if recodec(t, out, name) {
 			recorded++
+			sealed = name
 		} else {
 			unrecorded++
 		}
@@ -768,6 +773,8 @@ func TestDurableUnknownCodec(t *testing.T) {
 	if recorded == 0 {
 		t.Fatal("no durable file has a ledger record")
 	}
+	partial := plantPartial(t, out, sealed)
+	unrecorded++
 	sum, err := Run(context.Background(), durableConfig(url, out, true))
 	if err != nil {
 		t.Fatal(err)
@@ -777,6 +784,26 @@ func TestDurableUnknownCodec(t *testing.T) {
 	if r.Rejected["codec"] == 0 || r.Accepted != 0 || r.Rejected["corrupt"] != 0 || r.Orphans < int64(unrecorded) {
 		t.Fatalf("resume %+v (%d files unrecorded)", r, unrecorded)
 	}
+	if _, err := os.Stat(filepath.Join(out, order.DurableDir, partial)); !os.IsNotExist(err) {
+		t.Fatalf("the unrecorded partial file survived the resume: %v", err)
+	}
+}
+
+// plantPartial writes a durable file that a kill mid-range would leave,
+// the header frame of sealed and nothing after it, under a fresh name
+// no ledger record holds, and returns the name.
+func plantPartial(t *testing.T, out, sealed string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(out, order.DurableDir, sealed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n0 := int(binary.LittleEndian.Uint32(b))
+	name := hex.EncodeToString([]byte("unrecorded-file!")) + ".spill" // 16 bytes, no run's random ID
+	if err := os.WriteFile(filepath.Join(out, order.DurableDir, name), b[:8+n0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return name
 }
 
 // recodec rewrites durable file name in out to name another row codec (the

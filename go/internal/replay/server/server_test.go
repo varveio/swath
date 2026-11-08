@@ -814,7 +814,9 @@ func pipelinedReader(t *testing.T, s *Server, target string, n int) net.Conn {
 // Sixteen permits held is not yet that state: until every holder's socket
 // is full, a holder still finishes its flush and frees its permit for the
 // next request (a fresh one included), so the fresh request is retried
-// until the ceiling refuses it; it is never answered past the ceiling.
+// until the ceiling refuses it. The ceiling itself is checked on the
+// peak admission records, not on a count sampled after an answer: an
+// over-admission that ended before the sample would be invisible there.
 func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("receive buffer sizing")
@@ -851,9 +853,6 @@ func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 			t.Fatalf("a request past the ceiling was not answered: %v", err)
 		}
 		resp.Body.Close()
-		if n := s.responses.Load(); n > int64(cfg.MaxResponses()) {
-			t.Fatalf("%d responses outstanding", n)
-		}
 		if resp.StatusCode == 200 {
 			return false // a holder's flush finished first
 		}
@@ -868,6 +867,9 @@ func TestPipelinedSmallResponsesStayWithinTheCeiling(t *testing.T) {
 	waitFor(t, "the permits and bytes to come back", func() bool { return s.responses.Load() == 0 && s.budget.Charged() == 0 })
 	if r := get(t, s, "/bucket?list-type=2&max-keys=1"); r.status != 200 {
 		t.Errorf("after the readers left: %d", r.status)
+	}
+	if p := s.responsesPeak.Load(); p != int64(cfg.MaxResponses()) {
+		t.Errorf("%d responses held at most, the ceiling is %d", p, cfg.MaxResponses())
 	}
 }
 
