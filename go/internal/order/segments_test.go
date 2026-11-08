@@ -489,22 +489,47 @@ func damageTrailer(t *testing.T, path string) {
 // disagrees with its rows is found before any segment closes a part: the
 // run fails, no segment was opened, and no part is final (a part closed
 // could be journaled; the final one would let a resume commit).
+//
+// The trailer is damaged when the drainer tries the segments
+// (hookSegmenter) with the sink's plan ready (two parts), so the attempt
+// goes on to check the trailers and the drainer reads no spilled frame in
+// between: the newest spill file left on disk is undrained, a late
+// sibling's, far from the read-ahead. The slow range is held until every
+// other range is done ("one-range-open"), so listing ends with it and the
+// siblings are all still spilled. Damaged at ListingDone, the file could
+// be reached by the serial drain first (a plain spill error, not the
+// segments' invariant error; #321).
 func TestSegmentsTrailerFailureClosesNoPart(t *testing.T) {
 	withProcs(t, 5)
 	f := &frontier{slowPages: 2, siblings: 30, sibPages: 4, rows: 100}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	f.hold = make(chan struct{})
+	var released sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			released.Do(func() { close(f.hold) })
+		}
+	})()
 	dir := t.TempDir()
 	s := &partSink{limit: 3000, encoders: 4}
-	opt := Options{Workers: 8, Budget: 500, SpillDir: dir, ListingDone: func() {
+	var damaged bool // the drainer's goroutine alone
+	hookSegmenter = func(*sync.Mutex) {
+		s.mu.Lock()
+		ready := len(s.parts) >= 2 && !s.segmented
+		s.mu.Unlock()
+		if damaged || !ready {
+			return
+		}
+		damaged = true
 		files, _ := filepath.Glob(filepath.Join(dir, "spill-*", "*.spill"))
 		if len(files) == 0 {
 			t.Error("no spill file to damage")
 			return
 		}
 		slices.Sort(files)
-		damageTrailer(t, files[len(files)-1]) // a late sibling's: replayed by the segments
-	}}
+		damageTrailer(t, files[len(files)-1])
+	}
+	t.Cleanup(func() { hookSegmenter = nil })
+	opt := Options{Workers: 8, Budget: 500, SpillDir: dir}
 	_, err := Run[fr, tp](context.Background(), f, s, &testSchema, opt)
 	var inv *dataset.InvariantError
 	if !errors.As(err, &inv) {
@@ -625,25 +650,57 @@ func (s *queuedSink) close() {
 // tail replayed into stalled encoders whose queues are the router's (two
 // batches a segment, sixteen the continued part). It returns the stats,
 // the most counted downstream at once and the segment waits seen.
-func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
+//
+// The slow range is held until every other range is done (Run's
+// "one-range-open"), not only listed: listing ends with it, while the
+// drainer still waits at it, so the tail the segments replay is every
+// sibling after the first two parts. Released when the
+// last sibling had emitted its rows, the drainer could pass the slow range
+// and drain siblings serially while that sibling was still completing,
+// leaving the segments a few thousand rows that never reach the gate
+// (#313).
+//
+// gated holds the encoders until a segment worker waits at the safety gate
+// (hookWait at waitSegment): nothing downstream is taken before, so the
+// workers' reservations and queued batches reach the budget and the gate
+// must engage, whatever the schedule. A run that ends before (its
+// deadline) releases them, so no encoder or Close is left waiting.
+func budgetRun(t *testing.T, budget int64, siblings int, gated bool) (Stats, int64, int64) {
 	t.Helper()
 	withProcs(t, 5)
 	countRows = false // the budget in bytes, as the encoders' queues count them
 	defer func() { countRows = true }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var hold chan struct{}
+	var release func()
+	if gated {
+		hold = make(chan struct{})
+		var once sync.Once
+		release = func() { once.Do(func() { close(hold) }) }
+		stop := context.AfterFunc(ctx, release)
+		defer stop()
+	}
 	var waits atomic.Int64
 	hookWait = func(site string) {
 		if site == waitSegment {
 			waits.Add(1)
+			if gated {
+				release()
+			}
 		}
 	}
 	defer func() { hookWait = nil }()
 	f := &frontier{slowPages: 4, siblings: siblings, sibPages: 6, rows: 100, long: 3}
-	f.hold, f.left = make(chan struct{}), &atomic.Int64{}
-	f.left.Store(int64(f.siblings))
+	f.hold = make(chan struct{})
+	var once sync.Once
+	defer SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			once.Do(func() { close(f.hold) })
+		}
+	})()
 	shared := &Shared{}
-	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+	s := &queuedSink{partSink: &partSink{limit: 2_000_000, encoders: 4, queue: 2}, shared: shared, stall: 10 * time.Millisecond, hold: hold}
 	st, err := Run[fr, tp](ctx, f, s, &testSchema, Options{Workers: 8, Budget: budget, SpillDir: t.TempDir(), Shared: shared})
 	if err != nil {
 		t.Fatal(err)
@@ -665,7 +722,7 @@ func budgetRun(t *testing.T, budget int64, siblings int) (Stats, int64, int64) {
 // which then waited tens of thousands of times on Batch.
 func TestSegmentsSizedToBudget(t *testing.T) {
 	const budget = 28 << 20
-	st, peak, waits := budgetRun(t, budget, 200)
+	st, peak, waits := budgetRun(t, budget, 200, false)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers != 2 || sg.WorkersBy != WorkersByRowBudget || st.SpillRows == 0 {
 		t.Fatalf("segments %+v, %d rows spilled: want two workers set by the row budget, spill read", sg, st.SpillRows)
@@ -682,11 +739,13 @@ func TestSegmentsSizedToBudget(t *testing.T) {
 // what the segments hold within it but for one unit, the workers waiting
 // at the segment site. Before (sol review 2, P2) every worker queued
 // four-thousand-row batches into its part's queue (16 deep for the
-// continued part) whatever the budget: 19 MB downstream.
+// continued part) whatever the budget: 19 MB downstream. The encoders are
+// held until a worker waits at the gate (budgetRun's gated), so the wait
+// does not depend on the encoders' stall against the workers' pace.
 func TestSegmentsStayWithinBudget(t *testing.T) {
 	const budget = 4 << 20
 	anyShare(t)
-	st, peak, waits := budgetRun(t, budget, 60)
+	st, peak, waits := budgetRun(t, budget, 60, true)
 	sg := st.Segments
 	if sg.Reason != SegmentEngaged || sg.Workers < 2 || st.SpillRows == 0 {
 		t.Fatalf("segments %+v", sg)
