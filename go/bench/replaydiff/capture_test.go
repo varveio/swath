@@ -983,3 +983,30 @@ func TestCaptureWalkChangesPageSize(t *testing.T) {
 		}
 	}
 }
+
+// TestCaptureEmptyMutationSource: an X-Record-Token naming an alteration
+// of no token ("flip ", "truncate ", "flip-decoded ") is a malformed
+// annotation: the exchange fails with a reported reason, the replay does
+// not stop, and the exchanges after it are still replayed.
+func TestCaptureEmptyMutationSource(t *testing.T) {
+	keys := liveKeys()
+	xs := s3CaptureWalk(t, keys)[:2]
+	got := &target{name: "go", base: startGoProtocols(t, []string{server.ProtocolS3}, keys...), client: &http.Client{}}
+	for _, mutation := range []string{"flip", "truncate", "flip-decoded"} {
+		bad := xs[1]
+		bad.Annotations = []capturedHeader{{recordCaseHeader, "s3-07r"}, {recordTokenHeader, mutation + " "}}
+		later := xs[0]
+		later.Seq = 3
+		rep := &report{}
+		replayCapture(&driver{o: options{bucket: "bkt"}, got: got, rep: rep, countPasses: true}, "s3", gcsSynthetic,
+			exchangeItems([]capturedExchange{xs[0], bad, later}), testLimits)
+		if rep.Failed != 1 || rep.Passed != 2 || len(rep.Results) != 1 || !strings.Contains(rep.Results[0].Error, recordTokenHeader) {
+			t.Errorf("%s: %d passed, %d failed, %+v", mutation, rep.Passed, rep.Failed, rep.Results)
+		}
+	}
+	for _, mutation := range []string{"flip", "truncate", "flip-decoded"} {
+		if _, err := mutateToken("", mutation); err == nil {
+			t.Errorf("%s of an empty token: no error", mutation)
+		}
+	}
+}

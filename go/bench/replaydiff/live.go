@@ -645,9 +645,13 @@ func (lr *liveRun) token(c liveCase) {
 // about the unused bits of the last character or the padding, as the
 // campaign's is not.
 func mutateToken(token, mutation string) (string, error) {
-	switch mutation {
-	case "":
+	switch {
+	case mutation == "":
 		return token, nil
+	case token == "":
+		return "", fmt.Errorf("an empty token has no %s alteration", mutation)
+	}
+	switch mutation {
 	case "flip":
 		last := "A"
 		if strings.HasSuffix(token, "A") {

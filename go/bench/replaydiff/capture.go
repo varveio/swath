@@ -119,6 +119,11 @@ func noteMutation(note string) (mutation, source string, err error) {
 	if source, err = url.QueryUnescape(esc); err != nil {
 		return "", "", fmt.Errorf("annotation %s: %w", recordTokenHeader, err)
 	}
+	if source == "" {
+		// Every alteration is of an issued token, and no answer issues
+		// an empty one.
+		return "", "", fmt.Errorf("annotation %s %q: the altered token is empty", recordTokenHeader, note)
+	}
 	return mutation, source, nil
 }
 
