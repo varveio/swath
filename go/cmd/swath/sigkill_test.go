@@ -190,9 +190,11 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 // tests' slow frontier: the first tiles' requests are slow, so the
 // ranges ahead of them spill and seal certificates. Every point must be
 // reached: a run that completes instead fails the test. The fourth-cycle
-// ledger arms are reached by construction: the child runs with
+// ledger arms are reached by construction: those children run with
 // SWATH_TEST_SERIAL_SEALS, each seal waiting for the earlier seals'
 // ledger cycles, so four seals are four appends however they fall in time.
+// The recovery arms' runs do not: serialized seals leave fewer certificates
+// sealed by the first unlink than the damaged ledger needs live.
 func TestSIGKILLDurableSpill(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -219,11 +221,11 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
 		t.Fatalf("reference: %v\n%s", err, out)
 	}
-	// killed runs cmd with SWATH_TEST_KILL_AT=at, its seals serialized,
-	// and requires the SIGKILL.
-	killed := func(at string, cmd *exec.Cmd) {
+	// killed runs cmd with SWATH_TEST_KILL_AT=at (and env) and requires
+	// the SIGKILL.
+	killed := func(at string, cmd *exec.Cmd, env ...string) {
 		t.Helper()
-		cmd.Env = append(os.Environ(), "SWATH_TEST_KILL_AT="+at, "SWATH_TEST_SERIAL_SEALS=1")
+		cmd.Env = append(append(os.Environ(), "SWATH_TEST_KILL_AT="+at), env...)
 		out, err := cmd.CombinedOutput()
 		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); err == nil || !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
 			t.Fatalf("%s: not killed there (not reached): %v\n%s", at, err, out)
@@ -244,7 +246,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 		for _, nth := range nths {
 			at := point + ":" + nth
 			out := filepath.Join(t.TempDir(), "ds")
-			killed(at, exec.Command(bin, args(out)...))
+			killed(at, exec.Command(bin, args(out)...), "SWATH_TEST_SERIAL_SEALS=1")
 			resume(at, out)
 		}
 	}
