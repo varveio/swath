@@ -202,6 +202,15 @@ func pieces(lo string, loInc bool, hi string, cuts []string, floor int) []span {
 // rewrite replaces s's lower bound Q+leadBeyond with Q's subtree successor
 // and, when the successor's last scalar lies in E or S, re-cuts it under
 // the successor's parent.
+//
+// The successor is sent as startFrom as it is, even when it ends in '.' or
+// is a control character (Q ending in '-' gives '.', in '~' gives DEL):
+// probed live on 2026-11-08 against azureopendatastorage/
+// holidaydatacontainer (anonymous, x-ms-version 2026-10-06), startFrom
+// "BackupProcessed." , "BackupProcessed\x7f", "BackupProcessed\x01",
+// "BackupProcessed\uE000" and "BackupProcessed/" all answer 200 and list
+// from that exact string in UTF-16 order, untrimmed. The engine's
+// AcceptBound governs its own pivots, not these seeks.
 func rewrite(s span, floor int) []span {
 	n, ok := succ(s.lo[:len(s.lo)-1], floor)
 	if !ok || s.hi != "" && n >= s.hi {

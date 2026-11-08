@@ -453,7 +453,7 @@ func TestMaximumLengthBounds(t *testing.T) {
 	keys := []string{"a" + E, "a" + E1, "a" + S, "a" + S + E, "b"}
 	q := bounded("", after, through)
 	spans := len(decompose(normalise(q.Prefix, q.After, q.Through, q.Bounded), q.Through))
-	if spans < 1000 || spans > maxStack {
+	if spans < 1000 || spans > stackBound(after, through) {
 		t.Fatalf("%d spans", spans)
 	}
 	st, a := run(t, keys, q, nil)
@@ -500,5 +500,38 @@ func TestCancelledRead(t *testing.T) {
 	cancel()
 	if _, err := a.Fetch(ctx, &keyrange.Query{Max: 1}); !errors.Is(err, context.Canceled) || a.Len() != 0 {
 		t.Errorf("%v, %d chains", err, a.Len())
+	}
+}
+
+// TestSuccessorSeeksSentAsIs: a successor ending in '.' (after "a-") and
+// one that is DEL (after "a~") are sent as startFrom unchanged, and the
+// walk stays exact.
+func TestSuccessorSeeksSentAsIs(t *testing.T) {
+	for _, x := range []struct{ q, succ string }{{"a-", "a."}, {"a~", "a\x7f"}} {
+		keys := []string{x.q + S, x.q + E + "z", x.succ, x.succ + "b", x.succ + S, "b"}
+		st, _ := run(t, keys, keyrange.Query{After: x.q + E, Max: 1000}, nil)
+		sent := false
+		for _, r := range st.Log() {
+			sent = sent || r.In.StartFrom == x.succ
+		}
+		if !sent {
+			t.Errorf("after %q: startFrom %q never sent\n%s", x.q+E, x.succ, st)
+		}
+	}
+}
+
+// TestStackBoundAtMaximumBounds: the 1,024-unit bounds with the most
+// first spans found (3,070) stay within the chain's bound and list
+// exactly.
+func TestStackBoundAtMaximumBounds(t *testing.T) {
+	after, through := strings.Repeat(E, 1024), S+strings.Repeat(E, 1022)
+	q := bounded("", after, through)
+	spans := len(decompose(normalise(q.Prefix, q.After, q.Through, q.Bounded), q.Through))
+	if spans != 3070 || spans > 3*(units(after)+units(through))+1 {
+		t.Fatalf("%d spans", spans)
+	}
+	_, a := run(t, []string{E, E + S, S, S + E, "b"}, q, nil)
+	if a.Counter(CStackMax) < int64(spans) {
+		t.Errorf("stack max %d", a.Counter(CStackMax))
 	}
 }

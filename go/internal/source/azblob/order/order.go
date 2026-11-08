@@ -63,9 +63,31 @@ var CounterDefs = []counters.Def{
 	{Key: "order_buffer_rows_max", Kind: counters.Max, Unit: "items", Help: "the most items a chain held read and not yet emitted"},
 }
 
-// maxStack bounds a chain's spans; a deeper stack is an invariant
-// violation (§6).
-const maxStack = 3 * 1024
+// maxNameUnits is the longest Azure name, in UTF-16 code units.
+const maxNameUnits = 1024
+
+// units is s's length in UTF-16 code units.
+func units(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r >= 0x10000 {
+			n++
+		}
+	}
+	return n
+}
+
+// stackBound is the most spans a chain over these bounds can hold; a
+// deeper stack is an invariant violation (§6). §3.1 cuts at most three
+// points per scalar of each bound, so the first spans number at most
+// 3 × (units(after) + units(through)) + 1. A split adds E, S and the rest,
+// whose successor rewrite re-cuts at most two pieces per scalar of Q,
+// so at most 2 + 2 × maxNameUnits spans; splits nest at most once per
+// scalar of a name, maxNameUnits levels.
+func stackBound(after, through string) int {
+	return 3*(units(after)+units(through)) + 1 + maxNameUnits*(2+2*maxNameUnits)
+}
 
 var (
 	// ErrToken: a continuation token that is not the last one its chain
@@ -142,6 +164,7 @@ type chain struct {
 	bounded           bool
 
 	stack []span
+	limit int // stackBound of the chain's bounds
 	ids   int
 	seq   uint64
 	last  string // the last name emitted
@@ -195,7 +218,8 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 	var id uint64
 	var base, c *chain
 	if q.Token == "" {
-		c = &chain{prefix: q.Prefix, delimiter: q.Delimiter, after: q.After, through: q.Through, bounded: q.Bounded}
+		c = &chain{prefix: q.Prefix, delimiter: q.Delimiter, after: q.After, through: q.Through, bounded: q.Bounded,
+			limit: stackBound(q.After, q.Through)}
 		spans := decompose(normalise(q.Prefix, q.After, q.Through, q.Bounded), q.Through)
 		for i := len(spans) - 1; i >= 0; i-- {
 			c.stack = append(c.stack, a.newSpan(c, spans[i]))
@@ -204,8 +228,8 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 			a.add(CSpans, int64(len(spans)-1))
 		}
 		a.max(CStackMax, int64(len(c.stack)))
-		if len(c.stack) > maxStack {
-			return nil, fmt.Errorf("%w: %d spans", ErrInvariant, len(c.stack))
+		if len(c.stack) > c.limit {
+			return nil, fmt.Errorf("%w: %d spans, bound %d", ErrInvariant, len(c.stack), c.limit)
 		}
 	} else {
 		var seq uint64
@@ -493,8 +517,8 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 		a.add(CSpans, int64(len(kids)-1))
 	}
 	a.max(CStackMax, int64(len(c.stack)))
-	if len(c.stack) > maxStack {
-		return false, fmt.Errorf("%w: %d spans", ErrInvariant, len(c.stack))
+	if len(c.stack) > c.limit {
+		return false, fmt.Errorf("%w: %d spans, bound %d", ErrInvariant, len(c.stack), c.limit)
 	}
 	return true, nil
 }
