@@ -18,6 +18,17 @@
 // modification time. None of them checks the parts' digests, which
 // seekparquet.Validate does at LevelDigest, or the rows no request decodes.
 //
+// Totals and Aggregates total the current objects under paths and
+// prefixes over the module's selection plans (seekparquet.Dataset.
+// PlanRanges): a count is the plan's row count, exact only when every part
+// holding the rows has been checked; a byte sum decodes the size pages of
+// the rows, once however the selections nest or repeat. Totals is always
+// exact or fails. An aggregate is nil when it is not known exactly: a
+// count across a part no read has checked, a sum that overflows, or a sum
+// left out by its SumMode or by its budget, which counts the compressed
+// size pages and dictionaries the sums read, a shared one once, and not
+// the footers, key pages and page indexes planning reads.
+//
 // The module opens, validates and queries the dataset; this package adds
 // swath's meaning. It does not import the lister and needs no cloud SDK: a
 // reader of a dataset in an object store passes a seekparquet.Source (the

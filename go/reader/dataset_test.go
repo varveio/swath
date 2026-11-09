@@ -93,6 +93,13 @@ func s3Spec() spec {
 // dataset with the module's writer and returns its directory.
 func writeDataset[T any](t *testing.T, s spec, rows []T) string {
 	t.Helper()
+	return writeGeometry(t, s, rows, 100, 0)
+}
+
+// writeGeometry writes rows as writeDataset does, in pages of pageRows
+// rows and row groups of groupRows rows (0: the writer's default).
+func writeGeometry[T any](t *testing.T, s spec, rows []T, pageRows int, groupRows int64) string {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
 	schema := parquet.SchemaOf(new(T))
 	var buf []parquet.Row
@@ -107,7 +114,7 @@ func writeDataset[T any](t *testing.T, s spec, rows []T) string {
 		}
 	}
 	err := local.WriteDir(context.Background(), dir, schema, &rowReader{rows: buf},
-		local.DatasetOptions{Part: write.PartOptions{Key: s.key, SchemaID: string(s.id), PageRows: 100}, Extensions: ext, AllowUnsynced: true})
+		local.DatasetOptions{Part: write.PartOptions{Key: s.key, SchemaID: string(s.id), PageRows: pageRows, RowGroupRows: groupRows}, Extensions: ext, AllowUnsynced: true})
 	if err != nil {
 		t.Fatal(err)
 	}
