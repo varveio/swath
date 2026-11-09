@@ -61,6 +61,12 @@ func Cause(err error) error {
 	return err
 }
 
+// TooLargeError is the cause of a Guard failure on a 2xx body longer than
+// MaxBody (a client may answer it by asking for less).
+type TooLargeError struct{ Limit int64 }
+
+func (e *TooLargeError) Error() string { return fmt.Sprintf("response larger than %d bytes", e.Limit) }
+
 // Capture asks the Guard, through the request context (WithCapture), for the
 // validated 2xx body. Replace, when set, is what the SDK decodes instead (a
 // minimal envelope). One Capture serves one attempt and is never shared
@@ -112,7 +118,7 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if int64(len(body)) > limit {
 		if ok {
-			return nil, &GuardError{Err: fmt.Errorf("response larger than %d bytes", limit)}
+			return nil, &GuardError{Err: &TooLargeError{Limit: limit}}
 		}
 		body = body[:limit]
 	}

@@ -89,6 +89,9 @@ func TestGuardCap(t *testing.T) {
 			if want := fmt.Sprintf("response larger than %d bytes", max); Cause(err).Error() != want {
 				t.Errorf("cause %q, want %q", Cause(err), want)
 			}
+			if tl, ok := errors.AsType[*TooLargeError](err); !ok || tl.Limit != max {
+				t.Errorf("err %v: want a *TooLargeError of limit %d", err, max)
+			}
 		})
 	}
 }
