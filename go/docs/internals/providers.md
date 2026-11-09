@@ -65,7 +65,9 @@ authentication from the vendor's SDK modules.
 **The SDK's.** S3: the credential chain (environment, shared config and profiles, SSO, web identity and STS,
 IMDS) and the SigV4 signer (`aws-sdk-go-v2/config`, `credentials`, `aws/signer/v4`). GCS: Google's
 credential loading (service-account and authorized-user files, Application Default Credentials, the metadata
-server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/metadata`).
+server) and token refresh (`golang.org/x/oauth2`, `cloud.google.com/go/compute/metadata`). Azure Blob: Entra ID
+tokens through `DefaultAzureCredential` (environment, workload identity, managed identity, Azure CLI) and the
+`TokenCredential` type (`azidentity`, `azcore`); a SAS is a query string and Shared Key is signed in the client.
 
 **Ours.** The one list call per provider (ListObjectsV2; `objects.list`), built and sent by
 `internal/source/s3/client` and `internal/source/gcs/client` (the S3 client also sends ListObjectVersions, for
@@ -88,9 +90,50 @@ retry and requeue that never fail a run, one failure vocabulary across providers
 answered requests, the refusal of redirects (the resume identity freezes the route), bounded bodies and the
 validation of every page.
 
-The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`) are test-only oracles
-(`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the binary
-links neither ([testing.md](../testing.md)).
+**Azure Blob** (`internal/source/azblob/client`; the provider and its flags come later). One call, List Blobs:
+`GET {endpoint}/{container}?restype=container&comp=list` with `prefix`, `delimiter`, `startFrom`, `marker` and
+`maxresults` only when set (never `endBefore` or `include`; spaces as `%20`, as the SDK sends them),
+`x-ms-version: 2026-10-06` pinned (the replay also serves 2026-06-06; the two behave alike), a fresh
+`x-ms-client-request-id` per attempt and the swath user agent; the default endpoint is
+`https://ACCOUNT.blob.core.windows.net`, any other one takes the account as its first path segment (the replay,
+Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`; a
+refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
+before `encoding/xml`'s streaming decoder reads `EnumerationResults` one entry at a time, keeping `Blob` and
+`BlobPrefix` in one slice in wire order and only the listed properties. A `<Name Encoded="true">` (a name with
+U+FFFE or U+FFFF) is percent-decoded once with path semantics (`+` stays `+`); a malformed escape or invalid
+UTF-8 is an invalid page, as are names that do not ascend strictly in UTF-16 code-unit order (byte order with
+lead bytes F0..F4 before EE..EF, compared in the client) and a `NextMarker` equal to the marker sent; an empty or
+absent `NextMarker` is the end (Azure has no truncation flag). A 200 must be a listing envelope:
+`EnumerationResults` holding a `Blobs` element (empty for an empty page) and no `Error` element, with nothing
+after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is fixed at 64 MiB, the
+memory one in-flight response may hold (bodies are read whole, outside the engine's memory budget): a page past it
+is asked again with `maxresults` halved, marker and query unchanged, down to 1 (`body_cap_shrinks`), so memory stays
+bounded and a valid page is never refused; only a single entry past the cap is a `parse` failure. Classification takes `x-ms-error-code`
+first, the body's `<Code>` when the header is absent, then the status, because `AuthenticationFailed` arrives as a
+403 and `ServerBusy` as a 503: `auth` (`NoAuthenticationInformation`, `AuthenticationFailed`,
+`InvalidAuthenticationInfo`, 401), `access_denied` (`AuthorizationFailure`, `AuthorizationPermissionMismatch`,
+another 403), `no_such_bucket` (`ContainerNotFound`), `throttle` (`ServerBusy`, 429), `timeout`
+(`OperationTimedOut`, 408), `server` (`InternalError`, another 5xx); retried are 408, 429, 502, 503, 504 and a 500
+only when it is `OperationTimedOut` or `InternalError`, and a `Retry-After` (seconds or an HTTP date) longer than
+the drawn backoff is waited out (`objhttp.RetryAfter`), at most the request timeout (a longer one is cut to it
+and counted in `retry_after_capped`; the attempt budget still ends the request, which the engine requeues).
+Redirects are never followed and their target is never quoted: the client's transport drops `Location` from
+every 3xx, and request errors are scrubbed of the SAS through their whole chain. Authentication, in precedence: anonymous; a SAS appended
+to every query and removed from every error (request URLs, 400 query echoes, redirect targets, messages); a
+Shared Key signature with `x-ms-date` per attempt (`TestSharedKeyMatchesSDK` compares it with the SDK's on both
+endpoint forms); Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`, its tokens
+coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a timeout
+retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the others the
+chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token is asked
+for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes the
+requests unauthenticated, with a note; a timeout, a transport failure or a token endpoint's 5xx keeps the chain and
+each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the managed identity is always kept.
+Connections are the GCS pool. `TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
+SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the evidence archive to the client.
+
+The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`, `sdk/storage/azblob`) are test-only
+oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the
+binary links none of them ([testing.md](../testing.md); `TestBinaryLinksNoAzblob`).
 
 ## S3 (`internal/source/s3`)
 

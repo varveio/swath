@@ -63,6 +63,14 @@ type Answer interface {
 	Retryable() bool // the request may succeed when repeated
 }
 
+// RetryAfter is a failure carrying the service's own wait before the
+// attempt is repeated (an Azure Retry-After header): Do waits that long
+// when it exceeds the backoff it drew.
+type RetryAfter interface {
+	error
+	RetryAfter() time.Duration
+}
+
 // CredentialError is a credential failure: credentials that do not load,
 // or a token or key the provider would not issue. Transient ones (a token
 // endpoint's 5xx, a cut connection, an attempt past the request timeout)
@@ -257,7 +265,8 @@ func (r *Retry) Defaults() {
 
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
-// full-jitter exponential backoff between attempts and counting retries,
+// full-jitter exponential backoff between attempts (or the service's own
+// wait, RetryAfter, when that is longer) and counting retries,
 // throttles and timeouts (every throttled or timed-out attempt, the last
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
@@ -288,7 +297,12 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		}
 		c.retries.Add(1)
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
-		t := time.NewTimer(rand.N(d) + 1)
+		wait := rand.N(d) + 1
+		var ra RetryAfter
+		if errors.As(err, &ra) {
+			wait = max(wait, ra.RetryAfter())
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
