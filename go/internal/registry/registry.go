@@ -67,7 +67,20 @@ type Factory struct {
 	// records a root: the command line, the terminal and the report. The
 	// root itself still goes to Open.
 	Redact func(root string) string
+	// Secrets are the provider's flags that hold a secret, or a command
+	// that prints one: the command never records their values, and a resume
+	// must be given them again.
+	Secrets []Secret
+	// Usage is the root form for the command's help ("s3://bucket[/prefix]";
+	// "a local directory" for local paths).
+	Usage string
 }
+
+// Secret is a provider flag whose value is never recorded (Flag, without
+// dashes) and the environment variable the provider reads the same
+// credential from when the flag is absent ("" when none), which on resume
+// may stand in for the flag.
+type Secret struct{ Flag, Env string }
 
 // Request is what the pipeline tells a factory.
 type Request struct {

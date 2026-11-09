@@ -22,7 +22,8 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Redact: RedactRoot})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Redact: RedactRoot,
+		Secrets: []registry.Secret{{Flag: "azblob-sas", Env: EnvSAS}}, Usage: "az://account/container[/prefix]"})
 }
 
 // flagged is the Azure flag group's value: the Azure options and the range

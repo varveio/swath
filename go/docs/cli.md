@@ -14,7 +14,7 @@ swath --version                         print the build (tool, module version, V
 `swath resume --help`, `swath show --help`, `swath diag --help`, `swath diag list --help`) prints its flags and
 exits 0.
 
-SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `-o DIR`
+SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `az://account/container[/prefix]`. `swath list` writes a dataset to `-o DIR`
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
 below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
 buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
@@ -70,7 +70,7 @@ $ swath list --help
 usage: swath list SOURCE [-o DIR|FILE|-] [flags]
   -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text
   file; no -o, or -o -, text rows on stdout
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
   -o directory
@@ -219,7 +219,7 @@ $ swath count --help
 usage: swath count SOURCE [flags]
   lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
   arrive, never ordered, buffered or spilled; prints one line, or the run report
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
   --region string
@@ -344,7 +344,7 @@ $ swath diag list --help
 usage: swath diag list SOURCE [flags]
   every swath list flag (swath list --help), and the diagnostic flags below:
   they exist to run an experiment or a comparison, not to operate the tool
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Diagnostics:
   --seed

@@ -37,7 +37,7 @@ import (
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
-	"github.com/varveio/swath/go/internal/source/azblob"
+	_ "github.com/varveio/swath/go/internal/source/azblob"
 	_ "github.com/varveio/swath/go/internal/source/gcs"
 	_ "github.com/varveio/swath/go/internal/source/localfs"
 	_ "github.com/varveio/swath/go/internal/source/s3"
@@ -286,7 +286,7 @@ func commands(w io.Writer) {
   swath show [--journal] DIR              show a dataset or an interrupted run
   swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
   swath --version                         print the build (tool, module version, VCS revision)
-SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix].
+SOURCE is `+sourceForms()+`.
 swath COMMAND --help lists a command's flags.
 `)
 }
@@ -456,20 +456,48 @@ var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
 // resume must be given it again.
-var secretFlags = []string{"bearer-token-command", "azblob-sas"}
+// They and secretEnv are the registered providers' (registry.Factory.Secrets).
+var secretFlags, secretEnv = providerSecrets()
 
-// secretEnv names the environment variable that may stand in for a secret
-// flag on swath resume: the provider reads the same credential from it
-// when the flag is absent, so a rotated SAS may come from either source.
-var secretEnv = map[string]string{"azblob-sas": azblob.EnvSAS}
+// providerSecrets collects the registered providers' secret flags and the
+// environment variable that may stand in for each on resume.
+func providerSecrets() ([]string, map[string]string) {
+	var flags []string
+	env := map[string]string{}
+	for _, f := range registry.Factories() {
+		for _, s := range f.Secrets {
+			flags = append(flags, s.Flag)
+			if s.Env != "" {
+				env[s.Flag] = s.Env
+			}
+		}
+	}
+	return flags, env
+}
+
+// sourceForms is the SOURCE line of the help: the registered providers'
+// root forms (registry.Factory.Usage), by scheme, the local directory
+// first.
+func sourceForms() string {
+	var forms []string
+	for _, f := range registry.Factories() {
+		if f.Usage != "" {
+			forms = append(forms, f.Usage)
+		}
+	}
+	if n := len(forms); n > 1 {
+		return strings.Join(forms[:n-1], ", ") + " or " + forms[n-1]
+	}
+	return strings.Join(forms, "")
+}
 
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
 // redactArgv is argv with every secret flag's value replaced by redacted,
-// in both spellings (--flag VALUE and --flag=VALUE), and an az:// root's
-// SAS query by its provider's redaction (registry.Redact; a resume must be
-// given it again).
+// in both spellings (--flag VALUE and --flag=VALUE), and a credential in a
+// root by its provider's redaction (registry.Redact; a resume must be given
+// it again).
 func redactArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {

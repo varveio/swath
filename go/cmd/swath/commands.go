@@ -132,8 +132,11 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	for _, name := range secrets {
 		given := false
 		f.Visit(func(fl *flag.Flag) { given = given || fl.Name == name })
+		// The provider reads the credential from its variable when the
+		// flag is absent (registry.Secret.Env), so a rotated secret may
+		// come from either source.
 		if env := secretEnv[name]; env != "" && os.Getenv(env) != "" {
-			given = true // the provider reads the credential from there
+			given = true
 		}
 		if !given {
 			hint := ""
