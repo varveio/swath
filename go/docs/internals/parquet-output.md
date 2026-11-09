@@ -237,7 +237,10 @@ producer defines its schema beside its code. The S3, GCS and local producers bin
 five. `Bind` also copies the spec's version roles (`reader.VersionSpec`: the version ID, latest or deleted-at and
 delete-marker columns) into `schema.Info.Versions` and checks them as the producer's package loads;
 `schema.BindVersions` derives their accessors (`ID`, `Latest`, the optional `DeleteMarker`), the one
-interpretation of version rows that the text output, the versions counts and the per-prefix totals share. No
+interpretation of version rows that the text output, the versions counts and the per-prefix totals share.
+`registry.Bind` resolves them once, when the provider opens its source, and panics on roles that do not define
+the rows (a producer's bug), so a malformed declaration is refused before the listing creates any journal,
+dataset or text file. No
 consumer binds `is_latest`, `is_delete_marker`, `time_deleted`, `version_id` or `generation` by name.
 `Info.Groups` stays the ordering property: a versions schema groups, grouped rows need not be versions. The Azure producer defines `swath/azblob-objects/v1` directly (`internal/source/azblob/schema.go`). The Parquet node is built
 from that list; `TestFooterMatchesSchema` checks the footer against a test schema with one column of every type.
