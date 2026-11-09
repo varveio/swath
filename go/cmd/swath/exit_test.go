@@ -303,6 +303,25 @@ func sameParts(t *testing.T, at, ref, out string) {
 	}
 }
 
+// stuckEvidence is what a run stopped as stuck left in dir, for a failure
+// message: the progress at the stop and the stacks of the goroutines inside
+// the source. The dump goes with the test's temporary directory otherwise,
+// and a stall that fires once on a loaded runner leaves nothing to read.
+func stuckEvidence(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, dataset.Workspace, "stacks-stuck.txt"))
+	if err != nil {
+		return fmt.Sprintf("no goroutine dump: %v", err)
+	}
+	blocks := strings.Split(string(b), "\n\n")
+	kept := blocks[:1] // the header: the cause, the time and the progress snapshot
+	for _, g := range blocks[1:] {
+		if strings.Contains(g, "/internal/source/") {
+			kept = append(kept, g)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
 // TestQueuedHealthyWorkIsNotStuck: requests the service answers keep the
 // stall clock alive although no row moves; requests that fail or never
 // return do not. With the limiter at one permit (one worker; the windowed
@@ -362,11 +381,13 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
+		start := time.Now()
 		err := run(ctx, append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--limiter", "--workers", "1", "--seed=false",
 			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, unjournaled...), &out, true)
 		if m == "healthy" {
 			if err != nil {
-				t.Fatalf("healthy work at one permit: %v", err)
+				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
+					err, time.Since(start).Round(time.Millisecond), served.Load(), out.String(), stuckEvidence(dir))
 			}
 			if !strings.Contains(out.String(), `"limiter.limit": 1`) {
 				t.Fatalf("the limit was not one: %s", out.String())
