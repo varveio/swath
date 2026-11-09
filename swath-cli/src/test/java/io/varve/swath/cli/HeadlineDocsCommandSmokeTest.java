@@ -11,7 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
-/** Parses the commands a newcomer meets first; execution would require a real S3 endpoint. */
+/** Guards Go preview examples and parses the historical Java guides with the Java CLI. */
 class HeadlineDocsCommandSmokeTest {
 
     private static final String SMALL_PUBLIC_PREFIX =
@@ -19,36 +19,36 @@ class HeadlineDocsCommandSmokeTest {
     private static final String FULL_PUBLIC_BUCKET = "s3://noaa-gestofs-pds/";
 
     @Test
-    void readmeStartsWithTheSmallPublicWorkflow() throws Exception {
+    void readmeStartsWithTheGoPreviewWorkflow() throws Exception {
         String readme = Files.readString(Path.of("..", "README.md"));
+        String quickstart = readme.substring(
+                readme.indexOf("## Quick start"), readme.indexOf("## Output and resume"));
 
-        assertThat(readme)
-                .contains("Parallel, resumable S3 listing for very large buckets")
-                .contains("list " + SMALL_PUBLIC_PREFIX)
-                .contains("--no-sign-request --region us-east-1")
-                .contains("--format parquet -o /out/stofs-20230113")
-                .contains("out/stofs-20230113/data/*.parquet")
-                .doesNotContain("--format parquet -o /out/stofs-20230113.parquet");
-
-        parse(
-                "list",
-                SMALL_PUBLIC_PREFIX,
-                "--no-sign-request",
-                "--region",
-                "us-east-1",
-                "--format",
-                "parquet",
-                "-o",
-                "/out/stofs-20230113");
+        assertThat(quickstart)
+                .contains("Build the unreleased Go implementation")
+                .contains("./build.sh -o swath")
+                .contains("./swath --version")
+                .contains("./swath du /data -d 2")
+                .contains("./swath list " + SMALL_PUBLIC_PREFIX)
+                .contains("--anonymous --region us-east-1")
+                .contains("./swath list /data -o /tmp/swath-inventory")
+                .contains("./swath show /tmp/swath-inventory")
+                .doesNotContain("--no-sign-request", "--format parquet", "data/*.parquet");
+        assertThat(quickstart.indexOf("./swath du /data -d 2"))
+                .as("a local summary comes before the cloud listing")
+                .isLessThan(quickstart.indexOf("./swath list " + SMALL_PUBLIC_PREFIX));
+        // Go examples are not parsed by the Java command implementation. The Java
+        // getting-started and recorded-demo commands remain exercised below.
     }
 
     @Test
-    void gettingStartedCommandsParse() throws Exception {
+    void javaGettingStartedCommandsParse() throws Exception {
         String gettingStarted =
                 Files.readString(Path.of("..", "docs", "getting-started.md"));
 
         assertThat(gettingStarted)
                 .contains("list " + SMALL_PUBLIC_PREFIX)
+                .contains("--no-sign-request --region us-east-1")
                 .contains("--format tsv")
                 .contains("--format parquet -o /out/stofs-20230113")
                 .contains("resume /out/stofs-20230113");
