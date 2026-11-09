@@ -58,7 +58,7 @@ func TestVersionsKeepWireOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want, err := ParseVersions([]byte(versionsBody("VDV"))); err != nil || !reflect.DeepEqual(got, want) {
+	if want, err := parseVersions([]byte(versionsBody("VDV"))); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("client %+v\nscanner %+v (%v)", got, want, err)
 	}
 	var kinds string

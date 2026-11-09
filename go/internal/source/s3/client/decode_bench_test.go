@@ -126,8 +126,8 @@ func BenchmarkDecodeBody(b *testing.B) {
 		name string
 		f    func() error
 	}{
-		{"scanner/list", func() error { _, err := ParseList(list); return err }},
-		{"scanner/versions", func() error { _, err := ParseVersions(vers); return err }},
+		{"scanner/list", func() error { _, err := parseList(list); return err }},
+		{"scanner/versions", func() error { _, err := parseVersions(vers); return err }},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -153,10 +153,10 @@ func TestBenchBodiesAgree(t *testing.T) {
 		var err, werr error
 		if versions {
 			got, err = c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "bkt"})
-			want, werr = ParseVersions(benchBody(versions))
+			want, werr = parseVersions(benchBody(versions))
 		} else {
 			got, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "bkt"})
-			want, werr = ParseList(benchBody(versions))
+			want, werr = parseList(benchBody(versions))
 		}
 		if err != nil || werr != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("versions %v: the client's page differs from the scanner's (%v, %v)", versions, err, werr)

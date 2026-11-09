@@ -96,7 +96,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
 			if strings.Contains(string(body), "<ListBucketResult") {
-				want, err := ParseList(body)
+				want, err := parseList(body)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -106,7 +106,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 				}
 				return
 			}
-			pg, err := ParseVersions(body)
+			pg, err := parseVersions(body)
 			if err != nil {
 				t.Fatal(err)
 			}
