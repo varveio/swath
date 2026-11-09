@@ -29,7 +29,9 @@ module `github.com/varveio/seekparquet/go`; one whose keys repeat, an `--all-ver
 the versions routes exist), a format-2 dataset directory of an
 earlier build, a dataset's `data/` directory, a directory of sorted parts written by Java `swath --sort`, or one
 such part. A fixture that cannot
-be served sorted is refused when it opens, with the reason. A file ending
+be served sorted is refused when it opens, with the reason. The format-2 and Java-era forms are **legacy**:
+they are read by `internal/replay/legacy`, kept only until the Go replay has replaced the Java replay (#352) and
+the fixtures are re-listed as SeekParquet datasets, after which that reader is deleted (#353). A file ending
 in `.tsv` is instead a key list loaded into memory (one object per line: key, size, last-modified microseconds,
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
 `\N` for null), for tests and for listings that have no Parquet form; `bench/replaydiff -dump-tsv` writes one.

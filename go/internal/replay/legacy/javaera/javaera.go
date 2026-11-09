@@ -1,7 +1,8 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package javaera is the sorted-Parquet profile of the Java tool's sorted
+// Package javaera is a LEGACY profile (deleted with its parent package
+// legacy, #353): the sorted-Parquet profile of the Java tool's sorted
 // output: footer-stamped parts of the 13-column canonical schema, in a
 // directory or as one file, with no manifest. It decides whether such a set
 // can be served sorted and opens it with legacy.
