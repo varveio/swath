@@ -63,9 +63,12 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
 
-// oneFilesystemFilter is --one-filesystem in the manifest's
-// coverage.filters.
-const oneFilesystemFilter = "one_filesystem"
+// oneFilesystemFilter and noDirsFilter are --one-filesystem and --no-dirs
+// in the manifest's coverage.filters.
+const (
+	oneFilesystemFilter = "one_filesystem"
+	noDirsFilter        = "no_dirs"
+)
 
 type opened struct {
 	registry.Bound[Entry]
@@ -151,6 +154,11 @@ func (o *opened) Report() source.Report {
 		// The tree is listed only as far as its filesystem reaches: a
 		// reader that needs the whole tree refuses it, as a filtered one.
 		cov.Filters = append(cov.Filters, oneFilesystemFilter)
+	}
+	if o.p.opt.NoDirs {
+		// The directories' rows are left out: a reader that needs every
+		// entry refuses the dataset, as a filtered one.
+		cov.Filters = append(cov.Filters, noDirsFilter)
 	}
 	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov,
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}

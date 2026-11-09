@@ -28,7 +28,7 @@ import (
 
 // writeParts writes each of parts, in key order, as one part of a new
 // dataset, in pages of pageRows rows and row groups of groupRows.
-func writeParts(t *testing.T, s spec, pageRows int, groupRows int64, parts ...[]s3Row) string {
+func writeParts(t testing.TB, s spec, pageRows int, groupRows int64, parts ...[]s3Row) string {
 	t.Helper()
 	dir := writeGeometry(t, s, parts[0], pageRows, groupRows)
 	for _, p := range parts[1:] {
@@ -86,15 +86,19 @@ func randomKeys(r *rand.Rand, n int) []string {
 // streamTotals computes Totals of path from a full Stream of the dataset,
 // selecting objects as Totals documents it.
 func streamTotals(objects []Object, path string) PathTotals {
-	var out PathTotals
-	undated := false
+	out := PathTotals{Bytes: ptr(int64(0))}
+	undated, unsized := false, false
 	for _, o := range objects {
 		key := string(o.Key)
 		if path != "" && key != path && !(strings.HasSuffix(path, "/") && strings.HasPrefix(key, path)) {
 			continue
 		}
 		out.Count++
-		out.Bytes += *o.Size
+		if o.Size == nil {
+			unsized = true
+		} else {
+			*out.Bytes += *o.Size
+		}
 		if path != "" && key == path {
 			exact := o
 			out.Exact = &exact
@@ -108,6 +112,9 @@ func streamTotals(objects []Object, path string) PathTotals {
 	}
 	if undated {
 		out.NewestModified = nil
+	}
+	if unsized {
+		out.Bytes = nil
 	}
 	return out
 }
@@ -136,9 +143,16 @@ func describeTotals(p PathTotals) string {
 		newest = p.NewestModified.Format(time.RFC3339Nano)
 	}
 	if p.Exact != nil {
-		exact = fmt.Sprintf("%q size %d", p.Exact.Key, *p.Exact.Size)
+		exact = fmt.Sprintf("%q", p.Exact.Key)
+		if p.Exact.Size != nil {
+			exact += fmt.Sprintf(" size %d", *p.Exact.Size)
+		}
 	}
-	return fmt.Sprintf("{count %d, bytes %d, newest %s, exact %s}", p.Count, p.Bytes, newest, exact)
+	bytes := "nil"
+	if p.Bytes != nil {
+		bytes = fmt.Sprint(*p.Bytes)
+	}
+	return fmt.Sprintf("{count %d, bytes %s, newest %s, exact %s}", p.Count, bytes, newest, exact)
 }
 
 // pathsOf returns root, every key, every "/"-ending prefix of a key, and
@@ -210,7 +224,7 @@ func TestTotalsSelection(t *testing.T) {
 	}
 	want := Object{Position: Position{Key: []byte("a/")}, Size: ptr(int64(1)), LastModified: ptr(time.UnixMicro(1_700_000_001_000_000).UTC()),
 		ETag: ptr("e1"), StorageClass: ptr("STANDARD")}
-	if got[1].Bytes != 1+2 || !reflect.DeepEqual(*got[1].Exact, want) {
+	if *got[1].Bytes != 1+2 || !reflect.DeepEqual(*got[1].Exact, want) {
 		t.Fatalf("a/: %s, exact %+v; want bytes 3 and %+v", describeTotals(got[1]), *got[1].Exact, want)
 	}
 }
@@ -222,7 +236,8 @@ func TestTotalsOfEmptyBucket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, make([]PathTotals, 3)) {
+	zero := PathTotals{Bytes: ptr(int64(0))}
+	if !reflect.DeepEqual(got, []PathTotals{zero, zero, zero}) {
 		t.Fatalf("empty bucket totals %+v, want zeros", got)
 	}
 }
@@ -233,7 +248,7 @@ func TestTotalsSizeOverflowFails(t *testing.T) {
 	rows := keyRows([]string{"a/0000", "a/0001"})
 	rows[0].Size = ptr(int64(math.MaxInt64))
 	d := openDir(t, writeDataset(t, s3Spec(), rows))
-	if got, err := d.Totals(context.Background(), []string{"a/0000"}); err != nil || got[0].Bytes != math.MaxInt64 {
+	if got, err := d.Totals(context.Background(), []string{"a/0000"}); err != nil || *got[0].Bytes != math.MaxInt64 {
 		t.Fatalf("one huge object: %+v, %v", got, err)
 	}
 	got, err := d.Totals(context.Background(), []string{"a/"})
@@ -575,6 +590,61 @@ func TestPrefixSpan(t *testing.T) {
 	for _, prefix := range []string{"", "\xff", "\xff\xff"} {
 		if s := prefixSpan([]byte(prefix)); s.hi != nil {
 			t.Errorf("prefix %q: end %q, want none", prefix, s.hi)
+		}
+	}
+}
+
+// azblobRow is a swath/azblob-objects/v1 row as swath writes it.
+type azblobRow struct {
+	Key          string  `parquet:"key"`
+	Size         *int64  `parquet:"size,optional"`
+	LastModified *int64  `parquet:"last_modified,optional,timestamp(microsecond:utc)"`
+	ETag         *string `parquet:"etag,optional"`
+	ContentMD5   *string `parquet:"content_md5,optional"`
+	ContentType  *string `parquet:"content_type,optional"`
+	BlobType     *string `parquet:"blob_type,optional"`
+	AccessTier   *string `parquet:"access_tier,optional"`
+	CreationTime *int64  `parquet:"creation_time,optional,timestamp(microsecond:utc)"`
+}
+
+// TestAzblobTotals: an Azure blob's access tier is its storage class, in
+// an exact object's totals as in Stream, and prefix totals and aggregates
+// read the blobs' sizes; a blob without a tier keeps it nil.
+func TestAzblobTotals(t *testing.T) {
+	var rows []azblobRow
+	for i, k := range listKeys {
+		r := azblobRow{Key: k, Size: ptr(int64(10 * i)), LastModified: ptr(int64(1_700_000_000_000_000 + i)), ETag: ptr(fmt.Sprintf(`"0x%d"`, i)),
+			BlobType: ptr("BlockBlob"), AccessTier: ptr([]string{"Hot", "Cool", "Archive"}[i%3])}
+		if k == "c/3/" {
+			r.AccessTier = nil
+		}
+		rows = append(rows, r)
+	}
+	ext := swathExtension()
+	ext["source"] = map[string]any{"kind": "azblob", "uri": "az://acct/b", "container": "b"}
+	s := spec{id: AzblobObjectsV1, key: s3Spec().key, ext: ext}
+	dir := writeGeometry(t, s, rows[:5], 2, 3)
+	appendPart(t, dir, writeGeometry(t, s, rows[5:], 2, 3))
+	objects, err := stream(t, openDir(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := openDir(t, dir)
+	checkTotals(t, d, objects, append(pathsOf(listKeys), "", "c/3/"))
+	got, err := d.Totals(context.Background(), []string{"a/", "c/3/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := got[0].Exact; *e.StorageClass != "Cool" || *e.ETag != `"0x1"` || got[1].Exact.StorageClass != nil {
+		t.Fatalf("exact blobs %+v, %+v", *got[0].Exact, *got[1].Exact)
+	}
+	aggs, err := d.Aggregates(context.Background(), [][]byte{nil, []byte("a/"), []byte("c/")}, AggregateOptions{Counts: true, Sums: SumsAlways})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []string{"", "a/", "c/"} {
+		if count, size := prefixTotals(objects, []byte(p)); *aggs[i].Count != count || *aggs[i].Bytes != size {
+			t.Fatalf("%q: %s, want %d and %d", p, describeAggregate(aggs[i]), count, size)
 		}
 	}
 }

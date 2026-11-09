@@ -717,6 +717,9 @@ Diagnostics:
   the provider's counter `other_device_dirs`, and a dataset's `coverage.filters` holds `one_filesystem`, so a
   reader that needs the whole tree refuses it, as it refuses a filtered one. It needs each directory's device:
   `--metadata names` is refused, and so is a platform whose engine does not read it.
+- **`--no-dirs`** (local sources): directories are walked but their rows are not written. A dataset's
+  `coverage.filters` holds `no_dirs`, so a reader that needs the whole tree refuses it, as it refuses a filtered
+  one.
 - **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
   matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and

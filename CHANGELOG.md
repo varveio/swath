@@ -5,6 +5,15 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/reader` reads a filesystem's entries typed: `Dataset.StreamLocal` hands on every `LocalEntry`
+  (every column, nulls kept), `List` and `Page` return an entry's `Entry.Local` (a directory's prefix `d/` paired
+  with its own row), and `Stream` refuses a local dataset. `Totals` and `Aggregates` total local entries of every
+  kind and their summed `st_size` (entry bytes, directories' own sizes included); `PathTotals.Bytes` is now
+  `*int64`, nil when an entry has no size (`--metadata names`). `Dataset.Scan` scans the current objects under a
+  prefix with several goroutines (`ScanRequest{Prefix, Workers, Stats}`), in batches. `Totals` of an Azure
+  dataset no longer panics on an exact blob (it read `storage_class`; the access tier is `access_tier`).
+- Go port: `--no-dirs` is recorded in a local dataset's `coverage.filters` (`no_dirs`), so a reader that needs
+  the whole tree refuses it.
 - Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
   JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
   parses dataset roots (`ParseLocation`: `s3://`, `gs://`, `az://ACCOUNT/CONTAINER`) and opens one with each

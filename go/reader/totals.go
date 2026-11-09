@@ -16,19 +16,30 @@ import (
 )
 
 // PathTotals is the totals of one path requested from Totals. Its numbers
-// are never partial or estimated: Totals fails instead.
+// are never partial or estimated: Totals fails instead, or leaves a value
+// it cannot state exactly nil.
+//
+// Over a swath/local-entries/v1 dataset an object is a filesystem entry
+// of any kind: Count counts every entry the path selects, a directory's
+// own row "d/" included for "d/" (the root has no row, so "" counts the
+// entries below it), and Bytes sums their st_size, a directory's own size
+// included. Those are entry bytes: neither the files' content bytes nor
+// the space they take on disk.
 type PathTotals struct {
 	// Count is the number of objects the path selects; zero for an empty
 	// selection.
 	Count int64
-	// Bytes is the sum of the selected objects' sizes.
-	Bytes int64
+	// Bytes is the sum of the selected objects' sizes. It is nil when a
+	// selected filesystem entry has no size (--metadata names), never a
+	// partial sum.
+	Bytes *int64
 	// NewestModified is the latest modification time among the selected
 	// objects. It is nil when Count is zero or any selected object has no
 	// modification time.
 	NewestModified *time.Time
 	// Exact is the object whose key equals the path, when one exists. It
-	// is also counted in Count and Bytes. It is always nil for "".
+	// is also counted in Count and Bytes. It is always nil for "". For a
+	// filesystem entry it holds the key, size and modification time.
 	Exact *Object
 }
 
@@ -46,8 +57,9 @@ type PathTotals struct {
 // since its parts are checked. An exact object's ETag and storage class
 // are read by a plan of those objects alone. Every selected object is
 // checked as Stream checks it (a size, at least 0; a modification time in
-// the years 1 to 9999), failing with a SemanticError of KindRow; sizes
-// whose sum does not fit an int64 fail with one naming size and no row.
+// the years 1 to 9999), and a filesystem entry as StreamLocal does (its
+// size may be null), failing with a SemanticError of KindRow; sizes whose
+// sum does not fit an int64 fail with one naming size and no row.
 //
 // A versions schema holds no current objects: Totals refuses it with a
 // SemanticError of KindSchema before it reads. The module's refusals
@@ -96,7 +108,7 @@ func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, err
 		if s.overflow {
 			return nil, semantic(KindRow, "size", nil, "the sizes %q selects overflow an int64 total", unique[i])
 		}
-		totals[i] = PathTotals{Count: *n, Bytes: s.bytes, NewestModified: s.newestTime()}
+		totals[i] = PathTotals{Count: *n, Bytes: s.total(), NewestModified: s.newestTime()}
 	}
 	for path, o := range sums.exact {
 		if i, ok := exact[path]; ok {
@@ -121,8 +133,9 @@ func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, err
 	return out, nil
 }
 
-// fillExact reads the columns after size and last_modified (ETag and
-// storage class) of the exact objects found, by one plan of their keys.
+// fillExact reads the columns after size and last_modified (the ETag and
+// the storage class, an Azure blob's access tier) of the exact objects
+// found, by one plan of their keys.
 func (d *Dataset) fillExact(ctx context.Context, totals []PathTotals, columns []string) error {
 	at := make(map[string]*Object)
 	var ranges []seekparquet.Range
@@ -142,7 +155,7 @@ func (d *Dataset) fillExact(ctx context.Context, totals []PathTotals, columns []
 	return plan.Scan(ctx, nil, func(r seekparquet.Row) error {
 		o := at[string(r.Key)]
 		dec := decoder{spec: d.spec, row: &r}
-		o.ETag, o.StorageClass = dec.string("etag"), dec.string("storage_class")
+		o.ETag, o.StorageClass = dec.string(columns[0]), dec.string(columns[1])
 		return dec.err
 	})
 }
@@ -274,7 +287,7 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 		if dec.err != nil {
 			return dec.err
 		}
-		if err := checkObject(&o); err != nil {
+		if err := checkObject(&o, d.spec.ID == LocalV1); err != nil {
 			return err
 		}
 		for ; next < len(order) && bytes.Compare(spans[order[next]].lo, r.Key) <= 0; next++ {
@@ -301,13 +314,18 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 type objectSum struct {
 	bytes    int64
 	overflow bool // the sizes overflow an int64
+	unsized  bool // a filesystem entry has no size
 	newest   time.Time
 	dated    bool // newest is set
 	undated  bool // an object has no modification time
 }
 
 func (s *objectSum) add(o *Object) {
-	s.addSize(*o.Size)
+	if o.Size == nil {
+		s.unsized = true
+	} else {
+		s.addSize(*o.Size)
+	}
 	switch {
 	case o.LastModified == nil:
 		s.undated = true
@@ -322,6 +340,15 @@ func (s *objectSum) addSize(size int64) {
 		return
 	}
 	s.bytes += size
+}
+
+// total is the sum of the sizes, nil when an object had none or they
+// overflow an int64.
+func (s *objectSum) total() *int64 {
+	if s.unsized || s.overflow {
+		return nil
+	}
+	return ptrTo(s.bytes)
 }
 
 // newestTime is the newest modification time, nil when there was no

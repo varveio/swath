@@ -18,10 +18,14 @@
 // and every part's columns against the spec. AcceptWholeSource accepts the
 // dataset as a complete, unfiltered listing of the whole of one source.
 // Stream hands on every current object, checking each one's size and
-// modification time; List lists them by delimiter a page at a time,
-// through the module's delimited listing, checking each object as Stream
-// does (Delimiter 0 is the NUL byte); a common prefix carries the object
-// at its exact key, an S3-style folder object, from the same request.
+// modification time; StreamLocal hands on a filesystem's entries
+// (LocalEntry), nulls kept; Scan hands on the current objects under a
+// prefix in batches, from shards of the plan read concurrently
+// (seekparquet.RangePlan.Split). List lists objects or entries by
+// delimiter a page at a time, through the module's delimited listing,
+// checking each as Stream does (Delimiter 0 is the NUL byte); a common
+// prefix carries the row at its exact key, an S3-style folder object or a
+// filesystem's directory row, from the same request.
 // AcceptWholeSource identifies the source by its kind: a bucket by name,
 // an Azure container by name and account (source.uri), a filesystem by
 // its root. Page lists a page with one entry of lookahead for its Next
@@ -43,16 +47,19 @@
 // (ErrIdentityMismatch). IsRefusal tells the errors that refuse the data
 // from the others.
 //
-// Totals and Aggregates total the current objects under paths and
+// Totals and Aggregates total the current objects, or a filesystem's
+// entries of every kind and their st_size (entry bytes), under paths and
 // prefixes over the module's selection plans (seekparquet.Dataset.
 // PlanRanges): a count is the plan's row count, exact only when every part
 // holding the rows has been checked; a byte sum decodes the size pages of
 // the rows, once however the selections nest or repeat. Totals is always
-// exact or fails. An aggregate is nil when it is not known exactly: a
-// count across a part no read has checked, a sum that overflows, or a sum
-// left out by its SumMode or by its budget, which counts the compressed
-// size pages and dictionaries the sums read, a shared one once, and not
-// the footers, key pages and page indexes planning reads.
+// exact or fails, its byte total nil over an entry without a size. An
+// aggregate is nil when it is not known exactly: a count across a part no
+// read has checked, a sum over an entry without a size, a sum that
+// overflows, or a sum left out by its SumMode or by its budget, which
+// counts the compressed size pages and dictionaries the sums read, a
+// shared one once, and not the footers, key pages and page indexes
+// planning reads.
 //
 // The module opens, validates and queries the dataset; this package adds
 // swath's meaning. It does not import the lister and needs no cloud SDK: a

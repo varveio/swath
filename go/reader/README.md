@@ -3,8 +3,8 @@
 `github.com/varveio/swath/go/reader` is what a reader of swath datasets needs to know about swath on top of the
 [SeekParquet](https://github.com/varveio/seekparquet) module: the schema ids and their columns, the manifest's
 `extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, a `Dataset` that
-opens a dataset, checks its schema, accepts it as a whole-source listing, streams and lists its current objects
-and totals them under paths and prefixes, the digest validation a reader importing a dataset runs first, and
+opens a dataset, checks its schema, accepts it as a whole-source listing, streams, scans and lists its current
+objects (or a filesystem's entries) and totals them under paths and prefixes, the digest validation a reader importing a dataset runs first, and
 `AdmitWhole`, which runs every one of those checks in order for a reader attaching a whole current-object listing.
 
 The swath dataset profile this module implements (what a swath dataset is, the schema ids and their row
@@ -57,9 +57,12 @@ func (*Dataset) CheckSchema(ctx context.Context) error
 type WholeSource struct { Kind, Container, URI string }
 func (*Dataset) AcceptWholeSource(want WholeSource) error
 func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
+func (*Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) error // swath/local-entries/v1 only
 func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; ReadStats }
+type ScanRequest struct { Prefix []byte; Workers int; Stats *ReadStats } // Workers <= 0: 1
+func (*Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Object) error) error
 type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
-type Entry struct { Object *Object; CommonPrefix []byte } // an object, a prefix, or a prefix with its exact-key object
+type Entry struct { Object *Object; Local *LocalEntry; CommonPrefix []byte } // an object or entry, a prefix, or a prefix with its exact-key row
 func (Entry) Cursor() *Cursor
 func (*Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error)
 func (*Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error)
@@ -74,7 +77,7 @@ type SemanticError struct { Kind Kind; Column string; Row *Position; Err error }
 const KindSchema, KindCoverage, KindRow Kind = "schema", "coverage", "row"
 var ErrSchema, ErrCoverage, ErrRow *SemanticError // errors.Is targets, by kind
 
-type PathTotals struct { Count, Bytes int64; NewestModified *time.Time; Exact *Object }
+type PathTotals struct { Count int64; Bytes *int64; NewestModified *time.Time; Exact *Object } // Bytes nil: an entry without a size
 type SumMode int // SumsOff, SumsWithinBudget, SumsAlways
 const DefaultSumBudget = 4 << 20
 type AggregateOptions struct { Counts bool; Sums SumMode; SumBudgetBytes int64 }
@@ -104,6 +107,15 @@ err = d.AcceptWholeSource(reader.WholeSource{Kind: "s3", Container: "bucket"}) /
 err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
 entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000})
 // the next page: ListRequest{..., Cursor: entries[len(entries)-1].Cursor()}
+err = d.Scan(ctx, reader.ScanRequest{Prefix: []byte("logs/"), Workers: runtime.GOMAXPROCS(0)},
+	func(batch []reader.Object) error { /* called concurrently; do not keep batch */ return nil })
+```
+
+A filesystem's entries (`swath/local-entries/v1`) stream as `LocalEntry`, every column with its nulls, and list
+as `Entry.Local`, a directory's prefix `d/` paired with its own row:
+
+```go
+err = d.StreamLocal(ctx, func(e reader.LocalEntry) error { /* e.Kind, e.Size (nil under --metadata names), e.LinkTarget */ return nil })
 ```
 
 A reader importing a dataset validates its digests first, then opens the same bytes:
@@ -174,7 +186,8 @@ for _, r := range rows {
   is compared, a recorded `""` refuses: it identifies no source. An absent member refuses. The first failure is `KindCoverage` with `Column` naming the member (`source.uri`, say). Exclusions (what a
   listing leaves out by design, such as an output directory inside a listed tree) and `coverage.snapshot` (a
   listing is never a point-in-time snapshot) do not refuse.
-- **`Stream`.** Current objects only: a versions schema is refused (`KindSchema`) before any read. Every object
+- **`Stream`.** Current objects only: a versions schema, and a filesystem's entries (`StreamLocal`'s), are
+  refused (`KindSchema`) before any read. Every object
   in dataset order through `seekparquet.Range`, 1,024 rows a request, each page after the previous page's last
   row (`Cursor`), projecting `size`, `last_modified` and, for S3 and Cloud Storage, `etag` and
   `storage_class`. The module checks every key page it decodes (order, bounds, page index). Each object must
@@ -182,14 +195,33 @@ for _, r := range rows {
   naming the column and the row. The first error ends the stream: `fn`'s and the module's
   (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
   Each `Object` owns its key, a copy, so `fn` may keep or change it. `StreamStats` sums every Stream's
-  requests, objects handed to `fn` (counted before the call) and `ReadStats`.
+  (and StreamLocal's) requests, objects handed to `fn` (counted before the call) and `ReadStats`.
+- **`StreamLocal`.** `swath/local-entries/v1` only (any other schema id is `KindSchema`, before any read). Every
+  entry as `Stream` reads objects, projecting every column of the schema, each `LocalEntry` owning its key.
+  Nulls are kept: under `--metadata names` the stat columns, `Size` and `LastModified` included, are nil, and a
+  target is nil but for a symlink listed with targets. A size, when present, must be at least 0 and a
+  modification time, when present, in the years 1 to 9999 (`KindRow`). Its errors are `Stream`'s.
+- **`Scan(req)`.** Current objects only, refused as `Stream` refuses, before any read; `Stats` reset first. One
+  plan of `Prefix`'s rows (`seekparquet.Dataset.PlanRanges`, projecting the columns `Object` holds, which checks
+  every part holding them), divided into at most `Workers` shards (`RangePlan.Split`: consecutive rows cut at row
+  group boundaries, balanced by projected bytes; `Workers` 0 or less is 1, and a plan with fewer row groups has
+  fewer shards), each scanned by its own goroutine. Each object is decoded and checked as `Stream` checks it and
+  handed to `fn` once, in batches of at most 1,024: a shard's batches in ascending key order, one at a time,
+  shards' batches concurrently and in no set order, so `fn` must be safe for concurrent use. A batch's slice is
+  reused once `fn` returns: `fn` must not keep it (an `Object` copied out of it owns its memory). The first
+  error cancels the other shards and is returned: `fn`'s and the module's unchanged, a row's `KindRow`, the
+  context's (checked before each batch). Batches already handed on stay handed on; a failed scan is no result.
+  `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too; `Scan` does not add to
+  `StreamStats`.
 - **`List(req)`.** Current objects only, as `Stream`: a versions schema is refused (`KindSchema`) before any
   read. One request of the module's delimited listing (`seekparquet.Dataset.List`), which routes it, skips each
   common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
   up to and including the first one; `Delimiter` 0 is the NUL byte, a delimiter like any other, not "no
-  rollup"), projecting the columns `Object` holds. Entries are in ascending byte order,
-  at most `Limit`; each is an `Object` or a `CommonPrefix`, owning its bytes. A `CommonPrefix` also has `Object`
-  set to the object stored at the prefix's exact key (an S3-style `a/` folder object under its children), from
+  rollup"), projecting the columns `Object` holds, or, for `swath/local-entries/v1`, every column of `LocalEntry`.
+  Entries are in ascending byte order, at most `Limit`; each is an `Object` (a `Local` entry for a filesystem) or
+  a `CommonPrefix`, owning its bytes. A `CommonPrefix` also has `Object` (`Local`) set to the row stored at the
+  prefix's exact key (an S3-style `a/` folder object under its children, or a directory's own row `d/`, so an
+  empty directory lists as its prefix with its row; no directory metadata is made up for a prefix), from
   the module's exact row (`seekparquet.Entry.Exact`, spec LIST-8) in the same request, when that object is the
   first key the listing reached under the prefix. That holds without a cursor and after every cursor a page
   returned: a prefix cursor resumes after all of its prefix's keys, and an object's row cursor never lies inside
@@ -198,8 +230,8 @@ for _, r := range rows {
   after an object, the prefix cursor after a common prefix (its exact-key object included), so the next page
   starts after every key that rolls up to it; repeating the request with each page's
   last cursor lists every entry once; a cursor before `Prefix`'s keys lists from the first of them, one after
-  them lists nothing. Each object is checked as `Stream` checks it; a row that fails is the
-  `KindRow` error and no entries. The module's errors are returned unchanged: `*RefusalError`, `ErrClosed`
+  them lists nothing. Each object is checked as `Stream` checks it, each entry as `StreamLocal` does; a row
+  that fails is the `KindRow` error and no entries. The module's errors are returned unchanged: `*RefusalError`, `ErrClosed`
   after `Close`, `ErrInvalidRequest` (a `Limit` that is not positive, a malformed cursor), the Source's and the
   context's. `Stats`, when set, is reset when the request starts (a refusal before any read leaves it zero) and receives
   the request's `ReadStats`, whether it succeeds or fails; `List` does
@@ -210,11 +242,16 @@ for _, r := range rows {
   The rows of all paths are planned at once (`seekparquet.Dataset.PlanRanges`, projecting `size` and
   `last_modified`), which checks every part holding them, and scanned once, so a row several paths select is
   decoded once. `Count` is the plan's count of the path's range, exact once its parts are checked; `Bytes` the
-  sum of the sizes; `NewestModified` the latest time, nil when the path selects nothing or any selected object
+  sum of the sizes (nil when a selected filesystem entry has none); `NewestModified` the latest time, nil when the path selects nothing or any selected object
   has no time; `Exact` the object whose key is the path (never for `""`), with its ETag and storage class read by
   a plan of those objects alone. Each object is checked as `Stream` checks it (`KindRow`), and sizes whose sum
   overflows an int64 fail with `KindRow` naming `size` and no row. Totals is exact or fails: the module's
-  refusals and the Source's errors unchanged, the context's error, no totals.
+  refusals and the Source's errors unchanged, the context's error, no totals. **Local totals**
+  (`swath/local-entries/v1`): an object is an entry of any kind; `Count` includes a directory's own row `d/` for
+  the path `d/`, once, and `""` counts the entries below the root, which has no row; `Bytes` is the entries'
+  summed `st_size`, directories' own sizes included: entry bytes, not the files' content bytes and not disk usage
+  (`allocated_bytes`). An entry without a size (`--metadata names`) makes `Bytes` nil, never 0, and an entry
+  without a time `NewestModified` nil. `Exact` holds the entry's key, size and time.
 - **`Aggregates(prefixes, opt)`.** Current objects only. A prefix covers every object whose key begins with it,
   the one whose key is the prefix included; prefixes may repeat, nest and overlap. Nothing is read unless
   `Counts` or `Sums` is set. A count plans the prefix's range without columns, decoding the key pages at its
@@ -229,8 +266,9 @@ for _, r := range rows {
   read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
   smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
   cannot be proven, is not summed under a budget.
-  `Bytes` is nil for a prefix not summed and for a sum that overflows an int64; `Count` is reported only with
-  `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
+  `Bytes` is nil for a prefix not summed, for a sum over a filesystem entry without a size, and for a sum that
+  overflows an int64; a filesystem's counts and sums are the local totals of `Totals`. `Count` is reported only
+  with `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
   `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates. Both calls fail first on a
   context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
 - **`Page(req)`.** `List` with one entry beyond `req.Limit`, trimmed to `Limit`; `Next` is the last returned
@@ -287,9 +325,12 @@ versions, whose group can be longer than any page. An S3 delete marker's `Size` 
 generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it.
 
 `Object` is the small projection a reader of current objects needs (key, size, modification time, ETag,
-storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/gcs-objects/v1`,
-`swath/azblob-objects/v1` and `swath/local-entries/v1` (no ETag or storage class): a versions row is not a current object,
-and `DecodeObject` refuses its schema id.
+storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/gcs-objects/v1` and
+`swath/azblob-objects/v1`: a versions row is not a current object, and `DecodeObject` refuses its schema id.
+`DecodeObject` also projects a `swath/local-entries/v1` row (no ETag or storage class), as `Totals` reports an
+exact entry, while `StreamLocal` and `List` hand on a filesystem's entries whole, as `LocalEntry`. A local key
+is the path relative to the root as bytes, unnormalised, a directory's ending in `/`; a link target is bytes,
+written with `/` separators by the portable engine on Windows (`filepath.ToSlash`).
 
 ## Errors
 
@@ -338,6 +379,18 @@ column the module accepts; `Stream`'s order and values over pages, nulls, its ro
 error, a module refusal returned unchanged, and the refusal of a versions schema; and a part with corrupted
 bytes caught by digest validation.
 
+`local_test.go` writes a filesystem tree (directories with their own rows, an empty one, a name that is not
+UTF-8, a symlink with its target, a FIFO) over two parts, with every stat column and as `--metadata names`
+writes it: `StreamLocal` decodes every column and null; `Stream` and `Scan` refuse the entries and `StreamLocal`
+objects, before any read; `Page` lists it by `/` in pages of 1, 2 and 100, each directory paired with its row and
+each prefix's totals nil-summed under `names`; `Totals` match the `StreamLocal` oracle, a directory counted once
+with its own row and entry bytes nil, never 0, without sizes. `scan_test.go` checks `Scan` against `Stream` for
+0, 1, 2, 7 and 64 workers and several prefixes (each object once, each batch ascending), its statistics against
+a plan, split and shard scans made by hand, a failing row, `fn`'s error stopping each shard at its first batch,
+cancellation and a versions refusal before any read; `BenchmarkScan` tallies 300,000 objects with one worker and
+`GOMAXPROCS`. `TestAzblobTotals` totals an Azure dataset against `Stream` (an exact blob's access tier as its
+storage class) and its prefixes' aggregates.
+
 `list_test.go` lists keys holding `a`, `a/`, `a/b`, `a/b0` and `ab/x` over three parts against an oracle, by
 several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects and prefixes; checks an entry's
 values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
@@ -349,7 +402,8 @@ alone), a storage error and a cancellation at the second part, a cancellation du
 report is complete; the context's error is returned), and a complete report comparing fewer digests than parts,
 all errors. The lister's `TestReaderStreams*` tests admit and stream datasets its own
 writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
-(one without a size refused), and both versions schemas admitted and refused by `Stream`.
+through `StreamLocal` (kinds, a link target, one without a size kept nil; `Stream` refuses them), and both
+versions schemas admitted and refused by `Stream`.
 
 `admit_test.go` admits a three-part dataset through a Source and a directory (its `Identity` the SHA-256 of the
 manifest file and its `published_at`) and a dataset of no parts, refuses in order a corrupt part, a missing
