@@ -16,8 +16,13 @@ request workflow.
 
 ## Build and test
 
-swath is a multi-module Gradle build and requires **JDK 25**. The wrapper supplies Gradle,
-but JDK 25 must be available to it.
+The unreleased Go implementation lives in `go/` and uses the toolchain declared in
+`go/go.mod`. Build it with `cd go && ./build.sh -o swath`. The Go gate is
+`go vet ./... && go test -race ./...`; run focused tests locally and use the sharded CI
+for the full suite, as described in [Go testing](go/docs/testing.md).
+
+The current Java distribution is a multi-module Gradle build and requires **JDK 25**.
+The wrapper supplies Gradle, but JDK 25 must be available to it.
 
 ```bash
 ./gradlew build -PnoIntegration  # Docker-free per-commit gate

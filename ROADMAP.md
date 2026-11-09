@@ -1,74 +1,63 @@
 # Roadmap
 
-This page lists deliberately deferred work in rough priority order. Items are intentions,
-not release commitments; issues track work that is actionable now.
+Items here are intentions, not release commitments. Issues track actionable work.
 
-## Current shipped scope
+## Release transition
 
-swath currently provides:
+The latest published release is the S3-focused Java v0.3.2. The Go implementation on
+`main` is unreleased. Go will replace Java, and the Java code will be removed at that
+release. A copy change does not itself make that release or remove Java.
 
-- parallel current-object listing for general-purpose S3 buckets;
-- table, TSV, JSONL, and managed Parquet output;
-- checkpoint and resume for managed Parquet directories;
-- opt-in globally key-sorted Parquet;
-- filters, run reports, metrics, and diagnostic traces; and
-- experimental GCS access through the S3-compatible XML API.
+Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
+Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible
+object-store dataset resume, S3 versions and delete markers, and GCS generations.
+The [Go guide](go/docs/guide.md) and [CLI](go/docs/cli.md) describe their limits.
+These capabilities should not be listed as future backend work.
 
-The supported product is the CLI. Internal Java seams are not a stable third-party API.
+The [publication checklist](docs/go-release-copy-checklist.md) keeps installation,
+repository metadata and documentation aligned with the release transition.
 
-## Planned features
+## Planned work
 
 ### `swath inspect`
 
-Give a cheap first look at a bucket or prefix—estimated scale, density, prefix structure,
-and likely listing constraints—without performing the full inventory.
+A cheap first look at a bucket or prefix: estimated scale, density, prefix structure,
+and listing constraints, without performing a full inventory. The current `show`
+command describes an existing dataset or interrupted run, not an unlisted source.
 
-### Versioned listing
+### Versioned-listing coverage
 
-`--all-versions` lists object versions and delete markers (S3) and live and noncurrent generations (GCS) in the
-Go port, under their own schema ids, `swath/s3-versions/v1` and `swath/gcs-generations/v1`. Still to come: the
-replay server's versioned storage (so versioned listings can be measured offline), measurements on large
-versioned buckets, and GCS soft-deleted objects. The Java tool's `swath/canonical` schema reserves version
-columns and leaves them empty.
+S3 `--all-versions` and GCS generations are implemented in Go under their own schemas.
+Large versioned-bucket measurements and GCS soft-deleted objects remain future work.
+Azure version, snapshot and deleted-blob listing are not implemented.
 
 ### Supplied keyspace hints
 
-Allow callers to provide known keyspace structure instead of paying for the default
-shallow discovery pass. The design must preserve the same disjoint range and resume
-contracts as discovered seeds.
+Go already accepts `--seed-from` for a previous dataset or a cut file. Broader ways to
+provide known keyspace structure still need a design that preserves disjoint ranges
+and resume identity.
 
 ### Diff two listings
 
-Compare two buckets, prefixes, or inventory datasets and emit missing or changed objects.
-The user-facing contract and restart behavior need design before an implementation is
-committed.
+Compare buckets, prefixes or inventory datasets and emit missing or changed entries.
+The user-facing contract and restart behavior still need design. Today comparisons
+are downstream work, not a built-in swath command.
 
-### S3 directory buckets
+### Additional source semantics
 
-Directory buckets do not provide the one global lexicographic order required by swath's
-range-splitting engine. Supporting them needs a separate sequential continuation-token
-path rather than pretending the current algorithm applies.
-
-## Post-1.0 candidates
-
-### Embeddable library entry point
-
-Expose a curated, versioned Java API after the internal types and lifecycle have settled.
-The current modules are implementation boundaries, not a supported SPI.
-
-### Native GCS and additional backends
-
-A native backend must provide or deliberately replace the global-order and
-exclusive-lower-bound assumptions used by the S3 engine. The current GCS XML path remains
-experimental S3-compatible access.
+S3 directory buckets lack the global ordering required by the range engine. Azure
+hierarchical namespaces have different ordering semantics. Both need explicit support
+rather than being treated as equivalent to today's supported sources.
 
 ### Resume retargeting
 
-Allow an interrupted run to move to a new output destination through an explicit
-identity-rewrite operation. Ordinary `swath resume` intentionally keeps destination
-identity fixed.
+Move an interrupted run to a new output destination through an explicit identity-rewrite
+operation. Ordinary `swath resume` keeps source and destination identity fixed.
 
-### Checked nullness
+## Library interfaces
 
-Adopt a repository-wide nullness story such as JSpecify with a static checker after the
-pre-1.0 structural work settles.
+The CLI is the product entry point. Internal engine packages are not a stable embedding
+API. The existing [Go dataset reader](go/reader/README.md) and
+[object-store file reader](go/objfile/README.md) document their own interfaces; they are
+not a promise of an embeddable listing engine. A curated engine API needs a separate
+contract after the CLI and lifecycle settle.

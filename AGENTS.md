@@ -5,18 +5,21 @@ Read this before changing swath. General contribution rules are in
 
 ## What swath is
 
-swath is a Java 25 CLI for high-performance object-store listing. The supported product
-currently targets general-purpose S3 buckets and uses an adaptive work-stealing scan with
-bounded active buffers, crash-safe checkpoint/resume, and optional globally sorted
-Parquet output.
+swath is a command-line tool for parallel listing and inventory of large object stores
+and filesystems. The unreleased Go implementation on `main` supports local and mounted
+filesystems, S3, GCS and Azure Blob flat namespaces, with size summaries and sorted
+Parquet output. The latest published release is the S3-focused Java v0.3.2. Go will
+replace Java at release; this repository still contains both implementations.
 
-Start with [`README.md`](README.md). The
-[visual field guide](https://swath.varve.io/field-guide/) is the best plain-language
-algorithm explanation.
+Start with [`README.md`](README.md) and the [Go guide](go/docs/guide.md). The
+[visual field guide](https://swath.varve.io/field-guide/) is historical Java v0.3.2
+documentation, not the Go algorithm.
 
 ## Sources of truth
 
-- Current user behavior belongs in `README.md` and `docs/`.
+- Product positioning and release status belong in `README.md`. Go behavior belongs in
+  `go/docs/`; root `docs/` usage and engine pages describe Java. The root contracts below
+  supply the language-neutral invariants; do not copy Java implementation details into Go.
 - [`docs/internals/contracts.md`](docs/internals/contracts.md) owns the load-bearing
   invariants I1–I12, persistence/output schemas, and per-sink guarantees.
 - [`docs/internals/algorithms.md`](docs/internals/algorithms.md) owns the listing
@@ -80,8 +83,8 @@ The contributor reference is
 ## Go port
 
 - The Go port lives in [`go/`](go/): module `github.com/varveio/swath/go`, command
-  `go/cmd/swath`, packages under `go/internal/`. It is a separate tool from the Java
-  distribution until the Java code is retired.
+  `go/cmd/swath`, packages under `go/internal/`. Its launcher and dataset differ from the
+  current Java release; Go replaces Java at release rather than becoming a second edition.
 - The language-neutral documents bind it: [`docs/internals/contracts.md`](docs/internals/contracts.md)
   (invariants, schemas, dataset layout), the algorithms, and the usage semantics.
   [`go/docs/`](go/docs/) is the source of truth for the Go code (architecture, its
