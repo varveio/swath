@@ -71,15 +71,6 @@ func (generationCodec) Decode(d *schema.Decoder, g *Generation) {
 	g.TimeDeleted = d.Varint()
 }
 
-// The delta encoding of a Generation against the previous row's (spill's
-// delta frames, where a name's generations are neighbours sharing their
-// class, type and often their size and hashes): a flags byte, each integer
-// as a signed varint of its wrapping difference from the previous row's
-// (two's complement, so every difference round-trips and a small one is
-// short either way), then each string unless it repeats the previous
-// row's (bit i of the flags: string i of generationStrings).
-const generationFlags = 1<<5 - 1 // one bit per string
-
 func generationInts(g *Generation) [6]*int64 {
 	return [6]*int64{&g.Size, &g.Mtime, &g.Generation, &g.Metageneration, &g.TimeCreated, &g.TimeDeleted}
 }
@@ -89,43 +80,15 @@ func generationStrings(g *Generation) [5]*string {
 }
 
 func (generationCodec) AppendDelta(dst []byte, prev, g *Generation) []byte {
-	at := len(dst)
-	dst = append(dst, 0)
 	pi, ci := generationInts(prev), generationInts(g)
-	for i := range ci {
-		dst = binary.AppendVarint(dst, int64(uint64(*ci[i])-uint64(*pi[i])))
-	}
-	var flags byte
 	ps, cs := generationStrings(prev), generationStrings(g)
-	for i := range cs {
-		if *cs[i] == *ps[i] {
-			flags |= 1 << i
-		} else {
-			dst = schema.AppendString(dst, *cs[i])
-		}
-	}
-	dst[at] = flags
-	return dst
+	return schema.AppendDelta(dst, schema.DeltaFields{Ints: pi[:], Strings: ps[:]}, schema.DeltaFields{Ints: ci[:], Strings: cs[:]})
 }
 
 func (generationCodec) DecodeDelta(d *schema.Decoder, prev, g *Generation) {
-	flags := d.Byte()
-	if flags&^generationFlags != 0 {
-		d.Fixed(-1) // an unknown flag: malformed
-		return
-	}
 	pi, ci := generationInts(prev), generationInts(g)
-	for i := range ci {
-		*ci[i] = int64(uint64(*pi[i]) + uint64(d.Varint()))
-	}
 	ps, cs := generationStrings(prev), generationStrings(g)
-	for i := range cs {
-		if flags&(1<<i) != 0 {
-			*cs[i] = *ps[i]
-		} else {
-			*cs[i] = d.Str()
-		}
-	}
+	schema.DecodeDelta(d, schema.DeltaFields{Ints: pi[:], Strings: ps[:]}, schema.DeltaFields{Ints: ci[:], Strings: cs[:]})
 }
 
 var _ schema.DeltaCodec[Generation] = generationCodec{}
