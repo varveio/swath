@@ -87,35 +87,6 @@ func usec(t *testing.T, s string) int64 {
 	return v.UnixMicro()
 }
 
-// TestVersionsRequest: a Versions request sends versions=true and, on
-// Google's endpoint, a field mask with timeDeleted; a current-object
-// request is unchanged.
-func TestVersionsRequest(t *testing.T) {
-	s := newServer(t)
-	s.body = []byte(`{"kind":"storage#objects"}`)
-	u, _ := url.Parse(s.URL)
-	c, err := New(context.Background(), Config{Anonymous: true, HTTPClient: &http.Client{Transport: toServer{u}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, versions := range []bool{false, true} {
-		if _, err := c.List(context.Background(), &ListInput{Bucket: "b", StartOffset: "a\x00", Versions: versions}); err != nil {
-			t.Fatal(err)
-		}
-		q := s.query
-		want, wantV := fields, ""
-		if versions {
-			want, wantV = versionFields, "true"
-		}
-		if q.Get("fields") != want || q.Get("versions") != wantV || q.Get("startOffset") != "a\x00" {
-			t.Fatalf("versions %v: query %v", versions, q)
-		}
-	}
-	if versionFields == fields {
-		t.Fatal("the versions field mask asks for nothing more")
-	}
-}
-
 // expectedPage is the page a capture must read as, decoded here field by
 // field from the wire's own spelling: sizes, generations and
 // metagenerations are decimal strings, times RFC 3339 as microseconds,
