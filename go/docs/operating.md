@@ -368,7 +368,7 @@ DIR/
 **The manifest is the commit.** Parts appear in `data/` before the run ends, so `data/` alone is not a
 dataset: a reader starts only once `manifest.json` exists, and a reader that needs the whole bucket checks
 `coverage.complete` true, `coverage.stop_reason` `completed`, `coverage.skipped_entries` 0, `coverage.filters`
-empty and `scope.kind` `whole` (fields: [upgrade.md](upgrade.md)).
+empty and `scope.kind` `whole` (fields: [dataset.md](dataset.md#the-swath-extension)).
 
 ```bash
 swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
@@ -387,11 +387,11 @@ lists for the object. On GCS, `last_modified` also changes when only the object'
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
-`swath/azblob-objects/v1`, its columns and caveats in [upgrade.md](upgrade.md#the-downstream-reader-dispatch-on-schema-id).
+`swath/azblob-objects/v1`, its columns and caveats in [dataset.md](dataset.md#schema-registry).
 Every dataset lists current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
-only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.
+only on the swath dataset profile ([dataset.md](dataset.md)); Java swath's reader does not open it.
 
 ## Listing every version
 
@@ -411,9 +411,11 @@ objects alone is the default mode, which is cheaper.
 **Order.** Keys ascend; a key's rows are consecutive, in the service's order within the key: S3 newest first,
 versions and delete markers interleaved; GCS by generation, ascending. S3 can list two entries of a key with the
 same `last_modified` (to the second), so that time does not rebuild S3's order: the file order does.
-On S3, the first row of a key's group has `is_latest`: it is the latest entry, and a delete marker means
-the object is deleted. On GCS, the last row of a name's group is the newest generation; it is live only
-if `time_deleted` is null. A GCS name may have no live generation.
+In an unfiltered, complete listing, the first row of an S3 key's group is the one with `is_latest`, and a
+delete marker there means the object is deleted. On GCS, the last row of a name's group is the newest
+generation; it is live only if `time_deleted` is null, and a GCS name may have no live generation. A filter can
+remove a key's latest version, so in a filtered dataset read `is_latest` and `time_deleted` per row instead of
+by position.
 
 **Parts never split a key.** A part's size target, `--part-rotation-max-rows` and `--part-interval` cut at the
 next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a

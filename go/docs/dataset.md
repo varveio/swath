@@ -1,0 +1,244 @@
+# The swath dataset
+
+`swath list ... -o DIR` writes a **swath dataset**: a [SeekParquet](https://github.com/varveio/seekparquet)
+dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
+**swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
+operation requires, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
+The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md),
+at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
+order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
+[internals/parquet-output.md](internals/parquet-output.md) explains how the writer meets it;
+[upgrade.md](upgrade.md) maps the Java tool's format 1 onto it.
+
+Nothing here is released. Until the first release, any of this profile may change outright, with no
+compatibility window for datasets written by earlier builds.
+
+## What a swath dataset is
+
+A directory (or object-store prefix) is a swath dataset when all of the following are true:
+
+| Layer | Identified by | Defined by |
+|---|---|---|
+| SeekParquet dataset | `manifest.json` with `format` `seekparquet`, `format_version` 0, `draft_revision` 1 (format 1 draft 1), and the `seekparquet.*` stamps in every part's footer | the SeekParquet specification |
+| swath schema | `schema_id`: exactly one of the [registered ids](#schema-registry), compared byte for byte, never by prefix or after normalization | this page; executable as `reader.Schema` |
+| swath metadata | `extensions.swath` with `version` 1 and well-formed members | [The swath extension](#the-swath-extension) |
+
+A SeekParquet dataset without a registered schema id or without a valid `extensions.swath` is not a swath
+dataset. Any SeekParquet reader can still open it, and generic SeekParquet reads ignore `extensions.swath`
+entirely. A swath dataset can also be partial: a listing stopped by `--max-keys`, or one with filters, is still
+a swath dataset. It just fails whole-source acceptance.
+
+Being a swath dataset and being acceptable for a purpose are separate questions. They are answered by separate
+operations (the `go/reader` names are given; other readers make the same distinctions):
+
+| Operation | What it establishes | Reads |
+|---|---|---|
+| Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format 1 draft 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
+| Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
+| Acceptance (`AcceptWholeSource`) | The listing covers the whole of the named source: the coverage rule in [The swath extension](#the-swath-extension) | the manifest only |
+| Digest validation (`ValidateDigests`, `ValidateDigestsDir`) | Every part declares a SHA-256 that its bytes match | every part's bytes |
+
+`Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
+(`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
+but has no `version`, or an unsupported one, is refused. Acceptance and digest validation require the extension
+to be present.
+
+The manifest is the authority for which parts belong to the dataset and for its commit: a directory without
+`manifest.json` holds no dataset, and one with it holds exactly the parts it lists, in key order. A part on its
+own is inspectable Parquet, not evidence that a dataset exists, is complete, or was published.
+
+**Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
+lists), `run.json` (the run report: operational, written after the commit and never part of acceptance), and
+`.swath/` (the run's private workspace, which readers ignore). The full tree and the publication order are in
+[internals/parquet-output.md](internals/parquet-output.md#publication-gate-and-order).
+
+## The swath extension
+
+SeekParquet allows only its own members at the top level, in `key` and in each part. A producer's metadata
+goes under `extensions`, by namespace. swath writes `extensions.swath` only:
+
+```json
+{
+  "format": "seekparquet",
+  "format_version": 0,
+  "draft_revision": 1,
+  "schema_id": "swath/s3-objects/v1",
+  "key": {"column": "key", "unique": true},
+  "extensions": {
+    "swath": {
+      "version": 1,
+      "published_at": "2026-11-08T18:00:00.123456Z",
+      "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
+      "scope": {"kind": "prefix", "prefix": "logs/"},
+      "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
+                   "exclusions": [], "filters": [], "snapshot": false,
+                   "listing_started_at": "…", "listing_finished_at": "…"}
+    }
+  },
+  "parts": [
+    {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
+     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "sha256": "…"}
+  ]
+}
+```
+
+The seekparquet module (`seekparquet.MarshalManifest`) writes the manifest, and its member order is the
+module's. JSON readers must not depend on that order.
+
+| Member | Meaning | Required by |
+|---|---|---|
+| `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
+| `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | informative |
+| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind); `--seed-from` |
+| `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | informative |
+| `source.container` | The bucket or container; absent for a filesystem | whole-source acceptance: equal to the caller's container, or absent or `null` when the caller passes `""` (a filesystem); `--seed-from` |
+| `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | whole-source acceptance: `whole` |
+| `scope.prefix` | The prefix, with `prefix`; omitted when empty | not needed for acceptance; `--seed-from` checks it against the run's prefix |
+| `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
+| `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | whole-source acceptance: `completed` |
+| `coverage.skipped_entries` | Entries the listing could not read | whole-source acceptance: `0` |
+| `coverage.filters` | The filters the run applied, as given | whole-source acceptance: present and empty |
+| `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative: does not refuse |
+| `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative: does not refuse |
+| `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
+
+**Whole-source acceptance** requires every member listed as required for it. An absent or `null` member refuses
+the dataset, except `source.container` when the caller's container is `""`: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
+empty. `exclusions` are tolerated, so an accepted dataset is the whole source minus what was excluded by design,
+not every entry the source holds. swath publishes the complete result of the live listing it performed; it is not
+a point-in-time snapshot of a source that changes during the run.
+
+Readers ignore members they do not define and keep the raw extension (`reader.Metadata.Manifest`), so an
+informative member can be added under `version` 1. A member of the wrong JSON type is malformed: `go/reader`
+reports it as `KindCoverage`, while an unsupported version is reported as `KindSchema`.
+
+## Schema registry
+
+A schema id is `swath/<row-contract>/vN`: the row contract it names and that contract's version. Each id fixes the
+columns a reader may rely on: their names, physical and logical types and nullability, the key's encoding and
+uniqueness, and the meaning of a row. `reader.Schema(id)` returns the executable descriptor, and `CheckSchema` checks
+parts against it. The S3, GCS and local producers bind their schemas to these descriptors (`schema.Bind`), and
+`TestProducerSchemasGolden` pins those five. The Azure producer defines `swath/azblob-objects/v1` directly in
+`internal/source/azblob`; `CheckSchema` and the `go/reader` decoders still check it against the descriptor.
+
+| Schema id | A row is | Key | Keys unique | Longest key |
+|---|---|---|---|---|
+| `swath/s3-objects/v1` | an S3 current object | UTF-8 (`STRING`) | yes | 1,024 bytes |
+| `swath/s3-versions/v1` | an S3 version or delete marker (`--all-versions`) | UTF-8 | no: one row per version | 1,024 bytes |
+| `swath/gcs-objects/v1` | a Cloud Storage live object | UTF-8 | yes | 1,024 bytes |
+| `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
+| `swath/azblob-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
+| `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
+
+Every column after the key is nullable unless marked required. Types: `STRING` is `BYTE_ARRAY (STRING)`, UTF-8;
+`binary` is unannotated `BYTE_ARRAY`; `int64` is `INT64` (`INT(64,true)` or unannotated); `uint32` and `uint64` are
+`INT32 INT(32,false)` and `INT64 INT(64,false)`, read over their full unsigned range; `timestamp` is `INT64
+TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`.
+
+**`swath/s3-objects/v1`**: `key`, `size` int64, `last_modified` timestamp, `etag` STRING (one pair of surrounding
+quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STRING (null unless the run used
+`--fetch-owner`), `checksum_algorithm` STRING (the first algorithm S3 lists), `checksum_type` STRING. `etag`,
+`storage_class` and the checksums are null when S3 omits them.
+
+**`swath/s3-versions/v1`**: the `swath/s3-objects/v1` columns in the same order, then `version_id` STRING
+(verbatim; `"null"` is a real version id), `is_latest` bool (required) and `is_delete_marker` bool (required).
+`size`, `etag`, `storage_class` and the checksums are null on a delete marker.
+
+**`swath/gcs-objects/v1`**: `key` (the object name), `size` int64, `last_modified` timestamp (`updated`), `etag`
+STRING (the JSON API's opaque entity tag), `generation` and `metageneration` int64, `storage_class` STRING, `md5`
+and `crc32c` STRING (base64, as listed), `content_type` STRING, and last `time_created` timestamp
+(`timeCreated`). `time_created` is the one column a part may lack: parts written before the lister recorded it
+do not have it, and a reader reads it as null there. `last_modified` also moves when only the object's metadata
+changes, and `etag` is not a content hash. Compare content with `md5` or `crc32c`. GCS gives no `md5` for composite
+objects and neither hash for objects encrypted with customer-managed or customer-supplied keys.
+
+**`swath/gcs-generations/v1`**: the `swath/gcs-objects/v1` columns, then `time_deleted` timestamp: null for the
+live generation. There is no `is_latest`.
+
+**`swath/azblob-objects/v1`**: `key` (the blob name), `size` int64 (`Content-Length`), `last_modified` timestamp
+(`Last-Modified`, at the wire's 1 s resolution), `etag` STRING (opaque, as listed), `content_md5` STRING (base64
+as listed; null when absent, as for blobs uploaded in blocks without one), `content_type` STRING, `blob_type`
+STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `access_tier` STRING (null when absent), `creation_time`
+timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a
+content hash: compare content with `content_md5`, and never compare ETags across stores.
+
+**`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them):
+
+| Column | Type | Source |
+|---|---|---|
+| `key` | binary, required | the path relative to the root, `/`-separated, no leading `/`; a directory's ends in `/`; the name's exact bytes |
+| `size` | int64 | `st_size` (apparent bytes) |
+| `last_modified` | timestamp | `st_mtime` |
+| `kind` | STRING, required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
+| `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
+| `uid`, `gid`, `nlink` | uint32 | `st_uid`, `st_gid`, `st_nlink` |
+| `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`) |
+| `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`) |
+| `metadata_changed_at`, `atime` | timestamp | `st_ctime`, `st_atime` |
+| `birth_time` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); Windows `CreationTime` |
+| `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
+
+Under `--metadata names` (no stat) the stat columns are null.
+
+## Keys and order
+
+This section is for consumers that read the parts without `go/reader`: DuckDB, Python, Spark.
+
+- **Read the manifest's exact file list.** The dataset is the parts `manifest.json` lists, in the listed order.
+  It is not every file under `data/`: a run in progress publishes parts there before its commit, and an
+  overwrite removes them. Read the parts by name: optional columns can be absent from some parts (`read_parquet
+  ([...], union_by_name = true)` in DuckDB). Columns a schema id does not define may appear anywhere and are
+  ignored.
+- **Order is unsigned byte order.** Rows ascend by `key`'s bytes compared as unsigned bytes, within each part and
+  across parts in manifest order. Keys are never normalized (Unicode, case, separators). Cloud keys are the
+  provider's UTF-8 bytes. A local key is the name's bytes exactly as the kernel returned them, which need not be
+  UTF-8. Manifest bounds are standard base64 of the key bytes: decode them and compare bytes, never the base64
+  text.
+- **Azure order is byte order after adaptation.** List Blobs returns names in UTF-16 code-unit order, which
+  puts names with characters at U+10000 and above before those at U+E000 to U+FFFF. swath's adapter reorders
+  them, so an Azure dataset is in byte order like every other one, not in the service's listing order.
+- **Versions rows are consecutive per key.** In `swath/s3-versions/v1` and `swath/gcs-generations/v1` a key
+  repeats once per version, on consecutive rows, and a key's group never spans two parts. On S3 the order within
+  a group is the service's: newest first, with versions and delete markers interleaved. No column rebuilds it,
+  since two entries can share `last_modified`. On GCS rows order by key and then by numeric `generation`, strictly
+  ascending; the lister refuses a page that breaks this. The `is_latest`, `is_delete_marker` and `time_deleted`
+  values are the service's, per row. In an unfiltered, complete listing, the first row of an S3 group is the one
+  with `is_latest` true, and a key whose first row is a delete marker is deleted. On GCS the last row is the newest
+  generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
+  `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
+  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS), row by
+  row.
+- **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
+  SQL scan does not promise stored order. To keep a group's order, read the parts in manifest order and number the
+  rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the
+  manifest, then the row number). A row's offset is its zero-based position in its group of equal keys. A row
+  cursor `(key, offset)` continues after that row, at offset + 1 of the same key, then at the next key
+  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md)). A cursor is
+  always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key `k`". To skip every row
+  of `k`, use an exclusive key bound (`seekparquet.Range` with `Start` = `k` and `StartExclusive`), which skips the group's
+  remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
+- **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
+  so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.
+  `go/reader`'s totals report nil, never 0, for a value they cannot state exactly.
+
+## Footer stamps
+
+Every part's footer carries SeekParquet's five stamps, equal to the manifest's: `seekparquet.format_version`,
+`seekparquet.draft_revision`, `seekparquet.schema_id`, `seekparquet.key_column` (`key`) and
+`seekparquet.key_unique`. Within-part order is the standard `sorting_columns` (`key`, ascending). swath adds no
+stamp of its own. A footer identifies the row contract its part claims; it cannot show that the part belongs to
+a dataset, whether parts are missing, or what the listing covered. Those are the manifest's.
+
+## Evolution
+
+| Identifier | May change without a new value | Forces a new value | Who decides |
+|---|---|---|---|
+| SeekParquet `format_version` / `draft_revision` | editorial clarifications | any change to which bytes are accepted or what a query returns | SeekParquet maintainers, through proposal and conformance review |
+| `schema_id` | added nullable, absence-tolerant columns that leave existing rows and columns unchanged; writer layout (row groups, pages, encodings, codecs) | a renamed or removed column, a changed type, signedness, time unit or nullability, a changed key encoding or uniqueness, a changed meaning of a row; type widening is not automatically compatible | swath maintainers, with the consumers |
+| `extensions.swath.version` | added informative members that readers may ignore | a change to an existing member's meaning or to what admission requires. When an older reader could wrongly accept the dataset, the schema id changes too, because older readers ignore members they do not know | swath maintainers |
+| Writer recipe (`parquetout.Recipe`, in the resume identity) | changes that keep its byte-reproduction promise | a change to how a part is reproduced byte for byte | swath writer maintainers |
+| Journal version (private to a run) | changes that existing recovery reads safely | a representation existing recovery cannot read | swath recovery maintainers |
+
+Readers ignore unknown columns wherever they are placed, and physical column order is not part of the contract:
+columns are looked up by name. Each part's `created_by` names the build that wrote it, so a resumed run can hold
+parts from two builds. The tool's release version moves independently of every identifier above.

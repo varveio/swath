@@ -22,7 +22,7 @@ from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
 
 # Physical type, repetition and logical annotation for every declared GCS
 # column. Nullable values still require a column in each part; only the
-# historical current-object time_created column may be absent (upgrade.md).
+# historical current-object time_created column may be absent (docs/dataset.md).
 GCS_CONTRACT = {
     name: ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
     if name in {"key", "etag", "storage_class", "md5", "crc32c", "content_type"}

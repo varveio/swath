@@ -484,7 +484,7 @@ until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 1; done
 cd go && go build -o /tmp/swath ./cmd/swath
 /tmp/swath list s3://noaa-normals-pds -endpoint http://127.0.0.1:19090 -path-style -anonymous -o /tmp/go-ds
 python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical: true
-python3 verify.py /tmp/go-ds                                         # the SeekParquet dataset, read by DuckDB
+python3 verify.py /tmp/go-ds                                         # the swath dataset, read by DuckDB
 ```
 
 - `bench/diffds.py A B` compares two datasets with DuckDB. It checks:
@@ -652,7 +652,7 @@ verifier tests skip. The tests stay in `go/test_dataset_readers.py` beside `veri
 `dataset_schema.py`, since they cover both the verifier and `bench/diffds.py`.
 
 `python3 /any/path/verify.py OUT [REFERENCE]` works from any working directory; its imports resolve beside
-the script. It checks a SeekParquet dataset independently of the Go code: schema dispatch, the manifest's
+the script. It checks a swath dataset independently of the Go code: schema dispatch, the manifest's
 SeekParquet members only, its key declaration (`unique` false exactly for the versions schemas), the swath
 extension's fields and coverage, no `_SUCCESS` or `symlink.txt`, `data/` holds exactly the manifest's parts,
 row counts, exact manifest bounds (`min_key_base64`/`max_key_base64`, decoded), each part's SHA-256 against

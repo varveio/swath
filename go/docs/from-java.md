@@ -2,7 +2,7 @@
 
 For someone who has run the Java `swath` CLI. This tool is a separate binary with its own launcher. Every
 Java option, output mode, exit code and report field, with its Go counterpart and the decision behind it, is
-in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [upgrade.md](upgrade.md).
+in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dataset.md](dataset.md) (the swath dataset) and [upgrade.md](upgrade.md) (what changed from the Java layout).
 
 ## What stays the same
 
