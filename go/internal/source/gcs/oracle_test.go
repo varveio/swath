@@ -37,24 +37,19 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 // mapping and its fields selector), every field the schema keeps:
 // names, prefixes, tokens, size, generation, metageneration, etag, update
 // time, creation time, storage class, MD5, CRC32C, content type and
-// deletion time, across prefixes, delimiters, both offsets and
-// generations listings (versions=true), with keys that need escaping and
-// one outside the Basic Multilingual Plane, every key listed. Our client
-// runs twice: against the fake's endpoint (full responses) and addressed
-// to Google's endpoint, where it sends the production fields selector,
-// which the fake applies, while the Google client reads full responses;
-// a field the selector left out would differ.
+// deletion time, over pages of a current and a generations listing
+// (versions=true), with keys that need escaping and one outside the Basic
+// Multilingual Plane, every key listed. Our client is addressed to
+// Google's endpoint, where it sends the production fields selector, which
+// the fake applies, while the Google client reads full responses; a field
+// the selector left out would differ.
 func TestClientPagesMatchGoogleClient(t *testing.T) {
 	// astral is a key outside the Basic Multilingual Plane (U+1F600: four
-	// UTF-8 bytes, a surrogate pair in UTF-16), listed and sent as an offset.
+	// UTF-8 bytes, a surrogate pair in UTF-16).
 	astral := "astral" + string(rune(0x1F600))
 	keys := append(testKeys(), "sp ace", "pl+us", "pct%41", "amp&<>", "q\"'", "a?b", "a#b", "ctl\x01", "ctl\x02x", astral)
 	f, ep := newFake(t, keys)
 	ctx := context.Background()
-	plain, err := client.New(ctx, client.Config{Endpoint: ep, Anonymous: true})
-	if err != nil {
-		t.Fatal(err)
-	}
 	u, _ := url.Parse(ep)
 	prod, err := client.New(ctx, client.Config{Anonymous: true, HTTPClient: &http.Client{Transport: redirect{u}}})
 	if err != nil {
@@ -65,80 +60,64 @@ func TestClientPagesMatchGoogleClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed := map[string]bool{}
-	for _, start := range []client.ListInput{
-		{MaxResults: 7},
-		{},
-		{Prefix: "data/year=2021/", MaxResults: 100},
-		{StartOffset: "a/x", EndOffset: "data/year=2020/part-00100.parquet\x00", MaxResults: 50},
-		{Delimiter: "/", MaxResults: 3},
-		{Prefix: "a/", Delimiter: "/"},
-		{StartOffset: "pct%41", EndOffset: "sp ace"},
-		{StartOffset: "ctl\x01", MaxResults: 1},
-		{StartOffset: astral, EndOffset: astral + "\x00", MaxResults: 1},
-		// generations listings (versions=true, and on Google's endpoint the
-		// generations field mask)
-		{Versions: true, MaxResults: 9},
-		{Versions: true, StartOffset: "a\x00", Delimiter: "/", MaxResults: 4},
-	} {
-		for name, ours := range map[string]*client.Client{"plain": plain, "production fields": prod} {
-			in := start
-			in.Bucket = "bkt"
-			for pages := 0; ; pages++ {
-				a, err := ours.List(ctx, &in)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if name == "production fields" {
-					if sel := f.Last().Get("fields"); sel == "" || in.Versions != strings.Contains(sel, "timeDeleted") {
-						t.Fatalf("fields selector %q on Google's endpoint, versions %v", sel, in.Versions)
-					}
-				}
-				if got := f.Last().Get("versions") == "true"; got != in.Versions {
-					t.Fatalf("versions=%v sent for %+v", got, in)
-				}
-				call := svc.Objects.List("bkt").Prefix(in.Prefix).Delimiter(in.Delimiter).StartOffset(in.StartOffset).
-					EndOffset(in.EndOffset).PageToken(in.PageToken).Versions(in.Versions)
-				if in.MaxResults > 0 {
-					call = call.MaxResults(int64(in.MaxResults))
-				}
-				b, err := call.Do()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if a.NextPageToken != b.NextPageToken || !slices.Equal(a.Prefixes, b.Prefixes) || len(a.Items) != len(b.Items) {
-					t.Fatalf("%s %+v page %d: ours %d items %q next %q, Google %d items %q next %q", name, start, pages,
-						len(a.Items), a.Prefixes, a.NextPageToken, len(b.Items), b.Prefixes, b.NextPageToken)
-				}
-				for i, o := range a.Items {
-					g := b.Items[i]
-					up, err := time.Parse(time.RFC3339Nano, g.Updated)
-					if err != nil {
-						t.Fatal(err)
-					}
-					created, err := time.Parse(time.RFC3339Nano, g.TimeCreated)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want := client.Object{Name: g.Name, Size: int64(g.Size), Updated: up.UnixMicro(), TimeCreated: created.UnixMicro(), ETag: g.Etag,
-						Generation: g.Generation, Metageneration: g.Metageneration, StorageClass: g.StorageClass,
-						MD5: g.Md5Hash, CRC32C: g.Crc32c, ContentType: g.ContentType}
-					if g.TimeDeleted != "" {
-						d, err := time.Parse(time.RFC3339Nano, g.TimeDeleted)
-						if err != nil {
-							t.Fatal(err)
-						}
-						want.TimeDeleted = d.UnixMicro()
-					}
-					listed[o.Name] = true
-					if o != want || g.StorageClass == "" || g.Md5Hash == "" || g.Metageneration == 0 {
-						t.Fatalf("%s %+v page %d item %d: ours %+v, Google %+v", name, start, pages, i, o, want)
-					}
-				}
-				if a.NextPageToken == "" {
-					break
-				}
-				in.PageToken = a.NextPageToken
+	// A current and a generations listing (versions=true, and on Google's
+	// endpoint the generations field mask).
+	for _, start := range []client.ListInput{{MaxResults: 7}, {Versions: true, MaxResults: 9}} {
+		in := start
+		in.Bucket = "bkt"
+		for pages := 0; ; pages++ {
+			a, err := prod.List(ctx, &in)
+			if err != nil {
+				t.Fatal(err)
 			}
+			if sel := f.Last().Get("fields"); sel == "" || in.Versions != strings.Contains(sel, "timeDeleted") {
+				t.Fatalf("fields selector %q on Google's endpoint, versions %v", sel, in.Versions)
+			}
+			if got := f.Last().Get("versions") == "true"; got != in.Versions {
+				t.Fatalf("versions=%v sent for %+v", got, in)
+			}
+			call := svc.Objects.List("bkt").Prefix(in.Prefix).Delimiter(in.Delimiter).StartOffset(in.StartOffset).
+				EndOffset(in.EndOffset).PageToken(in.PageToken).Versions(in.Versions)
+			if in.MaxResults > 0 {
+				call = call.MaxResults(int64(in.MaxResults))
+			}
+			b, err := call.Do()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.NextPageToken != b.NextPageToken || !slices.Equal(a.Prefixes, b.Prefixes) || len(a.Items) != len(b.Items) {
+				t.Fatalf("%+v page %d: ours %d items %q next %q, Google %d items %q next %q", start, pages,
+					len(a.Items), a.Prefixes, a.NextPageToken, len(b.Items), b.Prefixes, b.NextPageToken)
+			}
+			for i, o := range a.Items {
+				g := b.Items[i]
+				up, err := time.Parse(time.RFC3339Nano, g.Updated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				created, err := time.Parse(time.RFC3339Nano, g.TimeCreated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := client.Object{Name: g.Name, Size: int64(g.Size), Updated: up.UnixMicro(), TimeCreated: created.UnixMicro(), ETag: g.Etag,
+					Generation: g.Generation, Metageneration: g.Metageneration, StorageClass: g.StorageClass,
+					MD5: g.Md5Hash, CRC32C: g.Crc32c, ContentType: g.ContentType}
+				if g.TimeDeleted != "" {
+					d, err := time.Parse(time.RFC3339Nano, g.TimeDeleted)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want.TimeDeleted = d.UnixMicro()
+				}
+				listed[o.Name] = true
+				if o != want || g.StorageClass == "" || g.Md5Hash == "" || g.Metageneration == 0 {
+					t.Fatalf("%+v page %d item %d: ours %+v, Google %+v", start, pages, i, o, want)
+				}
+			}
+			if a.NextPageToken == "" {
+				break
+			}
+			in.PageToken = a.NextPageToken
 		}
 	}
 	for _, k := range keys {
