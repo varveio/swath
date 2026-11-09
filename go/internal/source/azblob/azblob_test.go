@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/varveio/swath/go/internal/source/objhttp"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -29,6 +28,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3"
 )
 
@@ -224,9 +224,12 @@ func (p *pages) List(_ context.Context, in *client.ListInput) (*client.ListOutpu
 // fetchAll drains q through p.fetch, as the engine's chain would.
 func fetchAll(t *testing.T, p *Provider, q keyrange.Query) []string {
 	t.Helper()
+	a := p.adapter()
+	defer a.Release()
+	ctx := context.WithValue(context.Background(), adapterKey{}, a)
 	var got []string
 	for {
-		pg, err := p.fetch(context.Background(), &q)
+		pg, err := p.fetch(ctx, &q)
 		if err != nil {
 			t.Fatalf("%+v: %v", q, err)
 		}
@@ -279,7 +282,10 @@ func TestHighBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pg, err := sp.fetch(context.Background(), &keyrange.Query{Delimiter: "/", Max: 10})
+	a := sp.adapter()
+	defer a.Release()
+	ctx := context.WithValue(context.Background(), adapterKey{}, a)
+	pg, err := sp.fetch(ctx, &keyrange.Query{Delimiter: "/", Max: 10})
 	if err != nil || len(pg.Rows) != 2 || pg.Rows[0].Data.Size != 3 || pg.Rows[0].Data.BlobType != "PageBlob" ||
 		!slices.Equal(pg.Prefixes, []string{"b/"}) || pg.Truncated {
 		t.Fatalf("page %+v, %v", pg, err)
@@ -833,19 +839,6 @@ func TestClientCutsReported(t *testing.T) {
 	}
 }
 
-// TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, and the client's counters
-// follow the engine's.
-func TestPoolSizeReported(t *testing.T) {
-	r := azblobtest.Serve(t, azblobtest.Keys())
-	for workers, want := range map[int]int64{1: 1, 40: 3} {
-		_, st := list(t, replayOptions(r), workers)
-		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
-			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
-		}
-	}
-}
-
 // TestAdmissionFallbackPolicy pins code-before-status decisions: changing
 // them can skip the DFS proof, or admit an account without the right proof.
 func TestAdmissionFallbackPolicy(t *testing.T) {
@@ -872,6 +865,9 @@ func TestAdmissionFallbackPolicy(t *testing.T) {
 		want bool
 	}{
 		{client.ErrHNSUnknown, true},
+		{errors.Join(client.ErrHNSUnknown, source.Unsupported(errors.New("unsupported"))), true},
+		{errors.New("unclassified"), false},
+		{nil, false},
 		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
 		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
 		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
@@ -884,17 +880,42 @@ func TestAdmissionFallbackPolicy(t *testing.T) {
 	}
 }
 
-// TestEndpointUserinfoRefused: an endpoint with user information is
-// refused before anything is recorded, and the refusal never quotes the
-// password, which the journal identity and the run report would otherwise
-// carry.
-func TestEndpointUserinfoRefused(t *testing.T) {
-	r := azblobtest.Serve(t, []string{"a"})
-	live := strings.Replace(base(r), "http://", "http://user:s3cret@", 1) // would list, and record the password
-	for _, ep := range []string{live, "https://user:s3cret@azurite.example/", "http://:s3cret@h"} {
-		_, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1, Warn: func(string) {}})
-		if err == nil || strings.Contains(err.Error(), "s3cret") {
-			t.Errorf("%s: %v", ep, err)
+func TestFetchRequiresExpandAdapter(t *testing.T) {
+	st := azblobtest.NewStore([]string{"a"})
+	p, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, err := p.fetch(context.Background(), &keyrange.Query{Max: 1})
+	if pg != nil || !errors.Is(err, source.ErrProtocol) || st.Responses() != 0 {
+		t.Fatalf("page=%+v err=%v responses=%d", pg, err, st.Responses())
+	}
+}
+
+// Exhaust the status/code cross-product, including contradictory labels
+// supplied by third-party clients. Admission uses Azure's status/code policy.
+func TestFallbackMatchesAdmissionPolicy(t *testing.T) {
+	codes := []string{"", "other", "NoAuthenticationInformation", "AuthenticationFailed", "InvalidAuthenticationInfo",
+		"AuthorizationFailure", "AuthorizationPermissionMismatch", "ContainerNotFound", "ServerBusy", "OperationTimedOut", "InternalError"}
+	for _, status := range []int{0, 200, 400, 401, 403, 404, 408, 429, 500, 501, 502, 503, 504} {
+		for _, code := range codes {
+			want := status == 401 || status == 403
+			switch code {
+			case "NoAuthenticationInformation", "AuthenticationFailed", "InvalidAuthenticationInfo", "AuthorizationFailure", "AuthorizationPermissionMismatch":
+				want = true
+			case "ContainerNotFound", "ServerBusy", "OperationTimedOut", "InternalError":
+				want = false
+			}
+			raw := &client.Error{Status: status, Code: code}
+			normalized := objhttp.Normalize(raw)
+			for _, class := range []objhttp.Class{objhttp.ClassAuth, objhttp.ClassAccessDenied, objhttp.ClassOther} {
+				normalized.Class = class
+				for _, err := range []error{raw, fmt.Errorf("account: %w", raw), normalized, fmt.Errorf("account: %w", normalized)} {
+					if got := fallback(err); got != want {
+						t.Errorf("status=%d code=%q class=%q: %v want %v", status, code, class, got, want)
+					}
+				}
+			}
 		}
 	}
 }

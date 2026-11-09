@@ -190,7 +190,7 @@ func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool,
 	}
 	presized := false
 	for batches := 0; ; batches++ {
-		if batches%64 == 63 && done(ctx) { // a huge directory: stay cancellable
+		if batches%64 == 63 && ctx.Err() != nil { // a huge directory: stay cancellable
 			return ctx.Err()
 		}
 		n, err := unix.Getdents(fd, sc.buf)
@@ -292,13 +292,13 @@ func buildKeys(prefix string, sc *scratch) {
 // sortChecked sorts a directory's entries, checking for a stop around the
 // sort: a huge directory's sort is not interruptible.
 func sortChecked(ctx context.Context, plen int, sc *scratch, st *Stats) error {
-	if done(ctx) {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	if sortEntries(plen, sc) {
 		st.ParallelSorts++
 	}
-	if done(ctx) {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return nil
@@ -415,7 +415,7 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names, key
 	n := 0
 	for i := range ents {
 		if i%cancelEvery == cancelEvery-1 {
-			if done(ctx) {
+			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 		}

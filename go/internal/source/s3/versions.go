@@ -232,17 +232,14 @@ func versionRows(out *client.VersionPage, owner bool) []VersionRow {
 		v := &r.Data
 		r.Key = e.Key
 		v.VersionID, v.IsLatest, v.DeleteMarker = e.VersionID, e.IsLatest, e.DeleteMarker
-		v.Mtime = e.Mtime
-		if owner {
-			v.OwnerID, v.OwnerDisplayName = e.OwnerID, e.OwnerDisplayName
-		}
 		if e.DeleteMarker {
+			v.Mtime = e.Mtime
+			if owner {
+				v.OwnerID, v.OwnerDisplayName = e.OwnerID, e.OwnerDisplayName
+			}
 			continue // no object fields: absent, not zero
 		}
-		v.ETag = stripQuotes(e.ETag)
-		v.StorageClass = e.StorageClass
-		v.ChecksumAlgorithm, v.ChecksumType = e.ChecksumAlgorithm, e.ChecksumType
-		v.Size = e.Size
+		v.Object = object(&e.Object, owner)
 	}
 	return rows
 }

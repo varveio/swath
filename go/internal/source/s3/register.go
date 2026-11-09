@@ -21,7 +21,9 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	registry.Register(registry.Factory{
+		EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label,
+		Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
 		Operational: []string{"profile", "bearer-token-refresh-interval"},
@@ -41,28 +43,6 @@ type flagged struct {
 	refreshSet   bool // --bearer-token-refresh-interval given
 }
 
-// boolFunc is a boolean flag that records that it was given.
-type boolFunc struct {
-	v   *bool
-	set *bool
-}
-
-func (b boolFunc) IsBoolFlag() bool { return true }
-func (b boolFunc) String() string {
-	if b.v == nil {
-		return "false"
-	}
-	return strconv.FormatBool(*b.v)
-}
-func (b boolFunc) Set(s string) error {
-	v, err := strconv.ParseBool(s)
-	if err != nil {
-		return err
-	}
-	*b.v, *b.set = v, true
-	return nil
-}
-
 func defaults() any { return &flagged{} }
 
 // flags registers the S3 flag group beside the shared groups' values; the
@@ -72,7 +52,14 @@ func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")
-	f.Var(boolFunc{&o.PathStyle, &o.pathStyleSet}, "path-style", "S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)")
+	f.BoolFunc("path-style", "S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)", func(s string) error {
+		v, err := strconv.ParseBool(s)
+		if err != nil {
+			return err
+		}
+		o.PathStyle, o.pathStyleSet = v, true
+		return nil
+	})
 	f.StringVar(&o.BearerCommand, "bearer-token-command", "", "S3: shell `command` whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again")
 	f.Func("bearer-token-refresh-interval", "S3: run --bearer-token-command again after this `duration` (default 45m)", func(v string) error {
 		d, err := time.ParseDuration(v)

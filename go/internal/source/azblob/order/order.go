@@ -164,16 +164,6 @@ func New(l Lister, container string, set *counters.Set, base counters.ID) *Adapt
 	return &Adapter{l: l, container: container, set: set, base: base, chains: map[uint64]*chain{}, busy: map[uint64]int{}}
 }
 
-// Counter is the value of counter i of CounterDefs.
-func (a *Adapter) Counter(i int) int64 { return a.set.Load(a.base + counters.ID(i)) }
-
-// Len is the number of chains registered.
-func (a *Adapter) Len() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.chains)
-}
-
 // Release drops every registered chain (the provider's Expand, however it
 // returns); their tokens are refused afterwards.
 func (a *Adapter) Release() {

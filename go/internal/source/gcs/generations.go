@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/varveio/swath/go/internal/schema"
-	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/reader"
@@ -137,20 +136,7 @@ var _ schema.DeltaCodec[Generation] = generationCodec{}
 // then drops After's rows: Description.InclusiveStart). A page whose
 // generations of one name do not ascend is invalid.
 func (p *provider[P]) fetchGenerations(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Generation], error) {
-	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
-		StartOffset: q.After, PageToken: q.Token, MaxResults: q.Max, Versions: true}
-	if q.After != "" {
-		if start, ok := ExclusiveStart(q.After); ok {
-			in.StartOffset = start
-		}
-	}
-	if q.Bounded {
-		if end, ok := keyrange.ExclusiveEnd(q.Through, acceptEnd); ok {
-			in.EndOffset = end
-		} else {
-			p.Set().Inc(p.ID(cEndOmitted)) // the engine trims at Through
-		}
-	}
+	in := p.input(q, true)
 	out, err := p.client.List(ctx, in)
 	if err != nil {
 		return nil, err
@@ -159,9 +145,7 @@ func (p *provider[P]) fetchGenerations(ctx context.Context, q *keyrange.Query) (
 	for i := range out.Items {
 		o, r := &out.Items[i], &rows[i]
 		r.Key = o.Name
-		r.Data = Generation{Object: Object{Size: o.Size, Mtime: o.Updated, TimeCreated: o.TimeCreated, ETag: o.ETag,
-			Generation: o.Generation, Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5,
-			CRC32C: o.CRC32C, ContentType: o.ContentType}, TimeDeleted: o.TimeDeleted}
+		r.Data = Generation{Object: object(o), TimeDeleted: o.TimeDeleted}
 		if i > 0 && r.Key == rows[i-1].Key && r.Data.Generation <= rows[i-1].Data.Generation {
 			return nil, fmt.Errorf("%w: generation %d of %q after %d", objhttp.ErrInvalidPage, r.Data.Generation, r.Key, rows[i-1].Data.Generation)
 		}
