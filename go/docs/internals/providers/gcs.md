@@ -87,7 +87,9 @@ a comparison needs a hash from elsewhere
 [ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume is the recorded inputs: the source (bucket and prefix), the endpoint (as
 `client.Endpoint` normalizes it for the client, above; scheme and host case are the only other equivalence) and the billed project
 (`--gcs-user-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
-supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume.
+supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume. A journal from a
+build that recorded the resolved route instead of the endpoint is refused (`endpoint` not recorded;
+[upgrade.md](../../upgrade.md), "Changes between Go builds"; `TestOldJournalRefused`).
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).

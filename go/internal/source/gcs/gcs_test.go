@@ -5,6 +5,7 @@ package gcs
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
@@ -443,6 +445,42 @@ func TestEndpointIdentityIsDestination(t *testing.T) {
 				t.Errorf("%s and %s record identity %q but list %s and %s", a.base, b.base, a.identity, a.path, b.path)
 			}
 		}
+	}
+}
+
+// TestOldJournalRefused pins the compatibility break docs/upgrade.md
+// states: a journal written before the identity recorded the endpoint (it
+// recorded the resolved "route", ENDPOINT/b/BUCKET/o) is refused, naming
+// the endpoint as not recorded, even for the same bucket and default
+// endpoint; and a run through a supplied client declares no resume.
+func TestOldJournalRefused(t *testing.T) {
+	src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &Options{Anonymous: true}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := journal.Identity{Provider: "gcs"}
+	for _, f := range src.(source.Identified).Identity().Fields {
+		id.Source = append(id.Source, journal.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
+	}
+	route := client.DefaultEndpoint + "b/bkt/o"
+	old := journal.Identity{Provider: "gcs", Source: []journal.Field{
+		{Name: "source", Value: "gs://bkt/p"},
+		{Name: "route", Value: route, Canonical: objhttp.CanonicalRoute(route)},
+		{Name: "user project", Value: ""},
+	}}
+	var m *journal.MismatchError
+	if err := journal.Check(old, id); !errors.As(err, &m) || m.Field != "endpoint" || m.Stored != "(not recorded)" || m.Requested != client.DefaultEndpoint {
+		t.Fatalf("resume of an old journal: %v", err)
+	}
+	if old.Hash() == id.Hash() {
+		t.Fatal("args_hash unchanged")
+	}
+	src, err = open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.(source.Capable).Capabilities().Resume {
+		t.Fatal("a supplied client declares resume")
 	}
 }
 
