@@ -72,6 +72,8 @@ The contributor reference is
 
 - Deep and performance tiers are opt-in. See
   [`docs/ops/dev/TESTING.md`](docs/ops/dev/TESTING.md).
+- Read [`docs/ops/dev/CI.md`](docs/ops/dev/CI.md) before changing CI: the workflows, the
+  `ci-gate` check and the reasoning behind them.
 - Docker is available for Testcontainers, LocalStack, MinIO, and replay checks.
 - Use DuckDB or the repository verifier for Parquet output.
 

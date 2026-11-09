@@ -113,15 +113,13 @@ func Check(parts []Part, rows int64) error {
 // The fields are flat in Go; the JSON is the module's
 // (seekparquet.MarshalManifest, ParseManifest), with swath's fields under
 // extensions.swath. UnmarshalJSON reads that form (an earlier build's
-// MD5 digests under extensions.swath.part_md5 are not read) and the
-// swath-dataset format 2 manifest earlier builds wrote (LegacyFormat), whose
-// fields are top-level.
+// MD5 digests under extensions.swath.part_md5 are not read).
 type Manifest struct {
-	Format        string // seekparquet.Format, or LegacyFormat when read from an earlier build's dataset
-	FormatVersion int    // seekparquet.FormatVersion (LegacyFormatVersion)
-	DraftRevision int    // seekparquet.DraftRevision (0 in format 2)
+	Format        string // seekparquet.Format
+	FormatVersion int    // seekparquet.FormatVersion
+	DraftRevision int    // seekparquet.DraftRevision
 	SchemaID      string
-	Key           seekparquet.Key // KeyColumn (in format 2: key, unique)
+	Key           seekparquet.Key // KeyColumn
 	PublishedAt   time.Time
 	Source        Source
 	Scope         Scope
@@ -135,18 +133,6 @@ type swathExtension struct {
 	Source      Source    `json:"source"`
 	Scope       Scope     `json:"scope"`
 	Coverage    Coverage  `json:"coverage"`
-}
-
-// legacyManifest is the swath-dataset format 2 manifest.
-type legacyManifest struct {
-	Format        string         `json:"format"`
-	FormatVersion int            `json:"format_version"`
-	SchemaID      string         `json:"schema_id"`
-	PublishedAt   time.Time      `json:"published_at"`
-	Source        Source         `json:"source"`
-	Scope         Scope          `json:"scope"`
-	Coverage      Coverage       `json:"coverage"`
-	Parts         []ManifestPart `json:"parts"`
 }
 
 // MarshalJSON writes m in the SeekParquet form.
@@ -165,25 +151,11 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 	return seekparquet.MarshalManifest(sm)
 }
 
-// UnmarshalJSON reads either form, by its format member: the SeekParquet
-// one as the module parses it (strictly, its version one this build reads,
-// within ManifestLimits).
+// UnmarshalJSON reads a SeekParquet manifest as the module parses it
+// (strictly, its version one this build reads, within ManifestLimits).
+// Any other manifest, the swath-dataset format 2 of builds from 2026-11-05
+// to 2026-11-08 included, is refused.
 func (m *Manifest) UnmarshalJSON(b []byte) error {
-	var head struct {
-		Format string `json:"format"`
-	}
-	if err := json.Unmarshal(b, &head); err != nil {
-		return err
-	}
-	if head.Format == LegacyFormat {
-		var l legacyManifest
-		if err := json.Unmarshal(b, &l); err != nil {
-			return err
-		}
-		*m = Manifest{Format: l.Format, FormatVersion: l.FormatVersion, SchemaID: l.SchemaID, Key: seekparquet.Key{Column: KeyColumn, Unique: true},
-			PublishedAt: l.PublishedAt, Source: l.Source, Scope: l.Scope, Coverage: l.Coverage, Parts: l.Parts}
-		return nil
-	}
 	sm, err := seekparquet.ParseManifest(b, ManifestLimits)
 	if err != nil {
 		return err
@@ -205,12 +177,6 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 // Current reports whether m is in the format this build writes.
 func (m *Manifest) Current() bool {
 	return m.Format == seekparquet.Format && m.FormatVersion == int(seekparquet.FormatVersion) && m.DraftRevision == int(seekparquet.DraftRevision)
-}
-
-// Readable reports whether m is a format this build reads: the current one
-// or swath-dataset format 2.
-func (m *Manifest) Readable() bool {
-	return m.Current() || m.Format == LegacyFormat && m.FormatVersion == LegacyFormatVersion
 }
 
 // Source is what was listed.

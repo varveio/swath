@@ -11,6 +11,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // A Factory opens one kind of source.
@@ -50,6 +52,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// KeyPrefix, if set, returns the key prefix root names (s3://b/logs/ →
+	// "logs/"): the keys it lists start with it. Without it the keys are
+	// relative to the root (a local tree's).
+	KeyPrefix func(root string) (string, error)
 	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
 	// so its rows cannot be written as text; the command refuses a text run
 	// of it before opening it.
@@ -127,6 +133,9 @@ type Env struct {
 	Sizes *Sizes
 	// Versions counts the attempt's emitted version rows after filtering.
 	Versions *VersionCounts
+	// Totals, if set, sums the counted rows per key prefix (swath du); it
+	// needs Count.
+	Totals *totals.Tally
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a
@@ -195,16 +204,24 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		p = newFiltered(p, keep, b.s, env.Filtered)
 	}
 	if env.Sizes != nil && !env.Empty {
-		if size := sizeColumn(b.s); size != nil {
+		if size := objectSize(b.s); size != nil {
 			env.Sizes.Measured = true
 			p = newSized(p, size, &env.Sizes.Bytes)
 		}
+	}
+	if env.Totals != nil && !env.Count {
+		return order.Stats{}, nil, errors.New("registry: per-prefix totals need a count")
 	}
 	if env.Count {
 		var observe order.Sink[P]
 		if observer.latest != nil || observer.deleted != nil {
 			observer.Sink = discard[P]{}
 			observe = observer
+		}
+		if env.Totals != nil {
+			if observe, err = bindTotals(env.Totals, b.s, observe); err != nil {
+				return order.Stats{}, nil, err
+			}
 		}
 		st, err := order.CountWithSink(ctx, p, env.Ordered, env.Order, observe)
 		return st, nil, err

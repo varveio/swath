@@ -103,9 +103,6 @@ const (
 	// KindJavaEra is a directory of footer-stamped sorted parts (or one
 	// such file) written by the Java sort-fixture command.
 	KindJavaEra Kind = "java-era"
-	// KindFormat2 is a manifest-described sorted dataset (format 2),
-	// written by earlier builds.
-	KindFormat2 Kind = "format-2"
 	// KindSeekParquet is a SeekParquet dataset, the format this build
 	// writes, read through the seekparquet module.
 	KindSeekParquet Kind = "seekparquet"
@@ -141,7 +138,7 @@ type Metadata struct {
 	Identity string
 	// Ordering is always OrderingProfile.
 	Ordering string
-	// SchemaID is the declared schema id: the manifest's for a format-2
+	// SchemaID is the declared schema id: the manifest's for a SeekParquet
 	// dataset, "swath/canonical" for a Java-era fixture. Projections are
 	// chosen by it, never by the columns present.
 	SchemaID string
@@ -154,8 +151,9 @@ func DefaultReaders() int {
 	return max(8, min(32, runtime.GOMAXPROCS(0)))
 }
 
-// Open opens the fixture at path (a format-2 dataset directory, a directory
-// of Java-era sorted parts, or one such part) and builds its routing index.
+// Open opens the fixture at path (a SeekParquet dataset directory, a
+// directory of Java-era sorted parts, or one such part) and builds its
+// routing index.
 // Fixtures that cannot be served sorted are refused with an error that
 // names the reason.
 func Open(ctx context.Context, path string, opts Options) (Store, Metadata, error) {

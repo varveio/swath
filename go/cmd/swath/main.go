@@ -36,6 +36,7 @@ import (
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -230,7 +231,7 @@ var errText = errors.New("text output (table, tsv, jsonl) is not resumable: it k
 // usageError is a malformed command line.
 type usageError struct{ error }
 
-// dispatch runs one command: list, count, resume, show, diag list or diag
+// dispatch runs one command: list, du, resume, show, diag list or diag
 // count.
 func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
@@ -240,8 +241,8 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "list":
 		return run(ctx, args[1:], stdout, false)
-	case "count":
-		return runCount(ctx, args[1:], stdout, false)
+	case "du":
+		return runDu(ctx, args[1:], stdout)
 	case "diag":
 		switch {
 		case len(args) == 2 && isHelp(args[1]):
@@ -250,7 +251,7 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		case len(args) >= 2 && args[1] == "list":
 			return run(ctx, args[2:], stdout, true)
 		case len(args) >= 2 && args[1] == "count":
-			return runCount(ctx, args[2:], stdout, true)
+			return runCount(ctx, args[2:], stdout)
 		}
 		return usageError{errors.New(strings.TrimSpace(diagUsage))}
 	case "resume":
@@ -278,9 +279,9 @@ func isHelp(a string) bool { return a == "-h" || a == "-help" || a == "--help" }
 
 // diagUsage is swath diag's own help.
 const diagUsage = `usage: swath diag list SOURCE [flags]    swath list with the diagnostic flags
-       swath diag count SOURCE [flags]   swath count with the diagnostic flags
+       swath diag count SOURCE [flags]   list SOURCE and count it, writing nothing: a throughput measurement
 The diagnostic flags exist to run an experiment or a comparison, not to operate the tool.
-swath diag list --help lists them.
+swath diag list --help and swath diag count --help list them.
 `
 
 // commands prints the command summary.
@@ -288,10 +289,10 @@ func commands(w io.Writer) {
 	fmt.Fprint(w, `usage:
   swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
   swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
-  swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+  swath du SOURCE [-d N] [flags]          total SOURCE's objects and bytes, per key prefix down to N levels
   swath resume DIR [flags]                continue the interrupted run in DIR
   swath show [--journal] DIR              show a dataset or an interrupted run
-  swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
+  swath diag list|count SOURCE [flags]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
   swath --version                         print the build (tool, module version, VCS revision)
 SOURCE is `+sourceForms()+`.
 swath COMMAND --help lists a command's flags.
@@ -427,7 +428,8 @@ type options struct {
 	diag                   bool // swath diag list or count: the diagnostic flags too
 	out                    string
 	overwrite              bool
-	countOnly              bool // swath count
+	countOnly              bool // swath du or swath diag count: rows counted, none written
+	du                     bool // swath du: the per-prefix totals
 	reportFormat, report   string
 	cpuProfile, memProfile string // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
@@ -447,6 +449,25 @@ type options struct {
 	filter                 filter.Spec
 	partMaxRows            int64
 	seedFrom               string
+	// swath du's per-prefix totals: --depth, --max-prefixes, and the
+	// local --allocated, --count-links-once and --max-inodes; totals is
+	// their output, resolved.
+	depth, maxPrefixes, maxInodes int
+	allocated, linksOnce          bool
+	totals                        *totalsOut
+}
+
+// totalsOut is where swath du writes its prefix rows: stdout, in format
+// (textout's TSV, JSONL or Table).
+type totalsOut struct {
+	format string
+	tally  *totals.Tally
+}
+
+// write writes the tally's rows to w.
+func (t *totalsOut) write(w io.Writer) error {
+	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs()}
+	return textout.WriteTotals(w, t.format, l, t.tally.Result())
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -542,7 +563,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 // when diag.
 func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	f.StringVar(&o.out, "o", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default)")
-	f.StringVar(&o.format, "format", "", "stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format")
+	f.StringVar(&o.format, "format", "", "the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in -o")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
@@ -561,10 +582,17 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	o.term.register(f)
 	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
 	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
-	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
-	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects of at most this `size`")
-	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
-	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects modified at or before this `time`")
+	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects (a local tree's entries, directories too) of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
+	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects or entries of at most this `size`")
+	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects (a local tree's entries, directories too) modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
+	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects or entries modified at or before this `time`")
+	depthUsage := "also total each key prefix down to `N` levels below SOURCE (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du"
+	f.IntVar(&o.depth, "depth", 0, depthUsage)
+	f.IntVar(&o.depth, "d", 0, depthUsage)
+	f.BoolVar(&o.allocated, "allocated", false, "local: total the files' allocated bytes (st_blocks x 512, as du; a directory's own blocks are not counted) instead of their apparent size")
+	f.BoolVar(&o.linksOnce, "count-links-once", false, "local: count a file with several hard links once, under the first of its names in byte order, as du does by default")
+	f.IntVar(&o.maxPrefixes, "max-prefixes", totals.DefaultMaxPrefixes, "fail rather than hold more than `N` distinct prefixes (memory grows with them, never with the objects)")
+	f.IntVar(&o.maxInodes, "max-inodes", totals.DefaultMaxInodes, "local, --count-links-once: fail rather than remember more than `N` hard-linked files")
 	f.Func("storage-class", "keep objects in these storage `classes` (STANDARD,GLACIER; repeatable)", func(v string) error {
 		for _, c := range strings.Split(v, ",") {
 			if c = strings.TrimSpace(c); c != "" {
@@ -617,6 +645,12 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, g) }) {
 			o.owners[n] = append(o.owners[n], p.Scheme)
 		}
+	}
+	// The totals' du flags read columns only the local schema has
+	// (allocated_bytes; nlink, dev and inode), so another source refuses
+	// them as it refuses the local provider's own flags.
+	for _, n := range localTotalsFlags {
+		o.owners[n] = []string{""}
 	}
 	f.SetOutput(io.Discard)
 }
@@ -694,19 +728,27 @@ func run(ctx context.Context, args []string, stdout io.Writer, diag bool) error 
 	return runWith(ctx, command{diag: diag}, args, stdout, nil, false, nil)
 }
 
-// runCount is swath count (diag: swath diag count).
-func runCount(ctx context.Context, args []string, stdout io.Writer, diag bool) error {
-	return runWith(ctx, command{diag: diag, count: true}, args, stdout, nil, false, nil)
+// runCount is swath diag count.
+func runCount(ctx context.Context, args []string, stdout io.Writer) error {
+	return runWith(ctx, command{diag: true, count: true}, args, stdout, nil, false, nil)
 }
 
-// command is one of the list commands: swath list, swath count, and their
-// swath diag forms.
-type command struct{ diag, count bool }
+// runDu is swath du.
+func runDu(ctx context.Context, args []string, stdout io.Writer) error {
+	return runWith(ctx, command{count: true, du: true}, args, stdout, nil, false, nil)
+}
+
+// command is one of the list commands: swath list, swath du (a count that
+// totals per prefix), and the swath diag forms of list and count.
+type command struct{ diag, count, du bool }
 
 // name is the command as typed.
 func (c command) name() string {
 	n := "list"
-	if c.count {
+	switch {
+	case c.du:
+		n = "du"
+	case c.count:
 		n = "count"
 	}
 	if c.diag {
@@ -719,7 +761,7 @@ func (c command) name() string {
 // the usage refusals (a help request prints the usage to stdout).
 func parseList(args []string, stdout io.Writer, cmd command) (o options, root string, err error) {
 	f := newFlags(&o, cmd.diag)
-	o.countOnly = cmd.count
+	o.countOnly, o.du = cmd.count, cmd.du
 	for rest := args; ; {
 		if err := f.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
@@ -768,17 +810,20 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err}
 	}
 	o.text = text
+	if err := resolveTotals(f, &o, root, stdoutTerminal()); err != nil {
+		return o, "", usageError{err}
+	}
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
-		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath count: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
+		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath du: its keys are bytes, which text rows cannot carry", schemeName(pf.Scheme))}
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
+	if (text != nil && text.Path == "" || o.totals != nil) && o.reportFormat == "json" {
+		return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
+	}
 	if text != nil && text.Path == "" {
 		text.Stdout = stdout
-		if o.reportFormat == "json" {
-			return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
-		}
 	}
 	return o, root, nil
 }
@@ -816,6 +861,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Attempt: att,
 		Filter:  &o.filter,
 		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
+	}
+	if t := o.totals; t != nil {
+		// swath du's rows are its output: written once the count is
+		// complete, before the run's end and outcome are settled.
+		cfg.Totals = t.tally
+		cfg.Deliver = func(context.Context) error { return t.write(stdout) }
 	}
 	if o.term.quiet > 0 {
 		cfg.Warn = func(string) {}
@@ -855,7 +906,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// and every one of them derives from it. error.json is written while
 	// the run still owns the output (Settle), never by a run that did not.
 	cfg.Finalize = func(r *listing.Report, err error) {
-		if toStdout && brokenPipe(err) {
+		if (toStdout || o.totals != nil) && brokenPipe(err) {
 			// The reader closed the stream: exit 0, as Java's, and the
 			// report says the listing did not reach its end.
 			err = nil
@@ -873,7 +924,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			settled = true
 		}
 	}
-	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir)
+	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir, rowNoun(pf.Scheme == "")) // the empty scheme is a local path
 	defer tt.close()
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
@@ -936,6 +987,18 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if o.text != nil && o.text.Path == "" {
 		return nil // stdout carries the rows; --stats prints the account on stderr
 	}
+	if o.du {
+		// stdout carried the rows (Deliver). Totals that leave entries
+		// out say so, whatever the statistics' gating.
+		if n := sum.Errors(); n > 0 && o.term.quiet == 0 {
+			what := "entries"
+			if n == 1 {
+				what = "entry"
+			}
+			note(errOut, fmt.Sprintf("swath: warning: %s %s could not be read (the report's source counters say why): the totals leave them out\n", count(n), what))
+		}
+		return nil
+	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
@@ -968,6 +1031,7 @@ func measured(v *int64, unit float64, format string) string {
 func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
+	var le *totals.LimitError
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -985,6 +1049,10 @@ func explain(err error) error {
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
+	case errors.As(err, &le) && le.Inodes:
+		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every link without --count-links-once)", err)
+	case errors.As(err, &le):
+		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	}
 	return err
 }

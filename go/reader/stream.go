@@ -20,7 +20,7 @@ const streamPageRows = 1024
 type StreamStats struct {
 	Requests int64
 	Objects  int64
-	seekparquet.ReadStats
+	ReadStats
 }
 
 // StreamStats returns the work of every Stream on the Dataset so far,

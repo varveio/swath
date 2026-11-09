@@ -13,7 +13,9 @@ listing through the S3 API for tests and benchmarks: [docs/replay.md](docs/repla
 ```bash
 ./build.sh -o swath                         # CGO_ENABLED=0, the revision stamped (docs/operating.md)
 ./swath list /some/root -o /tmp/ds          # list, order, encode, publish
-./swath count /some/root                    # list and count only
+./swath du /some/root -d 2                  # totals per directory two levels down, as du
+./swath du s3://bucket/logs/ -d 1           # totals per prefix under logs/
+./swath diag count /some/root               # list and count only, to measure the listing
 ./swath list s3://bucket -o /tmp/ds         # an S3 bucket or prefix
 ./swath list gs://bucket -o /tmp/ds         # a GCS bucket or prefix
 ./swath list az://acct/ctr -o /tmp/ds       # an Azure Blob container or prefix

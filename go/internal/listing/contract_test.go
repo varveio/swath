@@ -25,13 +25,14 @@ import (
 )
 
 // checkContract reads a committed dataset the way a reader does, from the
-// manifest only, and checks the format-2 contract: the manifest is the
+// manifest only, and checks the SeekParquet contract: the manifest is the
 // commit (no _SUCCESS, no symlink.txt) and its parts are exactly data/'s
-// files in name order; each part's bytes and MD5 match; its rows equal the
-// footer's; its bounds are its first and last key, exact bytes; keys rise
-// strictly within and across parts; every footer carries exactly the
-// profile, its version, the schema id and the index bound under swath.*,
-// and sorting_columns says key ascending. It returns every key in order.
+// files in name order; each part's bytes and SHA-256 match; its rows equal
+// the footer's; its bounds are its first and last key, exact bytes; keys
+// rise strictly within and across parts; every footer carries exactly the
+// seekparquet.* stamps (format version, draft revision, schema id, key
+// column, key uniqueness), and sorting_columns says key ascending. It
+// returns every key in order.
 func checkContract(t *testing.T, out string) []string {
 	t.Helper()
 	var m dataset.Manifest

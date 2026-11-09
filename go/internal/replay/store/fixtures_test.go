@@ -19,7 +19,6 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/format2"
 	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
 	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 	"github.com/varveio/swath/go/internal/replay/sortfixture"
@@ -67,25 +66,6 @@ func writeJavaEra(t testing.TB, dir string, keys []string, parts, groupRows int)
 	return dir
 }
 
-// writeLegacyFormat2 writes keys into a format-2 dataset of parts parts
-// (legacytest.WriteFormat2), the format earlier builds wrote.
-func writeLegacyFormat2(t testing.TB, dir string, keys []string, parts int) string {
-	t.Helper()
-	d := legacytest.Dataset{}
-	per := (len(keys) + parts - 1) / parts
-	for p := 0; p*per < len(keys); p++ {
-		var rows []legacytest.Row
-		for i := p * per; i < min((p+1)*per, len(keys)); i++ {
-			rows = append(rows, legacytest.Object(keys[i], i))
-		}
-		d.Parts = append(d.Parts, legacytest.Part{Rows: rows, GroupRows: 1500, PageBytes: 2048})
-	}
-	if _, err := legacytest.WriteFormat2(dir, d); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
 // writeSorted writes keys, shuffled into an unstamped capture, and sorts
 // them into a SeekParquet dataset with sort-fixture.
 func writeSorted(t testing.TB, dir string, keys []string, keyLimit int) string {
@@ -126,7 +106,7 @@ func reference(t testing.TB, path string) (rows []refRow, boundaries []string) {
 	t.Helper()
 	var files []string
 	var placeholderETag *string
-	if format2.IsDataset(path) {
+	if isSeekParquet(path) {
 		raw, err := os.ReadFile(filepath.Join(path, "manifest.json"))
 		var manifest struct {
 			SchemaID string `json:"schema_id"`

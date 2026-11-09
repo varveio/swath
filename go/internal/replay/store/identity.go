@@ -14,7 +14,6 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
-	"github.com/varveio/swath/go/internal/replay/legacy/format2"
 	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
 )
 
@@ -56,9 +55,11 @@ func javaEraIdentity(path string, files []string, stamps []javaera.Stamp) (strin
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-// seekIdentity is format2Identity's digest over a SeekParquet dataset: the
-// manifest's SHA-256, then every listed part with its format version,
-// draft revision and schema id in the stamp's place.
+// seekIdentity is the restart identity of a SeekParquet dataset: the same
+// digest over manifest.json, with the SHA-256 of its bytes in the stamp's
+// place (the manifest is the commit, so its digest pins the dataset), then
+// every listed part with its format version, draft revision and schema id
+// in the stamp's place.
 func seekIdentity(dir string, meta seekparquet.Metadata) (string, error) {
 	root, err := filepath.Abs(dir)
 	if err != nil {
@@ -68,36 +69,11 @@ func seekIdentity(dir string, meta seekparquet.Metadata) (string, error) {
 	digest := sha256.New()
 	digest.Write([]byte(identityDomain))
 	digest.Write(binary.BigEndian.AppendUint32(nil, uint32(1+len(meta.Parts))))
-	if err := identityFile(digest, root, filepath.Join(root, format2.ManifestName), "sha256:"+hex.EncodeToString(manifest[:])); err != nil {
+	if err := identityFile(digest, root, filepath.Join(root, seekparquet.ManifestName), "sha256:"+hex.EncodeToString(manifest[:])); err != nil {
 		return "", err
 	}
 	stamp := fmt.Sprintf("seekparquet/%d/%d/%s", meta.Version.FormatVersion, meta.Version.DraftRevision, meta.SchemaID)
 	for _, part := range meta.Parts {
-		if err := identityFile(digest, root, filepath.Join(root, filepath.FromSlash(part.Path)), stamp); err != nil {
-			return "", err
-		}
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
-}
-
-// format2Identity is the same digest over manifest.json, with the SHA-256 of
-// its bytes in the stamp's place, then every listed part, with its footer
-// profile, version and schema id in the stamp's place: the manifest is the
-// commit, so its digest pins the dataset.
-func format2Identity(dir string, dataset *format2.Dataset) (string, error) {
-	root, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	manifest := sha256.Sum256(dataset.ManifestBytes)
-	digest := sha256.New()
-	digest.Write([]byte(identityDomain))
-	digest.Write(binary.BigEndian.AppendUint32(nil, uint32(1+len(dataset.Manifest.Parts))))
-	if err := identityFile(digest, root, filepath.Join(root, format2.ManifestName), "sha256:"+hex.EncodeToString(manifest[:])); err != nil {
-		return "", err
-	}
-	stamp := fmt.Sprintf("%s/%d/%s", format2.Format, format2.Version, dataset.Manifest.SchemaID)
-	for _, part := range dataset.Manifest.Parts {
 		if err := identityFile(digest, root, filepath.Join(root, filepath.FromSlash(part.Path)), stamp); err != nil {
 			return "", err
 		}

@@ -52,7 +52,7 @@ func TestRun(t *testing.T) {
 	if err := run(context.Background(), []string{src, "-o", src, "--overwrite"}, &buf, false); err == nil || !strings.HasPrefix(err.Error(), "-o:") {
 		t.Fatalf("out == root: %v", err)
 	}
-	if err := runCount(context.Background(), []string{src, "--metadata", "bogus"}, &buf, false); err == nil {
+	if err := runCount(context.Background(), []string{src, "--metadata", "bogus"}, &buf); err == nil {
 		t.Fatal("bad --metadata accepted")
 	}
 }
@@ -96,7 +96,7 @@ func TestSize(t *testing.T) {
 // run with UPDATE=1 to rewrite it.
 func TestCLIDocFlags(t *testing.T) {
 	var b bytes.Buffer
-	for i, cmd := range []command{{}, {count: true}, {diag: true}} {
+	for i, cmd := range []command{{}, {count: true, du: true}, {diag: true}, {diag: true, count: true}} {
 		if i > 0 {
 			b.WriteString("\n")
 		}

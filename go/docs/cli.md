@@ -3,24 +3,29 @@
 ```text
 swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
 swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
-swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+swath du SOURCE [-d N] [flags]          total SOURCE's objects and bytes, per key prefix down to N levels
 swath resume DIR [flags]                continue the interrupted run in DIR
 swath show [--journal] DIR              show a dataset or an interrupted run
-swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
+swath diag list|count SOURCE [flags]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
 swath --version                         print the build (tool, module version, VCS revision)
 ```
 
-`swath --help` prints that summary; `--help` on every command (`swath list --help`, `swath count --help`,
-`swath resume --help`, `swath show --help`, `swath diag --help`, `swath diag list --help`) prints its flags and
-exits 0.
+`swath --help` prints that summary; `--help` on every command (`swath list --help`, `swath du --help`,
+`swath resume --help`, `swath show --help`, `swath diag --help`, `swath diag list --help`, `swath diag count
+--help`) prints its flags and exits 0.
 
 SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `az://account/container[/prefix]`. `swath list` writes a dataset to `-o DIR`
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
-below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
-buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
-filter, performance, limit and reporting flags, and refuses the output ones (`-o`, `--format`, `--overwrite`,
-`--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2. Each prints one
-line (`swath count`: `rows=N object_bytes=B wall=...`), or the run report (`run.json`, below) with `--report-format json`; `--report FILE` also writes that report to
+below). `swath du` and `swath diag count` only list and count, writing no rows (rows are counted as they arrive,
+never ordered, buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); they
+take the source, filter, performance, limit and reporting flags, and refuse the output ones (`-o`, `--overwrite`,
+`--part-size`, `--row-budget`, `--spill-budget`, `--encoders`; `--format` but for `swath du`'s totals) with exit 2.
+`swath du` prints per-prefix totals on stdout (**Per-prefix totals** below), and only it takes their flags
+(`--depth`/`-d`, `--max-prefixes`, `--allocated`, `--count-links-once`, `--max-inodes`). `swath diag count` measures
+the listing: it prints one line, `rows=N object_bytes=B wall=...` (a local tree's line starts with its counters,
+`files=N dirs=N bytes=N errors=N`). `swath list` prints one line after a dataset or a text file. Any of them
+prints the run report (`run.json`, below) instead with `--report-format json`, but where stdout carries rows
+(`swath list` to stdout, `swath du`); `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
 source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
 (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/` with the lock and journal) or anything below them,
@@ -48,10 +53,10 @@ and exits 0 (`DIR is already complete: nothing to resume`; the report's outcome 
 true), so a supervisor may resume until exit 0; one committed with partial coverage stays `incomplete`, exit 1.
 `swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
 rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
-`swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` and `swath diag
-count` take every `list` (or `count`) flag plus the diagnostic ones (the **Diagnostics** group below); they exist
-to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath count` refuse each of
-them with exit 2 and a message naming `swath diag`. Each flag has one name; an unknown flag is a usage error
+`swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
+`list` flag and `swath diag count` every count flag, plus the diagnostic ones (the **Diagnostics** group below);
+they exist to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath du` refuse
+each of them with exit 2 and a message naming `swath diag`. Each flag has one name; an unknown flag is a usage error
 (exit 2). From the Java 0.3 releases, and renames since the unreleased builds of `main`: [upgrade.md](upgrade.md#changes-from-03-to-04). Flags take one or two dashes. The
 Java distribution keeps its own `swath` launcher; the two are separate tools.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
@@ -78,7 +83,7 @@ Source and output:
   --overwrite
         replace a previous dataset in -o
   --format string
-        stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
+        the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --region string
@@ -121,18 +126,20 @@ Source and output:
         local: omit kind=DIR rows
   --no-link-target
         local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
   --max-size size
-        keep objects of at most this size
+        keep objects or entries of at most this size
   --modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
   --modified-until time
-        keep objects modified at or before this time
+        keep objects or entries modified at or before this time
   --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   --seed-from path
@@ -211,13 +218,17 @@ workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spil
 profile, anonymous, request-timeout, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-sas, azblob-request-timeout (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
-$ swath count --help
-usage: swath count SOURCE [flags]
-  lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
-  arrive, never ordered, buffered or spilled; prints one line, or the run report
+$ swath du --help
+usage: swath du SOURCE [-d N] [flags]
+  totals SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels
+  below SOURCE, a parent including its children, as du (sum rows of one Depth only): on stdout as a
+  table on a terminal, the total last; TSV otherwise, or --format jsonl, the total first, at Depth 0.
+  Bytes are the objects' sizes as listed, not storage or billing
   SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
+  --format string
+        the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --region string
@@ -260,18 +271,20 @@ Source and output:
         local: omit kind=DIR rows
   --no-link-target
         local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
   --max-size size
-        keep objects of at most this size
+        keep objects or entries of at most this size
   --modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
   --modified-until time
-        keep objects modified at or before this time
+        keep objects or entries modified at or before this time
   --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   --seed-from path
@@ -304,6 +317,20 @@ Limits:
   --azblob-request-timeout duration
         Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
         change it: raise it for a slow Azure endpoint or Azurite
+
+Per-prefix totals:
+  --depth, -d N
+        also total each key prefix down to N levels below SOURCE (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du
+  --allocated
+        local: total the files' allocated bytes (st_blocks x 512, as du; a directory's own blocks are not counted) instead of their apparent size
+  --count-links-once
+        local: count a file with several hard links once, under the first of its names in byte order, as du does by default
+  --max-prefixes N
+        fail rather than hold more than N distinct prefixes (memory grows with them, never with the objects) (default 1000000)
+        change it: raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted
+  --max-inodes N
+        local, --count-links-once: fail rather than remember more than N hard-linked files (default 1000000)
+        change it: raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)
 
 Output and reporting:
   --report file
@@ -365,6 +392,143 @@ Diagnostics:
         wait on the reorder budget instead of spilling rows ahead of the frontier to disk
   --no-journal
         publish parts only at the end, without the journal that swath resume needs
+
+$ swath diag count --help
+usage: swath diag count SOURCE [flags]
+  lists SOURCE and counts its rows and object bytes, writing nothing, to measure the listing:
+  rows are counted as they arrive, never ordered, buffered or spilled; prints one line of counts and
+  resources, or the run report; the diagnostic flags below run an experiment or a comparison
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
+
+Source and output:
+  --anonymous
+        credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
+  --region string
+        S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
+  --endpoint URL
+        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
+  --path-style
+        S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
+  --profile profile
+        S3: shared config profile (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)
+  --request-payer
+        S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)
+  --bearer-token-command command
+        S3: shell command whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again
+  --bearer-token-refresh-interval duration
+        S3: run --bearer-token-command again after this duration (default 45m)
+  --fips
+        S3: use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+  --dualstack
+        S3: use the dual-stack (IPv6) endpoint
+  --fetch-owner
+        S3: fill owner_id and owner_display_name
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
+  --gcs-endpoint URL
+        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
+  --azblob-endpoint URL
+        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
+  --include regex
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+  --exclude regex
+        drop keys in which this regex (Go RE2 syntax) matches anywhere
+  --min-size size
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
+  --max-size size
+        keep objects or entries of at most this size
+  --modified-since time
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+  --modified-until time
+        keep objects or entries modified at or before this time
+  --storage-class classes
+        keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+  --seed-from path
+        start from a previous listing's key distribution instead of the delimiter seed: a committed dataset path of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively
+
+Performance:
+  --workers int
+        listing goroutines, the most requests in flight (default 64, whatever the CPU count)
+        change it: raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default
+
+Limits:
+  --max-duration duration
+        stop the run after this duration (exit 124; a journaled run is resumable); 0: no limit
+        change it: give every unattended run one; a stopped object-store run resumes where it stopped
+  --stall-timeout duration
+        stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
+        change it: raise it for a service that is slow to answer for minutes at a time
+  --request-rate N
+        requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
+        change it: set it to stay under a request quota shared with other clients
+  --limiter
+        requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
+        change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
+  --request-timeout duration
+        S3: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow S3-compatible store whose pages take longer to answer
+  --gcs-request-timeout duration
+        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow GCS endpoint or emulator
+  --azblob-request-timeout duration
+        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow Azure endpoint or Azurite
+
+Output and reporting:
+  --report file
+        also write the run report (JSON, with the outcome and the attempt id) to this file when the attempt ends, on failure too
+  --report-format text
+        text (one line) or json (the run report, as in run.json) (default text)
+  --progress
+        print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)
+  --no-progress
+        no live progress on stderr
+  --progress-interval interval
+        progress interval (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)
+  --stats
+        print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)
+  --no-stats
+        no end-of-run statistics on stderr
+  -v, -vv, -vvv
+        verbose: a start line, and progress as appended records (-vv, -vvv: the same)
+  -q, -qq
+        quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
+  --color string
+        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+
+Diagnostics:
+  --seed
+        ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists, the first carrying the first data page, which lists a scope of one page alone; not with -sequential); false: start from one range (default true)
+  --structure
+        ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none (default auto)
+  --slow-split
+        ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)
+  --floors
+        ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages
+  --sequential
+        ranges: list with one continuation-token chain (no ranges; the reference)
+  --max-keys N
+        ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
+  --page-size N
+        ranges: ask the service for pages of N entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes
+  --limiter-slow-start
+        requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
 ```
 <!-- flags:end -->
 
@@ -401,7 +565,7 @@ Diagnostics:
 - **`-o DIR`** is refused when non-empty unless `--overwrite`, which replaces only
   a previous dataset of this tool and never anything inside the listed root.
 - **Text output** (S3, GCS and Azure Blob sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
-  dataset: `swath list DIR` without `-o DIR`, or with a text `-o`, is refused with exit 2, naming `-o DIR` and `swath count`). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
+  dataset: `swath list DIR` without `-o DIR`, or with a text `-o`, is refused with exit 2, naming `-o DIR` and `swath du`). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
   format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
   auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe
   compresses (`| zstd`). `--format` with a `-o` file or directory is refused, because the name already says it.
@@ -443,12 +607,111 @@ Diagnostics:
   rows; `--stats` prints the account on stderr) and `--report-format json` is refused (use `--report FILE`).
   Text runs keep no journal: `swath resume` refuses a text destination, and an interrupted text run is run
   again. `output.text` in the report names the format, destination, compression, rows and bytes.
+- **Per-prefix totals** (`swath du SOURCE [-d N]`, every source): how much is under a bucket, a prefix or a
+  directory, and under each prefix down to N levels, as `du` (and `mc du`, `gsutil du`, `s5cmd du`) for buckets and
+  directories alike. Depth counts from SOURCE: from the prefix it names up to its last `/` (`s3://b/logs/2026/`
+  from `logs/2026/`, `s3://b/logs` from the bucket's top; a local tree from its root), before an `--include`
+  narrows the listed prefix. A prefix of depth k is a key up to and including the k-th `/` after that, and the
+  total is depth 0. For the total and each prefix of depth 1 to N, `swath du` prints the objects under it, the
+  directories below it (local trees), their bytes (the `size` column) and the newest modification time among
+  them, a parent including its children; `-d 0`, the default, is the total alone, as `du -s`. A key with fewer
+  than N `/` counts in the prefixes it has (`top.txt` only in the total). A local directory's row lists its own
+  prefix (an empty directory shows 0) and counts in its parents' `Dirs`, never as an object, and its time is not
+  the newest's; an S3 delete marker lists its prefixes (they count toward `--max-prefixes`) and adds no object,
+  bytes or time. A directory's own size is no object's (nor is it in the run report's `object_bytes`), so the
+  totals' objects and bytes are the files, links and other entries. With `--all-versions` every version is an
+  object. The filters apply first, to every row, directories included (**Filters** below): `--min-size 1M` keeps
+  the large files and drops the directories, whose own size is small, so `Dirs` counts only the directories that
+  pass and a directory left with nothing is no row. The bytes are the objects' sizes as listed: not storage
+  consumed, compression, replicas or a bill.
+
+  Rows go to stdout in `--format` `auto` (the table on a terminal, TSV otherwise), `table`, `tsv` or `jsonl`. TSV
+  and JSONL are sorted by prefix in byte order, the total first and a parent before its children; the table keeps
+  that order for the other rows and puts the total last. Each row includes everything below it (the total
+  includes every row), so add up rows of one depth only, never across depths: the depth-1 rows together leave
+  out the objects directly under SOURCE, and all rows together count an object once per level it is under. The
+  table is for reading: a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below
+  1 KiB), a local tree's files counted as `Files`, the newest time to the second in the reader's local time (as
+  `ls -l` and `du --time`; `TZ` chooses it), the prefix last, as `du` prints its paths, and the total last, named
+  `(total)`, as `du` and `wc` end on theirs:
+
+  ```text
+      Size  Files  Dirs  LastModified (local)  Prefix
+   695 KiB     73    11  2026-11-09 02:44:49   bench/
+   429 KiB     48     2  2026-11-09 13:03:32   cmd/
+  5.88 MiB    681    97  2026-11-09 13:03:32   (total)
+  ```
+
+  TSV and JSONL are for programs and are the same for every source of a kind: exact bytes and microsecond UTC
+  times (`+00:00`), fields `Depth`, `Objects`, `Dirs` (local trees), `Size` (`AllocatedSize` with `--allocated`),
+  `Unsized` (local trees), `LastModified` and `Prefix`, in that order in TSV (the numbers first and the name
+  last, as `du` prints a size and then its path). `Depth` is the row's level below SOURCE: 0 is the total, which
+  stays the first row, in byte order; select it by `Depth`, not by its place or its prefix
+  (`jq 'select(.Depth == 0) | .Size'`; `jq 'select(.Depth == 1)'` for the children). The total's `Prefix` is
+  SOURCE's prefix up to its last `/` (empty for a whole bucket or a local tree, so a TSV total line ends with an
+  empty field: split TSV at tabs, `awk -F'\t'` or `cut`, never at runs of blanks). The fields say objects for a
+  local tree's files too, so a script reads every source with the same names; only the table says `Files`.
+  `Size` is the bytes of the objects that had a size, and `Unsized` counts the files that had none
+  (`--metadata names` reads no sizes), as `rclone size --json`'s `sizeless`: a size with `Unsized` above 0 leaves
+  those files out, and the table shows it as `-`. A time is missing when no object under the prefix had one:
+  empty in TSV and in the table, absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
+  JSONL a prefix that is not UTF-8 (a local name's bytes, which a JSON string cannot carry exactly) is
+  `PrefixBase64`, its exact bytes in standard base64, instead of `Prefix`:
+
+  ```text
+  $ swath du s3://bucket/logs/ -d 2 --format tsv
+  Depth	Objects	Size	LastModified	Prefix
+  0	4	9	2026-01-02T04:04:05+00:00	logs/
+  1	2	7	2026-01-02T04:04:05+00:00	logs/a/
+  2	1	5	2026-01-02T04:04:05+00:00	logs/a/b/
+  1	1	1	2026-01-02T03:04:05+00:00	logs/c/
+  ```
+
+  ```text
+  $ swath du /data -d 2 --format jsonl
+  {"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":9,"Unsized":0,"LastModified":"2026-01-02T04:04:05+00:00"}
+  {"Depth":2,"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"Unsized":0,"LastModified":"2026-11-09T11:38:25+00:00"}
+  ```
+
+  Rows are written once the count completes, before the run's end is stamped and its outcome settled, so the
+  report's times include the writing: a run that fails or stops before prints none; a failed write fails the run
+  (`status` `failed`, a full disk `disk_full`), and so does a stop that comes while the rows are written (a signal,
+  `--max-duration`), since they may be cut short; a reader that closes stdout ends it with exit 0, `status`
+  `stopped`, `stop_reason` `downstream_closed`, as text output's. stdout carries the rows, so `--report-format json` is
+  refused (use `--report FILE`, whose `output.totals` names the depth, the prefixes, their caps and the total;
+  the rows are only on stdout); `--stats` prints the account on stderr. Entries a local listing could not read
+  (`errors` in the source's counters: permissions, entries that vanished) are not in the totals: the run still
+  exits 0, as a listing does, and `swath du` says so on stderr whatever the statistics' gating (not with `-q`, which prints no warnings).
+  The count is the unordered one ([internals/ordering.md](internals/ordering.md#counting-without-order)): there is
+  no faster way to a prefix's total than listing it, since a delimiter listing returns the prefixes, not their
+  sizes (swath already seeds its parallel listing from them). Memory grows with the distinct prefixes, never the
+  objects, and `--max-prefixes N` (default 1,000,000, about 150 MB) caps them: a run that would hold more fails
+  (exit 1, cause `prefix_limit`), naming `--depth` and `--max-prefixes`, rather than print partial or rolled-up
+  totals. A flat listing holds one prefix whatever the depth; a bucket of millions of top-level "folders" at
+  `-d 1` is what the cap is for.
+- **du's local flags** (an object store refuses them with exit 2, as it refuses the local provider's own flags;
+  `swath list` and `swath diag count` refuse them as `swath du`'s). `--allocated` sums `allocated_bytes`
+  (`st_blocks` × 512: what the files take on disk, as `du` reports by default; a sparse file counts its allocated
+  blocks, not its length) instead of the apparent size, and the field is then `AllocatedSize`. Directories' own
+  blocks are not counted (they are no objects), so `--allocated` totals are `du`'s less the directories' blocks.
+  `--count-links-once` counts a file with more than one hard link once per device and inode, as `du` does by
+  default (swath's default counts each name, as `du -l`): its object and bytes go to the prefixes of its first
+  name in byte order, so the result does not depend on which name a worker reached first, while each name still
+  adds its time. Only those inodes are remembered, and `--max-inodes N` (default 1,000,000) caps them (exit 1,
+  cause `inode_limit`). Both read each entry's stat: `--metadata names` is refused (exit 2), and a platform whose
+  engine does not read the values (the portable engine off Linux) fails the run at the first entry without them.
+- **`--one-filesystem`** (local sources, `swath list`, `swath du` and `swath diag count`): a directory on another device than the
+  root (a mount point) is listed, its row kept, but not walked, as `du -x` and `find -xdev`. The listing says so:
+  the provider's counter `other_device_dirs`, and a dataset's `coverage.filters` holds `one_filesystem`, so a
+  reader that needs the whole tree refuses it, as it refuses a filtered one. It needs each directory's device:
+  `--metadata names` is refused, and so is a platform whose engine does not read it.
 - **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
   matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
   `--modified-until` keep modification times within the inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00`
   or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
-  A,B` (repeatable) keeps the listed classes (case-insensitive). They reduce the rows written, not the requests
+  A,B` (repeatable) keeps the listed classes (case-insensitive). They apply to every row: on a local tree,
+  directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not the requests
   made, with one exception: an `--include` anchored at the start with a literal (`^logs/2026/`) narrows the listed
   prefix to it (the same rows, fewer requests; the report's `invocation.source` names the narrowed root). The
   dropped rows are counted in `output.rows_filtered` (`rows_emitted` is what passed; `rows_fetched` both). The filters are part of the
@@ -601,7 +864,7 @@ Diagnostics:
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
-  | 0 | `completed` | the dataset is committed (or `swath count` finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
+  | 0 | `completed` | the dataset is committed (or `swath du` or `swath diag count` finished), also by an earlier attempt: `swath resume` on a complete dataset | – |
   | 1 | `fatal`, `incomplete` | a run failure a resume will not fix (access denied, no such bucket, an invariant, another process owning the output; a protocol violation, `cause` `protocol`, which outranks a stop cause and which the journal records, so `swath resume` refuses the run; the part limit, `cause` `part_limit`, and an output layout swath did not make (a linked `data/`, workspace, journal or part), `cause` `unsafe_layout`, which both also outrank a stop cause; the refused paths are left as they were; the outcome is in the report, and in `error.json` only when swath could take the output lock to settle it: a refused linked workspace or journal can leave `error.json` unchanged, and the external `--report` carries the refusal), or a dataset committed with partial coverage (a key limit), so a partial dataset never exits 0 | no |
   | 2 | `usage`, `refused` | `usage`: a malformed command line or an unknown scheme; `refused`: a refusal that is the caller's to fix, before anything ran: a non-empty `-o` directory without `--overwrite`, `--overwrite` on a directory that is not this tool's dataset, a new run over an interrupted one, an output that is the listed root (or inside it, replaced), a resume whose identity changed, a resume with nothing to resume, an S3 directory bucket | `usage`: no; `refused`: the output is as it was, so yes when it holds an interrupted run |
   | 74 | `disk_full` | a part, a journal record or the manifest could not be written: its filesystem is full (`cause` `no_space`; spill waits instead of failing) | yes, journal intact, once there is space |
@@ -652,7 +915,7 @@ Diagnostics:
 
   | Field | Meaning |
   |---|---|
-  | `objects` | rows listed so far |
+  | `objects` | rows listed so far (a local tree's entries, directories included) |
   | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
   | `parts` | parts published |
   | `verified_bytes` | a resume's bytes of retained parts checked so far |
@@ -675,7 +938,7 @@ Diagnostics:
   values unless given again.
 - **Terminal** (Java's stderr surface). A live progress record on stderr, from the snapshot the progress file
   is written from: the phase (`starting`, `verifying` with a resume's bytes checked, `listing`), objects listed
-  (with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
+  (a local tree's entries: `N entries`; with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
   elapsed time since the command began, API calls and, on a known tariff, the labelled estimate; no percentage
   or ETA (a listing has no honest denominator), no key text. On a terminal it is redrawn in place (carriage
   return, `ESC[2K`; on Windows after enabling virtual-terminal processing, else plain lines), its trailing
@@ -684,7 +947,7 @@ Diagnostics:
   `--no-progress` suppresses it, `--progress-interval D` (at least 1 s) sets the cadence and implies it.
   Warnings written while the line is drawn erase it and repaint it after. At the end, `--stats` prints Java's
   block on stderr: a disposition (`INCOMPLETE (class)` with `resume: swath resume DIR` for a resumable stop; a
-  refused run prints only this line), `N objects in T · K keys/s` (with the whole invocation's time when it is
+  refused run prints only this line), `N objects in T · K keys/s` (`N entries` for a local tree; with the whole invocation's time when it is
   over a second longer), `N API calls · R per 1k objects · in flight avg A · peak P`, throttles, retries and
   entry errors when any, the estimate, and `files · bytes written · peak RSS`. Without `--stats` it is printed
   for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
@@ -731,18 +994,24 @@ engine's seed, from its first delimiter request to its tiles (absent where none 
 `sys_cpu_ms` are the process's CPU times (absent where the platform does not measure them).
 
 **Rows and bytes** (`output`). `rows_fetched` is what this invocation listed from the source, `rows_filtered`
-what the filters dropped of it, `rows_emitted` what was handed on in order (swath count: counted). On a run that
+what the filters dropped of it, `rows_emitted` what was handed on in order (swath du, swath diag count: counted). On a run that
 succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`; a run that stopped has also fetched rows ahead of
 the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
 the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `parts_retained` count parts.
-`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
+`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files accepted after the filters): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`).
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
+`swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
+`max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
+`objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
+markers), `unsized` (objects without a value in the bytes column: the sizes are then unknown), `links_once`
+(`--count-links-once`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
+them, each counted once) and `max_inodes` (their cap).
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
-rows after filtering at the order stage's handoff (swath count: validated, counted rows).
+rows after filtering at the order stage's handoff (swath du, swath diag count: validated, counted rows).
 `versions` excludes S3 delete markers; S3 also reports `delete_markers`, with
 `rows_emitted` = `versions` + `delete_markers`. GCS reports `noncurrent` among its
 `versions`, with `versions` = `noncurrent` + `live_objects`. A live S3 object has
@@ -764,7 +1033,7 @@ percentiles and in-flight time are the provider's counters (`source.stats.counte
 **Resources** (`resources`). `peak_rss_bytes` (with `rusage_available`), `peak_heap_live_bytes` (sampled every
 100 ms), `max_buffered_bytes` (peak reorder storage, against `invocation.row_budget_bytes`), `free_disk_min_bytes`
 (the least free space seen, every second, on the filesystem the run writes to: the spill directory's, else the
-output's; absent for swath count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
+output's; absent for swath du and swath diag count), `peak_ahead_rows`, `frontier_stuck_max_ns`, `frontier_wait_ns`,
 `budget_wait_ns` and `encoder_wait_ns` (summed over goroutines: not elapsed time), `peak_nodes`, `peak_markers`,
 `part_time_cuts`, `part_row_cuts`, `features` (the pipeline's policies, on or off), and `spill` (absent with spill
 off): `rows`, `bytes`, `logical_bytes`, `format`, `decode_refused`, `ranges`, `peak_bytes`, `refused`,

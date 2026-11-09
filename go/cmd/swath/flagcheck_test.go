@@ -35,7 +35,7 @@ func TestNegativeDurationsRefused(t *testing.T) {
 		}
 	}
 	var buf bytes.Buffer
-	if err := runCount(context.Background(), []string{src, "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf); err != nil {
 		t.Fatalf("zero durations: %v", err)
 	}
 }
@@ -76,7 +76,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		t.Error("--workers, a command flag, has a provider owner")
 	}
 	var buf bytes.Buffer
-	if err := runCount(context.Background(), []string{src, "--no-stats", "--workers", "2"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-stats", "--workers", "2"}, &buf); err != nil {
 		t.Fatalf("a command flag with a local root: %v", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestLocalTextRefusedUpFront(t *testing.T) {
 	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", filepath.Join(t.TempDir(), "rows.tsv")}} {
 		var buf bytes.Buffer
 		err := run(context.Background(), args, &buf, false)
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath count") {
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath du") {
 			t.Errorf("%v: exit %d (%v)", args, exitOf(err), err)
 		}
 		if buf.Len() != 0 {

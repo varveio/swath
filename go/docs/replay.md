@@ -26,10 +26,12 @@ kill %1
 
 `--fixture` is a sorted listing: a dataset directory this tool wrote (SeekParquet, read through the seekparquet
 module `github.com/varveio/seekparquet/go`; one whose keys repeat, an `--all-versions` listing, is refused until
-the versions routes exist), a format-2 dataset directory of an
-earlier build, a dataset's `data/` directory, a directory of sorted parts written by Java `swath --sort`, or one
-such part. A fixture that cannot
-be served sorted is refused when it opens, with the reason. A file ending
+the versions routes exist), a dataset's `data/` directory, a directory of sorted parts written by Java
+`swath --sort`, or one such part. A fixture that cannot be served sorted is refused when it opens, with the
+reason; a dataset of format 2 (written by builds from 2026-11-05 to 2026-11-08) is not served: re-list it. The
+Java-era forms are **legacy**: they are read by `internal/replay/legacy`, kept only until the Go replay has
+replaced the Java replay (#352) and the fixtures are re-listed as SeekParquet datasets, after which that reader
+is deleted (#353). A file ending
 in `.tsv` is instead a key list loaded into memory (one object per line: key, size, last-modified microseconds,
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
 `\N` for null), for tests and for listings that have no Parquet form; `bench/replaydiff -dump-tsv` writes one.
@@ -416,7 +418,7 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `request.latency{shape}` | from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
 | `request.stage.latency{protocol,stage}` | on first use | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
 | `fixture.list.latency`, `serving.path{mode}` | from startup | one S3 pager operation |
-| `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era or format-2 fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
+| `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
 | `index.load.latency{source=derived}`, `index.entries` | from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | from startup | how long a store read holds its reader slot, slot wait excluded |
 | `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |

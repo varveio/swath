@@ -29,7 +29,7 @@ type Dataset struct {
 // schema id. A schema id swath does not write is a SemanticError of
 // KindSchema; the module's refusals and errors are returned unchanged. The
 // Source must stay usable until Close.
-func Open(ctx context.Context, src seekparquet.Source, opt seekparquet.Options) (*Dataset, error) {
+func Open(ctx context.Context, src Source, opt Options) (*Dataset, error) {
 	sp, err := seekparquet.OpenDataset(ctx, src, opt)
 	if err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func Open(ctx context.Context, src seekparquet.Source, opt seekparquet.Options) 
 
 // OpenDir opens the dataset in the local directory at path, as Open does,
 // through seekparquet.OpenDir. The directory stays open until Close.
-func OpenDir(ctx context.Context, path string, opt seekparquet.Options) (*Dataset, error) {
+func OpenDir(ctx context.Context, path string, opt Options) (*Dataset, error) {
 	sp, err := seekparquet.OpenDir(ctx, path, opt)
 	if err != nil {
 		return nil, err

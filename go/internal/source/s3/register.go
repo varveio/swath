@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open,
 		Secrets: []registry.Secret{{Flag: "bearer-token-command"}}, Usage: "s3://bucket[/prefix]"})
 }
 
@@ -278,4 +278,10 @@ func classify(err error) string {
 	default:
 		return string(c)
 	}
+}
+
+// keyPrefix is the key prefix a root names (registry.Factory.KeyPrefix).
+func keyPrefix(root string) (string, error) {
+	_, prefix, err := ParseURL(root)
+	return prefix, err
 }

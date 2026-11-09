@@ -1,7 +1,8 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package javaera is the sorted-Parquet profile of the Java tool's sorted
+// Package javaera is a LEGACY profile (deleted with its parent package
+// legacy, #353): the sorted-Parquet profile of the Java tool's sorted
 // output: footer-stamped parts of the 13-column canonical schema, in a
 // directory or as one file, with no manifest. It decides whether such a set
 // can be served sorted and opens it with legacy.
@@ -243,7 +244,7 @@ func Open(ctx context.Context, path string, expect []legacy.Column, files *legac
 		stamp, stamped := ReadStamp(footer)
 		switch {
 		case !stamped:
-			return nil, legacy.Refuse(legacy.ReasonNoStamp, "%s carries no recognised sortedness stamp%s", name, format2Hint(footer))
+			return nil, legacy.Refuse(legacy.ReasonNoStamp, "%s carries no recognised sortedness stamp", name)
 		case stamp.Mode != ModeObjects:
 			return nil, legacy.Refuse(legacy.ReasonUnsupportedMode, "%s is stamped mode=%s, not objects", name, stamp.Mode)
 		case stamp.FormatVersion != FormatVersion:
@@ -271,13 +272,4 @@ func Open(ctx context.Context, path string, expect []legacy.Column, files *legac
 	ok = true
 	fixture.Reader = reader
 	return fixture, nil
-}
-
-// format2Hint names the likely mistake when a part of a manifest dataset is
-// opened without its manifest.
-func format2Hint(footer *parquet.File) string {
-	if _, ok := footer.Lookup("swath.profile"); ok {
-		return " (it is a part of a manifest dataset: open the dataset directory)"
-	}
-	return ""
 }

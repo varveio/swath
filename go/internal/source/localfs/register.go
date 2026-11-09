@@ -35,6 +35,7 @@ func flags(f *flag.FlagSet, _ bool, _ any) any {
 	f.Var(&o.Fields, "metadata", "local: metadata `tier` per entry: names (no stat), stat, statx (adds birth_time; Linux)")
 	f.BoolVar(&o.NoDirs, "no-dirs", false, "local: omit kind=DIR rows")
 	f.BoolFunc("no-link-target", "local: do not read symlink targets", func(string) error { o.LinkTarget = false; return nil })
+	f.BoolVar(&o.OneFilesystem, "one-filesystem", false, "local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev")
 	return o
 }
 
@@ -59,6 +60,10 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	}
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
+
+// oneFilesystemFilter is --one-filesystem in the manifest's
+// coverage.filters.
+const oneFilesystemFilter = "one_filesystem"
 
 type opened struct {
 	registry.Bound[Entry]
@@ -99,6 +104,11 @@ func (o *opened) Report() source.Report {
 	cov := source.Coverage{Target: o.p.root, Complete: true, StopReason: "completed", Skipped: st.Errors() - st.ReadlinkErrors - st.Vanished}
 	for k := range o.p.opt.Skip {
 		cov.Exclusions = append(cov.Exclusions, k)
+	}
+	if o.p.opt.OneFilesystem {
+		// The tree is listed only as far as its filesystem reaches: a
+		// reader that needs the whole tree refuses it, as a filtered one.
+		cov.Filters = append(cov.Filters, oneFilesystemFilter)
 	}
 	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov,
 		Brief: fmt.Sprintf("files=%d dirs=%d bytes=%d errors=%d", st.Files, st.Dirs, st.Bytes, st.Errors())}

@@ -31,6 +31,16 @@ the bucket” once.
 Use **prefix** for a key prefix. Directory or folder language is acceptable only when
 describing a user interface or a dataset's physical output directory.
 
+### Local trees: entry, file, and directory
+
+A local directory tree is not an object store, and its words are its own. Its rows are
+**entries**: **files** (every kind that is not a directory: regular files, symbolic links,
+devices) and **directories**. Do not call a local entry an object in prose or on the
+terminal. Machine-readable names (report fields, TSV columns, JSON members) stay the same
+for every source so one script reads them all: there `objects` counts a local tree's files,
+and a field that means rows, directories included, says so (`rows_emitted`; `progress.json`'s
+`objects`). A directory's own size is not an object's: it is in no object byte count.
+
 ### Live listing, result, and snapshot
 
 swath performs a **live listing** and publishes a **listing result** or **inventory**.
