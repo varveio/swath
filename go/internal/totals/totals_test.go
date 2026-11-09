@@ -16,6 +16,12 @@ import (
 
 // brute is the oracle: every prefix of every key, summed one row at a time.
 func brute(rows []Row, depth int) []Prefix {
+	return bruteWith(rows, depth, func(Row) bool { return true })
+}
+
+// bruteWith is brute where an object counts (as an object, with its bytes)
+// only if counts says so; its time counts in any case.
+func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
 	for _, r := range rows {
 		for k := 0; k <= depth; k++ {
@@ -39,9 +45,11 @@ func brute(rows []Row, depth int) []Prefix {
 			if !r.Object {
 				continue
 			}
-			p.Objects++
-			if r.HasBytes {
-				p.Bytes += r.Bytes
+			if counts(r) {
+				p.Objects++
+				if r.HasBytes {
+					p.Bytes += r.Bytes
+				}
 			}
 			if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
 				p.Newest, p.HasNewest = r.Mtime, true
@@ -257,5 +265,88 @@ func TestBatchKeepsNoKeys(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"", "a/", "a/b/"}) {
 		t.Fatalf("%q", got)
+	}
+}
+
+// TestLinksOnceMatchesBruteForce: with LinksOnce, an object of several
+// hard links counts once, its object and bytes under the smallest of its
+// keys and its time under every link, whichever batch or goroutine saw
+// which link first; without LinksOnce every link counts.
+func TestLinksOnceMatchesBruteForce(t *testing.T) {
+	for seed := range uint64(20) {
+		rng := rand.New(rand.NewPCG(seed, 11))
+		rows := randomRows(rng, 1+rng.IntN(400))
+		inodes := 1 + rng.IntN(20)
+		for i := range rows {
+			if rows[i].Object && rng.IntN(3) == 0 {
+				id := int64(rng.IntN(inodes))
+				rows[i].Link, rows[i].Dev, rows[i].Inode = true, id%2, id
+				rows[i].Bytes, rows[i].HasBytes = 1000+id, true // one inode, one size
+			}
+		}
+		// The oracle: each inode counts under its smallest key; its other
+		// links add their time only.
+		owner := map[[2]int64]string{}
+		for _, r := range rows {
+			id := [2]int64{r.Dev, r.Inode}
+			if k, ok := owner[id]; r.Link && (!ok || r.Key < k) {
+				owner[id] = r.Key
+			}
+		}
+		links := int64(0)
+		for _, r := range rows {
+			if r.Link {
+				links++
+			}
+		}
+		counted := func(r Row) bool { return !r.Link || owner[[2]int64{r.Dev, r.Inode}] == r.Key }
+		for _, depth := range []int{0, 2, 5} {
+			for _, linksOnce := range []bool{false, true} {
+				tl := New(Options{Depth: depth, LinksOnce: linksOnce})
+				shuffled := slices.Clone(rows)
+				rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+				var wg sync.WaitGroup
+				for w := range 4 {
+					wg.Go(func() {
+						for lo := w * 13; lo < len(shuffled); lo += 4 * 13 {
+							b := tl.Batch()
+							for i := lo; i < min(lo+13, len(shuffled)); i++ {
+								b.Add(&shuffled[i])
+							}
+							if err := b.Flush(); err != nil {
+								t.Error(err)
+							}
+						}
+					})
+				}
+				wg.Wait()
+				want := brute(rows, depth)
+				if linksOnce {
+					want = bruteWith(rows, depth, counted)
+				}
+				got := tl.Result()
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("seed %d depth %d once %v:\ngot  %+v\nwant %+v", seed, depth, linksOnce, got, want)
+				}
+				st := tl.Stats()
+				if linksOnce && (st.LinkedRows != links || st.Inodes != int64(len(owner)) || !st.LinksOnce) || !linksOnce && (st.LinkedRows != 0 || st.Inodes != 0) {
+					t.Fatalf("seed %d: stats %+v, %d links over %d inodes", seed, st, links, len(owner))
+				}
+			}
+		}
+	}
+}
+
+// TestInodeCap: the inodes LinksOnce remembers are capped as the prefixes
+// are, with their own class.
+func TestInodeCap(t *testing.T) {
+	tl := New(Options{Depth: 0, MaxPrefixes: 2, LinksOnce: true})
+	b := tl.Batch()
+	for i := range int64(3) {
+		b.Add(&Row{Key: "k" + string(rune('a'+i)), Object: true, Link: true, Inode: i})
+	}
+	var le *LimitError
+	if err := b.Flush(); !errors.As(err, &le) || !le.Inodes || le.Class() != "inode_limit" {
+		t.Fatalf("%v", err)
 	}
 }

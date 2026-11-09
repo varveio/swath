@@ -53,7 +53,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
-  its exact bytes, like any other. Mount points are crossed; there is no `-one-file-system` yet.
+  its exact bytes, like any other. Mount points are crossed unless `--one-filesystem` (`Options.OneFilesystem`):
+  `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
+  portable engine off Linux), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
+  (counter `other_device_dirs`); `Report` adds `one_filesystem` to the coverage's filters, so a dataset says it
+  stops at the root's filesystem.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
   admission prices it at that width, and a longer target stops the run with the typed `schema.ErrValueTooLong`, as
   a key over its cap does; a target within it is written byte for byte.

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -70,13 +71,18 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 }
 
 // resolveTotals decides swath count's per-prefix totals: on with --depth,
+// or at depth 0 (the total alone) with --allocated or --count-links-once,
 // written to stdout in --format (auto, the default: the table on a
 // terminal, TSV otherwise). A source whose keys are bytes cannot be
-// written as JSON. --format without --depth is placement's refusal.
+// written as JSON. --format without them is placement's refusal; the du
+// flags on another source than a local one are foreignFlags'.
 func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) error {
 	f.Visit(func(fl *flag.Flag) { o.depthGiven = o.depthGiven || fl.Name == "depth" })
-	if !o.countOnly || !o.depthGiven {
+	if !o.countOnly || !totalsAsked(f) {
 		return nil
+	}
+	if fl := f.Lookup("metadata"); (o.allocated || o.linksOnce) && fl != nil && fl.Value.String() == "names" {
+		return errors.New("--allocated and --count-links-once read each entry's stat: not with --metadata names")
 	}
 	switch {
 	case o.depth < 0:
@@ -99,6 +105,10 @@ func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) err
 	default:
 		return fmt.Errorf("--format %q: swath count --depth writes auto, table, tsv or jsonl", o.format)
 	}
-	o.totals = &totalsOut{format: format, tally: totals.New(totals.Options{Depth: o.depth, MaxPrefixes: o.maxPrefixes})}
+	opt := totals.Options{Depth: o.depth, MaxPrefixes: o.maxPrefixes, LinksOnce: o.linksOnce}
+	if o.allocated {
+		opt.BytesColumn = totals.AllocatedBytes
+	}
+	o.totals = &totalsOut{format: format, tally: totals.New(opt)}
 	return nil
 }

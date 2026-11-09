@@ -42,7 +42,7 @@ var helpGroups = []helpGroup{
 		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
 		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"}, {name: "azblob-flat"},
-		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
+		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"}, {name: "one-filesystem"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
 		{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},
 		{name: "seed-from"},
@@ -66,7 +66,7 @@ var helpGroups = []helpGroup{
 		{name: "azblob-request-timeout", when: "raise it for a slow Azure endpoint or Azurite"},
 	}},
 	{totalsGroup, []helpFlag{
-		{name: "depth"},
+		{name: "depth"}, {name: "allocated"}, {name: "count-links-once"},
 		{name: "max-prefixes", when: "raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted"},
 	}},
 	{"Output and reporting", []helpFlag{
@@ -93,7 +93,10 @@ const totalsGroup = "Per-prefix totals"
 
 // onlyCounted are the flags only swath count takes: the per-prefix totals
 // shape what a count prints, and a listing writes rows, not totals.
-var onlyCounted = []string{"depth", "max-prefixes"}
+var onlyCounted = []string{"depth", "max-prefixes", "allocated", "count-links-once"}
+
+// localTotalsFlags are the totals' flags only a local source takes.
+var localTotalsFlags = []string{"allocated", "count-links-once"}
 
 // notCounted are the flags swath count refuses: it lists and counts,
 // writing nothing, so it has no output, no parts and no reorder storage.
@@ -126,10 +129,10 @@ func placement(f *flag.FlagSet, cmd command) (err error) {
 	f.Visit(func(fl *flag.Flag) {
 		switch {
 		case err != nil:
-		case cmd.count && fl.Name == "format" && given(f, "depth"):
+		case cmd.count && fl.Name == "format" && totalsAsked(f):
 			// --depth's prefix rows are text on stdout: --format says how.
-		case cmd.count && fl.Name == "max-prefixes" && !given(f, "depth"):
-			err = errors.New("--max-prefixes caps --depth's prefixes: give --depth too")
+		case cmd.count && fl.Name == "max-prefixes" && !totalsAsked(f):
+			err = errors.New("--max-prefixes caps the totals' prefixes: give --depth too")
 		case !cmd.count && slices.Contains(onlyCounted, fl.Name):
 			err = fmt.Errorf("%s has no meaning for swath %s, which writes rows: swath count takes it", dashed(fl.Name), cmd.name())
 		case cmd.count && slices.Contains(notCounted, fl.Name):
@@ -150,10 +153,14 @@ func placement(f *flag.FlagSet, cmd command) (err error) {
 	return err
 }
 
-// given reports whether flag name was set on the command line.
-func given(f *flag.FlagSet, name string) (set bool) {
-	f.Visit(func(fl *flag.Flag) { set = set || fl.Name == name })
-	return set
+// totalsAsked reports whether the command line asks for the per-prefix
+// totals: --depth, or a du flag that implies them (--allocated,
+// --count-links-once).
+func totalsAsked(f *flag.FlagSet) (asked bool) {
+	f.Visit(func(fl *flag.Flag) {
+		asked = asked || fl.Name == "depth" || slices.Contains(localTotalsFlags, fl.Name) && fl.Value.String() == "true"
+	})
+	return asked
 }
 
 // usage prints a list command's help: its synopsis and its flags by group,

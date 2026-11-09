@@ -443,10 +443,12 @@ type options struct {
 	partMaxRows            int64
 	seedFrom               string
 	// swath count's per-prefix totals: --depth (depthGiven: the flag was
-	// given; totals: the totals' output, resolved) and --max-prefixes.
-	depth, maxPrefixes int
-	depthGiven         bool
-	totals             *totalsOut
+	// given; totals: the totals' output, resolved), --max-prefixes, and
+	// du's --allocated and --count-links-once.
+	depth, maxPrefixes   int
+	depthGiven           bool
+	allocated, linksOnce bool
+	totals               *totalsOut
 }
 
 // totalsOut is where swath count --depth writes its prefix rows: stdout,
@@ -573,6 +575,8 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
 	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects modified at or before this `time`")
 	f.IntVar(&o.depth, "depth", 0, "swath count: also total each key prefix down to `N` levels (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du: rows of prefix, objects, bytes and the newest time, on stdout in --format")
+	f.BoolVar(&o.allocated, "allocated", false, "local, swath count: total allocated bytes (allocated_bytes, st_blocks x 512: what the files take on disk, as du) instead of the apparent size; implies the totals' rows (--depth 0 unless given)")
+	f.BoolVar(&o.linksOnce, "count-links-once", false, "local, swath count: count a file with several hard links once, under the first of its names in byte order, as du does by default; implies the totals' rows (--depth 0 unless given)")
 	f.IntVar(&o.maxPrefixes, "max-prefixes", totals.DefaultMaxPrefixes, "swath count --depth: fail rather than hold more than `N` distinct prefixes (memory grows with them, never with the objects)")
 	f.Func("storage-class", "keep objects in these storage `classes` (STANDARD,GLACIER; repeatable)", func(v string) error {
 		for _, c := range strings.Split(v, ",") {
@@ -626,6 +630,12 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, g) }) {
 			o.owners[n] = append(o.owners[n], p.Scheme)
 		}
+	}
+	// The totals' du flags read columns only the local schema has
+	// (allocated_bytes; nlink, dev and inode), so another source refuses
+	// them as it refuses the local provider's own flags.
+	for _, n := range localTotalsFlags {
+		o.owners[n] = []string{""}
 	}
 	f.SetOutput(io.Discard)
 }
@@ -955,7 +965,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		// The prefix rows, once the count is complete (a run that failed
 		// or stopped printed nothing above); stdout carries them, as a
 		// text run's rows, so the summary line is not printed.
-		err := textout.WriteTotals(stdout, t.format, false, t.tally.Result())
+		err := textout.WriteTotals(stdout, t.format, t.tally.Options().BytesColumn == totals.AllocatedBytes, t.tally.Result())
 		if err != nil && !brokenPipe(err) {
 			return err
 		}
@@ -1011,6 +1021,8 @@ func explain(err error) error {
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
+	case errors.As(err, &le) && le.Inodes:
+		return fmt.Errorf("%w (raise --max-prefixes, which also caps the inodes --count-links-once remembers, or count links each time without it)", err)
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	}

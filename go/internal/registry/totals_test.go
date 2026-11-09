@@ -116,7 +116,8 @@ func prefixes(key string, depth int) []string {
 }
 
 // TestTotalsNeedCountAndColumn: totals are refused on a run that is not a
-// count, and on a schema without the column they sum.
+// count, on a schema without the column they sum, and, counting links
+// once, without the columns that identify a file.
 func TestTotalsNeedCountAndColumn(t *testing.T) {
 	src := versionsSource(t, nil, 1, 10)
 	if _, _, err := src.Run(context.Background(), registry.Env{Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{})}); err == nil || !strings.Contains(err.Error(), "need a count") {
@@ -125,5 +126,9 @@ func TestTotalsNeedCountAndColumn(t *testing.T) {
 	_, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{BytesColumn: "allocated_bytes"})})
 	if err == nil || !strings.Contains(err.Error(), "need the allocated_bytes column") {
 		t.Fatalf("no column: %v", err)
+	}
+	_, _, err = src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 1}, Totals: totals.New(totals.Options{LinksOnce: true})})
+	if err == nil || !strings.Contains(err.Error(), "needs the nlink, dev and inode columns") {
+		t.Fatalf("no link columns: %v", err)
 	}
 }

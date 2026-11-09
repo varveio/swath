@@ -20,8 +20,9 @@ SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `
 below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
 buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
 filter, performance, limit and reporting flags, and refuses the output ones (`-o`, `--format` but with
-`--depth`, `--overwrite`, `--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2; `swath list`
-refuses the count's own (`--depth`, `--max-prefixes`; **Per-prefix totals** below). Each prints one
+the totals, `--overwrite`, `--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2; `swath list`
+refuses the count's own (`--depth`, `--max-prefixes`, `--allocated`, `--count-links-once`; **Per-prefix totals**
+below). Each prints one
 line (`swath count`: `rows=N object_bytes=B wall=...`; with `--depth`, the prefix rows instead), or the run report (`run.json`, below) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
 source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
@@ -127,6 +128,8 @@ Source and output:
         local: omit kind=DIR rows
   --no-link-target
         local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
@@ -273,6 +276,8 @@ Source and output:
         local: omit kind=DIR rows
   --no-link-target
         local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
@@ -321,6 +326,10 @@ Limits:
 Per-prefix totals:
   --depth N
         swath count: also total each key prefix down to N levels (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du: rows of prefix, objects, bytes and the newest time, on stdout in --format
+  --allocated
+        local, swath count: total allocated bytes (allocated_bytes, st_blocks x 512: what the files take on disk, as du) instead of the apparent size; implies the totals' rows (--depth 0 unless given)
+  --count-links-once
+        local, swath count: count a file with several hard links once, under the first of its names in byte order, as du does by default; implies the totals' rows (--depth 0 unless given)
   --max-prefixes N
         swath count --depth: fail rather than hold more than N distinct prefixes (memory grows with them, never with the objects) (default 1000000)
         change it: raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted
@@ -494,6 +503,23 @@ Diagnostics:
   150 MB) caps them: a count that would hold more fails (exit 1, cause `prefix_limit`), naming `--depth` and
   `--max-prefixes`. A flat listing holds one prefix whatever the depth; a bucket of millions of top-level
   "folders" at `--depth 1` is what the cap is for.
+- **du's flags** (local sources, `swath count` only; an object store refuses them with exit 2, as it refuses the
+  local provider's own flags). Each implies the totals' rows, at `--depth 0` (the total alone, as `du -s`) unless
+  `--depth` is given. `--allocated` sums `allocated_bytes` (`st_blocks` × 512: what the files take on disk, as
+  `du` reports by default; a sparse file counts its allocated blocks, not its length) instead of the apparent
+  size, and the column is then named `AllocatedSize`. `--count-links-once` counts a file with more than one hard
+  link once per device and inode, as `du` does by default (swath's default counts each name, as `du -l`): its
+  object and bytes go to the prefixes of its first name in byte order, so the result does not depend on which
+  name a worker reached first, while each name still adds its time; only those inodes are remembered, and
+  `--max-prefixes` caps them too (cause `inode_limit`). Both read each entry's stat: `--metadata names` is
+  refused (exit 2), and a platform whose engine does not read the values (the portable engine off Linux) fails
+  the count at the first entry without them. Directories' own blocks are not counted (they are no objects), so
+  `--allocated` totals are `du`'s less the directories' blocks.
+- **`--one-filesystem`** (local sources, `swath list` and `swath count`): a directory on another device than the
+  root (a mount point) is listed, its row kept, but not walked, as `du -x` and `find -xdev`. The listing says so:
+  the provider's counter `other_device_dirs`, and a dataset's `coverage.filters` holds `one_filesystem`, so a
+  reader that needs the whole tree refuses it, as it refuses a filtered one. It needs each directory's device:
+  `--metadata names` is refused, and so is a platform whose engine does not read it.
 - **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
   matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
@@ -789,9 +815,11 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
 `swath count --depth` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
-`max_prefixes` (the cap), `bytes_column` (the column summed: `size`), `objects` and `bytes` (the total's),
-`not_objects` (rows counted as no object: directories, delete markers) and `unsized` (objects without a value in
-the bytes column, counted with no bytes).
+`max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
+`objects` and `bytes` (the total's), `not_objects` (rows counted as no object: directories, delete markers),
+`unsized` (objects without a value in the bytes column, counted with no bytes), `links_once`
+(`--count-links-once`), `linked_rows` (rows with more than one hard link) and `inodes` (the distinct inodes among
+them, each counted once).
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
 rows after filtering at the order stage's handoff (swath count: validated, counted rows).
