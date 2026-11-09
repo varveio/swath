@@ -95,7 +95,9 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { target.Add(1) }))
 	defer other.Close()
 	redirect := func(status int) func(http.ResponseWriter, *http.Request) {
-		return func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL+"/storage/v1/b/b/o", status) }
+		return func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+"/storage/v1/b/b/o", status)
+		}
 	}
 	for _, c := range []struct {
 		name  string

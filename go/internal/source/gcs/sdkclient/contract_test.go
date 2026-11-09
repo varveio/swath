@@ -31,7 +31,9 @@ func TestRetryContract(t *testing.T) {
 		}
 	}
 	wire := objhttptest.Wire{
-		OK:       func(w http.ResponseWriter) { fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`) },
+		OK: func(w http.ResponseWriter) {
+			fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
+		},
 		Throttle: jsonError(429, "rateLimitExceeded"),
 		Server:   jsonError(503, "backendError"),
 		Denied:   jsonError(403, "forbidden"),
