@@ -21,8 +21,9 @@ import (
 
 // TestResumeRefusesRemovedFlag: a journal whose recorded command names a
 // flag this build no longer has (an earlier build's: --probe,
-// --seed-descent, --memory before --row-budget) is refused on resume
-// as a usage error, and the interrupted run is left resumable by the build
+// --seed-descent, --memory before --row-budget, the prefixed GCS and Azure
+// store flags before the shared --endpoint and --request-timeout) is
+// refused on resume as a usage error naming it, and the interrupted run is left resumable by the build
 // that started it: before the first release no build promises to resume
 // another's runs.
 func TestResumeRefusesRemovedFlag(t *testing.T) {
@@ -30,7 +31,7 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
-	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB"} {
+	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB", "--gcs-endpoint=http://127.0.0.1:1/storage/v1/", "--azblob-request-timeout=5s"} {
 		t.Run(removed, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}

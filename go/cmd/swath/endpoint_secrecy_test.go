@@ -30,14 +30,14 @@ func TestEndpointUserinfoReports(t *testing.T) {
 	s3 := httptest.NewServer(s3test.Handler(s3test.Backend(t, []string{"a", "b"})))
 	defer s3.Close()
 	az := azblobtest.Serve(t, []string{"a", "b"})
-	for _, c := range []struct{ flag, root, endpoint string }{
-		{"endpoint", "s3://bkt", s3.URL},
-		{"gcs-endpoint", "gs://bkt", gcstest.Bucket(t, []string{"a", "b"}, 0)},
-		{"azblob-endpoint", "az://replay/corpus", azEndpoint(az)},
+	for _, c := range []struct{ provider, root, endpoint string }{
+		{"s3", "s3://bkt", s3.URL},
+		{"gcs", "gs://bkt", gcstest.Bucket(t, []string{"a", "b"}, 0)},
+		{"azblob", "az://replay/corpus", azEndpoint(az)},
 	} {
 		for _, eq := range []bool{false, true} {
 			for _, success := range []bool{false, true} {
-				t.Run(c.flag+"/equals="+strconv.FormatBool(eq)+"/success="+strconv.FormatBool(success), func(t *testing.T) {
+				t.Run(c.provider+"/equals="+strconv.FormatBool(eq)+"/success="+strconv.FormatBool(success), func(t *testing.T) {
 					u, err := url.Parse(c.endpoint)
 					if err != nil {
 						t.Fatal(err)
@@ -45,9 +45,9 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					u.User = url.UserPassword("PRIVATE_USER", "PRIVATE_PASSWORD")
 					flagArgs := func(ep string) []string {
 						if eq {
-							return []string{"--" + c.flag + "=" + ep}
+							return []string{"--endpoint=" + ep}
 						}
-						return []string{"--" + c.flag, ep}
+						return []string{"--endpoint", ep}
 					}
 					dir := filepath.Join(t.TempDir(), "ds")
 					report := filepath.Join(t.TempDir(), "report.json")

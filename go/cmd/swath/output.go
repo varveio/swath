@@ -4,8 +4,6 @@
 package main
 
 import (
-	"errors"
-	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -74,12 +72,9 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 // below the prefix the source names, written to stdout in --format (auto,
 // the default: the table on a terminal, TSV otherwise). The du flags on
 // another source than a local one are foreignFlags' refusal.
-func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) error {
+func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	if !o.du {
 		return nil
-	}
-	if fl := f.Lookup("metadata"); (o.allocated || o.linksOnce) && fl != nil && fl.Value.String() == "names" {
-		return errors.New("--allocated and --count-links-once read each entry's stat: not with --metadata names")
 	}
 	switch {
 	case o.depth < 0:
@@ -107,6 +102,11 @@ func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) err
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: o.linksOnce}
 	if o.allocated {
 		opt.BytesColumn = totals.AllocatedBytes
+	}
+	if pf, err := registry.Lookup(root); err == nil && pf.CheckTotals != nil {
+		if err := pf.CheckTotals(o.sources[pf.Scheme], opt); err != nil {
+			return err
+		}
 	}
 	o.totals = &totalsOut{format: format, tally: totals.New(opt)}
 	return nil

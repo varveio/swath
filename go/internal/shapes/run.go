@@ -99,7 +99,7 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	}
 	fs := flag.NewFlagSet(a.Name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	opts := f.Flags(fs, true, f.SharedFlags(fs, true))
+	opts := f.RegisterFlags(fs, true)
 	args := append([]string{"-endpoint", srv.URL, "-anonymous", "-region", "us-east-1"}, a.Flags...)
 	if err := fs.Parse(args); err != nil {
 		return Result{}, fmt.Errorf("%s: flags %q: %w", a.Name, a.Flags, err)
