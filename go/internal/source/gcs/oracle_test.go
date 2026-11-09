@@ -30,9 +30,10 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// TestClientPagesMatchGoogleClient: the hand-rolled objects.list call
-// reads every page as Google's generated JSON API client does (test-only
-// oracle; the binary does not link it), every field the schema keeps:
+// TestClientPagesMatchGoogleClient: the client reads every page as
+// Google's generated JSON API client, called directly with full responses
+// and its own conversion here, does (the oracle for the client's strict
+// mapping and its fields selector), every field the schema keeps:
 // names, prefixes, tokens, size, generation, metageneration, etag, update
 // time, creation time, storage class, MD5, CRC32C and content type, across prefixes,
 // delimiters and both offsets, with keys that need escaping. Our client

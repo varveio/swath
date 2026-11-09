@@ -334,96 +334,56 @@ func TestDelimiterBoundaries(t *testing.T) {
 	}
 }
 
-// TestRouteIdentity: the identity freezes the bucket's route (base and
-// bucket); a supplied client that does not name its route declines resume.
-func TestRouteIdentity(t *testing.T) {
-	route := func(ep string) string {
-		src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &Options{Endpoint: ep, Anonymous: true}, Workers: 1})
+// TestIdentity: the identity is the recorded inputs: the source, the
+// endpoint (the default when none is given, a trailing slash added, scheme
+// and host case folded; the path kept) and the billed project as given.
+// A supplied client declines resume (credential rotation:
+// listing's TestGCSCredentialRotationResumes).
+func TestIdentity(t *testing.T) {
+	ident := func(opt Options) map[string]string {
+		src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &opt, Workers: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !src.(source.Capable).Capabilities().Resume {
 			t.Fatal("no resume")
 		}
+		m := map[string]string{}
 		for _, f := range src.(source.Identified).Identity().Fields {
-			if f.Name == "route" {
-				return f.Canonical
+			m[f.Name] = f.Value
+			if f.Canonical != "" {
+				m[f.Name] = f.Canonical
 			}
 		}
-		return ""
+		return m
 	}
-	if a, b, c := route("HTTP://Host:1/storage/v1"), route("http://host:1/storage/v1/"), route("http://host:1/other/v1/"); a != b || a == c || a != "http://host:1/storage/v1/b/bkt/o" {
-		t.Fatalf("routes %q %q %q", a, b, c)
+	ep := func(e string) string { return ident(Options{Endpoint: e, Anonymous: true})["endpoint"] }
+	if a, b, c := ep("HTTP://Host:1/storage/v1"), ep("http://host:1/storage/v1/"), ep("http://host:1/other/v1/"); a != b || a == c || a != "http://host:1/storage/v1/" {
+		t.Fatalf("endpoints %q %q %q", a, b, c)
 	}
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: unrouted{}}, Workers: 1})
+	if a, b := ep(""), ep(client.DefaultEndpoint); a != b {
+		t.Fatalf("default endpoint %q, %q", a, b)
+	}
+	base := ident(Options{Endpoint: "http://127.0.0.1:1/storage/v1/", Anonymous: true, UserProject: "p3"})
+	if base["source"] != "gs://bkt/p" || base["user project"] != "p3" || len(base) != 3 {
+		t.Fatalf("identity %v", base)
+	}
+	if other := ident(Options{Endpoint: "http://127.0.0.1:1/storage/v1/", Anonymous: true, UserProject: "p4"}); other["user project"] == base["user project"] {
+		t.Fatal("a changed billed project leaves the identity equal")
+	}
+	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if src.(source.Capable).Capabilities().Resume {
-		t.Fatal("a supplied client without a route declares resume")
+		t.Fatal("a supplied client declares resume")
 	}
 }
 
-type unrouted struct{}
+type supplied struct{}
 
-func (unrouted) List(context.Context, *client.ListInput) (*client.Page, error) {
+func (supplied) List(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{}, nil
-}
-
-// routeOnly names its route but not its billed project.
-type routeOnly struct{ unrouted }
-
-func (routeOnly) Route(bucket string) string { return "http://host/storage/v1/b/" + bucket + "/o" }
-
-// billed names both.
-type billed struct {
-	routeOnly
-	project string
-}
-
-func (b billed) UserProject() string { return b.project }
-
-// TestSuppliedClientBilling: a supplied client's identity is the billed
-// project it sends, not the options' (a requester-pays resume must bill
-// the same project); one that names its route but not its project
-// declines resume.
-func TestSuppliedClientBilling(t *testing.T) {
-	ident := func(c API, project string) (source.Identity, bool) {
-		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: c, UserProject: project}, Workers: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return src.(source.Identified).Identity(), src.(source.Capable).Capabilities().Resume
-	}
-	field := func(id source.Identity, name string) string {
-		for _, f := range id.Fields {
-			if f.Name == name {
-				return f.Value
-			}
-		}
-		t.Fatalf("no %s field", name)
-		return ""
-	}
-	a, ok := ident(billed{project: "p1"}, "options-project")
-	if !ok || field(a, "user project") != "p1" {
-		t.Fatalf("resume %v, user project %q: want the client's p1", ok, field(a, "user project"))
-	}
-	b, _ := ident(billed{project: "p2"}, "options-project")
-	if field(a, "user project") == field(b, "user project") {
-		t.Fatal("a changed billed project leaves the identity equal")
-	}
-	if _, ok := ident(routeOnly{}, "p1"); ok {
-		t.Fatal("a supplied client that does not name its billed project declares resume")
-	}
-	// The built-in client names the options' project.
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, UserProject: "p3",
-		Endpoint: "http://127.0.0.1:1/storage/v1/"}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v := field(src.(source.Identified).Identity(), "user project"); v != "p3" {
-		t.Fatalf("built-in client: user project %q", v)
-	}
 }
 
 // TestEngineFlagsShared: GCS takes the range engine's flag group the
@@ -525,9 +485,6 @@ func TestPoolSizeReported(t *testing.T) {
 		got, st := list(t, Options{Bucket: "bkt", Endpoint: ep}, workers)
 		if !slices.Equal(got, keys) {
 			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
-		}
-		if st.Client != clientKind {
-			t.Fatalf("client %q, want %q", st.Client, clientKind)
 		}
 		if n := st.Counters.Value("transport.pool_size"); n != want {
 			t.Fatalf("%d workers: transport.pool_size %d, want %d", workers, n, want)
