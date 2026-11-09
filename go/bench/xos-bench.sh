@@ -38,8 +38,12 @@ Darwin)
   hdiutil attach -quiet -nobrowse "$IMG" || exit 1
   ROOT=/Volumes/bench
   sudo mdutil -i off $ROOT >/dev/null
-  printf '#!/bin/sh\nhdiutil detach -quiet -force %s && sudo purge && hdiutil attach -quiet -nobrowse %s && sudo mdutil -i off %s >/dev/null\n' \
-    $ROOT "$IMG" $ROOT > "$T/remount.sh"
+  cat > "$T/remount.sh" <<EOF
+#!/bin/sh
+# a detach can still find the volume busy for a moment: retry
+for i in 1 2 3 4 5 6 7 8 9 10; do hdiutil detach -quiet -force $ROOT && break; sleep 1; done
+sudo purge && hdiutil attach -quiet -nobrowse "$IMG" && sudo mdutil -i off $ROOT >/dev/null
+EOF
   chmod +x "$T/remount.sh"
   DROP=$T/remount.sh
   ;;
