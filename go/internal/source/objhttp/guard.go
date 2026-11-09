@@ -49,6 +49,12 @@ type GuardError struct{ Err error }
 func (e *GuardError) Error() string { return "response guard: " + e.Err.Error() }
 func (e *GuardError) Unwrap() error { return e.Err }
 
+// TooLargeError is the cause of a Guard failure on a 2xx body longer than
+// MaxBody (a client may answer it by asking for less).
+type TooLargeError struct{ Limit int64 }
+
+func (e *TooLargeError) Error() string { return fmt.Sprintf("response larger than %d bytes", e.Limit) }
+
 // Cause returns the cause of the *GuardError err holds (through its Unwrap
 // chain), or err unchanged when it holds none. An adapter calls it before
 // Classify so the url.Error around the failure is not mistaken for a
@@ -121,7 +127,7 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if int64(len(body)) > limit {
 		if ok {
-			return nil, &GuardError{Err: fmt.Errorf("response larger than %d bytes", limit)}
+			return nil, &GuardError{Err: &TooLargeError{Limit: limit}}
 		}
 		body = body[:limit]
 	}

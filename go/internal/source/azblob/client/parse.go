@@ -230,11 +230,11 @@ func decodeName(n wireName) (string, error) {
 	return s, nil
 }
 
-// validate holds a parsed page to the listing contract: names (blobs and
+// Validate holds a parsed page to the listing contract: names (blobs and
 // prefixes together, in wire order) ascend strictly in UTF-16 code-unit
 // order, and the next marker is not the one sent (the listing would loop).
 // An empty NextMarker is the end.
-func (p *ListOutput) validate(sent string) error {
+func (p *ListOutput) Validate(sent string) error {
 	for i := 1; i < len(p.Items); i++ {
 		if a, b := p.Items[i-1].Name, p.Items[i].Name; utf16order.Compare(a, b) >= 0 {
 			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", ErrInvalidPage, b, a)
