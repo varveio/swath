@@ -1383,3 +1383,53 @@ The reader's own tests pass in the patched copy. `bench/diffds.py` finds the for
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
 ([upgrade.md, "The downstream reader: dispatch on schema id"](upgrade.md#the-downstream-reader-dispatch-on-schema-id)). The Java tool's reader does not read format 2, by design.
+
+## CI: Go caches, race shards and cross-OS legs, 2026-11-09
+
+Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
+`go-race (rest)` was its critical path at 5.4–6.0 min, 8.0–8.4 on a build-cache miss. The repository's
+Actions cache held 16.3 GB against its 10 GB limit (the Go caches 9.15 GB in 16 per-job entries, each with
+its own copy of the module cache), so entries were evicted continuously; a miss cost `go-objfile` 5.3–5.7 min
+against 0.6, `go-reader` 2.5 against 0.5, `go-lint` 2.0 against 0.7. Every run over 13 min had waited 7–10
+min for a macOS runner. 35 of 200 runs failed; the platform-only failures were 7 macOS-only (six test-timing
+flakes fixed in the tests, #307 #317 #334 #336; one arm64 encoder-path difference, #308) and 6 Windows-only
+(three of one clock-tick flake, #320; one filesystem difference, #310).
+
+After #355 (shared module cache, per-job build caches, retention) and #356 (`rest` in three shards, Windows
+and Linux arm64 on pull requests, macOS on `main`), job wall times in minutes, one run each:
+
+| job | PR 42626611538 | `main` 42629790131 | `main` 42631148177 (warm) |
+|---|---|---|---|
+| `go-race (cmd-kill)` | 4.3 | 4.6 | 4.6 |
+| `go-race (rest-replay)` | 4.1 | 3.4 | 3.2 |
+| `go-race (rest-source)` | 3.4 | 4.8 | 2.7 |
+| `go-race (listing-rest)` | 2.8 | 2.9 | 3.0 |
+| `go-race (crash)`, `(durable)`, `(cmd)` | 2.4–2.5 | 2.5–2.9 | 2.4–2.5 |
+| `go-race (rest)` | 2.2 | 1.7 | 1.6 |
+| `go-xos (windows-latest)` | 5.0 | 5.8 | 5.4 |
+| `go-xos (ubuntu-24.04-arm)` | 5.4 | 5.6 | 4.6 |
+| `go-xos (macos-latest)` | not on pull requests | 7.8 | 7.5 |
+| `go-objfile` | – | 5.5 (build-cache miss) | 0.8 |
+| `go-lint`, `go-reader`, `go-nonrace` | – | 0.6, 0.9, 0.9 | 0.9, 0.9, 0.9 |
+
+No `rest*` shard is above `cmd-kill`; the `go-xos` legs are the longest Go jobs on a pull request, and
+`rest-source` moves 2.7–4.8 between runs (its packages' summed time was 716 s, `rest-replay`'s 510, the
+remainder's 338 in the `-json` artifact of run 42614118007). The warm `main` run's `go-lint` log shows the
+exact module-cache hit (`go-mod-Linux-X64-<deps>`) and the build-cache restore from the previous commit's
+key (`go-build-Linux-X64-go-lint-<deps>-<sha>`).
+
+Cache sizes as `gh cache list` reports them (zstd-compressed) after the warm run: the module cache 500–504
+MiB on each of Linux amd64, Linux arm64, Windows and macOS (2.0 GB); the build caches `go-objfile` 628,
+`go-build` 357, `go-lint` 206, `go-reader` 204, `go-race (cmd)` 161, `go-race (rest)` 157, `go-xos` 146–155
+per OS, `go-race (cmd-kill)` 140, `rest-source` 122, `rest-replay` 111, `go-fixtures` 106, `go-nonrace` 87,
+`crash`/`durable`/`listing-rest` 78 each (2.9 GB). One generation is about 4.9 GB; a second exists while
+two `main` runs overlap, and `go-cache-prune` deleted 6, 2 and 3 superseded entries in the three runs. The
+13 legacy combined entries (6.7 GB) were deleted by hand after #355 merged.
+
+The first `main` run after #355 (42628492522) was red: `go mod download all` adds the hashes it fetches to
+`go.sum`, so `go mod tidy -diff` failed in `go-lint`, `go-objfile` and `go-reader`; the module cache it
+saved was complete. #360 runs the download on a copy of each module's `go.mod` and `go.sum`. Usage stayed
+above 10 GB after the Go caches shrank because `docker-check` and `go-build` wrote BuildKit caches on pull
+requests, scoped to each pull request's ref (0.4–0.8 GB each, 1.8 GB over three open pull requests), and
+GitHub's CodeQL setup keeps a 672 MiB dependency cache per pull request head. #361 writes the BuildKit
+caches from `main` only; its own pull-request run left no `buildkit-blob` entry under its ref.
