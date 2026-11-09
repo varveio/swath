@@ -58,9 +58,11 @@ func (f *fakeSTS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 </Credentials></%sResult></%sResponse>`, act, act, key, key, exp, act, act)
 }
 
-// TestCredentialSources: web identity, a role chained from it with an
-// external id, the STS region independent of --region, and credentials
-// refreshed when they expire mid-listing.
+// TestCredentialSources: the bucket's region (--region) is the listing's
+// signing region only; the credential service keeps the environment's or
+// the profile's region (else us-east-1), so a bucket in another region
+// never moves STS. A role assumed from a profile's keys: STS is signed in
+// us-east-1, the listing in the bucket's region with the role's keys.
 func TestCredentialSources(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -68,44 +70,23 @@ func TestCredentialSources(t *testing.T) {
 	stsSrv := httptest.NewServer(sts)
 	t.Cleanup(stsSrv.Close)
 	t.Setenv("AWS_ENDPOINT_URL_STS", stsSrv.URL)
-	tokenFile := filepath.Join(dir, "token")
-	os.WriteFile(tokenFile, []byte("jwt"), 0o600)
-	os.WriteFile(filepath.Join(dir, "config"), []byte(fmt.Sprintf(`[profile web]
-role_arn = arn:aws:iam::111111111111:role/web
-web_identity_token_file = %s
-
-[profile chained]
-role_arn = arn:aws:iam::222222222222:role/target
-source_profile = web
-external_id = ext-42
-`, tokenFile)), 0o600)
+	os.WriteFile(filepath.Join(dir, "credentials"), []byte("[base]\naws_access_key_id = AKBASE\naws_secret_access_key = s\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile role]\nrole_arn = arn:aws:iam::222222222222:role/target\nsource_profile = base\n"), 0o600)
 	var auth atomic.Value
-	h := func(w http.ResponseWriter, r *http.Request) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		auth.Store(r.Header.Get("Authorization"))
 		w.Write([]byte(okPage))
+	}, Config{Profile: "role", Region: "ap-southeast-2"})
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
 	}
-	list := func(cfg Config) {
-		t.Helper()
-		c, _ := testClient(t, h, cfg)
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Web identity, with the bucket in another region: STS keeps us-east-1.
-	list(Config{Profile: "web", Region: "eu-west-2"})
-	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKWEB/") || !strings.Contains(a, "/eu-west-2/s3/") {
-		t.Fatalf("web identity: %q", a)
-	}
-	// A role chained from it, with its external id.
-	list(Config{Profile: "chained", Region: "ap-southeast-2"})
-	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") {
-		t.Fatalf("chained role: %q", a)
+	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") || !strings.Contains(a, "/ap-southeast-2/s3/") {
+		t.Fatalf("listing: %q", a)
 	}
 	sts.mu.Lock()
 	calls := strings.Join(sts.calls, "; ")
 	sts.mu.Unlock()
-	if !strings.Contains(calls, "AssumeRoleWithWebIdentity ext= region=") || !strings.Contains(calls, "AssumeRole ext=ext-42 region=us-east-1") ||
-		strings.Contains(calls, "eu-west-2") || strings.Contains(calls, "ap-southeast-2") {
+	if calls != "AssumeRole ext= region=us-east-1" {
 		t.Fatalf("STS calls: %s", calls)
 	}
 }

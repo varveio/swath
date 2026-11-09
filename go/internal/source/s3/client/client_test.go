@@ -33,39 +33,10 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 	return c, srv
 }
 
-func TestRetriesAndThrottles(t *testing.T) {
-	var n atomic.Int32
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch n.Add(1) {
-		case 1:
-			w.WriteHeader(503)
-			w.Write([]byte(`<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>`))
-		case 2:
-			w.WriteHeader(500)
-		case 3:
-			w.Header().Set("Content-Length", "1000") // body cut short: a connection error
-			w.Write([]byte(okPage[:20]))
-		default:
-			if r.URL.Query().Get("list-type") != "2" || r.URL.Query().Get("encoding-type") != "url" || r.URL.Path != "/b" {
-				t.Errorf("request %s", r.URL)
-			}
-			w.Write([]byte(okPage))
-		}
-	}, Config{Anonymous: true})
-	pg, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pg.Contents[0].Key != "k " {
-		t.Fatalf("%+v", pg)
-	}
-	got := c.Counters()
-	got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
-	if got != (Counters{Attempts: 4, Retries: 3, Throttles: 1}) {
-		t.Fatalf("%+v", got)
-	}
-}
-
+// TestTypedErrorsAreNotRetried: a 301 PermanentRedirect is one attempt,
+// an *Error with its code, request ID and the bucket's region from
+// X-Amz-Bucket-Region, which the message names. The generic retry cases
+// are objhttptest.Contract's (TestRetryContract).
 func TestTypedErrorsAreNotRetried(t *testing.T) {
 	var n atomic.Int32
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -80,41 +51,6 @@ func TestTypedErrorsAreNotRetried(t *testing.T) {
 		t.Fatalf("%v (%d attempts)", err, n.Load())
 	}
 	if !strings.Contains(err.Error(), "the bucket is in eu-west-2") || strings.Contains(err.Error(), "-region") {
-		t.Fatal(err)
-	}
-}
-
-func TestTimeoutIsRetried(t *testing.T) {
-	var n atomic.Int32
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if n.Add(1) == 1 {
-			<-r.Context().Done()
-			return
-		}
-		w.Write([]byte(okPage))
-	}, Config{Anonymous: true, RequestTimeout: 50 * time.Millisecond})
-	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := c.Counters(); got.Timeouts != 1 || got.Retries != 1 {
-		t.Fatalf("%+v", got)
-	}
-}
-
-func TestAttemptsAreBounded(t *testing.T) {
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }, Config{Anonymous: true, MaxAttempts: 3})
-	_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if err == nil || !strings.Contains(err.Error(), "after 3 attempts") || c.Counters().Attempts != 3 {
-		t.Fatalf("%v %+v", err, c.Counters())
-	}
-}
-
-func TestCancelStopsBackoff(t *testing.T) {
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }, Config{Anonymous: true})
-	c.retry.BaseBackoff, c.retry.MaxBackoff = time.Hour, time.Hour
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if _, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
 }
@@ -202,29 +138,6 @@ func TestRequestPayer(t *testing.T) {
 		if (payer.Load() == "requester") != on || signed != on {
 			t.Fatalf("request payer %v: header %q, signed %v", on, payer.Load(), signed)
 		}
-	}
-}
-
-// TestParseFailuresAreRetried: a 200 whose body is cut or garbled is
-// retried and counted, and the page is returned once a good body arrives.
-func TestParseFailuresAreRetried(t *testing.T) {
-	var n atomic.Int32
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch n.Add(1) {
-		case 1:
-			w.Write([]byte(okPage[:len(okPage)-30])) // complete response, truncated document
-		case 2:
-			w.Write([]byte(strings.Replace(okPage, "</Key>", "</Kye>", 1)))
-		default:
-			w.Write([]byte(okPage))
-		}
-	}, Config{Anonymous: true})
-	pg, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if err != nil || len(pg.Contents) != 1 {
-		t.Fatalf("%v %+v", err, pg)
-	}
-	if got := c.Counters(); got.ParseFailures != 2 || got.Retries != 2 {
-		t.Fatalf("%+v", got)
 	}
 }
 
