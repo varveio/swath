@@ -134,8 +134,11 @@ returns the run report with every error, and `--report-format json` prints it on
 Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, define `P`'s
 `schema.Schema[P]`, and register a `registry.Factory` from `init` whose `Open` returns
 `registry.Bind(provider, &schema)` embedded in a value with the `Locator`, `Listed` and the optional interfaces
-(see [internals/providers.md](internals/providers.md)). The command imports the package for that registration
-only; `listing` does the rest.
+(see [internals/providers.md](internals/providers.md)). The factory also declares the provider's flags (its
+own, and the shared groups it names: the store's `--endpoint`, `--request-timeout`, `--anonymous`, the range
+engine's), which of them a resume may change, its secrets, its help entries and its root form; the command
+derives its flag set, help, resume rules and redaction from the registered factories and names no provider.
+The command imports the package for that registration only; `listing` does the rest.
 
 ## Memory
 

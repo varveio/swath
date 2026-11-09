@@ -16,7 +16,7 @@ decision to add it later).
 |---|---|---|---|
 | `--region REGION` | `--region` (default chain ends at `us-east-1`) | kept | – |
 | `--profile NAME` | `--profile` | kept | – |
-| `--endpoint-url URL` | `--endpoint URL` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--endpoint-url URL` | `--endpoint URL` (one flag for S3, GCS and Azure Blob; `--gcs-endpoint` and `--azblob-endpoint` removed; also `--request-timeout`, default 30 s, for all three, `--gcs-request-timeout` and `--azblob-request-timeout` removed) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); shared by every object store 2026-11-09 (issue 338) |
 | `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
 | `--no-sign-request` | `--anonymous` (one flag for S3, GCS and Azure Blob; `--gcs-anonymous` and `--azblob-anonymous` removed) | renamed | shared 2026-11-09 (owner: anonymity is explicit) |
 | `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
