@@ -42,8 +42,8 @@ func TestRetryContract(t *testing.T) {
 	for _, d := range decoders {
 		t.Run(d.name, func(t *testing.T) {
 			objhttptest.Contract(t, wire, func(s objhttptest.Settings) objhttptest.Client {
-				c, err := New(context.Background(), client.Config{Endpoint: s.Endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1", RequestTimeout: s.Timeout,
-					MaxAttempts: s.Retry.MaxAttempts, BaseBackoff: s.Retry.BaseBackoff, MaxBackoff: s.Retry.MaxBackoff, Limiter: s.Retry.Limiter}, WithDecoder(d.dec))
+				c, err := newSDK(context.Background(), client.Config{Endpoint: s.Endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1", RequestTimeout: s.Timeout,
+					MaxAttempts: s.Retry.MaxAttempts, BaseBackoff: s.Retry.BaseBackoff, MaxBackoff: s.Retry.MaxBackoff, Limiter: s.Retry.Limiter}, d.dec)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -108,3 +108,45 @@ func TestFirstRequestFollowsRoute(t *testing.T) {
 		}
 	}
 }
+
+// TestFIPSRegionAliases: a FIPS region alias is its region with FIPS on,
+// for Route as for the requests (the SDK resolves it inside each
+// operation), and the signing region is the region.
+func TestFIPSRegionAliases(t *testing.T) {
+	s3test.NoCredentials(t)
+	for _, region := range []string{"fips-us-east-1", "us-east-1-fips"} {
+		rec := &recorder{}
+		c, err := New(context.Background(), client.Config{Region: region, Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: rec}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "bkt"}); err != nil {
+			t.Fatal(err)
+		}
+		r := c.Route("bkt")
+		if r != "https://bkt.s3-fips.us-east-1.amazonaws.com/" || c.Region() != "us-east-1" || !strings.HasPrefix(rec.urls[0], r) {
+			t.Fatalf("%s: route %s, region %s, first request %s", region, r, c.Region(), rec.urls[0])
+		}
+	}
+}
+
+// TestCustomEndpointIgnoresEndpointFlags: with a custom endpoint, FIPS and
+// dual-stack are not used (they select among AWS endpoints), as by the
+// hand-rolled client: an S3-compatible store lists, path-style, with
+// either flag, on the same route.
+func TestCustomEndpointIgnoresEndpointFlags(t *testing.T) {
+	s3test.NoCredentials(t)
+	url := s3test.Bucket(t, []string{"a", "b/c"})
+	for _, flags := range []client.Config{{FIPS: true}, {DualStack: true}, {FIPS: true, DualStack: true}} {
+		cfg := testConfig(url)
+		cfg.FIPS, cfg.DualStack = flags.FIPS, flags.DualStack
+		hand, sdk := pair(t, cfg, false, nil)
+		pg, err := sdk.ListObjectsV2(context.Background(), &client.ListInput{Bucket: s3test.Name})
+		if err != nil || len(pg.Contents) != 2 {
+			t.Fatalf("%+v: %v %+v", flags, err, pg)
+		}
+		if h, s := hand.(*client.Client).Route(s3test.Name), sdk.(*Client).Route(s3test.Name); h != s || s != url+"/"+s3test.Name {
+			t.Fatalf("%+v: hand-rolled %s, sdk %s", flags, h, s)
+		}
+	}
+}

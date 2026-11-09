@@ -171,7 +171,7 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				sdk, err := New(context.Background(), withHTTP(cfg, srt), WithDecoder(d.dec))
+				sdk, err := newSDK(context.Background(), withHTTP(cfg, srt), d.dec)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -229,7 +229,7 @@ func TestCancelAfterHeaders(t *testing.T) {
 		cfg := testConfig(srv.URL)
 		hrt, srt := &closeCounter{next: http.DefaultTransport}, &closeCounter{next: http.DefaultTransport}
 		hand, _ := client.New(context.Background(), withHTTP(cfg, hrt))
-		sdk, _ := New(context.Background(), withHTTP(cfg, srt), WithDecoder(d.dec))
+		sdk, _ := newSDK(context.Background(), withHTTP(cfg, srt), d.dec)
 		for who, c := range map[string]lister{"hand-rolled": hand, "sdk": sdk} {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			_, err := c.ListObjectsV2(ctx, &client.ListInput{Bucket: "b"})

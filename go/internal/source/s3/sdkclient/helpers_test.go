@@ -12,12 +12,22 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
-// decoders are the SDK-backed client's decoders; every differential test
-// runs over all of them.
+// decoders are the SDK-backed client's paths: the scanner (production) and
+// the SDK's deserializer for current objects (measure.go; dec true). Every
+// differential test runs over both.
 var decoders = []struct {
 	name string
-	dec  Decoder
-}{{"sdk", DecoderSDK}, {"scanner", DecoderScanner}}
+	dec  bool
+}{{"scanner", false}, {"sdk", true}}
+
+// newSDK is New with the decoder path chosen (not the environment's).
+func newSDK(ctx context.Context, cfg client.Config, sdkDecode bool) (*Client, error) {
+	c, err := New(ctx, cfg)
+	if c != nil {
+		c.sdkDecode = sdkDecode
+	}
+	return c, err
+}
 
 // lister is what the differential tests compare: the hand-rolled client
 // and the SDK-backed one.
@@ -34,10 +44,10 @@ func testConfig(endpoint string) client.Config {
 		BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}
 }
 
-// pair builds the hand-rolled client and the SDK-backed one with dec for
+// pair builds the hand-rolled client and the SDK-backed one (dec: newSDK) for
 // the same config; hc, if set, is each one's supplied HTTP client (a copy
 // per client).
-func pair(t *testing.T, cfg client.Config, dec Decoder, hc *http.Client) (hand, sdk lister) {
+func pair(t *testing.T, cfg client.Config, dec bool, hc *http.Client) (hand, sdk lister) {
 	t.Helper()
 	hcfg, scfg := cfg, cfg
 	if hc != nil {
@@ -48,7 +58,7 @@ func pair(t *testing.T, cfg client.Config, dec Decoder, hc *http.Client) (hand, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(context.Background(), scfg, WithDecoder(dec))
+	s, err := newSDK(context.Background(), scfg, dec)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,15 +3,28 @@
 
 // Package sdkclient lists S3 through the AWS SDK's service client
 // (service/s3), behind the provider's API (s3.API, s3.VersionsAPI) and wire
-// types (package client). The SDK builds, routes and signs the requests and
-// decodes current-object pages and error answers; this package keeps what
-// the SDK does not provide: one retry owner (objhttp.Do; the SDK's retryer
-// is aws.NopRetryer), bounded and validated bodies (objhttp.Guard under the
-// SDK's HTTP client, which follows no redirect), the provider's failure
-// vocabulary, and a versions decoder that keeps <Version> and
-// <DeleteMarker> entries in wire order (walk.go; the SDK splits them into
-// two lists that cannot be merged back: TestStockSDKLosesVersionsOrder).
-// Credentials are package client's resolution (client.LoadAuth).
+// types (package client).
+//
+// The SDK owns the request: serialization, endpoint resolution, signing,
+// transport and the decoding of error answers. Its retryer is
+// aws.NopRetryer: objhttp.Do is the one retry owner, and an attempt is an
+// application attempt (net/http may still replay an idempotent GET on a
+// reused connection below it, as for the hand-rolled client). swath owns
+// only what a 2xx answer means: objhttp.Guard, under an HTTP client that
+// follows no redirect, bounds the body, checks it is the operation's
+// envelope answered 200, and captures it; the SDK's deserializer is handed
+// a minimal envelope in its place, and package client's scanner decodes
+// the captured body (client.ParseList, client.ParseVersions), as Java
+// swath's StreamingListObjectsV2Interceptor does. Measured through the same
+// stack over a 1,000-entry page (BenchmarkDecode), the SDK's deserializer
+// costs about 14 µs and 100,000 allocations an object page against the
+// scanner's 1.8 µs and 410; an encoding/xml token walk cost about 12 µs. The
+// scanner also keeps <Version> and <DeleteMarker> entries in wire order,
+// which the SDK's two lists cannot give back (TestStockSDKLosesVersionsOrder),
+// and accepts XML forms the SDK's deserializer refuses (CDATA within text,
+// spaces around numbers: client/xml_test.go). Credentials are package
+// client's resolution (client.LoadAuth), fetched before each attempt is
+// counted.
 package sdkclient
 
 import (
@@ -43,19 +56,22 @@ import (
 
 // Client lists S3 buckets through the SDK. It is safe for concurrent use.
 type Client struct {
-	cfg    client.Config
-	auth   *client.Auth
-	sdk    *awss3.Client
-	dec    Decoder
-	params awss3.EndpointParameters // Route's, without the bucket
-	retry  objhttp.Retry
-	counts objhttp.Counters
+	cfg       client.Config
+	auth      *client.Auth
+	region    string // the signing region, a FIPS alias resolved
+	sdk       *awss3.Client
+	params    awss3.EndpointParameters // Route's, without the bucket
+	retry     objhttp.Retry
+	counts    objhttp.Counters
+	sdkDecode bool // measurement plumbing (measure.go)
 }
 
 // New resolves the region and credentials (client.LoadAuth) and builds the
 // SDK client; ctx bounds the configuration load and the first credential
-// lookup. cfg.Now is not used: the SDK signs with its own clock.
-func New(ctx context.Context, cfg client.Config, opts ...Option) (*Client, error) {
+// lookup. cfg.Now is not used: the SDK signs with its own clock. As for the
+// hand-rolled client, FIPS and dual-stack select among AWS endpoints: with
+// a custom endpoint they are not used.
+func New(ctx context.Context, cfg client.Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
@@ -63,25 +79,24 @@ func New(ctx context.Context, cfg client.Config, opts ...Option) (*Client, error
 	if err != nil {
 		return nil, err
 	}
+	region, fips := fipsRegion(a.Region, cfg.FIPS)
+	dualStack := cfg.DualStack
 	var base *string
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", cfg.Endpoint)
 		}
-		base = aws.String(cfg.Endpoint)
+		base, fips, dualStack = aws.String(cfg.Endpoint), false, false
 	}
-	c := &Client{cfg: cfg, auth: a,
+	c := &Client{cfg: cfg, auth: a, region: region, sdkDecode: sdkDecode(),
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff,
 			Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer},
-		params: awss3.EndpointParameters{Region: aws.String(a.Region), UseFIPS: aws.Bool(cfg.FIPS), UseDualStack: aws.Bool(cfg.DualStack),
+		params: awss3.EndpointParameters{Region: aws.String(region), UseFIPS: aws.Bool(fips), UseDualStack: aws.Bool(dualStack),
 			Endpoint: base, ForcePathStyle: aws.Bool(cfg.PathStyle), Accelerate: aws.Bool(false),
 			DisableMultiRegionAccessPoints: aws.Bool(false), UseArnRegion: aws.Bool(false), DisableS3ExpressSessionAuth: aws.Bool(true)},
 	}
 	c.retry.Defaults()
-	for _, o := range opts {
-		o(c)
-	}
 
 	guard := &objhttp.Guard{Validate: validate}
 	if a.Bearer != nil {
@@ -101,20 +116,16 @@ func New(ctx context.Context, cfg client.Config, opts ...Option) (*Client, error
 	hc.Transport = guard
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	var creds aws.CredentialsProvider = aws.AnonymousCredentials{}
-	if a.Credentials != nil {
-		creds = a.Credentials
-	}
 	c.sdk = awss3.New(awss3.Options{
-		Region:       a.Region,
-		Credentials:  creds,
+		Region:       region,
+		Credentials:  aws.AnonymousCredentials{}, // a signed attempt supplies its own (attempt)
 		HTTPClient:   &hc,
 		Retryer:      aws.NopRetryer{},
 		BaseEndpoint: base,
 		UsePathStyle: cfg.PathStyle,
 		EndpointOptions: awss3.EndpointResolverOptions{
-			UseFIPSEndpoint:      fipsState(cfg.FIPS),
-			UseDualStackEndpoint: dualStackState(cfg.DualStack),
+			UseFIPSEndpoint:      endpointState[aws.FIPSEndpointState](fips, aws.FIPSEndpointStateEnabled, aws.FIPSEndpointStateDisabled),
+			UseDualStackEndpoint: endpointState[aws.DualStackEndpointState](dualStack, aws.DualStackEndpointStateEnabled, aws.DualStackEndpointStateDisabled),
 		},
 		Logger:                      logging.Nop{},
 		DisableS3ExpressSessionAuth: aws.Bool(true), // directory buckets are refused before any request
@@ -123,6 +134,23 @@ func New(ctx context.Context, cfg client.Config, opts ...Option) (*Client, error
 		APIOptions:                  []func(*smithymiddleware.Stack) error{awsmiddleware.AddUserAgentKey(buildinfo.Tool), allowGzip},
 	})
 	return c, nil
+}
+
+// fipsRegion resolves a FIPS region alias (fips-us-east-1, us-east-1-fips,
+// a -fips- infix) to its region with FIPS on, as the SDK does inside each
+// operation (service/s3 endpoints.go finalizeClientEndpointResolverOptions,
+// and internal/endpoints.MapFIPSRegion for the endpoint's region), so Route
+// and the requests resolve the same endpoint.
+func fipsRegion(region string, fips bool) (string, bool) {
+	r := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(region, "-fips-", "-"), "fips-", ""), "-fips", "")
+	return r, fips || r != region
+}
+
+func endpointState[S any](on bool, enabled, disabled S) S {
+	if on {
+		return enabled
+	}
+	return disabled
 }
 
 // allowGzip removes the SDK's "Accept-Encoding: identity", so net/http
@@ -134,20 +162,6 @@ func allowGzip(stack *smithymiddleware.Stack) error {
 	return err
 }
 
-func fipsState(on bool) aws.FIPSEndpointState {
-	if on {
-		return aws.FIPSEndpointStateEnabled
-	}
-	return aws.FIPSEndpointStateDisabled
-}
-
-func dualStackState(on bool) aws.DualStackEndpointState {
-	if on {
-		return aws.DualStackEndpointStateEnabled
-	}
-	return aws.DualStackEndpointStateDisabled
-}
-
 // Credentials returns the resolved credentials' source (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) {
 	return c.auth.Source, c.auth.Anonymous
@@ -156,8 +170,8 @@ func (c *Client) Credentials() (source string, anonymous bool) {
 // Note is a one-time warning for the user, or "".
 func (c *Client) Note() string { return c.auth.Note }
 
-// Region is the signing region.
-func (c *Client) Region() string { return c.auth.Region }
+// Region is the signing region (a FIPS alias resolved to its region).
+func (c *Client) Region() string { return c.region }
 
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
@@ -196,6 +210,18 @@ func (c *Client) Route(bucket string) string {
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
 }
 
+// The envelopes the operations answer, and the minimal ones the SDK
+// decodes in place of a captured body.
+const (
+	listRoot     = "ListBucketResult"
+	versionsRoot = "ListVersionsResult"
+)
+
+var (
+	emptyList     = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`)
+	emptyVersions = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListVersionsResult>`)
+)
+
 // ListObjectsV2 sends one ListObjectsV2 request through the SDK, retrying
 // retryable failures (objhttp.Do).
 func (c *Client) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
@@ -210,31 +236,24 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clie
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
+	op := operation[client.Page]{root: listRoot, replace: emptyList, parse: client.ParseList}
+	if c.sdkDecode {
+		op = operation[client.Page]{root: listRoot}
+	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*client.Page, error) {
-		if c.dec == DecoderSDK {
-			return attempt(c, ctx, nil, func(actx context.Context) (*client.Page, error) {
-				out, err := c.sdk.ListObjectsV2(actx, req)
-				if err != nil {
-					return nil, err
-				}
-				return page(out)
-			})
-		}
-		capture := &objhttp.Capture{Replace: emptyList}
-		return attempt(c, ctx, capture, func(actx context.Context) (*client.Page, error) {
-			if _, err := c.sdk.ListObjectsV2(actx, req); err != nil {
+		return attempt(c, ctx, op, func(actx context.Context, opts ...func(*awss3.Options)) (*client.Page, error) {
+			out, err := c.sdk.ListObjectsV2(actx, req, opts...)
+			if err != nil || op.parse != nil {
 				return nil, err
 			}
-			return client.ParseList(capture.Body)
+			return page(out)
 		})
 	})
 }
 
 // ListObjectVersions sends one ListObjectVersions request on
-// ListObjectsV2's path. The SDK decodes a minimal envelope in place of the
-// body (objhttp.Capture); the captured body is decoded in wire order (the
-// walk, or the scanner with DecoderScanner) and the page checked
-// (VersionPage.Validate).
+// ListObjectsV2's path; the scanner decodes the body in wire order and
+// checks the page (VersionPage.Validate).
 func (c *Client) ListObjectVersions(ctx context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
 	if in.VersionIDMarker != "" && in.KeyMarker == "" {
 		return nil, errors.New("ListObjectVersions: a version-id marker without a key marker")
@@ -250,52 +269,14 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *client.VersionsInpu
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
+	op := operation[client.VersionPage]{root: versionsRoot, replace: emptyVersions, parse: client.ParseVersions}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*client.VersionPage, error) {
-		capture := &objhttp.Capture{Replace: emptyVersions}
-		return attempt(c, ctx, capture, func(actx context.Context) (*client.VersionPage, error) {
-			if _, err := c.sdk.ListObjectVersions(actx, req); err != nil {
-				return nil, err
-			}
-			if c.dec == DecoderScanner {
-				return client.ParseVersions(capture.Body) // validated
-			}
-			pg, err := decodeVersions(capture.Body)
-			if err != nil {
-				return nil, err
-			}
-			if err := pg.Validate(); err != nil {
-				return nil, err
-			}
-			return pg, nil
+		return attempt(c, ctx, op, func(actx context.Context, opts ...func(*awss3.Options)) (*client.VersionPage, error) {
+			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
+			return nil, err
 		})
 	})
 }
-
-// emptyList and emptyVersions are what the SDK decodes in place of a
-// captured body.
-var (
-	emptyList     = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`)
-	emptyVersions = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListVersionsResult>`)
-)
-
-// Decoder selects how 2xx listing bodies are decoded.
-type Decoder int
-
-const (
-	// DecoderSDK: the SDK's generated deserializer for ListObjectsV2, the
-	// walk (walk.go) for ListObjectVersions.
-	DecoderSDK Decoder = iota
-	// DecoderScanner: package client's scanner (client.ParseList,
-	// client.ParseVersions) for both, on the captured body; the SDK decodes
-	// an empty envelope.
-	DecoderScanner
-)
-
-// Option configures a Client beyond client.Config.
-type Option func(*Client)
-
-// WithDecoder selects the body decoder (default DecoderSDK).
-func WithDecoder(d Decoder) Option { return func(c *Client) { c.dec = d } }
 
 func str(s string) *string {
 	if s == "" {
@@ -304,7 +285,20 @@ func str(s string) *string {
 	return aws.String(s)
 }
 
-type tokenKey struct{}
+// operation is how an attempt's 2xx body is checked and decoded: root is
+// the envelope it must be; with parse, the Guard captures the body, the SDK
+// decodes replace in its place and parse decodes the body; without, the
+// SDK's call result is the page.
+type operation[T any] struct {
+	root    string
+	replace []byte
+	parse   func([]byte) (*T, error)
+}
+
+type (
+	tokenKey struct{}
+	rootKey  struct{}
+)
 
 // bearerHeader is the Guard's Header in bearer mode: the token attempt
 // fetched before the request was counted, carried by its context.
@@ -317,30 +311,42 @@ func bearerHeader(req *http.Request) error {
 	return nil
 }
 
-// attempt runs one SDK call (call) under the request timeout. What the
-// request needs (credentials, a bearer token) is fetched first: a failure
-// there is a *objhttp.CredentialError and not an attempt. The attempt is
-// counted from just before the call until it returns (the Guard has read
-// the body by then). capture, if set, is filled by the Guard.
-func attempt[T any](c *Client, ctx context.Context, capture *objhttp.Capture, call func(context.Context) (*T, error)) (*T, error) {
+// attempt runs one SDK call under the request timeout. What the request
+// needs (the credentials, a bearer token) is fetched first, once: a failure
+// there is a *objhttp.CredentialError and not an attempt, and the call
+// signs with what was fetched (no second lookup inside the counted call).
+// The attempt is counted from just before the call until it returns (the
+// Guard has read and checked the body by then); op says how the body is
+// decoded.
+func attempt[T any](c *Client, ctx context.Context, op operation[T], call func(context.Context, ...func(*awss3.Options)) (*T, error)) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
-	tok, _, err := c.auth.Ready(actx)
+	tok, creds, err := c.auth.Ready(actx)
 	if err != nil {
 		return nil, err
 	}
-	cctx := actx
+	var opts []func(*awss3.Options)
+	if c.auth.Credentials != nil {
+		opts = append(opts, func(o *awss3.Options) {
+			o.Credentials = aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return creds, nil })
+		})
+	}
+	cctx := context.WithValue(actx, rootKey{}, op.root)
 	if c.auth.Bearer != nil {
 		cctx = context.WithValue(cctx, tokenKey{}, tok)
 	}
-	if capture != nil {
+	capture := &objhttp.Capture{Replace: op.replace}
+	if op.parse != nil {
 		cctx = objhttp.WithCapture(cctx, capture)
 	}
 	done := c.counts.Attempt()
-	v, err := call(cctx)
+	v, err := call(cctx, opts...)
 	done()
 	if err == nil {
 		err = faults.At("response-read")
+	}
+	if err == nil && op.parse != nil {
+		v, err = op.parse(capture.Body)
 	}
 	if err != nil {
 		err = c.failure(actx, ctx, err)
@@ -355,10 +361,10 @@ func attempt[T any](c *Client, ctx context.Context, capture *objhttp.Capture, ca
 // failure maps an attempt's error to the provider's vocabulary: a Guard
 // failure is its cause (ErrSyntax, a 2xx answer other than 200, the size
 // cap, a credential error, a failed body read: a cut body is transport, a
-// read past the attempt's deadline ErrTimeout); an
-// HTTP answer other than 2xx is a *client.Error; a 2xx body the SDK could
-// not decode, or a body the walk or the scanner refused, is ErrSyntax; a
-// transport failure stays one (an attempt timeout is ErrTimeout).
+// read past the attempt's deadline ErrTimeout); an HTTP answer other than
+// 2xx is a *client.Error; a 2xx body the SDK could not decode is ErrSyntax;
+// the scanner's ErrSyntax and ErrInvalidPage stand; a transport failure
+// stays one (an attempt timeout is ErrTimeout).
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError
 	if errors.As(err, &ge) {
@@ -415,14 +421,16 @@ func answer(err error) (objhttp.Class, bool) {
 // validate is the Guard's check of a 2xx body. A 2xx other than 200 is an
 // answer, as the hand-rolled client reads it (client.ResponseError: an
 // <Error> body's code, else the status text; the response headers are not
-// seen here, so no request ID or region from them). A 200 must hold a
-// ListBucketResult or ListVersionsResult root element: an empty body or
-// another root (an <Error> under 200) is ErrSyntax, retried, never read as
-// an empty final page.
-func validate(_ *http.Request, status int, body []byte) error {
+// seen here, so no request ID or region from them). A 200 must hold the
+// operation's envelope as its root element (the attempt's context names
+// it): an empty body or another root (an <Error> under 200, the other
+// listing's envelope) is ErrSyntax, retried, never read as an empty final
+// page.
+func validate(req *http.Request, status int, body []byte) error {
 	if status != http.StatusOK {
 		return client.ResponseError(status, nil, body)
 	}
+	want, _ := req.Context().Value(rootKey{}).(string)
 	d := xml.NewDecoder(bytes.NewReader(body))
 	for {
 		tok, err := d.Token()
@@ -433,65 +441,10 @@ func validate(_ *http.Request, status int, body []byte) error {
 			return fmt.Errorf("%w: %v", objhttp.ErrSyntax, err)
 		}
 		if s, ok := tok.(xml.StartElement); ok {
-			switch s.Name.Local {
-			case "ListBucketResult", "ListVersionsResult":
-				return nil
+			if s.Name.Local != want {
+				return fmt.Errorf("%w: root element <%s>, want <%s>", objhttp.ErrSyntax, s.Name.Local, want)
 			}
-			return fmt.Errorf("%w: root element <%s>, want <ListBucketResult> or <ListVersionsResult>", objhttp.ErrSyntax, s.Name.Local)
+			return nil
 		}
 	}
-}
-
-// page converts the SDK's ListObjectsV2 output, URL-decoding keys and
-// common prefixes once when the answer says encoding-type=url (the SDK
-// keeps them as sent).
-func page(out *awss3.ListObjectsV2Output) (*client.Page, error) {
-	enc := string(out.EncodingType)
-	pg := &client.Page{
-		IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
-		HasContinuation: out.NextContinuationToken != nil, KeyCount: int(aws.ToInt32(out.KeyCount)), EncodingType: enc,
-		Contents: make([]client.Object, len(out.Contents)),
-	}
-	var err error
-	for i, o := range out.Contents {
-		c := &pg.Contents[i]
-		if c.Key, err = unescape(enc, aws.ToString(o.Key)); err != nil {
-			return nil, err
-		}
-		c.ETag, c.Size = aws.ToString(o.ETag), aws.ToInt64(o.Size)
-		if o.LastModified != nil {
-			c.Mtime = o.LastModified.UnixMicro()
-		}
-		c.StorageClass = string(o.StorageClass)
-		if o.Owner != nil {
-			c.OwnerID, c.OwnerDisplayName = aws.ToString(o.Owner.ID), aws.ToString(o.Owner.DisplayName)
-		}
-		if len(o.ChecksumAlgorithm) > 0 {
-			c.ChecksumAlgorithm = string(o.ChecksumAlgorithm[0])
-		}
-		c.ChecksumType = string(o.ChecksumType)
-	}
-	if len(out.CommonPrefixes) > 0 {
-		pg.CommonPrefixes = make([]string, len(out.CommonPrefixes))
-		for i, p := range out.CommonPrefixes {
-			if pg.CommonPrefixes[i], err = unescape(enc, aws.ToString(p.Prefix)); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return pg, nil
-}
-
-// unescape decodes a key field once when enc is "url", with form semantics
-// ('+' is a space) as S3's encoding-type=url answers need and as package
-// client decodes them; a bad escape is ErrSyntax.
-func unescape(enc, s string) (string, error) {
-	if enc != "url" {
-		return s, nil
-	}
-	v, err := url.QueryUnescape(s)
-	if err != nil {
-		return "", fmt.Errorf("%w: invalid URL escape in %q", objhttp.ErrSyntax, s)
-	}
-	return v, nil
 }
