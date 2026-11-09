@@ -112,9 +112,11 @@ modules (`go`, `go/objfile`, `go/reader`).
 Only a push to `main` saves, each cache when the job ends; a pull request, the nightly jobs and stress
 dispatches restore without saving. A saved key is never overwritten, so concurrent saves of the shared
 module key keep the first and the rest only log a warning. A job on `main` that finds no exact module key
-runs `go mod download` in all three modules before it can save one: the jobs build different module graphs
-(the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed. A job
-that fails saves nothing.
+runs `go mod download all` in all three modules before it can save one: the jobs build different module
+graphs (the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed,
+which an exact hit never repairs. `all`, not the build list alone: `go mod tidy -diff` in `go-lint` also loads
+the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). A job that fails
+saves nothing.
 
 Retention: after the Go jobs of a push to `main` (passed or not), `go-cache-prune` runs
 [`scripts/ci/go-cache-prune.sh`](../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
@@ -217,9 +219,9 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 | `shuffle` | `false` | `-shuffle=on`; the seed is in the output, so `-shuffle=SEED` replays an order |
 | `os` | `ubuntu-latest` | `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest` |
 
-It sets up Go through `.github/actions/setup-go`, restoring the shared module cache and the `go-race (rest)`
-build cache (a linux/amd64 race build; on the other runners only the module cache hits) without saving, and
-runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
+It sets up Go through `.github/actions/setup-go`, restoring without saving the shared module cache and the
+build cache of the `ci.yml` job on the same runner (`go-race (rest)` on `ubuntu-latest`, `go-race (listing-rest)`
+on `ubuntu-24.04-arm`, `go-xos` on macOS and Windows, a build without `-race`), and runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
 `go-stress-OS-ARCH` artifact. Stress takes a package pattern and a `-run` pattern, not a race shard: to repeat
 a shard, pass its row's arguments from [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh).

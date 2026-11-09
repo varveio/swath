@@ -55,16 +55,18 @@ runs:
           go-mod-${{ runner.os }}-${{ runner.arch }}-
 
     # Jobs build different module graphs (go/reader has no cloud SDK), so the job that saves a new
-    # module key first would otherwise freeze only what it happened to need. Every module's
-    # dependencies are downloaded before any job may save. The directories are absolute because
-    # the callers' working directories differ.
+    # module key first would otherwise freeze only what it happened to need, and an exact hit
+    # never adds what is missing. Every module's `all` is downloaded before any job may save: the
+    # build list alone leaves out modules that only dependencies' tests import, which
+    # `go mod tidy -diff` (go-lint) loads (github.com/google/go-cmp, for protobuf's tests). The
+    # directories are absolute because the callers' working directories differ.
     - name: Download every Go module's dependencies (new module-cache key on main)
       if: steps.modcache-main.outcome == 'success' && steps.modcache-main.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
         for dir in go go/objfile go/reader; do
-          (cd "$GITHUB_WORKSPACE/$dir" && go mod download)
+          (cd "$GITHUB_WORKSPACE/$dir" && go mod download all)
         done
 
     - name: Restore the Go build cache (saved at the end of the job)

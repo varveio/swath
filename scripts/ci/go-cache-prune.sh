@@ -16,10 +16,12 @@ set -euo pipefail
 : "${GITHUB_REPOSITORY:?}"
 summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 
-# All pages: the API returns at most 100 per page.
+# All pages: the API returns at most 100 per page. Its default order is by last access, which a
+# restore between two page requests changes, so a cache could be listed twice (and one copy
+# deleted as older than the other). Creation order is fixed, and ids are deduplicated anyway.
 snapshot=$(gh api --paginate \
-  "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=go-build-&per_page=100" \
-  --jq '.actions_caches[]' | jq -s '.')
+  "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=go-build-&sort=created_at&direction=asc&per_page=100" \
+  --jq '.actions_caches[]' | jq -s 'unique_by(.id)')
 
 # One object per family: the retained cache and the ones to delete, oldest first.
 plan=$(jq '
