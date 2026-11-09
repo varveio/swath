@@ -198,8 +198,11 @@ func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	if z.Size != 5 || !z.Has(HasSize|HasMtime|HasMode) {
 		t.Errorf("z: size %d presence %b", z.Size, z.Present)
 	}
-	if runtime.GOOS == "linux" && (!z.Has(HasStat) || z.Inode == 0 || z.Nlink != 1) {
+	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && (!z.Has(HasStat) || z.Inode == 0 || z.Nlink != 1) {
 		t.Errorf("z: stat fields missing: %+v", z)
+	}
+	if runtime.GOOS == "darwin" && !z.Has(HasBtime) {
+		t.Errorf("z: no birth time on darwin: %+v", z)
 	}
 	if l := by["link-file"]; l.LinkTarget != "z" || !l.Has(HasLink) {
 		t.Errorf("link target %q", l.LinkTarget)

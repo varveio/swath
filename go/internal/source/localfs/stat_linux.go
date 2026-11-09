@@ -47,26 +47,6 @@ func readlinkAt(dirfd int, name string) (string, error) {
 	}
 }
 
-func kindOfMode(m uint32) Kind {
-	switch m & unix.S_IFMT {
-	case unix.S_IFREG:
-		return KindFile
-	case unix.S_IFDIR:
-		return KindDir
-	case unix.S_IFLNK:
-		return KindSymlink
-	case unix.S_IFIFO:
-		return KindFIFO
-	case unix.S_IFSOCK:
-		return KindSocket
-	case unix.S_IFCHR:
-		return KindCharDevice
-	case unix.S_IFBLK:
-		return KindBlockDevice
-	}
-	return KindUnknown
-}
-
 // dtKinds maps d_type values (0..15) to kinds; unlisted values are unknown.
 var dtKinds = [16]Kind{
 	unix.DT_REG: KindFile, unix.DT_DIR: KindDir, unix.DT_LNK: KindSymlink,

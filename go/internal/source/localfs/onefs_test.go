@@ -34,8 +34,8 @@ func TestOneFilesystem(t *testing.T) {
 	if _, err := New(root, Options{OneFilesystem: true, Fields: Names}); err == nil || !strings.Contains(err.Error(), "names metadata tier") {
 		t.Fatalf("names tier: %v", err)
 	}
-	if runtime.GOOS != "linux" {
-		// The portable engine reads no device on other platforms.
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		// The portable engine reads no device on Windows.
 		if _, err := New(root, Options{OneFilesystem: true}); err == nil {
 			t.Fatal("no device, yet one filesystem")
 		}
