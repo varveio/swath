@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -19,7 +20,7 @@ import (
 func TestAbandonedChains(t *testing.T) {
 	keys := []string{"a", "a" + E, "a" + E + S, "a" + S, "a" + S + E, "b", "c", "d"}
 	goroutines := runtime.NumGoroutine()
-	st := newFake(keys)
+	st := azblobtest.NewStore(keys)
 	st.Short = every(1)
 	a := New(st, "c", nil, 0)
 	for round := range 3 {
@@ -44,8 +45,8 @@ func TestAbandonedChains(t *testing.T) {
 			tokens = append(tokens, q)
 		}
 		// A page that fails leaves its chain as it was.
-		failing := newFake(keys)
-		failing.Fail = failAt(1)
+		failing := azblobtest.NewStore(keys)
+		failing.Fail = azblobtest.FailAt(1)
 		b := New(failing, "c", nil, 0)
 		q := keyrange.Query{Max: 1}
 		p, err := b.Fetch(context.Background(), &q)
@@ -53,7 +54,7 @@ func TestAbandonedChains(t *testing.T) {
 			t.Fatal(err)
 		}
 		q.Token = p.Token
-		if _, err := b.Fetch(context.Background(), &q); !errors.Is(err, errInjected) || b.Len() != 1 {
+		if _, err := b.Fetch(context.Background(), &q); !errors.Is(err, azblobtest.ErrInjected) || b.Len() != 1 {
 			t.Fatalf("a failed page: %v, %d chains", err, b.Len())
 		}
 		b.Release()

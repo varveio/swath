@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/utf16order"
@@ -108,10 +109,17 @@ var (
 	// ErrToken: a continuation token that is not the last one its chain
 	// returned, or that names no live chain.
 	ErrToken = errors.New("order: unknown or stale continuation token")
-	// ErrInvariant: the adapter broke its own invariant (a bug, not a
-	// page the service sent).
+	// ErrInvariant: the adapter's state contradicts itself, which only a
+	// page outside the listing contract (out of Azure's order) or a bug
+	// can cause. It is returned as a protocol violation wrapping the
+	// client's invalid page, so the engine fails the range as it fails any
+	// invalid page.
 	ErrInvariant = errors.New("order: invariant violated")
 )
+
+func invariant(format string, args ...any) error {
+	return source.Violation(fmt.Errorf("%w (%w): %s", ErrInvariant, client.ErrInvalidPage, fmt.Sprintf(format, args...)))
+}
 
 // Page is one page in byte order: blobs and, with a delimiter, BlobPrefix
 // roll-ups (Item.Prefix), together ascending in unsigned byte order. Rows
@@ -246,7 +254,7 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 		}
 		a.max(CStackMax, int64(len(c.stack)))
 		if len(c.stack) > c.limit {
-			return nil, fmt.Errorf("%w: %d spans, bound %d", ErrInvariant, len(c.stack), c.limit)
+			return nil, invariant("%d spans, bound %d", len(c.stack), c.limit)
 		}
 	} else {
 		var seq uint64
@@ -343,7 +351,7 @@ func (a *Adapter) fill(ctx context.Context, c *chain, limit int) (*Page, error) 
 			continue
 		}
 		if c.any && it.Name <= c.last {
-			return nil, fmt.Errorf("%w: %q emitted after %q", ErrInvariant, it.Name, c.last)
+			return nil, invariant("%q emitted after %q", it.Name, c.last)
 		}
 		top.buf = top.buf[1:]
 		c.last, c.any = it.Name, true
@@ -516,7 +524,7 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 			k++
 		}
 		if k == len(kids) {
-			return false, fmt.Errorf("%w: buffered %q is in no child of a split at %q", ErrInvariant, it.Name, q)
+			return false, invariant("buffered %q is in no child of a split at %q", it.Name, q)
 		}
 		kids[k].buf = append(kids[k].buf, it)
 	}
@@ -532,7 +540,7 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 			}
 		}
 		if owner < 0 {
-			return false, fmt.Errorf("%w: frontier %q is in no child of a split at %q", ErrInvariant, t.frontier, q)
+			return false, invariant("frontier %q is in no child of a split at %q", t.frontier, q)
 		}
 		floor := seekFrom(kids[owner].lo)
 		for k := range kids {
@@ -542,7 +550,7 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 			case utf16order.Compare(seekFrom(kids[k].lo), floor) < 0:
 				kids[k].st = exhausted
 			case len(kids[k].buf) > 0:
-				return false, fmt.Errorf("%w: a child after the owner of a split at %q holds %q", ErrInvariant, q, kids[k].buf[0].Name)
+				return false, invariant("a child after the owner of a split at %q holds %q", q, kids[k].buf[0].Name)
 			}
 		}
 	}
@@ -555,7 +563,7 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 	}
 	a.max(CStackMax, int64(len(c.stack)))
 	if len(c.stack) > c.limit {
-		return false, fmt.Errorf("%w: %d spans, bound %d", ErrInvariant, len(c.stack), c.limit)
+		return false, invariant("%d spans, bound %d", len(c.stack), c.limit)
 	}
 	return true, nil
 }

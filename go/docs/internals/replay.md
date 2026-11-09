@@ -476,7 +476,8 @@ no response permit or response memory, reads nothing from the store, and answers
 
 Azure lists names in UTF-16 code-unit order. For valid UTF-8 that is byte order except at the first differing
 byte, where lead bytes F0..F4 (a surrogate pair in UTF-16) rank before EE..EF (U+E000 to U+FFFF): byte ranks
-`00..ED, F0..F4, EE..EF, F5..FF` (`rank`, `Compare`). A prefix window is contiguous in both orders, and the
+`00..ED, F0..F4, EE..EF, F5..FF` (`internal/utf16order`, shared with the Azure client and the provider's byte-order
+adapter; `Compare` wraps it). A prefix window is contiguous in both orders, and the
 orders disagree only between an EE/EF branch and an F0..F4 branch under the same parent, so provider order over
 a byte range is the byte order with each such pair of sibling branches swapped. Two pieces build it on the
 byte-sorted store:

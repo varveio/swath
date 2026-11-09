@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
@@ -54,7 +55,7 @@ func walk(a *Adapter, q keyrange.Query, retries int, retry func(error) bool) ([]
 }
 
 // injected admits the fake's injected failures only.
-func injected(err error) bool { return errors.Is(err, errInjected) }
+func injected(err error) bool { return errors.Is(err, azblobtest.ErrInjected) }
 
 // flat is walk's pages concatenated.
 func flat(pages [][]client.Item, err error) ([]client.Item, error) {
@@ -163,7 +164,7 @@ func TestWorkedExamples(t *testing.T) {
 			if got := decompose(normalise(row.q.Prefix, row.q.After, row.q.Through, row.q.Bounded), row.q.Through); !slices.EqualFunc(got, row.spans, sameBounds) {
 				t.Errorf("spans %s, want %s", spanStrings(got), spanStrings(row.spans))
 			}
-			st := newFake(row.keys)
+			st := azblobtest.NewStore(row.keys)
 			a := New(st, "c", nil, 0)
 			items, err := flat(walk(a, row.q, 0, injected))
 			if err != nil {
@@ -187,9 +188,9 @@ func TestWorkedExamples(t *testing.T) {
 
 // run drains q over keys with the store configured by setup, checks the
 // items against the oracle and returns the store.
-func run(t *testing.T, keys []string, q keyrange.Query, setup func(*fakeStore)) (*fakeStore, *Adapter) {
+func run(t *testing.T, keys []string, q keyrange.Query, setup func(*azblobtest.Store)) (*azblobtest.Store, *Adapter) {
 	t.Helper()
-	st := newFake(keys)
+	st := azblobtest.NewStore(keys)
 	if setup != nil {
 		setup(st)
 	}
@@ -211,7 +212,7 @@ func every(n int) func(int) int { return func(int) int { return n } }
 // frontier b); S and E complete from their buffers, P-before the owner.
 // Two responses: the page and the marker's.
 func TestRawPageAcrossGroups(t *testing.T) {
-	st, a := run(t, []string{"a" + E, "a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *fakeStore) {
+	st, a := run(t, []string{"a" + E, "a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *azblobtest.Store) {
 		s.Short = func(n int) int { return map[int]int{0: 3}[n] }
 	})
 	if got := st.Log()[0].Names; !slices.Equal(got, []string{"a" + S, "a" + E, "b"}) {
@@ -233,7 +234,7 @@ func TestGroupsAcrossPages(t *testing.T) {
 	for size := 1; size <= len(keys); size++ {
 		for _, max := range []int{1, 2, 1000} {
 			t.Run(fmt.Sprintf("page%d/max%d", size, max), func(t *testing.T) {
-				run(t, keys, keyrange.Query{Max: max}, func(s *fakeStore) { s.Short = every(size) })
+				run(t, keys, keyrange.Query{Max: max}, func(s *azblobtest.Store) { s.Short = every(size) })
 			})
 		}
 	}
@@ -330,7 +331,7 @@ func TestRollupsAtSeeks(t *testing.T) {
 // [b] past S (one overlap row); the rest continues with [c]. Four
 // responses.
 func TestEmptySplitBranch(t *testing.T) {
-	st, a := run(t, []string{"a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *fakeStore) { s.Short = every(1) })
+	st, a := run(t, []string{"a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *azblobtest.Store) { s.Short = every(1) })
 	if st.Responses() != 4 || a.Counter(COverlapRows) != 1 || a.Counter(CSeeks) != 2 {
 		t.Errorf("%d responses, %d overlap rows, %d seeks\n%s", st.Responses(), a.Counter(COverlapRows), a.Counter(CSeeks), st)
 	}
@@ -340,7 +341,7 @@ func TestEmptySplitBranch(t *testing.T) {
 // startFrom, prefix or delimiter, so every other test also proves that the
 // adapter resends a marker only with the query that issued it.
 func TestMarkerBoundToQuery(t *testing.T) {
-	st := newFake([]string{"a", "b", "c"})
+	st := azblobtest.NewStore([]string{"a", "b", "c"})
 	in := client.ListInput{StartFrom: "a", MaxResults: 1}
 	out, err := st.List(context.Background(), &in)
 	if err != nil || out.NextMarker == "" {
@@ -353,7 +354,7 @@ func TestMarkerBoundToQuery(t *testing.T) {
 		{StartFrom: "a", Delimiter: "/", Marker: out.NextMarker, MaxResults: 1},
 		{StartFrom: "a", Marker: "m99", MaxResults: 1},
 	} {
-		if _, err := st.List(context.Background(), &bad); !errors.Is(err, errMarker) {
+		if _, err := st.List(context.Background(), &bad); !errors.Is(err, azblobtest.ErrMarker) {
 			t.Errorf("%+v: %v", bad, err)
 		}
 	}
@@ -371,10 +372,10 @@ func TestFailureRepeatsThePage(t *testing.T) {
 	q := keyrange.Query{Prefix: "a", After: "a" + D7FF + E, Max: 1000}
 	// Row 9's four seeks in one Fetch; the third fails. Two responses
 	// before it, four in the retry: six, in seven attempts.
-	st := newFake(keys)
-	st.Fail = failAt(2)
+	st := azblobtest.NewStore(keys)
+	st.Fail = azblobtest.FailAt(2)
 	a := New(st, "c", nil, 0)
-	if _, err := a.Fetch(context.Background(), &q); !errors.Is(err, errInjected) {
+	if _, err := a.Fetch(context.Background(), &q); !errors.Is(err, azblobtest.ErrInjected) {
 		t.Fatalf("the failing page: %v", err)
 	}
 	if a.Len() != 0 {
@@ -392,13 +393,13 @@ func TestFailureRepeatsThePage(t *testing.T) {
 	// run's pages, asked again on failure, equal the fault-free pages.
 	keys = []string{"a", "a" + E, "a" + E + "b", "a" + E + S, "a" + S, "a" + S + E, "b", "c"}
 	q = keyrange.Query{Max: 2}
-	clean := newFake(keys)
+	clean := azblobtest.NewStore(keys)
 	clean.Short = every(1)
 	want := pages(t, New(clean, "c", nil, 0), q, nil)
 	for n := range clean.Attempts() {
-		st := newFake(keys)
+		st := azblobtest.NewStore(keys)
 		st.Short = func(i int) int { return 1 }
-		st.Fail = failAt(n)
+		st.Fail = azblobtest.FailAt(n)
 		if got := pages(t, New(st, "c", nil, 0), q, st); !slices.EqualFunc(got, want, slices.Equal) {
 			t.Errorf("failure at request %d: pages %q, want %q\n%s", n, got, want, st)
 		}
@@ -410,7 +411,7 @@ func TestFailureRepeatsThePage(t *testing.T) {
 
 // pages is q's chain as pages of names, a failed page asked again with the
 // same token.
-func pages(t *testing.T, a *Adapter, q keyrange.Query, st *fakeStore) [][]string {
+func pages(t *testing.T, a *Adapter, q keyrange.Query, st *azblobtest.Store) [][]string {
 	t.Helper()
 	got, err := walk(a, q, 1000, injected)
 	if err != nil {
@@ -427,7 +428,7 @@ func pages(t *testing.T, a *Adapter, q keyrange.Query, st *fakeStore) [][]string
 // []+M, [b]: three. Prefix a, After a, Through ab, Max 1, keys {a, ab}:
 // [a]+M (the endpoint, dropped), then [ab]: two.
 func TestCharging(t *testing.T) {
-	st, a := run(t, []string{"a", "b"}, keyrange.Query{Max: 1}, func(s *fakeStore) {
+	st, a := run(t, []string{"a", "b"}, keyrange.Query{Max: 1}, func(s *azblobtest.Store) {
 		s.Empty = func(n int) bool { return n == 1 }
 	})
 	if st.Responses() != 3 || a.Counter(CEmptyPages) != 1 {
@@ -439,7 +440,7 @@ func TestCharging(t *testing.T) {
 		t.Errorf("%d responses\n%s", st.Responses(), st)
 	}
 	// The endpoint arriving after empty continuing pages is still dropped.
-	run(t, []string{"a", "ab"}, q, func(s *fakeStore) { s.Empty = func(n int) bool { return n < 3 } })
+	run(t, []string{"a", "ab"}, q, func(s *azblobtest.Store) { s.Empty = func(n int) bool { return n < 3 } })
 }
 
 // TestMaximumLengthBounds: bounds of 1,024 UTF-16 code units alternating
@@ -469,7 +470,7 @@ func TestMaximumLengthBounds(t *testing.T) {
 // TestTokens: a token is accepted only on its own chain, with the sequence
 // it was returned with and the chain's query.
 func TestTokens(t *testing.T) {
-	st := newFake([]string{"a", "b", "c"})
+	st := azblobtest.NewStore([]string{"a", "b", "c"})
 	a := New(st, "c", nil, 0)
 	q := keyrange.Query{Max: 1}
 	p, err := a.Fetch(context.Background(), &q)
@@ -495,7 +496,7 @@ func TestTokens(t *testing.T) {
 // TestCancelledRead: a cancelled read fails the page and registers
 // nothing.
 func TestCancelledRead(t *testing.T) {
-	a := New(newFake([]string{"a"}), "c", nil, 0)
+	a := New(azblobtest.NewStore([]string{"a"}), "c", nil, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := a.Fetch(ctx, &keyrange.Query{Max: 1}); !errors.Is(err, context.Canceled) || a.Len() != 0 {
@@ -545,7 +546,7 @@ func TestChainsEvicted(t *testing.T) {
 	for i := range 300 {
 		keys = append(keys, fmt.Sprintf("k%03d", i), fmt.Sprintf("k%03d", i)+S, fmt.Sprintf("k%03d", i)+E)
 	}
-	st := newFake(keys)
+	st := azblobtest.NewStore(keys)
 	st.Short = every(5)
 	a := New(st, "c", nil, 0)
 	live := keyrange.Query{Max: 1}

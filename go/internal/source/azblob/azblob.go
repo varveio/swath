@@ -8,11 +8,10 @@
 //
 // Azure lists in UTF-16 code-unit order, which is byte order except
 // between names whose first differing scalars are one in U+E000..U+FFFF
-// and one at U+10000 and above. Until the provider reorders such pages, it
-// refuses any page, cursor or bound that carries a byte in EE..F4 (the
-// lead bytes of those scalars) before the engine sees it, so every page
-// the engine takes is byte-ordered; and it lists only accounts whose
-// namespace is positively flat.
+// and one at U+10000 and above. The engine's pages come from the
+// byte-order adapter (internal/source/azblob/order), which reads Azure's
+// order and serves each query in unsigned byte order; and the provider
+// lists only accounts whose namespace is positively flat.
 package azblob
 
 import (
@@ -21,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -30,6 +30,7 @@ import (
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
+	"github.com/varveio/swath/go/internal/source/azblob/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -231,6 +232,9 @@ type Provider struct {
 	creds     string
 	route     string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace string // how admission found the namespace flat (Stats.Namespace)
+	// loose serves a fetch outside any Expand (none in the engine today);
+	// its idle chains are evicted past order.MaxChains.
+	loose *order.Adapter
 }
 
 // Range is the engine's range.
@@ -249,11 +253,6 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, source.Unsupported(errors.New("azblob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
 	}
-	if highByte(opt.Prefix) {
-		// every name in scope would carry it: refused up front, not an
-		// empty listing
-		return nil, (&Provider{opt: opt}).unsupportedName(opt.Prefix)
-	}
 	p, own, err := connect(ctx, opt)
 	if err != nil {
 		return nil, err
@@ -261,25 +260,48 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if err := p.admit(ctx); err != nil {
 		return nil, err
 	}
-	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
-		Target: p.target(),
-		// With the staged refusal every page the engine takes ascends in
-		// byte order, and startFrom takes any name.
-		Listing: keyrange.Listing,
-		// startFrom lists names >= it; there is no end bound, so the
-		// engine trims at Through.
-		StartInclusive: true,
-		AcceptBound:    AcceptBound,
-		Requeue:        requeue,
-		InvalidPage:    client.ErrInvalidPage,
-		Size:           func(o *Object) int64 { return o.Size },
-		Counters:       client.CounterDefs,
-	}, p.fetch)
+	e, err := keyrange.New(p.engineOptions(own), p.description(), p.fetch)
 	if err != nil {
 		return nil, err
 	}
 	p.Engine = e
+	p.loose = p.adapter()
 	return p, nil
+}
+
+// description is what the range engine must know about the provider.
+func (p *Provider) description() keyrange.Description[Object] {
+	return keyrange.Description[Object]{
+		Target: p.target(),
+		// The adapter serves every page in byte order, from any start
+		// name, after After (exclusive) and up to Through.
+		Listing:     keyrange.Listing,
+		AcceptBound: AcceptBound,
+		Requeue:     requeue,
+		InvalidPage: client.ErrInvalidPage,
+		Size:        func(o *Object) int64 { return o.Size },
+		Counters:    slices.Concat(client.CounterDefs, order.CounterDefs),
+	}
+}
+
+// adapter is a byte-order adapter over the provider's client, counting in
+// the provider's counters.
+func (p *Provider) adapter() *order.Adapter {
+	return order.New(p.client, p.opt.Container, p.Set(), p.ID(len(client.CounterDefs)))
+}
+
+// adapterKey carries an Expand's adapter on its context.
+type adapterKey struct{}
+
+// Expand lists one range (keyrange.Engine.Expand) with its own byte-order
+// adapter, whose chains (one per continuation chain the range starts:
+// the listing and its probes) are released however Expand returns (the
+// specification's §5 lifetime: the engine joins its probes and seed work
+// before Expand returns, and children carry bounds, not tokens).
+func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Object]) error {
+	a := p.adapter()
+	defer a.Release()
+	return p.Engine.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
 
 // admit refuses the run unless the account's namespace is flat: (1) Get
@@ -430,52 +452,24 @@ func (p *Provider) Stats() Stats {
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
-// highByte reports whether s holds a byte in EE..F4: a lead byte of a
-// scalar at U+E000 and above, where Azure's UTF-16 order and byte order
-// can disagree.
-func highByte(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0xEE && s[i] <= 0xF4 {
-			return true
-		}
-	}
-	return false
-}
-
-// unsupportedName is the staged refusal: a name at U+E000 and above met
-// in a page or a bound. It is a refusal (source.Unsupported, class
-// unsupported), not a protocol violation: Azure's order is valid, the
-// engine does not requeue it, and the journal stays resumable for a build
-// that reorders such pages.
-func (p *Provider) unsupportedName(name string) error {
-	return source.Unsupported(fmt.Errorf("azblob: names at U+E000 and above are not supported yet (container %s, first name %q)", p.opt.Container, name))
-}
-
+// fetch lists one page in byte order through the Expand's adapter and
+// converts its items to rows and prefixes.
 func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
-	// The bounds first, before the request is sent: a cursor or a bound
-	// past such a name would compare in the wrong order.
-	if highByte(q.After) {
-		return nil, p.unsupportedName(q.After)
+	a, ok := ctx.Value(adapterKey{}).(*order.Adapter)
+	if !ok {
+		a = p.loose
 	}
-	if q.Bounded && highByte(q.Through) {
-		return nil, p.unsupportedName(q.Through)
-	}
-	out, err := p.client.List(ctx, &client.ListInput{Container: p.opt.Container, Prefix: q.Prefix, Delimiter: q.Delimiter,
-		StartFrom: q.After, Marker: q.Token, MaxResults: q.Max})
+	out, err := a.Fetch(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	// Then every raw item, blob or prefix, before the engine trims any.
 	nblobs := 0
 	for i := range out.Items {
-		if highByte(out.Items[i].Name) {
-			return nil, p.unsupportedName(out.Items[i].Name)
-		}
 		if !out.Items[i].Prefix {
 			nblobs++
 		}
 	}
-	page := &keyrange.Page[Object]{Rows: make([]Row, 0, nblobs), Truncated: out.NextMarker != "", Token: out.NextMarker}
+	page := &keyrange.Page[Object]{Rows: make([]Row, 0, nblobs), Truncated: out.Truncated, Token: out.Token}
 	for i := range out.Items {
 		it := &out.Items[i]
 		if it.Prefix {

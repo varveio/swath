@@ -116,9 +116,9 @@ func classify(err, cause error, dir string) outcome {
 		// The caller's to fix (another output, --overwrite, the original
 		// settings): nothing ran, and the output is as it was, so
 		// Resumable still says whether swath resume can continue a run
-		// there. A source refused mid-run (an Azure name at U+E000 and
-		// above) keeps its journal, so it stays resumable by a build that
-		// lists it; the provider's class is its cause.
+		// there. A source refused mid-run (source.Unsupported) keeps its
+		// journal, so it stays resumable by a build that lists it; the
+		// provider's class is its cause.
 		o.Class, o.ExitCode = listing.ClassRefused, exitUsage
 		var ce interface{ Class() string }
 		if errors.As(err, &ce) {

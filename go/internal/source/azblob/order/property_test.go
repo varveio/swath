@@ -81,8 +81,8 @@ func newCase(seed uint64) *propertyCase {
 
 // store is the case's fake: request n's page cap, empty page and failure
 // are drawn from (seed, n), the same on every run of the case.
-func (c *propertyCase) store() *fakeStore {
-	st := newFake(c.keys)
+func (c *propertyCase) store() *azblobtest.Store {
+	st := azblobtest.NewStore(c.keys)
 	draw := func(n, hook int) *rand.Rand { return rand.New(rand.NewPCG(c.seed, uint64(3*n+hook))) }
 	st.Short = func(n int) int {
 		if r := draw(n, 0); r.IntN(4) < c.shortRate {
@@ -93,7 +93,7 @@ func (c *propertyCase) store() *fakeStore {
 	st.Empty = func(n int) bool { return draw(n, 1).IntN(10) < c.emptyRate }
 	st.Fail = func(n int) error {
 		if draw(n, 2).IntN(20) < c.failRate {
-			return errInjected
+			return azblobtest.ErrInjected
 		}
 		return nil
 	}
@@ -102,7 +102,7 @@ func (c *propertyCase) store() *fakeStore {
 
 // check runs the case and returns what broke, "" when nothing did; the
 // adapter's counters are added to set.
-func (c *propertyCase) check(set *counters.Set) (string, *fakeStore) {
+func (c *propertyCase) check(set *counters.Set) (string, *azblobtest.Store) {
 	st := c.store()
 	a := New(st, "c", set, 0)
 	before := a.Counter(CResponses)
