@@ -237,10 +237,20 @@ func TestSDKDecoding(t *testing.T) {
 			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
 		{"Error element instead of the entries", "", "", `<EnumerationResults><Blobs/><Error><Code>InternalError</Code></Error><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"prefixed Error element inside", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><e:Error xmlns:e="urn:test"/><NextMarker/></EnumerationResults>`,
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"Error in a blob name", "", "", page("", "Error-report"),
+			result{names: []string{"Error-report"}}, result{names: []string{"Error-report"}}},
 		{"ErrorCode element is not an Error", "", "", listHead + `<Blob><Name>a</Name><Properties><ErrorCode>x</ErrorCode></Properties></Blob>` + listTail,
 			result{names: []string{"a"}}, result{names: []string{"a"}}},
 		{"data after the root", "", "", page("", "a") + "<junk/>",
 			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"prefixed root with trailing junk", "", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>junk</EnumerationResults>`,
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"prefixed root", "", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>`,
+			result{}, result{class: objhttp.ClassParse}},
+		{"default namespace on root", "", "", `<EnumerationResults xmlns="urn:test"><Blobs/><NextMarker/></EnumerationResults>`,
+			result{}, result{class: objhttp.ClassParse}},
 		{"a second root", "", "", page("", "a") + page("", "b"),
 			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
 		{"whitespace after the root", "", "", page("", "a") + "\r\n ",
@@ -267,9 +277,11 @@ func TestSDKDecoding(t *testing.T) {
 			}))
 			defer srv.Close()
 			hand, sdk := pair(t, client.Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, MaxAttempts: 1})
+			var pages []*client.ListOutput
 			for i, l := range []lister{hand, sdk} {
 				var got result
 				p, err := l.List(context.Background(), &client.ListInput{Container: "c", Delimiter: c.delimiter})
+				pages = append(pages, p)
 				if err != nil {
 					got.class = client.Classify(err)
 				} else {
@@ -279,7 +291,12 @@ func TestSDKDecoding(t *testing.T) {
 				}
 				if want := []result{c.hand, c.sdk}[i]; !reflect.DeepEqual(got, want) {
 					t.Errorf("%T: %+v (%v), want %+v", l, got, err, want)
+				} else if want.class == objhttp.ClassParse && !errors.Is(err, objhttp.ErrSyntax) {
+					t.Errorf("%T: %v does not wrap ErrSyntax", l, err)
 				}
+			}
+			if c.hand.class == "" && reflect.DeepEqual(c.hand, c.sdk) && !reflect.DeepEqual(pages[0], pages[1]) {
+				t.Errorf("pages differ: hand %+v, SDK %+v", pages[0], pages[1])
 			}
 		})
 	}
