@@ -11,15 +11,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -79,7 +76,7 @@ func newListServer(t *testing.T) *listServer {
 			http.Error(w, `{"error":{"code":401,"message":"no credentials","errors":[{"reason":"required"}]}}`, 401)
 			return
 		}
-		fmt.Fprint(w, `{"items":[{"name":"a","size":"1"}]}`)
+		fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
 	}))
 	t.Cleanup(ls.Close)
 	return ls
@@ -197,7 +194,7 @@ func TestSlowRefreshBounded(t *testing.T) {
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(Classify)(err) {
+	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
 		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout, not a stop", Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 || n.InflightMax != 0 {
@@ -233,114 +230,28 @@ func TestRefusedGrant(t *testing.T) {
 	}
 }
 
-// TestADCConfiguredButBroken: configured credentials that do not load
-// refuse the client with a credential error instead of listing
-// anonymously; absent credentials are anonymous.
+// TestADCConfiguredButBroken: credentials that do not load or are not
+// found refuse the client with a credential error instead of listing
+// anonymously: an explicit file that is missing or malformed, and a
+// library search that finds nothing. A malformed file the search finds is
+// the provider's TestBrokenADCRefused.
 func TestADCConfiguredButBroken(t *testing.T) {
-	for _, c := range []struct{ name, body string }{
-		{"malformed JSON", `{"type":"authorized_user",`},
-		{"unknown type", `{"type":"nonsense"}`},
-	} {
-		t.Run("env "+c.name, func(t *testing.T) {
-			adc(t, c.body)
-			_, err := New(context.Background(), Config{})
-			var ce *CredentialError
-			if !errors.As(err, &ce) {
-				t.Fatalf("err %v, want a credential error", err)
-			}
-		})
-		t.Run("gcloud file "+c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("HOME", dir)
-			t.Setenv("APPDATA", filepath.Join(dir, ".config"))
-			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-			if err := os.MkdirAll(filepath.Join(dir, ".config", "gcloud"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, ".config", "gcloud", "application_default_credentials.json"), []byte(c.body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := New(context.Background(), Config{})
-			var ce *CredentialError
-			if !errors.As(err, &ce) {
-				t.Fatalf("err %v, want a credential error", err)
-			}
-		})
+	malformed := filepath.Join(t.TempDir(), "adc.json")
+	if err := os.WriteFile(malformed, []byte(`{"type":"authorized_user",`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	t.Run("missing file", func(t *testing.T) {
-		adc(t, "")
-		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(t.TempDir(), "absent.json"))
+	for name, f := range map[string]string{"missing file": filepath.Join(t.TempDir(), "absent.json"), "malformed file": malformed} {
 		var ce *CredentialError
-		if _, err := New(context.Background(), Config{}); !errors.As(err, &ce) {
-			t.Fatalf("err %v, want a credential error", err)
+		if _, err := New(context.Background(), Config{CredentialsFile: f}); !errors.As(err, &ce) {
+			t.Fatalf("%s: err %v, want a credential error", name, err)
 		}
-		if _, err := New(context.Background(), Config{CredentialsFile: filepath.Join(t.TempDir(), "absent.json")}); !errors.As(err, &ce) {
-			t.Fatalf("explicit file: err %v, want a credential error", err)
-		}
-	})
-	// When the library's search finds nothing, the client decides: a
-	// gcloud directory that cannot be examined may hold the operator's
-	// credentials (fail closed, not anonymous); a Google Cloud machine whose
-	// metadata server was not detected in time keeps its service account as
-	// the source (token failures retried per attempt); anywhere else the
-	// requests go anonymous. The search is injected, so the outcome does not
-	// depend on the host running the test.
-	for _, c := range []struct {
-		name, product string
-		unreadable    bool
-		want          string // "error", "anonymous" or a source substring
-	}{
-		{name: "gcloud directory not accessible", unreadable: true, want: "error"},
-		{name: "absent", want: "anonymous"},
-		{name: "GCE detection failed", product: "Google Compute Engine\n", want: "compute metadata"},
-		{name: "other machine", product: "Standard PC\n", want: "anonymous"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if c.unreadable && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
-				t.Skip("needs a non-root POSIX user for a permission-denied directory")
-			}
-			dir := t.TempDir()
-			t.Setenv("HOME", dir)
-			t.Setenv("APPDATA", dir)
-			t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-			t.Setenv("GCE_METADATA_HOST", "")
-			oldFind, oldProduct := findCredentials, gceProductFile
-			t.Cleanup(func() { findCredentials, gceProductFile = oldFind, oldProduct })
-			findCredentials = func(context.Context, ...string) (*google.Credentials, error) {
-				return nil, errors.New("google: could not find default credentials")
-			}
-			gceProductFile = filepath.Join(dir, "product_name")
-			if c.product != "" {
-				if err := os.WriteFile(gceProductFile, []byte(c.product), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if c.unreadable {
-				gcloud := filepath.Join(dir, ".config", "gcloud")
-				if err := os.MkdirAll(gcloud, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(gcloud, 0); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() { os.Chmod(gcloud, 0o700) })
-			}
-			cl, err := New(context.Background(), Config{})
-			if c.want == "error" {
-				var ce *CredentialError
-				if !errors.As(err, &ce) {
-					t.Fatalf("err %v, want a credential error", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			src, anon := cl.Credentials()
-			if (c.want == "anonymous") != anon || (!anon && !strings.Contains(src, c.want)) {
-				t.Fatalf("source %q, anonymous %v: want %s", src, anon, c.want)
-			}
-		})
+	}
+	// The search is injected, so the outcome does not depend on the host
+	// running the test.
+	_, err := newClient(context.Background(), Config{}, found{err: errors.New("google: could not find default credentials")}, objhttp.Pool(0, nil, nil))
+	var ce *CredentialError
+	if !errors.As(err, &ce) || ce.Transient {
+		t.Fatalf("nothing found: err %v, want a credential error (auth)", err)
 	}
 }
 
@@ -363,7 +274,7 @@ func (s *slowTokens) Token() (*oauth2.Token, error) {
 // call, so the source is never called concurrently.
 func TestTokenWaitersCoalesce(t *testing.T) {
 	ts := &slowTokens{}
-	c, err := New(context.Background(), Config{Endpoint: "http://127.0.0.1:1/storage/v1/", TokenSource: ts})
+	c, err := withTokens(Config{Endpoint: "http://127.0.0.1:1/storage/v1/"}, ts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +286,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 			defer wg.Done()
 			for range 10 {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-				_, _ = c.Token(ctx)
+				_, _ = c.token(ctx)
 				cancel()
 			}
 		}()
@@ -387,46 +298,26 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 	}
 }
 
-// TestComputeFallbackKeepsMargin: the compute metadata fallback, shared
-// through tokensource.Shared, keeps the client library's 225 s refresh
-// margin: a 120 s token is refreshed at every request, as the library's
-// own source does, never reused to near its expiry (a listing 401 is
-// terminal).
-func TestComputeFallbackKeepsMargin(t *testing.T) {
-	var calls atomic.Int64
-	md := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/token") {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Metadata-Flavor", "Google")
-		fmt.Fprint(w, `{"access_token":"t","expires_in":120,"token_type":"Bearer"}`)
+// TestAnonymousPrecedence: Anonymous sends no credentials, whatever the
+// environment configures (here working ADC, whose token endpoint is never
+// asked); it is the only way a request goes unauthenticated.
+func TestAnonymousPrecedence(t *testing.T) {
+	tok := newTokenServer(t, 3600)
+	adc(t, authorizedUser(tok.URL))
+	var auth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth.Store(r.Header.Get("Authorization"))
+		fmt.Fprint(w, `{"kind":"storage#objects"}`)
 	}))
-	defer md.Close()
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("APPDATA", dir)
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-	t.Setenv("GCE_METADATA_HOST", strings.TrimPrefix(md.URL, "http://"))
-	oldFind := findCredentials
-	t.Cleanup(func() { findCredentials = oldFind })
-	findCredentials = func(context.Context, ...string) (*google.Credentials, error) {
-		return nil, errors.New("google: could not find default credentials")
-	}
-	c, err := New(context.Background(), Config{})
+	defer srv.Close()
+	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src, _ := c.Credentials(); !strings.Contains(src, "compute metadata") {
-		t.Fatalf("source %q: want the compute metadata fallback", src)
+	if _, err := c.List(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
 	}
-	for range 2 {
-		if _, err := c.Token(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := calls.Load(); n != 2 {
-		t.Fatalf("%d token fetches for two requests with a 120 s token: the 225 s margin was lost", n)
+	if src, anon := c.Credentials(); !anon || src != "anonymous" || auth.Load().(string) != "" || tok.refreshes.Load() != 0 {
+		t.Fatalf("credentials %q anonymous=%v, Authorization %q, %d token calls", src, anon, auth.Load(), tok.refreshes.Load())
 	}
 }

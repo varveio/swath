@@ -1,37 +1,67 @@
 # GCS (`internal/source/gcs`)
 
-**Client** (`internal/source/gcs/client`). One `objects.list` GET of the JSON API per page:
-`DEFAULT/b/BUCKET/o` with `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`,
-`pageToken`, `maxResults` and `userProject`. On Google's endpoint the request asks for the listed fields only
-(`fields=nextPageToken,prefixes,items(name,size,updated,…)`); another endpoint (`--gcs-endpoint`, an emulator
-or the replay server) gets the full response. A response is read up to 16 MiB; a 400 names its query in the
-error. Credentials: `--gcs-anonymous` sends none; `--gcs-credentials FILE` reads a service-account or
-authorized-user JSON; otherwise Application Default Credentials, and without any (no
-`GOOGLE_APPLICATION_CREDENTIALS`, no gcloud file, not on Google Cloud) the requests go unauthenticated (public
-buckets allow it). Credentials that are configured but do not load refuse the run (`client.CredentialError`,
-class `auth`), never anonymity; on a Google Cloud machine (DMI product name `Google`/`Google Compute Engine`,
-or `GCE_METADATA_HOST`) whose metadata server the client library did not detect in time, the compute metadata
-token source is used anyway and its failures are retried per attempt (S3 follows the same rule). The token source lives as long as the client: it is built on a context that is
+**Client** (`internal/source/gcs/client`). Google's generated JSON API client
+(`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
+`projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
+`userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
+(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
+no user information (a password would be recorded; `TestEndpointUserinfoRefused`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
+template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
+client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
+escapes are kept, so `…/tenant%2F` is the base `…/tenant%2F/`. The generated client then resolves `b/BUCKET/o`
+against that base and re-escapes the decoded path, and swath accepts its reading: dot segments are removed
+(`/a/../storage/v1/` lists `/storage/v1/b/BUCKET/o`, `/a/./storage/v1/` lists `/a/storage/v1/b/BUCKET/o`) and
+an escaped separator is sent as a separator (`/proxy%2Ftenant/storage/v1/` lists
+`/proxy/tenant/storage/v1/b/BUCKET/o`, `/tenant%2F` lists `/tenant//b/BUCKET/o`); other escapes are sent as given
+(`/custom%20base/v1`). Two such spellings of one destination record different identities, which refuses a resume
+that was safe; two endpoints with one identity always list one path (`TestEndpoint`,
+`TestEndpointIdentityIsDestination`). The generated client is built with a logger that emits nothing: its
+default one, switched on by `GOOGLE_SDK_GO_LOGGING_LEVEL`, writes request headers, `Authorization` included,
+and response bodies to stderr (`TestSDKLogsNothing`). On Google's endpoint the request asks for
+the listed fields only (`fields=kind,nextPageToken,prefixes,items(name,size,updated,…)`); another endpoint (an
+emulator or the replay server) gets the full response. The generated client makes one request per call and never
+retries: `objhttp.Do` retries, backs off and admits requests, and an attempt is counted from just before the call
+until it returns. Below it, every response passes `objhttp.Guard`, which reads a success body up to 16 MiB (a
+longer one fails the attempt, class `other`) and an error body up to 64 KiB, closes the original body on every
+path, and rejects a 200 that carries a top-level `error` member (`"error": null` included), which the generated
+decoder would drop; the body is parsed for that only when it can hold one (a backslash, or `"error"` in any
+letter case). The decoded page must name `kind: storage#objects` (so `{}`, `null`, an empty body or another JSON
+value is a `parse` failure, retried, never an empty final page), every item must be present, a size must fit
+`int64` and a time must be RFC 3339. Any 2xx other than 200 is an answer, not a page (class `other`, or
+`throttle` by its reason). An answer is a `client.Error` by the HTTP status sent (never the body's `code`), with
+the first reason and the message; a 400 names its query. The User-Agent is swath's product token
+(`swath-go/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
+the client: class, retry decision, attempts and counters, the answer, every body closed once, no redirect
+followed. Credentials: `--anonymous` (shared with S3 and Azure Blob) sends none, and is the only way a request goes
+unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials FILE` reads a service-account or
+authorized-user JSON; otherwise Application Default Credentials, found by the client library's own search
+(`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud). Credentials that
+cannot be found or do not load refuse the run before any listing request (`client.CredentialError`, class
+`auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
 never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
 waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
 time: `tokensource.Shared`, the coalescer S3's bearer tokens use, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
 transport failure or timeout is
 retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
 (`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
-local token endpoint; the last injects a failed ADC search, so its unreadable-gcloud, compute-metadata and
-anonymous outcomes hold on a Google Cloud host too). The scope is `devstorage.read_only`. The binary links
-`golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`, not Google's storage client;
-`google.golang.org/api/storage/v1` is a test dependency only (`TestClientPagesMatchGoogleClient` compares
-pages against it). Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
-(100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
-vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `redirect` (any 3xx: redirects are never followed, also through a supplied HTTP client, because the resume identity freezes the route; `TestGCSRedirectCannotChangeResumeSource`), `throttle` (429,
-`rateLimitExceeded`, `userRateLimitExceeded`), `timeout` (an attempt past the request timeout, 408), `server`
-(another 5xx), `transport`, `parse` (a 200 that does not parse, or whose body is not an objects.list envelope: `null`, another JSON value or
-an error envelope, which would otherwise read as an empty final page; `TestInvalidSuccessEnvelopeIsRetried`,
-`TestGCSInvalidEnvelopeNeverCommits`), `invalid_page` (a parsed page that breaks the
-contract: `client.ErrInvalidPage`, which the engine wraps as a protocol violation: the outcome's `cause` is
-`protocol` and the run is marked unresumable), `canceled`, `other`; the class is the run
-outcome's `cause` (`TestClassify` drives each through the client, `TestInvalidPageClass` through the engine).
+local token endpoint; the last injects a failed ADC search, so its refusal holds on a Google Cloud host too;
+`TestComputeTokenFromSearch` serves the compute token from a fake metadata server). The token is fetched before the attempt is counted and set
+as the request's `Authorization` header (the generated client is built without authentication), so a credential
+failure is a `CredentialError` and not an attempt. The scope is `devstorage.read_only`. The client is Google's
+generated `google.golang.org/api/storage/v1` client, with `golang.org/x/oauth2` credentials ([clients.md](../clients.md));
+`TestClientPagesMatchGoogleClient` compares the client's pages, through
+the production fields selector too, with the generated client's own full responses. Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
+(100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Failures* are normalized once into `objhttp.Failure` with transient/throttle/timeout signals,
+HTTP status, the first reason, and a safe cause. A 403 with `rateLimitExceeded` or
+`userRateLimitExceeded` is a throttle; another 403 is a terminal permission refusal. A token endpoint
+outage or timeout remains transient, independently of report labels. Diagnostics retain `auth`,
+`access_denied`, `throttle`, `timeout`, `parse` and `unsupported`
+([Run report](../../cli.md#run-report)); other errors keep status/reason without a separate label.
+A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
+(`TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `client.ErrInvalidPage`;
+the engine wraps it as a protocol violation (`cause` `protocol`, unresumable). Redirects are never
+followed, including with a supplied HTTP client, so they cannot change the resume source
+(`TestGCSRedirectCannotChangeResumeSource`).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`
@@ -55,10 +85,12 @@ composite objects, whose `crc32c` remains, and omits both hashes from listings o
 customer-managed (CMEK) or customer-supplied (CSEK) keys. A missing hash is a null column, and when both are null
 a comparison needs a hash from elsewhere
 ([object resource](https://cloud.google.com/storage/docs/json_api/v1/objects),
-[ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume: the source, the route (the JSON API base and the bucket, as the
-client requests it; scheme and host case are the only equivalence) and the billed project the client sends
-(`--gcs-user-project` for the built-in client); credentials may change. A run with `--max-keys`, or through a
-supplied client that does not name its route and billed project (`gcs.Routed`), cannot resume.
+[ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume is the recorded inputs: the source (bucket and prefix), the endpoint (as
+`client.Endpoint` normalizes it for the client, above; scheme and host case are the only other equivalence) and the billed project
+(`--gcs-user-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
+supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume. A journal from a
+build that recorded the resolved route instead of the endpoint is refused (`endpoint` not recorded;
+[upgrade.md](../../upgrade.md), "Changes between Go builds"; `TestOldJournalRefused`).
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,
 `parse_failures`), `end_offset_omitted` and `transport.pool_size` (the client's transports; 0 with a supplied
 `Options.Client` that does not report one).
@@ -76,8 +108,8 @@ none of the name's generations); for a 1,024-byte name, whose successor `AcceptB
 sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
 removes all of the name's rows, across pages. A page whose generations of one name do not ascend is invalid.
 
-**Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
-transports, one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
+**Connections.** The built client spreads its requests round-robin over a pool of transports (`objhttp.Pool`,
+one generated service on each), one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
 connection only at the server's stream limit (about 100), so a single transport would carry all 64 workers on
 one connection, which caps throughput once the engine keeps many requests in flight
 (`TestTransportPoolSpreadsConnections`). A supplied `Config.HTTPClient` is used alone (a pool of 1). There is

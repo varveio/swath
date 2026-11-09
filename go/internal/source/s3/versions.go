@@ -258,7 +258,7 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 	// parameter); --fetch-owner decides whether they are kept.
 	out, err := api.ListObjectVersions(ctx, in)
 	if err != nil {
-		if client.Classify(err) == objhttp.ClassAccessDenied {
+		if versionsPermission(err) {
 			// Likely, not certain: an explicit deny or a prefix condition
 			// answers 403 too. Never retried as a current-only listing.
 			return nil, fmt.Errorf("%w (--all-versions calls ListObjectVersions, which needs s3:ListBucketVersions; s3:ListBucket alone does not grant it)", err)
@@ -269,4 +269,19 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", client.ErrInvalidPage)
 	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
+}
+
+// versionsPermission recognizes only listing permission refusals. Codes
+// for credentials, routing and missing buckets take precedence over 403.
+func versionsPermission(err error) bool {
+	f := objhttp.Normalize(err)
+	if f == nil || f.Transient || f.Throttle || f.Timeout || f.Status == 301 {
+		return false
+	}
+	switch f.Code {
+	case "NoSuchBucket", "PermanentRedirect", "AuthorizationHeaderMalformed",
+		"InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "TokenRefreshRequired":
+		return false
+	}
+	return f.Status == 403 || f.Code == "AccessDenied" || f.Code == "AllAccessDisabled"
 }

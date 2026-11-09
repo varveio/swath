@@ -6,6 +6,7 @@ package s3
 import (
 	"context"
 	"errors"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -505,6 +506,30 @@ func TestVersionsFakeClientRefusals(t *testing.T) {
 		}
 		if f.calls != 1 {
 			t.Fatal(f.calls)
+		}
+	}
+}
+
+// TestVersionsPermissionPolicy keeps the permission hint local: neither
+// routing, credentials nor a missing bucket should suggest adding a grant.
+func TestVersionsPermissionPolicy(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		code   string
+		want   bool
+	}{
+		{403, "", true}, {403, "AccessDenied", true}, {400, "AllAccessDisabled", true},
+		{403, "NoSuchBucket", false}, {403, "InvalidAccessKeyId", false},
+		{403, "SignatureDoesNotMatch", false}, {403, "ExpiredToken", false},
+		{403, "InvalidToken", false}, {403, "TokenRefreshRequired", false},
+		{403, "PermanentRedirect", false}, {403, "AuthorizationHeaderMalformed", false},
+		{301, "AccessDenied", false}, {403, "RequestTimeout", false}, {503, "AccessDenied", false},
+	} {
+		err := &client.Error{Status: c.status, Code: c.code}
+		for _, wrapped := range []error{err, objhttp.Normalize(err)} {
+			if got := versionsPermission(wrapped); got != c.want {
+				t.Errorf("%v: permission hint %v, want %v", wrapped, got, c.want)
+			}
 		}
 	}
 }

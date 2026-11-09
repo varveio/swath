@@ -58,9 +58,11 @@ func (f *fakeSTS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 </Credentials></%sResult></%sResponse>`, act, act, key, key, exp, act, act)
 }
 
-// TestCredentialSources: web identity, a role chained from it with an
-// external id, the STS region independent of --region, and credentials
-// refreshed when they expire mid-listing.
+// TestCredentialSources: the bucket's region (--region) is the listing's
+// signing region only; the credential service keeps the environment's or
+// the profile's region (else us-east-1), so a bucket in another region
+// never moves STS. A role assumed from a profile's keys: STS is signed in
+// us-east-1, the listing in the bucket's region with the role's keys.
 func TestCredentialSources(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -68,44 +70,23 @@ func TestCredentialSources(t *testing.T) {
 	stsSrv := httptest.NewServer(sts)
 	t.Cleanup(stsSrv.Close)
 	t.Setenv("AWS_ENDPOINT_URL_STS", stsSrv.URL)
-	tokenFile := filepath.Join(dir, "token")
-	os.WriteFile(tokenFile, []byte("jwt"), 0o600)
-	os.WriteFile(filepath.Join(dir, "config"), []byte(fmt.Sprintf(`[profile web]
-role_arn = arn:aws:iam::111111111111:role/web
-web_identity_token_file = %s
-
-[profile chained]
-role_arn = arn:aws:iam::222222222222:role/target
-source_profile = web
-external_id = ext-42
-`, tokenFile)), 0o600)
+	os.WriteFile(filepath.Join(dir, "credentials"), []byte("[base]\naws_access_key_id = AKBASE\naws_secret_access_key = s\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile role]\nrole_arn = arn:aws:iam::222222222222:role/target\nsource_profile = base\n"), 0o600)
 	var auth atomic.Value
-	h := func(w http.ResponseWriter, r *http.Request) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		auth.Store(r.Header.Get("Authorization"))
 		w.Write([]byte(okPage))
+	}, Config{Profile: "role", Region: "ap-southeast-2"})
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
 	}
-	list := func(cfg Config) {
-		t.Helper()
-		c, _ := testClient(t, h, cfg)
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Web identity, with the bucket in another region: STS keeps us-east-1.
-	list(Config{Profile: "web", Region: "eu-west-2"})
-	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKWEB/") || !strings.Contains(a, "/eu-west-2/s3/") {
-		t.Fatalf("web identity: %q", a)
-	}
-	// A role chained from it, with its external id.
-	list(Config{Profile: "chained", Region: "ap-southeast-2"})
-	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") {
-		t.Fatalf("chained role: %q", a)
+	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") || !strings.Contains(a, "/ap-southeast-2/s3/") {
+		t.Fatalf("listing: %q", a)
 	}
 	sts.mu.Lock()
 	calls := strings.Join(sts.calls, "; ")
 	sts.mu.Unlock()
-	if !strings.Contains(calls, "AssumeRoleWithWebIdentity ext= region=") || !strings.Contains(calls, "AssumeRole ext=ext-42 region=us-east-1") ||
-		strings.Contains(calls, "eu-west-2") || strings.Contains(calls, "ap-southeast-2") {
+	if calls != "AssumeRole ext= region=us-east-1" {
 		t.Fatalf("STS calls: %s", calls)
 	}
 }
@@ -220,13 +201,13 @@ func webIdentitySTS(t *testing.T, delay time.Duration, status int, code string) 
 	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
 }
 
-// TestCredentialsFailClosed: only an empty chain goes anonymous. A source
-// the environment configures (here web identity, as on a hosted runner)
-// that is slow, mounted late, refused or down never becomes unsigned
-// requests: a slow STS (5 s, past the empty chain's 3 s probe) and a token
-// file mounted a second after start sign; a refused token is an auth
-// failure at start; an STS outage keeps the source and the requests retry
-// it; --anonymous never signs, even with keys in the environment.
+// TestCredentialsFailClosed: requests go unsigned only with --anonymous.
+// A source the environment configures (here web identity, as on a hosted
+// runner) that is slow or mounted late signs; one that is refused or whose
+// token service is down at start refuses the client (auth: a later outage
+// is retried per request, TestCredentialOutageRecovers); an empty chain
+// refuses it too, and none of them sends a listing request. --anonymous
+// never signing, even with keys in the environment, is TestCredentialChain's.
 func TestCredentialsFailClosed(t *testing.T) {
 	setup := func(t *testing.T) (dir, token string) {
 		dir = t.TempDir()
@@ -247,7 +228,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		if a := auth.Load().(string); !strings.Contains(a, "Credential="+key+"/") {
-			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.Source, key)
+			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.source, key)
 		}
 	}
 	t.Run("slow STS", func(t *testing.T) {
@@ -289,74 +270,29 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, Classify(err))
 		}
 	})
+	// refused is the outcome of a client the first lookup could not
+	// serve: an auth failure, and no listing request sent.
+	refused := func(t *testing.T) {
+		t.Helper()
+		var sent atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); h(w, r) }))
+		t.Cleanup(srv.Close)
+		_, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
+		var ce *objhttp.CredentialError
+		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
+			t.Fatalf("%v (class %s), %d requests: want an auth failure and none sent", err, Classify(err), sent.Load())
+		}
+	}
 	t.Run("STS down", func(t *testing.T) {
 		_, token := setup(t)
 		os.WriteFile(token, []byte("jwt"), 0o600)
 		webIdentitySTS(t, 0, 503, "ServiceUnavailable")
-		srv := httptest.NewServer(http.HandlerFunc(h))
-		t.Cleanup(srv.Close)
-		c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true, MaxAttempts: 2,
-			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.auth.Anonymous || !strings.Contains(c.Note(), "not available yet") {
-			t.Fatalf("anonymous %v, note %q", c.auth.Anonymous, c.Note())
-		}
-		_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-		var ex *ExhaustedError
-		if !errors.As(err, &ex) || !Classify(err).Transient() {
-			t.Fatalf("STS down: %v (class %s), want a retried transient credential failure", err, Classify(err))
-		}
+		refused(t)
 	})
 	t.Run("empty chain", func(t *testing.T) {
 		isolate(t, t.TempDir())
-		c, _ := testClient(t, h, Config{Region: "us-east-1"})
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-		if a := auth.Load().(string); a != "" || c.auth.Source != "anonymous (no credentials found)" {
-			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.Source)
-		}
+		refused(t)
 	})
-	t.Run("anonymous", func(t *testing.T) {
-		isolate(t, t.TempDir())
-		t.Setenv("AWS_ACCESS_KEY_ID", "AKENV")
-		t.Setenv("AWS_SECRET_ACCESS_KEY", "s")
-		c, _ := testClient(t, h, Config{Region: "us-east-1", Anonymous: true})
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-		if a := auth.Load().(string); a != "" || !c.auth.Anonymous {
-			t.Fatalf("--anonymous signed: %q", a)
-		}
-	})
-}
-
-// TestOnEC2 reads the instance signs from the DMI files.
-func TestOnEC2(t *testing.T) {
-	old := dmiRoot
-	t.Cleanup(func() { dmiRoot = old })
-	for _, c := range []struct {
-		file, value string
-		want        bool
-	}{
-		{"", "", false},
-		{"devices/virtual/dmi/id/sys_vendor", "Amazon EC2\n", true},
-		{"devices/virtual/dmi/id/board_asset_tag", "i-0123456789abcdef0\n", true},
-		{"hypervisor/uuid", "EC2E1916-9099-7CAF-FD21-012345ABCDEF\n", true},
-		{"devices/virtual/dmi/id/sys_vendor", "QEMU\n", false},
-	} {
-		dmiRoot = t.TempDir()
-		if c.file != "" {
-			p := filepath.Join(dmiRoot, c.file)
-			os.MkdirAll(filepath.Dir(p), 0o755)
-			os.WriteFile(p, []byte(c.value), 0o600)
-		}
-		if got := onEC2(); got != c.want {
-			t.Errorf("%s=%q: onEC2 %v, want %v", c.file, c.value, got, c.want)
-		}
-	}
 }
 
 // TestPartialCredentialsRefuse (durability review):
@@ -392,7 +328,7 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 			c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
 			if err == nil {
 				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.Source, lerr, requests.Load())
+				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())
 			}
 			if Classify(err) != objhttp.ClassAuth {
 				t.Fatalf("%v: class %s, want auth", err, Classify(err))

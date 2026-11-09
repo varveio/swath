@@ -1,33 +1,35 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package client is a small Cloud Storage JSON API client: objects.list
-// only, with OAuth2 credentials from golang.org/x/oauth2/google (or none),
-// counted retries with full-jitter backoff, and typed errors.
+// Package client lists Cloud Storage buckets through Google's generated
+// JSON API client (google.golang.org/api/storage/v1): objects.list only,
+// one Objects.List call per attempt, with OAuth2 credentials from
+// golang.org/x/oauth2/google (or none), counted retries with full-jitter
+// backoff (objhttp.Do; the generated Do sends one request and never
+// retries), and typed errors.
+//
+// Every response passes an objhttp.Guard first (16 MiB success bodies,
+// 64 KiB error bodies, the original body closed); a 200 must decode to an
+// objects envelope (kind storage#objects) without an error member, so an
+// empty, null or error body is never read as an empty final page.
+// Redirects are never followed.
 //
 // Credentials live as long as the client: the token source is built on a
 // context that is never cancelled, whose HTTP client bounds each token
 // exchange by the request timeout, and every attempt waits for its token
-// under its own attempt deadline. Absent Application Default Credentials
-// mean anonymous access; configured but unusable ones refuse the client.
+// under its own attempt deadline. Requests go unauthenticated only with
+// Anonymous; Application Default Credentials that cannot be found or
+// loaded refuse the client.
 package client
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
-	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -35,9 +37,9 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
+	storage "google.golang.org/api/storage/v1"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -71,15 +73,13 @@ type Config struct {
 	BaseBackoff     time.Duration // default 100 ms
 	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
-	// Workers sizes the built transport pool (PoolSize); a supplied
+	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
 	// Rate, if set, caps attempts per second (objhttp.Rate).
 	Rate *objhttp.Rate
-	// TokenSource overrides the credential lookup (tests).
-	TokenSource oauth2.TokenSource
 }
 
 // ListInput is one objects.list request. StartOffset is inclusive and
@@ -145,14 +145,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Throttle reports a rate-limit answer.
-func (e *Error) Throttle() bool {
-	return e.Status == 429 || e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded"
-}
-
-// Retryable reports an answer worth repeating.
-func (e *Error) Retryable() bool { return e.Throttle() || e.Status >= 500 || e.Status == 408 }
-
 // Counters are what the client did.
 type Counters = objhttp.Counts
 
@@ -168,84 +160,61 @@ type ExhaustedError = objhttp.ExhaustedError
 var ErrSyntax = objhttp.ErrSyntax
 
 // Client lists Cloud Storage buckets; safe for concurrent use.
-type Client struct{ *Core }
-
-// New resolves credentials and builds the client (NewCore).
-func New(ctx context.Context, cfg Config) (*Client, error) {
-	c, err := NewCore(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{c}, nil
-}
-
-// Core is what a GCS listing client is built on, whatever sends its
-// requests: the endpoint, the transport pool, the credentials, the retry
-// policy and the counters, with the accessors the provider reads.
-type Core struct {
-	cfg    Config
-	base   *url.URL
-	http   []*http.Client // the transport pool, requests round-robin (Next)
-	next   atomic.Uint64
-	ts     *tokensource.Shared // nil: anonymous
-	source string
+type Client struct {
+	cfg      Config
+	endpoint string             // the JSON API base, with a trailing slash
+	svc      []*storage.Service // one per pooled transport, over its Guard; requests round-robin (pick)
+	next     atomic.Uint64
+	ts       *tokensource.Shared // nil: anonymous
+	source   string
 
 	retry  objhttp.Retry
 	counts objhttp.Counters
 }
 
-// NewCore resolves credentials and builds the transport pool. Without
-// Application Default Credentials (no GOOGLE_APPLICATION_CREDENTIALS, no
-// gcloud file, not on Google Cloud), requests go unauthenticated, which
-// public buckets allow. Credentials that are configured but do not load
-// are a *CredentialError.
-func NewCore(ctx context.Context, cfg Config) (*Core, error) {
+// New resolves credentials and builds the client. Requests go
+// unauthenticated only with cfg.Anonymous (a public bucket); otherwise
+// credentials that cannot be found or loaded (the client library's
+// Application Default Credentials search) are a *CredentialError, and
+// nothing is sent.
+func New(ctx context.Context, cfg Config) (*Client, error) {
+	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+}
+
+// credentialFinder finds the credentials of a client given none: the
+// client library's Application Default Credentials search (librarySearch), or in
+// tests a fixed answer, so what the client does with each outcome does not
+// depend on the host (on Google Cloud the real search finds the metadata
+// server).
+type credentialFinder interface {
+	find(ctx context.Context, scopes ...string) (*google.Credentials, error)
+}
+
+type librarySearch struct{}
+
+func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Credentials, error) {
+	return google.FindDefaultCredentials(ctx, scopes...)
+}
+
+// newClient is New with its credential search and its transport pool
+// given.
+func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []*http.Client) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	ep := cfg.Endpoint
-	if ep == "" {
-		ep = DefaultEndpoint
+	ep, err := Endpoint(cfg.Endpoint)
+	if err != nil {
+		return nil, err
 	}
-	u, err := url.Parse(ep)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
-	}
-	if !strings.HasSuffix(u.Path, "/") {
-		u.Path += "/"
-	}
-	c := &Core{cfg: cfg, base: u, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: Answer}}
+	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
-	// Redirects are answers, never followed, also through a supplied HTTP
-	// client: the resume identity freezes the route the requests go to (as
-	// S3's client does).
-	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if cfg.HTTPClient == nil {
-		// One transport per connWorkers workers: Go's HTTP/2 transport opens a
-		// second connection only at the server's stream limit (~100), so one
-		// transport would carry every worker on one connection. The pool's
-		// transports share one TLS session cache, so later connections resume.
-		cache := tls.NewLRUClientSessionCache(0)
-		for range PoolSize(cfg.Workers) {
-			t := http.DefaultTransport.(*http.Transport).Clone()
-			t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
-			t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
-			c.http = append(c.http, &http.Client{Transport: t, CheckRedirect: noRedirect})
-		}
-	} else {
-		hc := *cfg.HTTPClient
-		hc.CheckRedirect = noRedirect
-		c.http = []*http.Client{&hc}
-	}
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
 	// exchange (the attempt deadline bounds the wait, token below).
 	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
-		&http.Client{Transport: c.http[0].Transport, Timeout: cfg.RequestTimeout})
+		&http.Client{Transport: pool[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
-	case cfg.TokenSource != nil:
-		c.ts, c.source = tokensource.NewShared(cfg.TokenSource, 0), "token source"
 	case cfg.Anonymous:
 	case cfg.CredentialsFile != "":
 		c.source = "file " + cfg.CredentialsFile
@@ -259,99 +228,90 @@ func NewCore(ctx context.Context, cfg Config) (*Core, error) {
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	default:
-		creds, err := findCredentials(life, readScope)
-		switch {
-		case err == nil:
-			c.ts, c.source = tokensource.NewShared(creds.TokenSource, 0), "application default credentials"
-		case adcConfigured():
-			return nil, &CredentialError{Source: "application default credentials", Err: err}
-		case onGCEMachine():
-			// A Google Cloud machine whose metadata server did not answer the
-			// client library's detection in time: its service account is the
-			// configured source, never anonymity; token failures are retried
-			// per attempt like any refresh.
-			c.ts = tokensource.NewShared(google.ComputeTokenSource("", readScope), 0)
-			c.source = "compute metadata (detection failed: " + err.Error() + ")"
-		default:
-			c.source = "anonymous (no application default credentials)"
+		c.source = "application default credentials"
+		creds, err := finder.find(life, readScope)
+		if err != nil {
+			return nil, &CredentialError{Source: c.source, Err: err}
 		}
+		c.ts = tokensource.NewShared(creds.TokenSource, 0)
+	}
+	for _, hc := range pool {
+		g := *hc // keeps the pool's no-redirect policy
+		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
+		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
+			option.WithLogger(quiet))
+		if err != nil {
+			return nil, err
+		}
+		c.svc = append(c.svc, svc)
 	}
 	return c, nil
 }
 
-// connWorkers is the workers per pooled transport (one HTTP/2 connection
-// each, below the server's stream limit); maxConns caps the pool.
-const connWorkers, maxConns = 16, 8
+// quiet is the generated client's logger: it emits nothing. The default
+// one, switched on by GOOGLE_SDK_GO_LOGGING_LEVEL, writes every request's
+// headers to stderr unredacted, the Authorization header this client sets
+// included, and every response body.
+var quiet = slog.New(slog.DiscardHandler)
 
-// PoolSize is the number of transports a built client spreads its requests
-// over for workers: one per connWorkers, at least 1, at most maxConns.
-func PoolSize(workers int) int {
-	return min(max((workers+connWorkers-1)/connWorkers, 1), maxConns)
+// Endpoint is the JSON API base a client built with ep sends to, and the
+// form the resume identity records: DefaultEndpoint for "", an http(s) URL
+// with a host and no user information (a password would be recorded), its path's escapes kept as given and a literal trailing
+// slash added when the escaped path has none (so "tenant%2F" is the base
+// "tenant%2F/", not a base whose last segment the generated client's
+// relative resolution would drop). One string is one destination: the
+// client sends to exactly this base. A path holding a URI-template brace,
+// literal or escaped (%7B, %7D), is refused: the generated client expands
+// the request path as a template, which panics on an empty expression
+// and drops a named one.
+//
+// The generated client resolves the request path against the base (dot
+// segments removed: "/a/../storage/v1/" sends to "/storage/v1/...") and
+// then re-escapes the decoded path, so an escaped separator is sent as a
+// separator ("/proxy%2Ftenant/storage/v1/" sends to
+// "/proxy/tenant/storage/v1/..."). Two such spellings record different
+// identities for one destination, which refuses a resume that would have
+// been safe; never the converse.
+func Endpoint(ep string) (string, error) {
+	if ep == "" {
+		ep = DefaultEndpoint
+	}
+	u, err := url.Parse(ep)
+	switch {
+	case err != nil:
+		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
+	case u.User != nil:
+		return "", errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
+	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
+		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
+	}
+	if strings.ContainsAny(u.Path, "{}") {
+		return "", fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep)
+	}
+	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
+		u.Path, u.RawPath = u.Path+"/", p+"/"
+	}
+	return u.String(), nil
 }
 
 // Transports is the size of the client's transport pool (1 with a supplied
 // HTTPClient): the report's transport.pool_size.
-func (c *Core) Transports() int { return len(c.http) }
+func (c *Client) Transports() int { return len(c.svc) }
 
-// Pool is a copy of the transport pool (a supplied HTTPClient alone): HTTP
-// clients that never follow a redirect, shared with the client and read-only.
-func (c *Core) Pool() []*http.Client { return slices.Clone(c.http) }
-
-// Next is the index in Pool of the transport the next request takes,
-// round-robin.
-func (c *Core) Next() int {
-	return int((c.next.Add(1) - 1) % uint64(len(c.http)))
+// pick is the index of the transport (and service) the next request
+// takes, round-robin.
+func (c *Client) pick() int {
+	return int((c.next.Add(1) - 1) % uint64(len(c.svc)))
 }
 
-// adcConfigured reports whether Application Default Credentials are
-// configured in a place golang.org/x/oauth2/google reads: then a failure
-// to load them is an error, not anonymity. Only a well-known file that
-// does not exist means "not configured": one that cannot be examined (an
-// unreadable parent directory, an I/O error) fails closed, since it may
-// hold the credentials the operator meant.
-func adcConfigured() bool {
-	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
-		return true
-	}
-	dir := os.Getenv("APPDATA")
-	if runtime.GOOS != "windows" {
-		home := os.Getenv("HOME")
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		dir = filepath.Join(home, ".config")
-	}
-	_, err := os.Stat(filepath.Join(dir, "gcloud", "application_default_credentials.json"))
-	return !errors.Is(err, fs.ErrNotExist)
-}
-
-// findCredentials is the client library's ADC search (tests replace it: on
-// a Google Cloud host the real one finds the metadata server, so what the
-// client does when the search fails could not be tested there).
-var findCredentials = google.FindDefaultCredentials
-
-// gceProductFile names the machine's product (tests move it).
-var gceProductFile = "/sys/class/dmi/id/product_name"
-
-// onGCEMachine reports a Google Cloud machine by its DMI product name (the
-// sign the metadata library itself trusts) or a configured metadata host.
-func onGCEMachine() bool {
-	if os.Getenv("GCE_METADATA_HOST") != "" {
-		return true
-	}
-	b, _ := os.ReadFile(gceProductFile)
-	n := strings.TrimSpace(string(b))
-	return n == "Google" || n == "Google Compute Engine"
-}
-
-// Token waits for the token source under the attempt's deadline (ctx);
+// token waits for the token source under the attempt's deadline (ctx);
 // nil without credentials. A failure is a *CredentialError. Waiters
 // share one outstanding call (tokensource.Shared: at most one goroutine
 // calls the source at a time, however many attempts wait or give up); a
 // call that outlives the waits finishes in the background (its own HTTP
 // client is bounded by the request timeout) and later attempts reuse its
 // token.
-func (c *Core) Token(ctx context.Context) (*oauth2.Token, error) {
+func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 	if c.ts == nil {
 		return nil, nil
 	}
@@ -384,271 +344,24 @@ func transientToken(err error) bool {
 }
 
 // Credentials names where the credentials came from (never the secret).
-func (c *Core) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
+func (c *Client) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
 
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
-func (c *Core) Answered() int64 { return c.counts.Answered() }
+func (c *Client) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
 // the progress sampler (objhttp.Live).
-func (c *Core) Live() objhttp.Live {
+func (c *Client) Live() objhttp.Live {
 	l := c.counts.Live()
 	l.Limit = c.retry.Limiter.Limit()
 	return l
 }
 
 // Counters returns the request counters so far.
-func (c *Core) Counters() Counters {
+func (c *Client) Counters() Counters {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()
 	return n
-}
-
-// route is the URL of a bucket's objects collection.
-func (c *Core) route(bucket string) url.URL {
-	u := *c.base
-	u.Path += "b/" + bucket + "/o"
-	u.RawPath = strings.TrimSuffix(c.base.EscapedPath(), "/") + "/b/" + url.PathEscape(bucket) + "/o"
-	return u
-}
-
-// Route is the URL a bucket's listing requests go to, before the query.
-func (c *Core) Route(bucket string) string {
-	u := c.route(bucket)
-	return u.String()
-}
-
-// UserProject is the billed project every request names (userProject).
-func (c *Core) UserProject() string { return c.cfg.UserProject }
-
-// Fields is the partial-response selector a listing sends (versions: a
-// generations listing's), on Google's endpoint only: emulators and the
-// replay server refuse or ignore one; "" elsewhere.
-func (c *Core) Fields(versions bool) string {
-	switch {
-	case c.base.String() != DefaultEndpoint:
-		return ""
-	case versions:
-		return versionFields
-	}
-	return fields
-}
-
-// Endpoint is the normalized JSON API base (a trailing slash).
-func (c *Core) Endpoint() string { return c.base.String() }
-
-// Timeout is the per-attempt request timeout.
-func (c *Core) Timeout() time.Duration { return c.cfg.RequestTimeout }
-
-// Do runs attempt under the client's retry policy, counted (objhttp.Do).
-func (c *Core) Do(ctx context.Context, attempt func() (*Page, error)) (*Page, error) {
-	return objhttp.Do(ctx, c.retry, &c.counts, attempt)
-}
-
-// Attempt counts a request sent (objhttp.Counters.Attempt): call it just
-// before the send, and done after the body is read.
-func (c *Core) Attempt() (done func()) { return c.counts.Attempt() }
-
-// ParseFailure counts a 200 whose body is not a valid listing.
-func (c *Core) ParseFailure() { c.counts.ParseFailure() }
-
-// requestURL is the request URL for in.
-func (c *Client) requestURL(in *ListInput) string {
-	u := c.route(in.Bucket)
-	q := url.Values{}
-	if f := c.Fields(in.Versions); f != "" {
-		q.Set("fields", f)
-	}
-	q.Set("projection", "noAcl")
-	if in.Versions {
-		q.Set("versions", "true")
-	}
-	if in.Prefix != "" {
-		q.Set("prefix", in.Prefix)
-	}
-	if in.Delimiter != "" {
-		q.Set("delimiter", in.Delimiter)
-	}
-	if in.StartOffset != "" {
-		q.Set("startOffset", in.StartOffset)
-	}
-	if in.EndOffset != "" {
-		q.Set("endOffset", in.EndOffset)
-	}
-	if in.PageToken != "" {
-		q.Set("pageToken", in.PageToken)
-	}
-	if in.MaxResults > 0 {
-		q.Set("maxResults", strconv.Itoa(in.MaxResults))
-	}
-	if c.cfg.UserProject != "" {
-		q.Set("userProject", c.cfg.UserProject)
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
-// List sends one objects.list request, retrying retryable failures
-// (objhttp.Do).
-func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
-	u := c.requestURL(in)
-	return c.Do(ctx, func() (*Page, error) { return c.attempt(ctx, u) })
-}
-
-// maxResponse bounds a page body: 1,000 items of 1,024-byte names with
-// every field requested stay well under it.
-const maxResponse = 16 << 20
-
-func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
-	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(actx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", buildinfo.UserAgent())
-	tok, err := c.Token(actx)
-	if err != nil {
-		return nil, err
-	}
-	if tok != nil {
-		tok.SetAuthHeader(req)
-	}
-	defer c.counts.Attempt()()
-	resp, err := c.http[c.Next()].Do(req)
-	if err != nil {
-		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil {
-		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		e := ResponseError(resp.StatusCode, body)
-		if loc := resp.Header.Get("Location"); e.Status/100 == 3 && e.Message == "" {
-			e.Message = "redirect to " + loc + " (not followed)"
-		}
-		if e.Status == http.StatusBadRequest {
-			e.Query = req.URL.RawQuery // a malformed request names itself
-		}
-		return nil, e
-	}
-	if len(body) > maxResponse {
-		return nil, fmt.Errorf("objects.list response larger than %d bytes", maxResponse)
-	}
-	if err := faults.At("response-read"); err != nil {
-		return nil, err
-	}
-	p, err := parse(body)
-	if err != nil {
-		c.counts.ParseFailure()
-		return nil, err
-	}
-	return p, nil
-}
-
-// ResponseError is the answer a non-200 status and its body make: the
-// error envelope's message and first reason, when the body holds one.
-func ResponseError(status int, body []byte) *Error {
-	e := &Error{Status: status}
-	var w struct {
-		Error struct {
-			Message string `json:"message"`
-			Errors  []struct {
-				Reason string `json:"reason"`
-			} `json:"errors"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(body, &w) == nil {
-		e.Message = w.Error.Message
-		if len(w.Error.Errors) > 0 {
-			e.Reason = w.Error.Errors[0].Reason
-		}
-	}
-	return e
-}
-
-type wireObject struct {
-	Name           string `json:"name"`
-	Size           string `json:"size"`
-	Updated        string `json:"updated"`
-	TimeCreated    string `json:"timeCreated"`
-	TimeDeleted    string `json:"timeDeleted"`
-	ETag           string `json:"etag"`
-	Generation     string `json:"generation"`
-	Metageneration string `json:"metageneration"`
-	StorageClass   string `json:"storageClass"`
-	MD5            string `json:"md5Hash"`
-	CRC32C         string `json:"crc32c"`
-	ContentType    string `json:"contentType"`
-}
-
-func parse(body []byte) (*Page, error) {
-	var w struct {
-		Items         []wireObject    `json:"items"`
-		Prefixes      []string        `json:"prefixes"`
-		NextPageToken string          `json:"nextPageToken"`
-		Error         json.RawMessage `json:"error"`
-	}
-	if err := json.Unmarshal(body, &w); err != nil {
-		return nil, fmt.Errorf("%w (%d bytes): %v", ErrSyntax, len(body), err)
-	}
-	// A 200 must carry an objects.list envelope: a JSON object without an
-	// error member. `null`, another JSON value or an error envelope would
-	// otherwise read as an empty final page and end the range early; they
-	// are retried like a garbled body. `{}` (an empty listing under a fields
-	// selector) is a legitimate empty page.
-	if t := bytes.TrimLeft(body, " \t\r\n"); len(t) == 0 || t[0] != '{' {
-		return nil, fmt.Errorf("%w: a 200 whose body is not a JSON object (%d bytes)", ErrSyntax, len(body))
-	}
-	if w.Error != nil {
-		return nil, fmt.Errorf("%w: a 200 carrying an error envelope: %.200s", ErrSyntax, w.Error)
-	}
-	p := &Page{Prefixes: w.Prefixes, NextPageToken: w.NextPageToken, Items: make([]Object, len(w.Items))}
-	for i, o := range w.Items {
-		x := &p.Items[i]
-		x.Name, x.ETag, x.StorageClass, x.MD5, x.CRC32C, x.ContentType = o.Name, o.ETag, o.StorageClass, o.MD5, o.CRC32C, o.ContentType
-		var err error
-		if x.Size, err = optInt(o.Size); err != nil {
-			return nil, fmt.Errorf("%w: size %q", ErrSyntax, o.Size)
-		}
-		if x.Generation, err = optInt(o.Generation); err != nil {
-			return nil, fmt.Errorf("%w: generation %q", ErrSyntax, o.Generation)
-		}
-		if x.Metageneration, err = optInt(o.Metageneration); err != nil {
-			return nil, fmt.Errorf("%w: metageneration %q", ErrSyntax, o.Metageneration)
-		}
-		if x.Updated, err = optTime(o.Updated); err != nil {
-			return nil, fmt.Errorf("%w: updated %q", ErrSyntax, o.Updated)
-		}
-		if x.TimeCreated, err = optTime(o.TimeCreated); err != nil {
-			return nil, fmt.Errorf("%w: timeCreated %q", ErrSyntax, o.TimeCreated)
-		}
-		if x.TimeDeleted, err = optTime(o.TimeDeleted); err != nil {
-			return nil, fmt.Errorf("%w: timeDeleted %q", ErrSyntax, o.TimeDeleted)
-		}
-	}
-	return p, nil
-}
-
-// optTime reads an RFC 3339 time as Unix microseconds; 0 when absent.
-func optTime(s string) (int64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return 0, err
-	}
-	return t.UnixMicro(), nil
-}
-
-func optInt(s string) (int64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	return strconv.ParseInt(s, 10, 64)
 }

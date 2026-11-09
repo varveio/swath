@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -521,7 +522,7 @@ func TestAdmissionFallback(t *testing.T) {
 // answer whose x-ms-is-hns-enabled is not exactly "true" or "false" ("0",
 // which strconv.ParseBool would read as flat) is unknown: refused unless
 // --azblob-flat asserts it (no Data Lake host is asked: the endpoint has
-// none, and the SDK client does not ask one with Shared Key).
+// none, and the client does not ask one with Shared Key).
 func TestAdmitSharedKeyUnknown(t *testing.T) {
 	t.Setenv(EnvKey, "c2VjcmV0LWtleS1mb3ItdGVzdHM=")
 	t.Setenv(EnvSAS, "")
@@ -720,7 +721,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
 	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-azblob-anonymous", "-azblob-endpoint", base(r), "-azblob-request-timeout", "7s"}); err != nil {
+	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-anonymous", "-azblob-endpoint", base(r), "-azblob-request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: v, Workers: 2})
@@ -739,8 +740,8 @@ func TestEngineFlagsShared(t *testing.T) {
 func TestInvalidPageClass(t *testing.T) {
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "b"}, {Name: "a"}}}}}
 	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: c, Policy: keyrange.Policy{Sequential: true}}, 1)
-	if classify(err) != "invalid_page" || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
-		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
+	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
 	}
 }
 
@@ -788,21 +789,18 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 	}
 }
 
-// cappedAPI is a supplied client that reports the client's cut waits and
-// shrunk pages (the body cap is 64 MiB, more than any page the replay can
-// serve, so its path is driven in the client's own tests).
+// cappedAPI is a supplied client that reports the client's cut waits.
 type cappedAPI struct {
 	*sortedAPI
-	retryAfter, shrinks int64
+	retryAfter int64
 }
 
 func (c cappedAPI) RetryAfterCapped() int64 { return c.retryAfter }
-func (c cappedAPI) BodyCapShrinks() int64   { return c.shrinks }
 
 // TestClientCutsReported: retry_after_capped counts the 503 ServerBusy
 // answers whose Retry-After (an hour) passed the request timeout, through
-// the built client against the replay; body_cap_shrinks is reported from
-// the client.
+// the built client against the replay, and is reported from a supplied
+// client that counts it.
 func TestClientCutsReported(t *testing.T) {
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
@@ -821,20 +819,19 @@ func TestClientCutsReported(t *testing.T) {
 	t.Cleanup(srv.Close)
 	rows, st := list(t, Options{Account: r.Account, Container: r.Container, Endpoint: srv.URL, Timeout: 300 * time.Millisecond,
 		Policy: keyrange.Policy{Sequential: true}}, 1)
-	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 || st.Counters.Value("body_cap_shrinks") != 0 {
-		t.Fatalf("%d rows, retry_after_capped %d, body_cap_shrinks %d", len(rows), st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
+	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 {
+		t.Fatalf("%d rows, retry_after_capped %d", len(rows), st.Counters.Value("retry_after_capped"))
 	}
-	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3, shrinks: 5}
+	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3}
 	_, st = list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
-	if st.Counters.Value("retry_after_capped") != 3 || st.Counters.Value("body_cap_shrinks") != 5 {
-		t.Fatalf("supplied client: retry_after_capped %d, body_cap_shrinks %d", st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
+	if st.Counters.Value("retry_after_capped") != 3 {
+		t.Fatalf("supplied client: retry_after_capped %d", st.Counters.Value("retry_after_capped"))
 	}
 }
 
 // TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, the client's counters
-// follow the engine's, and the report names the built client (the SDK
-// client under the swath_sdkclient build tag).
+// client's pool, one transport per 16 workers, and the client's counters
+// follow the engine's.
 func TestPoolSizeReported(t *testing.T) {
 	r := azblobtest.Serve(t, azblobtest.Keys())
 	for workers, want := range map[int]int64{1: 1, 40: 3} {
@@ -842,8 +839,58 @@ func TestPoolSizeReported(t *testing.T) {
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
 			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
 		}
-		if st.Client != clientKind {
-			t.Fatalf("client %q, want %q", st.Client, clientKind)
+	}
+}
+
+// TestAdmissionFallbackPolicy pins code-before-status decisions: changing
+// them can skip the DFS proof, or admit an account without the right proof.
+func TestAdmissionFallbackPolicy(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		code   string
+		want   bool
+	}{
+		{401, "", true}, {403, "", true}, {500, "", false},
+		{400, "AuthenticationFailed", true}, {500, "AuthorizationFailure", true},
+		{403, "NoAuthenticationInformation", true}, {403, "InvalidAuthenticationInfo", true},
+		{403, "AuthorizationPermissionMismatch", true}, {403, "ContainerNotFound", false},
+		{401, "ServerBusy", false}, {403, "OperationTimedOut", false}, {401, "InternalError", false},
+	} {
+		err := &client.Error{Status: c.status, Code: c.code}
+		for _, wrapped := range []error{err, objhttp.Normalize(err), fmt.Errorf("account: %w", objhttp.Normalize(err))} {
+			if got := fallback(wrapped); got != c.want {
+				t.Errorf("%v: fallback %v, want %v", wrapped, got, c.want)
+			}
+		}
+	}
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{client.ErrHNSUnknown, true},
+		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
+		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
+		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
+		{errors.Join(client.ErrInvalidPage, &client.Error{Status: 403}), false},
+		{errors.Join(objhttp.ErrSyntax, &client.Error{Status: 401}), false},
+	} {
+		if got := fallback(c.err); got != c.want {
+			t.Errorf("%v: fallback %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// TestEndpointUserinfoRefused: an endpoint with user information is
+// refused before anything is recorded, and the refusal never quotes the
+// password, which the journal identity and the run report would otherwise
+// carry.
+func TestEndpointUserinfoRefused(t *testing.T) {
+	r := azblobtest.Serve(t, []string{"a"})
+	live := strings.Replace(base(r), "http://", "http://user:s3cret@", 1) // would list, and record the password
+	for _, ep := range []string{live, "https://user:s3cret@azurite.example/", "http://:s3cret@h"} {
+		_, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1, Warn: func(string) {}})
+		if err == nil || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s: %v", ep, err)
 		}
 	}
 }

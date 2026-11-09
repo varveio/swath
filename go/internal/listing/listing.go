@@ -431,6 +431,7 @@ const fdReserve = 32
 // are removed (a journaled run keeps them for -resume); the error is the
 // cause (ctx.Err() on cancellation).
 func Run(ctx context.Context, cfg Config) (Report, error) {
+	cfg.Argv = registry.RedactArgv(cfg.Argv)
 	rep, err := run(ctx, cfg)
 	cfg.finalize(&rep, err)
 	return rep, err

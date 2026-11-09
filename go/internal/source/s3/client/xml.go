@@ -58,8 +58,6 @@ type parser struct {
 
 	truncated bool
 	token     span
-	hasToken  bool
-	keyCount  int
 	encoding  span
 
 	// ListObjectVersions only.
@@ -83,14 +81,14 @@ func (p *parser) reset(body []byte, versions bool) {
 // parsers keeps parsers' scratch buffers between pages.
 var parsers sync.Pool // *parser
 
-// ParseList parses a ListObjectsV2 response body (a ListBucketResult) with
+// parseList parses a ListObjectsV2 response body (a ListBucketResult) with
 // the scanner. A body that does not parse is ErrSyntax.
-func ParseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
+func parseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
 
-// ParseVersions parses a ListObjectVersions response body (a
+// parseVersions parses a ListObjectVersions response body (a
 // ListVersionsResult) with the scanner, then checks the page
 // (VersionPage.Validate).
-func ParseVersions(body []byte) (*VersionPage, error) { return pooled(body, (*parser).parseVersions) }
+func parseVersions(body []byte) (*VersionPage, error) { return pooled(body, (*parser).parseVersions) }
 
 // pooled runs parse on body with a pooled parser.
 func pooled[T any](body []byte, parse func(*parser, []byte) (*T, error)) (*T, error) {
@@ -184,17 +182,15 @@ func (p *parser) listBody(self []byte) error {
 			if err != nil {
 				return err
 			}
-			p.token, p.hasToken = p.store(t), true
+			p.token = p.store(t)
 		case "KeyCount":
 			t, err := p.scalar(name, empty)
 			if err != nil {
 				return err
 			}
-			n, err := parseInt(t)
-			if err != nil {
+			if _, err := parseInt(t); err != nil {
 				return err
 			}
-			p.keyCount = int(n)
 		default:
 			if err := p.skip(name, empty); err != nil {
 				return err
@@ -499,9 +495,7 @@ func (p *parser) finish() (*Page, error) {
 		return nil, err
 	}
 	defer p.own()()
-	pg := &Page{IsTruncated: p.truncated, KeyCount: p.keyCount, HasContinuation: p.hasToken}
-	pg.NextContinuationToken = p.text(p.token)
-	pg.EncodingType = p.text(p.encoding)
+	pg := &Page{IsTruncated: p.truncated, NextContinuationToken: p.text(p.token)}
 	pg.Contents = make([]Object, len(p.objs))
 	for i := range p.objs {
 		pg.Contents[i] = p.object(&p.objs[i])
@@ -511,17 +505,15 @@ func (p *parser) finish() (*Page, error) {
 }
 
 // finishVersions turns a ListVersionsResult's spans into its page. The
-// NextKeyMarker and the echoed Prefix and KeyMarker are decoded like keys;
-// version IDs and the NextVersionIdMarker are not encoded by S3 and are
-// kept verbatim.
+// NextKeyMarker is decoded like keys, and the echoed Prefix and KeyMarker
+// are decoded only to refuse a malformed escape; version IDs and the
+// NextVersionIdMarker are not encoded by S3 and are kept verbatim.
 func (p *parser) finishVersions() (*VersionPage, error) {
 	if err := p.decode(&p.nextKey, &p.prefix, &p.keyMarker); err != nil {
 		return nil, err
 	}
 	defer p.own()()
-	pg := &VersionPage{IsTruncated: p.truncated, EncodingType: p.text(p.encoding),
-		NextKeyMarker: p.text(p.nextKey), NextVersionIDMarker: p.text(p.nextVID),
-		Prefix: p.text(p.prefix), KeyMarker: p.text(p.keyMarker)}
+	pg := &VersionPage{IsTruncated: p.truncated, NextKeyMarker: p.text(p.nextKey), NextVersionIDMarker: p.text(p.nextVID)}
 	pg.Versions = make([]Version, len(p.objs))
 	for i := range p.objs {
 		s := &p.objs[i]

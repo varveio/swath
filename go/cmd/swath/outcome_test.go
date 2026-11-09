@@ -365,7 +365,7 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
-		err := runWith(ctx, command{}, []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "-o", dir}, io.Discard, nil, true, nil)
+		err := runWith(ctx, command{}, []string{"gs://bkt", "--gcs-endpoint", ep, "--anonymous", "-o", dir}, io.Discard, nil, true, nil)
 		if !errors.Is(err, listing.ErrNothingToResume) {
 			t.Fatalf("%s: resumed run: %v", layout, err)
 		}
@@ -412,7 +412,7 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 	}
 	ctx := context.Background()
 	r1 := filepath.Join(reports, "1.json")
-	err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", gcs.URL + "/storage/v1/", "--gcs-anonymous", "--stall-timeout", "1s", "-o", dir, "--report", r1}, io.Discard, false)
+	err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", gcs.URL + "/storage/v1/", "--anonymous", "--stall-timeout", "1s", "-o", dir, "--report", r1}, io.Discard, false)
 	if c := exitCode(t, err); c != exitStuck {
 		t.Fatalf("first attempt: exit %d (%v)", c, err)
 	}
@@ -465,7 +465,7 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 	ctx := context.Background()
 	srv := gcstest.Bucket(t, gcstest.Keys(50), 0)
 	done := filepath.Join(t.TempDir(), "done")
-	if err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv, "--gcs-anonymous", "-o", done}, io.Discard, false); err != nil {
+	if err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", srv, "--anonymous", "-o", done}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
 	empty := t.TempDir()
@@ -494,7 +494,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	captureStderr(t)
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(200), 0)
-	args := []string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB"}
+	args := []string{"gs://bkt", "--gcs-endpoint", ep, "--anonymous", "--part-size", "4KiB"}
 	dir := filepath.Join(t.TempDir(), "ds")
 	if err := run(ctx, append(slices.Clone(args), "-o", dir), io.Discard, false); err != nil {
 		t.Fatal(err)
@@ -554,7 +554,7 @@ func TestRefusalsExit2(t *testing.T) {
 	ctx := context.Background()
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	gcs := func(dir string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
+		return append([]string{"gs://bkt", "--gcs-endpoint", ep, "--anonymous", "--part-size", "4KiB", "--row-budget", "512KiB", "-o", dir}, extra...)
 	}
 	foreign := t.TempDir()
 	os.WriteFile(filepath.Join(foreign, "notes.txt"), []byte("mine"), 0o644)
@@ -626,7 +626,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		var out bytes.Buffer
-		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--gcs-anonymous", "--workers", "1",
+		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "--report-format", "json", "-o", dir}, unjournaled...), &out, diagList)
 		srv.Close()
 		if c := exitCode(t, err); c != exitFatal {
@@ -650,7 +650,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 	for name, extra := range map[string][]string{"complete": nil, "key limit": {"--sequential", "--max-keys", "10"}} {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(ctx, append(append([]string{"gs://bkt", "--gcs-endpoint", ep, "--gcs-anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
+		err := run(ctx, append(append([]string{"gs://bkt", "--gcs-endpoint", ep, "--anonymous", "--part-size", "4KiB", "--report", report, "-o", dir}, unjournaled...), extra...), io.Discard, true)
 		if (err == nil) != (extra == nil) {
 			t.Fatalf("%s: %v", name, err)
 		}

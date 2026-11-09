@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/totals"
 )
@@ -123,7 +124,7 @@ type Attempt struct {
 // (a resume refused on its journal): what was asked, and the failure.
 func Unstarted(argv []string, out string, attempt *Attempt, err error) Report {
 	r := Report{ReportVersion: ReportVersion, Build: buildinfo.Read(), Attempt: attempt,
-		Invocation: Invocation{Argv: argv, Out: out}, Outcome: Outcome{Status: StatusFailed}}
+		Invocation: Invocation{Argv: registry.RedactArgv(argv), Out: out}, Outcome: Outcome{Status: StatusFailed}}
 	if err != nil {
 		r.Outcome.Error = err.Error()
 	}

@@ -36,7 +36,7 @@ func (f *flaky) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clien
 func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	defer keyrange.SetRequeueBackoff(time.Millisecond, 4*time.Millisecond)()
 	page := &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}}}
-	exhausted := &client.ExhaustedError{Attempts: 9, Err: &client.Error{Status: 503, Code: "SlowDown"}}
+	exhausted := &client.ExhaustedError{Attempts: 9, Err: objhttp.Normalize(&client.Error{Status: 503, Code: "SlowDown"})}
 	f := &flaky{stub: stub{pages: []*client.Page{page}}, err: exhausted}
 	f.n.Store(5)
 	rows, st := list(t, Options{Bucket: "b", Client: f, Policy: keyrange.Policy{Sequential: true}}, 1)
@@ -55,29 +55,11 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	}
 }
 
-// TestClassify covers every class.
+// TestClassify: a connection reset known only by its text is transient.
+// The status and code classes are TestAnswers' and the shared contract's.
 func TestClassify(t *testing.T) {
-	se := func(status int, code string) error { return &client.Error{Status: status, Code: code} }
-	for want, err := range map[objhttp.Class]error{
-		objhttp.ClassAuth:         se(403, "InvalidAccessKeyId"),
-		objhttp.ClassAccessDenied: se(403, "AccessDenied"),
-		objhttp.ClassNoSuchBucket: se(404, "NoSuchBucket"),
-		objhttp.ClassRedirect:     se(301, "PermanentRedirect"),
-		objhttp.ClassThrottle:     &client.ExhaustedError{Attempts: 9, Err: se(503, "SlowDown")},
-		objhttp.ClassTimeout:      se(400, "RequestTimeout"),
-		objhttp.ClassServer:       se(500, "InternalError"),
-		objhttp.ClassTransport:    &client.ExhaustedError{Attempts: 9, Err: errors.Join(errors.New("read: connection reset by peer"))},
-		objhttp.ClassParse:        client.ErrSyntax,
-		objhttp.ClassInvalidPage:  client.ErrInvalidPage,
-		objhttp.ClassCanceled:     context.Canceled,
-		objhttp.ClassOther:        errors.New("something else"),
-	} {
-		if got := client.Classify(err); got != want {
-			t.Errorf("%v: %s, want %s", err, got, want)
-		}
-		if transient := want == objhttp.ClassThrottle || want == objhttp.ClassTimeout || want == objhttp.ClassServer ||
-			want == objhttp.ClassTransport || want == objhttp.ClassParse; want.Transient() != transient {
-			t.Errorf("%s: transient %v", want, want.Transient())
-		}
+	err := errors.Join(errors.New("read: connection reset by peer"))
+	if f := objhttp.Normalize(err); client.Classify(f) != objhttp.ClassOther || !f.Transient {
+		t.Errorf("%v: failure %+v, want other, transient", err, f)
 	}
 }

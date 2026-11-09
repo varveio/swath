@@ -141,20 +141,20 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		// ranges finish; the unseeded arm splits.
 		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
 		{"s3-unseeded", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--seed=false"}, []string{"--part-interval=0"}, false},
-		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, []string{"--part-interval=0"}, false},
+		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--anonymous"}, []string{"--part-interval=0"}, false},
 		// Azure pages are 5,000 by default: 1,000, as the others, so the
 		// seed tiles these keys as it does theirs.
 		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
-			"--azblob-anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
+			"--anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
 		// Unseeded, as s3-unseeded: one range whose owner splits, so the
 		// split points and recovery after an owner split are crossed on the
 		// Azure route too.
 		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
-			"--azblob-anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
+			"--anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
 		// The hostile corpus, unseeded so that it splits: crashes inside
 		// the adapter's split spans resume to the same parts.
 		{"azblob-hostile", []string{"az://" + azh.Account + "/" + azh.Container, "--azblob-endpoint", strings.TrimSuffix(azh.Endpoint, "/"+azh.Account),
-			"--azblob-anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
+			"--anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {

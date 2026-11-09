@@ -1,12 +1,6 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package client is a small S3 client for the listing calls swath makes,
-// ListObjectsV2 and ListObjectVersions: SigV4 signing (UNSIGNED-PAYLOAD), credentials from the
-// environment and the shared AWS files, anonymous access, counted retries
-// with jittered exponential backoff, and a response parser that allocates
-// per page rather than per object. It replaces the AWS SDK in the binary;
-// the SDK remains a test-only oracle.
 package client
 
 import "fmt"
@@ -41,9 +35,6 @@ type Page struct {
 	CommonPrefixes        []string
 	IsTruncated           bool
 	NextContinuationToken string
-	HasContinuation       bool
-	KeyCount              int
-	EncodingType          string
 }
 
 // VersionsInput is one ListObjectVersions request.
@@ -87,10 +78,6 @@ type VersionPage struct {
 	// common prefix omits it).
 	NextKeyMarker       string
 	NextVersionIDMarker string
-	// Prefix and KeyMarker echo the request's, URL-decoded.
-	Prefix       string
-	KeyMarker    string
-	EncodingType string
 }
 
 // Error is an S3 error response (or an HTTP failure without one).
@@ -114,27 +101,6 @@ func (e *Error) Error() string {
 		s += " (request id " + e.RequestID + ")"
 	}
 	return s
-}
-
-// Throttle reports whether the server asked the client to slow down.
-func (e *Error) Throttle() bool {
-	switch e.Code {
-	case "SlowDown", "Throttling", "ThrottlingException", "RequestLimitExceeded", "TooManyRequestsException", "RequestThrottled":
-		return true
-	}
-	return e.Status == 429 || e.Status == 503
-}
-
-// Retryable reports whether the request may succeed when repeated.
-func (e *Error) Retryable() bool {
-	if e.Throttle() || e.Status >= 500 {
-		return true
-	}
-	switch e.Code {
-	case "RequestTimeout", "InternalError", "ServiceUnavailable":
-		return true
-	}
-	return false
 }
 
 // Validate checks the continuation contract, including supplied clients.

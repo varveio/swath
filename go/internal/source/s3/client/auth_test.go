@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sdkclient
+package client
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -43,20 +42,15 @@ func TestCredentialsRetrievedOncePerAttempt(t *testing.T) {
 		auth.Store(r.Header.Get("Authorization"))
 		io.WriteString(w, okPage)
 	}))
-	for _, d := range decoders {
-		c, err := newSDK(context.Background(), testConfig(url), d.dec)
-		if err != nil {
+	c := newTest(t, testConfig(url))
+	c.auth.credentials, c.auth.anonymous, c.auth.source = onePerRequest{&retrieved, &sent}, false, "test"
+	for range 3 {
+		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		c.auth.Credentials, c.auth.Anonymous, c.auth.Source = onePerRequest{&retrieved, &sent}, false, "test"
-		for range 3 {
-			if _, err := c.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "b"}); err != nil {
-				t.Fatalf("%s: %v", d.name, err)
-			}
-		}
-		if retrieved.Load() != sent.Load() || c.Counters().Attempts != 3 ||
-			!strings.HasPrefix(auth.Load().(string), "AWS4-HMAC-SHA256 Credential=AKTEST/") {
-			t.Fatalf("%s: %d lookups for %d requests, %+v, authorization %q", d.name, retrieved.Load(), sent.Load(), c.Counters(), auth.Load())
-		}
+	}
+	if retrieved.Load() != sent.Load() || c.Counters().Attempts != 3 ||
+		!strings.HasPrefix(auth.Load().(string), "AWS4-HMAC-SHA256 Credential=AKTEST/") {
+		t.Fatalf("%d lookups for %d requests, %+v, authorization %q", retrieved.Load(), sent.Load(), c.Counters(), auth.Load())
 	}
 }

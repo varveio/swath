@@ -5,63 +5,83 @@ package s3
 
 import (
 	"context"
-	"reflect"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
-	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
 )
 
-// TestClientPagesMatchSDK sends the same requests through the custom
-// client and the AWS SDK and compares every page field.
-func TestClientPagesMatchSDK(t *testing.T) {
-	keys := append(testKeys(), "sp ace", "pl+us", "pct%41", "amp&<>", "q\"'")
-	url := fakeBucket(t, keys, 0)
-	ours, err := client.New(context.Background(), client.Config{Endpoint: url, PathStyle: true, Anonymous: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdk := sdkoracle.New(url, "us-east-1", true)
-	for _, start := range []client.ListInput{
-		{MaxKeys: 7},
-		{MaxKeys: 1000, FetchOwner: true},
-		{Prefix: "data/year=2021/", MaxKeys: 100},
-		{StartAfter: "a/x", MaxKeys: 50},
-		{Delimiter: "/", MaxKeys: 3},
-		{Prefix: "a/", Delimiter: "/"},
-	} {
-		in := start
-		in.Bucket = "bkt"
-		for pages := 0; ; pages++ {
-			a, err := ours.ListObjectsV2(context.Background(), &in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, err := sdk.ListObjectsV2(context.Background(), &in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			a.EncodingType = "" // requested by the client only
-			if !reflect.DeepEqual(a, b) {
-				t.Fatalf("%+v page %d:\nclient %+v\n   sdk %+v", in, pages, a, b)
-			}
-			if !a.IsTruncated {
-				break
-			}
-			in.StartAfter, in.ContinuationToken = "", a.NextContinuationToken
-		}
-	}
+// sdkOracle is the AWS SDK's stock S3 client, with its own decoder, as the
+// provider's API: the oracle the provider's rows are held to (the client's
+// pages are held to the stock decoder by the client package's
+// TestScannerConformsToSDKDecoder). It does not ask for
+// encoding-type=url, so keys arrive raw.
+type sdkOracle struct{ c *awss3.Client }
+
+// newSDKOracle is an anonymous stock client for endpoint, path-style.
+func newSDKOracle(endpoint string) *sdkOracle {
+	return &sdkOracle{awss3.New(awss3.Options{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}, UsePathStyle: true,
+		BaseEndpoint: aws.String(endpoint)})}
 }
 
-// TestRowsMatchSDK lists through both clients, sequential and parallel.
+func (s *sdkOracle) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
+	req := &awss3.ListObjectsV2Input{Bucket: aws.String(in.Bucket)}
+	set := func(dst **string, v string) {
+		if v != "" {
+			*dst = aws.String(v)
+		}
+	}
+	set(&req.Prefix, in.Prefix)
+	set(&req.StartAfter, in.StartAfter)
+	set(&req.ContinuationToken, in.ContinuationToken)
+	set(&req.Delimiter, in.Delimiter)
+	if in.MaxKeys > 0 {
+		req.MaxKeys = aws.Int32(int32(in.MaxKeys))
+	}
+	if in.FetchOwner {
+		req.FetchOwner = aws.Bool(true)
+	}
+	out, err := s.c.ListObjectsV2(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	pg := &client.Page{
+		IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
+		Contents: make([]client.Object, len(out.Contents)),
+	}
+	for i, o := range out.Contents {
+		c := &pg.Contents[i]
+		c.Key, c.ETag, c.Size = aws.ToString(o.Key), aws.ToString(o.ETag), aws.ToInt64(o.Size)
+		if o.LastModified != nil {
+			c.Mtime = o.LastModified.UnixMicro()
+		}
+		c.StorageClass = string(o.StorageClass)
+		if o.Owner != nil {
+			c.OwnerID, c.OwnerDisplayName = aws.ToString(o.Owner.ID), aws.ToString(o.Owner.DisplayName)
+		}
+		if len(o.ChecksumAlgorithm) > 0 {
+			c.ChecksumAlgorithm = string(o.ChecksumAlgorithm[0])
+		}
+		c.ChecksumType = string(o.ChecksumType)
+	}
+	for _, p := range out.CommonPrefixes {
+		pg.CommonPrefixes = append(pg.CommonPrefixes, aws.ToString(p.Prefix))
+	}
+	return pg, nil
+}
+
+// TestRowsMatchSDK lists through the client and the stock SDK client,
+// sequential and parallel.
 func TestRowsMatchSDK(t *testing.T) {
 	keys := append(testKeys(), "sp ace", "pl+us", "pct%41", "amp&<>")
 	url := fakeBucket(t, keys, 0)
-	sdk := sdkoracle.New(url, "us-east-1", true)
+	sdk := newSDKOracle(url)
 	for _, seq := range []bool{true, false} {
 		want, _ := list(t, Options{Bucket: "bkt", Client: sdk, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
-		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
+		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
 		if len(got) != len(keys) || len(got) != len(want) {
 			t.Fatalf("rows %d, sdk %d, keys %d", len(got), len(want), len(keys))
 		}

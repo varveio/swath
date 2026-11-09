@@ -39,7 +39,6 @@ func flags(f *flag.FlagSet, diag bool, shared any) any {
 	common, _ := shared.(*keyrange.Common)
 	o := &flagged{common: common}
 	f.StringVar(&o.Endpoint, "gcs-endpoint", "", "GCS: JSON API base `URL` (default "+client.DefaultEndpoint+")")
-	f.BoolVar(&o.Anonymous, "gcs-anonymous", false, "GCS: send no credentials, ignoring any in the environment")
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
 	f.StringVar(&o.UserProject, "gcs-user-project", "", "GCS: bill a requester-pays bucket's requests to this `project`")
 	f.DurationVar(&o.Timeout, "gcs-request-timeout", 30*time.Second, "GCS: per-request timeout; a request that exceeds it is retried")
@@ -56,7 +55,7 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
+			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
 		}
 	case *Options: // a library caller
 		opt = *o
@@ -102,10 +101,13 @@ func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
 func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
-// (source.Priced): only on the provider's own service; a custom endpoint
-// has no known tariff, and the report then gives no figure.
+// (source.Priced): only on the provider's own service, however its
+// endpoint is spelled (compared canonically, as the identity is); a
+// custom endpoint has no known tariff, and the report then gives no
+// figure.
 func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
-	if (o.p.opt.Endpoint == "" || o.p.opt.Endpoint == client.DefaultEndpoint) && o.p.opt.Client == nil {
+	ep, err := client.Endpoint(o.p.opt.Endpoint)
+	if err == nil && objhttp.CanonicalRoute(ep) == objhttp.CanonicalRoute(client.DefaultEndpoint) && o.p.opt.Client == nil {
 		return 0.005, "gcs-class-a-reference-rate"
 	}
 	return 0, ""
@@ -125,25 +127,34 @@ func (o *opened[P]) target() string {
 	return t
 }
 
-// Identity freezes what a resume must list the same: the source, the
-// route requests go to (the JSON API base and the bucket), and the billed
-// project, both as the client sends them. A supplied client must name both
-// (Routed), or the run declines resume.
+// Identity freezes what a resume must list the same, from the recorded
+// inputs: the source (bucket and prefix), the JSON API endpoint as the
+// built client sends to it (client.Endpoint: the default when none is
+// given, a literal trailing slash added, escapes kept; scheme and host
+// case are the only other equivalence) and the billed project.
+// Credentials may change.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
+	ep, err := client.Endpoint(opt.Endpoint)
+	if err != nil {
+		// Only a supplied client, which never resumes, gets here with an
+		// endpoint it does not use; the value is not recorded (it may hold
+		// a password).
+		ep = ""
+	}
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "route", Value: o.p.route, Canonical: objhttp.CanonicalRoute(o.p.route)},
-		{Name: "user project", Value: o.p.project},
+		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
+		{Name: "user project", Value: opt.UserProject},
 	}}
 }
 
 // Capabilities: names list in byte order and startOffset takes any name,
 // so the range engine applies; --sequential lists one token chain. A run
-// with an object-count cap, or through a supplied client that does not
-// name its route, cannot resume (as for S3).
+// with an object-count cap, or through a supplied client (whose endpoint
+// and billed project are not the recorded inputs), cannot resume.
 func (o *opened[P]) Capabilities() source.Capabilities {
-	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
+	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.opt.Client == nil)
 }
 
 func (o *opened[P]) Restart(after string) error {
@@ -180,7 +191,7 @@ var (
 // run's outcome.
 func classify(err error) string {
 	switch c := client.Classify(err); c {
-	case objhttp.ClassOther, objhttp.ClassCanceled:
+	case objhttp.ClassOther:
 		return ""
 	default:
 		return string(c)

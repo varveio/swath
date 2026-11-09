@@ -39,27 +39,6 @@ type live interface{ Live() objhttp.Live }
 // service answered (source.Live).
 type answering interface{ Answered() int64 }
 
-// Routed is implemented by clients that can name what their requests
-// carry that resume identity freezes: the route a bucket's requests go to
-// and the billed project (client.Client). A supplied client that cannot is
-// listed, but the run declines resume.
-type Routed interface {
-	Route(bucket string) string
-	UserProject() string
-}
-
-// built is the client connect builds (newClient: client.New, or the SDK
-// client under the swath_sdkclient build tag).
-type built interface {
-	API
-	Routed
-	counted
-	pooled
-	live
-	answering
-	Credentials() (source string, anonymous bool)
-}
-
 // Options configure a listing.
 type Options struct {
 	Bucket          string
@@ -132,7 +111,6 @@ func (p *provider[P]) Answered() int64 {
 type Stats struct {
 	Anonymous   bool              `json:"anonymous"`
 	Credentials string            `json:"credentials,omitempty"`
-	Client      string            `json:"client,omitempty"` // the built client: "hand-rolled" or "sdk"; "" for a supplied one
 	MeanActive  float64           `json:"mean_active"`
 	Counters    counters.Snapshot `json:"counters"`
 }
@@ -151,8 +129,6 @@ type provider[P any] struct {
 	client    API
 	anonymous bool
 	creds     string
-	route     string // the URL the bucket's requests go to ("" with a supplied Client that is not Routed)
-	project   string // the billed project the client sends (userProject)
 }
 
 // Range is the engine's range.
@@ -232,16 +208,13 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := newClient(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
 		if err != nil {
 			return nil, false, fmt.Errorf("GCS client: %w", err)
 		}
 		p.client = c
 		p.creds, p.anonymous = c.Credentials()
-	}
-	if r, ok := p.client.(Routed); ok {
-		p.route, p.project = r.Route(opt.Bucket), r.UserProject()
 	}
 	return p, own, nil
 }
@@ -287,7 +260,7 @@ func ExclusiveStart(name string) (string, bool) {
 // maxName is the longest object name, in bytes.
 const maxName = 1024
 
-var requeue = objhttp.Requeue(client.Classify)
+var requeue = objhttp.Requeue
 
 // Restart continues after a journaled run's last published key.
 func (p *provider[P]) Restart(after string) {
@@ -304,11 +277,7 @@ func (p *provider[P]) Stats() Stats {
 		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}
 	e := p.Engine.Stats()
-	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
-	if p.opt.Client == nil {
-		st.Client = clientKind
-	}
-	return st
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {

@@ -706,7 +706,7 @@ go build -o /tmp/faultproxy ./bench/faultproxy
 ./swath list s3://noaa-normals-pds/ -o /tmp/rec --anonymous --endpoint http://127.0.0.1:19401 --region us-east-1 --workers 16
 kill -INT %1
 /tmp/replaydiff -capture /tmp/capture.jsonl -go ./swath-replay -fixture /tmp/rec -bucket noaa-normals-pds
-# GCS: -target https://storage.googleapis.com and swath list gs://B/P --gcs-anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
+# GCS: -target https://storage.googleapis.com and swath list gs://B/P --anonymous --gcs-endpoint http://127.0.0.1:19401/storage/v1/
 ```
 
 The capture is read and replayed one exchange at a time (`TestCaptureStreams`): one exchange, the token map and

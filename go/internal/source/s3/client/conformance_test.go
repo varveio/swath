@@ -1,11 +1,12 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sdkclient
+package client
 
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,51 +18,72 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// TestScannerConformsToSDKDecoder holds the production decoder, package
-// client's scanner, to the SDK's own deserializer. Current objects: for
-// every page of the fake bucket (the hostile keys, the oracle's request
-// shapes) and every captured ListObjectsV2 body, the scanner's page equals
-// the SDK's output converted (measure.go). Versions: for every captured
+// differentialKeys are the provider oracle's keys (TestRowsMatchSDK) and
+// the hostile encoding minefield (keyrangetest.Hostile).
+func differentialKeys() []string {
+	keys := []string{"a", "a-b", "a.b", "a/", "a/x", "a/y/z", "a0", "ab", "b/c", "é", "日本/x", "z~", "\x7f",
+		"sp ace", "pl+us", "pct%41", "amp&<>", "q\"'"}
+	for i := range 500 {
+		keys = append(keys, fmt.Sprintf("data/year=%d/part-%05d.parquet", 2020+i%5, i))
+	}
+	keys = append(keys, keyrangetest.Hostile()["encodingMinefield"]...)
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
+// TestScannerConformsToSDKDecoder holds the production decoder, the
+// scanner, to the SDK's own deserializer (the stock SDK client). Current
+// objects: for every page of the fake bucket (the hostile keys, the
+// oracle's request shapes, through each whole chain), the client's page
+// equals the stock client's, every field; and every captured
+// ListObjectsV2 body decodes to the same page. Versions: for every captured
 // ListObjectVersions body, the scanner's entries equal the SDK's Versions
-// and DeleteMarkers together, as multisets (the order, which the SDK
-// loses, is TestVersionsKeepWireOrder's and TestStockSDKLosesVersionsOrder's).
+// and DeleteMarkers together, as multisets (the order, which the SDK loses,
+// is TestVersionsKeepWireOrder's and TestStockSDKLosesVersionsOrder's).
 func TestScannerConformsToSDKDecoder(t *testing.T) {
 	s3test.NoCredentials(t)
 	t.Run("fake bucket", func(t *testing.T) {
 		url := s3test.Bucket(t, differentialKeys())
-		scanner, _ := newSDK(context.Background(), testConfig(url), false)
-		sdk, _ := newSDK(context.Background(), testConfig(url), true)
-		for _, start := range []client.ListInput{
+		c, sdk := newTest(t, testConfig(url)), stock(url)
+		for _, start := range []ListInput{
 			{MaxKeys: 97}, {MaxKeys: 1000, FetchOwner: true}, {Prefix: "data/year=2021/", MaxKeys: 100},
 			{StartAfter: "a/x", MaxKeys: 50}, {Delimiter: "/", MaxKeys: 3}, {Prefix: "a/", Delimiter: "/"},
+			{Prefix: "m/%", Delimiter: "/", MaxKeys: 7},
 		} {
 			in := start
 			in.Bucket = s3test.Name
-			for {
-				a, err := scanner.ListObjectsV2(context.Background(), &in)
+			n := 0
+			for ; ; n++ {
+				a, err := c.ListObjectsV2(context.Background(), &in)
 				if err != nil {
 					t.Fatal(err)
 				}
-				b, err := sdk.ListObjectsV2(context.Background(), &in)
+				b, err := stockList(context.Background(), sdk, &in)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !reflect.DeepEqual(a, b) {
-					t.Fatalf("%+v:\nscanner %+v\n    sdk %+v", in, a, b)
+					t.Fatalf("%+v page %d:\nscanner %+v\n    sdk %+v", in, n, a, b)
 				}
 				if !a.IsTruncated {
 					break
 				}
 				in.StartAfter, in.ContinuationToken = "", a.NextContinuationToken
 			}
+			if n == 0 && start.MaxKeys < 10 && start.Prefix == "" {
+				t.Fatalf("%+v: one page", start)
+			}
 		}
 	})
-	files, _ := filepath.Glob(filepath.Join("..", "client", "testdata", "versions", "*.xml"))
+	files, _ := filepath.Glob(filepath.Join("testdata", "versions", "*.xml"))
+	if len(files) < 10 {
+		t.Fatalf("fixtures: %v", files)
+	}
 	bodies := map[string][]byte{"bench list": benchBody(false), "bench versions": benchBody(true)}
 	for _, f := range files {
 		b, err := os.ReadFile(f)
@@ -74,24 +96,21 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
 			if strings.Contains(string(body), "<ListBucketResult") {
-				want, err := client.ParseList(body)
+				want, err := parseList(body)
 				if err != nil {
 					t.Fatal(err)
 				}
-				sdk, _ := newSDK(context.Background(), testConfig(url), true)
-				got, err := sdk.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "b"})
+				got, err := stockList(context.Background(), stock(url), &ListInput{Bucket: "b"})
 				if err != nil || !reflect.DeepEqual(got, want) {
 					t.Fatalf("sdk %+v (%v)\nscanner %+v", got, err, want)
 				}
 				return
 			}
-			pg, err := client.ParseVersions(body)
+			pg, err := parseVersions(body)
 			if err != nil {
 				t.Fatal(err)
 			}
-			stock := awss3.New(awss3.Options{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}, UsePathStyle: true,
-				BaseEndpoint: aws.String(url), Retryer: aws.NopRetryer{}})
-			out, err := stock.ListObjectVersions(context.Background(), &awss3.ListObjectVersionsInput{Bucket: aws.String("b")})
+			out, err := stock(url).ListObjectVersions(context.Background(), &awss3.ListObjectVersionsInput{Bucket: aws.String("b")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,14 +128,14 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 // stockVersions is the SDK's ListObjectVersions output as entries, the
 // keys decoded once when the answer says encoding-type=url: its Versions,
 // then its DeleteMarkers.
-func stockVersions(out *awss3.ListObjectVersionsOutput) ([]client.Version, error) {
+func stockVersions(out *awss3.ListObjectVersionsOutput) ([]Version, error) {
 	enc := string(out.EncodingType)
-	var vs []client.Version
-	owner := func(o *client.Object, id, name *string) {
+	var vs []Version
+	owner := func(o *Object, id, name *string) {
 		o.OwnerID, o.OwnerDisplayName = aws.ToString(id), aws.ToString(name)
 	}
 	for _, v := range out.Versions {
-		e := client.Version{Object: client.Object{Key: aws.ToString(v.Key), ETag: aws.ToString(v.ETag), Size: aws.ToInt64(v.Size),
+		e := Version{Object: Object{Key: aws.ToString(v.Key), ETag: aws.ToString(v.ETag), Size: aws.ToInt64(v.Size),
 			StorageClass: string(v.StorageClass), ChecksumType: string(v.ChecksumType)},
 			VersionID: aws.ToString(v.VersionId), IsLatest: aws.ToBool(v.IsLatest)}
 		if v.LastModified != nil {
@@ -131,7 +150,7 @@ func stockVersions(out *awss3.ListObjectVersionsOutput) ([]client.Version, error
 		vs = append(vs, e)
 	}
 	for _, d := range out.DeleteMarkers {
-		e := client.Version{Object: client.Object{Key: aws.ToString(d.Key)}, VersionID: aws.ToString(d.VersionId),
+		e := Version{Object: Object{Key: aws.ToString(d.Key)}, VersionID: aws.ToString(d.VersionId),
 			IsLatest: aws.ToBool(d.IsLatest), DeleteMarker: true}
 		if d.LastModified != nil {
 			e.Mtime = d.LastModified.UnixMicro()
@@ -143,7 +162,7 @@ func stockVersions(out *awss3.ListObjectVersionsOutput) ([]client.Version, error
 	}
 	for i := range vs {
 		var err error
-		if vs[i].Key, err = unescape(enc, vs[i].Key); err != nil {
+		if vs[i].Key, err = stockUnescape(enc, vs[i].Key); err != nil {
 			return nil, err
 		}
 	}
@@ -151,12 +170,12 @@ func stockVersions(out *awss3.ListObjectVersionsOutput) ([]client.Version, error
 }
 
 // sortedVersions is vs in a fixed order, for a multiset comparison.
-func sortedVersions(vs []client.Version) []client.Version {
+func sortedVersions(vs []Version) []Version {
 	vs = slices.Clone(vs)
 	if vs == nil {
-		vs = []client.Version{}
+		vs = []Version{}
 	}
-	slices.SortFunc(vs, func(a, b client.Version) int {
+	slices.SortFunc(vs, func(a, b Version) int {
 		return cmp.Or(strings.Compare(a.Key, b.Key), strings.Compare(a.VersionID, b.VersionID))
 	})
 	return vs
@@ -165,28 +184,23 @@ func sortedVersions(vs []client.Version) []client.Version {
 // TestCrossEnvelopeIsParseFailure: each operation requires its own
 // envelope. A ListVersionsResult answering ListObjectsV2, or a
 // ListBucketResult answering ListObjectVersions, is a parse failure,
-// retried, through both clients (the scanner checks it), never an empty
-// final page.
+// retried (the scanner checks it), never an empty final page.
 func TestCrossEnvelopeIsParseFailure(t *testing.T) {
 	s3test.NoCredentials(t)
 	versions := versionsBody("VDV")
 	list := `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Key></Contents></ListBucketResult>`
-	for _, d := range production {
-		cfg := testConfig(s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Has("versions") {
-				w.Write([]byte(list))
-				return
-			}
-			w.Write([]byte(versions))
-		})))
-		cfg.MaxAttempts = 2
-		hand, sdk := pair(t, cfg, d.dec, nil)
-		for who, c := range map[string]lister{"hand-rolled": hand, "sdk": sdk} {
-			_, lerr := c.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "b"})
-			_, verr := c.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"})
-			if client.Classify(lerr) != objhttp.ClassParse || client.Classify(verr) != objhttp.ClassParse || c.Counters().ParseFailures != 4 {
-				t.Fatalf("%s/%s: list %v, versions %v, %+v", d.name, who, lerr, verr, c.Counters())
-			}
+	cfg := testConfig(s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("versions") {
+			w.Write([]byte(list))
+			return
 		}
+		w.Write([]byte(versions))
+	})))
+	cfg.MaxAttempts = 2
+	c := newTest(t, cfg)
+	_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+	_, verr := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
+	if Classify(lerr) != objhttp.ClassParse || Classify(verr) != objhttp.ClassParse || c.Counters().ParseFailures != 4 {
+		t.Fatalf("list %v, versions %v, %+v", lerr, verr, c.Counters())
 	}
 }

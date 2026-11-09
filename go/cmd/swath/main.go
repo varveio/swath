@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/filter"
@@ -70,6 +72,11 @@ type forensicTarget struct {
 	att    *listing.Attempt
 	t      *terminal // the run's terminal result
 }
+
+// The Azure SDK's own log (azcore writes it to stderr when
+// AZURE_SDK_GO_LOGGING=all) quotes request URLs, a SAS included: swath
+// turns it off before any SDK use (TestAzureSDKLogSuppressed).
+func init() { azlog.SetListener(nil) }
 
 func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -471,8 +478,8 @@ var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-b
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
-var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
-	"bearer-token-command", "bearer-token-refresh-interval", "azblob-anonymous", "azblob-sas", "azblob-request-timeout"}
+var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
+	"bearer-token-command", "bearer-token-refresh-interval", "azblob-sas", "azblob-request-timeout"}
 
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
@@ -515,27 +522,8 @@ func sourceForms() string {
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
-// redactArgv is argv with every secret flag's value replaced by redacted,
-// in both spellings (--flag VALUE and --flag=VALUE), and a credential in a
-// root by its provider's redaction (registry.Redact; a resume must be given
-// it again).
-func redactArgv(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
-			out = append(out, registry.Redact(a))
-			continue
-		}
-		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
-		out = append(out, dashes+name+"="+redacted)
-		if !eq && i+1 < len(argv) {
-			i++ // the value
-		}
-	}
-	return out
-}
+// redactArgv is the recorded form shared with listing.Run.
+func redactArgv(argv []string) []string { return registry.RedactArgv(argv) }
 
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
@@ -665,8 +653,8 @@ func nonNegativeDurations(f *flag.FlagSet) (err error) {
 }
 
 // foreignFlags refuses a provider flag given explicitly for a root of
-// another provider (gs://... --anonymous: S3's flag, which GCS would
-// ignore; GCS's is --gcs-anonymous). A root no provider takes is left to
+// another provider (gs://... --profile: S3's flag, which GCS would
+// ignore; GCS's is --gcs-credentials). A root no provider takes is left to
 // the lookup's own refusal.
 func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
 	pf, lerr := registry.Lookup(root)
@@ -838,8 +826,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
-		argv = redactArgv(append(strings.Fields(cmd.name()), args...))
+		argv = append(strings.Fields(cmd.name()), args...)
 	}
+	argv = redactArgv(argv)
 	pf, err := registry.Lookup(root)
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})
@@ -1025,6 +1014,7 @@ func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
 	var le *totals.LimitError
+	var ce interface{ CredentialRefused() bool } // objhttp.CredentialError
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -1046,6 +1036,10 @@ func explain(err error) error {
 		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every link without --count-links-once)", err)
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
+	case errors.As(err, &ce) && ce.CredentialRefused():
+		// No credentials, or none that load: swath never falls back to
+		// anonymous requests on its own.
+		return fmt.Errorf("%w (a public bucket needs --anonymous)", err)
 	}
 	return err
 }

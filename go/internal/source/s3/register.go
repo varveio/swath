@@ -8,7 +8,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -68,7 +70,6 @@ func flags(f *flag.FlagSet, diag bool, shared any) any {
 	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store (path-style addressing unless --path-style=false)")
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
-	f.BoolVar(&o.Anonymous, "anonymous", false, "S3: send unsigned requests, ignoring any credentials")
 	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")
 	f.DurationVar(&o.Timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
 	f.Var(boolFunc{&o.PathStyle, &o.pathStyleSet}, "path-style", "S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)")
@@ -97,7 +98,7 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
+			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
 		}
 		if !o.pathStyleSet && opt.Endpoint != "" {
 			opt.PathStyle = true // Java's default for a custom endpoint
@@ -176,23 +177,52 @@ func (o *opened[P]) target() string {
 	return t
 }
 
-// Identity: the bucket and prefix, the effective route and the owner
-// columns. The route is what the client builds, not what was asked: the URL
-// the bucket's requests go to (endpoint, its path bytes, path or
-// virtual-host addressing; a different endpoint, another AWS partition or
-// the other addressing style can serve a different bucket of the same
-// name) and the signing region. With neither --endpoint nor --region
-// given, both come from the environment or the profile, so a resume in an
-// environment that resolves them differently is refused. A supplied client
-// must name its route (Routed), or the run declines resume.
+// Identity: the inputs the listing was asked with, as given. The bucket
+// and prefix; the endpoint (--endpoint, "" for AWS's own), the signing
+// region and the addressing flags (path-style, FIPS, dual-stack), which
+// together decide which service, partition and bucket of a name the SDK
+// lists (another endpoint, partition or addressing style can serve a
+// different bucket of the same name); and the owner columns. The region is
+// --region, else what the environment or the profile resolves, so a resume
+// in an environment that resolves another region is refused even when the
+// flag was not given. The inputs are compared as given: nothing resolves
+// them to a URL first (a FIPS region alias is its own value). The
+// endpoint's canonical form folds the scheme and host case
+// (objhttp.CanonicalRoute) and only a trailing slash the built client
+// sends the same requests without (endpointCanonical). A supplied client
+// is identified by the Route it names (Routed) in place of the endpoint,
+// its path byte for byte, or the run declines resume.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
+	endpoint, canonical := opt.Endpoint, endpointCanonical(opt.Endpoint, opt.PathStyle)
+	if opt.Client != nil {
+		endpoint = o.p.route
+		canonical = objhttp.CanonicalRoute(endpoint) // a route promises no slash equivalence
+	}
 	return source.Identity{Provider: "s3", Fields: []source.IdentityField{
 		{Name: "source", Value: "s3://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "route", Value: o.p.route, Canonical: objhttp.CanonicalRoute(o.p.route)},
+		{Name: "endpoint", Value: endpoint, Canonical: canonical},
 		{Name: "region", Value: o.p.region},
+		{Name: "path style", Value: strconv.FormatBool(opt.PathStyle)},
+		{Name: "fips", Value: strconv.FormatBool(opt.FIPS)},
+		{Name: "dual-stack", Value: strconv.FormatBool(opt.DualStack)},
 		{Name: "fetch owner", Value: strconv.FormatBool(opt.FetchOwner)},
 	}}
+}
+
+// endpointCanonical is the built client's endpoint as identity: the scheme
+// and host case folded, and one trailing slash folded only where the SDK
+// sends the same requests with or without it. Path-style addressing
+// appends "/bucket" to the endpoint's path after trimming one slash
+// (/base and /base/ both send /base/bkt), and an endpoint with no path
+// sends "/" either way; virtual-host addressing keeps any other path as
+// given (bkt.store/base and bkt.store/base/ are two request paths, and
+// may be two namespaces), so it is kept byte for byte (TestRequestURLs).
+func endpointCanonical(endpoint string, pathStyle bool) string {
+	if u, err := url.Parse(endpoint); err == nil && (pathStyle || u.Path == "/" && u.RawQuery == "") {
+		endpoint = strings.TrimSuffix(endpoint, "/")
+	}
+	return objhttp.CanonicalRoute(endpoint)
 }
 
 // Capabilities: S3 has no rank oracle and start-after is a fabricable
@@ -203,7 +233,8 @@ func (o *opened[P]) Identity() source.Identity {
 // journal, and a resume of one is refused; so does a run through a
 // supplied client that does not name its route (Routed).
 func (o *opened[P]) Capabilities() source.Capabilities {
-	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
+	identified := o.p.opt.Client == nil || o.p.route != ""
+	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && identified)
 }
 
 // Restart continues after the last published key, from the normal
@@ -242,7 +273,7 @@ var (
 // run's outcome.
 func classify(err error) string {
 	switch c := client.Classify(err); c {
-	case objhttp.ClassOther, objhttp.ClassCanceled:
+	case objhttp.ClassOther:
 		return ""
 	default:
 		return string(c)

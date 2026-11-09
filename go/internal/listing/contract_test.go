@@ -123,7 +123,7 @@ func TestDatasetContract(t *testing.T) {
 	url := fakeS3(t, 3000)
 	var ref []string
 	for i, o := range []S3Config{{Policy: keyrange.Policy{Sequential: true}}, {}, {Policy: keyrange.Policy{Seed: true}}} {
-		o.Endpoint, o.PathStyle = url, true
+		o.Endpoint, o.PathStyle, o.Anonymous = url, true, true
 		out := filepath.Join(t.TempDir(), "ds")
 		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &o}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()},
 			Limits: Limits{PartSize: 16 << 10, Workers: 8}}); err != nil {

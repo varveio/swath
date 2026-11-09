@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -147,4 +148,95 @@ func TestLegacyTemporaryProtocolIsRefusedOrRecovered(t *testing.T) {
 			}
 		}
 	}
+}
+
+// setSourceIdentity rewrites the journal header's source fields in out (the
+// frame's length and CRC with it).
+func setSourceIdentity(t *testing.T, out string, fields []journal.Field) {
+	t.Helper()
+	path := journal.Path(out)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := binary.LittleEndian.Uint32(b[:4])
+	var h journal.Header
+	if err := json.Unmarshal(b[8:8+size], &h); err != nil || h.Type != "header" {
+		t.Fatalf("header: %v", err)
+	}
+	h.Identity.Source = fields
+	hdr, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab := crc32.MakeTable(crc32.Castagnoli)
+	frame := binary.LittleEndian.AppendUint32(nil, uint32(len(hdr)))
+	frame = binary.LittleEndian.AppendUint32(frame, crc32.Update(crc32.Checksum(frame, tab), tab, hdr))
+	frame = append(frame, hdr...)
+	if err := os.WriteFile(path, append(frame, b[8+size:]...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLegacyS3IdentityIsRefused: a journal an earlier build wrote records
+// the S3 identity as the resolved route (source, route, region, fetch
+// owner), not the endpoint inputs. Its resume is refused for the endpoint,
+// "(not recorded)", nothing synthesized in its place, before recovery reads,
+// moves or removes any part: the run crashed with its third part recorded
+// and still at its claimed temporary name (which recovery would publish),
+// and after two refused attempts that part, data/, the journal and the
+// workspace are byte for byte as they were, with no manifest. The same
+// dataset with the current identity then resumes to the uninterrupted one.
+func TestLegacyS3IdentityIsRefused(t *testing.T) {
+	datasettest.RequireJournal(t)
+	url := crashBucket(t)
+	ref := filepath.Join(t.TempDir(), "ref")
+	if _, err := Run(context.Background(), crashConfig(url, ref, false)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	crashAtRecorded(t, url, out)
+	st, err := journal.Read(out)
+	if err != nil || len(st.Records) != 3 {
+		t.Fatalf("%v, %d records", err, len(st.Records))
+	}
+	current, acked := st.Header.Identity.Source, st.Records[2].Part
+	if _, err := os.Stat(dataset.ClaimPath(out, 2)); err != nil {
+		t.Fatalf("the recorded part is not at its claimed name: %v", err)
+	}
+	route := url + "/bkt"
+	setSourceIdentity(t, out, []journal.Field{
+		{Name: "source", Value: "s3://bkt/"},
+		{Name: "route", Value: route, Canonical: route},
+		{Name: "region", Value: "us-east-1"},
+		{Name: "fetch owner", Value: "false"},
+	})
+	before := snapshot(t, out)
+	for attempt := range 2 {
+		_, err := Run(context.Background(), crashConfig(url, out, true))
+		var mm *journal.MismatchError
+		if !errors.As(err, &mm) || mm.Field != "endpoint" || mm.Stored != "(not recorded)" {
+			t.Fatalf("attempt %d: %v, want an endpoint (not recorded) mismatch", attempt, err)
+		}
+		after := snapshot(t, out)
+		if len(after) != len(before) {
+			t.Fatalf("attempt %d: files changed: %d before, %d after", attempt, len(before), len(after))
+		}
+		for p, v := range before {
+			if !bytes.Equal(after[p], v) {
+				t.Fatalf("attempt %d: %s changed", attempt, p)
+			}
+		}
+		if got, err := measure(dataset.ClaimPath(out, 2)); err != nil || got.SHA256 != acked.SHA256 || got.Bytes != acked.Bytes {
+			t.Fatalf("attempt %d: the recorded part is not kept at its claimed name: %v %+v", attempt, err, got)
+		}
+		if _, err := os.Stat(filepath.Join(out, dataset.ManifestName)); err == nil {
+			t.Fatalf("attempt %d: a manifest exists", attempt)
+		}
+	}
+	setSourceIdentity(t, out, current)
+	if _, err := Run(context.Background(), crashConfig(url, out, true)); err != nil {
+		t.Fatalf("the restored identity does not resume: %v", err)
+	}
+	sameDataset(t, "legacy refused, then resumed", ref, out)
 }

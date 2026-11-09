@@ -26,7 +26,7 @@ every provider shares (the contract, the registry and the capabilities).
 | [providers/s3.md](providers/s3.md) | S3 (`internal/source/s3`): credentials, the adaptive limiter, versions, the schema, the range engine's page fetch |
 | [providers/gcs.md](providers/gcs.md) | GCS (`internal/source/gcs`): credentials, generations, the schema, route parity |
 | [providers/azblob.md](providers/azblob.md) | Azure Blob (`internal/source/azblob`): credentials, admission, the byte-order adapter, the schema |
-| [clients.md](clients.md) | the list clients shared by the object-store providers: hand-rolled on the SDKs' auth, and the SDK-backed clients behind `swath_sdkclient` |
+| [clients.md](clients.md) | the list clients of the object-store providers: one per provider on the vendor's SDK service client, and what swath keeps around it |
 | [range-engine.md](range-engine.md) | the range engine (`internal/source/keyrange`): splitting, seeds and priors, admission, resume, group mode |
 
 ## The contract (`internal/source`)
@@ -75,7 +75,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | S3 | Azure Blob | fs |
 |---|---|---|---|---|
-| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
+| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `CanonicalRoute`), region, path style, fips, dual-stack, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
 | `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | `(K, ⊤]` | – |
 | `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |

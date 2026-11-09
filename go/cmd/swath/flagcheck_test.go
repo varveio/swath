@@ -49,11 +49,10 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		args []string
 		flag string
 	}{
-		{[]string{"gs://bucket", "--anonymous"}, "--anonymous"},
 		{[]string{"gs://bucket", "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
 		{[]string{"gs://bucket", "--request-timeout", "5s"}, "--request-timeout"},
 		{[]string{"s3://bucket", "--gcs-endpoint", "http://127.0.0.1:1"}, "--gcs-endpoint"},
-		{[]string{"s3://bucket", "--gcs-anonymous"}, "--gcs-anonymous"},
+		{[]string{"s3://bucket", "--gcs-credentials", "f.json"}, "--gcs-credentials"},
 		{[]string{"gs://bucket", "--azblob-sas", "sv=1&sig=x"}, "--azblob-sas"},
 		{[]string{src, "--anonymous"}, "--anonymous"},
 		{[]string{src, "--region", "eu-west-1"}, "--region"},
@@ -68,7 +67,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	// The flag set knows each provider flag's owners.
 	var o options
 	newFlags(&o, false)
-	for name, want := range map[string]string{"anonymous": "s3", "gcs-anonymous": "gs", "azblob-anonymous": "az", "request-rate": "az,gs,s3"} {
+	for name, want := range map[string]string{"anonymous": "az,gs,s3", "profile": "s3", "gcs-credentials": "gs", "azblob-sas": "az", "request-rate": "az,gs,s3"} {
 		if got := strings.Join(o.owners[name], ","); got != want {
 			t.Errorf("owners of --%s: %q, want %q", name, got, want)
 		}

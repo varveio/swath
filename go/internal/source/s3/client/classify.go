@@ -3,11 +3,7 @@
 
 package client
 
-import (
-	"errors"
-
-	"github.com/varveio/swath/go/internal/source/objhttp"
-)
+import "github.com/varveio/swath/go/internal/source/objhttp"
 
 // ExhaustedError is a transient failure that outlasted the client's own
 // retries (objhttp.ExhaustedError).
@@ -16,33 +12,28 @@ type ExhaustedError = objhttp.ExhaustedError
 // ErrInvalidPage marks a page that breaks the listing contract.
 var ErrInvalidPage = objhttp.ErrInvalidPage
 
-// Classify returns the class of err (objhttp's vocabulary, with S3's
-// answers mapped by their status and code).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err, answer) }
+// Classify returns the stored report label (or normalizes a construction error).
+func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
 
-func answer(err error) (objhttp.Class, bool) {
-	var se *Error
-	if !errors.As(err, &se) {
-		return "", false
+// Failure maps the service answer once; labels do not drive retry policy.
+func (e *Error) Failure() objhttp.Failure {
+	f := objhttp.Failure{Status: e.Status, Code: e.Code}
+	switch e.Code {
+	case "SlowDown", "Throttling", "ThrottlingException", "RequestLimitExceeded", "TooManyRequestsException", "RequestThrottled":
+		f.Throttle = true
 	}
-	switch {
-	case se.Throttle():
-		return objhttp.ClassThrottle, true
-	case se.Code == "RequestTimeout":
-		return objhttp.ClassTimeout, true
-	case se.Status >= 500 || se.Retryable():
-		return objhttp.ClassServer, true
-	case se.Code == "NoSuchBucket":
-		return objhttp.ClassNoSuchBucket, true
-	case se.Status == 301 || se.Code == "PermanentRedirect" || se.Code == "AuthorizationHeaderMalformed":
-		return objhttp.ClassRedirect, true
-	case se.Code == "InvalidAccessKeyId" || se.Code == "SignatureDoesNotMatch" || se.Code == "ExpiredToken" ||
-		se.Code == "InvalidToken" || se.Code == "TokenRefreshRequired":
-		return objhttp.ClassAuth, true
-	case se.Status == 403 || se.Code == "AccessDenied" || se.Code == "AllAccessDisabled":
-		return objhttp.ClassAccessDenied, true
-	case se.Status == 404:
-		return objhttp.ClassNoSuchBucket, true
+	f.Throttle = f.Throttle || e.Status == 429 || e.Status == 503
+	f.Timeout = !f.Throttle && e.Code == "RequestTimeout"
+	f.Transient = f.Throttle || e.Status >= 500 || e.Code == "RequestTimeout" || e.Code == "InternalError" || e.Code == "ServiceUnavailable"
+	if !f.Transient {
+		switch e.Code {
+		case "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "TokenRefreshRequired":
+			f.Class = objhttp.ClassAuth
+		default:
+			if e.Status == 403 || e.Code == "AccessDenied" || e.Code == "AllAccessDisabled" {
+				f.Class = objhttp.ClassAccessDenied
+			}
+		}
 	}
-	return objhttp.ClassOther, true
+	return f
 }
