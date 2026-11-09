@@ -20,8 +20,9 @@
 // Stream hands on every current object, checking each one's size and
 // modification time; List lists them by delimiter a page at a time,
 // through the module's delimited listing, checking each object as Stream
-// does (Delimiter 0 is the NUL byte). None of them checks the parts' digests or the rows no request
-// decodes.
+// does (Delimiter 0 is the NUL byte); a common prefix carries the object
+// at its exact key, an S3-style folder object, from the same request.
+// None of them checks the parts' digests or the rows no request decodes.
 //
 // ValidateDigests, at import, checks that a dataset is swath's from its
 // manifest and that every part declares a SHA-256 its bytes match

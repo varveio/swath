@@ -218,8 +218,9 @@ func TestNullVersion(t *testing.T) {
 
 // TestNullVersionIdentity: overwriting an object at version "null" (a
 // versioning-suspended bucket) keeps the version id "null", so Identity is the
-// ETag, and a replacement of the same size has another Identity. An object
-// with a real version id is identified by it.
+// ETag, a replacement of the same size has another Identity, and an Object
+// pinned before the overwrite, from Open or OpenSized, reads none of the new
+// bytes (If-Match fails). An object with a real version id is identified by it.
 func TestNullVersionIdentity(t *testing.T) {
 	var data []byte
 	var etag, version string
@@ -231,25 +232,45 @@ func TestNullVersionIdentity(t *testing.T) {
 		w.Header().Set("ETag", etag)
 		w.Header().Set("x-amz-version-id", version)
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(data)-1, len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data)
 	}))
 	t.Cleanup(srv.Close)
 	client := awss3.New(awss3.Options{BaseEndpoint: aws.String(srv.URL), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{}})
-	open := func() string {
+	open := func() objfile.Object {
 		t.Helper()
 		file, err := s3.New(client, bucket).Open(context.Background(), "obj")
 		if err != nil {
 			t.Fatal(err)
 		}
-		return file.Identity()
+		return file
 	}
 	data, etag, version = objfiletest.Data(10, 1), `"a"`, "null"
-	first := open()
+	opened := open()
+	sized, err := s3.New(client, bucket).OpenSized(context.Background(), "obj", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := make([]byte, 10)
+	if _, err := sized.ReadAt(p, 0); err != nil || sized.Identity() != `"a"` {
+		t.Fatalf("first read of the sized object: %v, Identity %q", err, sized.Identity())
+	}
 	data, etag = objfiletest.Data(10, 2), `"b"`
-	if second := open(); first != `"a"` || second != `"b"` {
+	for name, file := range map[string]objfile.Object{"Open": opened, "OpenSized": sized} {
+		q := make([]byte, 10)
+		if n, err := file.ReadAt(q, 0); n != 0 || !errors.Is(err, objfile.ErrObjectChanged) || !bytes.Equal(q, make([]byte, 10)) {
+			t.Fatalf("%s: ReadAt after a same-size overwrite at version null = %d, %v", name, n, err)
+		}
+	}
+	if first, second := opened.Identity(), open().Identity(); first != `"a"` || second != `"b"` {
 		t.Fatalf("Identity of a null version before and after a same-size overwrite = %q, %q; want the ETags", first, second)
 	}
 	version = "v3"
-	if id := open(); id != "v3" {
+	if id := open().Identity(); id != "v3" {
 		t.Fatalf("Identity of version v3 = %q", id)
 	}
 }

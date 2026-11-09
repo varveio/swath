@@ -15,25 +15,34 @@ import (
 )
 
 // listKeys holds a, a/, a/b, a/b0 and ab/x, whose order and rollup a
-// listing by "/" must keep apart, cut into three parts below.
-var listKeys = []string{"a", "a/", "a/b", "a/b0", "a/c/d", "ab/x", "b", "c/1", "c/2", "c/3/x", "d"}
+// listing by "/" must keep apart, cut into three parts below; a/ and c/3/
+// are objects at a prefix's exact key, c/ is a prefix without one.
+var listKeys = []string{"a", "a/", "a/b", "a/b0", "a/c/d", "ab/x", "b", "c/1", "c/2", "c/3/", "c/3/x", "d"}
 
 // listDir writes listKeys over three parts, in pages of two rows and row
-// groups of three, cutting inside a/ and c/.
+// groups of three, cutting inside a/ and c/ (a/ and its keys span parts 0
+// and 1).
 func listDir(t *testing.T) string {
 	t.Helper()
 	return writeParts(t, s3Spec(), 2, 3, cut(keyRows(listKeys), 0, 3, 8, len(listKeys))...)
 }
 
-// describe returns an entry as a string: "o:key" or "p:prefix".
+// describe returns an entry as a string: "o:key", "p:prefix", or
+// "P:prefix" for a prefix with the object at its exact key.
 func describe(e Entry) string {
-	if e.Object != nil {
+	switch {
+	case e.CommonPrefix == nil:
 		return "o:" + string(e.Object.Key)
+	case e.Object == nil:
+		return "p:" + string(e.CommonPrefix)
+	case bytes.Equal(e.Object.Key, e.CommonPrefix):
+		return "P:" + string(e.CommonPrefix)
 	}
-	return "p:" + string(e.CommonPrefix)
+	return fmt.Sprintf("p:%s with the object %q", e.CommonPrefix, e.Object.Key)
 }
 
-// listOracle lists keys, sorted, by prefix and delimiter.
+// listOracle lists keys, sorted, by prefix and delimiter: a prefix whose
+// first key is the prefix itself is "P:".
 func listOracle(keys []string, prefix string, delim byte) []string {
 	var out []string
 	for _, k := range keys {
@@ -42,8 +51,8 @@ func listOracle(keys []string, prefix string, delim byte) []string {
 			continue
 		}
 		if i := strings.IndexByte(rest, delim); i >= 0 {
-			if p := "p:" + prefix + rest[:i+1]; len(out) == 0 || out[len(out)-1] != p {
-				out = append(out, p)
+			if p := prefix + rest[:i+1]; len(out) == 0 || out[len(out)-1][2:] != p {
+				out = append(out, map[bool]string{false: "p:", true: "P:"}[p == k]+p)
 			}
 			continue
 		}
@@ -68,8 +77,8 @@ func listAll(t *testing.T, d *Dataset, req ListRequest) []string {
 			t.Fatalf("%d entries, limit %d", len(page), req.Limit)
 		}
 		for _, e := range page {
-			if (e.Object == nil) == (e.CommonPrefix == nil) {
-				t.Fatalf("entry %+v: want exactly one of Object and CommonPrefix", e)
+			if e.Object == nil && e.CommonPrefix == nil {
+				t.Fatalf("entry %+v: neither Object nor CommonPrefix", e)
 			}
 			out = append(out, describe(e))
 		}
@@ -108,12 +117,64 @@ func TestListObjects(t *testing.T) {
 	}
 }
 
+// TestListExactObject: a common prefix carries the object at its exact
+// key, decoded as an object entry is, and its cursor stays the prefix's,
+// so the next page starts after every key under it, that object
+// included. A prefix without such an object, or reached after a row
+// cursor inside its keys, carries none.
+func TestListExactObject(t *testing.T) {
+	rows := keyRows(listKeys)
+	d := openDir(t, listDir(t))
+	ctx := context.Background()
+	got, err := d.List(ctx, ListRequest{Delimiter: '/', Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := got[1]
+	o := e.Object
+	if len(got) != 2 || string(e.CommonPrefix) != "a/" || o == nil || string(o.Key) != "a/" || o.Offset != 0 ||
+		*o.Size != *rows[1].Size || *o.ETag != *rows[1].ETag || o.LastModified.UnixMicro() != *rows[1].LastModified {
+		t.Fatalf("entries %+v, object %+v", got, o)
+	}
+	if c := e.Cursor(); c.Key != nil || string(c.Prefix) != "a/" {
+		t.Fatalf("cursor of a prefix with its object: %+v", c)
+	}
+	next, err := d.List(ctx, ListRequest{Delimiter: '/', Cursor: e.Cursor(), Limit: 1})
+	if err != nil || len(next) != 1 || describe(next[0]) != "p:ab/" {
+		t.Fatalf("after a/: %+v, %v", next, err)
+	}
+	for _, tc := range []struct {
+		prefix string
+		cursor *Cursor
+		want   string
+	}{
+		{"c/", nil, "o:c/1 o:c/2 P:c/3/"},
+		{"", &Cursor{Key: []byte("a/")}, "p:a/ p:ab/ o:b p:c/ o:d"},
+		{"", &Cursor{Key: []byte("c/2")}, "p:c/ o:d"},
+	} {
+		got := listAll(t, d, ListRequest{Prefix: []byte(tc.prefix), Delimiter: '/', Cursor: tc.cursor, Limit: 1})
+		if strings.Join(got, " ") != tc.want {
+			t.Fatalf("prefix %q after %+v: %q, want %q", tc.prefix, tc.cursor, got, tc.want)
+		}
+	}
+}
+
+// TestListExactObjectChecked: the object at a prefix's exact key is
+// checked as any object is, and one that fails fails the listing.
+func TestListExactObjectChecked(t *testing.T) {
+	d := openDir(t, writeDataset(t, s3Spec(), []s3Row{{Key: "a/"}, {Key: "a/x", Size: ptr(int64(1))}}))
+	got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10})
+	if se := semanticAt(t, err, KindRow, "size"); string(se.Row.Key) != "a/" || got != nil {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}
+
 // TestListOwnsBytes: changing a returned key or prefix after taking its
 // cursor changes neither the cursor nor the page that continues from it.
 func TestListOwnsBytes(t *testing.T) {
 	d := openDir(t, listDir(t))
 	ctx := context.Background()
-	for _, limit := range []int{1, 2} { // the last entry an object (a), then a prefix (a/)
+	for _, limit := range []int{1, 2} { // the last entry an object (a), then a prefix with its object (a/)
 		page, err := d.List(ctx, ListRequest{Delimiter: '/', Limit: limit})
 		if err != nil {
 			t.Fatal(err)
@@ -122,7 +183,8 @@ func TestListOwnsBytes(t *testing.T) {
 		cursor := last.Cursor()
 		if last.Object != nil {
 			last.Object.Key[0] = 0xff
-		} else {
+		}
+		if last.CommonPrefix != nil {
 			last.CommonPrefix[0] = 0xff
 		}
 		next, err := d.List(ctx, ListRequest{Delimiter: '/', Cursor: cursor, Limit: 1})
