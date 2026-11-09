@@ -72,7 +72,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | S3 | Azure Blob | fs |
 |---|---|---|---|---|
-| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
+| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `CanonicalRoute`), region, path style, fips, dual-stack, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
 | `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | `(K, ⊤]` | – |
 | `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |
