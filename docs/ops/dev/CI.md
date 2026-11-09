@@ -251,12 +251,14 @@ DEPS, then any.
 
 Per-commit build keys would grow without bound, so after the Go jobs of a `main` push
 `go-cache-prune` runs [`scripts/ci/go-cache-prune.sh`](../../../scripts/ci/go-cache-prune.sh). It
-lists every `go-build-` cache on `main` once, keeps the newest per job family by creation time and
-deletes the older ones. Newest by creation, not this run's commit: `main` runs overlap, and an older
-run finishing last must not delete a newer run's caches. It runs even when a Go job failed, since
-the passing jobs' caches were saved, and it is the only job with `actions: write`. Module caches are
-not pruned; GitHub evicts superseded ones after seven days unused. The compressed size of one
-generation under this layout is to be measured on the first `main` pushes and recorded in
+lists every `go-build-` and `go-mod-` cache on `main` once, keeps the newest per family by creation
+time and deletes the older ones: a build family is one job on one platform, a module family one
+platform. Newest by creation, not this run's commit: `main` runs overlap, and an older run finishing
+last must not delete a newer run's caches. It runs even when a Go job failed, since the passing
+jobs' caches were saved, and it is the only job with `actions: write`. Without module pruning a
+`go.mod` change left the previous dependency set behind, 500 MiB per platform, until GitHub's
+seven-day eviction; a pull request branched before the change still restores through the key
+prefix and downloads only the difference. The compressed size of one generation is recorded in
 [`go/docs/measurements.md`](../../../go/docs/measurements.md).
 
 ### Other caches

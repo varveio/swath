@@ -137,13 +137,14 @@ checkout must stay as committed for `go mod tidy -diff`. A job that fails saves 
 
 Retention: after the Go jobs of a push to `main` (passed or not), `go-cache-prune` runs
 [`scripts/ci/go-cache-prune.sh`](../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
-lists every `go-build-` cache on `main` once, groups them by family (the key without DEPS and SHA, and the
-cache version), keeps the newest by creation time and deletes the older ones, with a table of what it kept in
-the step summary. Newest by creation, not this run's commit: `main` runs overlap, and an older run finishing
-last must not delete a newer run's caches. `ci-gate` does not need it. Module caches are not pruned: one per
-OS and architecture per dependency set, and GitHub evicts the superseded ones after seven days unused. The
-compressed size of one generation is measured on the first `main` pushes after this layout and recorded in
-[measurements.md](measurements.md). The DuckDB downloads (`integration-tests`, the dispatch-only
+lists every `go-build-` and `go-mod-` cache on `main` once, groups them by family (the key without DEPS and
+SHA, and the cache version: one build family per job and platform, one module family per platform), keeps
+the newest by creation time and deletes the older ones, with a table of what it kept in the step summary.
+Newest by creation, not this run's commit: `main` runs overlap, and an older run finishing last must not
+delete a newer run's caches. `ci-gate` does not need it. A superseded module cache (500 MiB per platform
+after every `go.mod` change) is still restored by pull requests branched before the change through the key
+prefix, which yields the newest set; they download the difference. The compressed size of one generation is
+recorded in [measurements.md](measurements.md). The DuckDB downloads (`integration-tests`, the dispatch-only
 container smoke) retry five times, and the SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on

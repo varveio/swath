@@ -893,7 +893,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
-      - name: Delete all but the newest Go build cache per job
+      - name: Delete all but the newest Go build cache per job and module cache per platform
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/ci/go-cache-prune.sh
