@@ -154,7 +154,14 @@ idle connections. An endpoint from the environment that carries user information
 refused, so `Scope` never holds a credential. It takes no options and does not bound
 concurrency: a program that needs a region, endpoint, anonymous access or a test transport builds the SDK client
 itself and uses `s3.New`, `gcs.New` or `azblob.New` with `Root`; one that needs a bound wraps the `Store` in
-`Limit`.
+`Limit`. Importing `objfile/remote` links all three providers' SDKs; a program that reads from one provider
+builds that SDK's client and uses its `New` with `Root` the same way.
+
+The `Store` outlives the context `Open` is given: every request runs under the context of the `Open` or read
+that makes it, so a `Store` opened while serving one request can be kept for later ones. Google's credentials
+come from the newer auth library (`cloud.google.com/go/auth`), which fetches a token a request waits for with
+that request's context, so cancelling the request cancels that exchange; a refresh the library starts early,
+before a token expires, runs in the background with its own context and is not cancelled by any request.
 
 The swath CLI parses the same schemes for a listing root, with other semantics: a listing prefix is a key
 prefix, not a directory, and an `az://` root may carry a SAS query. It keeps its own parser.
@@ -180,3 +187,8 @@ uploads it to gofakes3 and compares a Range and a List read through objfile with
 serves ignored, shifted and cut-then-shifted ranges, with and without the transport `remote.Open` installs.
 `remote` opens each provider's location against an in-process server through the environment (the S3 endpoint
 variables, `STORAGE_EMULATOR_HOST`; the Azure client is replaced in the test).
+`TestOpenGCSCredentialsOutliveContext` opens a `gs://` Store with user credentials (an application-default
+login), their token endpoint dialled to a test server, cancels the opening context, and reads twice across a
+token expiry, so the token is refreshed after that context ended (on Google's older auth path the exchange
+fails with the opening context's cancellation); it then cancels a read during its token exchange and checks
+the exchange was cancelled.

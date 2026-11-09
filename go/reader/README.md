@@ -311,7 +311,9 @@ for _, r := range rows {
   error wrapping `ErrIdentityMismatch` naming the member that differs. No digest is validated and no part is
   opened: the identity proves the manifest, not the parts, so the source must be sealed to the objects admitted
   (objfile pins restored from the admission) or be local files unchanged since. A local directory that may have
-  changed is admitted again. On a failure the `Dataset` is closed and the `Source` stays open.
+  changed is admitted again. On a failure the `Dataset` is closed and the `Source` stays open. Because no part is
+  opened, a prefix's count and the totals across a part not yet checked are unknown (nil) until a read checks
+  that part; a browsing caller runs `CheckSchema` after `ReopenWhole` so the first page's counts are exact.
 - **Not checked.** The parts' digests by any call but `ValidateDigests` (and `AdmitWhole`, through it). Rows no request decodes, and columns a
   request does not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull`
   every value.
