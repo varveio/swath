@@ -43,10 +43,11 @@ func proxied(t *testing.T, keys []string, plan faulttest.Plan) (*faulttest.Proxy
 // throttles (15 % of the limiter's 256-answer window), so the 120 throttles
 // cut three times (16, 11, 7, 4); retries of throttled requests fall in
 // the storm too. "After the storm" starts 200 ms after the last throttle
-// and ends at the limiter's first increase. The run reports no increase
-// times, so a run without one is clean to its end; with one, the window
-// ends 10 s (the limiter's clean window) after the last throttle, the
-// earliest the limiter can grow: its window since the last cut never
+// and ends at the earliest point the limiter may grow, a conservative
+// bound on its first increase. The run reports no increase times, so a
+// run without one is clean to its end; with one, the window ends 10 s
+// (the limiter's clean window) after the last throttle, the earliest the
+// limiter can grow: its window since the last cut never
 // fills (a cut empties it, and fewer than 256 requests follow), so growth
 // waits for 10 s without a throttle answer, and the last answer comes
 // after the proxy saw the last throttle. Increases are checked only for a
