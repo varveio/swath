@@ -132,8 +132,11 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		{"200 kind", body(200, `{"kind":"storage#objects"}`), "", nil},
 		// an objects envelope names its kind (the production selector asks for it)
 		{"200 {} without kind", body(200, `{}`), "", ptr(objhttp.ClassParse)},
-		// the decoder ignores an error member beside the kind
-		{"200 kind with error member", body(200, `{"kind":"storage#objects","error":{"code":503}}`), objhttp.ClassParse, ptr("")},
+		{"200 kind with error member", body(200, `{"kind":"storage#objects","error":{"code":503}}`), objhttp.ClassParse, nil},
+		{"200 kind with error null", body(200, `{"kind":"storage#objects","error":null}`), objhttp.ClassParse, nil},
+		{"200 kind with escaped error key", body(200, `{"kind":"storage#objects","\u0065rror":{}}`), objhttp.ClassParse, nil},
+		{"200 kind with ERROR key", body(200, `{"kind":"storage#objects","ERROR":1}`), objhttp.ClassParse, nil},
+		{"200 error only in a name", body(200, `{"kind":"storage#objects","items":[{"name":"\"error\""}]}`), "", nil},
 		{"200 cut mid-object", body(200, `{"kind":"storage#objects","items":[{"na`), objhttp.ClassParse, nil},
 		{"200 body short of its length", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "100")
@@ -141,10 +144,15 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		}, objhttp.ClassTransport, nil},
 		{"200 16 MiB", body(200, padded(maxBody)), "", nil},
 		{"200 16 MiB + 1", body(200, padded(maxBody+1)), objhttp.ClassOther, nil},
-		// any 2xx but 200 is not a listing: the hand-rolled client reads it
-		// as an error answer (other), the SDK client as a malformed one
-		{"201", body(201, `{"kind":"storage#objects"}`), objhttp.ClassOther, ptr(objhttp.ClassParse)},
-		{"204", body(204, ``), objhttp.ClassOther, ptr(objhttp.ClassParse)},
+		// any 2xx but 200 is not a listing: an answer, class other
+		{"201", body(201, `{"kind":"storage#objects"}`), objhttp.ClassOther, nil},
+		{"201 garbled", body(201, `{"kind":`), objhttp.ClassOther, nil},
+		{"204", body(204, ``), objhttp.ClassOther, nil},
+		{"202 not JSON", body(202, `accepted`), objhttp.ClassOther, nil},
+		{"malformed gzip", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Encoding", "gzip")
+			io.WriteString(w, "not gzip at all")
+		}, objhttp.ClassOther, nil},
 		{"size over int64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"9223372036854775808"}]}`), objhttp.ClassParse, nil},
 		{"size max uint64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"18446744073709551615"}]}`), objhttp.ClassParse, nil},
 		{"size not a number", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"x"}]}`), objhttp.ClassParse, nil},
@@ -256,5 +264,51 @@ func TestCanceledAfterHeaders(t *testing.T) {
 			t.Fatalf("sdk %v: err %v, counters %+v", sdk, err, c.Counters())
 		}
 		cl.check(t, strconv.FormatBool(sdk))
+	}
+}
+
+// TestErrorPageThenValidPage: a 200 carrying an error member beside its
+// kind is retried as a parse failure, and the retry's page is the answer.
+func TestErrorPageThenValidPage(t *testing.T) {
+	var n atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			io.WriteString(w, `{"kind":"storage#objects","error":{"code":503,"message":"backend"}}`)
+			return
+		}
+		io.WriteString(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
+	}))
+	defer srv.Close()
+	c, err := New(context.Background(), client.Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 3,
+		BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := c.List(context.Background(), &client.ListInput{Bucket: "b"})
+	if err != nil || len(p.Items) != 1 || p.Items[0].Name != "a" {
+		t.Fatalf("page %+v, err %v", p, err)
+	}
+	if got := c.Counters(); got.Attempts != 2 || got.Retries != 1 || got.ParseFailures != 1 {
+		t.Fatalf("counters %+v", got)
+	}
+}
+
+// TestDeadlineDuringBody: an attempt whose body outlasts the request
+// timeout is a timeout on both clients, counted and retried.
+func TestDeadlineDuringBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"kind":"storage#objects",`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	hand, sdk := pair(t, client.Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 2, RequestTimeout: 100 * time.Millisecond,
+		BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond})
+	for _, c := range []lister{hand, sdk} {
+		_, err := c.List(context.Background(), &client.ListInput{Bucket: "b"})
+		got := c.Counters()
+		if client.Classify(err) != objhttp.ClassTimeout || got.Attempts != 2 || got.Retries != 1 || got.Timeouts != 2 || got.ParseFailures != 0 {
+			t.Fatalf("err %v (class %q), counters %+v", err, client.Classify(err), got)
+		}
 	}
 }

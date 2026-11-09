@@ -10,16 +10,21 @@
 // The generated Do sends one request and never retries (objhttp.Do owns
 // retries). Every response passes an objhttp.Guard first (16 MiB success
 // bodies, 64 KiB error bodies, the original body closed); a 200 must decode
-// to an objects envelope (kind storage#objects), so an empty, null or error
-// body is never read as an empty final page.
+// to an objects envelope (kind storage#objects) without an error member,
+// so an empty, null or error body is never read as an empty final page.
+// An endpoint whose route the generated client would not send as Route
+// names it is refused.
 package sdkclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"time"
 
 	"google.golang.org/api/googleapi"
@@ -45,10 +50,13 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := sameRoute(ctx, core); err != nil {
+		return nil, err
+	}
 	c := &Client{Core: core}
 	for _, hc := range core.Pool() {
 		g := *hc // keeps the pool's no-redirect policy
-		g.Transport = record{&objhttp.Guard{Next: hc.Transport}}
+		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
 		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(core.Endpoint()), option.WithoutAuthentication())
 		if err != nil {
 			return nil, err
@@ -56,6 +64,82 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 		c.svc = append(c.svc, svc)
 	}
 	return c, nil
+}
+
+// probeBucket is the bucket sameRoute addresses.
+const probeBucket = "b"
+
+// errProbe ends sameRoute's request before it is sent.
+var errProbe = errors.New("route probe")
+
+// sameRoute refuses an endpoint whose route the generated client would not
+// send as core.Route names it: the generated client expands the decoded
+// path and resolves it as a relative reference, so an escaped separator
+// (%2F) or a dot segment in the endpoint's path would reach another route
+// than the one the resume identity freezes.
+func sameRoute(ctx context.Context, core *client.Core) error {
+	var sent *url.URL
+	probe := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		sent = req.URL
+		return nil, errProbe
+	})}
+	svc, err := storage.NewService(ctx, option.WithHTTPClient(probe), option.WithEndpoint(core.Endpoint()), option.WithoutAuthentication())
+	if err != nil {
+		return err
+	}
+	if _, err := svc.Objects.List(probeBucket).Context(ctx).Do(); !errors.Is(err, errProbe) {
+		return fmt.Errorf("route probe: %w", err)
+	}
+	u := *sent
+	u.RawQuery = ""
+	if got, want := u.String(), core.Route(probeBucket); got != want {
+		return fmt.Errorf("endpoint %q: path not representable by the generated client (it sends %s for %s; use the hand-rolled client)",
+			core.Endpoint(), got, want)
+	}
+	return nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// validate rejects a 200 whose body carries a top-level error member
+// (error:null included), which the generated decoder would drop, reading
+// the envelope as an empty final page. It parses only a body that can hold
+// one: any backslash (an escaped key), or "error" in any letter case (the
+// decoder matches keys case-insensitively); without either, no key can
+// decode as error, so the pre-filter has no false negatives. A body that
+// does not parse is the decoder's to refuse.
+func validate(_ *http.Request, status int, body []byte) error {
+	if status != http.StatusOK || !mayHoldError(body) {
+		return nil
+	}
+	var w struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &w) == nil && w.Error != nil {
+		return fmt.Errorf("%w: a 200 carrying an error envelope: %.200s", objhttp.ErrSyntax, w.Error)
+	}
+	return nil
+}
+
+// mayHoldError reports a backslash or "error" (quoted, any case) in body.
+func mayHoldError(body []byte) bool {
+	if bytes.IndexByte(body, '\\') >= 0 {
+		return true
+	}
+	const key = `"error"`
+	for i := 0; ; {
+		j := bytes.IndexByte(body[i:], '"')
+		if j < 0 || i+j+len(key) > len(body) {
+			return false
+		}
+		i += j
+		if bytes.EqualFold(body[i:i+len(key)], []byte(key)) {
+			return true
+		}
+		i++
+	}
 }
 
 // List sends one objects.list request per attempt, retrying retryable
@@ -112,8 +196,9 @@ func (c *Client) attempt(ctx context.Context, in *client.ListInput) (*client.Pag
 		return nil, c.failure(actx, ctx, &s, err)
 	}
 	if s.status != http.StatusOK {
-		// any 2xx is the generated client's success; a listing is a 200
-		return nil, c.syntax(fmt.Errorf("%w: a %d answer", objhttp.ErrSyntax, s.status))
+		// any 2xx is the generated client's success; a listing is a 200,
+		// any other status an answer (as the hand-rolled client reads it)
+		return nil, &client.Error{Status: s.status}
 	}
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
@@ -127,8 +212,8 @@ func (c *Client) attempt(ctx context.Context, in *client.ListInput) (*client.Pag
 
 // failure is the error an attempt that did not get a page returns: the
 // service's answer as a *client.Error (by the HTTP status sent, which a
-// googleapi.Error's body-supplied code may contradict), a 2xx body the
-// generated decoder refused as ErrSyntax, the Guard's own failures
+// googleapi.Error's body-supplied code may contradict; another 2xx too), a
+// 200 body the generated decoder refused as ErrSyntax, the Guard's own failures
 // unwrapped (objhttp.Cause), an attempt timeout as objhttp.ErrTimeout.
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 	var ge *googleapi.Error
@@ -145,8 +230,10 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 			e.Query = s.query // a malformed request names itself
 		}
 		return e
-	case s.status/100 == 2:
+	case s.status == http.StatusOK:
 		return c.syntax(fmt.Errorf("%w: %w", objhttp.ErrSyntax, err))
+	case s.status/100 == 2:
+		return &client.Error{Status: s.status}
 	}
 	err = objhttp.Cause(err)
 	if errors.Is(err, objhttp.ErrSyntax) {

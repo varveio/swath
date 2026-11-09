@@ -251,3 +251,43 @@ func TestVersionsCapturesMatchHandRolled(t *testing.T) {
 		}
 	}
 }
+
+// TestRouteNotRepresentable: an endpoint path with an escaped separator or
+// a dot segment is sent by the hand-rolled client as its Route names it;
+// the generated client would send another path, so sdkclient.New refuses
+// it rather than list another route than the resume identity freezes.
+func TestRouteNotRepresentable(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.EscapedPath())
+		mu.Unlock()
+		fmt.Fprint(w, `{"kind":"storage#objects"}`)
+	}))
+	defer srv.Close()
+	for _, path := range []string{"/proxy%2Ftenant/storage/v1/", "/a/../storage/v1/", "/a/./storage/v1/"} {
+		cfg := client.Config{Endpoint: srv.URL + path, Anonymous: true}
+		hand, err := client.New(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := hand.List(context.Background(), &client.ListInput{Bucket: "bkt"}); err != nil {
+			t.Fatalf("%s: hand-rolled: %v", path, err)
+		}
+		mu.Lock()
+		got := paths[len(paths)-1]
+		mu.Unlock()
+		if want := strings.TrimPrefix(hand.Route("bkt"), srv.URL); got != want {
+			t.Fatalf("%s: hand-rolled sent %s, route %s", path, got, want)
+		}
+		if _, err := New(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "not representable") {
+			t.Fatalf("%s: sdkclient.New: %v", path, err)
+		}
+	}
+	for _, ep := range []string{"", srv.URL + "/storage/v1/", srv.URL + "/custom%20base/v1"} {
+		if _, err := New(context.Background(), client.Config{Endpoint: ep, Anonymous: true}); err != nil {
+			t.Fatalf("%q: %v", ep, err)
+		}
+	}
+}
