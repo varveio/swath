@@ -5,14 +5,19 @@ package gcs
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/schema"
@@ -372,6 +377,105 @@ func TestIdentity(t *testing.T) {
 		t.Fatal("a changed billed project leaves the identity equal")
 	}
 	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.(source.Capable).Capabilities().Resume {
+		t.Fatal("a supplied client declares resume")
+	}
+}
+
+// TestEndpointIdentityIsDestination: two endpoints record one identity
+// only if the listing sends its requests to one place. The escaped
+// trailing separator ("tenant%2F") is the case that once broke this: the
+// identity added a slash to the string while the client checked the
+// decoded path, and the generated client's relative resolution dropped
+// the last segment, so "tenant%2F" and "tenant%2F/" recorded one identity
+// and listed different paths.
+func TestEndpointIdentityIsDestination(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, strings.SplitN(r.RequestURI, "?", 2)[0])
+		mu.Unlock()
+		io.WriteString(w, `{"kind":"storage#objects"}`)
+	}))
+	defer srv.Close()
+	type sent struct{ base, identity, path string }
+	var got []sent
+	for base, want := range map[string]string{
+		"/tenant%2F":                  "/tenant//b/bkt/o",
+		"/tenant%2F/":                 "/tenant//b/bkt/o",
+		"/tenant":                     "/tenant/b/bkt/o",
+		"/tenant/":                    "/tenant/b/bkt/o",
+		"/tenant//":                   "/tenant//b/bkt/o",
+		"/storage/v1":                 "/storage/v1/b/bkt/o",
+		"/proxy%2Ftenant/storage/v1/": "/proxy/tenant/storage/v1/b/bkt/o",
+		"/proxy/tenant/storage/v1/":   "/proxy/tenant/storage/v1/b/bkt/o",
+		"/a/../storage/v1/":           "/storage/v1/b/bkt/o",
+		"/a/./storage/v1/":            "/a/storage/v1/b/bkt/o",
+	} {
+		opt := Options{Bucket: "bkt", Endpoint: srv.URL + base, Anonymous: true}
+		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &opt, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id string
+		for _, f := range src.(source.Identified).Identity().Fields {
+			if f.Name == "endpoint" {
+				id = f.Canonical
+			}
+		}
+		mu.Lock()
+		paths = nil
+		mu.Unlock()
+		list(t, Options{Bucket: "bkt", Endpoint: srv.URL + base}, 1)
+		mu.Lock()
+		to := slices.Compact(slices.Clone(paths))
+		mu.Unlock()
+		if len(to) != 1 || to[0] != want {
+			t.Fatalf("%s: requests to %q, want %q", base, to, want)
+		}
+		got = append(got, sent{base, id, want})
+	}
+	for _, a := range got {
+		for _, b := range got {
+			if a.identity == b.identity && a.path != b.path {
+				t.Errorf("%s and %s record identity %q but list %s and %s", a.base, b.base, a.identity, a.path, b.path)
+			}
+		}
+	}
+}
+
+// TestOldJournalRefused pins the compatibility break docs/upgrade.md
+// states: a journal written before the identity recorded the endpoint (it
+// recorded the resolved "route", ENDPOINT/b/BUCKET/o) is refused, naming
+// the endpoint as not recorded, even for the same bucket and default
+// endpoint; and a run through a supplied client declares no resume.
+func TestOldJournalRefused(t *testing.T) {
+	src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &Options{Anonymous: true}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := journal.Identity{Provider: "gcs"}
+	for _, f := range src.(source.Identified).Identity().Fields {
+		id.Source = append(id.Source, journal.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
+	}
+	route := client.DefaultEndpoint + "b/bkt/o"
+	old := journal.Identity{Provider: "gcs", Source: []journal.Field{
+		{Name: "source", Value: "gs://bkt/p"},
+		{Name: "route", Value: route, Canonical: objhttp.CanonicalRoute(route)},
+		{Name: "user project", Value: ""},
+	}}
+	var m *journal.MismatchError
+	if err := journal.Check(old, id); !errors.As(err, &m) || m.Field != "endpoint" || m.Stored != "(not recorded)" || m.Requested != client.DefaultEndpoint {
+		t.Fatalf("resume of an old journal: %v", err)
+	}
+	if old.Hash() == id.Hash() {
+		t.Fatal("args_hash unchanged")
+	}
+	src, err = open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

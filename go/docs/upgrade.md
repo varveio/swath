@@ -301,6 +301,13 @@ the list below is the earlier history of the unreleased builds.
   endpoint URL the earlier client resolved (`route`), so `swath resume` of such a run is refused before any part
   is touched (`cannot resume: endpoint was (not recorded)`), whatever the region or endpoint; the interrupted
   dataset is left as it was. Finish the run with the build that started it, or start it over with `--overwrite`.
+- GCS listings use Google's generated JSON API client only, and a GCS journal records the endpoint
+  (`--gcs-endpoint` as the client sends to it) where it recorded the resolved route (`ENDPOINT/b/BUCKET/o`).
+  A GCS run interrupted under an earlier build does not resume, even with unchanged flags: `swath resume`
+  refuses it with `cannot resume: endpoint was (not recorded), now …`, and the run report's `args_hash` of a
+  GCS run differs from an earlier build's. Finish such a run with the build that started it, or start it over
+  with `--overwrite`. A program that lists through its own `gcs.Options.Client` cannot resume at all (before,
+  one that named its route could).
 - `--workers` defaults to 64 whatever the CPU count (it was `min(64, max(4, 3*GOMAXPROCS))`).
 - A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
   and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it

@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,16 +91,27 @@ type answer struct {
 	reason, message string
 }
 
-// TestAnswers: for each scripted answer, the client ends in the expected
-// class with the retry decision, attempts and counters it implies under a
-// 3-attempt policy (a retryable class is retried to exhaustion, its
-// throttles, timeouts or parse failures counted per attempt), surfaces
-// the service's answer as an *Error by the HTTP status sent (the body's
-// code ignored; a 400 names its query), reads a page only from a 200
-// objects envelope, follows no redirect and closes every original body
-// once. The rows are the contract the generated client does not give:
-// it reads EOF, null, {} and an error member as an empty page, and any
-// 2xx as success.
+// The retry decision a row states: a retried failure takes all 3 attempts
+// of TestAnswers' policy and ends exhausted; a final one takes 1.
+const (
+	retried = true
+	final   = false
+)
+
+// empty is the page an objects envelope without items or prefixes reads as.
+var empty = &Page{Items: []Object{}}
+
+// TestAnswers: for each scripted answer, the client ends in the stated
+// class with the stated retry decision under a 3-attempt policy (a
+// retried failure is retried to exhaustion, a final one is not), and the
+// counters that decision and class give (attempts and retries; throttles,
+// timeouts or parse failures counted per attempt of that class); it
+// surfaces the service's answer as an *Error by the HTTP status sent (the
+// body's code ignored; a 400 names its query, exactly), reads exactly the
+// stated page, and only from a 200 objects envelope, follows no redirect
+// and closes every original body once. The rows are the contract the
+// generated client does not give: it reads EOF, null, {} and an error
+// member as an empty page, and any 2xx as success.
 func TestAnswers(t *testing.T) {
 	var target atomic.Int64
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { target.Add(1) }))
@@ -108,70 +121,80 @@ func TestAnswers(t *testing.T) {
 			http.Redirect(w, r, other.URL+"/storage/v1/b/b/o", status)
 		}
 	}
+	// esc is a backslash, spelled out so that the escaped fixtures below
+	// (\u0065 for e) stay escaped in the source as on the wire
+	const esc = `\`
 	moved := "redirect to " + other.URL + "/storage/v1/b/b/o (not followed)"
 	for _, c := range []struct {
 		name  string
 		serve func(http.ResponseWriter, *http.Request)
 		class objhttp.Class // "" for a page
+		retry bool
+		page  *Page // the page read, for class ""
 		*answer
 	}{
-		{"429 rateLimitExceeded", jsonError(429, 429, "rateLimitExceeded"), objhttp.ClassThrottle, &answer{429, "rateLimitExceeded", "m"}},
-		{"503", jsonError(503, 503, "backendError"), objhttp.ClassServer, &answer{503, "backendError", "m"}},
-		{"500", jsonError(500, 500, "internalError"), objhttp.ClassServer, &answer{500, "internalError", "m"}},
-		{"408", jsonError(408, 408, ""), objhttp.ClassTimeout, &answer{408, "", "m"}},
-		{"403 forbidden", jsonError(403, 403, "forbidden"), objhttp.ClassAccessDenied, &answer{403, "forbidden", "m"}},
-		{"403 rateLimitExceeded", jsonError(403, 403, "rateLimitExceeded"), objhttp.ClassThrottle, &answer{403, "rateLimitExceeded", "m"}},
-		{"404", jsonError(404, 404, "notFound"), objhttp.ClassNoSuchBucket, &answer{404, "notFound", "m"}},
-		{"400", jsonError(400, 400, "invalid"), objhttp.ClassOther, &answer{400, "invalid", "m"}},
-		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, &answer{401, "", ""}},
+		{"429 rateLimitExceeded", jsonError(429, 429, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{429, "rateLimitExceeded", "m"}},
+		{"503", jsonError(503, 503, "backendError"), objhttp.ClassServer, retried, nil, &answer{503, "backendError", "m"}},
+		{"500", jsonError(500, 500, "internalError"), objhttp.ClassServer, retried, nil, &answer{500, "internalError", "m"}},
+		{"408", jsonError(408, 408, ""), objhttp.ClassTimeout, retried, nil, &answer{408, "", "m"}},
+		{"403 forbidden", jsonError(403, 403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "forbidden", "m"}},
+		{"403 rateLimitExceeded", jsonError(403, 403, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{403, "rateLimitExceeded", "m"}},
+		{"404", jsonError(404, 404, "notFound"), objhttp.ClassNoSuchBucket, final, nil, &answer{404, "notFound", "m"}},
+		{"400", jsonError(400, 400, "invalid"), objhttp.ClassOther, final, nil, &answer{400, "invalid", "m"}},
+		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", ""}},
 		// the HTTP status, not the body's code (googleapi.Error.Code)
-		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassServer, &answer{503, "invalid", "m"}},
-		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassNoSuchBucket, &answer{404, "notFound", "m"}},
-		{"301", redirect(301), objhttp.ClassRedirect, &answer{301, "", moved}},
-		{"302", redirect(302), objhttp.ClassRedirect, &answer{302, "", moved}},
-		{"307", redirect(307), objhttp.ClassRedirect, &answer{307, "", moved}},
-		{"200 error envelope", body(200, `{"error":{"code":503,"message":"backend"}}`), objhttp.ClassParse, nil},
-		{"200 error null", body(200, `{"error":null}`), objhttp.ClassParse, nil},
-		{"200 null", body(200, `null`), objhttp.ClassParse, nil},
-		{"200 spaced null", body(200, " null \n"), objhttp.ClassParse, nil},
-		{"200 array", body(200, `[]`), objhttp.ClassParse, nil},
-		{"200 string", body(200, `""`), objhttp.ClassParse, nil},
-		{"200 empty", body(200, ``), objhttp.ClassParse, nil},
-		{"200 trailing JSON", body(200, `{"kind":"storage#objects"} {}`), objhttp.ClassParse, nil},
-		{"200 kind", body(200, `{"kind":"storage#objects"}`), "", nil},
+		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassServer, retried, nil, &answer{503, "invalid", "m"}},
+		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassNoSuchBucket, final, nil, &answer{404, "notFound", "m"}},
+		{"301", redirect(301), objhttp.ClassRedirect, final, nil, &answer{301, "", moved}},
+		{"302", redirect(302), objhttp.ClassRedirect, final, nil, &answer{302, "", moved}},
+		{"307", redirect(307), objhttp.ClassRedirect, final, nil, &answer{307, "", moved}},
+		{"200 error envelope", body(200, `{"error":{"code":503,"message":"backend"}}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 error null", body(200, `{"error":null}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 null", body(200, `null`), objhttp.ClassParse, retried, nil, nil},
+		{"200 spaced null", body(200, " null \n"), objhttp.ClassParse, retried, nil, nil},
+		{"200 array", body(200, `[]`), objhttp.ClassParse, retried, nil, nil},
+		{"200 string", body(200, `""`), objhttp.ClassParse, retried, nil, nil},
+		{"200 empty", body(200, ``), objhttp.ClassParse, retried, nil, nil},
+		{"200 trailing JSON", body(200, `{"kind":"storage#objects"} {}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 kind", body(200, `{"kind":"storage#objects"}`), "", final, empty, nil},
 		// an objects envelope names its kind (the production selector asks for it)
-		{"200 {} without kind", body(200, `{}`), objhttp.ClassParse, nil},
-		{"200 kind with error member", body(200, `{"kind":"storage#objects","error":{"code":503}}`), objhttp.ClassParse, nil},
-		{"200 kind with error null", body(200, `{"kind":"storage#objects","error":null}`), objhttp.ClassParse, nil},
-		{"200 kind with escaped error key", body(200, `{"kind":"storage#objects","error":{}}`), objhttp.ClassParse, nil},
-		{"200 kind with ERROR key", body(200, `{"kind":"storage#objects","ERROR":1}`), objhttp.ClassParse, nil},
-		{"200 error only in a name", body(200, `{"kind":"storage#objects","items":[{"name":"\"error\""}]}`), "", nil},
-		{"200 cut mid-object", body(200, `{"kind":"storage#objects","items":[{"na`), objhttp.ClassParse, nil},
+		{"200 {} without kind", body(200, `{}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 kind with error member", body(200, `{"kind":"storage#objects","error":{"code":503}}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 kind with error null", body(200, `{"kind":"storage#objects","error":null}`), objhttp.ClassParse, retried, nil, nil},
+		// the backslash branch of the pre-filter: no "error" in the bytes,
+		// one in the decoded key
+		{"200 kind with escaped error key", body(200, `{"kind":"storage#objects","`+esc+`u0065rror":{}}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 kind with ERROR key", body(200, `{"kind":"storage#objects","ERROR":1}`), objhttp.ClassParse, retried, nil, nil},
+		{"200 error only in a name", body(200, `{"kind":"storage#objects","items":[{"name":"\"error\""}],"prefixes":["error/"],"nextPageToken":"t\"error\""}`), "", final,
+			&Page{Items: []Object{{Name: `"error"`}}, Prefixes: []string{"error/"}, NextPageToken: `t"error"`}, nil},
+		{"200 escaped name", body(200, `{"kind":"storage#objects","items":[{"name":"a`+esc+`u0062\\\"c","size":"3","generation":"7"}]}`), "", final,
+			&Page{Items: []Object{{Name: `ab\"c`, Size: 3, Generation: 7}}}, nil},
+		{"200 cut mid-object", body(200, `{"kind":"storage#objects","items":[{"na`), objhttp.ClassParse, retried, nil, nil},
 		{"200 body short of its length", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "100")
 			io.WriteString(w, `{"kind":"storage#objects",`)
-		}, objhttp.ClassTransport, nil},
-		{"200 16 MiB", body(200, padded(maxBody)), "", nil},
-		{"200 16 MiB + 1", body(200, padded(maxBody+1)), objhttp.ClassOther, nil},
+		}, objhttp.ClassTransport, retried, nil, nil},
+		{"200 16 MiB", body(200, padded(maxBody)), "", final, empty, nil},
+		{"200 16 MiB + 1", body(200, padded(maxBody+1)), objhttp.ClassOther, final, nil, nil},
 		// any 2xx but 200 is not a listing: an answer, class other
-		{"201", body(201, `{"kind":"storage#objects"}`), objhttp.ClassOther, &answer{201, "", ""}},
-		{"201 garbled", body(201, `{"kind":`), objhttp.ClassOther, &answer{201, "", ""}},
-		{"204", body(204, ``), objhttp.ClassOther, &answer{204, "", ""}},
-		{"201 throttle reason", jsonError(201, 201, "rateLimitExceeded"), objhttp.ClassThrottle, &answer{201, "rateLimitExceeded", "m"}},
-		{"202 forbidden reason", jsonError(202, 202, "forbidden"), objhttp.ClassOther, &answer{202, "forbidden", "m"}},
-		{"202 not JSON", body(202, `accepted`), objhttp.ClassOther, &answer{202, "", ""}},
+		{"201", body(201, `{"kind":"storage#objects"}`), objhttp.ClassOther, final, nil, &answer{201, "", ""}},
+		{"201 garbled", body(201, `{"kind":`), objhttp.ClassOther, final, nil, &answer{201, "", ""}},
+		{"204", body(204, ``), objhttp.ClassOther, final, nil, &answer{204, "", ""}},
+		{"201 throttle reason", jsonError(201, 201, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{201, "rateLimitExceeded", "m"}},
+		{"202 forbidden reason", jsonError(202, 202, "forbidden"), objhttp.ClassOther, final, nil, &answer{202, "forbidden", "m"}},
+		{"202 not JSON", body(202, `accepted`), objhttp.ClassOther, final, nil, &answer{202, "", ""}},
 		{"malformed gzip", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Encoding", "gzip")
 			io.WriteString(w, "not gzip at all")
-		}, objhttp.ClassOther, nil},
-		{"size over int64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"9223372036854775808"}]}`), objhttp.ClassParse, nil},
-		{"size max uint64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"18446744073709551615"}]}`), objhttp.ClassParse, nil},
-		{"size not a number", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"x"}]}`), objhttp.ClassParse, nil},
-		{"size unquoted", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":5}]}`), objhttp.ClassParse, nil},
-		{"size negative", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"-1"}]}`), objhttp.ClassParse, nil},
-		{"malformed updated", body(200, `{"kind":"storage#objects","items":[{"name":"a","updated":"2026-02-19"}]}`), objhttp.ClassParse, nil},
-		{"malformed timeCreated", body(200, `{"kind":"storage#objects","items":[{"name":"a","timeCreated":"yesterday"}]}`), objhttp.ClassParse, nil},
-		{"null item", body(200, `{"kind":"storage#objects","items":[null]}`), objhttp.ClassParse, nil},
+		}, objhttp.ClassOther, final, nil, nil},
+		{"size over int64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"9223372036854775808"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"size max uint64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"18446744073709551615"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"size not a number", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"x"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"size unquoted", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":5}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"size negative", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"-1"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"malformed updated", body(200, `{"kind":"storage#objects","items":[{"name":"a","updated":"2026-02-19"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"malformed timeCreated", body(200, `{"kind":"storage#objects","items":[{"name":"a","timeCreated":"yesterday"}]}`), objhttp.ClassParse, retried, nil, nil},
+		{"null item", body(200, `{"kind":"storage#objects","items":[null]}`), objhttp.ClassParse, retried, nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(c.serve))
@@ -191,46 +214,47 @@ func TestAnswers(t *testing.T) {
 			if cls := Classify(err); cls != c.class {
 				t.Fatalf("class %q, want %q (err %v)", cls, c.class, err)
 			}
-			n := cli.Counters()
-			if c.class == "" {
-				if p == nil || n.Attempts != 1 || n.Retries != 0 || n.ParseFailures != 0 {
-					t.Fatalf("page %+v, counters %+v", p, n)
-				}
-				return
+			if !reflect.DeepEqual(p, c.page) {
+				t.Errorf("page %+v, want %+v", p, c.page)
 			}
-			f := objhttp.Normalize(err, Answer)
-			var exhausted *ExhaustedError
-			want := int64(1)
-			if f.Retry {
-				want = 3
+			attempts := int64(1)
+			if c.retry {
+				attempts = 3
 			}
-			if errors.As(err, &exhausted) != f.Retry {
-				t.Errorf("retry %v, exhausted %v", f.Retry, err)
-			}
-			count := func(on bool) int64 {
-				if on {
-					return want
+			per := func(class objhttp.Class) int64 {
+				if c.class == class {
+					return attempts
 				}
 				return 0
 			}
-			if n.Attempts != want || n.Retries != want-1 || n.Throttles != count(f.Throttle) || n.Timeouts != count(f.Timeout) ||
-				n.ParseFailures != count(c.class == objhttp.ClassParse) {
-				t.Errorf("counters %+v, want %d attempts (%+v)", n, want, f)
+			want := Counters{Attempts: attempts, Retries: attempts - 1, Throttles: per(objhttp.ClassThrottle),
+				Timeouts: per(objhttp.ClassTimeout), ParseFailures: per(objhttp.ClassParse)}
+			if n := cli.Counters(); n.Attempts != want.Attempts || n.Retries != want.Retries || n.Throttles != want.Throttles ||
+				n.Timeouts != want.Timeouts || n.ParseFailures != want.ParseFailures {
+				t.Errorf("counters %+v, want %+v", n, want)
 			}
-			if f.Throttle != (c.class == objhttp.ClassThrottle) || f.Timeout != (c.class == objhttp.ClassTimeout) {
-				t.Errorf("signals %+v for class %q", f, c.class)
+			var exhausted *ExhaustedError
+			if errors.As(err, &exhausted) != c.retry {
+				t.Errorf("retry %v, error %v", c.retry, err)
 			}
 			var e *Error
 			if errors.As(err, &e) != (c.answer != nil) {
 				t.Fatalf("answer %v, want %+v", err, c.answer)
 			}
-			if e != nil {
-				if e.Status != c.status || e.Reason != c.reason || e.Message != c.message || (e.Query != "") != (e.Status == 400) {
-					t.Errorf("answer %+v, want %+v", e, *c.answer)
-				}
-				if e.Status == 400 && !strings.Contains(e.Query, "prefix=p") {
-					t.Errorf("400 query %q", e.Query)
-				}
+			if e == nil {
+				return
+			}
+			if e.Status != c.status || e.Reason != c.reason || e.Message != c.message {
+				t.Errorf("answer %+v, want %+v", e, *c.answer)
+			}
+			var query url.Values
+			if c.status == http.StatusBadRequest {
+				// the request's own query, as the client sent it
+				query = url.Values{"alt": {"json"}, "prettyPrint": {"false"}, "projection": {"noAcl"}, "prefix": {"p"}}
+			}
+			got, perr := url.ParseQuery(e.Query)
+			if perr != nil || (query == nil) != (e.Query == "") || query != nil && !reflect.DeepEqual(got, query) {
+				t.Errorf("query %q, want %v", e.Query, query)
 			}
 		})
 	}

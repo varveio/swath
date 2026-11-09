@@ -6,12 +6,15 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -113,6 +116,52 @@ func TestVersionsRequest(t *testing.T) {
 	}
 }
 
+// expectedPage is the page a capture must read as, decoded here field by
+// field from the wire's own spelling: sizes, generations and
+// metagenerations are decimal strings, times RFC 3339 as microseconds,
+// hashes, etags, storage class, content type, names, prefixes and the
+// token verbatim. A capture member it does not know fails the test, so
+// every field the captures carry is pinned.
+func expectedPage(t *testing.T, b []byte) *Page {
+	t.Helper()
+	var w struct {
+		NextPageToken string
+		Prefixes      []string
+		Items         []map[string]string
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	num := func(s string) int64 {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	at := func(s string) int64 {
+		if s == "" {
+			return 0
+		}
+		return usec(t, s)
+	}
+	p := &Page{Items: []Object{}, Prefixes: w.Prefixes, NextPageToken: w.NextPageToken}
+	for _, o := range w.Items {
+		for k := range o {
+			switch k {
+			case "name", "size", "generation", "metageneration", "contentType", "storageClass", "md5Hash", "crc32c",
+				"etag", "timeCreated", "updated", "timeDeleted":
+			default:
+				t.Fatalf("capture member %q is not pinned", k)
+			}
+		}
+		p.Items = append(p.Items, Object{Name: o["name"], Size: num(o["size"]), Updated: at(o["updated"]), TimeCreated: at(o["timeCreated"]),
+			ETag: o["etag"], Generation: num(o["generation"]), Metageneration: num(o["metageneration"]), StorageClass: o["storageClass"],
+			MD5: o["md5Hash"], CRC32C: o["crc32c"], ContentType: o["contentType"], TimeDeleted: at(o["timeDeleted"])})
+	}
+	return p
+}
+
 // toServer sends requests addressed to Google's endpoint to a test server,
 // so the client takes its production path (the fields selector included).
 type toServer struct{ to *url.URL }
@@ -123,9 +172,11 @@ func (r toServer) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// TestVersionsCaptureParses: the captured pages parse in wire order
-// (names ascending, generations ascending within a name) with timeDeleted
-// on exactly the noncurrent generations, and a page served over HTTP takes
+// TestVersionsCaptureParses: the captured pages read exactly as
+// expectedPage spells them out (every item's every field, the prefixes and
+// the token), in wire order (names ascending, generations ascending within
+// a name) with timeDeleted on exactly the noncurrent generations; without
+// kind they are refused; and a page served over HTTP takes
 // the ordinary request path with versions=true.
 func TestVersionsCaptureParses(t *testing.T) {
 	for _, c := range []struct {
@@ -150,6 +201,9 @@ func TestVersionsCaptureParses(t *testing.T) {
 		}
 		if len(p.Items) != c.items || len(p.Prefixes) != c.prefixes || p.NextPageToken == "" {
 			t.Fatalf("%s: %d items, %d prefixes, token %q", c.file, len(p.Items), len(p.Prefixes), p.NextPageToken)
+		}
+		if want := expectedPage(t, capture(t, c.file, false)); !reflect.DeepEqual(p, want) {
+			t.Fatalf("%s:\nread %+v\nwant %+v", c.file, p, want)
 		}
 		deleted := 0
 		for i, o := range p.Items {
