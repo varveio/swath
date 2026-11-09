@@ -26,8 +26,8 @@ type Position struct {
 }
 
 // Cursor returns the cursor after this row, owning its key bytes.
-func (p Position) Cursor() *seekparquet.Cursor {
-	return &seekparquet.Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
+func (p Position) Cursor() *Cursor {
+	return &Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
 }
 
 // Object is a current object, or a filesystem entry, as a reader of any

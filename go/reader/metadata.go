@@ -97,10 +97,10 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 // never a point-in-time snapshot (coverage.snapshot false), so neither
 // refuses a dataset.
 func (d *Dataset) AcceptWholeSource(kind, container string) error {
-	m := d.meta
-	if !m.Swath {
-		return semantic(KindCoverage, "extensions."+Extension, nil, "absent: the manifest is not a swath listing's")
+	if err := d.checkSwath(); err != nil {
+		return err
 	}
+	m := d.meta
 	var src SourceInfo
 	if m.Source != nil {
 		src = *m.Source

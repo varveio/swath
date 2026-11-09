@@ -34,12 +34,8 @@ import (
 // rows it reads) nor the parts' digests (seekparquet.Validate at
 // LevelDigest) are checked.
 func (d *Dataset) CheckSchema(ctx context.Context) error {
-	key := d.meta.Manifest.Key
-	if key.Column != d.spec.Key.Name {
-		return semantic(KindSchema, key.Column, nil, "the manifest's key column; %s's is %s", d.spec.ID, d.spec.Key.Name)
-	}
-	if key.Unique != d.spec.UniqueKeys {
-		return semantic(KindSchema, key.Column, nil, "the manifest declares key_unique %t; %s's keys are unique: %t", key.Unique, d.spec.ID, d.spec.UniqueKeys)
+	if err := d.checkKey(); err != nil {
+		return err
 	}
 	if err := d.sp.Verify(ctx); err != nil {
 		return err
@@ -48,6 +44,19 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 		if err := d.checkPart(ctx, i, p.Path); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkKey checks the manifest's key column and key uniqueness against
+// the spec's.
+func (d *Dataset) checkKey() error {
+	key := d.meta.Manifest.Key
+	if key.Column != d.spec.Key.Name {
+		return semantic(KindSchema, key.Column, nil, "the manifest's key column; %s's is %s", d.spec.ID, d.spec.Key.Name)
+	}
+	if key.Unique != d.spec.UniqueKeys {
+		return semantic(KindSchema, key.Column, nil, "the manifest declares key_unique %t; %s's keys are unique: %t", key.Unique, d.spec.ID, d.spec.UniqueKeys)
 	}
 	return nil
 }
