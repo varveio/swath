@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/reader` declares each versions schema's column roles once, in its spec (`SchemaSpec.Versions`,
+  `VersionSpec{ID, Latest, DeleteMarker, DeletedAt}`): `swath/s3-versions/v1` names `version_id`, `is_latest` and
+  `is_delete_marker`, `swath/gcs-generations/v1` names `generation` and `time_deleted`, and the current-object
+  schemas none. The lister's text output, version counts and per-prefix totals read version rows through these
+  roles instead of by column name. Columns, schema ids, dataset metadata, text output and the report's fields are
+  unchanged.
 - Go port: `go/reader` reads a filesystem's entries typed: `Dataset.StreamLocal` hands on every `LocalEntry`
   (every column, nulls kept), `List` and `Page` return an entry's `Entry.Local` (a directory's prefix `d/` paired
   with its own row), and `Stream` refuses a local dataset. `Totals` and `Aggregates` total local entries of every

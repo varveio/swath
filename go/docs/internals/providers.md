@@ -43,7 +43,13 @@ type Provider[R, P any] interface {
 ```
 
 `P` is the provider's row payload (`fs.Entry`, `s3.Object`), bound to columns by its `schema.Schema[P]`, which
-lives beside the provider.
+lives beside the provider. A provider with a versions listing (`--all-versions`) binds a versions schema id
+(`schema.Bind`) and declares nothing more: the spec in `go/reader` names the schema's version roles (version ID,
+latest or deleted-at, delete marker; `reader.VersionSpec`), and the text output, versions counts and per-prefix
+totals read the rows through them (`schema.BindVersions`), never through the provider or its registration. A new
+versions schema adds its spec there with its roles: a future Azure one would declare its string identifier and
+an explicit latest boolean, and no delete-marker role unless its rows are delete markers (neither a snapshot nor
+a soft-deleted blob is one).
 
 A range is a provider-defined value. `Expand` emits its content in ascending key order: every key of a child's
 subtree sorts after everything emitted before the child and before everything emitted after it. `Expand` may

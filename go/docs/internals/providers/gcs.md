@@ -102,7 +102,8 @@ a name, and pages are native, continued by the API's `pageToken`. The payload `g
 `TimeDeleted`; its schema `swath/gcs-generations/v1` is the `gcs-objects/v1` columns in the same order (the same
 accessors; `generation` an exact INT64) and then `time_deleted`, null for the live generation (there is no
 `is_latest`: a name may have no live generation, and the highest generation is not taken to be live), with
-`Info.Groups` set; its delta spill codec codes integers as wrapping differences and repeated strings as flags.
+`Info.Groups` set and the spec's version roles (`generation` the ID, read in decimal; `time_deleted` the
+deleted-at, so latest is null, by presence); its delta spill codec codes integers as wrapping differences and repeated strings as flags.
 `gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
 none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
 sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
