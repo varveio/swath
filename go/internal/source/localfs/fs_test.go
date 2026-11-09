@@ -166,6 +166,10 @@ func TestListingEqualsSortedOracle(t *testing.T) {
 						if !portable && nativeEngine && fields != Names && st.Chunks == 0 {
 							t.Error("5000-entry directory was not chunked")
 						}
+						// The 5000-entry directory takes more than one read: a stat tier hints between them.
+						if !portable && nativeEngine && (st.ReaddirplusHints > 0) != (fields != Names) {
+							t.Errorf("readdirplus_hints %d at the %s tier", st.ReaddirplusHints, fields)
+						}
 						checkRows(t, rows, fields, portable)
 					})
 				}

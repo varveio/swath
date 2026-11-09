@@ -879,6 +879,14 @@ above), so CPU saved does not show. Warm, the remaining gap to fdu (stat tier) a
 space: kernel CPU and syscall counts are the same (`strace -c`), and after this change syscalls are about
 65 % of a names-tier count's CPU, the rest spread over row emission, keys and allocation at a few percent each.
 
+**NFS: READDIRPLUS hints** (2026-11-09; same box, loopback NFS 4.2 over an ext4 image in a tmpfs). A cold count of
+a 200,000-file directory made 199,722 LOOKUP RPCs (`nfsstat -c`): the Linux client fetches attributes with the
+names only on a directory's first read unless more than 8 of its entries were looked up between reads, and swath
+read the whole directory before any stat. Statting 9 entries after each full read keeps READDIRPLUS on: no
+LOOKUPs, 95 READDIRs. Paired, 6 cold rounds: 5.85 s to 2.42 s, −57.9 % [−64.3, −49.3] (fdu 2.73 s, which stats
+each batch as it reads). Local ext4, the same directory warm, 20 rounds: −6.3 % [−19.0, +1.7], no cost. The box
+was loaded by other builds during these runs; the RPC counts do not depend on load.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake

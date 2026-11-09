@@ -29,7 +29,11 @@ const (
 	chunkThreshold = 4096 // entries above which a directory is chunked
 	chunkEntries   = 2048 // entries per chunk
 	direntBuffer   = 64 << 10
-	cancelEvery    = 1024 // entries between context checks
+	// direntHintSlack: a read that returns more than the buffer less this
+	// (the largest record, 280 bytes, with room) filled it, so the
+	// directory likely goes on.
+	direntHintSlack = 1 << 10
+	cancelEvery     = 1024 // entries between context checks
 
 	// A directory of at least parallelSortMin entries is sorted in
 	// parallel runs of at least sortRunMin entries, then merged.
@@ -40,6 +44,10 @@ const (
 	// the entry count its size suggests, rather than doubling repeatedly.
 	presizeAfter = 1024
 	presizeMax   = 1 << 24 // entries: an estimate is never trusted beyond this
+	// readdirplusHint is how many entries of a full batch are statted before
+	// the next read: more than the Linux NFS client's threshold of 8
+	// (NFS_READDIR_CACHE_USAGE_THRESHOLD in fs/nfs/dir.c).
+	readdirplusHint = 9
 )
 
 // entry is one directory entry: its name in the scratch name buffer and its
@@ -120,7 +128,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	st.DirsRead++
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	if err := readNames(ctx, fd, r.path, sc, st); err != nil {
+	if err := readNames(ctx, fd, r.path, sc, p.opt.Fields != Names, st); err != nil {
 		unix.Close(fd)
 		return err
 	}
@@ -160,7 +168,17 @@ func openDir(path string, noFollow bool) (int, error) {
 }
 
 // readNames parses all entries of fd into sc (names and entries).
-func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats) error {
+//
+// With stat, a batch that fills most of the buffer (the directory goes on)
+// has a few of its entries statted before the next read. The Linux NFS
+// client asks the server for attributes with the names (READDIRPLUS) on a
+// directory's first read, and on a later read only if more than 8 of its
+// entries were looked up since the one before (nfs_use_readdirplus); a
+// directory read whole before any stat otherwise costs one LOOKUP per entry
+// beyond the first page. fdu (github.com/jlevy/fdu), which stats each batch
+// before reading the next, keeps READDIRPLUS on for the same reason. On a
+// local filesystem the hint is a few extra cached stats per 2,048 entries.
+func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool, st *Stats) error {
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(_ uint64, typ uint8, name []byte) {
 		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
@@ -182,9 +200,14 @@ func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats)
 		if n <= 0 {
 			return nil
 		}
+		first := len(sc.ents)
 		if err := parseDirents(sc.buf[:n], add); err != nil {
 			st.note(&st.ReadErrors, path, err)
 			return nil
+		}
+		if stat && n > len(sc.buf)-direntHintSlack {
+			hintReaddirplus(fd, sc, first)
+			st.ReaddirplusHints++
 		}
 		if !presized && len(sc.ents) >= presizeAfter {
 			presized = true
@@ -214,6 +237,15 @@ func presize(fd int, sc *scratch) bool {
 	sc.ents = slices.Grow(sc.ents, est-len(sc.ents))
 	sc.names = slices.Grow(sc.names, est*avg-len(sc.names))
 	return true
+}
+
+// hintReaddirplus stats up to readdirplusHint entries from first, ignoring
+// the results (readNames).
+func hintReaddirplus(fd int, sc *scratch, first int) {
+	var s unix.Stat_t
+	for i := first; i < min(first+readdirplusHint, len(sc.ents)); i++ {
+		unix.Fstatat(fd, nameOf(sc.names, &sc.ents[i]), &s, unix.AT_SYMLINK_NOFOLLOW)
+	}
 }
 
 // resolveUnknown types entries the filesystem reported as DT_UNKNOWN.

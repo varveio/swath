@@ -61,6 +61,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   report): to 4 per CPU at the `stat` and `statx` tiers, to 2 per CPU at the `names` tier, where more
   processors only add contention when the tree is warm. A count has no encoders, reorder storage or readahead
   to resize; runs that write output keep GOMAXPROCS as it is.
+- **NFS: attributes with the names.** The Linux NFS client fetches attributes with a directory's names
+  (READDIRPLUS) on its first read, and on a later read only if more than 8 of its entries were looked up since
+  the previous one (`nfs_use_readdirplus` in `fs/nfs/dir.c`). A directory read whole before any stat would cost
+  one LOOKUP per entry past the first page, so at a stat tier, after a read that fills the buffer, the getdents
+  engine stats 9 of its entries before the next (`readdirplus_hints`); fdu, which stats each batch before
+  reading the next, keeps READDIRPLUS on the same way. A 200,000-file directory over NFS 4.2, cold: 199,722
+  LOOKUPs to none, 5.85 s to 2.42 s ([measurements](../measurements.md)).
 - **A count does not sort.** Nothing consumes a count's order, so the getdents engine skips each directory's
   sort (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
   (`TestUnsortedCountEqualsSortedListing`). Warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
