@@ -32,7 +32,7 @@ under the mutex, splits only if workers are idle (demand), the range ranks among
 structure boundary or the pivot passes the guards and, for a bounded range, the admission gates estimate
 that the remainder and both children are worth their requests. It then emits `(cursor, pivot]` and
 `(pivot, hi]` and returns, and the children become claimable
-([internals/providers.md](internals/providers.md#range-engine-internalsourcekeyrange)).
+([internals/range-engine.md](internals/range-engine.md)).
 
 ## Packages
 
@@ -66,7 +66,7 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/buildinfo` | the binary's identity (tool, module version, VCS revision, the linker's `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
 The list clients are hand-rolled on the SDKs' authentication; what is the SDK's, what is ours and why:
-[internals/providers.md](internals/providers.md#the-list-clients-hand-rolled-on-the-sdks-auth).
+[internals/clients.md](internals/clients.md#the-list-clients-hand-rolled-on-the-sdks-auth).
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and

@@ -367,7 +367,7 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
   page size one under every delimiter-sending policy. Credentials are tested against a local token endpoint
   (`internal/source/gcs/client`, `creds_test.go`).
 - **SDK-backed clients vs the hand-rolled clients** (build tag `swath_sdkclient`; see
-  [providers.md](internals/providers.md#the-sdk-backed-clients-swath_sdkclient-experiment)). Each adapter
+  [clients.md](internals/clients.md#the-sdk-backed-clients-swath_sdkclient-experiment)). Each adapter
   (`internal/source/s3/sdkclient`, `internal/source/gcs/sdkclient`) passes `objhttptest.Contract`, the shared
   retry and classification contract the hand-rolled clients pass. Differential tests run both clients against
   the same fake and compare pages, error classes, retry decisions, counters and body-close counts (every

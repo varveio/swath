@@ -10,8 +10,7 @@ import (
 )
 
 // Split admission: whether a split that demand asks for, and the guard
-// allows, is worth its requests (docs/internals/providers.md, "Range
-// engine"). A split costs each child a first request, and on S3, which has
+// allows, is worth its requests (docs/internals/range-engine.md). A split costs each child a first request, and on S3, which has
 // no end bound, a child's last page overfetches up to a page past its hi;
 // it saves at most the page latencies the owner would spend listing the
 // rest alone. Both gates and the rank read one estimate: the keys in an
