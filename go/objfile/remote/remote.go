@@ -57,9 +57,11 @@ type Store struct {
 //     blob.core.windows.net endpoint.
 //
 // Open makes no request; a missing bucket or a refused credential fails the
-// first Open of the Store. The Store outlives ctx: each request, credential
-// refreshes included, runs under the context of the Open or read that makes
-// it, so a Store opened with one request's context may serve later ones.
+// first Open of the Store. The Store outlives ctx: each request runs under
+// the context of the Open or read that makes it, a token exchange the request
+// waits for included (a refresh the library starts early, before a token
+// expires, runs in the background with its own context), so a Store opened
+// with one request's context may serve later ones.
 func Open(ctx context.Context, location string) (*Store, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {

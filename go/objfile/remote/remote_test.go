@@ -299,6 +299,7 @@ func TestOpenGCSCredentialsOutliveContext(t *testing.T) {
 	}))
 	t.Cleanup(tokens.Close)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil // a proxy from the environment would carry the token request past the dialer below
 	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if addr == "oauth2.googleapis.com:443" {

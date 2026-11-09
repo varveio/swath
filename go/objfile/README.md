@@ -157,10 +157,11 @@ itself and uses `s3.New`, `gcs.New` or `azblob.New` with `Root`; one that needs 
 `Limit`. Importing `objfile/remote` links all three providers' SDKs; a program that reads from one provider
 builds that SDK's client and uses its `New` with `Root` the same way.
 
-The `Store` outlives the context `Open` is given: every request, a credential refresh included, runs under the
-context of the `Open` or read that makes it, so a `Store` opened while serving one request can be kept for
-later ones. Google's credentials come from the newer auth library (`cloud.google.com/go/auth`), which fetches a
-token with the context of the request that needs it; cancelling that request cancels the token exchange.
+The `Store` outlives the context `Open` is given: every request runs under the context of the `Open` or read
+that makes it, so a `Store` opened while serving one request can be kept for later ones. Google's credentials
+come from the newer auth library (`cloud.google.com/go/auth`), which fetches a token a request waits for with
+that request's context, so cancelling the request cancels that exchange; a refresh the library starts early,
+before a token expires, runs in the background with its own context and is not cancelled by any request.
 
 The swath CLI parses the same schemes for a listing root, with other semantics: a listing prefix is a key
 prefix, not a directory, and an `az://` root may carry a SAS query. It keeps its own parser.
