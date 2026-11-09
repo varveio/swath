@@ -11,8 +11,8 @@ with a token-only seek is listed as one sequential chain per root; one with no s
 sorts it inside the provider. Each provider declares this in `source.Capabilities` (`Seek`: `fabricable`,
 `token_only`, `none`; `Order`: `bytes`, `other`, `none`; `RankOracle`; `RangeEngine()` is the test, and
 `keyrange.New` refuses a `Description.Listing` that fails it): S3 and GCS are fabricable and byte-ordered without a
-rank oracle (`token_only` with `--sequential`); Azure Blob lists in UTF-16 code-unit order, and is declared
-byte-ordered only because its provider refuses every page or bound where the two orders could differ (below); the filesystem has no seek and no order (a directory is a
+rank oracle (`token_only` with `--sequential`); Azure Blob lists in UTF-16 code-unit order, and is byte-ordered
+through its provider's order adapter, which serves every engine query in byte order (below); the filesystem has no seek and no order (a directory is a
 range, read whole and sorted).
 
 ## The contract (`internal/source`)
@@ -408,8 +408,8 @@ as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-s
 (the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
 it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
 report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
-and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is refused at open,
-before any request (every name in scope would hold it).
+and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed
+through the adapter like any other.
 
 **Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
 the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
@@ -448,8 +448,11 @@ its journal resumable. The comparator (`internal/utf16order`) is the one the cli
 Azure route use. The specification, with its worked examples and the facts it rests on, is
 `notes/plans/2026-11-08-azblob-order-adapter-spec.md` in the notes repository.
 
-*Cost.* A container (or a query) with no name at U+E000 and above costs nothing extra: one span, the same
-requests as a plain marker chain, no split. An item equal to a bounded query's `Through` ends its span, so a
+*Cost.* A query with no name at U+E000 and above in its bounds, its prefix or its results costs nothing extra:
+one span, the same requests as a plain marker chain, no split. Bounds count as well as names: the engine's
+frontier splits synthesise pivots from its whole alphabet, so over names just below U+E000 (lead byte ED) a
+bound at U+E000 and above can arrive and is cut like a name (`TestSynthesizedPivotListed`), which costs a seek
+and possibly an empty probe. An item equal to a bounded query's `Through` ends its span, so a
 range's last page does not read past its end (sound because `Through`'s path is cut at every group boundary:
 nothing in its span follows it in Azure's order; an addition to the specification's §4.1). Where such names are, each cut is a seek (`order_spans`,
 `order_seeks`; one per span, even an empty one: `order_probes`), each split may add one (an `E` group the read
