@@ -11,6 +11,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -351,6 +354,7 @@ func TestEntraDiscovery(t *testing.T) {
 	}{
 		{name: "found", cred: &countingCredential{}},
 		{name: "absent", cred: &countingCredential{err: absent}, anonymous: true},
+		{name: "login command not found", cred: &countingCredential{err: fmt.Errorf("AzureCLICredential: %w", exec.ErrNotFound)}, anonymous: true},
 		{name: "metadata timeout", cred: &countingCredential{err: fmt.Errorf("ManagedIdentityCredential: %w", context.DeadlineExceeded)}, retryClass: objhttp.ClassTimeout},
 		{name: "transport failure", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{}}, retryClass: objhttp.ClassTransport},
 		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, retryClass: objhttp.ClassTransport},
@@ -446,7 +450,19 @@ func TestNoMetadataProbeOffAzure(t *testing.T) {
 	for _, imds := range []string{"403", "hang"} {
 		t.Run(imds, func(t *testing.T) {
 			clearEntra(t)
-			t.Setenv("PATH", t.TempDir())
+			// No az or azd on the PATH, the system's commands kept: on
+			// Windows azidentity would start cmd.exe from there, so the
+			// case is "the CLI is not installed", not "no shell".
+			path := t.TempDir()
+			if runtime.GOOS == "windows" {
+				path += string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32")
+			} else {
+				path += string(os.PathListSeparator) + "/bin" + string(os.PathListSeparator) + "/usr/bin"
+			}
+			t.Setenv("PATH", path)
+			if _, err := exec.LookPath("az"); err == nil {
+				t.Skip("an az command is installed system-wide")
+			}
 			var asked atomic.Int64
 			meta := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				asked.Add(1)
