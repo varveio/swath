@@ -103,7 +103,7 @@ func (c *Client) services(bodyCap int64) error {
 	for _, hc := range c.http {
 		g := &objhttp.Guard{Next: hc.Transport, MaxBody: bodyCap, MaxError: maxErrorBody, Validate: envelope}
 		h := *hc // keeps the pool's no-redirect policy
-		h.Transport = record{g}
+		h.Transport = g
 		opt := &service.ClientOptions{ClientOptions: azcore.ClientOptions{
 			Transport:       &h,
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
@@ -130,7 +130,7 @@ func (c *Client) services(bodyCap int64) error {
 // (objhttp.Do), and validates the page (objhttp.ErrInvalidPage). A page past the
 // body cap is ErrBodyCap, not retried.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) { return c.list(ctx, in) })
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*ListOutput, error) { return c.list(ctx, in) })
 }
 
 // list is one List Blobs attempt: a fresh pager seeded with the marker,
@@ -149,7 +149,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 		size = &m
 	}
 	var out *ListOutput
-	done := c.counts.Attempt()
+	done := c.Tally.Attempt()
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
 		r, err = cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Marker: str(in.Marker), Prefix: str(in.Prefix),
@@ -188,21 +188,21 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 // "false"; anything else is ErrHNSUnknown, never flat). A refused call is
 // an error the caller takes for "unknown", never for flat.
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
 		s := &sent{}
 		actx, cancel, err := c.begin(ctx, s)
 		if err != nil {
 			return false, err
 		}
 		defer cancel()
-		done := c.counts.Attempt()
+		done := c.Tally.Attempt()
 		_, err = c.svc[c.pick()].NewContainerClient(container).GetAccountInfo(actx, nil)
 		done()
 		switch {
 		case s.refused(err) || err == nil:
 			// the header as sent, not the SDK's strconv.ParseBool reading
 			// of it ("1" and "0" are not Azure's answers)
-			return hns(s.header)
+			return hns(s.Header)
 		}
 		return false, c.failure(actx, ctx, s, err, container)
 	})
@@ -214,14 +214,14 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.CancelFunc, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	if c.ts != nil {
-		tok, err := c.token(actx)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			cancel()
 			return nil, nil, err
 		}
 		actx = policy.WithHTTPHeader(actx, http.Header{headerAuthorization: {"Bearer " + tok.AccessToken}})
 	}
-	return context.WithValue(actx, sentKey{}, s), cancel, nil
+	return objhttp.WithCapture(context.WithValue(actx, sentKey{}, s), &s.Capture), cancel, nil
 }
 
 // failure is the error of an attempt that got no page: the service's answer
@@ -432,10 +432,8 @@ type sentKey struct{}
 // sent is what an attempt met on the wire: its startFrom (for pin), the
 // request URL as sent and whether a 200 passed the Guard to the SDK.
 type sent struct {
+	objhttp.Capture
 	startFrom string
-	url       *url.URL
-	ok        bool
-	header    http.Header // the 200's
 }
 
 // refused reports err as the SDK's refusal of a 200 the Guard passed (its
@@ -443,18 +441,18 @@ type sent struct {
 // the attempt was not cancelled meanwhile (azcore then returns the
 // context's error).
 func (s *sent) refused(err error) bool {
-	return s.ok && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	return s.Status == http.StatusOK && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 // safeURL is the attempt's URL without the SAS: as sent, or the
 // container's route when nothing was sent; a 400's Query and a redacted
 // transport error name it.
 func (s *sent) safeURL(c *Client, container string) *url.URL {
-	if s.url == nil {
+	if s.URL == nil {
 		u := c.route(container)
 		return &u
 	}
-	u := *s.url
+	u := *s.URL
 	sas, _ := url.ParseQuery(c.sas)
 	q := u.Query()
 	for k := range sas {
@@ -481,21 +479,4 @@ func (pin) Do(req *policy.Request) (*http.Response, error) {
 		}
 	}
 	return req.Next()
-}
-
-// record notes the request URL and whether a response reached the SDK,
-// in the attempt's sent (from the request context).
-type record struct{ next http.RoundTripper }
-
-func (r record) RoundTrip(req *http.Request) (*http.Response, error) {
-	s, _ := req.Context().Value(sentKey{}).(*sent)
-	if s != nil {
-		u := *req.URL
-		s.url = &u
-	}
-	resp, err := r.next.RoundTrip(req)
-	if s != nil && err == nil && resp.StatusCode == http.StatusOK {
-		s.ok, s.header = true, resp.Header
-	}
-	return resp, err
 }

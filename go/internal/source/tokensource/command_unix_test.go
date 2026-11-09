@@ -33,7 +33,7 @@ func TestCommand(t *testing.T) {
 	counter := filepath.Join(dir, "n")
 	cmd := fmt.Sprintf(`echo x >> %s; printf ' tok-%%s\n' "$(wc -l < %s | tr -d ' ')"`, counter, counter)
 	c := &Command{Cmd: cmd, Refresh: 45 * time.Minute}
-	s := NewShared(c, 0)
+	s := NewShared(c)
 	get := func() string {
 		tok, err := s.Token(context.Background())
 		if err != nil {

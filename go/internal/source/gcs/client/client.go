@@ -149,8 +149,7 @@ type Client struct {
 	ts       *tokensource.Shared // nil: anonymous
 	source   string
 
-	retry  objhttp.Retry
-	counts objhttp.Counters
+	*objhttp.Meter
 }
 
 // New resolves credentials and builds the client. Requests go
@@ -188,8 +187,7 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		return nil, err
 	}
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
-		retry: cfg.Retry}
-	c.retry.Defaults()
+		Meter: objhttp.NewMeter(cfg.Retry)}
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
 	// exchange (the attempt deadline bounds the wait, token below).
@@ -207,18 +205,18 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		if err != nil {
 			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
-		c.ts = tokensource.NewShared(creds.TokenSource, 0)
+		c.ts = tokensource.NewShared(creds.TokenSource)
 	default:
 		c.source = "application default credentials"
 		creds, err := finder.find(life, readScope)
 		if err != nil {
 			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
-		c.ts = tokensource.NewShared(creds.TokenSource, 0)
+		c.ts = tokensource.NewShared(creds.TokenSource)
 	}
 	for _, hc := range pool {
 		g := *hc // keeps the pool's no-redirect policy
-		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
+		g.Transport = &objhttp.Guard{Next: hc.Transport, Validate: validate}
 		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
 			option.WithLogger(quiet))
 		if err != nil {
@@ -285,64 +283,20 @@ func (c *Client) pick() int {
 	return int((c.next.Add(1) - 1) % uint64(len(c.svc)))
 }
 
-// token waits for the token source under the attempt's deadline (ctx);
-// nil without credentials. A failure is a *objhttp.CredentialError. Waiters
-// share one outstanding call (tokensource.Shared: at most one goroutine
-// calls the source at a time, however many attempts wait or give up); a
-// call that outlives the waits finishes in the background (its own HTTP
-// client is bounded by the request timeout) and later attempts reuse its
-// token.
-func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	if c.ts == nil {
-		return nil, nil
-	}
-	t, err := c.ts.Token(ctx)
-	switch {
-	case err == nil:
-		return t, nil
-	case ctx.Err() != nil:
-		return nil, &objhttp.CredentialError{Source: c.source, Transient: true, Timeout: true,
-			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
-	}
-	return nil, &objhttp.CredentialError{Source: c.source, Transient: transientToken(err),
-		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
-}
-
 // transientToken: the token endpoint's or the metadata server's 5xx, 408
 // and 429, transport failures and a token exchange's own timeout may pass;
 // a refused grant (400, 401) and unusable credentials will not.
 func transientToken(err error) bool {
-	status := func(s int) bool { return s >= 500 || s == 408 || s == 429 }
 	var re *oauth2.RetrieveError
 	var me *metadata.Error
 	switch {
 	case errors.As(err, &re):
-		return re.Response != nil && status(re.Response.StatusCode)
+		return re.Response != nil && objhttp.TransientStatus(re.Response.StatusCode)
 	case errors.As(err, &me):
-		return status(me.Code)
+		return objhttp.TransientStatus(me.Code)
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // Credentials names where the credentials came from (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
-
-// Answered is the number of requests the service answered usably
-// (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
-
-// Live is the request account now with the limiter's current limit, for
-// the progress sampler (source.Requests).
-func (c *Client) Live() source.Requests {
-	l := c.counts.Live()
-	l.Limit = int64(c.retry.Limiter.Limit())
-	return l
-}
-
-// Counters returns the request counters so far.
-func (c *Client) Counters() objhttp.Counts {
-	n := c.counts.Load()
-	n.Limiter = c.retry.Limiter.Counts()
-	n.Rate = c.retry.Rate.Counts()
-	return n
-}

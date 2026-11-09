@@ -24,7 +24,7 @@ import (
 // List sends one objects.list request per attempt, retrying retryable
 // failures (objhttp.Do).
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, in) })
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*Page, error) { return c.attempt(ctx, in) })
 }
 
 // selector is the partial-response selector a listing sends (versions: a
@@ -43,8 +43,8 @@ func (c *Client) selector(versions bool) string {
 func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
-	var s sent
-	call := c.svc[c.pick()].Objects.List(in.Bucket).Projection("noAcl").Context(objhttp.WithCapture(context.WithValue(actx, sentKey{}, &s), &s.body))
+	var s objhttp.Capture
+	call := c.svc[c.pick()].Objects.List(in.Bucket).Projection("noAcl").Context(objhttp.WithCapture(actx, &s))
 	if f := c.selector(in.Versions); f != "" {
 		call.Fields(googleapi.Field(f))
 	}
@@ -74,23 +74,23 @@ func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 	}
 	h := call.Header()
 	h.Set("User-Agent", buildinfo.UserAgent()+" "+googleapi.UserAgent)
-	tok, err := c.token(actx)
+	tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
 	if err != nil {
 		return nil, err
 	}
 	if tok != nil {
 		h.Set("Authorization", tok.Type()+" "+tok.AccessToken)
 	}
-	done := c.counts.Attempt()
+	done := c.Tally.Attempt()
 	out, err := call.Do()
 	done()
 	if err != nil {
 		return nil, c.failure(actx, ctx, &s, err)
 	}
-	if s.status != http.StatusOK {
+	if s.Status != http.StatusOK {
 		// any 2xx is the generated client's success; a listing is a 200,
 		// any other status an answer
-		return nil, responseError(s.status, s.body.Body)
+		return nil, responseError(s.Status, s.Body)
 	}
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
@@ -146,11 +146,11 @@ func mayHoldError(body []byte) bool {
 // googleapi.Error's body-supplied code may contradict; another 2xx too), a
 // 200 body the generated decoder refused as objhttp.ErrSyntax, the Guard's own failures
 // resolved by objhttp.Normalize, an attempt timeout as objhttp.ErrTimeout.
-func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
+func (c *Client) failure(actx, ctx context.Context, s *objhttp.Capture, err error) error {
 	var ge *googleapi.Error
 	switch {
-	case errors.As(err, &ge) && s.status != 0:
-		e := &Error{Status: s.status, Message: ge.Message}
+	case errors.As(err, &ge) && s.Status != 0:
+		e := &Error{Status: s.Status, Message: ge.Message}
 		if len(ge.Errors) > 0 {
 			e.Reason = ge.Errors[0].Reason
 		}
@@ -158,13 +158,13 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 			e.Message = "redirect to " + loc + " (not followed)"
 		}
 		if e.Status == http.StatusBadRequest {
-			e.Query = s.query // a malformed request names itself
+			e.Query = s.URL.RawQuery // a malformed request names itself
 		}
 		return e
-	case s.status == http.StatusOK:
+	case s.Status == http.StatusOK:
 		return fmt.Errorf("%w: %w", objhttp.ErrSyntax, err)
-	case s.status/100 == 2:
-		return responseError(s.status, s.body.Body)
+	case s.Status/100 == 2:
+		return responseError(s.Status, s.Body)
 	}
 	if errors.Is(err, objhttp.ErrSyntax) {
 		return err
@@ -237,31 +237,4 @@ func micros(field, s string) (int64, error) {
 		return 0, fmt.Errorf("%w: %s %q", objhttp.ErrSyntax, field, s)
 	}
 	return t.UnixMicro(), nil
-}
-
-// sent is what an attempt's request met on the wire: the status of the
-// response handed to the generated client (0 without one), the query it
-// sent and, on a 2xx, the body (an answer's envelope when not a 200).
-type sent struct {
-	status int
-	query  string
-	body   objhttp.Capture
-}
-
-type sentKey struct{}
-
-// record notes the request's query and the (guarded) response's status in
-// the attempt's sent, from the request context.
-type record struct{ next http.RoundTripper }
-
-func (r record) RoundTrip(req *http.Request) (*http.Response, error) {
-	s, _ := req.Context().Value(sentKey{}).(*sent)
-	if s != nil {
-		s.query = req.URL.RawQuery
-	}
-	resp, err := r.next.RoundTrip(req)
-	if s != nil && resp != nil {
-		s.status = resp.StatusCode
-	}
-	return resp, err
 }

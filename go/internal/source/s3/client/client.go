@@ -75,11 +75,10 @@ type Config struct {
 
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
-	cfg    Config
-	auth   *auth
-	sdk    *awss3.Client
-	retry  objhttp.Retry
-	counts objhttp.Counters
+	cfg  Config
+	auth *auth
+	sdk  *awss3.Client
+	*objhttp.Meter
 }
 
 // New resolves the region and credentials (loadAuth) and builds the SDK
@@ -110,34 +109,21 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		base, fips, dualStack = aws.String(cfg.Endpoint), false, false
 	}
 	c := &Client{cfg: cfg, auth: a,
-		retry: cfg.Retry,
+		Meter: objhttp.NewMeter(cfg.Retry),
 	}
-	c.retry.Defaults()
 
-	guard := &objhttp.Guard{Validate: validate}
-	if a.bearer != nil {
-		guard.Header = bearerHeader
-	}
-	// No redirect is followed, a supplied client's included (a copy): a 3xx
-	// is an answer. A plain *http.Client is used as given: the SDK wraps
-	// only its own BuildableClient (service/s3 api_client.go
-	// resolveHTTPClient).
-	var hc http.Client
-	if cfg.HTTPClient != nil {
-		hc = *cfg.HTTPClient
-		guard.Next = hc.Transport
-	} else {
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024 // one keep-alive connection per worker
-		guard.Next = t
-	}
-	hc.Transport = guard
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc := objhttp.Pool(1, cfg.HTTPClient, func(next http.RoundTripper) http.RoundTripper {
+		guard := &objhttp.Guard{Next: next, Validate: validate}
+		if a.bearer != nil {
+			guard.Header = bearerHeader
+		}
+		return guard
+	})[0]
 
 	c.sdk = awss3.New(awss3.Options{
 		Region:       a.region,
 		Credentials:  aws.AnonymousCredentials{}, // a signed attempt supplies its own (attempt)
-		HTTPClient:   &hc,
+		HTTPClient:   hc,
 		Retryer:      aws.NopRetryer{},
 		BaseEndpoint: base,
 		UsePathStyle: cfg.PathStyle,
@@ -197,26 +183,6 @@ func (c *Client) Note() string { return c.auth.note }
 // profile resolves it, else us-east-1.
 func (c *Client) Region() string { return c.auth.region }
 
-// Answered is the number of requests the service answered usably
-// (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
-
-// Live is the request account now with the limiter's current limit, for
-// the progress sampler (source.Requests).
-func (c *Client) Live() source.Requests {
-	l := c.counts.Live()
-	l.Limit = int64(c.retry.Limiter.Limit())
-	return l
-}
-
-// Counters returns the request counters so far.
-func (c *Client) Counters() objhttp.Counts {
-	n := c.counts.Load()
-	n.Limiter = c.retry.Limiter.Counts()
-	n.Rate = c.retry.Rate.Counts()
-	return n
-}
-
 // The minimal envelopes the SDK decodes in place of a captured body.
 var (
 	emptyList     = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`)
@@ -237,7 +203,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*Page, error) {
 		return attempt(c, ctx, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
@@ -265,7 +231,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*VersionPage, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*VersionPage, error) {
 		return attempt(c, ctx, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err
@@ -320,7 +286,7 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 	}
 	capture := &objhttp.Capture{Replace: replace}
 	cctx = objhttp.WithCapture(cctx, capture)
-	done := c.counts.Attempt()
+	done := c.Tally.Attempt()
 	err = call(cctx, opts...)
 	done()
 	if err == nil {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 )
 
@@ -69,12 +70,17 @@ func Cause(err error) error {
 }
 
 // Capture asks the Guard, through the request context (WithCapture), for the
-// validated 2xx body. Replace, when set, is what the SDK decodes instead (a
-// minimal envelope). One Capture serves one attempt and is never shared
+// request URL and delivered response. Status and Header are set only when
+// a response is handed upward, after bounding its body and validating a 2xx.
+// Replace is what the SDK decodes instead (a minimal envelope). One Capture
+// serves one attempt and is never shared
 // across goroutines.
 type Capture struct {
-	Body    []byte // set by the Guard: the validated 2xx body
-	Replace []byte // set by Validate's owner: handed upward instead of Body
+	URL     *url.URL    // copied before sending, even if no response is delivered
+	Status  int         // the response delivered through the Guard, zero on failure
+	Header  http.Header // the delivered response headers
+	Body    []byte      // set by the Guard: the validated 2xx body
+	Replace []byte      // set by Validate's owner: handed upward instead of Body
 }
 
 type captureKey struct{}
@@ -86,6 +92,11 @@ func WithCapture(ctx context.Context, c *Capture) context.Context {
 
 // RoundTrip implements http.RoundTripper.
 func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
+	c, _ := req.Context().Value(captureKey{}).(*Capture)
+	if c != nil {
+		u := *req.URL
+		c.URL = &u
+	}
 	if g.Header != nil {
 		req = req.Clone(req.Context()) // the caller's request is not ours to change
 		if err := g.Header(req); err != nil {
@@ -142,7 +153,7 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 				return nil, &GuardError{Err: err}
 			}
 		}
-		if c, _ := req.Context().Value(captureKey{}).(*Capture); c != nil {
+		if c != nil {
 			c.Body = body
 			if c.Replace != nil {
 				body = c.Replace
@@ -159,6 +170,9 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	out.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	out.TransferEncoding = nil
+	if c != nil {
+		c.Status, c.Header = out.StatusCode, out.Header
+	}
 	return &out, nil
 }
 

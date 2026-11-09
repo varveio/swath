@@ -286,7 +286,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 			defer wg.Done()
 			for range 10 {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-				_, _ = c.token(ctx)
+				_, _ = objhttp.WaitToken(ctx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
 				cancel()
 			}
 		}()

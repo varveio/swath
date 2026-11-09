@@ -222,7 +222,7 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 func transientRefresh(err error) bool {
 	var hs interface{ HTTPStatusCode() int }
 	if errors.As(err, &hs) {
-		if s := hs.HTTPStatusCode(); s >= 500 || s == 408 || s == 429 {
+		if objhttp.TransientStatus(hs.HTTPStatusCode()) {
 			return true
 		}
 	}

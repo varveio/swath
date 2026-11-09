@@ -135,8 +135,7 @@ type Client struct {
 	source string
 	note   string
 
-	retry            objhttp.Retry
-	counts           objhttp.Counters
+	*objhttp.Meter
 	retryAfterCapped atomic.Int64
 }
 
@@ -193,8 +192,7 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, base: base,
-		retry: cfg.Retry}
-	c.retry.Defaults()
+		Meter: objhttp.NewMeter(cfg.Retry)}
 	// Redirects are answers, never followed (objhttp.Pool). The Location
 	// header is removed before net/http sees it (noLocation): a malformed
 	// one would otherwise end the request in an error that quotes it, SAS
@@ -302,7 +300,7 @@ func (c *Client) tokenHTTP() *http.Client {
 
 // shared wraps cred as the client's coalesced token source.
 func (c *Client) shared(cred azcore.TokenCredential) *tokensource.Shared {
-	return tokensource.NewShared(credentialSource{cred: cred, timeout: c.cfg.RequestTimeout}, 0)
+	return tokensource.NewShared(credentialSource{cred: cred, timeout: c.cfg.RequestTimeout})
 }
 
 // credentialSource is an azcore credential as an oauth2 token source. It
@@ -342,21 +340,6 @@ func anonymousNote(cfg Config) string {
 	return ""
 }
 
-// token waits for the token source under the attempt's deadline (as the
-// GCS client does).
-func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	t, err := c.ts.Token(ctx)
-	switch {
-	case err == nil:
-		return t, nil
-	case ctx.Err() != nil:
-		return nil, &objhttp.CredentialError{Source: c.source, Transient: true, Timeout: true,
-			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
-	}
-	return nil, &objhttp.CredentialError{Source: c.source, Transient: transientToken(err),
-		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
-}
-
 // transientToken: a token endpoint's 5xx, 408 and 429, an exchange that got
 // no answer (a transport failure, which azidentity reports without a
 // response) and an exchange's own timeout may pass; a refused grant and a
@@ -370,8 +353,7 @@ func transientToken(err error) bool {
 		if af.RawResponse == nil {
 			return true
 		}
-		s := af.RawResponse.StatusCode
-		return s >= 500 || s == 408 || s == 429
+		return objhttp.TransientStatus(af.RawResponse.StatusCode)
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }
@@ -393,29 +375,9 @@ func (c *Client) Transports() int { return len(c.http) }
 // (round-robin).
 func (c *Client) pick() int { return int((c.next.Add(1) - 1) % uint64(len(c.http))) }
 
-// Answered is the number of requests the service answered usably
-// (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
-
-// Live is the request account now with the limiter's current limit, for
-// the progress sampler (source.Requests).
-func (c *Client) Live() source.Requests {
-	l := c.counts.Live()
-	l.Limit = int64(c.retry.Limiter.Limit())
-	return l
-}
-
 // RetryAfterCapped is the number of answers whose Retry-After was cut to
 // the request timeout (retry_after_capped).
 func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
-
-// Counters returns the request counters so far.
-func (c *Client) Counters() objhttp.Counts {
-	n := c.counts.Load()
-	n.Limiter = c.retry.Limiter.Counts()
-	n.Rate = c.retry.Rate.Counts()
-	return n
-}
 
 // route is the URL of a container, without a query.
 func (c *Client) route(container string) url.URL {
@@ -490,7 +452,7 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
 		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err
@@ -535,13 +497,13 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	req.Header.Set(headerVersion, Version)
 	req.Header.Set(headerUserAgent, buildinfo.UserAgent())
 	if c.ts != nil {
-		tok, err := c.token(actx)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set(headerAuthorization, "Bearer "+tok.AccessToken)
 	}
-	defer c.counts.Attempt()()
+	defer c.Tally.Attempt()()
 	resp, err := c.http[c.pick()].Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
