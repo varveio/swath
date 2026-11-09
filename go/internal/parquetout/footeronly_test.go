@@ -37,7 +37,7 @@ import (
 type partDigests struct{ Data, Meta, Offsets, Values, Keys string }
 
 // footerOnlyGolden are the digests of the parts footerOnlyScenarios write,
-// recorded with the swath-dataset format 2 writer (a1177c7f, parquet-go
+// a frozen golden written by the 2026-11-05 layout (a1177c7f, parquet-go
 // v0.32.0, klauspost/compress v1.19.1) on linux/amd64 with AVX2.
 var footerOnlyGolden = map[string][]partDigests{
 	"unique": {
@@ -163,9 +163,10 @@ func digestPart(t *testing.T, path string) (partDigests, *format.FileMetaData, [
 
 // TestFooterOnlyChange: the SeekParquet writer writes the same data
 // pages, the same offset indexes, the same value-column indexes and the
-// same footer as the format 2 writer did, apart from the footer stamps and
-// the key column's index bounds, which are now exact; a part whose keys
-// fit within 1,024 bytes has the same key index too.
+// same footer as the frozen golden (written by the 2026-11-05 layout)
+// records, apart from the footer stamps and the key column's index bounds,
+// which are now exact; a part whose keys fit within 1,024 bytes has the
+// same key index too.
 func TestFooterOnlyChange(t *testing.T) {
 	for name, write := range footerOnlyScenarios() {
 		parts := write(t)

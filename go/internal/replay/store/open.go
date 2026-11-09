@@ -15,7 +15,6 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
-	"github.com/varveio/swath/go/internal/replay/legacy/format2"
 	"github.com/varveio/swath/go/internal/replay/legacy/javaera"
 )
 
@@ -112,17 +111,6 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 			_ = s.reader.Close()
 			return nil, Metadata{}, err
 		}
-	} else if info.IsDir() && format2.IsDataset(path) {
-		dataset, err := format2.Open(ctx, path, expect, s.files)
-		if err != nil {
-			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
-		}
-		s.reader = dataset.Reader
-		meta.Kind, meta.SchemaID = KindFormat2, dataset.Manifest.SchemaID
-		if meta.Identity, err = format2Identity(path, dataset); err != nil {
-			_ = s.reader.Close()
-			return nil, Metadata{}, err
-		}
 	} else {
 		fixture, err := javaera.Open(ctx, path, expect, s.files)
 		if err != nil {
@@ -146,8 +134,8 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 
 // Refusal returns the reason Open refused a fixture as not servable sorted
 // (no_stamp, unsupported_mode, unknown_format_version, incomplete_multifile,
-// mixed_row_types, sanity_failed, and for format 2 datasets
-// unsupported_schema, invalid_manifest, no_page_index), row_group_disorder
+// mixed_row_types, sanity_failed, unsupported_schema, no_page_index) for a
+// Java-era fixture, row_group_disorder
 // for a read that found a row group's keys out of order, a SeekParquet
 // refusal code (spec/refusal-codes.json: invalid_manifest, stamp_mismatch,
 // key_order, ...) for a SeekParquet dataset, or "" when err is none of

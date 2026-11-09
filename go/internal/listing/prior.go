@@ -86,8 +86,7 @@ func samePath(a, b string) bool {
 	return aa == ab
 }
 
-// datasetPrior reads a committed dataset's distribution (this build's
-// SeekParquet format, or an earlier build's format 2): its
+// datasetPrior reads a committed SeekParquet dataset's distribution: its
 // identity is the source kind and container (the bucket) of the manifest,
 // which must be the run's, and its scope, which the engine checks against
 // the run's prefix (Prior.Check); an endpoint or region is not in the
@@ -110,9 +109,9 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
 	switch {
-	case !m.Readable():
-		return nil, fmt.Errorf("manifest format %s %d, want %s %d (draft %d) or %s %d", m.Format, m.FormatVersion,
-			seekparquet.Format, seekparquet.FormatVersion, seekparquet.DraftRevision, dataset.LegacyFormat, dataset.LegacyFormatVersion)
+	case !m.Current():
+		return nil, fmt.Errorf("manifest format %s %d draft %d, want %s %d draft %d", m.Format, m.FormatVersion, m.DraftRevision,
+			seekparquet.Format, seekparquet.FormatVersion, seekparquet.DraftRevision)
 	case m.Source.Kind != loc.Kind || m.Source.Container != loc.Container:
 		return nil, fmt.Errorf("the dataset lists %s (%s %q), the run %s (%s %q)", m.Source.URI, m.Source.Kind, m.Source.Container, loc.Root, loc.Kind, loc.Container)
 	}
@@ -149,7 +148,7 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 			cum = end // no cut inside this part
 			continue
 		}
-		pages, err := parquetout.KeyPages(filepath.Join(dir, dataset.DataDir, dataset.PartName(i)), !m.Current())
+		pages, err := parquetout.KeyPages(filepath.Join(dir, dataset.DataDir, dataset.PartName(i)))
 		var sum int64
 		for _, pg := range pages {
 			sum += pg.Rows

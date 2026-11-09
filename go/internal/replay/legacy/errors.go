@@ -11,8 +11,8 @@ import (
 )
 
 // Reasons a set of parts is refused. The first six are the replay server's
-// established fallback vocabulary; the others name what only a manifest
-// dataset or a missing page index can get wrong.
+// established fallback vocabulary; the others name a schema or a missing
+// page index the reader cannot serve.
 const (
 	// ReasonNoStamp: a part carries no recognised sortedness stamp, or there
 	// are no parts.
@@ -24,21 +24,17 @@ const (
 	// reader does not know.
 	ReasonUnknownFormatVersion = "unknown_format_version"
 	// ReasonIncompleteMultifile: the parts present do not prove they are the
-	// whole output (a gap, a duplicate, no final part, or a part that does
-	// not match its manifest entry).
+	// whole output (a gap, a duplicate, no final part).
 	ReasonIncompleteMultifile = "incomplete_multifile"
 	// ReasonMixedRowTypes: a row group's row_type statistics do not prove
 	// every row is a current object.
 	ReasonMixedRowTypes = "mixed_row_types"
 	// ReasonSanityFailed: the decoded row-group first keys do not ascend
-	// strictly, or a part's decoded bounds contradict its manifest entry.
+	// strictly, or a row group's first key is empty.
 	ReasonSanityFailed = "sanity_failed"
 	// ReasonUnsupportedSchema: the key column is missing or not a required
 	// byte array, or a projected column has another type.
 	ReasonUnsupportedSchema = "unsupported_schema"
-	// ReasonInvalidManifest: a manifest is unreadable or not a sorted
-	// dataset manifest this reader knows.
-	ReasonInvalidManifest = "invalid_manifest"
 	// ReasonNoPageIndex: a non-empty row group's key column lacks a
 	// ColumnIndex or an OffsetIndex, so it cannot be seeked by page.
 	ReasonNoPageIndex = "no_page_index"

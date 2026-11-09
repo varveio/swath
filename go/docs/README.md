@@ -5,7 +5,7 @@ Who reads what. Each page owns its facts; the others link to it.
 - **Operator** (schedules and watches runs): [operators.md](operators.md), then [operating.md](operating.md)
   for the full reference and [cli.md](cli.md) for every flag, exit code and report field.
 - **Coming from the Java CLI:** [from-java.md](from-java.md), then [cli-inventory.md](cli-inventory.md) (every
-  Java option against this tool) and [upgrade.md](upgrade.md) (the SeekParquet dataset, and format 2 before it, for readers).
+  Java option against this tool) and [upgrade.md](upgrade.md) (the SeekParquet dataset, for Java users and for readers).
 - **Contributor**, in reading order: [architecture.md](architecture.md),
   [internals/contracts.md](internals/contracts.md), [internals/ordering.md](internals/ordering.md) (the order
   stage, its budget, waits and spill), [internals/providers.md](internals/providers.md) (the provider contract,
