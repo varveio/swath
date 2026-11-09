@@ -21,38 +21,6 @@ const (
 	leadBeyond = 0xF5
 )
 
-// rank is a byte's position in Azure's order (UTF-16 code units for valid
-// UTF-8): 00..ED, F0..F4, EE..EF, F5..FF (replay/azure.rank).
-func rank(v byte) int {
-	switch {
-	case v >= 0xf0 && v <= 0xf4:
-		return int(v) - 2
-	case v == 0xee || v == 0xef:
-		return int(v) + 5
-	}
-	return int(v)
-}
-
-// pcmp compares two names in Azure's order.
-func pcmp(a, b string) int {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[i] != b[i] {
-			if rank(a[i]) < rank(b[i]) {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case len(a) < len(b):
-		return -1
-	case len(a) > len(b):
-		return 1
-	}
-	return 0
-}
-
 // cut is q followed by the single byte v.
 func cut(q string, v byte) string { return q + string([]byte{v}) }
 

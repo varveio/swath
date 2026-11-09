@@ -5,7 +5,6 @@ package client
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/utf16order"
 )
 
 // bom starts every body Azure sends, success or error (both service
@@ -235,7 +236,7 @@ func decodeName(n wireName) (string, error) {
 // An empty NextMarker is the end.
 func (p *ListOutput) validate(sent string) error {
 	for i := 1; i < len(p.Items); i++ {
-		if a, b := p.Items[i-1].Name, p.Items[i].Name; compareNames(a, b) >= 0 {
+		if a, b := p.Items[i-1].Name, p.Items[i].Name; utf16order.Compare(a, b) >= 0 {
 			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", ErrInvalidPage, b, a)
 		}
 	}
@@ -243,31 +244,6 @@ func (p *ListOutput) validate(sent string) error {
 		return fmt.Errorf("%w: NextMarker repeats the marker sent", ErrInvalidPage)
 	}
 	return nil
-}
-
-// compareNames is Azure's listing order, UTF-16 code units. For valid
-// UTF-8 it is byte order except at the first differing byte, where lead
-// bytes F0..F4 (U+10000 and up, surrogate pairs D800..DFFF in UTF-16)
-// rank before EE..EF (U+E000..U+FFFF): at a first difference both bytes
-// are lead bytes or both continuation bytes, so ranking the byte values
-// 00..ED, F0..F4, EE..EF, F5..FF compares the code units.
-func compareNames(a, b string) int {
-	for i := range min(len(a), len(b)) {
-		if a[i] != b[i] {
-			return cmp.Compare(unitRank(a[i]), unitRank(b[i]))
-		}
-	}
-	return cmp.Compare(len(a), len(b))
-}
-
-func unitRank(v byte) int {
-	switch {
-	case v >= 0xf0 && v <= 0xf4:
-		return int(v) - 2
-	case v == 0xee || v == 0xef:
-		return int(v) + 5
-	}
-	return int(v)
 }
 
 // errorBody reads an <Error> document's Code and Message (the BOM

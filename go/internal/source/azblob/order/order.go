@@ -31,6 +31,7 @@ import (
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/utf16order"
 )
 
 // Lister is the call the adapter makes (*client.Client).
@@ -451,7 +452,7 @@ func (a *Adapter) transfer(c *chain, i int, items []client.Item, marker string) 
 	}
 	floor := seekFrom(c.stack[to].lo)
 	for _, j := range at {
-		if pcmp(seekFrom(c.stack[j].lo), floor) < 0 {
+		if utf16order.Compare(seekFrom(c.stack[j].lo), floor) < 0 {
 			c.stack[j].st = exhausted
 		}
 	}
@@ -538,7 +539,7 @@ func (a *Adapter) split(c *chain, name string) (bool, error) {
 			switch {
 			case k == owner:
 				kids[k].st, kids[k].sk, kids[k].frontier = t.st, t.sk, t.frontier
-			case pcmp(seekFrom(kids[k].lo), floor) < 0:
+			case utf16order.Compare(seekFrom(kids[k].lo), floor) < 0:
 				kids[k].st = exhausted
 			case len(kids[k].buf) > 0:
 				return false, fmt.Errorf("%w: a child after the owner of a split at %q holds %q", ErrInvariant, q, kids[k].buf[0].Name)
