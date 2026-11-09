@@ -178,6 +178,9 @@ func openDir(path string, noFollow bool) (int, error) {
 // beyond the first page. fdu (github.com/jlevy/fdu), which stats each batch
 // before reading the next, keeps READDIRPLUS on for the same reason. On a
 // local filesystem the hint is a few extra cached stats per 2,048 entries.
+// The client's first reads of a directory can be short (19, then 5 entries
+// on Linux 7.0) and are not hinted; hinting after them too was measured
+// worse there (3,277 LOOKUPs on a 200,000-entry directory against none).
 func readNames(ctx context.Context, fd int, path string, sc *scratch, stat bool, st *Stats) error {
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
 	add := func(_ uint64, typ uint8, name []byte) {
