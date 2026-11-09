@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -187,25 +188,42 @@ func (o *opened[P]) target() string {
 // in an environment that resolves another region is refused even when the
 // flag was not given. The inputs are compared as given: nothing resolves
 // them to a URL first (a FIPS region alias is its own value). The
-// endpoint's canonical form folds the scheme and host case and one trailing
-// slash (objhttp.CanonicalRoute). A supplied client is identified by the
-// Route it names (Routed) in place of the endpoint, or the run declines
-// resume.
+// endpoint's canonical form folds the scheme and host case
+// (objhttp.CanonicalRoute) and only a trailing slash the built client
+// sends the same requests without (endpointCanonical). A supplied client
+// is identified by the Route it names (Routed) in place of the endpoint,
+// its path byte for byte, or the run declines resume.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
-	endpoint := opt.Endpoint
+	endpoint, canonical := opt.Endpoint, endpointCanonical(opt.Endpoint, opt.PathStyle)
 	if opt.Client != nil {
 		endpoint = o.p.route
+		canonical = objhttp.CanonicalRoute(endpoint) // a route promises no slash equivalence
 	}
 	return source.Identity{Provider: "s3", Fields: []source.IdentityField{
 		{Name: "source", Value: "s3://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "endpoint", Value: endpoint, Canonical: objhttp.CanonicalRoute(strings.TrimSuffix(endpoint, "/"))},
+		{Name: "endpoint", Value: endpoint, Canonical: canonical},
 		{Name: "region", Value: o.p.region},
 		{Name: "path style", Value: strconv.FormatBool(opt.PathStyle)},
 		{Name: "fips", Value: strconv.FormatBool(opt.FIPS)},
 		{Name: "dual-stack", Value: strconv.FormatBool(opt.DualStack)},
 		{Name: "fetch owner", Value: strconv.FormatBool(opt.FetchOwner)},
 	}}
+}
+
+// endpointCanonical is the built client's endpoint as identity: the scheme
+// and host case folded, and one trailing slash folded only where the SDK
+// sends the same requests with or without it. Path-style addressing
+// appends "/bucket" to the endpoint's path after trimming one slash
+// (/base and /base/ both send /base/bkt), and an endpoint with no path
+// sends "/" either way; virtual-host addressing keeps any other path as
+// given (bkt.store/base and bkt.store/base/ are two request paths, and
+// may be two namespaces), so it is kept byte for byte (TestRequestURLs).
+func endpointCanonical(endpoint string, pathStyle bool) string {
+	if u, err := url.Parse(endpoint); err == nil && (pathStyle || u.Path == "/" && u.RawQuery == "") {
+		endpoint = strings.TrimSuffix(endpoint, "/")
+	}
+	return objhttp.CanonicalRoute(endpoint)
 }
 
 // Capabilities: S3 has no rank oracle and start-after is a fabricable

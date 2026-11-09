@@ -635,8 +635,8 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 
 // CanonicalRoute is the allowlist of equivalent route spellings for
 // resume identity: the scheme and host are case-insensitive; the path is
-// kept byte for byte (a client folds its endpoint's trailing slash once,
-// before this).
+// kept byte for byte (a client folds its endpoint's trailing slash before
+// this only where it sends the same requests without it).
 func CanonicalRoute(r string) string {
 	i := strings.Index(r, "://")
 	if i < 0 {
