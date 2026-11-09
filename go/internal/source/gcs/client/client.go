@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -292,9 +293,9 @@ func PoolSize(workers int) int {
 // HTTPClient): the report's transport.pool_size.
 func (c *Core) Transports() int { return len(c.http) }
 
-// Pool is the transport pool (a supplied HTTPClient alone): HTTP clients
-// that never follow a redirect.
-func (c *Core) Pool() []*http.Client { return c.http }
+// Pool is a copy of the transport pool (a supplied HTTPClient alone): HTTP
+// clients that never follow a redirect, shared with the client and read-only.
+func (c *Core) Pool() []*http.Client { return slices.Clone(c.http) }
 
 // Next is the index in Pool of the transport the next request takes,
 // round-robin.
