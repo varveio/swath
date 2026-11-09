@@ -41,14 +41,6 @@ type Routed interface{ Route(bucket string) string }
 // counted is implemented by clients that count their requests.
 type counted interface{ Counters() client.Counters }
 
-// live is implemented by clients that count their attempts live
-// (source.Requested).
-type live interface{ Live() objhttp.Live }
-
-// answering is implemented by clients that count the requests their
-// service answered (source.Live).
-type answering interface{ Answered() int64 }
-
 // Options configure a Provider.
 type Options struct {
 	Bucket    string
@@ -101,36 +93,6 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 	return bucket, prefix, nil
 }
 
-// Faults are the throttle answers and attempt timeouts so far
-// (source.Faulted); 0 for a supplied client that does not count them.
-func (p *provider[P]) Faults() (throttles, timeouts int64) {
-	if c, ok := p.client.(counted); ok {
-		n := c.Counters()
-		return n.Throttles, n.Timeouts
-	}
-	return 0, 0
-}
-
-// Requests is the client's live request account (source.Requested); zero
-// for a supplied client that does not count it.
-func (p *provider[P]) Requests() source.Requests {
-	if c, ok := p.client.(live); ok {
-		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
-			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
-	}
-	return source.Requests{}
-}
-
-// Answered is the requests the service answered usably (source.Live); 0
-// for a supplied client that does not count them.
-func (p *provider[P]) Answered() int64 {
-	if c, ok := p.client.(answering); ok {
-		return c.Answered()
-	}
-	return 0
-}
-
 // Stats is what a listing did: the counter snapshot (Counters, the one
 // representation of every count, with the run's feature states) and the
 // few values that are not counts.
@@ -158,12 +120,13 @@ type VersionsProvider = provider[Version]
 // engine over one of its list calls.
 type provider[P any] struct {
 	*keyrange.Engine[P]
-	opt       Options
-	client    API
-	anonymous bool
-	creds     string
-	region    string // the resolved signing region ("" with a supplied Client)
-	route     string // a supplied Routed client's Route ("" otherwise)
+	objhttp.Activity // the client's, observed once it is chosen
+	opt              Options
+	client           API
+	anonymous        bool
+	creds            string
+	region           string // the resolved signing region ("" with a supplied Client)
+	route            string // a supplied Routed client's Route ("" otherwise)
 }
 
 // Range is the engine's unit of listing work.
@@ -272,6 +235,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	} else if r, ok := p.client.(Routed); ok {
 		p.route = r.Route(opt.Bucket)
 	}
+	p.Activity = objhttp.Observe(p.client)
 	return p, own, nil
 }
 
