@@ -18,8 +18,9 @@
 // envelope, whole, or ErrSyntax), as Java
 // swath's StreamingListObjectsV2Interceptor does. Measured through the same
 // stack over a 1,000-entry page (BenchmarkDecode), the SDK's deserializer
-// costs about 14 µs and 100,000 allocations an object page against the
-// scanner's 1.8 µs and 410; an encoding/xml token walk cost about 12 µs. The
+// costs about 14 µs per object and 100,000 allocations per page against the
+// scanner's 1.8 µs per object and 410 per page; an encoding/xml token walk
+// cost about 12 µs per object. The
 // scanner also keeps <Version> and <DeleteMarker> entries in wire order,
 // which the SDK's two lists cannot give back (TestStockSDKLosesVersionsOrder),
 // and accepts XML forms the SDK's deserializer refuses (CDATA within text,
