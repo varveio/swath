@@ -117,7 +117,7 @@ func reference(t testing.TB, path string) (rows []refRow, boundaries []string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if manifest.SchemaID == "swath-local/v1" {
+		if manifest.SchemaID == "swath/local-entries/v1" {
 			placeholder := "swath-s3-synthetic-v1"
 			placeholderETag = &placeholder
 		}

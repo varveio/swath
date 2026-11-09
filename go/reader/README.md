@@ -23,6 +23,7 @@ func (SchemaSpec) Column(name string) (ColumnSpec, bool)
 func (SchemaSpec) ColumnNames() []string          // the projection the decoders read
 
 const Extension = "swath"
+const MetadataVersion = 1                          // extensions.swath.version this module reads
 type Metadata struct { Manifest seekparquet.Metadata; SchemaID SchemaID; Swath bool
 	PublishedAt *time.Time; Source *SourceInfo; Scope *Scope; Coverage *Coverage }
 func ParseMetadata(m seekparquet.Metadata) (Metadata, error)
@@ -35,7 +36,7 @@ type Position struct { Key []byte; Offset int64 } // embedded in every row
 func (Position) Cursor() *Cursor
 
 type Object, S3Object, S3Version, GCSObject, GCSGeneration, AzblobObject, LocalEntry
-func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, azblob-objects/v1, swath-local/v1
+func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, azblob-objects/v1, swath/local-entries/v1
 func DecodeS3Object(row seekparquet.Row) (S3Object, error)
 func DecodeS3Version(row seekparquet.Row) (S3Version, error)
 func DecodeGCSObject(row seekparquet.Row) (GCSObject, error)
@@ -110,9 +111,12 @@ for _, r := range rows {
 ## What is checked, and when
 
 - **`Open`, `OpenDir`.** The module reads and checks the manifest and opens no part
-  (`seekparquet.OpenDataset`, `OpenDir`); its refusals are returned unchanged. `extensions.swath` is parsed
-  (a member of the wrong JSON type is a `KindCoverage` error) and the schema id must be one swath writes (else
-  `KindSchema`). A manifest without the extension opens; `AcceptWholeSource` refuses it.
+  (`seekparquet.OpenDataset`, `OpenDir`); its refusals are returned unchanged. `extensions.swath` is parsed:
+  its `version` must be the integer 1 (`MetadataVersion`), else, absent included, `KindSchema` ("unsupported
+  swath metadata version"), before any other member is read; a member of the wrong JSON type is a
+  `KindCoverage` error. The schema id must be one swath writes (else `KindSchema`). A manifest without the
+  extension opens; `AcceptWholeSource` refuses it. A generic SeekParquet read (`seekparquet.OpenDataset`)
+  does not read the extension and is unaffected.
 - **`CheckSchema`** (at admission). The manifest's key column and key uniqueness are the spec's, so a versions
   dataset (keys repeat) never passes as current objects. Then `seekparquet.Dataset.Verify` checks every part
   (size, footer, stamps with the schema id, key column, each row group's first key page), and each part's columns
@@ -204,7 +208,7 @@ for _, r := range rows {
 A nullable column is a pointer, nil for null; a required column (`is_latest`, `is_delete_marker`, `kind`) is a
 value. Times are UTC `time.Time`s of the stored microseconds. Unsigned columns (`mode`, `uid`, `gid`, `nlink`,
 `inode`, `dev`) are `uint32` and `uint64` over their full range. Keys and link targets are bytes, and need not
-be UTF-8 for `swath-local/v1`. Byte values share the `seekparquet.Row`'s memory.
+be UTF-8 for `swath/local-entries/v1`. Byte values share the `seekparquet.Row`'s memory.
 
 Every row keeps its key and its `Offset` in its group of equal keys, so a page that ends inside a group
 continues from the row (`Cursor`). Rows of one key stay separate rows in file order: nothing collects a key's
@@ -213,7 +217,7 @@ generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it.
 
 `Object` is the small projection a reader of current objects needs (key, size, modification time, ETag,
 storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/gcs-objects/v1`,
-`swath/azblob-objects/v1` and `swath-local/v1` (no ETag or storage class): a versions row is not a current object,
+`swath/azblob-objects/v1` and `swath/local-entries/v1` (no ETag or storage class): a versions row is not a current object,
 and `DecodeObject` refuses its schema id.
 
 ## Errors
@@ -223,10 +227,11 @@ the schema id defines (its part lacks it, or the read did not project it) or hol
 `KindRow` for a null in a required column. `time_created` is the one column a part may lack (it was added to
 `swath/gcs-objects/v1` later); it reads as nil there. Columns a schema id does not define are ignored.
 
-`ParseMetadata` reads every member of `extensions.swath` as a pointer (a slice: nil) that is nil when absent, so
-a missing `coverage.complete` is never read as false; a member of the wrong JSON type is a `KindCoverage`
-error. A manifest without the extension parses with `Swath` false. Unknown members (an older build's
-`part_md5`) are ignored. `AcceptWholeSource`'s errors are `KindCoverage` with `Column` naming the member of
+`ParseMetadata` first requires `extensions.swath.version` to be 1 (`KindSchema` otherwise): the version covers
+the extension's own contract, while a change to a schema's rows takes a new schema id. It reads every other
+member of `extensions.swath` as a pointer (a slice: nil) that is nil when absent, so a missing
+`coverage.complete` is never read as false; a member of the wrong JSON type is a `KindCoverage` error. A
+manifest without the extension parses with `Swath` false. Unknown members are ignored. `AcceptWholeSource`'s errors are `KindCoverage` with `Column` naming the member of
 `extensions.swath` at fault; `CheckSchema`'s are `KindSchema` naming the column, with the part in the message.
 
 ## What it is not
@@ -239,7 +244,7 @@ client, and no grouping of versions and no streaming or totals of them yet.
 ## Tests
 
 `go test -race ./...` in this directory: the decoders on hand-built rows (nulls, binary keys, unsigned bounds,
-absent, unprojected and mistyped columns), `ParseMetadata` on present, absent and malformed members, and
+absent, unprojected and mistyped columns), `ParseMetadata` on present, absent and malformed members and on unsupported versions, and
 `TestNoCloudSDK`, which runs `go list -deps -test ./...` and `go list -m all` and fails on any `aws`,
 `cloud.google.com` or `azure` path. The lister's `internal/listing` `TestReader*` tests decode datasets its own
 writer wrote for all five schemas: every column, nulls, keys that are not UTF-8, unsigned bounds, a part

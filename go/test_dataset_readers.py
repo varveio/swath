@@ -29,7 +29,7 @@ class WholeRows(unittest.TestCase):
         for sid in (None, "swath/unknown/v1"):
             with self.assertRaises(ValueError):
                 schema_id({"schema_id": sid})
-        self.assertEqual(schema_id({"schema_id": "swath-local/v1"}), "swath-local/v1")
+        self.assertEqual(schema_id({"schema_id": "swath/local-entries/v1"}), "swath/local-entries/v1")
 
     def test_sequences_multiplicity_metadata_and_nulls(self):
         self.assertEqual({f["schema_id"] for f in fixtures()}, VERSION_IDS)

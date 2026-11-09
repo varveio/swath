@@ -19,6 +19,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/reader"
 )
 
 func part(i int, lo, hi string, n int64) Part {
@@ -61,7 +62,7 @@ func exists(t *testing.T, paths ...string) {
 	}
 }
 
-const id = "swath-local/v0"
+const id = "swath/local-entries/v0"
 
 func TestPrepareNeverDeletesTheTree(t *testing.T) {
 	T := t.TempDir()
@@ -268,8 +269,9 @@ func TestManaged(t *testing.T) {
 
 // TestManifestShape: a published manifest has only SeekParquet's
 // top-level members, part members and key declaration, with swath's own
-// under extensions.swath (the parts' MD5 digests included), and reads back
-// as it was written; a format 2 manifest of an earlier build is refused.
+// under extensions.swath (version 1 its first member), and reads back as it
+// was written; a format 2 manifest of an earlier build, and an
+// extensions.swath of another version or none, are refused.
 func TestManifestShape(t *testing.T) {
 	for _, groups := range []bool{false, true} {
 		out := t.TempDir()
@@ -311,14 +313,17 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"coverage", "published_at", "scope", "source", "version"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
+		}
+		if !bytes.HasPrefix(raw["extensions"], []byte(`{"swath":{"version":1,`)) {
+			t.Fatalf("extensions.swath.version is not its first member, 1: %s", raw["extensions"])
 		}
 		var m Manifest
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
-		if !m.Current() || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
+		if !m.Current() || m.MetadataVersion != reader.MetadataVersion || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "completed" || m.Source.Container != "b" ||
 			len(m.Parts) != 1 || m.Parts[0].SHA256 != part.SHA256 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
 		}
@@ -330,14 +335,21 @@ func TestManifestShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(legacy), &m); err == nil {
 		t.Fatalf("format 2 read as %+v", m)
 	}
-	// An earlier build's SeekParquet manifest: MD5 digests under the
-	// extension, none in the parts.
-	earlier := `{"format":"seekparquet","format_version":0,"draft_revision":1,"schema_id":"x/v1","key":{"column":"key","unique":true},
-		"extensions":{"swath":{"published_at":"2026-11-08T18:00:00Z","source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},
-		"coverage":{"complete":true,"stop_reason":"completed"},"part_md5":["0123456789abcdef0123456789abcdef"]}},
-		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ=="}]}`
-	if err := json.Unmarshal([]byte(earlier), &m); err != nil || !m.Current() || !m.Coverage.Complete || m.Parts[0].SHA256 != "" || m.Parts[0].MaxKey != "a" {
-		t.Fatalf("an earlier build's manifest read as %+v: %v", m, err)
+	// extensions.swath without version 1 (an earlier build's, without the
+	// member; a later contract's) is refused; one without the extension
+	// reads.
+	manifest := func(ext string) string {
+		return `{"format":"seekparquet","format_version":0,"draft_revision":1,"schema_id":"x/v1","key":{"column":"key","unique":true},` + ext +
+			`"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ=="}]}`
+	}
+	for _, sw := range []string{`{"published_at":"2026-11-08T18:00:00Z","coverage":{"complete":true}}`, `{"version":2}`} {
+		if err := json.Unmarshal([]byte(manifest(`"extensions":{"swath":`+sw+`},`)), &m); err == nil || !strings.Contains(err.Error(), "unsupported swath metadata version") {
+			t.Fatalf("extensions.swath %s: %v, want unsupported swath metadata version", sw, err)
+		}
+	}
+	m = Manifest{}
+	if err := json.Unmarshal([]byte(manifest("")), &m); err != nil || !m.Current() || m.MetadataVersion != 0 || m.Parts[0].MaxKey != "a" {
+		t.Fatalf("a manifest without extensions.swath read as %+v: %v", m, err)
 	}
 }
 

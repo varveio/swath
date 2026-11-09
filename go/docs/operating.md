@@ -371,7 +371,7 @@ dataset: a reader starts only once `manifest.json` exists, and a reader that nee
 empty and `scope.kind` `whole` (fields: [upgrade.md](upgrade.md)).
 
 ```bash
-swath show DIR            # format, schema, source, scope, coverage, parts, rows, key range
+swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
 swath show --journal DIR  # an interrupted run: the journal as JSON lines
 duckdb -c "SELECT count(*), sum(size) FROM read_parquet('DIR/data/*.parquet')"
 duckdb -c "SELECT storage_class, count(*), sum(size) FROM read_parquet('DIR/data/*.parquet') GROUP BY 1"

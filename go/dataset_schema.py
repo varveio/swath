@@ -8,7 +8,7 @@ S3_VERSIONS = "swath/s3-versions/v1"
 GCS_CURRENT = "swath/gcs-objects/v1"
 GCS_VERSIONS = "swath/gcs-generations/v1"
 AZBLOB_CURRENT = "swath/azblob-objects/v1"
-LOCAL = "swath-local/v1"
+LOCAL = "swath/local-entries/v1"
 S3_COLUMNS = ["key", "size", "last_modified", "etag", "storage_class", "owner_id",
               "owner_display_name", "checksum_algorithm", "checksum_type"]
 GCS_COLUMNS = ["key", "size", "last_modified", "etag", "generation", "metageneration",

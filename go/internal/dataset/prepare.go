@@ -21,7 +21,7 @@ import (
 var (
 	ErrOutIsRoot  = errors.New("output is the listed root or one of its ancestors")
 	ErrNotEmpty   = errors.New("output directory is not empty")
-	ErrNotDataset = errors.New("output directory does not hold a previous swath-local dataset")
+	ErrNotDataset = errors.New("output directory does not hold a previous swath dataset")
 	ErrInsideRoot = errors.New("cannot replace an output inside the listed root")
 	ErrRootNotDir = errors.New("root is not a directory")
 )

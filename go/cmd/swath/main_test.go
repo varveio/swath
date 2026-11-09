@@ -57,6 +57,29 @@ func TestRun(t *testing.T) {
 	}
 }
 
+// TestShowDataset: swath show names a committed dataset's layers, the
+// SeekParquet format and draft, the swath schema id and the swath metadata
+// version, before its coverage.
+func TestShowDataset(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{"-o", out, src}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	var shown bytes.Buffer
+	if err := show([]string{out}, &shown); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(shown.String(), "\n")
+	want := "dataset " + out + ": SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1"
+	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") {
+		t.Fatalf("show:\n%s\nwant first line %q", shown.String(), want)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	var b bytes.Buffer
 	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath-go ") {

@@ -12,6 +12,12 @@ Notable changes per release. The full human summary for the current release is i
   from `main` wrote between 2026-11-05 and 2026-11-08, are no longer read: `swath show`, `--seed-from` and
   `swath-replay` refuse them, and `--overwrite` does not take their directory for this tool's output. Re-list
   them as SeekParquet datasets. Java-era fixtures are still served by `swath-replay`.
+- Go port: the local filesystem schema id is `swath/local-entries/v1` (was `swath-local/v1`); schema ids follow
+  `swath/<row-contract>/vN`. The manifest's `extensions.swath` carries `"version": 1` as its first member, and
+  `swath show`, `--seed-from` and `go/reader` refuse a manifest whose `extensions.swath` lacks it or holds
+  another value ("unsupported swath metadata version"); generic SeekParquet reads ignore the extension. Re-list
+  datasets written by earlier development builds. `swath show` names each layer: the SeekParquet format and
+  draft, the swath schema id and the swath metadata version.
 
 ## 0.3.2 — 2026-09-03
 

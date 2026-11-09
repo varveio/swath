@@ -295,10 +295,10 @@ The rule: a recording served on its own provider's API answers exactly as stored
 is either mapped to the equivalent value, where a real equivalent exists, or a fixed placeholder. The S3-shaped
 schemas are S3's own (`swath/canonical` is the format-1 schema, `swath/s3-objects/v1` the Go lister's S3
 datasets, `swath-replay/objects/v1` what `sort-fixture` writes from a capture; all three hold the same nine
-columns); `swath/gcs-objects/v1` is GCS's own; `swath-local/v1` (a local tree's size and modification time) has
+columns); `swath/gcs-objects/v1` is GCS's own; `swath/local-entries/v1` (a local tree's size and modification time) has
 no provider API, so every route maps or fills it.
 
-| Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath-local/v1` |
+| Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath/local-entries/v1` |
 |---|---|---|---|
 | S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
 | S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `time_created` (GCS `timeCreated`, which the XML API lists), milliseconds; from `last_modified` (GCS `updated`) where `time_created` is null or the part lacks the column | mapped from the modification time, milliseconds |

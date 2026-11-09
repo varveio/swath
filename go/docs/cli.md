@@ -51,8 +51,8 @@ identity stays frozen: a resume whose overrides resolve another route (a profile
 refused by the identity check. `swath resume` on a committed dataset with complete coverage has nothing to do
 and exits 0 (`DIR is already complete: nothing to resume`; the report's outcome is `completed`, `complete`
 true), so a supervisor may resume until exit 0; one committed with partial coverage stays `incomplete`, exit 1.
-`swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
-rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
+`swath show DIR` prints a committed dataset's manifest summary (its layers: the SeekParquet format and draft,
+the swath schema id and the swath metadata version; then key, source, scope, coverage, parts, rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
 `list` flag and `swath diag count` every count flag, plus the diagnostic ones (the **Diagnostics** group below);
 they exist to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath du` refuse

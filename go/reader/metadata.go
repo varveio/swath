@@ -5,6 +5,7 @@ package reader
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -12,6 +13,11 @@ import (
 
 // Extension is the manifest's extensions namespace swath writes.
 const Extension = "swath"
+
+// MetadataVersion is the version of extensions.swath's own contract that
+// swath writes (its "version" member) and ParseMetadata reads. A change to
+// a schema's rows takes a new schema id instead.
+const MetadataVersion = 1
 
 // Metadata is a dataset's manifest: the module's view of it, and what
 // swath records under extensions.swath. Every member of the extension is
@@ -62,14 +68,29 @@ type Coverage struct {
 	ListingFinishedAt *time.Time `json:"listing_finished_at"`
 }
 
-// ParseMetadata reads m's extensions.swath. A member of another type than
-// swath writes (a malformed extension) is a SemanticError of KindCoverage;
-// members swath does not define are ignored.
+// ParseMetadata reads m's extensions.swath. Its version must be the
+// integer MetadataVersion, else (absent included) a SemanticError of
+// KindSchema: "unsupported swath metadata version". A member of another
+// type than swath writes (a malformed extension) is a SemanticError of
+// KindCoverage; members swath does not define are ignored.
 func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 	out := Metadata{Manifest: m, SchemaID: SchemaID(m.SchemaID)}
 	raw, ok := m.Extension(Extension)
 	if !ok {
 		return out, nil
+	}
+	var v struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return Metadata{}, &SemanticError{Kind: KindCoverage, Err: err}
+	}
+	if string(v.Version) != strconv.Itoa(MetadataVersion) {
+		got := string(v.Version)
+		if got == "" {
+			got = "absent"
+		}
+		return Metadata{}, semantic(KindSchema, "", nil, "unsupported swath metadata version: extensions.swath.version %s, this reader reads %d", got, MetadataVersion)
 	}
 	var x struct {
 		PublishedAt *time.Time  `json:"published_at"`

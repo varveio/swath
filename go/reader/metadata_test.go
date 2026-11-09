@@ -6,6 +6,7 @@ package reader
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func manifestWith(ext string) seekparquet.Metadata {
 }
 
 func TestParseMetadata(t *testing.T) {
-	full := manifestWith(`{"swath": {"published_at": "2026-11-08T18:00:00.123456Z",
+	full := manifestWith(`{"swath": {"version": 1, "published_at": "2026-11-08T18:00:00.123456Z",
 		"source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
 		"scope": {"kind": "prefix", "prefix": "logs/"},
 		"coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0, "exclusions": [], "filters": [], "snapshot": false,
@@ -40,7 +41,7 @@ func TestParseMetadata(t *testing.T) {
 	}
 
 	// Absent members are nil, present zero values are not.
-	m, err = ParseMetadata(manifestWith(`{"swath": {"source": {"kind": "local-fs", "uri": "/data"}, "scope": {"kind": "whole"},
+	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "source": {"kind": "local-fs", "uri": "/data"}, "scope": {"kind": "whole"},
 		"coverage": {"complete": false, "skipped_entries": 0}}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -59,10 +60,10 @@ func TestParseMetadata(t *testing.T) {
 	}
 
 	for _, ext := range []string{
-		`{"swath": {"coverage": {"complete": "yes"}}}`,
-		`{"swath": {"coverage": {"skipped_entries": 1.5}}}`,
-		`{"swath": {"coverage": {"filters": "none"}}}`,
-		`{"swath": {"published_at": "yesterday"}}`,
+		`{"swath": {"version": 1, "coverage": {"complete": "yes"}}}`,
+		`{"swath": {"version": 1, "coverage": {"skipped_entries": 1.5}}}`,
+		`{"swath": {"version": 1, "coverage": {"filters": "none"}}}`,
+		`{"swath": {"version": 1, "published_at": "yesterday"}}`,
 		`{"swath": []}`,
 	} {
 		_, err := ParseMetadata(manifestWith(ext))
@@ -70,5 +71,27 @@ func TestParseMetadata(t *testing.T) {
 		if !errors.Is(err, ErrCoverage) || errors.Is(err, ErrSchema) || !errors.As(err, &se) || se.Err == nil {
 			t.Errorf("%s: %v, want a coverage error with its cause", ext, err)
 		}
+	}
+}
+
+// TestParseMetadataVersion: extensions.swath must hold version 1, the
+// integer; absent, another version, or not an integer is KindSchema
+// ("unsupported swath metadata version"), before any other member is read.
+func TestParseMetadataVersion(t *testing.T) {
+	for _, ext := range []string{
+		`{"swath": {"source": {"kind": "s3"}}}`,
+		`{"swath": {"version": 2, "coverage": {"complete": "a later contract"}}}`,
+		`{"swath": {"version": 0}}`,
+		`{"swath": {"version": null}}`,
+		`{"swath": {"version": "1"}}`,
+		`{"swath": {"version": 1.0}}`,
+	} {
+		_, err := ParseMetadata(manifestWith(ext))
+		if !errors.Is(err, ErrSchema) || errors.Is(err, ErrCoverage) || !strings.Contains(err.Error(), "unsupported swath metadata version") {
+			t.Errorf("%s: %v, want an unsupported swath metadata version (schema) error", ext, err)
+		}
+	}
+	if m, err := ParseMetadata(manifestWith(`{"swath": {"version": 1}}`)); err != nil || !m.Swath {
+		t.Fatalf("version 1: %+v, %v", m, err)
 	}
 }
