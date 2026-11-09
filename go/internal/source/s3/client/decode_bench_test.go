@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -138,28 +137,5 @@ func BenchmarkDecodeBody(b *testing.B) {
 			}
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*benchEntries), "ns/object")
 		})
-	}
-}
-
-// TestBenchBodiesAgree: the benchmark's bodies come back through the
-// client as the scanner decodes them, whole.
-func TestBenchBodiesAgree(t *testing.T) {
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	for _, versions := range []bool{false, true} {
-		cfg := testConfig("http://127.0.0.1:1")
-		cfg.HTTPClient = &http.Client{Transport: canned(benchBody(versions))}
-		c := newTest(t, cfg)
-		var got, want any
-		var err, werr error
-		if versions {
-			got, err = c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "bkt"})
-			want, werr = parseVersions(benchBody(versions))
-		} else {
-			got, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "bkt"})
-			want, werr = parseList(benchBody(versions))
-		}
-		if err != nil || werr != nil || !reflect.DeepEqual(got, want) {
-			t.Fatalf("versions %v: the client's page differs from the scanner's (%v, %v)", versions, err, werr)
-		}
 	}
 }

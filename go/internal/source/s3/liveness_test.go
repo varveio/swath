@@ -55,30 +55,11 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	}
 }
 
-// TestClassify covers every class.
+// TestClassify: a connection reset known only by its text is transient.
+// The status and code classes are TestAnswers' and the shared contract's.
 func TestClassify(t *testing.T) {
-	se := func(status int, code string) error { return &client.Error{Status: status, Code: code} }
-	for _, c := range []struct {
-		want      objhttp.Class
-		err       error
-		transient bool
-	}{
-		{objhttp.ClassAuth, se(403, "InvalidAccessKeyId"), false},
-		{objhttp.ClassAccessDenied, se(403, "AccessDenied"), false},
-		{objhttp.ClassOther, se(404, "NoSuchBucket"), false},
-		{objhttp.ClassOther, se(301, "PermanentRedirect"), false},
-		{objhttp.ClassThrottle, se(503, "SlowDown"), true},
-		{objhttp.ClassTimeout, se(400, "RequestTimeout"), true},
-		{objhttp.ClassOther, se(500, "InternalError"), true},
-		{objhttp.ClassOther, errors.Join(errors.New("read: connection reset by peer")), true},
-		{objhttp.ClassParse, client.ErrSyntax, true},
-		{objhttp.ClassOther, client.ErrInvalidPage, false},
-		{objhttp.ClassOther, context.Canceled, false},
-		{objhttp.ClassOther, errors.New("something else"), false},
-	} {
-		f := objhttp.Normalize(c.err)
-		if got := client.Classify(f); got != c.want || f.Transient != c.transient {
-			t.Errorf("%v: failure %+v, want label %s transient %v", c.err, f, c.want, c.transient)
-		}
+	err := errors.Join(errors.New("read: connection reset by peer"))
+	if f := objhttp.Normalize(err); client.Classify(f) != objhttp.ClassOther || !f.Transient {
+		t.Errorf("%v: failure %+v, want other, transient", err, f)
 	}
 }
