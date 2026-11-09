@@ -249,7 +249,7 @@ func TestSidePathResolvedAsWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := filepath.Join(B, "link") + string(filepath.Separator) + ".." + string(filepath.Separator) + "other" + string(filepath.Separator) + "report.json"
-	if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(A, "other", "report.json")); err != nil {
@@ -448,7 +448,7 @@ func TestSidePathsBesideUnrelatedDirectories(t *testing.T) {
 	var buf bytes.Buffer
 	for _, dir := range []string{spark, other} {
 		report := filepath.Join(dir, "report.json")
-		if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf, false); err != nil {
+		if err := runCount(context.Background(), []string{src, "--no-progress", "--no-stats", "--report", report}, &buf); err != nil {
 			t.Fatalf("--report %s: %v", report, err)
 		}
 		if _, err := os.Stat(report); err != nil {
@@ -545,7 +545,7 @@ func TestDanglingLinkSidePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SWATH_MEMPROFILE", plain)
-	if c := exitOf(runCount(context.Background(), []string{src}, &buf, false)); c != exitUsage {
+	if c := exitOf(runCount(context.Background(), []string{src}, &buf)); c != exitUsage {
 		t.Errorf("a profile through a link: exit %d, want %d", c, exitUsage)
 	}
 	if f, err := createNoFollow(plain); err == nil {
@@ -650,7 +650,7 @@ func TestFoldsCaseProbeInside(t *testing.T) {
 // swath list.
 func listOrCount(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "count" {
-		return runCount(context.Background(), args[1:], stdout, false)
+		return runCount(context.Background(), args[1:], stdout)
 	}
 	return run(context.Background(), args, stdout, false)
 }

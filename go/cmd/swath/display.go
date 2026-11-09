@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source/localfs"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record
@@ -532,7 +533,11 @@ func statsLines(r *listing.Report, brokenPipe bool) []string {
 	} else if r.Timings.ListingMs > 0 {
 		kps = float64(r.Output.RowsEmitted) * 1000 / float64(r.Timings.ListingMs)
 	}
-	head := count(r.Output.RowsEmitted) + " objects in " + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
+	noun := " objects in "
+	if r.Invocation.SchemaID == localfs.Schema.ID {
+		noun = " entries in " // a local tree's rows are its files and directories
+	}
+	head := count(r.Output.RowsEmitted) + noun + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
 	if session-run > time.Second {
 		head += sep + elapsed(session) + " total"
 	}

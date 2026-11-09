@@ -20,7 +20,7 @@ import (
 // the reuse.* counters, timings.listing_done_at and resources.drain (the
 // drain tail: read-ahead, segments, encoder admission after listing), and
 // for versions schemas the attempt-scoped version classification and
-// distinct keys, and swath count's per-prefix totals (output.totals).
+// distinct keys, and swath du's per-prefix totals (output.totals).
 const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -266,7 +266,7 @@ type Output struct {
 	LiveObjects   *int64 `json:"live_objects,omitempty"`
 	RowsFetched   int64  `json:"rows_fetched"`   // listed from the source by this invocation, before the filters
 	RowsFiltered  int64  `json:"rows_filtered"`  // fetched by this invocation and dropped by the filters (--include, ...)
-	RowsEmitted   int64  `json:"rows_emitted"`   // fetched, kept by the filters and handed on in order (swath count: counted)
+	RowsEmitted   int64  `json:"rows_emitted"`   // fetched, kept by the filters and handed on in order (swath du, swath diag count: counted)
 	RowsRetained  int64  `json:"rows_retained"`  // kept from the interrupted run (resume)
 	RowsCommitted int64  `json:"rows_committed"` // in the committed dataset (0 unless committed)
 	// RowsDurable is the rows in parts that stay in the output: the
@@ -284,9 +284,8 @@ type Output struct {
 	OutputBytes int64  `json:"output_bytes"`
 	// Text is a text run's output (nil for a dataset or a dry run).
 	Text *TextOutput `json:"text,omitempty"`
-	// Totals is swath count's per-prefix totals (--depth): the depth, the
-	// prefixes and their cap, the column summed and the total (nil
-	// without them).
+	// Totals is swath du's per-prefix totals: the depth, the prefixes and
+	// their cap, the column summed and the total (nil without them).
 	Totals *totals.Stats `json:"totals,omitempty"`
 }
 

@@ -22,7 +22,7 @@ sort: no sorted runs staged on disk and no merge pass. What does sit on disk bef
 pipeline state: closed Parquet parts in `.swath/parts/` (claimed while their journal record is written,
 then renamed into `data/`) and, with spill, rows ahead of the frontier, read back in key order.
 
-A count (`swath count`) has no sink that needs order, so `order.Count` takes the place of the order stage
+A count (`swath du`, `swath diag count`) has no sink that needs order, so `order.Count` takes the place of the order stage
 and everything after it: workers expand the same ranges and the rows are counted and dropped as they arrive,
 with no reorder buffer, no spill and no file ([internals/ordering.md](internals/ordering.md#counting-without-order)).
 
@@ -56,9 +56,9 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`, `Container`: a row that is no object, a local directory), `Info`; `Bind` takes a schema id's key settings and its columns' names, types and nullability from the reader module's spec | reader (the nested module) |
-| `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)); `swath count --depth`'s prefix rows in the same formats and escaping | schema, dataset, totals |
+| `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)); `swath du`'s prefix rows (TSV, JSONL with `PrefixBase64` for a name that is not UTF-8, or the readable table) | schema, dataset, totals |
 | `internal/filter` | Java's seven row filters and the `--include` prefix narrowing | schema |
-| `internal/totals` | `swath count --depth`: per-prefix sums (objects, bytes, newest time) from concurrent batches, capped at `--max-prefixes` | – |
+| `internal/totals` | `swath du`: per-prefix sums (objects, directories, bytes, unsized objects, newest time) below the source's prefix, from concurrent batches, capped at `--max-prefixes` (and `--max-inodes` for `--count-links-once`) | – |
 | `internal/parquetout` | schema binding, codec, part router (`Router[P]`), encoders over the seekparquet module's part writer | schema, dataset, buildinfo, seekparquet |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order, the part cut rule a sink states for the segment tail (`SegmentPlan`) | faults |
 | `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |

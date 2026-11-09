@@ -66,8 +66,9 @@ var helpGroups = []helpGroup{
 		{name: "azblob-request-timeout", when: "raise it for a slow Azure endpoint or Azurite"},
 	}},
 	{totalsGroup, []helpFlag{
-		{name: "depth"}, {name: "allocated"}, {name: "count-links-once"},
+		{name: "depth", stacked: []string{"d"}}, {name: "allocated"}, {name: "count-links-once"},
 		{name: "max-prefixes", when: "raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted"},
+		{name: "max-inodes", when: "raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)"},
 	}},
 	{"Output and reporting", []helpFlag{
 		{name: "report"}, {name: "report-format"},
@@ -87,19 +88,19 @@ var helpGroups = []helpGroup{
 // diagnosticGroup is the heading of the flags only swath diag takes.
 const diagnosticGroup = "Diagnostics"
 
-// totalsGroup is the heading of swath count's per-prefix totals, which
-// only the count commands take (onlyCounted).
+// totalsGroup is the heading of swath du's per-prefix totals (onlyDu).
 const totalsGroup = "Per-prefix totals"
 
-// onlyCounted are the flags only swath count takes: the per-prefix totals
-// shape what a count prints, and a listing writes rows, not totals.
-var onlyCounted = []string{"depth", "max-prefixes", "allocated", "count-links-once"}
+// onlyDu are the flags only swath du takes: they shape its totals, and a
+// listing or a plain count prints none.
+var onlyDu = []string{"depth", "d", "max-prefixes", "max-inodes", "allocated", "count-links-once"}
 
 // localTotalsFlags are the totals' flags only a local source takes.
-var localTotalsFlags = []string{"allocated", "count-links-once"}
+var localTotalsFlags = []string{"allocated", "count-links-once", "max-inodes"}
 
-// notCounted are the flags swath count refuses: it lists and counts,
-// writing nothing, so it has no output, no parts and no reorder storage.
+// notCounted are the flags the counts (swath du, swath diag count) refuse:
+// they write no rows, so they have no output file, no parts and no reorder
+// storage; swath du takes --format alone, for its totals.
 var notCounted = []string{"o", "format", "overwrite", "part-size", "row-budget", "spill-budget", "encoders",
 	"spill-plain", "spill-compress", "spill-reserve", "no-spill", "part-interval", "part-rotation-max-rows", "no-journal"}
 
@@ -122,60 +123,54 @@ var diagOnly = sync.OnceValue(func() map[string]bool {
 })
 
 // placement refuses a flag the command does not take: an output flag on
-// swath count or swath diag count (checked first, so the message never
+// swath du or swath diag count (checked first, so the message never
 // names a command that refuses the flag too), a diagnostic flag on swath
-// list or swath count.
+// list or swath du.
 func placement(f *flag.FlagSet, cmd command) (err error) {
 	f.Visit(func(fl *flag.Flag) {
 		switch {
 		case err != nil:
-		case cmd.count && fl.Name == "format" && totalsAsked(f):
-			// --depth's prefix rows are text on stdout: --format says how.
-		case cmd.count && fl.Name == "max-prefixes" && !totalsAsked(f):
-			err = errors.New("--max-prefixes caps the totals' prefixes: give --depth too")
-		case !cmd.count && slices.Contains(onlyCounted, fl.Name):
-			err = fmt.Errorf("%s has no meaning for swath %s, which writes rows: swath count takes it", dashed(fl.Name), cmd.name())
-		case cmd.count && slices.Contains(notCounted, fl.Name):
+		case !cmd.du && slices.Contains(onlyDu, fl.Name):
+			err = fmt.Errorf("%s has no meaning for swath %s: it shapes swath du's totals", dashed(fl.Name), cmd.name())
+		case cmd.count && slices.Contains(notCounted, fl.Name) && !(cmd.du && fl.Name == "format"):
 			to := "swath list"
 			if diagOnly()[fl.Name] {
 				to = "swath diag list"
 			}
-			if fl.Name == "format" {
-				to += " takes it, and swath count with --depth" // the sentence ends "takes it" either way
-				err = fmt.Errorf("%s has no meaning for swath %s, which writes nothing: %s", dashed(fl.Name), cmd.name(), to)
-				break
+			what := "which writes nothing"
+			if cmd.du {
+				what = "which writes totals, not rows"
 			}
-			err = fmt.Errorf("%s has no meaning for swath %s, which writes nothing: %s takes it", dashed(fl.Name), cmd.name(), to)
+			err = fmt.Errorf("%s has no meaning for swath %s, %s: %s takes it", dashed(fl.Name), cmd.name(), what, to)
 		case !cmd.diag && diagOnly()[fl.Name]:
-			err = fmt.Errorf("%s is a diagnostic flag: give it to swath diag %s", dashed(fl.Name), strings.TrimPrefix(cmd.name(), "diag "))
+			to := "swath diag " + cmd.name()
+			if cmd.du {
+				to = "swath diag count or swath diag list" // swath du has no diagnostic form
+			}
+			err = fmt.Errorf("%s is a diagnostic flag: give it to %s", dashed(fl.Name), to)
 		}
 	})
 	return err
-}
-
-// totalsAsked reports whether the command line asks for the per-prefix
-// totals: --depth, or a du flag that implies them (--allocated,
-// --count-links-once).
-func totalsAsked(f *flag.FlagSet) (asked bool) {
-	f.Visit(func(fl *flag.Flag) {
-		asked = asked || fl.Name == "depth" || slices.Contains(localTotalsFlags, fl.Name) && fl.Value.String() == "true"
-	})
-	return asked
 }
 
 // usage prints a list command's help: its synopsis and its flags by group,
 // generated from the flag set itself (docs/cli.md holds the same text).
 func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 	switch {
+	case cmd.count && cmd.diag:
+		fmt.Fprintln(w, "usage: swath diag count SOURCE [flags]")
+		fmt.Fprintln(w, "  lists SOURCE and counts its rows and object bytes, writing nothing, to measure the listing:")
+		fmt.Fprintln(w, "  rows are counted as they arrive, never ordered, buffered or spilled; prints one line of counts and")
+		fmt.Fprintln(w, "  resources, or the run report; the diagnostic flags below run an experiment or a comparison")
 	case cmd.diag:
 		fmt.Fprintf(w, "usage: swath %s SOURCE [flags]\n", cmd.name())
 		fmt.Fprintf(w, "  every swath %s flag (swath %s --help), and the diagnostic flags below:\n", strings.TrimPrefix(cmd.name(), "diag "), strings.TrimPrefix(cmd.name(), "diag "))
 		fmt.Fprintln(w, "  they exist to run an experiment or a comparison, not to operate the tool")
-	case cmd.count:
-		fmt.Fprintln(w, "usage: swath count SOURCE [flags]")
-		fmt.Fprintln(w, "  lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they")
-		fmt.Fprintln(w, "  arrive, never ordered, buffered or spilled; prints one line, or the run report; with --depth,")
-		fmt.Fprintln(w, "  each key prefix's objects, bytes and newest time instead, as du")
+	case cmd.du:
+		fmt.Fprintln(w, "usage: swath du SOURCE [-d N] [flags]")
+		fmt.Fprintln(w, "  totals SOURCE's objects, bytes and newest time, and with -d N each key prefix's down to N levels")
+		fmt.Fprintln(w, "  below SOURCE, a parent including its children, as du: on stdout as a table on a terminal, TSV")
+		fmt.Fprintln(w, "  otherwise, or --format jsonl. Bytes are the objects' sizes as listed, not storage or billing")
 	default:
 		fmt.Fprintln(w, "usage: swath list SOURCE [-o DIR|FILE|-] [flags]")
 		fmt.Fprintln(w, "  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text")
@@ -183,13 +178,15 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 	}
 	fmt.Fprintln(w, "  SOURCE is "+sourceForms())
 	for _, g := range helpGroups {
-		if cmd.diag != (g.title == diagnosticGroup) {
+		// swath diag list --help adds the diagnostic group to swath list
+		// --help; swath diag count, with no plain form, prints every group.
+		if g.title == diagnosticGroup && !cmd.diag || cmd.diag && !cmd.count && g.title != diagnosticGroup {
 			continue
 		}
 		var lines []string
 		for _, h := range g.flags {
 			fl := f.Lookup(h.name)
-			if fl == nil || cmd.count && h.name != "format" && slices.Contains(notCounted, h.name) || !cmd.count && slices.Contains(onlyCounted, h.name) {
+			if fl == nil || cmd.count && slices.Contains(notCounted, h.name) && !(cmd.du && h.name == "format") || !cmd.du && slices.Contains(onlyDu, h.name) {
 				continue
 			}
 			lines = append(lines, flagHelp(fl, h))

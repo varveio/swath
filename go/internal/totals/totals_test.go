@@ -16,18 +16,24 @@ import (
 
 // brute is the oracle: every prefix of every key, summed one row at a time.
 func brute(rows []Row, depth int) []Prefix {
-	return bruteWith(rows, depth, func(Row) bool { return true })
+	return bruteWith(rows, Options{Depth: depth}, func(Row) bool { return true })
 }
 
-// bruteWith is brute where an object counts (as an object, with its bytes)
-// only if counts says so; its time counts in any case.
-func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
+// bruteWith is brute under opt's depth and origin, where an object counts
+// (as an object, with its bytes) only if counts says so; its time counts in
+// any case. A directory counts in its parents' Dirs, a key outside the
+// origin in the total alone.
+func bruteWith(rows []Row, opt Options, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
 	for _, r := range rows {
-		for k := 0; k <= depth; k++ {
-			end, ok := 0, true
+		key := r.Key
+		if !strings.HasPrefix(key, opt.Origin) {
+			key = opt.Origin
+		}
+		for k := 0; k <= opt.Depth; k++ {
+			end, ok := len(opt.Origin), true
 			for range k {
-				i := strings.IndexByte(r.Key[end:], '/')
+				i := strings.IndexByte(key[end:], '/')
 				if i < 0 {
 					ok = false
 					break
@@ -37,10 +43,16 @@ func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
 			if !ok {
 				break
 			}
-			p := m[r.Key[:end]]
+			p := m[key[:end]]
 			if p == nil {
-				p = &Prefix{Prefix: r.Key[:end]}
-				m[r.Key[:end]] = p
+				p = &Prefix{Prefix: key[:end]}
+				m[key[:end]] = p
+			}
+			if r.Dir && key[:end] == r.Key {
+				break
+			}
+			if r.Dir {
+				p.Dirs++
 			}
 			if !r.Object {
 				continue
@@ -49,6 +61,8 @@ func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
 				p.Objects++
 				if r.HasBytes {
 					p.Bytes += r.Bytes
+				} else {
+					p.Unsized++
 				}
 			}
 			if r.HasMtime && (!p.HasNewest || r.Mtime > p.Newest) {
@@ -56,8 +70,8 @@ func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
 			}
 		}
 	}
-	if m[""] == nil {
-		m[""] = &Prefix{}
+	if m[opt.Origin] == nil {
+		m[opt.Origin] = &Prefix{Prefix: opt.Origin}
 	}
 	var out []Prefix
 	for _, p := range m {
@@ -69,7 +83,8 @@ func bruteWith(rows []Row, depth int, counts func(Row) bool) []Prefix {
 
 // randomRows is a tree of keys up to 5 levels deep over a small alphabet
 // that includes bytes above 0x7f, invalid UTF-8 and '/' runs ("a//b": an
-// empty component), sorted as a range's rows are, some not objects.
+// empty component), sorted as a range's rows are, some not objects: a
+// directory or a delete marker.
 func randomRows(rng *rand.Rand, n int) []Row {
 	names := []string{"a", "b", "\xff", "\xc3\xa9", "a-b", "a.b", "0", "", "zz\x80"}
 	seen := map[string]bool{}
@@ -88,6 +103,9 @@ func randomRows(rng *rand.Rand, n int) []Row {
 		}
 		seen[k] = true
 		r := Row{Key: k, Object: rng.IntN(6) != 0, Bytes: rng.Int64N(1 << 40), HasBytes: rng.IntN(10) != 0}
+		if !r.Object {
+			r.Dir, r.Bytes, r.HasBytes = rng.IntN(2) == 0, 0, false
+		}
 		if rng.IntN(8) != 0 {
 			r.Mtime, r.HasMtime = rng.Int64N(1<<50)-1<<49, true // negative times too
 		}
@@ -99,14 +117,16 @@ func randomRows(rng *rand.Rand, n int) []Row {
 
 // TestTallyMatchesBruteForce: rows split into random batches, flushed by
 // concurrent goroutines in any order (sorted within a batch, as a range's,
-// or shuffled), give the brute-force totals at every depth, in byte order.
+// or shuffled), give the brute-force totals at every depth and origin, in
+// byte order.
 func TestTallyMatchesBruteForce(t *testing.T) {
 	for seed := range uint64(20) {
 		rng := rand.New(rand.NewPCG(seed, 7))
 		rows := randomRows(rng, 1+rng.IntN(600))
 		for _, depth := range []int{0, 1, 2, 3, 7} {
-			want := brute(rows, depth)
-			tl := New(Options{Depth: depth})
+			origin := []string{"", "a/", "a/b/", "\xff/"}[rng.IntN(4)]
+			want := bruteWith(rows, Options{Depth: depth, Origin: origin}, func(Row) bool { return true })
+			tl := New(Options{Depth: depth, Origin: origin})
 			var batches [][]Row
 			for rest := rows; len(rest) > 0; {
 				n := min(len(rest), 1+rng.IntN(40))
@@ -138,10 +158,11 @@ func TestTallyMatchesBruteForce(t *testing.T) {
 			wg.Wait()
 			got := tl.Result()
 			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("seed %d depth %d: %d prefixes, want %d\ngot  %+v\nwant %+v", seed, depth, len(got), len(want), got, want)
+				t.Fatalf("seed %d depth %d origin %q: %d prefixes, want %d\ngot  %+v\nwant %+v", seed, depth, origin, len(got), len(want), got, want)
 			}
 			st := tl.Stats()
-			if st.Prefixes != int64(len(want)) || st.Objects != want[0].Objects || st.Bytes != want[0].Bytes || st.Depth != depth {
+			if st.Prefixes != int64(len(want)) || st.Objects != want[0].Objects || st.Bytes != want[0].Bytes || st.Dirs != want[0].Dirs ||
+				st.Unsized != want[0].Unsized || st.Depth != depth {
 				t.Fatalf("seed %d depth %d: stats %+v", seed, depth, st)
 			}
 		}
@@ -155,7 +176,8 @@ func TestShortKeysAndDepth(t *testing.T) {
 	b := tl.Batch()
 	for _, r := range []Row{
 		{Key: "top", Object: true, Bytes: 1, HasBytes: true},
-		{Key: "a/", Object: false},
+		{Key: "a/", Object: false}, // a delete marker
+		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own
 		{Key: "a/x", Object: true, Bytes: 2, HasBytes: true, Mtime: 5, HasMtime: true},
 		{Key: "a/b/c/d/e", Object: true, Bytes: 4, HasBytes: true, Mtime: 9, HasMtime: true},
 		{Key: "a/b/y", Object: true}, // no bytes, no time
@@ -166,20 +188,62 @@ func TestShortKeysAndDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Prefix{
-		{Prefix: "", Objects: 4, Bytes: 7, Newest: 9, HasNewest: true},
-		{Prefix: "a/", Objects: 3, Bytes: 6, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/", Objects: 2, Bytes: 4, Newest: 9, HasNewest: true},
+		{Prefix: "", Objects: 4, Dirs: 1, Bytes: 7, Unsized: 1, Newest: 9, HasNewest: true},
+		{Prefix: "a/", Objects: 3, Dirs: 1, Bytes: 6, Unsized: 1, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/", Objects: 2, Bytes: 4, Unsized: 1, Newest: 9, HasNewest: true},
 		{Prefix: "a/b/c/", Objects: 1, Bytes: 4, Newest: 9, HasNewest: true},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
 	}
-	if st := tl.Stats(); st.NotObjects != 1 || st.Unsized != 1 || st.Prefixes != 4 {
+	if st := tl.Stats(); st.NotObjects != 2 || st.Dirs != 1 || st.Unsized != 1 || st.Prefixes != 4 {
 		t.Fatalf("stats %+v", st)
 	}
 	// An empty tally still has its total.
 	if got := New(Options{Depth: 2}).Result(); !reflect.DeepEqual(got, []Prefix{{}}) {
 		t.Fatalf("empty: %+v", got)
+	}
+	if got := New(Options{Depth: 2, Origin: "logs/"}).Result(); !reflect.DeepEqual(got, []Prefix{{Prefix: "logs/"}}) {
+		t.Fatalf("empty under an origin: %+v", got)
+	}
+}
+
+// TestOrigin: depth counts from the origin, the source's own prefix, and
+// the rows keep the keys' spelling; the total is the origin's row.
+func TestOrigin(t *testing.T) {
+	tl := New(Options{Depth: 1, Origin: "logs/2026/"})
+	b := tl.Batch()
+	for _, k := range []string{"logs/2026/", "logs/2026/01/a", "logs/2026/01/b/c", "logs/2026/02/d", "logs/2026/top"} {
+		b.Add(&Row{Key: k, Object: true, Bytes: 1, HasBytes: true})
+	}
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	want := []Prefix{
+		{Prefix: "logs/2026/", Objects: 5, Bytes: 5},
+		{Prefix: "logs/2026/01/", Objects: 2, Bytes: 2},
+		{Prefix: "logs/2026/02/", Objects: 1, Bytes: 1},
+	}
+	if got := tl.Result(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// TestHugeDepth: a depth far past the keys' costs what the keys' own depth
+// does: the per-level scratch grows with the levels reached, never with
+// the depth asked for.
+func TestHugeDepth(t *testing.T) {
+	tl := New(Options{Depth: 1 << 40})
+	b := tl.Batch()
+	b.Add(&Row{Key: "a/b/c", Object: true})
+	if len(b.cur) != 3 {
+		t.Fatalf("%d levels of scratch for a key of 3", len(b.cur))
+	}
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(tl.Result()); got != 3 {
+		t.Fatalf("%d prefixes", got)
 	}
 }
 
@@ -269,9 +333,10 @@ func TestBatchKeepsNoKeys(t *testing.T) {
 }
 
 // TestLinksOnceMatchesBruteForce: with LinksOnce, an object of several
-// hard links counts once, its object and bytes under the smallest of its
-// keys and its time under every link, whichever batch or goroutine saw
-// which link first; without LinksOnce every link counts.
+// hard links counts once, its object and bytes (or its unknown size) under
+// the smallest of its keys and its time under every link, whichever batch
+// or goroutine saw which link first, whether its links are inside the
+// origin or not; without LinksOnce every link counts.
 func TestLinksOnceMatchesBruteForce(t *testing.T) {
 	for seed := range uint64(20) {
 		rng := rand.New(rand.NewPCG(seed, 11))
@@ -281,7 +346,7 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 			if rows[i].Object && rng.IntN(3) == 0 {
 				id := int64(rng.IntN(inodes))
 				rows[i].Link, rows[i].Dev, rows[i].Inode = true, id%2, id
-				rows[i].Bytes, rows[i].HasBytes = 1000+id, true // one inode, one size
+				rows[i].Bytes, rows[i].HasBytes = 1000+id, id%4 != 0 // one inode, one size, some unknown
 			}
 		}
 		// The oracle: each inode counts under its smallest key; its other
@@ -302,7 +367,8 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 		counted := func(r Row) bool { return !r.Link || owner[[2]int64{r.Dev, r.Inode}] == r.Key }
 		for _, depth := range []int{0, 2, 5} {
 			for _, linksOnce := range []bool{false, true} {
-				tl := New(Options{Depth: depth, LinksOnce: linksOnce})
+				opt := Options{Depth: depth, LinksOnce: linksOnce, Origin: []string{"", "a/", "\xff/"}[rng.IntN(3)]}
+				tl := New(opt)
 				shuffled := slices.Clone(rows)
 				rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 				var wg sync.WaitGroup
@@ -320,13 +386,13 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 					})
 				}
 				wg.Wait()
-				want := brute(rows, depth)
+				want := bruteWith(rows, opt, func(Row) bool { return true })
 				if linksOnce {
-					want = bruteWith(rows, depth, counted)
+					want = bruteWith(rows, opt, counted)
 				}
 				got := tl.Result()
 				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("seed %d depth %d once %v:\ngot  %+v\nwant %+v", seed, depth, linksOnce, got, want)
+					t.Fatalf("seed %d depth %d once %v origin %q:\ngot  %+v\nwant %+v", seed, depth, linksOnce, opt.Origin, got, want)
 				}
 				st := tl.Stats()
 				if linksOnce && (st.LinkedRows != links || st.Inodes != int64(len(owner)) || !st.LinksOnce) || !linksOnce && (st.LinkedRows != 0 || st.Inodes != 0) {
@@ -337,16 +403,16 @@ func TestLinksOnceMatchesBruteForce(t *testing.T) {
 	}
 }
 
-// TestInodeCap: the inodes LinksOnce remembers are capped as the prefixes
-// are, with their own class.
+// TestInodeCap: the inodes LinksOnce remembers have their own cap and
+// class, apart from the prefixes'.
 func TestInodeCap(t *testing.T) {
-	tl := New(Options{Depth: 0, MaxPrefixes: 2, LinksOnce: true})
+	tl := New(Options{Depth: 0, MaxPrefixes: 1, MaxInodes: 2, LinksOnce: true})
 	b := tl.Batch()
 	for i := range int64(3) {
 		b.Add(&Row{Key: "k" + string(rune('a'+i)), Object: true, Link: true, Inode: i})
 	}
 	var le *LimitError
-	if err := b.Flush(); !errors.As(err, &le) || !le.Inodes || le.Class() != "inode_limit" {
+	if err := b.Flush(); !errors.As(err, &le) || !le.Inodes || le.Max != 2 || le.Class() != "inode_limit" {
 		t.Fatalf("%v", err)
 	}
 }

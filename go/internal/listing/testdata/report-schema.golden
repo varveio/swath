@@ -75,9 +75,11 @@ output.text.sink_wait_ns int64
 output.totals.bytes int64
 output.totals.bytes_column string
 output.totals.depth int
+output.totals.dirs int64
 output.totals.inodes int64
 output.totals.linked_rows int64
 output.totals.links_once bool
+output.totals.max_inodes int64
 output.totals.max_prefixes int64
 output.totals.not_objects int64
 output.totals.objects int64

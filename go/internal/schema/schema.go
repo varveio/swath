@@ -104,7 +104,7 @@ type Schema[P any] struct {
 	// Codec serializes payloads for spill files, private to one run.
 	Codec Codec[P]
 	// Container, if set, tells a row that names a container of other rows
-	// (a local directory), not an object: swath count's per-prefix totals
+	// (a local directory), not an object: swath du's per-prefix totals
 	// list its prefixes and count nothing for it (package totals).
 	Container func(p *P) bool
 }

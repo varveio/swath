@@ -45,10 +45,16 @@ type Config struct {
 	// part of the resume identity, recorded in the manifest's
 	// coverage.filters.
 	Filter *filter.Spec
-	// Totals, if set, sums a count's rows per key prefix (swath count
-	// --depth); the report's output.totals is its account. It needs a dry
-	// run (no dataset, no text).
+	// Totals, if set, sums a count's rows per key prefix (swath du); the
+	// report's output.totals is its account. It needs a dry run (no
+	// dataset, no text).
 	Totals *totals.Tally
+	// Deliver, if set, writes a count's result once every row is counted
+	// (swath du's per-prefix totals), before the report's end is stamped:
+	// its time is the run's, and its error, or a stop that comes before or
+	// while it writes, fails the run as a listing's would. It needs a dry
+	// run.
+	Deliver func(ctx context.Context) error
 	// Attempt, if set, identifies this invocation in its report.
 	Attempt *Attempt
 	Warn    func(string) // one-time warnings for the user (nil: dropped)
@@ -282,7 +288,7 @@ func (c *Config) resolve() error {
 		return bad("replace needs an output directory")
 	case o.Text != nil && (o.Dir != "" || o.Resume):
 		return bad("text output excludes a dataset directory and resume")
-	case c.Totals != nil && !dryRun(*c):
+	case (c.Totals != nil || c.Deliver != nil) && !dryRun(*c):
 		return bad("per-prefix totals need a count (no dataset, no text)")
 	}
 	if l.Workers == 0 {
@@ -736,6 +742,18 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		return a.fail(err)
 	}
 	if router == nil {
+		if cfg.Deliver != nil {
+			err := context.Cause(ctx)
+			if err == nil {
+				err = cfg.Deliver(ctx)
+			}
+			if err == nil {
+				err = context.Cause(ctx) // a stop while it wrote: the result may be cut short
+			}
+			if err != nil {
+				return a.fail(err)
+			}
+		}
 		a.sum.Outcome.Status = StatusListed
 		if text != nil {
 			a.sum.Outcome.Status = StatusWritten
@@ -944,7 +962,7 @@ func textScratch(path string, att *Attempt) (string, error) {
 }
 
 // dryRun reports whether cfg writes nothing (no dataset, no text): its
-// rows are only counted (swath count).
+// rows are only counted (swath du, swath diag count).
 func dryRun(cfg Config) bool { return cfg.Output.Dir == "" && cfg.Output.Text == nil }
 
 // attempt is one pipeline run's report and the state its failure and

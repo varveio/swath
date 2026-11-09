@@ -269,11 +269,11 @@ The report's changes from version 1 to version 2 are in [Changes from 0.3 to 0.4
 Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE -o DIR`;
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
-`-no-spill` → `swath diag list …`; `swath list --count-only` → `swath count` (2026-11-07); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
+`-no-spill` → `swath diag list …`; `swath list --count-only` → `swath diag count` (`swath count` from 2026-11-07 to 2026-11-09; its per-prefix totals are `swath du`); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count;
 `--encoders` stays CPU-derived. Java's `--tune seed.mode=none` is `swath diag list --seed=false` (the seed is on
-by default, as Java's `shallow` is), and `--format discard` is `swath count`, which counts without ordering or
+by default, as Java's `shallow` is), and `--format discard` is `swath diag count`, which counts without ordering or
 spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
 `--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
@@ -314,7 +314,7 @@ the list below is the earlier history of the unreleased builds.
 - Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
   chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
   bare flag is `on`.
-- `--count-only` (now `swath count`) no longer runs the order stage: the report's `features.order` is false, `spill` is absent
+- `--count-only` (now `swath diag count`) no longer runs the order stage: the report's `features.order` is false, `spill` is absent
   and `max_buffered_bytes` is 0.
 - `swath diag list --seed-descent` was removed with the seed descent. The `seed.probes`, `seed.levels.*` and
   other counters of that descent are gone.
@@ -355,9 +355,10 @@ without a version and without a compatibility promise. Against those builds, 0.4
 (a removed name is an unknown flag, exit 2; there are no aliases, and a run interrupted under such a build is
 finished with it or started over): `--output` is `-o`; `--force` is `--overwrite`; `--endpoint-url` is
 `--endpoint`; `--quiet` is `-q`; `--spill-max` is `--spill-budget`; `swath list --count-only` is the command
-`swath count` (it refuses the output flags with exit 2); `--seed=false` and `--limiter-slow-start` moved to
-`swath diag list`, and `swath list` and `swath count` refuse every diagnostic flag with a message naming
-`swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+`swath diag count` (it refuses the output flags with exit 2; the builds of `main` from 2026-11-07 to 2026-11-09
+called it `swath count`, and `swath count` is now an unknown command: `swath du` totals a source, `swath diag
+count` measures its listing); `--seed=false` and `--limiter-slow-start` moved to `swath diag list`, and `swath
+list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
 **Run report: version 3.** Version 3 only adds fields; nothing of version 2 changes, and a version 2 reader
@@ -373,9 +374,9 @@ reads version 3 by ignoring them:
   `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
   schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
   retained resume rows.
-- **Per-prefix totals** (`swath count --depth`, `--allocated`, `--count-links-once`): `output.totals` (`depth`,
-  `prefixes`, `max_prefixes`, `bytes_column`, `objects`, `bytes`, `not_objects`, `unsized`, `links_once`,
-  `linked_rows`, `inodes`), present only on such a count. The local provider's counters add `other_device_dirs`
+- **Per-prefix totals** (`swath du`): `output.totals` (`depth`, `prefixes`, `max_prefixes`, `bytes_column`,
+  `objects`, `bytes`, `dirs`, `not_objects`, `unsized`, `links_once`, `linked_rows`, `inodes`, `max_inodes`),
+  present only on a `swath du` run. The local provider's counters add `other_device_dirs`
   (`--one-filesystem`).
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader

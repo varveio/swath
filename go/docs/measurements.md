@@ -11,7 +11,7 @@ one session. Ratios held across sessions.
 
 **Commands as run.** Commands and flags are quoted as the build of the day took them. Since report version 2
 and the command-line cleanup ([upgrade.md](upgrade.md#command-line)): `swath list --count-only` is
-`swath count`; `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
+`swath diag count` (`swath count` from 2026-11-07 to 2026-11-09); `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
 are `swath diag list` (or `swath diag count`) flags, and the
 seed is on by default, so `--seed` alone is the default; `--spill-max` is `--spill-budget`; the report's
 `output.rows_listed` is `output.rows_emitted`, `output.bytes` `output.output_bytes`, `cost.api_calls`

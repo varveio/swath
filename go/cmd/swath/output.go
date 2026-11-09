@@ -47,7 +47,7 @@ func textDest(path string) (format, compression string) {
 func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 	toStdout := o.out == "" || o.out == "-"
 	switch {
-	case o.countOnly: // swath count writes nothing (placement refuses -o and --format)
+	case o.countOnly: // swath du and swath diag count write no rows (placement refuses -o; du's --format is resolveTotals')
 		return nil, nil
 	case !toStdout && o.format != "":
 		return nil, fmt.Errorf("--format is for stdout: -o %s decides by its name (.tsv or .jsonl, optionally .gz or .zst, is one text file; any other name, the dataset directory)", o.out)
@@ -70,15 +70,12 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 	return nil, fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
 }
 
-// resolveTotals decides swath count's per-prefix totals: on with --depth,
-// or at depth 0 (the total alone) with --allocated or --count-links-once,
-// written to stdout in --format (auto, the default: the table on a
-// terminal, TSV otherwise). A source whose keys are bytes cannot be
-// written as JSON. --format without them is placement's refusal; the du
-// flags on another source than a local one are foreignFlags'.
+// resolveTotals sets up swath du's per-prefix totals: a tally at --depth
+// below the prefix the source names, written to stdout in --format (auto,
+// the default: the table on a terminal, TSV otherwise). The du flags on
+// another source than a local one are foreignFlags' refusal.
 func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) error {
-	f.Visit(func(fl *flag.Flag) { o.depthGiven = o.depthGiven || fl.Name == "depth" })
-	if !o.countOnly || !totalsAsked(f) {
+	if !o.du {
 		return nil
 	}
 	if fl := f.Lookup("metadata"); (o.allocated || o.linksOnce) && fl != nil && fl.Value.String() == "names" {
@@ -89,6 +86,8 @@ func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) err
 		return fmt.Errorf("--depth %d: negative", o.depth)
 	case o.maxPrefixes < 1:
 		return fmt.Errorf("--max-prefixes %d: want at least 1", o.maxPrefixes)
+	case o.maxInodes < 1:
+		return fmt.Errorf("--max-inodes %d: want at least 1", o.maxInodes)
 	}
 	format := o.format
 	switch format {
@@ -97,18 +96,35 @@ func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) err
 		if stdoutTTY {
 			format = textout.Table
 		}
-	case textout.TSV, textout.Table:
-	case textout.JSONL:
-		if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys {
-			return fmt.Errorf("--format jsonl: a %s source's names are bytes, which JSON cannot carry: use tsv or table", schemeName(pf.Scheme))
-		}
+	case textout.TSV, textout.Table, textout.JSONL:
 	default:
-		return fmt.Errorf("--format %q: swath count --depth writes auto, table, tsv or jsonl", o.format)
+		return fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
 	}
-	opt := totals.Options{Depth: o.depth, MaxPrefixes: o.maxPrefixes, LinksOnce: o.linksOnce}
+	origin, err := keyOrigin(root)
+	if err != nil {
+		return err
+	}
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: o.linksOnce}
 	if o.allocated {
 		opt.BytesColumn = totals.AllocatedBytes
 	}
 	o.totals = &totalsOut{format: format, tally: totals.New(opt)}
 	return nil
+}
+
+// keyOrigin is the prefix swath du's depth counts from: the key prefix the
+// root names, up to its last '/' (s3://b/logs/2026/ and s3://b/logs/2026/x
+// count from logs/2026/; s3://b/logs from the bucket's top). A local tree's
+// keys are relative to the root, so it counts from "". It is taken from the
+// root as given, before an --include narrows the listed prefix.
+func keyOrigin(root string) (string, error) {
+	pf, err := registry.Lookup(root)
+	if err != nil || pf.KeyPrefix == nil {
+		return "", nil // an unknown scheme is refused when the run looks it up
+	}
+	p, err := pf.KeyPrefix(root)
+	if err != nil {
+		return "", err
+	}
+	return p[:strings.LastIndexByte(p, '/')+1], nil
 }

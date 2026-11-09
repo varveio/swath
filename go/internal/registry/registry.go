@@ -52,6 +52,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// KeyPrefix, if set, returns the key prefix root names (s3://b/logs/ →
+	// "logs/"): the keys it lists start with it. Without it the keys are
+	// relative to the root (a local tree's).
+	KeyPrefix func(root string) (string, error)
 	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
 	// so its rows cannot be written as text; the command refuses a text run
 	// of it before opening it.
@@ -129,8 +133,8 @@ type Env struct {
 	Sizes *Sizes
 	// Versions counts the attempt's emitted version rows after filtering.
 	Versions *VersionCounts
-	// Totals, if set, sums the counted rows per key prefix (swath count
-	// --depth); it needs Count.
+	// Totals, if set, sums the counted rows per key prefix (swath du); it
+	// needs Count.
 	Totals *totals.Tally
 }
 

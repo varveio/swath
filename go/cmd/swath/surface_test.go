@@ -59,15 +59,18 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 		if !diagOnly()[strings.TrimLeft(name, "-")] {
 			t.Errorf("%s is not a diagnostic flag", name)
 		}
-		for _, cmd := range []command{{}, {count: true}} {
+		for _, cmd := range []command{{}, {count: true, du: true}} {
 			var buf bytes.Buffer
 			err := runWith(context.Background(), cmd, []string{root, "-o", filepath.Join(t.TempDir(), "ds"), fl}, &buf, nil, false, nil)
 			if cmd.count {
 				err = runWith(context.Background(), cmd, []string{root, fl}, &buf, nil, false, nil)
 			}
 			want := "swath diag " + cmd.name()
-			if cmd.count && slices.Contains(notCounted, strings.TrimLeft(name, "-")) {
+			switch {
+			case cmd.count && slices.Contains(notCounted, strings.TrimLeft(name, "-")):
 				want = "swath diag list takes it" // no count command takes an output flag
+			case cmd.du:
+				want = "swath diag count or swath diag list" // swath du has no diagnostic form
 			}
 			if exitOf(err) != exitUsage || !strings.Contains(err.Error(), want) {
 				t.Errorf("swath %s %s: exit %d (%v), want %d naming swath diag", cmd.name(), fl, exitOf(err), err, exitUsage)
@@ -86,37 +89,58 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 	}
 }
 
-// TestCountRefusesOutputFlags: swath count and swath diag count write
-// nothing, so the output, part, reorder and spill flags are refused (exit
-// 2), naming a command that takes them.
+// TestCountRefusesOutputFlags: swath du and swath diag count write no
+// rows, so the output, part, reorder and spill flags are refused (exit 2),
+// naming a command that takes them; swath du takes --format alone, for its
+// totals, and the totals' flags are swath du's.
 func TestCountRefusesOutputFlags(t *testing.T) {
 	src := localSource(t)
-	for _, fl := range []string{"-o=x", "--format=tsv", "--overwrite", "--part-size=1MiB", "--row-budget=1MiB", "--spill-budget=1GiB", "--encoders=2"} {
+	for _, fl := range []string{"-o=x", "--overwrite", "--part-size=1MiB", "--row-budget=1MiB", "--spill-budget=1GiB", "--encoders=2"} {
 		var buf bytes.Buffer
-		err := runCount(context.Background(), []string{src, fl}, &buf, false)
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath count") || !strings.Contains(err.Error(), "swath list takes it") {
-			t.Errorf("swath count %s: exit %d (%v)", fl, exitOf(err), err)
+		err := runDu(context.Background(), []string{src, fl}, &buf)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath du, which writes totals") || !strings.Contains(err.Error(), "swath list takes it") {
+			t.Errorf("swath du %s: exit %d (%v)", fl, exitOf(err), err)
+		}
+		err = runCount(context.Background(), []string{src, fl}, &buf)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath diag count, which writes nothing") {
+			t.Errorf("swath diag count %s: exit %d (%v)", fl, exitOf(err), err)
+		}
+	}
+	var buf bytes.Buffer
+	if err := runCount(context.Background(), []string{src, "--format=tsv"}, &buf); exitOf(err) != exitUsage {
+		t.Errorf("swath diag count --format: exit %d (%v)", exitOf(err), err)
+	}
+	for _, fl := range []string{"--depth=1", "-d=1", "--max-prefixes=5", "--allocated", "--count-links-once", "--max-inodes=5"} {
+		for name, run := range map[string]func() error{
+			"list":       func() error { return run(context.Background(), []string{src, fl}, &buf, false) },
+			"diag count": func() error { return runCount(context.Background(), []string{src, fl}, &buf) },
+		} {
+			if err := run(); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "shapes swath du's totals") {
+				t.Errorf("swath %s %s: exit %d (%v)", name, fl, exitOf(err), err)
+			}
 		}
 	}
 	for _, fl := range []string{"--spill-compress=false", "--spill-plain", "--spill-reserve=1GiB", "--no-spill", "--no-journal", "--part-interval=1s"} {
-		for _, diag := range []bool{false, true} {
-			var buf bytes.Buffer
-			err := runCount(context.Background(), []string{src, fl}, &buf, diag)
-			if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath") || strings.Contains(err.Error(), "count takes it") {
-				t.Errorf("diag %v swath count %s: exit %d (%v)", diag, fl, exitOf(err), err)
-			}
+		var buf bytes.Buffer
+		err := runCount(context.Background(), []string{src, fl}, &buf)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath") || strings.Contains(err.Error(), "count takes it") {
+			t.Errorf("swath diag count %s: exit %d (%v)", fl, exitOf(err), err)
+		}
+		err = runDu(context.Background(), []string{src, fl}, &buf)
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath du") && !strings.Contains(err.Error(), "swath diag count or swath diag list") {
+			t.Errorf("swath du %s: exit %d (%v)", fl, exitOf(err), err)
 		}
 	}
 }
 
-// TestCount: swath count lists and counts, writes nothing, prints the
-// rows and object bytes, and its report says so (status listed, no
+// TestCount: swath diag count lists and counts, writes nothing, prints
+// the rows and object bytes, and its report says so (status listed, no
 // ordering, the object bytes summed).
 func TestCount(t *testing.T) {
 	src := localSource(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var buf bytes.Buffer
-	if err := runCount(context.Background(), []string{src, "--no-stats", "--report", report}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-stats", "--report", report}, &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "rows=2 object_bytes=6 ") {
@@ -128,7 +152,7 @@ func TestCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.Outcome.Status != listing.StatusListed || r.Resources.Features["order"] || r.Output.RowsEmitted != 2 || r.Output.RowsFetched != 2 ||
-		r.Output.ObjectBytes == nil || *r.Output.ObjectBytes != 6 || r.Invocation.Argv[0] != "count" || r.ReportVersion != listing.ReportVersion {
+		r.Output.ObjectBytes == nil || *r.Output.ObjectBytes != 6 || !slices.Equal(r.Invocation.Argv[:2], []string{"diag", "count"}) || r.ReportVersion != listing.ReportVersion {
 		t.Fatalf("report %+v %+v %v", r.Outcome, r.Output, r.Invocation.Argv)
 	}
 	if r.History == nil || len(r.History.Samples) < 2 {
@@ -154,7 +178,7 @@ func TestOldNamesRejected(t *testing.T) {
 // TestEveryHelpExitsZero: --help on every command, diag included, prints
 // to stdout and exits 0 (main treats flag.ErrHelp as success).
 func TestEveryHelpExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"help"}, {"list", "--help"}, {"count", "--help"}, {"resume", "--help"}, {"show", "--help"},
+	for _, args := range [][]string{{"--help"}, {"help"}, {"list", "--help"}, {"du", "--help"}, {"resume", "--help"}, {"show", "--help"},
 		{"diag", "--help"}, {"diag", "list", "--help"}, {"diag", "count", "-h"}} {
 		var out bytes.Buffer
 		err := dispatch(context.Background(), args, &out)

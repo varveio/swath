@@ -12,7 +12,7 @@ import (
 	"github.com/varveio/swath/go/internal/totals"
 )
 
-// totalsSink sums the counted rows per prefix (swath count --depth) into a
+// totalsSink sums the counted rows per prefix (swath du) into a
 // tally, reading the payload through the schema's columns by name, as the
 // filters and the versions counts do, so it serves every schema: the bytes
 // column (size, or another the tally names), last_modified, and what is not
@@ -62,6 +62,9 @@ func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], next order.Sink[P])
 	if !opt.LinksOnce {
 		k.nlink = nil
 	}
+	if s.Container != nil {
+		t.SetDirs()
+	}
 	return k, nil
 }
 
@@ -72,7 +75,7 @@ func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error 
 			p := &seg[i].Data
 			r := totals.Row{Key: seg[i].Key, Object: true}
 			if k.box != nil && k.box(p) {
-				r.Object = false
+				r.Object, r.Dir = false, true
 			} else if k.marker != nil {
 				if m, _ := k.marker(p); m {
 					r.Object = false
