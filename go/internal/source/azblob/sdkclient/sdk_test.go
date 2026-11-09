@@ -20,10 +20,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
@@ -494,4 +496,175 @@ func TestNamespaceInfo(t *testing.T) {
 	if _, err := k.NamespaceInfo(context.Background(), "c"); !errors.Is(err, client.ErrNoDFSEndpoint) || len(cp.reqs) != n {
 		t.Fatalf("Shared Key: %v, %d requests", err, len(cp.reqs)-n)
 	}
+}
+
+// TestRedactedRefusal: a 200 the SDK refuses for a header that quotes the
+// SAS (a malformed Date echoing the query) is a parse failure, retried,
+// whose error never holds the signature.
+func TestRedactedRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec, _ := url.QueryUnescape(r.URL.RawQuery)
+		w.Header()["Date"] = []string{"x " + r.URL.RawQuery + " " + dec}
+		fmt.Fprint(w, page("", "a"))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(context.Background(), client.Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, MaxAttempts: 3,
+		BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.List(context.Background(), &client.ListInput{Container: "c"})
+	ex, ok := errors.AsType[*client.ExhaustedError](err)
+	if !ok || ex.Attempts != 3 || client.Classify(err) != objhttp.ClassParse || c.Counters().ParseFailures != 3 {
+		t.Fatalf("%v: class %q, parse failures %d", err, client.Classify(err), c.Counters().ParseFailures)
+	}
+	if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "REDACTED") {
+		t.Fatalf("not redacted: %v", err)
+	}
+}
+
+// TestLogScrubbed: the SDK's own log lines (a failed connection's
+// url.Error, an echoing 403's dump), which quote the SAS, reach the
+// listener scrubLogs installs without the signature, encoded or decoded.
+func TestLogScrubbed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { azureError(w, r, 403, "AuthorizationFailure") }))
+	t.Cleanup(srv.Close)
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close() // a connection refused
+	var mu sync.Mutex
+	var raw, logged []string
+	scrub := scrubbing(func(_ azlog.Event, msg string) { logged = append(logged, msg) })
+	azlog.SetListener(func(e azlog.Event, msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		raw = append(raw, msg)
+		scrub(e, msg)
+	})
+	t.Cleanup(func() { azlog.SetListener(nil) })
+	for _, ep := range []string{srv.URL, down.URL} {
+		c, err := New(context.Background(), client.Config{Endpoint: ep, Account: "acct", SAS: testSAS, MaxAttempts: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.List(context.Background(), &client.ListInput{Container: "c"}); err == nil || strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: %v", ep, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	quoted := 0
+	for _, l := range raw {
+		if strings.Contains(l, secret) {
+			quoted++
+		}
+	}
+	if quoted < 2 {
+		t.Fatalf("the SDK's log quoted the signature in %d lines: the test proves nothing (%q)", quoted, raw)
+	}
+	for _, l := range logged {
+		if strings.Contains(l, secret) {
+			t.Errorf("logged: %q", l)
+		}
+	}
+}
+
+// TestConcurrentClient: 16 goroutines list distinct ranges (prefixes,
+// startFrom seeks, page sizes) through one SDK client while a proxy
+// throttles every seventh request and the body cap makes the large pages
+// halve: each gets its own range's names, in order, as a fault-free
+// hand-rolled walk lists them.
+func TestConcurrentClient(t *testing.T) {
+	r := azblobtest.Serve(t, azblobtest.Keys())
+	ep := strings.TrimSuffix(r.Endpoint, "/"+r.Account)
+	target, _ := url.Parse(ep)
+	var n atomic.Int64
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Query().Get("comp") == "list" && n.Add(1)%7 == 0 {
+			w.Header().Set("Retry-After", "0")
+			azureError(w, req, 503, "ServerBusy")
+			return
+		}
+		out, err := http.DefaultTransport.RoundTrip(withHost(req, target))
+		if err != nil {
+			w.WriteHeader(502)
+			return
+		}
+		defer out.Body.Close()
+		for k, v := range out.Header {
+			w.Header()[k] = v
+		}
+		w.WriteHeader(out.StatusCode)
+		io.Copy(w, out.Body)
+	}))
+	t.Cleanup(proxy.Close)
+	sdk, err := New(context.Background(), client.Config{Endpoint: proxy.URL, Account: r.Account, Anonymous: true, Workers: 32,
+		BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const cap = 6 << 10 // a page of 5 fits, one of 40 does not
+	sdk.SetBodyCap(cap)
+	for _, g := range sdk.guards {
+		g.MaxBody = cap
+	}
+	ref, err := client.New(context.Background(), client.Config{Endpoint: ep, Account: r.Account, Anonymous: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := make([]client.ListInput, 16)
+	for i := range inputs {
+		in := client.ListInput{Container: r.Container, Prefix: fmt.Sprintf("f/%02d", i), MaxResults: 5 + i%3}
+		if i%2 == 1 {
+			in.StartFrom = fmt.Sprintf("f/%02d50", i)
+		}
+		if i == 0 {
+			in.MaxResults = 40
+		}
+		inputs[i] = in
+	}
+	names := func(pages []client.ListOutput) []string {
+		var out []string
+		for _, p := range pages {
+			for _, it := range p.Items {
+				out = append(out, it.Name)
+			}
+		}
+		return out
+	}
+	got := make([][]string, len(inputs))
+	var wg sync.WaitGroup
+	for i, in := range inputs {
+		wg.Go(func() {
+			for {
+				p, err := sdk.List(context.Background(), &in)
+				if err != nil {
+					t.Errorf("%+v: %v", in, err)
+					return
+				}
+				got[i] = append(got[i], names([]client.ListOutput{*p})...)
+				if p.NextMarker == "" {
+					return
+				}
+				in.Marker = p.NextMarker
+			}
+		})
+	}
+	wg.Wait()
+	for i, in := range inputs {
+		in.MaxResults = 0
+		if want := names(walk(t, ref, in)); !slices.Equal(got[i], want) || len(want) == 0 {
+			t.Errorf("%+v: %d names, want %d", in, len(got[i]), len(want))
+		}
+	}
+	if sdk.BodyCapShrinks() == 0 || sdk.Counters().Retries == 0 || sdk.Counters().Throttles == 0 {
+		t.Fatalf("shrinks %d, retries %d, throttles %d: the faults were not met", sdk.BodyCapShrinks(), sdk.Counters().Retries, sdk.Counters().Throttles)
+	}
+}
+
+// withHost is req addressed to target, for a forwarding proxy.
+func withHost(req *http.Request, target *url.URL) *http.Request {
+	out := req.Clone(req.Context())
+	out.RequestURI = ""
+	out.URL.Scheme, out.URL.Host, out.Host = target.Scheme, target.Host, target.Host
+	return out
 }
