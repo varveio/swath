@@ -131,6 +131,12 @@ func TestBindVersionsMalformed(t *testing.T) {
 			message: "version ID column tag is not a string"},
 		{roles: reader.VersionSpec{ID: "tag", Latest: "head"}, edit: func(s *schema.Schema[rec]) { s.Columns[2].Bool = nil },
 			message: "latest column head is not a required boolean"},
+		{roles: reader.VersionSpec{ID: "serial", Latest: "head"}, edit: func(s *schema.Schema[rec]) { s.Columns[1].Int = nil },
+			message: "version ID column serial is not a string or a signed 64-bit integer"},
+		{roles: reader.VersionSpec{ID: "tag", DeletedAt: "gone"}, edit: func(s *schema.Schema[rec]) { s.Columns[4].Int = nil },
+			message: "deleted-at column gone is not a nullable timestamp"},
+		{roles: reader.VersionSpec{ID: "tag", Latest: "head", DeleteMarker: "tomb"}, edit: func(s *schema.Schema[rec]) { s.Columns[3].Bool = nil },
+			message: "delete marker column tomb is not a required boolean"},
 	} {
 		s := recSchema(c.roles)
 		s.Groups = !c.unique
