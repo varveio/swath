@@ -111,11 +111,16 @@ func TestRequests(t *testing.T) {
 	}
 }
 
-// TestEndpoint: an endpoint is an http(s) URL with a host; the trailing
-// slash is optional; the base path is kept as given, escapes included;
-// another endpoint than Google's gets no fields selector.
+// TestEndpoint: an endpoint is an http(s) URL with a host and no
+// URI-template brace in its path, literal or escaped (the generated client
+// expands the request path as a template: an empty expression panics, a
+// named one is dropped); the trailing slash is optional; the base path is
+// kept as given, escapes included; another endpoint than Google's gets no
+// fields selector.
 func TestEndpoint(t *testing.T) {
-	for _, ep := range []string{"ftp://host/storage/v1/", "storage/v1/", "http:///storage/v1/", "http://%zz/"} {
+	for _, ep := range []string{"ftp://host/storage/v1/", "storage/v1/", "http:///storage/v1/", "http://%zz/",
+		"http://host/%7B%7D/storage/v1/", "http://host/%7Btenant%7D/storage/v1/", "http://host/%7b%7d/",
+		"http://host/{}/storage/v1/", "http://host/{tenant}/storage/v1/", "http://host/a%7D/", "http://host/storage/v1/{"} {
 		if _, err := New(context.Background(), Config{Endpoint: ep, Anonymous: true}); err == nil {
 			t.Errorf("%q accepted", ep)
 		}

@@ -286,7 +286,10 @@ var quiet = slog.New(slog.DiscardHandler)
 // slash added when the escaped path has none (so "tenant%2F" is the base
 // "tenant%2F/", not a base whose last segment the generated client's
 // relative resolution would drop). One string is one destination: the
-// client sends to exactly this base.
+// client sends to exactly this base. A path holding a URI-template brace,
+// literal or escaped (%7B, %7D), is refused: the generated client expands
+// the request path as a template, which panics on an empty expression
+// and drops a named one.
 //
 // The generated client resolves the request path against the base (dot
 // segments removed: "/a/../storage/v1/" sends to "/storage/v1/...") and
@@ -302,6 +305,9 @@ func Endpoint(ep string) (string, error) {
 	u, err := url.Parse(ep)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
+	}
+	if strings.ContainsAny(u.Path, "{}") {
+		return "", fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep)
 	}
 	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
 		u.Path, u.RawPath = u.Path+"/", p+"/"
