@@ -57,9 +57,9 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 for tree in $TREES; do
   P=$ROOT/$tree
-  names=("$SWATH_A count $P --metadata names --no-stats" "$SWATH_B count $P --metadata names --no-stats"
+  names=("$SWATH_A diag count $P --metadata names --no-stats" "$SWATH_B diag count $P --metadata names --no-stats"
          "fd -j64 -u ^\$ $P")
-  stat=("$SWATH_A count $P --no-stats" "$SWATH_B count $P --no-stats" "fd -j64 -u --search-path $P --size +100Ti")
+  stat=("$SWATH_A diag count $P --no-stats" "$SWATH_B diag count $P --no-stats" "fd -j64 -u --search-path $P --size +100Ti")
   if [ $OS = windows ]; then
     # hyperfine -N splits words like a POSIX shell: backslashes are doubled
     W='V:\\'$tree N=$(cygpath -w "$T/none" | sed 's/\\/\\\\/g')
@@ -71,6 +71,10 @@ for tree in $TREES; do
     have bfs && { names+=("bfs $P -false"); stat+=("bfs $P -size +100000000M"); }
     have fdu && stat+=("fdu --view=summary --no-gitignore --cache off $P")
   fi
+  # hyperfine -i (robocopy exits 1 on success) would also time a swath that fails at once: check it runs
+  for b in "$SWATH_A" "$SWATH_B"; do
+    "$b" diag count "$P" --no-stats > /dev/null || { echo "FAILED: $b diag count $P"; exit 1; }
+  done
   for mode in warm cold; do
     if [ $mode = warm ]; then H=(-w 1 -r ${WARM_REPS:-6}); else H=(-r ${COLD_REPS:-3} --prepare "$DROP"); fi
     for tier in names stat; do
@@ -80,7 +84,7 @@ for tree in $TREES; do
         > "$OUT/$OS-$tree-$mode-$tier.log" 2>&1 || { echo "FAILED $OS $tree $mode $tier"; tail -5 "$OUT/$OS-$tree-$mode-$tier.log"; }
     done
   done
-  echo "$tree: $($SWATH_B count "$P" 2>&1 | grep -o 'files=[0-9]* dirs=[0-9]*')" | tee -a "$OUT/$OS-counts.txt"
+  echo "$tree: $($SWATH_B diag count "$P" 2>&1 | grep -o 'files=[0-9]* dirs=[0-9]*')" | tee -a "$OUT/$OS-counts.txt"
 done
 
 python3 - "$OUT" "$OS" <<'EOF' | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
