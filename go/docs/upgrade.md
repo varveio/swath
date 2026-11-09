@@ -1,13 +1,14 @@
 # Upgrading to the Go tool's datasets
 
-This tool writes a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft revision 1
-(stamped `format_version` 0, `draft_revision` 1), from 0.4; the Java tool writes swath's format 1. This guide
-has two audiences:
+The Java tool writes swath's format 1; this tool writes a swath dataset, a
+[SeekParquet](https://github.com/varveio/seekparquet) dataset (format 1 draft revision 1, stamped `format_version`
+0 and `draft_revision` 1) defined by the swath dataset profile in [dataset.md](dataset.md). This guide is the
+migration from one to the other, for two audiences:
 
 - **A user of the Java tool** moving to this one: what a format 1 dataset becomes ([Files](#files) through
   [Versions](#versions)), what the run report and the command line become, and what changed from 0.3 to 0.4.
-- **A reader of SeekParquet datasets** (the downstream reader, `bench/diffds.py`, `bench/summaries.py`): the
-  contract in [The downstream reader: dispatch on schema id](#the-downstream-reader-dispatch-on-schema-id).
+- **A reader of the Java layout** (the downstream reader, `bench/diffds.py`, `bench/summaries.py`): what it must
+  change, in [What a reader of the Java layout changes](#what-a-reader-of-the-java-layout-changes).
 
 Neither format is a superset of the other: there are no aliases, so a reader of one refuses the other, and a
 Java reader cannot open a SeekParquet dataset by design. DuckDB, the SeekParquet conformance suite and the
@@ -15,13 +16,12 @@ downstream reader are the acceptance gates ([Gates](#gates)).
 
 ## SeekParquet
 
-SeekParquet is a sorted-key profile for Apache Parquet: ordinary Parquet parts, sorted by one byte-string key
+SeekParquet is a sorted-key format for Apache Parquet: ordinary Parquet parts, sorted by one byte-string key
 and split into key-disjoint parts, and a manifest that lists them in key order and commits them. Any Parquet
-reader reads the parts as a table; a reader that knows the profile (the Go module
+reader reads the parts as a table; a reader that knows the format (the Go module
 `github.com/varveio/seekparquet/go`, which `swath-replay` serves datasets through) seeks a key, reads key
 ranges and lists a prefix with delimiter rollups from the manifest, the footers, the key column's page index
-and a few pages. The specification is the SeekParquet repository's `spec/format-1.md`; the sections below
-say where swath's own fields are in it.
+and a few pages. What swath adds on top (schema ids, `extensions.swath`, acceptance) is in [dataset.md](dataset.md).
 
 ## Dispatch
 
@@ -51,36 +51,8 @@ re-list it into a new directory.
 
 ## Manifest
 
-SeekParquet allows only its own members, at the top level, in `key` and in a part; a producer's own metadata
-goes under `extensions`, by namespace. swath's is `extensions.swath`:
-
-```json
-{
-  "format": "seekparquet",
-  "format_version": 0,
-  "draft_revision": 1,
-  "schema_id": "swath/s3-objects/v1",
-  "key": {"column": "key", "unique": true},
-  "extensions": {
-    "swath": {
-      "version": 1,
-      "published_at": "2026-11-08T18:00:00.123456Z",
-      "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
-      "scope": {"kind": "prefix", "prefix": "logs/"},
-      "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
-                   "exclusions": [], "filters": [], "snapshot": false,
-                   "listing_started_at": "…", "listing_finished_at": "…"}
-    }
-  },
-  "parts": [
-    {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
-     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "sha256": "…"}
-  ]
-}
-```
-
-The member order is the seekparquet module's (`seekparquet.MarshalManifest`, which writes swath's manifests);
-JSON readers do not depend on it.
+The manifest's members and `extensions.swath` are defined in [dataset.md](dataset.md#the-swath-extension). Field
+by field, from format 1:
 
 | Format 1 field | SeekParquet field |
 |---|---|
@@ -102,15 +74,11 @@ the format's validators check at the digest level. MD5 is not written anywhere. 
 `extensions.swath.part_md5`); no reader reads them, so re-list into a new directory.
 
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
-JSON. A reader decodes them and compares bytes (unsigned), never the base64 text. For the S3 schema the
-decoded bounds are UTF-8, as the keys are.
+JSON; readers decode them and compare bytes ([dataset.md](dataset.md#keys-and-order)).
 
-**Acceptance.** A reader that needs the whole source accepts a dataset only if `extensions.swath.coverage`
-has `complete` true, `skipped_entries` 0 and `filters` empty, and `extensions.swath.scope.kind` is `whole`. A
-missing or malformed coverage fails closed. `exclusions` lists what the listing left out by design (an output
-directory inside a listed tree); `snapshot` is always false: entries that changed while the listing ran may
-or may not be in it. A dataset of another producer may be SeekParquet without a swath extension; a reader
-that needs swath's coverage refuses it.
+**Acceptance** moves from `_SUCCESS` and the run summary to the manifest's coverage: the rule is in
+[dataset.md](dataset.md#the-swath-extension). A dataset of another producer may be SeekParquet without a swath
+extension; a reader that needs swath's coverage refuses it.
 
 ## S3 schema
 
@@ -167,16 +135,16 @@ a key's group.
 
 ## Versions
 
-Four versions move independently: the dataset format (SeekParquet's `format_version` 0 and `draft_revision` 1,
-in the manifest and the `seekparquet.*` stamps), the
-logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
-schema id" below), the private journal (version 9, never read by readers: version 9 records each part's SHA-256 where versions 7
-and 8 recorded its MD5, so this build refuses those journals before recovery touches anything, and they refuse
-version 9; an interrupted run of an older build is finished with that build or started over with `--overwrite`) and the writer recipe
-(`parquetout.Recipe`, `swath-go/parquet-r3` since SeekParquet, in the resume identity, with the dataset format: a
-build of another recipe or format refuses the journal). `created_by` names the real build, so
-parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
-on resume with its own footer's columns and `created_by`, so that one part does not depend on the build that resumes.
+Format 1 had one version string. Four identifiers now move independently: the SeekParquet format and draft,
+the schema id, `extensions.swath.version`, and the writer recipe. Their policy is in
+[dataset.md](dataset.md#evolution). The private journal has its own version too. This build reads journal
+version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
+before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
+that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath-go/parquet-r3`
+since SeekParquet) and the dataset format are in the resume identity: a build of another recipe or format
+refuses the journal. `created_by` names the real build, so parts are byte-identical within a build only. A part
+claimed but not recorded when a run stopped is reproduced on resume with its own footer's columns and
+`created_by`, so that one part does not depend on the build that resumes.
 
 ## Run report and counters
 
@@ -376,62 +344,45 @@ schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Di
 the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
 zstd), but they are private to one run and never read across builds.
 
-## The downstream reader: dispatch on schema id
+## What a reader of the Java layout changes
 
-The downstream reader reads SeekParquet datasets ([SeekParquet](#seekparquet)) for every provider. What such a
-reader does, stated as the contract rather than as its code:
+A reader of format 1 (the downstream reader is the reference) changes as follows. The contract it moves to is
+[dataset.md](dataset.md).
 
-- **Open.** Read `manifest.json` first ([Dispatch](#dispatch)). `format` `seekparquet` (with `format_version`
-  0 and `draft_revision` 1) is SeekParquet: take swath's fields from `extensions.swath`; never read `_SUCCESS`
-  or a run summary. A format 1 manifest takes the legacy path; any other manifest is refused.
-- **Whole-source acceptance.** From the coverage (`extensions.swath.coverage`): `complete` true, `stop_reason` `completed`, `skipped_entries` 0, `filters` present and empty,
-  `scope.kind` `whole`; a missing field refuses.
-- **Schema id.** Each schema id defines the columns a reader may rely on, by name and type; the reader dispatches
-  on it (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, `swath/azblob-objects/v1`, the local schema) and checks `source.kind` and the
-  container against what it was asked to open. A schema id is not a closed column set: a part may hold columns its
-  id does not define, which the reader ignores, and an optional column of the id may be absent from some parts or
-  all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
-  build that writes the column mixes parts with and without it under one id (the resume identity freezes the
-  schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
-  column of every schema id is present in every part. `swath/azblob-objects/v1` is `key` (the blob name, up to
-  3,072 bytes: 1,024 UTF-16 units), `size` (`Content-Length`), `last_modified` (`Last-Modified`, µs at the wire's
-  1 s resolution), `etag` (opaque, as listed), `content_md5` (base64 as listed; null when absent, as for blobs
-  uploaded in blocks without one), `content_type`, `blob_type` (`BlockBlob`, `PageBlob`, `AppendBlob`),
-  `access_tier` (null when absent) and `creation_time` (`Creation-Time`, µs). As on GCS, `last_modified` also
-  moves when only a blob's metadata changes and `etag` is opaque, not a content hash: compare content with
-  `content_md5`, never ETags across stores.
-- **Versions schemas** (`swath list --all-versions`). `swath/s3-versions/v1` is the `swath/s3-objects/v1`
-  columns in the same order, `size` nullable (null on delete markers, as are `etag`, `storage_class` and the
-  checksums), then `version_id` (verbatim; `"null"` is a real ID), `is_latest` and `is_delete_marker`
-  (required). `swath/gcs-generations/v1` is the `swath/gcs-objects/v1` columns, then `time_deleted` (null for
-  the live generation; there is no `is_latest`). In both, a key repeats once per version, on consecutive rows,
-  in the service's order within the key (S3 newest first, versions and delete markers interleaved; GCS by
-  generation, ascending), which the file order carries and no column rebuilds. On S3, the first row of a
-  key's group has `is_latest`: it is the latest entry, and a delete marker means the object is deleted.
-  On GCS, the last row of a name's group is the newest generation; it is live only if `time_deleted` is
-  null, and a name may have no live generation. Parts stay key-disjoint (a key's
-  rows are never split across parts), and `sorting_columns` is `key` ascending. A reader that assumes one row
-  per key refuses these ids; a reader that wants the current objects filters `is_latest AND NOT
-  is_delete_marker` (S3) or `time_deleted IS NULL` (GCS). The reserved Java-era version columns are absent from the current-object S3 schema;
-  `row_type` is absent from both Go S3 schemas. Readers dispatch on the schema id before reading them.
-  `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
-  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and
-  ordered row sequences for both versions schemas, preserving nulls and within-key order; it refuses
-  mismatched or unknown schema ids. `--ts-ms` is refused for versions so timestamps remain exact.
-  Reader fixtures: `python3 -m unittest test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB.
-
-- **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
-- **Part footers.** Every part carries the `seekparquet.*` stamps equal to the manifest's, and `key` ascending
-  as the first sorting column.
-- **Rows.** `key`, `size` and `last_modified` are read; a null or negative `size` is rejected, so a local
-  dataset listed with names only is not readable by such a reader, and so is a `last_modified` outside the
-  years 1 to 9999; directory rows of a local dataset are entries whose keys end in `/`.
-- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract for
-  SeekParquet datasets: `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage above,
-  source kind and container) and `Stream` (current objects, the row checks above).
-- **Fixtures.** One dataset per schema written by this tool serves as the reader's fixture; the commands
-  that produce them are the ones in docs/testing.md.
-
+- **Open.** Read `manifest.json` first ([Dispatch](#dispatch)). A SeekParquet manifest (`format` `seekparquet`,
+  `format_version` 0, `draft_revision` 1) is the swath dataset path: require `extensions.swath.version` 1 and take
+  swath's fields from `extensions.swath`. Never read `_SUCCESS` or a run summary. A format 1 manifest takes the
+  legacy path; any other manifest is refused.
+- **Whole-source acceptance** comes from `extensions.swath`, not from the run summary: the members and the rule are
+  in [dataset.md](dataset.md#the-swath-extension). Also check `source.kind` and the container against what the
+  reader was asked to open.
+- **Dispatch on the schema id.** Use the exact registered id (`swath/s3-objects/v1`, `swath/gcs-objects/v1`,
+  `swath/azblob-objects/v1`, `swath/local-entries/v1` and the versions ids), with the columns
+  [dataset.md](dataset.md#schema-registry) gives it. Its column set is not closed: ignore columns the id does not
+  define, and read an optional column that a part lacks as null (`time_created` on GCS). A run resumed by a build
+  that writes a newly added optional column mixes parts with and without it under one id.
+- **Columns Java wrote and the current-object schemas do not.** `version_id`, `is_latest`, `is_delete_marker` and
+  `row_type` are gone from `swath/s3-objects/v1` ([S3 schema](#s3-schema)). Every version and delete marker is in
+  the versions schemas (`--all-versions`) instead, one row per version, consecutive per key. A reader that assumes
+  one row per key refuses those ids. A reader that wants current objects from them filters as
+  [dataset.md](dataset.md#keys-and-order) says.
+- **Keys** are bytes in unsigned order, and the manifest's part bounds are base64 ([dataset.md](dataset.md#keys-and-order)).
+  Local keys may be non-UTF-8.
+- **Part footers** carry the `seekparquet.*` stamps equal to the manifest's, and `key` ascending as the first
+  sorting column ([Footer](#footer)).
+- **Rows.** The downstream reader reads `key`, `size` and `last_modified`. It rejects a null or negative `size`
+  (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
+  to 9999. A local dataset's directory rows are entries whose keys end in `/`.
+- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
+  `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage, source kind and container),
+  `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
+  (every part's SHA-256 against its bytes).
+- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
+  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
+  sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
+  schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
+  test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
+  serves as the reader's fixture; the commands that produce them are in [testing.md](testing.md).
 
 ## Gates
 

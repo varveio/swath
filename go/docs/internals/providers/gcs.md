@@ -46,7 +46,7 @@ group (`keyrange.Flags`, registered once by the command); the GCS flags are pref
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed),
 `content_type` and, last, `time_created` (`timeCreated`, µs, the logical type of `last_modified`). `time_created`
 is an optional column of the schema id: a part written before the lister listed it has no such column, and a
-run resumed across that change holds parts of both kinds ([../upgrade.md](../../upgrade.md#the-downstream-reader-dispatch-on-schema-id)). Two columns share
+run resumed across that change holds parts of both kinds ([../dataset.md](../../dataset.md#schema-registry)). Two columns share
 S3's names but not its meaning. `last_modified` is `updated`, which GCS also moves when only the object's metadata
 changes; S3's `LastModified` moves only when the object is written. `time_created` is the generation's write
 time and never changes. `etag` is the JSON API's opaque entity tag, which also changes with metadata and is not a

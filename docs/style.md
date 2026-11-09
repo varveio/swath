@@ -54,14 +54,28 @@ consistency matters:
 `_SUCCESS` means the result was completely published; it does not add transactional
 snapshot semantics.
 
-### Managed Parquet dataset
+### swath dataset and SeekParquet dataset
 
-On first use in a beginner or workflow page, define it:
+- **swath dataset** is the product term: a committed SeekParquet dataset that carries one of
+  swath's registered schema ids and a valid `extensions.swath`. Use it in product
+  documentation, CLI output and downstream integrations. On first use in a beginner or
+  workflow page, define it:
 
-> A managed Parquet dataset is a directory of Parquet parts plus swath's manifest,
-> completion marker, run report, and temporary resume state.
+  > A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that
+  > commits them, in the SeekParquet format.
 
-After that, **managed dataset** is enough when the format is clear.
+- **SeekParquet dataset** is the format term: any dataset that satisfies the SeekParquet
+  sorted-key format, whoever wrote it. Use it when the format itself matters:
+  interoperability, generic readers, conformance and diagnostics.
+- **swath dataset profile** is swath's contract on top of the format: its schema ids, the
+  `extensions.swath` metadata and its acceptance rules. The Go port's
+  [`go/docs/dataset.md`](../go/docs/dataset.md) owns it.
+- **Parquet part** is one Parquet file the manifest lists.
+- **Legacy Java dataset** is the Java tool's format 1, with its own commit rules
+  (`_SUCCESS`, the run summary). Use the term in migration documents and legacy
+  diagnostics. The Java tool's own pages call it a **managed Parquet dataset**: a
+  directory of Parquet parts plus swath's manifest, completion marker, run report, and
+  temporary resume state.
 
 ### Supported and experimental
 

@@ -84,7 +84,7 @@ transient class, as for S3 and GCS; `InvalidPage` is the client's. Pages are `cl
 service's cap) unless `--page-size` lowers them. An adapter page maps `Blob` items to rows and `BlobPrefix` items
 to `Prefixes`, with the adapter's `Truncated` and token.
 
-**Schema** `swath/azblob-objects/v1`, its columns and their caveats as [upgrade.md](../../upgrade.md#the-downstream-reader-dispatch-on-schema-id)
+**Schema** `swath/azblob-objects/v1`, its columns and their caveats as [dataset.md](../../dataset.md#schema-registry)
 states them; `MaxKeyBytes` 3,072, `blob_type` dictionary-encoded, and a delta spill codec.
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob

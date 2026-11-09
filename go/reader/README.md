@@ -6,6 +6,10 @@
 opens a dataset, checks its schema, accepts it as a whole-source listing, streams and lists its current objects
 and totals them under paths and prefixes, and the digest validation a reader importing a dataset runs first.
 
+The swath dataset profile this module implements (what a swath dataset is, the schema ids and their row
+contracts, `extensions.swath` and what each operation requires, key order, evolution) is defined in
+[../docs/dataset.md](../docs/dataset.md). This README is the API.
+
 It is a nested Go module. It depends on the SeekParquet module (and through it parquet-go) and the standard
 library only: no cloud SDK, and not the swath lister (`github.com/varveio/swath/go`), which imports it instead.
 The lister's producers bind their schemas to the specs here (`internal/schema.Bind`), so what swath writes and

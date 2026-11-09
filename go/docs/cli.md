@@ -730,7 +730,7 @@ Diagnostics:
   resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
   manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
   `modified_after=…`, `modified_before=…`, `storage_class=…`), and a reader that needs the whole source refuses a
-  dataset whose `coverage.filters` is not empty ([upgrade.md](upgrade.md)). **Regular expressions are Go's RE2,
+  dataset whose `coverage.filters` is not empty ([dataset.md](dataset.md#the-swath-extension)). **Regular expressions are Go's RE2,
   not Java's:** the common syntax is the same, but backreferences (`\1`), lookahead and lookbehind, possessive
   quantifiers and atomic groups do not exist and are refused (exit 2); `\Z` is not supported (`\z` is), and
   some character-class and Unicode-property details differ. RE2 runs in time linear in the key, so no pattern

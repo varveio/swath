@@ -1382,7 +1382,7 @@ bucket (open, stream, list one prefix):
 The reader's own tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1 datasets of
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
-([upgrade.md, "The downstream reader: dispatch on schema id"](upgrade.md#the-downstream-reader-dispatch-on-schema-id)). The Java tool's reader does not read format 2, by design.
+([upgrade.md, "What a reader of the Java layout changes"](upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
 
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 

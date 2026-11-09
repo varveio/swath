@@ -368,7 +368,7 @@ DIR/
 **The manifest is the commit.** Parts appear in `data/` before the run ends, so `data/` alone is not a
 dataset: a reader starts only once `manifest.json` exists, and a reader that needs the whole bucket checks
 `coverage.complete` true, `coverage.stop_reason` `completed`, `coverage.skipped_entries` 0, `coverage.filters`
-empty and `scope.kind` `whole` (fields: [upgrade.md](upgrade.md)).
+empty and `scope.kind` `whole` (fields: [dataset.md](dataset.md#the-swath-extension)).
 
 ```bash
 swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
@@ -387,11 +387,11 @@ lists for the object. On GCS, `last_modified` also changes when only the object'
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
-`swath/azblob-objects/v1`, its columns and caveats in [upgrade.md](upgrade.md#the-downstream-reader-dispatch-on-schema-id).
+`swath/azblob-objects/v1`, its columns and caveats in [dataset.md](dataset.md#schema-registry).
 Every dataset lists current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
-only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.
+only on the swath dataset profile ([dataset.md](dataset.md)); Java swath's reader does not open it.
 
 ## Listing every version
 
