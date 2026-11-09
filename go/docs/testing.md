@@ -3,7 +3,7 @@
 This page maps every test method of the Go port to what it proves, where it lives, how to run it, and when
 CI runs it. The invariants the tests hold are in [internals/contracts.md](internals/contracts.md). The Java
 tiers are owned by [docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md) and appear here only in the
-summary.
+summary. The reasoning behind CI's shape is in [docs/ops/dev/CI.md](../../docs/ops/dev/CI.md).
 
 ## Summary
 
