@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -398,5 +401,34 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 				t.Fatalf("%d requests sent", n)
 			}
 		})
+	}
+}
+
+// appearingToken is a credentials provider whose first lookup creates the
+// token file and still fails with the file missing, as the SDK's web
+// identity provider does when the file appears while it reads: the lookup
+// before the fix returned that failure as final.
+type appearingToken struct {
+	token string
+	calls int
+}
+
+func (p *appearingToken) Retrieve(context.Context) (aws.Credentials, error) {
+	p.calls++
+	if p.calls == 1 {
+		os.WriteFile(p.token, []byte("jwt"), 0o600)
+		return aws.Credentials{}, fmt.Errorf("unable to read file at %s: %w", p.token, fs.ErrNotExist)
+	}
+	return aws.Credentials{AccessKeyID: "AKWEB", SecretAccessKey: "s", Source: "web identity"}, nil
+}
+
+// TestRetrieveWaitsForTokenAppearingDuringLookup: a token file that appears
+// during the lookup that read it as missing is looked up again, not
+// reported missing.
+func TestRetrieveWaitsForTokenAppearingDuringLookup(t *testing.T) {
+	p := &appearingToken{token: filepath.Join(t.TempDir(), "token")}
+	c, err := retrieve(context.Background(), p, p.token)
+	if err != nil || c.AccessKeyID != "AKWEB" || p.calls != 2 {
+		t.Fatalf("credentials %+v, err %v, calls %d; want AKWEB after 2 calls", c, err, p.calls)
 	}
 }

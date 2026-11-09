@@ -138,14 +138,18 @@ func LoadAuth(ctx context.Context, cfg Config) (*Auth, error) {
 
 // retrieve is the first lookup. A web-identity token file that is not
 // there yet (mounted after the process started) is waited for until ctx
-// ends, then looked up once more.
+// ends, then looked up once more. Whether the file is there is read
+// before the lookup, not after a failed one: a file that appears between
+// the two would otherwise make its own absence the final answer.
 func retrieve(ctx context.Context, p aws.CredentialsProvider, tokenFile string) (aws.Credentials, error) {
 	for {
-		c, err := p.Retrieve(ctx)
-		if err == nil || tokenFile == "" {
-			return c, err
+		present := tokenFile == ""
+		if !present {
+			_, serr := os.Stat(tokenFile)
+			present = !errors.Is(serr, fs.ErrNotExist)
 		}
-		if _, serr := os.Stat(tokenFile); !errors.Is(serr, fs.ErrNotExist) {
+		c, err := p.Retrieve(ctx)
+		if err == nil || present {
 			return c, err
 		}
 		select {
