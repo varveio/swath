@@ -500,6 +500,7 @@ its checkpoint/publication state.
   stamps, the part writer, footer inspection) are the
   [seekparquet Go module](https://github.com/varveio/seekparquet)'s. Its guarantees are in
   [go/docs/internals/contracts.md](../../go/docs/internals/contracts.md),
+  the swath dataset profile in [go/docs/dataset.md](../../go/docs/dataset.md), and
   what changed for readers in [go/docs/upgrade.md](../../go/docs/upgrade.md).
 - parquet-mr `_metadata` summary files are deprecated/off-by-default — swath
   writes its **own consumer `manifest.json`** at the dataset root in the

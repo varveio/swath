@@ -22,7 +22,7 @@ from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
 
 # Physical type, repetition and logical annotation for every declared GCS
 # column. Nullable values still require a column in each part; only the
-# historical current-object time_created column may be absent (upgrade.md).
+# historical current-object time_created column may be absent (docs/dataset.md).
 GCS_CONTRACT = {
     name: ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
     if name in {"key", "etag", "storage_class", "md5", "crc32c", "content_type"}
@@ -84,6 +84,7 @@ def main(out, reference=None):
     check(all(set(f) == {"path", "rows", "bytes", "min_key_base64", "max_key_base64", "sha256"} for f in m.get("parts", [])),
           "parts have exactly path, rows, bytes, the base64 key bounds and sha256")
     ext = m.get("extensions", {}).get("swath", {})
+    check(type(ext.get("version")) is int and ext.get("version") == 1, f"extensions.swath.version is 1 (got {ext.get('version')!r})")
     for k in ("published_at", "source", "scope", "coverage"):
         check(k in ext, f"extensions.swath has {k}")
     check(list(m.get("extensions", {})) == ["swath"], "extensions holds the swath namespace only")

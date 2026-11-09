@@ -6,8 +6,12 @@ import os
 import sys
 
 n = 0
-for d, _, files in os.walk(sys.argv[1]):
+for d, dirs, files in os.walk(sys.argv[1]):
     for f in files:
         os.lstat(os.path.join(d, f))
+        n += 1
+    # os.walk lists a symlink to a directory among dirs (not followed): it is a non-directory entry
+    for s in [x for x in dirs if os.path.islink(os.path.join(d, x))]:
+        os.lstat(os.path.join(d, s))
         n += 1
 print(n)

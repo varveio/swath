@@ -14,8 +14,9 @@ type Kind string
 const (
 	// KindSchema: a part's columns are not those its schema id defines (a
 	// column absent, or of another type), the manifest's key is not the
-	// schema id's, the schema id is not one swath writes, or it is not one
-	// the operation reads (a versions schema has no current objects).
+	// schema id's, the schema id is not one swath writes, it is not one
+	// the operation reads (a versions schema has no current objects), or
+	// extensions.swath's version is not one this module reads.
 	KindSchema Kind = "schema"
 	// KindCoverage: the manifest's extensions.swath is malformed, or does
 	// not record a listing of the whole source (AcceptWholeSource).

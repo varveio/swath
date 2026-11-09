@@ -873,7 +873,7 @@ files); `wide` is 1,000,000 empty files in 1,000 directories. Warm cache, 3 repe
 
 These were measured on the walker before the pipeline was restructured (the same `getdents64` and
 dirfd-relative `fstatat` path; its `--engine`, `--fields` and `--order` flags no longer exist, and
-`bench/run.sh` and `bench/compare.sh` still drive them). The current pipeline on the same tree, in one
+`bench/run.sh` still drives them; `bench/compare.sh` uses the current flags). The current pipeline on the same tree, in one
 interleaved session against that walker: stat count-only 1.81 s against 1.64 s and names 0.58 s against 0.51 s
 (within that session's noise for stat), and a full run writing the dataset 1.77–1.78 s.
 
@@ -916,6 +916,57 @@ The names tier is the fastest lister measured; the stat tier ties the fastest Ru
 less kernel time than every full-path stat tool. The disk-usage tools only sum sizes; the walker builds a full
 row per entry. Not established: cold-cache behaviour of these tools, hard-link de-duplication, network or
 overlay filesystems.
+
+### Against fd at equal output, huge directories, cold count (2026-11-08)
+
+**Synthetic, local.** 4-vCPU, 15 GiB VM, ext4 on virtio; trees from `bench/gen_tree.py` and FTZZ 4.0.0
+(`ftzz -n 10M -r 100 -d 5 --files-exact`: 10,000,000 files in 131,492 directories); hyperfine, fd 9.0.0,
+bfs 3.1.2. Absolute times on this VM drift between sessions; compare within a table only.
+
+**fd at equal output.** With fd's paths sent to `/dev/null` (not counted through a pipe, which our first pass
+did and which made the walker look 2x faster), warm, the two are even: `wide`, names 262 ms (fd 297, `-j 16`
+232), stat 728 ms (fd 861, `-j 16` 694); `ftzz-10m`, names 2.39 s (fd 3.15, `-j 16` 2.44, bfs 3.88, find
+4.13). Both make one `getdents64` per buffer and one stat per entry (`strace -c`); fd stats by absolute path,
+the walker relative to the directory fd. Warm, about 83 % of the walker's CPU is `fstatat` in the kernel.
+
+**This change** (`localfs`: pointer-free entries, prefix-skipping and parallel sort, presized buffers; a
+stat-tier count at 4 processors per CPU):
+
+| | before (`d9d8ee1`) | after | fd |
+|---|---:|---:|---:|
+| `huge` (200,000 files in one directory), warm, `count`, 15 runs | 324–332 ms | **189 ms** | 264 ms (`-j 16`: 162) |
+| `huge`, warm, `list -o` (sorted Parquet), 15 runs | 488 ms | **309 ms** | – |
+| `realistic`, cold (`drop_caches` before each), `count`, 3 runs | 3.89 s | **2.92 s** | 4.39 s (`-j 64`: 2.83) |
+| `wide`, warm, `count`, 20 runs | 642 ms | 590 ms | – |
+| `deep`, warm, `count`, 20 runs | 285 ms | 293 ms | – |
+| `realistic`, warm, `count`, 20 runs | 1.51 s | 1.53 s | – |
+| `ftzz-10m`, `count`, 2 runs | 77.0 ± 14.1 s | 71.4 ± 4.5 s | `-j 64`: 79.4 ± 12.3 s |
+
+Before the change the huge directory's read and sort ran on one goroutine ahead of its stats (profile: sort
+~100 ms, slice growth ~70 ms of 325). Cold, the walker used about 2.8 of 4 CPUs at any `--workers` (16, 64 and
+256 all 3.7–3.8 s) and fd `-j 64` about 3.8: a stat waiting on the disk holds its Go processor, and GOMAXPROCS
+8 gave 3.17 s, 16 gave 3.07 s. The warm rows of ordinary trees are within noise. The 10M tree does not fit
+this VM's inode cache (`ext4_inode_cache` 9.1M objects, 9.8 GiB; page cache 0.2 GiB): every tool spends
+265–290 s of kernel time in 70–80 s of wall, CPU-bound on reclaim, and the arms are within noise of each
+other. The `huge` Parquet output is identical to the baseline's in content and order.
+
+**Names tier, and a paired re-check** (2026-11-09). A directory read that waits on the disk holds a Go processor as a
+stat does: cold, a names-tier count took 2.18 s at GOMAXPROCS 4, 1.59 s at 8 and 1.46 s at 16 on `realistic`
+(Chromium 119 with submodules, 1.93M files: 4.29 / 3.42 / 3.03 s); warm, 8 was no slower and 16 up to 8 % slower.
+A names-tier count now runs at 2 processors per CPU. The same change stops `sortEntries` reading GOMAXPROCS (which
+takes the scheduler lock) for every directory. Paired and interleaved runs (each round runs every arm in rotating
+order; the median of the per-round differences against the baseline `d9d8ee1`, with a 95 % bootstrap interval;
+the box was shared with a build, so absolute times are higher than above):
+
+| names tier unless noted | rounds | change against `d9d8ee1` |
+|---|---:|---:|
+| Chromium, cold | 4 | −21.5 % [−30.5, −3.0] (fd `-j 64`: −52.9 %) |
+| `realistic`, cold | 4 | −19.1 % [−25.0, −15.4] |
+| Chromium, warm | 15 | −6.8 % [−21.7, −1.3] |
+| `realistic`, warm | 10 | −0.5 % [−10.4, +9.9] |
+| Chromium, stat tier, warm | 10 | −3.6 % [−9.0, +1.4] |
+
+Cold names-tier counts remain about 2x behind fd `-j 64`.
 
 ## Memory behind a held-up frontier
 
@@ -1382,4 +1433,54 @@ bucket (open, stream, list one prefix):
 The reader's own tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1 datasets of
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
-([upgrade.md, "The downstream reader: dispatch on schema id"](upgrade.md#the-downstream-reader-dispatch-on-schema-id)). The Java tool's reader does not read format 2, by design.
+([upgrade.md, "What a reader of the Java layout changes"](upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
+
+## CI: Go caches, race shards and cross-OS legs, 2026-11-09
+
+Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
+`go-race (rest)` was its critical path at 5.4–6.0 min, 8.0–8.4 on a build-cache miss. The repository's
+Actions cache held 16.3 GB against its 10 GB limit (the Go caches 9.15 GB in 16 per-job entries, each with
+its own copy of the module cache), so entries were evicted continuously; a miss cost `go-objfile` 5.3–5.7 min
+against 0.6, `go-reader` 2.5 against 0.5, `go-lint` 2.0 against 0.7. Every run over 13 min had waited 7–10
+min for a macOS runner. 35 of 200 runs failed; the platform-only failures were 7 macOS-only (six test-timing
+flakes fixed in the tests, #307 #317 #334 #336; one arm64 encoder-path difference, #308) and 6 Windows-only
+(three of one clock-tick flake, #320; one filesystem difference, #310).
+
+After #355 (shared module cache, per-job build caches, retention) and #356 (`rest` in three shards, Windows
+and Linux arm64 on pull requests, macOS on `main`), job wall times in minutes, one run each:
+
+| job | PR 42626611538 | `main` 42629790131 | `main` 42631148177 (warm) |
+|---|---|---|---|
+| `go-race (cmd-kill)` | 4.3 | 4.6 | 4.6 |
+| `go-race (rest-replay)` | 4.1 | 3.4 | 3.2 |
+| `go-race (rest-source)` | 3.4 | 4.8 | 2.7 |
+| `go-race (listing-rest)` | 2.8 | 2.9 | 3.0 |
+| `go-race (crash)`, `(durable)`, `(cmd)` | 2.4–2.5 | 2.5–2.9 | 2.4–2.5 |
+| `go-race (rest)` | 2.2 | 1.7 | 1.6 |
+| `go-xos (windows-latest)` | 5.0 | 5.8 | 5.4 |
+| `go-xos (ubuntu-24.04-arm)` | 5.4 | 5.6 | 4.6 |
+| `go-xos (macos-latest)` | not on pull requests | 7.8 | 7.5 |
+| `go-objfile` | – | 5.5 (build-cache miss) | 0.8 |
+| `go-lint`, `go-reader`, `go-nonrace` | – | 0.6, 0.9, 0.9 | 0.9, 0.9, 0.9 |
+
+No `rest*` shard is above `cmd-kill`; the `go-xos` legs are the longest Go jobs on a pull request, and
+`rest-source` moves 2.7–4.8 between runs (its packages' summed time was 716 s, `rest-replay`'s 510, the
+remainder's 338 in the `-json` artifact of run 42614118007). The warm `main` run's `go-lint` log shows the
+exact module-cache hit (`go-mod-Linux-X64-<deps>`) and the build-cache restore from the previous commit's
+key (`go-build-Linux-X64-go-lint-<deps>-<sha>`).
+
+Cache sizes as `gh cache list` reports them (zstd-compressed) after the warm run: the module cache 500–504
+MiB on each of Linux amd64, Linux arm64, Windows and macOS (2.0 GB); the build caches `go-objfile` 628,
+`go-build` 357, `go-lint` 206, `go-reader` 204, `go-race (cmd)` 161, `go-race (rest)` 157, `go-xos` 146–155
+per OS, `go-race (cmd-kill)` 140, `rest-source` 122, `rest-replay` 111, `go-fixtures` 106, `go-nonrace` 87,
+`crash`/`durable`/`listing-rest` 78 each (2.9 GB). One generation is about 4.9 GB; a second exists while
+two `main` runs overlap, and `go-cache-prune` deleted 6, 2 and 3 superseded entries in the three runs. The
+13 legacy combined entries (6.7 GB) were deleted by hand after #355 merged.
+
+The first `main` run after #355 (42628492522) was red: `go mod download all` adds the hashes it fetches to
+`go.sum`, so `go mod tidy -diff` failed in `go-lint`, `go-objfile` and `go-reader`; the module cache it
+saved was complete. #360 runs the download on a copy of each module's `go.mod` and `go.sum`. Usage stayed
+above 10 GB after the Go caches shrank because `docker-check` and `go-build` wrote BuildKit caches on pull
+requests, scoped to each pull request's ref (0.4–0.8 GB each, 1.8 GB over three open pull requests), and
+GitHub's CodeQL setup keeps a 672 MiB dependency cache per pull request head. #361 writes the BuildKit
+caches from `main` only; its own pull-request run left no `buildkit-blob` entry under its ref.

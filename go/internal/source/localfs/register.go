@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
@@ -68,6 +70,42 @@ const oneFilesystemFilter = "one_filesystem"
 type opened struct {
 	registry.Bound[Entry]
 	p *Provider
+}
+
+// countProcsFactor is how many processors a count runs with, per CPU the
+// process had, at a stat tier and at the names tier. A stat or a directory
+// read that waits on the disk holds its processor until the scheduler hands
+// it off, so with one processor per CPU a cold tree leaves CPUs idle; more
+// processors keep more of them in flight. Measured on 4 CPUs: stat tier, cold,
+// ~1M entries, 3.97 s at 4 processors, 3.07 s at 16, warm no slower; names
+// tier, cold, 2.18 s at 4, 1.59 s at 8, 1.46 s at 16, warm no slower at 8 but
+// up to 8 % slower at 16 (no stat to wait on, more contention), hence 2.
+const (
+	countProcsFactor      = 4
+	namesCountProcsFactor = 2
+)
+
+// Run lists the tree. A count runs with more processors (countProcsFactor
+// per CPU at a stat tier, namesCountProcsFactor at the names tier, at most
+// the workers) and restores the setting when it returns; a count has no
+// encoders, reorder storage or readahead, the other readers of GOMAXPROCS.
+// Every run that writes output keeps the setting as it is.
+func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
+	if env.Count {
+		factor := countProcsFactor
+		if o.p.opt.Fields == Names {
+			factor = namesCountProcsFactor
+		}
+		prev := runtime.GOMAXPROCS(0)
+		if procs := min(prev*factor, max(prev, env.Order.Workers)); procs > prev {
+			runtime.GOMAXPROCS(procs)
+			defer runtime.GOMAXPROCS(prev)
+			o.p.mu.Lock()
+			o.p.stats.CountProcs = int64(procs)
+			o.p.mu.Unlock()
+		}
+	}
+	return o.Bound.Run(ctx, env)
 }
 
 func (o *opened) Locator() source.Locator {

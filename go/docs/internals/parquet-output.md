@@ -2,7 +2,7 @@
 
 What `internal/parquetout` and `internal/dataset` write, and why. Each choice lists what depends on it. The dataset
 is a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft revision 1 (the format's
-`spec/format-1.md`; what changed from the Java tool's format 1 is in [../upgrade.md](../upgrade.md#seekparquet)); swath's own
+`spec/format-1.md`; the swath dataset profile it carries is [../dataset.md](../dataset.md); what changed from the Java tool's format 1 is in [../upgrade.md](../upgrade.md#seekparquet)); swath's own
 guarantees are in [contracts.md](contracts.md#dataset-guarantees-readers-rely-on-these). This page says how the
 Go writer meets them.
 
@@ -83,7 +83,7 @@ prints the same type, also for `swath du`, `swath diag count` or a failure, and 
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
 [../cli.md](../cli.md#run-report) (pinned by `internal/listing/testdata/report-schema.golden`). It is
 operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
-acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md)).
+acceptance, which reads the manifest's coverage ([../dataset.md](../dataset.md#the-swath-extension)).
 
 ## Footer stamps
 
@@ -164,9 +164,11 @@ writer accepts repeated keys and refuses a descending one; pages and row groups 
 
 Order is checked at three places, each before the step it protects:
 
-- **Every row**, in the order stage (`order.Run`'s stream-wide guard): keys strictly ascending across the
-  whole run, and after the last published key on a resume. No sink, Parquet or other, receives a descending
-  or repeated key, even from a provider that breaks its ordering contract at a range boundary.
+- **Every row**, in the order stage (`order.Run`'s stream-wide guard). Keys are strictly ascending across the
+  whole run for a schema with unique keys, and nondecreasing for a versions schema, whose keys repeat on
+  consecutive rows. On a resume, every key is strictly after the last published key (an exclusive boundary).
+  No sink, Parquet or other, receives a descending key, or a repeated key under a unique schema, even from a
+  provider that breaks its ordering contract at a range boundary.
 - **Every part, before it is journaled.** A journaled run publishes parts early, so the router checks each
   part against the part before it (the resumed seam included) before `Publish` claims, records or renames
   it: nonempty, and its first key after the previous part's last. The journal's `Append` checks the same
@@ -196,7 +198,7 @@ out/
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json
 ```
 
-The manifest's fields and the reader's acceptance rule are in [../upgrade.md](../upgrade.md).
+The manifest's fields and the reader's acceptance rule are in [../dataset.md](../dataset.md#the-swath-extension).
 
 Output safety: the source root is validated first; the output may not be the root or an ancestor of it (by path
 and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of
@@ -221,7 +223,7 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
   checks this writer's datasets against the format's reference validator ([../testing.md](../testing.md#seekparquet-conformance)).
 - **The downstream reader** dispatches on the manifest's format, accepts whole-bucket coverage from the
   manifest's swath extension, and reads the SeekParquet stamps and each schema id's columns
-  ([../upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)); the recorded probe
+  ([../upgrade.md](../upgrade.md#what-a-reader-of-the-java-layout-changes)); the recorded probe
   ([measurements](../measurements.md#downstream-reader-compatibility)) predates SeekParquet.
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
@@ -230,41 +232,18 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
-producer defines its schema beside its code. The Parquet node is built from that list; `TestFooterMatchesSchema`
-checks the footer against a test schema with one column of every type. There is no message string any more.
+producer defines its schema beside its code. The S3, GCS and local producers bind it to the descriptor
+`go/reader` registers for its id (`schema.Bind`, `reader.Schema`), and `TestProducerSchemasGolden` pins those
+five. The Azure producer defines `swath/azblob-objects/v1` directly (`internal/source/azblob/schema.go`). The Parquet node is built
+from that list; `TestFooterMatchesSchema` checks the footer against a test schema with one column of every type.
+The Parquet schema name is `swath_listing` for every schema. The schema ids, their grammar
+(`swath/<row-contract>/vN`) and their row contracts (columns, types, nullability, key encoding) are in
+[../dataset.md](../dataset.md#schema-registry).
 
-**`s3.Schema`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
-`last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name` (null unless `-fetch-owner`),
-`checksum_algorithm` (the first listed), `checksum_type` (null when S3 omits them). Every row is a current
-object, so Java's `version_id`, `is_latest`, `is_delete_marker` and `row_type` are not stored; `bench/diffds.py`
-restores their constant values for comparison. ETags lose one pair of surrounding quotes, as swath does.
-
-**Keys are bytes.** Every schema's `key` is a required BYTE_ARRAY ordered as unsigned bytes. It carries the
-STRING annotation only where the producer guarantees UTF-8 (S3 keys are UTF-8); filesystem keys and link
-targets are unannotated BYTE_ARRAY, written exactly as the kernel returned them, never skipped, replaced or
-normalised. Manifest bounds are written in base64 (`min_key_base64`, `max_key_base64`) so every key survives
-JSON; readers compare the decoded bytes (`dataset.Key`).
-
-**`fs.Schema`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
-named `kind`. `size` and `last_modified` match the S3 schema; `key` is binary. Identifiers are unsigned. v1 renamed
-`blocks` to `allocated_bytes` and `ctime` to `metadata_changed_at`, and made the identifiers unsigned:
-
-| Column | Parquet physical / logical | Null? | Source |
-|---|---|---|---|
-| `key` | BYTE_ARRAY (unannotated) | required | path relative to the root, `/`-separated, no leading `/`; directories end in `/`; the name's exact bytes |
-| `size` | INT64 `INT(64,true)` | optional | `st_size` (apparent bytes) |
-| `last_modified` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_mtime` |
-| `kind` | BINARY (STRING) | required | `FILE`, `DIR`, `SYMLINK`, `FIFO`, `SOCKET`, `CHAR_DEVICE`, `BLOCK_DEVICE`, `UNKNOWN` |
-| `mode` | INT32 `INT(32,false)` | optional | `st_mode & 0o7777` (permission + setuid/setgid/sticky) |
-| `uid`, `gid` | INT32 `INT(32,false)` | optional | `st_uid`, `st_gid` |
-| `nlink` | INT32 `INT(32,false)` | optional | `st_nlink` |
-| `inode` | INT64 `INT(64,false)` | optional | `st_ino` |
-| `dev` | INT64 `INT(64,false)` | optional | `st_dev` (statx: `makedev(major, minor)`) |
-| `allocated_bytes` | INT64 `INT(64,true)` | optional | `st_blocks * 512` (sparse files show `allocated_bytes < size`) |
-| `metadata_changed_at`, `atime` | INT64 TIMESTAMP(MICROS, UTC) | optional | `st_ctime`, `st_atime` |
-| `birth_time` | INT64 TIMESTAMP(MICROS, UTC) | optional | statx `stx_btime` (only `--metadata statx`, mask `all`, when the filesystem reports it); macOS `st_birthtime` (stat tier); Windows `CreationTime` |
-| `link_target` | BYTE_ARRAY (unannotated) | optional | `readlink` result, symlinks only (stat/statx tiers unless `--no-link-target`) |
-
-Directories produce `kind=DIR` rows keyed `a/b/` (`-no-dirs` omits them). In the S3 schema a key ending in
-`/` is an object like any other: delimiter prefixes are derived by readers, never stored. The Parquet schema
-name is `swath_listing` for both schemas.
+How the writer meets the key contract: `key` is a required BYTE_ARRAY with the STRING annotation only where the
+producer guarantees UTF-8 (the object stores' keys). Filesystem keys and link targets are unannotated, written
+exactly as the kernel returned them, never skipped, replaced or normalized. Manifest bounds are written in
+base64 (`min_key_base64`, `max_key_base64`); readers compare the decoded bytes (`dataset.Key`). S3 ETags lose one
+pair of surrounding quotes; Azure ETags are kept as listed. In the object-store schemas a key ending in `/` is an
+object like any other: delimiter prefixes are derived by readers, never stored. In `swath/local-entries/v1` a
+key ending in `/` is a directory.

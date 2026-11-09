@@ -1,4 +1,4 @@
-schema_id swath-local/v1
+schema_id swath/local-entries/v1
 message swath_listing
 key_unique true
 max_key_bytes 0

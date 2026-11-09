@@ -6,11 +6,13 @@
 package localfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"math"
 	"os"
+	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -28,22 +30,46 @@ const (
 	chunkEntries   = 2048 // entries per chunk
 	direntBuffer   = 64 << 10
 	cancelEvery    = 1024 // entries between context checks
+
+	// A directory of at least parallelSortMin entries is sorted in
+	// parallel runs of at least sortRunMin entries, then merged.
+	parallelSortMin = 1 << 15
+	sortRunMin      = 1 << 14
+
+	// After presizeAfter entries, a directory's buffers are grown once to
+	// the entry count its size suggests, rather than doubling repeatedly.
+	presizeAfter = 1024
+	presizeMax   = 1 << 24 // entries: an estimate is never trusted beyond this
 )
 
 // entry is one directory entry: its name in the scratch name buffer and its
-// key in the directory's key arena.
+// key in the directory's key arena, as offsets. It holds no pointer, so a
+// huge directory's entries are grown, sorted and handed to chunks without
+// GC write barriers or scanning.
 type entry struct {
 	nameOff, nameLen uint32
-	key              string // slice of the key arena
-	ino              uint64
+	keyOff, keyLen   uint32
 	typ              uint8
 }
 
-// scratch is per-goroutine reusable memory for reading a directory.
+// errTooLarge: a directory whose names or keys exceed 4 GiB does not fit an
+// entry's 32-bit offsets; it is skipped and counted as a read error.
+var errTooLarge = errors.New("directory too large: its names or keys exceed 4 GiB")
+
+// fitsOffsets reports whether sc's names, and the keys buildKeys would make
+// under a prefix of plen bytes, fit an entry's 32-bit offsets.
+func fitsOffsets(plen int, sc *scratch) bool {
+	names := uint64(len(sc.names))
+	return names <= math.MaxUint32 && names+uint64(len(sc.ents))*uint64(plen+1) <= math.MaxUint32
+}
+
+// scratch is per-goroutine reusable memory for reading a directory. keys is
+// not reused: the rows of the directory are views of it.
 type scratch struct {
 	buf   []byte
 	names []byte
 	ents  []entry
+	keys  []byte
 }
 
 var scratchPool = sync.Pool{New: func() any { return &scratch{buf: make([]byte, direntBuffer)} }}
@@ -52,6 +78,7 @@ var scratchPool = sync.Pool{New: func() any { return &scratch{buf: make([]byte, 
 type chunk struct {
 	dir   *sharedFD
 	names []byte
+	keys  []byte
 	ents  []entry
 }
 
@@ -80,7 +107,7 @@ func disposeChunk(r Range) {
 // before stat, so each stat lands in its final slot.
 func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	if c := r.chunk; c != nil { // Expand releases its descriptor share
-		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.ents, st)
+		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.keys, c.ents, st)
 		if err != nil {
 			return err
 		}
@@ -93,10 +120,15 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	st.DirsRead++
 	sc := scratchPool.Get().(*scratch)
-	defer scratchPool.Put(sc)
+	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
 	if err := readNames(ctx, fd, r.path, sc, st); err != nil {
 		unix.Close(fd)
 		return err
+	}
+	if !fitsOffsets(len(r.prefix), sc) {
+		unix.Close(fd)
+		st.note(&st.ReadErrors, r.path, errTooLarge)
+		return nil
 	}
 	p.resolveUnknown(fd, sc)
 	buildKeys(r.prefix, sc)
@@ -104,7 +136,9 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		unix.Close(fd)
 		return ctx.Err()
 	}
-	slices.SortFunc(sc.ents, func(a, b entry) int { return strings.Compare(a.key, b.key) })
+	if sortEntries(len(r.prefix), sc) {
+		st.ParallelSorts++
+	}
 	if done(ctx) {
 		unix.Close(fd)
 		return ctx.Err()
@@ -114,7 +148,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		return p.emitChunks(fd, r, sc, e, st)
 	}
 	defer unix.Close(fd)
-	rows, err := p.statInto(ctx, fd, r.path, sc.names, sc.ents, st)
+	rows, err := p.statInto(ctx, fd, r.path, sc.names, sc.keys, sc.ents, st)
 	if err != nil {
 		return err
 	}
@@ -134,10 +168,11 @@ func openDir(path string, noFollow bool) (int, error) {
 // readNames parses all entries of fd into sc (names and entries).
 func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats) error {
 	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
-	add := func(ino uint64, typ uint8, name []byte) {
-		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), ino: ino, typ: typ})
+	add := func(_ uint64, typ uint8, name []byte) {
+		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
 		sc.names = append(sc.names, name...)
 	}
+	presized := false
 	for batches := 0; ; batches++ {
 		if batches%64 == 63 && done(ctx) { // a huge directory: stay cancellable
 			return ctx.Err()
@@ -157,7 +192,36 @@ func readNames(ctx context.Context, fd int, path string, sc *scratch, st *Stats)
 			st.note(&st.ReadErrors, path, err)
 			return nil
 		}
+		if !presized && len(sc.ents) >= presizeAfter {
+			presized = true
+			if presize(fd, sc) {
+				st.Presized++
+			}
+		}
 	}
+}
+
+// presize grows sc's buffers once for a large directory, to the entry count
+// its st_size suggests at the average name length seen so far: a linux
+// dirent record is at least 8 bytes plus the name, 4-aligned, on ext4, and
+// tmpfs and btrfs report sizes at or above that per entry, so the estimate
+// is rarely short (appending still grows past it if it is). It reports
+// whether it grew anything.
+func presize(fd int, sc *scratch) bool {
+	var s unix.Stat_t
+	if unix.Fstat(fd, &s) != nil || s.Size <= 0 {
+		return false
+	}
+	avg := len(sc.names) / len(sc.ents)
+	est := min(int(s.Size/int64(8+(avg+3)&^3)), presizeMax)
+	if est <= cap(sc.ents) {
+		return false
+	}
+	sc.ents = slices.Grow(sc.ents, est-len(sc.ents))
+	if more := est*avg - len(sc.names); more > 0 { // avg is rounded down: the names may already exceed it
+		sc.names = slices.Grow(sc.names, more)
+	}
+	return true
 }
 
 // resolveUnknown types entries the filesystem reported as DT_UNKNOWN.
@@ -175,7 +239,7 @@ func (p *Provider) resolveUnknown(fd int, sc *scratch) {
 }
 
 // buildKeys writes every key (prefix+name, plus "/" for directories) into
-// one arena and slices it.
+// one new arena, sc.keys, recording each entry's offset and length.
 func buildKeys(prefix string, sc *scratch) {
 	size := 0
 	for i := range sc.ents {
@@ -190,20 +254,103 @@ func buildKeys(prefix string, sc *scratch) {
 		if e.typ == unix.DT_DIR {
 			arena = append(arena, '/')
 		}
-		e.key = unsafe.String(unsafe.SliceData(arena[start:]), len(arena)-start) // arena is never written again
+		e.keyOff, e.keyLen = uint32(start), uint32(len(arena)-start)
 	}
+	sc.keys = arena
 }
 
-// emitChunks shares fd among chunk ranges of the sorted entries.
+// sortEntries sorts a directory's entries by key, in parallel for a large
+// directory, and reports whether it did so in parallel.
+func sortEntries(plen int, sc *scratch) bool {
+	runs := 1
+	if len(sc.ents) >= parallelSortMin { // GOMAXPROCS(0) takes the scheduler lock: not per small directory
+		runs = max(1, min(runtime.GOMAXPROCS(0), len(sc.ents)/sortRunMin))
+	}
+	sortRuns(plen, sc, runs)
+	return runs > 1
+}
+
+// sortRuns sorts sc.ents by key: it splits them into runs sorted
+// concurrently, then merges pairs of runs, concurrently, until one is
+// left. Every key starts with the directory's prefix (plen bytes), so
+// comparing what follows it, the name and a directory's "/", gives the same
+// byte order without re-reading the prefix in every comparison. Names in a
+// directory are distinct, so no two keys are equal and the result is the
+// one order whatever the runs.
+func sortRuns(plen int, sc *scratch, runs int) {
+	keys := sc.keys
+	cmp := func(a, b entry) int {
+		return bytes.Compare(keys[int(a.keyOff)+plen:int(a.keyOff+a.keyLen)], keys[int(b.keyOff)+plen:int(b.keyOff+b.keyLen)])
+	}
+	src := sc.ents
+	if runs <= 1 {
+		slices.SortFunc(src, cmp)
+		return
+	}
+	bounds := make([]int, runs+1)
+	for i := range bounds {
+		bounds[i] = i * len(src) / runs
+	}
+	var wg sync.WaitGroup
+	for i := range runs {
+		wg.Go(func() { slices.SortFunc(src[bounds[i]:bounds[i+1]], cmp) })
+	}
+	wg.Wait()
+	dst := make([]entry, len(src))
+	for len(bounds) > 2 {
+		next := []int{0}
+		for i := 0; i+1 < len(bounds); i += 2 {
+			lo, hi := bounds[i], bounds[min(i+2, len(bounds)-1)]
+			mid := bounds[i+1]
+			next = append(next, hi)
+			if i+2 >= len(bounds) { // an odd run out: carried over as it is
+				copy(dst[lo:hi], src[lo:hi])
+				continue
+			}
+			wg.Go(func() { mergeRuns(dst[lo:hi], src[lo:mid], src[mid:hi], cmp) })
+		}
+		wg.Wait()
+		src, dst, bounds = dst, src, next
+	}
+	sc.ents = src
+}
+
+// mergeRuns merges the sorted runs a and b into dst (len(a)+len(b)).
+func mergeRuns(dst, a, b []entry, cmp func(a, b entry) int) {
+	i, j, k := 0, 0, 0
+	for i < len(a) && j < len(b) {
+		if cmp(a[i], b[j]) <= 0 {
+			dst[k] = a[i]
+			i++
+		} else {
+			dst[k] = b[j]
+			j++
+		}
+		k++
+	}
+	k += copy(dst[k:], a[i:])
+	copy(dst[k:], b[j:])
+}
+
+// keyOf views an entry's key in the arena without copying; the arena is
+// never written once built, and rows keep it alive.
+func keyOf(keys []byte, e *entry) string {
+	return unsafe.String(unsafe.SliceData(keys[e.keyOff:]), int(e.keyLen))
+}
+
+// emitChunks shares fd among chunk ranges of the sorted entries. The chunks
+// take the scratch's name and entry buffers rather than copies of them; the
+// scratch goes back to the pool without them, so a huge directory's buffers
+// are not kept for the next directory.
 func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
-	names := slices.Clone(sc.names)
-	ents := slices.Clone(sc.ents)
+	names, keys, ents := sc.names, sc.keys, sc.ents
+	sc.names, sc.keys, sc.ents = nil, nil, nil
 	n := (len(ents) + chunkEntries - 1) / chunkEntries
 	d := &sharedFD{fd: fd}
 	d.refs.Store(int32(n))
 	st.Chunks += int64(n)
 	for i := 0; i < len(ents); i += chunkEntries {
-		c := &chunk{dir: d, names: names, ents: ents[i:min(i+chunkEntries, len(ents))]}
+		c := &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}
 		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c}); err != nil {
 			// The emitter owns chunk i now (the order stage disposes it);
 			// release the references of the chunks never emitted.
@@ -218,7 +365,7 @@ func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Ran
 
 // statInto stats ents (sorted) relative to fd into one row slab, dropping
 // entries that vanished, failed or changed type since they were listed.
-func (p *Provider) statInto(ctx context.Context, fd int, path string, names []byte, ents []entry, st *Stats) ([]Row, error) {
+func (p *Provider) statInto(ctx context.Context, fd int, path string, names, keys []byte, ents []entry, st *Stats) ([]Row, error) {
 	rows := make([]Row, len(ents))
 	n := 0
 	for i := range ents {
@@ -229,7 +376,7 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names []by
 		}
 		e := &ents[i]
 		r := &rows[n]
-		r.Key = e.key
+		r.Key = keyOf(keys, e)
 		if p.opt.Fields == Names {
 			r.Data.Kind = kindOfDT(e.typ)
 			n++

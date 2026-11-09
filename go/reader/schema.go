@@ -16,7 +16,7 @@ const (
 	GCSObjectsV1     SchemaID = "swath/gcs-objects/v1"     // Cloud Storage live objects
 	GCSGenerationsV1 SchemaID = "swath/gcs-generations/v1" // Cloud Storage generations (--all-versions)
 	AzblobObjectsV1  SchemaID = "swath/azblob-objects/v1"  // Azure Blob current blobs
-	LocalV1          SchemaID = "swath-local/v1"           // a filesystem tree
+	LocalV1          SchemaID = "swath/local-entries/v1"   // a filesystem tree
 )
 
 // ColumnType is a column's physical and logical Parquet type.

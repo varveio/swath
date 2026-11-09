@@ -71,6 +71,7 @@ type renamedKey struct {
 // b writes it, with an exclusion, which does not refuse it.
 func swathExtension() map[string]any {
 	return map[string]any{
+		"version":      MetadataVersion,
 		"published_at": "2026-11-09T10:00:00Z",
 		"source":       map[string]any{"kind": "s3", "uri": "s3://b", "container": "b"},
 		"scope":        map[string]any{"kind": "whole"},

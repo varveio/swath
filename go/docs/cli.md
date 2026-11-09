@@ -51,8 +51,8 @@ identity stays frozen: a resume whose overrides resolve another route (a profile
 refused by the identity check. `swath resume` on a committed dataset with complete coverage has nothing to do
 and exits 0 (`DIR is already complete: nothing to resume`; the report's outcome is `completed`, `complete`
 true), so a supervisor may resume until exit 0; one committed with partial coverage stays `incomplete`, exit 1.
-`swath show DIR` prints a committed dataset's manifest summary (format, schema, source, scope, coverage, parts,
-rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
+`swath show DIR` prints a committed dataset's manifest summary (its layers: the SeekParquet format and draft,
+the swath schema id and the swath metadata version; then key, source, scope, coverage, parts, rows, key range) or an interrupted run's recorded command, frozen identity, committed parts and the key
 `swath resume` would start after; `--journal` dumps the journal as JSON lines. `swath diag list` takes every
 `list` flag and `swath diag count` every count flag, plus the diagnostic ones (the **Diagnostics** group below);
 they exist to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath du` refuse
@@ -730,7 +730,7 @@ Diagnostics:
   resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
   manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
   `modified_after=…`, `modified_before=…`, `storage_class=…`), and a reader that needs the whole source refuses a
-  dataset whose `coverage.filters` is not empty ([upgrade.md](upgrade.md)). **Regular expressions are Go's RE2,
+  dataset whose `coverage.filters` is not empty ([dataset.md](dataset.md#the-swath-extension)). **Regular expressions are Go's RE2,
   not Java's:** the common syntax is the same, but backreferences (`\1`), lookahead and lookbehind, possessive
   quantifiers and atomic groups do not exist and are refused (exit 2); `\Z` is not supported (`\z` is), and
   some character-class and Unicode-property details differ. RE2 runs in time linear in the key, so no pattern

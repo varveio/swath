@@ -477,9 +477,11 @@ func (s *Shared) setWake(f func()) {
 
 // send appends rows to the drainer's output batch, writing full batches.
 // Every row handed on passes the stream-wide order guard first: keys
-// strictly ascending across the whole run (and after Options.After), so no
-// sink, Parquet or other, ever receives a descending or repeated key from
-// a provider that broke its ordering contract.
+// strictly ascending across the whole run, nondecreasing in group mode
+// (Options.Groups: a versions schema's keys repeat on consecutive rows),
+// and always strictly after Options.After, so no sink, Parquet or other,
+// ever receives a descending key, or a repeated one outside group mode,
+// from a provider that broke its ordering contract.
 func (o *run[R, P]) send(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil

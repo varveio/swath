@@ -15,6 +15,7 @@ import (
 	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Key is a key's exact bytes, held in a Go string and compared as unsigned
@@ -112,23 +113,28 @@ func Check(parts []Part, rows int64) error {
 //
 // The fields are flat in Go; the JSON is the module's
 // (seekparquet.MarshalManifest, ParseManifest), with swath's fields under
-// extensions.swath. UnmarshalJSON reads that form (an earlier build's
-// MD5 digests under extensions.swath.part_md5 are not read).
+// extensions.swath, whose version is reader.MetadataVersion. UnmarshalJSON
+// reads that form.
 type Manifest struct {
 	Format        string // seekparquet.Format
 	FormatVersion int    // seekparquet.FormatVersion
 	DraftRevision int    // seekparquet.DraftRevision
 	SchemaID      string
 	Key           seekparquet.Key // KeyColumn
-	PublishedAt   time.Time
-	Source        Source
-	Scope         Scope
-	Coverage      Coverage
-	Parts         []ManifestPart // in key order; part i is data/part-%05d.parquet
+	// MetadataVersion is extensions.swath.version as read (0 for a
+	// manifest without the extension); MarshalJSON always writes
+	// reader.MetadataVersion.
+	MetadataVersion int
+	PublishedAt     time.Time
+	Source          Source
+	Scope           Scope
+	Coverage        Coverage
+	Parts           []ManifestPart // in key order; part i is data/part-%05d.parquet
 }
 
 // swathExtension is extensions.swath.
 type swathExtension struct {
+	Version     int       `json:"version"`
 	PublishedAt time.Time `json:"published_at"`
 	Source      Source    `json:"source"`
 	Scope       Scope     `json:"scope"`
@@ -137,7 +143,7 @@ type swathExtension struct {
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
-	x := swathExtension{PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage}
+	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: m.PublishedAt, Source: m.Source, Scope: m.Scope, Coverage: m.Coverage}
 	sm := seekparquet.Manifest{Key: m.Key, SchemaID: m.SchemaID, Parts: make([]seekparquet.PartInfo, len(m.Parts)),
 		Version: seekparquet.Version{FormatVersion: int64(m.FormatVersion), DraftRevision: int64(m.DraftRevision)}}
 	for i, p := range m.Parts {
@@ -152,7 +158,8 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reads a SeekParquet manifest as the module parses it
-// (strictly, its version one this build reads, within ManifestLimits).
+// (strictly, its version one this build reads, within ManifestLimits),
+// with extensions.swath, when present, at version reader.MetadataVersion.
 // Any other manifest, the swath-dataset format 2 of builds from 2026-11-05
 // to 2026-11-08 included, is refused.
 func (m *Manifest) UnmarshalJSON(b []byte) error {
@@ -165,9 +172,12 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 		if err := json.Unmarshal(raw, &x); err != nil {
 			return fmt.Errorf("manifest: extensions.%s: %w", Extension, err)
 		}
+		if x.Version != reader.MetadataVersion {
+			return fmt.Errorf("manifest: unsupported swath metadata version %d (this build reads %d)", x.Version, reader.MetadataVersion)
+		}
 	}
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
-		Key: sm.Key, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(sm.Parts))}
+		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}
