@@ -177,9 +177,10 @@ def gen_realistic(root):
 def gen_huge(root):
     d = os.path.join(root, "one-dir")
     os.mkdir(d)
-    for f in range(200_000):
-        touch(os.path.join(d, f"entry-{f:06d}"))
-    return 200_000
+    n = int(os.environ.get("HUGE_FILES", "200000"))
+    for f in range(n):
+        touch(os.path.join(d, f"entry-{f:07d}"))
+    return n
 
 
 GENS = {"wide": gen_wide, "deep": gen_deep, "realistic": gen_realistic, "huge": gen_huge}

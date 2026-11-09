@@ -10,17 +10,12 @@ on:
     inputs:
       ref_a:
         description: swath ref A (before)
-        default: claude/stoic-ritchie-ugt91m
+        default: b8a8003c  # main before #368
       ref_b:
         description: swath ref B (after)
-        default: claude/localfs-count-unsorted
-      trees:
-        description: gen_tree.py trees
-        default: realistic huge
-      warm_reps:
+        default: 40b89380  # #368
+      peer_rounds:
         default: "6"
-      cold_reps:
-        default: "3"
       os:
         description: runners (JSON list)
         default: '["windows-latest", "macos-latest"]'
@@ -33,18 +28,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.os || '["macos-latest"]') }}
+        os: ${{ fromJSON(inputs.os || '["windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    timeout-minutes: 350
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'main' }}", path: swath-a}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'b8a8003c' }}", path: swath-a}
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'go/localfs-darwin-fstatat' }}", path: swath-b}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || '40b89380' }}", path: swath-b}
       - uses: actions/setup-go@v5
         with: {go-version-file: swath-b/go/go.mod, cache: false}
       - uses: actions/setup-python@v5
@@ -58,18 +53,18 @@ jobs:
       - name: tools (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install fd bfs hyperfine
+          brew install fd bfs
           pip install fdu || echo "fdu unavailable"
       - name: tools (Windows)
         if: runner.os == 'Windows'
-        run: choco install -y --no-progress fd hyperfine
+        run: choco install -y --no-progress fd
       - name: bench
         run: |
           export PATH="$PATH:/c/ProgramData/chocolatey/bin"
           B="$RUNNER_TEMP/bin"
           if [ "$RUNNER_OS" = Windows ]; then B=$(cygpath -m "$B"); X=.exe; else X=; fi
           SWATH_A="$B/swath-a$X" SWATH_B="$B/swath-b$X" GEN=go/bench/gen_tree.py OUT="$RUNNER_TEMP/out" \
-            TREES="${{ inputs.trees || 'huge' }}" WARM_REPS="${{ inputs.warm_reps || '6' }}" COLD_REPS="${{ inputs.cold_reps || '3' }}" \
+            PEER_ROUNDS="${{ inputs.peer_rounds || '6' }}" \
             bash go/bench/xos-bench.sh
       - uses: actions/upload-artifact@v4
         if: always()
