@@ -35,7 +35,6 @@ import (
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
 
@@ -1033,7 +1032,7 @@ func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
 	var le *totals.LimitError
-	var ce *objhttp.CredentialError
+	var ce interface{ CredentialRefused() bool } // objhttp.CredentialError
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -1055,7 +1054,7 @@ func explain(err error) error {
 		return fmt.Errorf("%w (raise --max-inodes if memory allows, or count every link without --count-links-once)", err)
 	case errors.As(err, &le):
 		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
-	case errors.As(err, &ce) && !ce.Transient:
+	case errors.As(err, &ce) && ce.CredentialRefused():
 		// No credentials, or none that load: swath never falls back to
 		// anonymous requests on its own.
 		return fmt.Errorf("%w (a public bucket needs --anonymous)", err)
