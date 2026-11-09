@@ -58,6 +58,31 @@ type SchemaSpec struct {
 	MaxKeyBytes int
 	// Columns are the columns after the key, in order.
 	Columns []ColumnSpec
+	// Versions names the columns that carry a versions schema's roles; the
+	// zero value for a schema whose rows are not versions.
+	Versions VersionSpec
+}
+
+// VersionSpec names the columns of a versions schema (a key's versions as
+// consecutive rows) by role, so a consumer interprets the rows of any such
+// schema from its spec instead of from the column names. ID and exactly
+// one of Latest and DeletedAt are set; a versions schema has repeating keys
+// (UniqueKeys false).
+type VersionSpec struct {
+	// ID is the version's identifier: a string column, or a signed INT64
+	// column whose value is the identifier in decimal. Null on a row
+	// without one.
+	ID string
+	// Latest is a required boolean column: true on the key's latest row.
+	Latest string
+	// DeleteMarker, if set, is a required boolean column: true on a row
+	// that is a delete marker (no object, no bytes) rather than a version
+	// of the object. A schema without it has no delete markers.
+	DeleteMarker string
+	// DeletedAt is the alternative to Latest: a nullable timestamp
+	// column, null on the latest (live) row. A row with a value, even a
+	// zero one, is not the latest.
+	DeletedAt string
 }
 
 // Column returns the named column (the key included).
@@ -135,12 +160,14 @@ var schemas = map[SchemaID]SchemaSpec{
 	S3VersionsV1: {ID: S3VersionsV1, Key: textKey, MaxKeyBytes: maxObjectKeyBytes, Columns: concat(s3Columns,
 		ColumnSpec{Name: "version_id", Type: TypeString},
 		ColumnSpec{Name: "is_latest", Type: TypeBool, Required: true},
-		ColumnSpec{Name: "is_delete_marker", Type: TypeBool, Required: true})},
+		ColumnSpec{Name: "is_delete_marker", Type: TypeBool, Required: true}),
+		Versions: VersionSpec{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}},
 	GCSObjectsV1: {ID: GCSObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxObjectKeyBytes, Columns: gcsColumns},
 	// The gcs-objects/v1 columns, then time_deleted: null for the live
 	// generation.
 	GCSGenerationsV1: {ID: GCSGenerationsV1, Key: textKey, MaxKeyBytes: maxObjectKeyBytes, Columns: concat(gcsColumns,
-		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros})},
+		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros}),
+		Versions: VersionSpec{ID: "generation", DeletedAt: "time_deleted"}},
 	// Every column is nullable: content_md5 and access_tier where Azure
 	// lists none, the others where a listing omits them.
 	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: []ColumnSpec{
