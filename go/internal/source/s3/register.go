@@ -120,18 +120,19 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionsSchema), p: p, root: req.Root}, nil
+		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionsSchema), Registered: p, p: p, root: req.Root}, nil
 	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p, root: req.Root}, nil
 }
 
 // opened is the S3 provider as the pipeline sees it.
 type opened[P any] struct {
 	registry.Bound[P]
+	keyrange.Registered
 	p    *provider[P]
 	root string
 }
@@ -139,19 +140,6 @@ type opened[P any] struct {
 func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "s3", Root: o.root, Container: o.p.opt.Bucket}
 }
-
-func (o *opened[P]) Listed() int64 { return o.p.Listed() }
-
-func (o *opened[P]) Answered() int64 { return o.p.Answered() }
-
-// Frontier is the engine's key-space progress (source.Advancing).
-func (o *opened[P]) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
-
-// Requests is the live request account (source.Requested).
-func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
-
-// SeedTime is the engine's seed time (source.SeedTimed).
-func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
 // (source.Priced): only on the provider's own service; a custom endpoint
@@ -162,12 +150,6 @@ func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
 	}
 	return 0, ""
 }
-
-func (o *opened[P]) Faults() (throttles, timeouts int64) { return o.p.Faults() }
-
-// Contention is the engine's decision-mutex wait and longest hold
-// (source.Contended).
-func (o *opened[P]) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
 
 func (o *opened[P]) target() string {
 	t := "s3://" + o.p.opt.Bucket
@@ -237,36 +219,27 @@ func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && identified)
 }
 
-// Restart continues after the last published key, from the normal
-// start-up: one range (after, ⊤], split as on a fresh run.
-func (o *opened[P]) Restart(after string) error {
-	o.p.Restart(after)
-	return nil
-}
-
-// SeedFrom starts the listing from a prior's cuts instead of the seed
-// (source.Seeded, --seed-from).
-func (o *opened[P]) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
-
-// Reuse lists around a resume's reused coverage certificates
-// (source.Reusing): the engine replays them, lists the gaps.
-func (o *opened[P]) Reuse(spans []source.Span) { o.p.Reuse(spans) }
-
-// Fences reports the engine's coverage fences (source.Fencing).
-func (o *opened[P]) Fences() bool { return o.p.Fences() }
-
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
+// The registered source's whole method set (keyrange.Registered: the ten
+// optional interfaces a range-engine provider gives the pipeline); a
+// capability whose method went missing would silently be off.
 var (
-	_ source.Identified = (*opened[Object])(nil)
-	_ source.Resumable  = (*opened[Object])(nil)
-	_ source.Seeded     = (*opened[Object])(nil)
-	_ source.Reusing    = (*opened[Object])(nil)
-	_ source.Capable    = (*opened[Object])(nil)
-	_ source.Reporter   = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Object])(nil)
+	_ keyrange.Registered = (*opened[Object])(nil)
+	_ source.Identified   = (*opened[Object])(nil)
+	_ source.Capable      = (*opened[Object])(nil)
+	_ source.Reporter     = (*opened[Object])(nil)
+	_ source.Priced       = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Version])(nil)
+	_ keyrange.Registered = (*opened[Version])(nil)
+	_ source.Identified   = (*opened[Version])(nil)
+	_ source.Capable      = (*opened[Version])(nil)
+	_ source.Reporter     = (*opened[Version])(nil)
+	_ source.Priced       = (*opened[Version])(nil)
 )
 
 // classify names the class of an S3 failure (client.Classify) for the

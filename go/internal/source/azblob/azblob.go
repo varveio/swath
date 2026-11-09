@@ -444,10 +444,14 @@ func AcceptBound(s string) bool {
 
 var requeue = objhttp.Requeue
 
-// Restart continues after a journaled run's last published key.
-func (p *Provider) Restart(after string) {
+// Restart continues after a journaled run's last published key, from
+// the normal start-up: one range (after, ⊤], split as on a fresh run
+// (source.Resumable). It records the resume in the provider's options and
+// the engine's.
+func (p *Provider) Restart(after string) error {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
+	return nil
 }
 
 // Stats snapshots the counters.

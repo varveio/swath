@@ -302,10 +302,14 @@ func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 // asked again (keyrange.Description.Requeue).
 var requeue = objhttp.Requeue
 
-// Restart continues after the last published key.
-func (p *provider[P]) Restart(after string) {
+// Restart continues after a journaled run's last published key, from
+// the normal start-up: one range (after, ⊤], split as on a fresh run
+// (source.Resumable). It records the resume in the provider's options and
+// the engine's.
+func (p *provider[P]) Restart(after string) error {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
+	return nil
 }
 
 // Stats returns the counters so far.

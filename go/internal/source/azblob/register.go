@@ -86,11 +86,12 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), p: p}, nil
+	return &opened{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p}, nil
 }
 
 type opened struct {
 	registry.Bound[Object]
+	keyrange.Registered
 	p *Provider
 }
 
@@ -98,25 +99,6 @@ type opened struct {
 func (o *opened) Locator() source.Locator {
 	return source.Locator{Kind: "azblob", Root: o.p.target(), Container: o.p.opt.Container}
 }
-
-func (o *opened) Listed() int64 { return o.p.Listed() }
-
-func (o *opened) Answered() int64 { return o.p.Answered() }
-
-// Frontier is the engine's key-space progress (source.Advancing).
-func (o *opened) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
-
-// Requests is the live request account (source.Requested).
-func (o *opened) Requests() source.Requests { return o.p.Requests() }
-
-// SeedTime is the engine's seed time (source.SeedTimed).
-func (o *opened) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
-
-func (o *opened) Faults() (throttles, timeouts int64) { return o.p.Faults() }
-
-// Contention is the engine's decision-mutex wait and longest hold
-// (source.Contended).
-func (o *opened) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
 
 // endpoint is the account's blob service URL as the client requests it
 // (the route without the container): https://ACCOUNT.blob.core.windows.net,
@@ -151,34 +133,20 @@ func (o *opened) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
 }
 
-func (o *opened) Restart(after string) error {
-	o.p.Restart(after)
-	return nil
-}
-
-// SeedFrom starts the listing from a prior's cuts instead of the seed
-// (source.Seeded, --seed-from).
-func (o *opened) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
-
-// Reuse lists around a resume's reused coverage certificates
-// (source.Reusing): the engine replays them, lists the gaps.
-func (o *opened) Reuse(spans []source.Span) { o.p.Reuse(spans) }
-
-// Fences reports the engine's coverage fences (source.Fencing).
-func (o *opened) Fences() bool { return o.p.Fences() }
-
 func (o *opened) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("azblob", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
+// The registered source's whole method set (keyrange.Registered: the ten
+// optional interfaces a range-engine provider gives the pipeline); a
+// capability whose method went missing would silently be off.
 var (
-	_ source.Identified = (*opened)(nil)
-	_ source.Resumable  = (*opened)(nil)
-	_ source.Seeded     = (*opened)(nil)
-	_ source.Reusing    = (*opened)(nil)
-	_ source.Capable    = (*opened)(nil)
-	_ source.Reporter   = (*opened)(nil)
+	_ registry.Source     = (*opened)(nil)
+	_ keyrange.Registered = (*opened)(nil)
+	_ source.Identified   = (*opened)(nil)
+	_ source.Capable      = (*opened)(nil)
+	_ source.Reporter     = (*opened)(nil)
 )
 
 // classify names the class of an Azure failure (client.Classify) for the
