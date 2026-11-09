@@ -2,7 +2,7 @@
 
 What `internal/parquetout` and `internal/dataset` write, and why. Each choice lists what depends on it. The dataset
 is a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft revision 1 (the format's
-`spec/format-1.md`; what changed from format 2 is in [../upgrade.md](../upgrade.md#seekparquet)); swath's own
+`spec/format-1.md`; what changed from the Java tool's format 1 is in [../upgrade.md](../upgrade.md#seekparquet)); swath's own
 guarantees are in [contracts.md](contracts.md#dataset-guarantees-readers-rely-on-these). This page says how the
 Go writer meets them.
 
@@ -20,7 +20,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Choice | Value | Why / who depends on it |
 |---|---|---|
 | Row path | the module's page intake, `write.PartWriter.WritePage`: swath buffers a page of rows (1,024) and the module asks for each column's values (`fillKey`, `fill`, from the schema's accessors), borrowing them until it returns, and writes each column's page through parquet-go's column writers, 64 rows at a time | No per-row reflection and no copy: a schema mismatch with a struct row silently selects parquet-go's reflective conversion. The 64-row write quantum keeps pages identical to parquet-go's row path. `WritePage` checks the key order but not that a `STRING` key is valid UTF-8 (KEY-6): swath declares the key `STRING` only for providers whose keys are UTF-8 by their protocol (S3, GCS) and `BINARY` for filesystem paths, so it adds no check. |
-| `size` and other integers | INT64 / INT32 with the standard `INT(64,true)` / `INT(32,true)` annotation | Format 2 drops the Java adapter that stripped it; the downstream reader checks the physical type only. |
+| `size` and other integers | INT64 / INT32 with the standard `INT(64,true)` / `INT(32,true)` annotation | The Java tool's adapter stripped it; the downstream reader checks the physical type only. |
 | Timestamps | INT64 `TIMESTAMP(MICROS, UTC)` | canonical `last_modified`. |
 | Key encoding | `DELTA_BYTE_ARRAY` | sorted keys share long prefixes. It is also what makes the column-index adapter possible: with dictionary keys the type is library-private. |
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (the module's `ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; the downstream reader and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
@@ -29,7 +29,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page (SeekParquet GEO-1 recommends at most 1,024 key rows a page). The column index carries page bounds; header statistics would duplicate them. |
-| Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value: format 2's 1,024-byte limit did that to any key or value over 1,024 bytes (filesystem paths and link targets). `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
+| Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value: the 1,024-byte limit of the 2026-11-05 layout did that to any key or value over 1,024 bytes (filesystem paths and link targets). `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
 | Codec | zstd, klauspost `SpeedDefault` with entropy coding of all-literal blocks enabled | pure Go (`CGO_ENABLED=0`). The default wrapper skips entropy coding on all-literal blocks, which loses most of the gain on hex ETags. |
 | Codec states | one pool per router, shared by its writers: single-state zstd encoders made as concurrent page compressions need them, up to the encoders admitted (raised by `Router.Admit`), reused last-in first-out | a state keeps the history of the largest page it compressed (about 10.6 MiB once a page passes one 128 KiB zstd block, with zstd's lower encoder memory, which changes how the encoder allocates its history and scratch, not its window or matching: `TestLowerEncoderMemIsByteIdentical` compares 33 raw inputs, three patterns at eleven sizes up to 9 MiB, with and without it; it is evidence, not proof for every frame or reuse history, and exercises no schema). The 10.6 MiB and the 12 MiB priced are measured residency and allowance, not a bound the library guarantees. The spill frames' zstd encoders are separate and set apart: `order.spillEncoderOptions`, a 1 MiB window with the same lower-memory mode, about 1.5 MiB each ([ordering](ordering.md)); the Parquet codec keeps the default 8 MiB window, which its bytes (`parquetout.Recipe`) depend on, so a pool handed round in turn warms every state; output does not depend on the state (`EncodeAll` resets it). |
@@ -89,12 +89,14 @@ acceptance, which reads the manifest's coverage ([../upgrade.md](../upgrade.md))
 
 Every part carries SeekParquet's five stamps (STAMP-1), equal to the manifest's: `seekparquet.format_version=0`,
 `seekparquet.draft_revision=1`, `seekparquet.schema_id`, `seekparquet.key_column=key` and
-`seekparquet.key_unique` (`true`, or `false` for a schema whose keys repeat, `schema.Info.Groups`); format 2's
-`swath.index_bound_bytes` is gone with the shortening it described. Within-file order is the standard `sorting_columns` (key, ascending) on every row group. Order
+`seekparquet.key_unique` (`true`, or `false` for a schema whose keys repeat, `schema.Info.Groups`). Within-file order is the standard `sorting_columns` (key, ascending) on every row group. Order
 across parts, exact bounds and completeness are the manifest's; nothing in a footer says where a part sits
-in the dataset. `TestFooterOnlyChange` pins the digests of the data pages, page indexes and footer the format 2
-writer wrote for its rows and requires them unchanged apart from the stamps and the bounds of keys over 1,024
-bytes (shown for those rows; see [../upgrade.md](../upgrade.md#seekparquet) on the compression library).
+in the dataset. `TestFooterOnlyChange` pins the digests of the data pages, page indexes and footer of a frozen
+golden (written by the 2026-11-05 layout) for its rows and requires them unchanged apart from the stamps and the
+bounds of keys over 1,024 bytes. That is shown for those rows only: the switch to SeekParquet raised
+klauspost/compress from v1.19.1 to v1.20.3, whose zstd encoder may choose its entropy tables differently on
+other data of more than one block, so parts of builds before and after need not be byte-identical in general
+(the writer recipe, `swath-go/parquet-r3`, keeps their resumes apart).
 
 ## Part router and deterministic boundaries
 
@@ -217,10 +219,10 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 - **SeekParquet readers** (the Go module `github.com/varveio/seekparquet/go`, which `swath-replay` uses) open the
   dataset by its manifest and stamps and seek through the key column's page index; the CI conformance step
   checks this writer's datasets against the format's reference validator ([../testing.md](../testing.md#seekparquet-conformance)).
-- **The downstream reader** opened format-2 S3 datasets with the changes in [../upgrade.md](../upgrade.md): it
-  dispatches on the manifest's format, accepts whole-bucket coverage from the manifest, reads the
-  current-object schema and the `swath.profile` stamp ([measurements](../measurements.md#downstream-reader-compatibility));
-  for 0.4 it reads the SeekParquet manifest and stamps ([../upgrade.md](../upgrade.md#seekparquet)).
+- **The downstream reader** dispatches on the manifest's format, accepts whole-bucket coverage from the
+  manifest's swath extension, and reads the SeekParquet stamps and each schema id's columns
+  ([../upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)); the recorded probe
+  ([measurements](../measurements.md#downstream-reader-compatibility)) predates SeekParquet.
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 

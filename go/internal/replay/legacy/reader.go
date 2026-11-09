@@ -33,10 +33,6 @@ type PartSource struct {
 	// Footer is the part's parsed footer when a profile has already read it
 	// with OpenFooter; nil reads it.
 	Footer *parquet.File
-	// MinKey and MaxKey are the part's exact first and last keys when its
-	// profile records them (a manifest does); Open decodes both and refuses
-	// the set with ReasonSanityFailed when they differ. Nil checks nothing.
-	MinKey, MaxKey []byte
 	// BoundBytes is the length at which the key column's ColumnIndex bounds
 	// may have been truncated by the writer: a bound this long or longer is
 	// treated as conservative. It must be positive.
@@ -61,7 +57,7 @@ type Options struct {
 	// CheckGroup, when set, is called for every non-empty row group in key
 	// order, with its part's footer, before that group's first key is
 	// checked; an error refuses the set. A profile uses it for decisions it
-	// takes from footer metadata (row types, sorting columns).
+	// takes from footer metadata (row types).
 	CheckGroup func(part string, footer *parquet.File, physical int, group *format.RowGroup) error
 }
 
@@ -127,7 +123,6 @@ func Open(ctx context.Context, sources []PartSource, opt Options) (*Reader, erro
 		}
 		r.parts = append(r.parts, p)
 		r.columns = mergeColumns(r.columns, p.footer.Schema())
-		first, last := len(r.groups), -1
 		for physical := range p.footer.Metadata().RowGroups {
 			rg := &p.footer.Metadata().RowGroups[physical]
 			if rg.NumRows == 0 {
@@ -154,41 +149,10 @@ func Open(ctx context.Context, sources []PartSource, opt Options) (*Reader, erro
 			}
 			r.groups = append(r.groups, group{part: i, physical: physical, first: key, rows: rg.NumRows})
 			r.rows += rg.NumRows
-			previous, last = key, len(r.groups)-1
-		}
-		if err := checkBounds(ctx, r, p, src, first, last); err != nil {
-			return nil, err
-		}
-		if last >= 0 && src.MaxKey != nil {
-			// The next part's first key must follow this part's last.
-			previous = src.MaxKey
+			previous = key
 		}
 	}
 	return r, nil
-}
-
-// checkBounds compares a part's decoded first and last keys with the exact
-// bounds its profile recorded.
-func checkBounds(ctx context.Context, r *Reader, p *part, src PartSource, first, last int) error {
-	if src.MinKey == nil && src.MaxKey == nil {
-		return nil
-	}
-	if last < 0 {
-		return Refuse(ReasonSanityFailed, "%s holds no rows but records key bounds", src.Name)
-	}
-	if src.MinKey != nil && !bytes.Equal(r.groups[first].first, src.MinKey) {
-		return Refuse(ReasonSanityFailed, "%s: decoded first key differs from its recorded minimum", src.Name)
-	}
-	if src.MaxKey != nil {
-		key, err := p.lastKey(ctx, r.groups[last].physical)
-		if err != nil {
-			return fmt.Errorf("%s: %w", src.Name, err)
-		}
-		if !bytes.Equal(key, src.MaxKey) {
-			return Refuse(ReasonSanityFailed, "%s: decoded last key differs from its recorded maximum", src.Name)
-		}
-	}
-	return nil
 }
 
 func openPart(src PartSource, expect []Column) (*part, error) {
@@ -301,21 +265,6 @@ func (p *part) firstKey(ctx context.Context, physical int) ([]byte, error) {
 		return nil, Refuse(ReasonSanityFailed, "%s row group %d: first key is empty", p.name, physical)
 	}
 	return bytes.Clone(values[0].ByteArray()), nil
-}
-
-// lastKey decodes the last key of a non-empty row group from its last key
-// page, located through the OffsetIndex.
-func (p *part) lastKey(ctx context.Context, physical int) ([]byte, error) {
-	index, err := p.keyIndex(ctx, physical)
-	if err != nil {
-		return nil, err
-	}
-	cursor := p.keyCursor(ctx, physical, index, nil)
-	defer cursor.close()
-	if err := cursor.decode(len(index.pages) - 1); err != nil {
-		return nil, err
-	}
-	return bytes.Clone(cursor.values[len(cursor.values)-1].ByteArray()), nil
 }
 
 // at returns the part's file for reads under ctx: a *CachedFile waits for

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/faults"
 )
 
@@ -237,14 +239,31 @@ func insideRoot(root, out string) (bool, error) {
 	return inside, err
 }
 
+// isDataset reports whether out holds a previous output of this tool that
+// a run of schemaID may replace: a current SeekParquet dataset of
+// schemaID, the Java tool's (a schemaId manifest, or _SUCCESS beside
+// data/), or an interrupted run's data/ and marks. A manifest of any other
+// format, the format 2 of builds from 2026-11-05 to 2026-11-08 included,
+// is refused whatever else the directory holds.
 func isDataset(out, schemaID string) bool {
 	if b, err := os.ReadFile(filepath.Join(out, ManifestName)); err == nil {
 		var m struct {
-			SchemaID string `json:"schema_id"`
-			Legacy   string `json:"schemaId"`
+			Format        *string `json:"format"`
+			FormatVersion int64   `json:"format_version"`
+			DraftRevision int64   `json:"draft_revision"`
+			SchemaID      string  `json:"schema_id"`
+			Legacy        string  `json:"schemaId"`
 		}
-		if json.Unmarshal(b, &m) == nil && (m.SchemaID == schemaID || m.Legacy != "") {
-			return true // this tool's dataset, of this or an earlier format
+		if json.Unmarshal(b, &m) == nil {
+			switch {
+			case m.Legacy != "":
+				return true // the Java tool's format 1
+			case m.Format == nil:
+			case *m.Format != seekparquet.Format || m.FormatVersion != seekparquet.FormatVersion || m.DraftRevision != seekparquet.DraftRevision:
+				return false
+			case m.SchemaID == schemaID:
+				return true
+			}
 		}
 	}
 	_, e1 := os.Stat(filepath.Join(out, legacySuccess))

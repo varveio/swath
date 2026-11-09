@@ -5,50 +5,85 @@ package store
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
-
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
+	seekparquet "github.com/varveio/seekparquet/go"
+	"github.com/varveio/seekparquet/go/write"
 )
 
-// writeTypedFormat2 writes rows (two keys, a and b) as the one part of a
-// format-2 dataset of schemaID, with the profile's stamps and sorting
-// metadata, and returns the dataset directory.
-func writeTypedFormat2[T any](t *testing.T, schemaID string, rows []T) string {
+// seekPart is one part's rows, in key order, with the schema they were
+// built from.
+type seekPart struct {
+	schema *parquet.Schema
+	rows   []parquet.Row
+}
+
+// partOf returns rows (a struct with a required string key column) as a
+// seekPart of T's schema.
+func partOf[T any](rows []T) seekPart {
+	schema := parquet.SchemaOf(new(T))
+	part := seekPart{schema: schema, rows: make([]parquet.Row, len(rows))}
+	for i := range rows {
+		part.rows[i] = schema.Deconstruct(nil, &rows[i])
+	}
+	return part
+}
+
+// writeSeek writes parts, in order, as a SeekParquet dataset of schemaID
+// through the module's part writer (pages of at most pageRows rows; 0 is
+// its default), and returns the dataset directory. Parts may differ in
+// their value columns.
+func writeSeek(t *testing.T, schemaID string, pageRows int, parts ...seekPart) string {
 	t.Helper()
 	dir := t.TempDir()
-	if _, err := legacytest.WriteFormat2(dir, legacytest.Dataset{SchemaID: schemaID,
-		Parts: []legacytest.Part{{Rows: objects("a", "b")}}}); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "data", "part-00000.parquet")
-	options := []parquet.WriterOption{parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key")))}
-	for k, v := range legacytest.Format2Stamps(schemaID, 1024) {
-		options = append(options, parquet.KeyValueMetadata(k, v))
+	key := seekparquet.Key{Column: "key", Unique: true}
+	m := seekparquet.Manifest{Key: key, SchemaID: schemaID,
+		Version: seekparquet.Version{FormatVersion: seekparquet.FormatVersion, DraftRevision: seekparquet.DraftRevision}}
+	for i, part := range parts {
+		name := fmt.Sprintf("data/part-%05d.parquet", i)
+		f, err := os.Create(filepath.Join(dir, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := write.NewPart(f, part.schema, write.PartOptions{Key: key, SchemaID: schemaID, PageRows: pageRows})
+		if err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if _, err := w.WriteRows(part.rows); err != nil {
+			_ = w.Abort()
+			t.Fatal(err)
+		}
+		info, err := w.Seal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		info.Path = name
+		m.Parts = append(m.Parts, info)
 	}
-	if err := parquet.WriteFile(path, rows, options...); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
+	raw, err := seekparquet.MarshalManifest(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
-	}
-	m["parts"].([]any)[0].(map[string]any)["bytes"] = info.Size()
-	raw, _ = json.Marshal(m)
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, seekparquet.ManifestName), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// writeTyped writes rows (two keys, a and b) as the one part of a
+// SeekParquet dataset of schemaID and returns the dataset directory.
+func writeTyped[T any](t *testing.T, schemaID string, rows []T) string {
+	t.Helper()
+	return writeSeek(t, schemaID, 0, partOf(rows))
 }
 
 // TestProjectedColumnTypesAreChecked opens datasets whose projected
@@ -64,43 +99,43 @@ func TestProjectedColumnTypesAreChecked(t *testing.T) {
 		dir                    func(t *testing.T, schemaID string) string
 	}{
 		{"content_type as INT64", "content_type", gcs, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key         string `parquet:"key"`
 				ContentType int64  `parquet:"content_type"`
 			}{{"a", 7}, {"b", 8}})
 		}},
 		{"repeated md5", "md5", gcs, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key string   `parquet:"key"`
 				MD5 []string `parquet:"md5"`
 			}{{"a", []string{"x", "y"}}, {"b", nil}})
 		}},
 		{"generation as a string", "generation", gcs, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key        string `parquet:"key"`
 				Generation string `parquet:"generation"`
 			}{{"a", "1"}, {"b", "2"}})
 		}},
 		{"metageneration as unsigned", "metageneration", gcs, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key            string `parquet:"key"`
 				Metageneration uint64 `parquet:"metageneration"`
 			}{{"a", 1}, {"b", 2}})
 		}},
 		{"crc32c as JSON", "crc32c", gcs, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key    string `parquet:"key"`
 				CRC32C string `parquet:"crc32c,json"`
 			}{{"a", `"x"`}, {"b", `"y"`}})
 		}},
 		{"etag as INT64", "etag", s3, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key  string `parquet:"key"`
 				ETag int64  `parquet:"etag"`
 			}{{"a", 1}, {"b", 2}})
 		}},
 		{"repeated storage_class", "storage_class", s3, func(t *testing.T, id string) string {
-			return writeTypedFormat2(t, id, []struct {
+			return writeTyped(t, id, []struct {
 				Key          string   `parquet:"key"`
 				StorageClass []string `parquet:"storage_class"`
 			}{{"a", []string{"STANDARD"}}, {"b", nil}})
@@ -118,7 +153,7 @@ func TestProjectedColumnTypesAreChecked(t *testing.T) {
 		})
 	}
 	// The right types open.
-	dir := writeTypedFormat2(t, gcs, []struct {
+	dir := writeTyped(t, gcs, []struct {
 		Key         string  `parquet:"key"`
 		Generation  int64   `parquet:"generation"`
 		MD5         *string `parquet:"md5,optional"`

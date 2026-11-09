@@ -27,14 +27,6 @@ const (
 	Extension = "swath"
 )
 
-// LegacyFormat is the swath-dataset format 2 earlier builds wrote: still
-// read where a committed dataset is read (show, --seed-from, Managed), and
-// served by the replay server; never written.
-const (
-	LegacyFormat        = "swath-dataset"
-	LegacyFormatVersion = 2
-)
-
 // File and directory names inside a dataset.
 const (
 	DataDir      = "data"

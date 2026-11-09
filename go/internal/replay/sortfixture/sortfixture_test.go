@@ -45,9 +45,9 @@ func capture(t *testing.T, parts ...[]legacytest.Row) string {
 
 func obj(key string, i int) legacytest.Row { return legacytest.Object(key, i) }
 
-// TestSortsTwoPartsIntoAFormat2Dataset sorts two capture parts, keeps only
+// TestSortsTwoPartsIntoASeekParquetDataset sorts two capture parts, keeps only
 // OBJECT rows with their nulls, and writes the replay-owned schema.
-func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
+func TestSortsTwoPartsIntoASeekParquetDataset(t *testing.T) {
 	marker := obj("p/", 9)
 	marker.RowType, marker.Size = "COMMON_PREFIX", nil
 	deleted := obj("x", 8)
