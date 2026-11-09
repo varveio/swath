@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -266,18 +267,33 @@ func (c *Client) credentials(ctx context.Context) error {
 
 // newLoginCredential is the unconfigured discovery's chain off an Azure
 // VM: the developer logins only (the Azure CLI, the Azure Developer CLI),
-// which run a local command and never ask the instance metadata service
-// (tests replace it).
+// which run a local command and never ask the instance metadata service.
+// A login whose command is not installed (exec.LookPath: az, azd; az.cmd
+// on Windows through PATHEXT) is absent and left out, so with neither the
+// chain is an exec.ErrNotFound and nothing is started: azidentity would
+// run each through a shell (cmd.exe on Windows, /bin/sh elsewhere) and
+// report a shell it cannot start as an authentication failure without a
+// response, which reads as transient (tests replace it).
 var newLoginCredential = func() (azcore.TokenCredential, error) {
-	cli, err := azidentity.NewAzureCLICredential(nil)
-	if err != nil {
-		return nil, err
+	var logins []azcore.TokenCredential
+	if _, err := exec.LookPath("az"); err == nil {
+		cli, err := azidentity.NewAzureCLICredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		logins = append(logins, cli)
 	}
-	azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
-	if err != nil {
-		return nil, err
+	if _, err := exec.LookPath("azd"); err == nil {
+		azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		logins = append(logins, azd)
 	}
-	return azidentity.NewChainedTokenCredential([]azcore.TokenCredential{cli, azd}, nil)
+	if len(logins) == 0 {
+		return nil, fmt.Errorf("neither the Azure CLI (az) nor the Azure Developer CLI (azd) is installed: %w", exec.ErrNotFound)
+	}
+	return azidentity.NewChainedTokenCredential(logins, nil)
 }
 
 // newDefaultCredential is azidentity's DefaultAzureCredential (tests
@@ -341,7 +357,11 @@ func (c *Client) entra(ctx context.Context) error {
 
 // login is the unconfigured discovery off an Azure VM: the developer
 // logins (newLoginCredential), one token asked for under the caller's
-// context and the request timeout.
+// context and the request timeout. No login installed (exec.ErrNotFound)
+// or none logged in (azidentity's unavailable signal: "not found on
+// path", "az login") is no credential: anonymous with the note, as a
+// missing gcloud login is for GCS. Only a login that ran and had its
+// token refused refuses the run.
 func (c *Client) login(ctx context.Context) error {
 	const source = "Entra ID (Azure CLI login)"
 	cred, err := newLoginCredential()
@@ -359,7 +379,7 @@ func (c *Client) login(ctx context.Context) error {
 		return ctx.Err()
 	case refused(err):
 		return &CredentialError{Source: source, Err: err}
-	case unavailable(err):
+	case unavailable(err), errors.Is(err, exec.ErrNotFound):
 		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
 	default:
 		// Found but not reachable now (a timeout, a transport failure, a
