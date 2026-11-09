@@ -37,7 +37,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   hinting after them measured worse (3,277 LOOKUPs).
 - **A count does not sort.** Nothing consumes a count's order, so both engines skip each directory's sort
   (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
-  (`TestUnsortedCountEqualsSortedListing`). Warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
+  (`TestUnsortedCountEqualsSortedListing`). getdents engine, warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
   −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../../measurements.md)).
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
