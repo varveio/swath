@@ -147,10 +147,13 @@ prefixes; `./x/...` selects `./x` and every package under `./x/`, never `./xy`. 
 selectors against one `go list -race ./...` and passes `go test` the explicit package paths; `rest` is every
 package no selector names.
 
-`--check` (in `go-lint`) lists the packages and tests, built with `-race` as the shards build them, and fails
-when two rows share a name, there is not exactly one `rest` or it is empty, a selector matches no package, a
-package is selected twice by whole-package rows (or twice within one), a whole-package row selects a split
-package, a split package has no remainder row or two, a row selects no test, or a test is selected twice.
+`--check` (in `go-lint`) lists the packages, and the tests of each split package, built with `-race` as the
+shards build them. It fails when two rows share a name, there is not exactly one `rest` or it is empty, a
+selector matches no package, a package is selected twice by whole-package rows (or twice within one), a
+whole-package row selects a split package, a split package has no remainder row or two, a row of a split
+package (pattern or remainder) selects no test, or a test of a split package is selected twice. Whole-package
+rows are checked for packages, not tests: a row whose packages have no tests (`./internal/faults` alone,
+say) passes and runs nothing.
 `--self-test`, also in `go-lint`, runs these table checks against synthetic package lists, with no Go. A new
 package needs no edit; a new `-run` row needs its package's remainder to stay nonempty.
 

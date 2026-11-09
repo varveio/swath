@@ -19,8 +19,9 @@
 # --check verifies the table against the real package and test lists: shard names are unique,
 # there is one `rest` and it is not empty, every selector matches, no package is in two
 # whole-package rows (or named twice in one), no whole-package row covers a split package, every
-# split package has exactly one remainder row, each row (pattern or remainder) selects at least
-# one test, and no test is selected twice. Packages and tests are discovered with -race, as the
+# split package has exactly one remainder row, each row of a split package (pattern or
+# remainder) selects at least one test, and no test of a split package is selected twice.
+# Whole-package rows are checked for packages only: one whose packages have no tests runs nothing. Packages and tests are discovered with -race, as the
 # shards build them, so a package or test file under `//go:build race` is not invisible to the
 # check. Patterns are anchored and use only the syntax Go's RE2 and grep -E agree on.
 #
