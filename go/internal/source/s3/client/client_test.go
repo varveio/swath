@@ -153,7 +153,7 @@ func TestCredentialChain(t *testing.T) {
 		return c
 	}
 	// Nothing configured: anonymous.
-	if c := list(Config{}); auth.Load() != "" || !c.auth.anonymous {
+	if c := list(Config{}); auth.Load() != "" || !c.auth.Anonymous {
 		t.Fatalf("unsigned expected, got %q", auth.Load())
 	}
 	// A named profile from the shared files, with its region.
@@ -252,5 +252,26 @@ func TestParseFailuresAreRetried(t *testing.T) {
 	}
 	if got := c.Counters(); got.ParseFailures != 2 || got.Retries != 2 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// TestSuppliedClientFollowsNoRedirect: a supplied HTTP client whose policy
+// follows redirects is used without it: a 307 is an answer, and its
+// Location receives no request.
+func TestSuppliedClientFollowsNoRedirect(t *testing.T) {
+	var followed atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed.Add(1)
+		w.Write([]byte(okPage))
+	}))
+	defer elsewhere.Close()
+	supplied := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return nil }}
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}, Config{Anonymous: true, HTTPClient: supplied})
+	_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+	var se *Error
+	if !errors.As(err, &se) || se.Status != 307 || followed.Load() != 0 || supplied.CheckRedirect(nil, nil) != nil {
+		t.Fatalf("%v, %d followed", err, followed.Load())
 	}
 }

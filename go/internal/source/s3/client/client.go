@@ -56,7 +56,7 @@ type Counters = objhttp.Counts
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
 	cfg    Config
-	auth   *auth
+	auth   *Auth
 	region string
 	base   *url.URL
 	http   *http.Client
@@ -65,7 +65,6 @@ type Client struct {
 	retry  objhttp.Retry
 	counts objhttp.Counters
 
-	parsers sync.Pool // *parser
 	buffers sync.Pool // *bytes.Buffer
 }
 
@@ -79,11 +78,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	a, err := loadAuth(ctx, cfg)
+	a, err := LoadAuth(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: joinNotes(anonymousNote(cfg), a.note),
+	c := &Client{cfg: cfg, auth: a, region: a.Region, note: a.Note,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
@@ -95,17 +94,23 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	} else {
 		c.base = &url.URL{Scheme: "https", Host: awsHost(c.region, cfg.FIPS, cfg.DualStack)}
 	}
-	if c.http == nil {
+	// No redirect is followed, a supplied client's included (a copy): the
+	// route is fixed and a 3xx is an answer.
+	if cfg.HTTPClient != nil {
+		hc := *cfg.HTTPClient
+		c.http = &hc
+	} else {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024 // one keep-alive connection per worker
-		c.http = &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		c.http = &http.Client{Transport: t}
 	}
+	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return c, nil
 }
 
 // Credentials returns the resolved credentials' source (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) {
-	return c.auth.source, c.auth.anonymous
+	return c.auth.Source, c.auth.Anonymous
 }
 
 // Note is a one-time warning for the user, or "".
@@ -334,7 +339,7 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	buf.Reset()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(buf, io.LimitReader(resp.Body, 64<<10))
-		return nil, responseError(resp, buf.Bytes())
+		return nil, ResponseError(resp.StatusCode, resp.Header, buf.Bytes())
 	}
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxResponse+1)); err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
@@ -345,12 +350,7 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
 	}
-	p, _ := c.parsers.Get().(*parser)
-	if p == nil {
-		p = new(parser)
-	}
-	defer c.parsers.Put(p)
-	page, err := parse(p, buf.Bytes())
+	page, err := pooled(buf.Bytes(), parse)
 	if err != nil {
 		if errors.Is(err, ErrSyntax) {
 			c.counts.ParseFailure()
@@ -360,8 +360,12 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	return page, nil
 }
 
-func responseError(resp *http.Response, body []byte) *Error {
-	e := &Error{Status: resp.StatusCode, RequestID: resp.Header.Get("X-Amz-Request-Id")}
+// ResponseError is the *Error of an answer other than 200: its status, the
+// code, message and request ID an <Error> body names (else the status text
+// without spaces as the code, and the X-Amz-Request-Id header), and for a
+// redirect the bucket's region (X-Amz-Bucket-Region). header may be nil.
+func ResponseError(status int, header http.Header, body []byte) *Error {
+	e := &Error{Status: status, RequestID: header.Get("X-Amz-Request-Id")}
 	if code, msg, id, ok := parseError(body); ok {
 		e.Code, e.Message = code, msg
 		if id != "" {
@@ -369,10 +373,10 @@ func responseError(resp *http.Response, body []byte) *Error {
 		}
 	}
 	if e.Code == "" {
-		e.Code = strings.ReplaceAll(http.StatusText(resp.StatusCode), " ", "")
+		e.Code = strings.ReplaceAll(http.StatusText(status), " ", "")
 	}
-	if resp.StatusCode == http.StatusMovedPermanently || e.Code == "AuthorizationHeaderMalformed" || e.Code == "PermanentRedirect" {
-		e.Region = resp.Header.Get("X-Amz-Bucket-Region")
+	if status == http.StatusMovedPermanently || e.Code == "AuthorizationHeaderMalformed" || e.Code == "PermanentRedirect" {
+		e.Region = header.Get("X-Amz-Bucket-Region")
 	}
 	return e
 }
