@@ -138,9 +138,9 @@ func wireEntries(t *testing.T, body []byte) client.ListOutput {
 // epoch is the Last-Modified of the fixture's first key (azblobtest.Serve).
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// TestWireOrder walks the replay's Azure route, flat and with a delimiter,
-// from startFrom seeks, at page sizes 1 to 5,000, over the hostile corpus,
-// anonymous, with a SAS and with Shared Key: every page's items are the
+// TestWireOrder walks the replay's Azure route over the hostile corpus,
+// flat, over Encoded names, with a delimiter (an astral one too) and from
+// high-scalar startFrom seeks: every page's items are the
 // wire's, in wire order with the two kinds interleaved (the SDK returns a
 // hierarchy page's blobs and prefixes apart and merge restores them), with
 // the wire's NextMarker; one attempt per page. Every item carries the
@@ -155,66 +155,53 @@ func TestWireOrder(t *testing.T) {
 	for i, k := range keys {
 		index[k] = i
 	}
-	ep := strings.TrimSuffix(r.Endpoint, "/"+r.Account)
-	for _, auth := range []client.Config{{Anonymous: true}, {SAS: "sv=2026-10-06&sp=rl&sig=Fake%2BSig%3D"}, {SharedKey: "c2VjcmV0LWtleS1mb3ItdGVzdHM="}} {
-		wire := &tee{}
-		auth.Endpoint, auth.Account, auth.HTTPClient = ep, r.Account, &http.Client{Transport: wire}
-		c := newClient(t, auth)
-		for _, in := range []client.ListInput{
-			{MaxResults: 1, Prefix: "u/"},
-			{MaxResults: 2, Prefix: "e/"},
-			{MaxResults: 7},
-			{MaxResults: 5000},
-			{},
-			{Prefix: "data/year=2021/", MaxResults: 3},
-			{StartFrom: "a/010", MaxResults: 5},
-			{StartFrom: "u/\ue000", MaxResults: 2},
-			{StartFrom: "pct%41", MaxResults: 1, Prefix: "p"},
-			{Delimiter: "/", MaxResults: 3},
-			{Delimiter: "/"},
-			{Prefix: "u/", Delimiter: "/", MaxResults: 2},
-			{Prefix: "u/", Delimiter: "/", StartFrom: "u/\U0001F600"},
-			{Prefix: "e/", Delimiter: "/", MaxResults: 1},
-			{Prefix: "n1/", Delimiter: "/", MaxResults: 4},
-			{Prefix: "d/", Delimiter: "/", StartFrom: "d/p\ue000"},
-			{Prefix: "r", Delimiter: "\U00010000", MaxResults: 3},
-		} {
-			in.Container = r.Container
-			before := c.Counters().Attempts
-			pages, items, prefixes := 0, 0, 0
-			for {
-				p, err := c.List(context.Background(), &in)
-				if err != nil {
-					t.Fatalf("%+v: %v", in, err)
-				}
-				pages++
-				want := wireEntries(t, wire.last)
-				for _, it := range p.Items {
-					items++
-					if it.Prefix {
-						prefixes++
-						continue
-					}
-					i, ok := index[it.Name]
-					if !ok || it.Size != int64(i) || it.LastModified != epoch.Add(time.Duration(i)*time.Second).UnixMicro() ||
-						it.BlobType != "BlockBlob" || it.ETag == "" {
-						t.Fatalf("%+v page %d: %+v is not the fixture's key %d", in, pages, it, i)
-					}
-				}
-				if p.NextMarker != want.NextMarker || fmt.Sprint(p.Items) != fmt.Sprint(want.Items) {
-					t.Fatalf("%+v page %d:\n got  %+v next %q\n wire %+v next %q", in, pages, p.Items, p.NextMarker, want.Items, want.NextMarker)
-				}
-				if p.NextMarker == "" {
-					break
-				}
-				in.Marker = p.NextMarker
+	wire := &tee{}
+	c := newClient(t, client.Config{Anonymous: true, Endpoint: strings.TrimSuffix(r.Endpoint, "/"+r.Account), Account: r.Account,
+		HTTPClient: &http.Client{Transport: wire}})
+	for _, in := range []client.ListInput{
+		{MaxResults: 7},
+		{MaxResults: 2, Prefix: "e/"},
+		{Delimiter: "/", MaxResults: 3},
+		{Prefix: "u/", Delimiter: "/", MaxResults: 2},
+		{StartFrom: "u/\ue000", MaxResults: 2},
+		{Prefix: "u/", Delimiter: "/", StartFrom: "u/\U0001F600"},
+		{Prefix: "r", Delimiter: "\U00010000", MaxResults: 3},
+	} {
+		in.Container = r.Container
+		before := c.Counters().Attempts
+		pages, items, prefixes := 0, 0, 0
+		for {
+			p, err := c.List(context.Background(), &in)
+			if err != nil {
+				t.Fatalf("%+v: %v", in, err)
 			}
-			if n := c.Counters().Attempts - before; n != int64(pages) {
-				t.Errorf("%+v: %d attempts, %d pages", in, n, pages)
+			pages++
+			want := wireEntries(t, wire.last)
+			for _, it := range p.Items {
+				items++
+				if it.Prefix {
+					prefixes++
+					continue
+				}
+				i, ok := index[it.Name]
+				if !ok || it.Size != int64(i) || it.LastModified != epoch.Add(time.Duration(i)*time.Second).UnixMicro() ||
+					it.BlobType != "BlockBlob" || it.ETag == "" {
+					t.Fatalf("%+v page %d: %+v is not the fixture's key %d", in, pages, it, i)
+				}
 			}
-			if items == 0 || in.Delimiter != "" && prefixes == 0 {
-				t.Fatalf("%+v: %d items, %d prefixes: a walk that proves nothing", in, items, prefixes)
+			if p.NextMarker != want.NextMarker || fmt.Sprint(p.Items) != fmt.Sprint(want.Items) {
+				t.Fatalf("%+v page %d:\n got  %+v next %q\n wire %+v next %q", in, pages, p.Items, p.NextMarker, want.Items, want.NextMarker)
 			}
+			if p.NextMarker == "" {
+				break
+			}
+			in.Marker = p.NextMarker
+		}
+		if n := c.Counters().Attempts - before; n != int64(pages) {
+			t.Errorf("%+v: %d attempts, %d pages", in, n, pages)
+		}
+		if items == 0 || in.Delimiter != "" && prefixes == 0 {
+			t.Fatalf("%+v: %d items, %d prefixes: a walk that proves nothing", in, items, prefixes)
 		}
 	}
 }

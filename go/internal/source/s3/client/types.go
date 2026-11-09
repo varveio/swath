@@ -35,9 +35,6 @@ type Page struct {
 	CommonPrefixes        []string
 	IsTruncated           bool
 	NextContinuationToken string
-	HasContinuation       bool
-	KeyCount              int
-	EncodingType          string
 }
 
 // VersionsInput is one ListObjectVersions request.
@@ -81,10 +78,6 @@ type VersionPage struct {
 	// common prefix omits it).
 	NextKeyMarker       string
 	NextVersionIDMarker string
-	// Prefix and KeyMarker echo the request's, URL-decoded.
-	Prefix       string
-	KeyMarker    string
-	EncodingType string
 }
 
 // Error is an S3 error response (or an HTTP failure without one).

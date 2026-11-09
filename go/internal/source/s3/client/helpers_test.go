@@ -69,7 +69,6 @@ func stockPage(out *awss3.ListObjectsV2Output) (*Page, error) {
 	enc := string(out.EncodingType)
 	pg := &Page{
 		IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
-		HasContinuation: out.NextContinuationToken != nil, KeyCount: int(aws.ToInt32(out.KeyCount)), EncodingType: enc,
 		Contents: make([]Object, len(out.Contents)),
 	}
 	var err error

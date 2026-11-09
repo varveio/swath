@@ -50,7 +50,6 @@ func (s *sdkOracle) ListObjectsV2(ctx context.Context, in *client.ListInput) (*c
 	}
 	pg := &client.Page{
 		IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
-		HasContinuation: out.NextContinuationToken != nil, KeyCount: int(aws.ToInt32(out.KeyCount)),
 		Contents: make([]client.Object, len(out.Contents)),
 	}
 	for i, o := range out.Contents {

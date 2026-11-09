@@ -264,11 +264,8 @@ func (c *Client) credentials(entra entraSource) error {
 		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
 		c.source = "shared key"
-		// The SDK signs; the key must be base64 (its error does not quote
-		// the key).
-		if _, err := service.NewSharedKeyCredential(cfg.Account, cfg.SharedKey); err != nil {
-			return &CredentialError{Source: c.source, Err: err}
-		}
+		// The SDK signs; services refuses a key that is not base64 (its
+		// error does not quote the key).
 		c.key = cfg.SharedKey
 	default:
 		return c.entra(entra)

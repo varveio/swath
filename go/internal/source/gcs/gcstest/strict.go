@@ -53,7 +53,6 @@ type Strict struct {
 	// It returns a new map on each call: the fields selector trims it.
 	Resource func(i int, k string) map[string]any
 	requests atomic.Int64
-	empties  atomic.Int64
 	last     atomic.Value // the last request's query
 
 	secret  [16]byte
@@ -90,10 +89,9 @@ func (f *Strict) Serve(t testing.TB) string {
 	return srv.URL + Path
 }
 
-// Requests is the number of requests received; Empties the empty pages
-// sent; Last the last request's query.
+// Requests is the number of requests received; Last the last request's
+// query.
 func (f *Strict) Requests() int64 { return f.requests.Load() }
-func (f *Strict) Empties() int64  { return f.empties.Load() }
 func (f *Strict) Last() url.Values {
 	q, _ := f.last.Load().(url.Values)
 	return q
@@ -175,7 +173,6 @@ func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f.Empty > 0 && serial%f.Empty == 0 {
 		// An empty page that still makes progress: a new token that
 		// continues from the request's own position.
-		f.empties.Add(1)
 		resp["nextPageToken"] = f.issue(position{chainOf(q), token, strconv.FormatInt(serial, 10)})
 		f.write(w, q, resp)
 		return

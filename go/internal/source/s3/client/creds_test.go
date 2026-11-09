@@ -206,8 +206,8 @@ func webIdentitySTS(t *testing.T, delay time.Duration, status int, code string) 
 // runner) that is slow or mounted late signs; one that is refused or whose
 // token service is down at start refuses the client (auth: a later outage
 // is retried per request, TestCredentialOutageRecovers); an empty chain
-// refuses it too, and none of them sends a listing request; --anonymous
-// never signs, even with keys in the environment.
+// refuses it too, and none of them sends a listing request. --anonymous
+// never signing, even with keys in the environment, is TestCredentialChain's.
 func TestCredentialsFailClosed(t *testing.T) {
 	setup := func(t *testing.T) (dir, token string) {
 		dir = t.TempDir()
@@ -292,18 +292,6 @@ func TestCredentialsFailClosed(t *testing.T) {
 	t.Run("empty chain", func(t *testing.T) {
 		isolate(t, t.TempDir())
 		refused(t)
-	})
-	t.Run("anonymous", func(t *testing.T) {
-		isolate(t, t.TempDir())
-		t.Setenv("AWS_ACCESS_KEY_ID", "AKENV")
-		t.Setenv("AWS_SECRET_ACCESS_KEY", "s")
-		c, _ := testClient(t, h, Config{Region: "us-east-1", Anonymous: true})
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-		if a := auth.Load().(string); a != "" || !c.auth.anonymous {
-			t.Fatalf("--anonymous signed: %q", a)
-		}
 	})
 }
 

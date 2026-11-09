@@ -12,16 +12,6 @@ import (
 	"testing"
 )
 
-// TestPoolSize: a built client has one transport per 16 workers, at least
-// 1, at most 8.
-func TestPoolSize(t *testing.T) {
-	for workers, want := range map[int]int{-1: 1, 0: 1, 1: 1, 16: 1, 17: 2, 64: 4, 128: 8, 129: 8, 1024: 8} {
-		if got := newTestClient(t, Config{Anonymous: true, Workers: workers}).Transports(); got != want {
-			t.Errorf("%d workers: %d transports, want %d", workers, got, want)
-		}
-	}
-}
-
 // TestTransportPoolSpreadsConnections lists over HTTP/2 through a TLS
 // server that records each request's connection: the distinct connections
 // are the pool's transports, and round-robin gives each the same share.

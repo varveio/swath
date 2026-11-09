@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 const okPage = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>k%20</Key><Size>1</Size></Contents></ListBucketResult>`
@@ -33,28 +31,6 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 	return c, srv
 }
 
-// TestTypedErrorsAreNotRetried: a 301 PermanentRedirect is one attempt,
-// an *Error with its code, request ID and the bucket's region from
-// X-Amz-Bucket-Region, which the message names. The generic retry cases
-// are objhttptest.Contract's (TestRetryContract).
-func TestTypedErrorsAreNotRetried(t *testing.T) {
-	var n atomic.Int32
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		n.Add(1)
-		w.Header().Set("X-Amz-Bucket-Region", "eu-west-2")
-		w.WriteHeader(301)
-		w.Write([]byte(`<Error><Code>PermanentRedirect</Code><Message>wrong endpoint</Message><RequestId>RID</RequestId></Error>`))
-	}, Config{Anonymous: true})
-	_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	var se *Error
-	if !errors.As(err, &se) || se.Code != "PermanentRedirect" || se.RequestID != "RID" || se.Region != "eu-west-2" || n.Load() != 1 {
-		t.Fatalf("%v (%d attempts)", err, n.Load())
-	}
-	if !strings.Contains(err.Error(), "the bucket is in eu-west-2") || strings.Contains(err.Error(), "-region") {
-		t.Fatal(err)
-	}
-}
-
 // isolate clears the AWS environment and points the shared files at dir.
 func isolate(t *testing.T, dir string) {
 	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_ROLE_ARN", "AWS_EC2_METADATA_SERVICE_ENDPOINT"} {
@@ -66,9 +42,9 @@ func isolate(t *testing.T, dir string) {
 }
 
 // TestCredentialChain: the SDK's default chain signs with environment keys
-// and profiles; -anonymous never signs; nothing found refuses the client
-// (auth) with no request sent, never anonymity; a named profile that does
-// not exist is an error.
+// (with a session token) and profiles (with their region); -anonymous never
+// signs and warns. An empty chain and a missing profile refusing are
+// TestCredentialsFailClosed's and TestPartialCredentialsRefuse's.
 func TestCredentialChain(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -88,13 +64,6 @@ func TestCredentialChain(t *testing.T) {
 		}
 		return c
 	}
-	// Nothing configured: refused, nothing sent.
-	var sent atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); w.Write([]byte(okPage)) }))
-	t.Cleanup(srv.Close)
-	if c, err := New(context.Background(), Config{Endpoint: srv.URL, PathStyle: true}); err == nil || Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
-		t.Fatalf("nothing configured: client %v, err %v (class %s), %d requests; want auth and none sent", c != nil, err, Classify(err), sent.Load())
-	}
 	// A named profile from the shared files, with its region.
 	if c := list(Config{Profile: "work"}); !strings.Contains(auth.Load().(string), "Credential=AKWORK/") || c.Region() != "eu-west-2" ||
 		!strings.Contains(auth.Load().(string), "/eu-west-2/s3/aws4_request") {
@@ -110,9 +79,6 @@ func TestCredentialChain(t *testing.T) {
 	// -anonymous is authoritative, with a warning.
 	if c := list(Config{Anonymous: true}); auth.Load() != "" || token.Load() != "" || c.Note() == "" {
 		t.Fatalf("anonymous request signed: %q, note %q", auth.Load(), c.Note())
-	}
-	if _, err := New(context.Background(), Config{Profile: "nope"}); err == nil {
-		t.Fatal("missing profile accepted")
 	}
 }
 

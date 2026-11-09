@@ -48,7 +48,7 @@ func (s *sdkOracle) ListObjectsV2(ctx context.Context, in *client.ListInput) (*c
 		return nil, err
 	}
 	pg := &client.Page{IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
-		HasContinuation: out.NextContinuationToken != nil, KeyCount: int(aws.ToInt32(out.KeyCount)), Contents: make([]client.Object, len(out.Contents))}
+		Contents: make([]client.Object, len(out.Contents))}
 	for i, o := range out.Contents {
 		c := &pg.Contents[i]
 		c.Key, c.ETag, c.Size, c.StorageClass, c.ChecksumType = aws.ToString(o.Key), aws.ToString(o.ETag), aws.ToInt64(o.Size), string(o.StorageClass), string(o.ChecksumType)

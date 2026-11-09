@@ -34,8 +34,7 @@ func (r *recorder) ListObjectsV2(ctx context.Context, in *client.ListInput) (*cl
 	if err != nil {
 		return nil, err
 	}
-	pg := &client.Page{CommonPrefixes: out.CommonPrefixes, IsTruncated: out.IsTruncated,
-		HasContinuation: out.HasContinuation, NextContinuationToken: out.NextContinuationToken}
+	pg := &client.Page{CommonPrefixes: out.CommonPrefixes, IsTruncated: out.IsTruncated, NextContinuationToken: out.NextContinuationToken}
 	for _, o := range out.Contents {
 		pg.Contents = append(pg.Contents, client.Object{Key: o.Key, Size: o.Size})
 	}

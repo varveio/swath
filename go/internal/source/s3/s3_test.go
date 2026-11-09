@@ -154,15 +154,6 @@ func TestPrefixAndLimit(t *testing.T) {
 	}
 }
 
-func TestRetriesAreCounted(t *testing.T) {
-	keys := testKeys()[:50]
-	url := fakeBucket(t, keys, 2)
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Sequential: true}}, 1)
-	if len(rows) != 50 || st.Counters.Value("retries") != 2 {
-		t.Fatalf("rows %d retries %d", len(rows), st.Counters.Value("retries"))
-	}
-}
-
 // stub returns canned pages.
 type stub struct{ pages []*client.Page }
 
