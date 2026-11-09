@@ -1,0 +1,17 @@
+schema_id swath/gcs-generations/v1
+message swath_listing
+key_unique false
+max_key_bytes 1024
+quoted_etag false
+column key BYTE_ARRAY STRING required delta
+column size INT64 INT(64,true) optional max_bytes 0 accessor int
+column last_modified INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
+column etag BYTE_ARRAY STRING optional delta max_bytes 0 accessor str
+column generation INT64 INT(64,true) optional max_bytes 0 accessor int
+column metageneration INT64 INT(64,true) optional max_bytes 0 accessor int
+column storage_class BYTE_ARRAY STRING optional max_bytes 0 accessor str
+column md5 BYTE_ARRAY STRING optional max_bytes 0 accessor str
+column crc32c BYTE_ARRAY STRING optional max_bytes 0 accessor str
+column content_type BYTE_ARRAY STRING optional max_bytes 0 accessor str
+column time_created INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int
+column time_deleted INT64 TIMESTAMP(MICROS,UTC) optional max_bytes 0 accessor int

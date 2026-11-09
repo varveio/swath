@@ -148,6 +148,7 @@ func TestValidateAzure(t *testing.T) {
 		{func(c *Config) { c.Host = "0.0.0.0"; c.AdvertisedHost = "replay.local" }, true},
 		{func(c *Config) { c.Protocols = []string{"s3"} }, false}, // an account without the route
 		{func(c *Config) { c.Protocols = []string{"s3"}; c.AzureAccount = "" }, true},
+		{func(c *Config) { c.Protocols = []string{"s3"}; c.AzureAccount = ""; c.AzureHNS = true }, false},
 	} {
 		cfg := azureConfig("s3", "azure")
 		c.mutate(&cfg)
@@ -191,6 +192,101 @@ func TestAzureEngagementMeters(t *testing.T) {
 	} {
 		if n := count(s, ProviderPath, "azure", c.path, c.reason); n != 1 {
 			t.Errorf("%s %s: %d", c.path, c.reason, n)
+		}
+	}
+}
+
+// TestAzureAccountInformation pins Get Account Information on every path
+// the route claims, existing container or not, by GET and HEAD: 200 with an
+// empty body and the flat account's headers, the HNS answer under
+// AzureHNS, and the route's error envelopes for a wrong method, a missing
+// or unsupported version and a wrong selector.
+func TestAzureAccountInformation(t *testing.T) {
+	const query = "?restype=account&comp=properties"
+	for _, hns := range []bool{false, true} {
+		cfg := azureConfig("s3", "azure")
+		cfg.AzureHNS = hns
+		s := start(t, cfg)
+		for _, path := range []string{"/replay", "/replay/", "/replay/bucket", "/replay/bucket/", "/replay/other", "/replay/other/"} {
+			for _, method := range []string{"GET", "HEAD"} {
+				r := azureDo(t, s, method, path+query+"&timeout=30", "x-ms-version", "2026-10-06", "x-ms-client-request-id", "c-2")
+				checkAccountInformation(t, fmt.Sprintf("hns=%v %s %s", hns, method, path), r, hns)
+			}
+		}
+	}
+
+	s := start(t, azureConfig("s3", "azure"))
+	for _, c := range []struct {
+		method, target string
+		header         []string
+		status         int
+		code, reason   string
+	}{
+		{"POST", "/replay" + query, []string{"x-ms-version", "2026-06-06"}, 405, "UnsupportedHttpVerb", "wrong_method"},
+		{"PUT", "/replay/bucket" + query, []string{"x-ms-version", "2026-06-06"}, 405, "UnsupportedHttpVerb", "wrong_method"},
+		{"GET", "/replay" + query, nil, 400, "InvalidHeaderValue", "invalid_header_value"},
+		{"GET", "/replay/bucket" + query, []string{"x-ms-version", "2019-12-12"}, 400, "InvalidHeaderValue", "invalid_header_value"},
+		{"GET", "/replay" + query, []string{"x-ms-version", "2026-06-06", "x-ms-version", "2026-06-06"}, 400, "InvalidHeaderValue", "duplicate_header"},
+		{"GET", "/replay?restype=account&comp=list", []string{"x-ms-version", "2026-06-06"}, 400, "InvalidQueryParameterValue", "invalid_selector"},
+		{"GET", "/replay" + query + "&prefix=a", []string{"x-ms-version", "2026-06-06"}, 400, "UnsupportedQueryParameter", "unsupported_query_parameter"},
+		{"GET", "/replay" + query + "&sig=a&sig=b", []string{"x-ms-version", "2026-06-06"}, 400, "InvalidQueryParameterValue", "duplicate_query_parameter"},
+		{"GET", "/replay" + query + "&timeout=0", []string{"x-ms-version", "2026-06-06"}, 400, "InvalidQueryParameterValue", "invalid_timeout"},
+	} {
+		r := azureDo(t, s, c.method, c.target, c.header...)
+		if r.status != c.status || r.header.Get("x-ms-error-code") != c.code || r.header.Get("x-swath-replay-error") != c.reason ||
+			!strings.HasPrefix(r.body, bom+"<?xml") || r.header.Get("x-ms-is-hns-enabled") != "" {
+			t.Errorf("%s %s %q: %+v", c.method, c.target, c.header, r)
+		}
+		if c.status == 405 && r.header.Get("allow") != "GET, HEAD" {
+			t.Errorf("%s %s: Allow %q", c.method, c.target, r.header.Get("allow"))
+		}
+	}
+	if r := azureDo(t, s, "GET", "/replay"+query+"&list-type=2"); r.status != 400 || r.body != `{"error":"replay_ambiguous_request"}` {
+		t.Fatalf("ambiguous %+v", r)
+	}
+	// Without the account-information selector the account paths and a
+	// container path with a trailing slash stay on the S3 route.
+	for _, target := range []string{"/replay?list-type=2", "/replay?restype=container&comp=list", "/replay/?restype=container&comp=list",
+		"/replay/bucket/?restype=container&comp=list"} {
+		if r := azureDo(t, s, "GET", target); r.header.Get("x-amz-request-id") == "" {
+			t.Errorf("%s: not the S3 route: %+v", target, r)
+		}
+	}
+	if count(s, ProviderPath, "azure", "request_refused", "wrong_method") != 2 {
+		t.Error("refusal meters")
+	}
+}
+
+func checkAccountInformation(t *testing.T, what string, r response, hns bool) {
+	t.Helper()
+	if r.status != 200 || r.body != "" || r.header.Get("Content-Length") != "0" || r.header.Get("Content-Type") != "" ||
+		r.header.Get("x-ms-is-hns-enabled") != fmt.Sprint(hns) || r.header.Get("x-ms-account-kind") != "StorageV2" ||
+		r.header.Get("x-ms-sku-name") != "Standard_LRS" || r.header.Get("x-ms-version") != "2026-10-06" ||
+		r.header.Get("x-ms-client-request-id") != "c-2" || !strings.HasPrefix(r.header.Get("x-ms-request-id"), "replay-") ||
+		r.header.Get("Date") == "" {
+		t.Errorf("%s: %+v", what, r)
+	}
+}
+
+// TestAzureSASQueries sends both operations a SAS-shaped query: the SAS
+// parameters are accepted and ignored, an unknown parameter beside them
+// is still refused.
+func TestAzureSASQueries(t *testing.T) {
+	const sas = "sv=2026-06-06&ss=b&srt=sco&sp=rl&se=2026-12-31T00%3A00%3A00Z&st=2026-01-01T00%3A00%3A00Z&spr=https" +
+		"&sr=c&si=policy&sip=127.0.0.1&skoid=o&sktid=t&skt=2026-01-01&ske=2026-12-31&sks=b&skv=2026-06-06" +
+		"&saoid=a&suoid=u&scid=c&ses=e&sdd=1&rscc=no-cache&rscd=inline&rsce=gzip&rscl=en&rsct=text%2Fplain&sig=c2ln"
+	s := start(t, azureConfig("azure"))
+	list := azureDo(t, s, "GET", "/replay/bucket?restype=container&comp=list&"+sas, "x-ms-version", "2026-06-06")
+	if list.status != 200 || !strings.Contains(list.body, "<Name>a/1</Name>") {
+		t.Errorf("list: %+v", list)
+	}
+	account := azureDo(t, s, "GET", "/replay/bucket?restype=account&comp=properties&"+sas, "x-ms-version", "2026-10-06",
+		"x-ms-client-request-id", "c-2")
+	checkAccountInformation(t, "account", account, false)
+	for _, q := range []string{"restype=container&comp=list", "restype=account&comp=properties"} {
+		if r := azureDo(t, s, "GET", "/replay/bucket?"+q+"&"+sas+"&sigx=1", "x-ms-version", "2026-06-06"); r.status != 400 ||
+			r.header.Get("x-swath-replay-error") != "unsupported_query_parameter" {
+			t.Errorf("%s with an unknown parameter: %+v", q, r)
 		}
 	}
 }

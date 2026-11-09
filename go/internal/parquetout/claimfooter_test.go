@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -45,14 +47,14 @@ func TestCutReproducesClaimedFooter(t *testing.T) {
 		}
 		return parts
 	}
-	footer := func(p dataset.Part) Footer {
+	footer := func(p dataset.Part) seekparquet.Footer {
 		t.Helper()
 		f, err := os.Open(p.Path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer f.Close()
-		ft, err := ReadFooter(f)
+		ft, err := seekparquet.InspectFooter(f, p.Bytes)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,8 +68,8 @@ func TestCutReproducesClaimedFooter(t *testing.T) {
 		t.Fatalf("claimed footer %+v", ft)
 	}
 	parts := route(&testSchema, "newer", &Cut{Ordinal: 0, Rows: ft.Rows, Columns: ft.Columns, CreatedBy: ft.CreatedBy})
-	if parts[0].MD5 != claimed.MD5 || parts[0].Bytes != claimed.Bytes {
-		t.Fatalf("part 0 is %d bytes, md5 %s; the claimed part %d bytes, md5 %s", parts[0].Bytes, parts[0].MD5, claimed.Bytes, claimed.MD5)
+	if parts[0].SHA256 != claimed.SHA256 || parts[0].Bytes != claimed.Bytes {
+		t.Fatalf("part 0 is %d bytes, sha256 %s; the claimed part %d bytes, sha256 %s", parts[0].Bytes, parts[0].SHA256, claimed.Bytes, claimed.SHA256)
 	}
 	if next := footer(parts[1]); len(next.Columns) != len(testSchema.Columns)+1 || next.CreatedBy != "swath-go version "+createdVersion+"(build newer)" {
 		t.Fatalf("part 1 footer %+v", next)
@@ -82,7 +84,7 @@ func TestCutReproducesClaimedFooter(t *testing.T) {
 		{"no created_by", Cut{Rows: ft.Rows, Columns: ft.Columns}},
 		{"columns out of order", Cut{Rows: ft.Rows, Columns: append([]string{"key"}, reversed...), CreatedBy: ft.CreatedBy}},
 	} {
-		if p := route(&testSchema, "newer", &c.cut)[0]; p.MD5 == claimed.MD5 {
+		if p := route(&testSchema, "newer", &c.cut)[0]; p.SHA256 == claimed.SHA256 {
 			t.Fatalf("%s: the claimed part reproduced", c.name)
 		}
 	}

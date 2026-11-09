@@ -8,18 +8,13 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
-
-	"github.com/varveio/swath/go/internal/replay/legacy/legacytest"
 )
 
 // TestGCSETag pins gcsETag, the S3 ETag of a GCS object as Cloud Storage's
@@ -87,26 +82,10 @@ func gcsRows(n int) ([]gcsRow, []string) {
 }
 
 // writeGCSRows writes rows as the one part of a swath/gcs-objects/v1
-// dataset: writeTypedFormat2's, its manifest entry given the part's row
-// count and key bounds.
+// SeekParquet dataset, in pages of 100 rows.
 func writeGCSRows(t *testing.T, rows []gcsRow) string {
 	t.Helper()
-	dir := writeTypedFormat2(t, "swath/gcs-objects/v1", rows)
-	path := filepath.Join(dir, "manifest.json")
-	raw, _ := os.ReadFile(path)
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
-	}
-	part := m["parts"].([]any)[0].(map[string]any)
-	part["rows"] = len(rows)
-	part["min_key_base64"] = base64.StdEncoding.EncodeToString([]byte(rows[0].Key))
-	part["max_key_base64"] = base64.StdEncoding.EncodeToString([]byte(rows[len(rows)-1].Key))
-	raw, _ = json.Marshal(m)
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	return writeSeek(t, "swath/gcs-objects/v1", 100, partOf(rows))
 }
 
 // TestGCSRecordingS3View reads a swath/gcs-objects/v1 dataset through the
@@ -287,52 +266,25 @@ type gcsUntimedRow struct {
 	ETag         *string `parquet:"etag,optional"`
 }
 
-// writeGCSParts writes a swath/gcs-objects/v1 dataset of one part per
-// rows slice, in order: parts of gcsUntimedRow where untimed is true,
-// else of gcsTimedRow (the column set of a run resumed by a build that
-// records time_created).
+// writeGCSParts writes a swath/gcs-objects/v1 SeekParquet dataset of one
+// part per rows slice, in order: parts of gcsUntimedRow where untimed is
+// true, else of gcsTimedRow (the column set of a run resumed by a build
+// that records time_created).
 func writeGCSParts(t *testing.T, parts [][]gcsTimedRow, untimed []bool) string {
 	t.Helper()
-	const schemaID = "swath/gcs-objects/v1"
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "data"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	options := []parquet.WriterOption{parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))), parquet.PageBufferSize(512)}
-	for k, v := range legacytest.Format2Stamps(schemaID, 1024) {
-		options = append(options, parquet.KeyValueMetadata(k, v))
-	}
-	var entries []map[string]any
+	var written []seekPart
 	for i, rows := range parts {
-		name := fmt.Sprintf("data/part-%05d.parquet", i)
-		path := filepath.Join(dir, filepath.FromSlash(name))
-		var err error
-		if untimed[i] {
-			old := make([]gcsUntimedRow, len(rows))
-			for j, r := range rows {
-				old[j] = gcsUntimedRow{Key: r.Key, Size: r.Size, LastModified: r.LastModified, ETag: r.ETag}
-			}
-			err = parquet.WriteFile(path, old, options...)
-		} else {
-			err = parquet.WriteFile(path, rows, options...)
+		if !untimed[i] {
+			written = append(written, partOf(rows))
+			continue
 		}
-		if err != nil {
-			t.Fatal(err)
+		old := make([]gcsUntimedRow, len(rows))
+		for j, r := range rows {
+			old[j] = gcsUntimedRow{Key: r.Key, Size: r.Size, LastModified: r.LastModified, ETag: r.ETag}
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		entries = append(entries, map[string]any{"path": name, "rows": len(rows), "bytes": info.Size(),
-			"min_key_base64": base64.StdEncoding.EncodeToString([]byte(rows[0].Key)),
-			"max_key_base64": base64.StdEncoding.EncodeToString([]byte(rows[len(rows)-1].Key))})
+		written = append(written, partOf(old))
 	}
-	raw, _ := json.Marshal(map[string]any{"format": "swath-dataset", "format_version": 2, "schema_id": schemaID,
-		"coverage": map[string]any{"complete": true}, "parts": entries})
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	return writeSeek(t, "swath/gcs-objects/v1", 50, written...)
 }
 
 // TestGCSRecordingLastModifiedFromTimeCreated reads a swath/gcs-objects/v1

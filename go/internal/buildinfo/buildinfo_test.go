@@ -3,7 +3,10 @@
 
 package buildinfo
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestRevision: a revision set at link time (build.sh, CI) is the build's,
 // whatever the toolchain's VCS stamp says.
@@ -13,5 +16,31 @@ func TestRevision(t *testing.T) {
 	Revision = "0123abcd-dirty"
 	if b := Read(); b.Revision != Revision || b.Tool != Tool {
 		t.Fatalf("build %+v", b)
+	}
+}
+
+func TestUserAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build Build
+		want  string
+	}{
+		{"unknown", Build{}, "swath-go/devel"},
+		{"development", Build{Version: "devel"}, "swath-go/devel"},
+		{"revision", Build{Version: "devel", Revision: "0123456789abcdef-dirty"}, "swath-go/devel+01234567"},
+		{"unknown with revision", Build{Revision: "0123456789abcdef"}, "swath-go/devel+01234567"},
+		{"short revision", Build{Version: "devel", Revision: "abc"}, "swath-go/devel+abc"},
+		{"release", Build{Version: "v0.2.1", Revision: "0123456789abcdef"}, "swath-go/v0.2.1"},
+		{"release without revision", Build{Version: "v0.2.1"}, "swath-go/v0.2.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.build.userAgent()
+			if got != tc.want || len(got) >= 24 || strings.ContainsAny(got, " \t\r\n") {
+				t.Fatalf("User-Agent %q, want %q (under 24 bytes, no whitespace)", got, tc.want)
+			}
+		})
+	}
+	if got, want := UserAgent(), Read().userAgent(); got != want {
+		t.Fatalf("UserAgent() = %q, want %q", got, want)
 	}
 }

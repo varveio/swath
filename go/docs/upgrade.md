@@ -1,37 +1,58 @@
-# Upgrading dataset readers
+# Upgrading to the Go tool's datasets
 
-This guide covers what a reader of swath datasets (the downstream reader, `bench/diffds.py`, `bench/summaries.py`) changes to
-read what this tool writes: a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft
-revision 1 (stamped `format_version` 0, `draft_revision` 1), from 0.4. Builds of this port from `main` before
-0.4 wrote swath-dataset format 2; the Java tool writes format 1. [SeekParquet](#seekparquet) says what a
-format 2 reader changes. The sections after it were written for format 2 and say what it changed from Java's
-format 1; its columns, schema ids, part files and coverage are SeekParquet's too, in the places that section
-gives. No format is a superset of another: there are no aliases, so a reader of one refuses the others, and a
-Java reader cannot open either by design. DuckDB, the SeekParquet conformance suite and the downstream reader
-are the acceptance gates (see "Gates").
+This tool writes a [SeekParquet](https://github.com/varveio/seekparquet) dataset, format 1 draft revision 1
+(stamped `format_version` 0, `draft_revision` 1), from 0.4; the Java tool writes swath's format 1. This guide
+has two audiences:
+
+- **A user of the Java tool** moving to this one: what a format 1 dataset becomes ([Files](#files) through
+  [Versions](#versions)), what the run report and the command line become, and what changed from 0.3 to 0.4.
+- **A reader of SeekParquet datasets** (the downstream reader, `bench/diffds.py`, `bench/summaries.py`): the
+  contract in [The downstream reader: dispatch on schema id](#the-downstream-reader-dispatch-on-schema-id).
+
+Neither format is a superset of the other: there are no aliases, so a reader of one refuses the other, and a
+Java reader cannot open a SeekParquet dataset by design. DuckDB, the SeekParquet conformance suite and the
+downstream reader are the acceptance gates ([Gates](#gates)).
 
 ## SeekParquet
 
 SeekParquet is a sorted-key profile for Apache Parquet: ordinary Parquet parts, sorted by one byte-string key
 and split into key-disjoint parts, and a manifest that lists them in key order and commits them. Any Parquet
-reader reads the parts as a table, as before; a reader that knows the profile (the Go module
+reader reads the parts as a table; a reader that knows the profile (the Go module
 `github.com/varveio/seekparquet/go`, which `swath-replay` serves datasets through) seeks a key, reads key
 ranges and lists a prefix with delimiter rollups from the manifest, the footers, the key column's page index
-and a few pages. The specification is the SeekParquet repository's `spec/format-1.md`; what follows is what
-changed against format 2. The data pages did not change with the format: for the rows `TestFooterOnlyChange`
-writes (short unique keys, repeated keys, keys over 1,024 bytes), a format 2 build and this one write the same
-pages, page indexes and footers, apart from the stamps and the bounds of values over 1,024 bytes. That is shown for
-those inputs only: the same switch raised klauspost/compress from v1.19.1 to v1.20.3, whose zstd encoder may
-choose its entropy tables differently on other data of more than one block, so a part of a build before and
-after need not be byte-identical in general (the writer recipe, `swath-go/parquet-r3`, already keeps their
-resumes apart).
+and a few pages. The specification is the SeekParquet repository's `spec/format-1.md`; the sections below
+say where swath's own fields are in it.
 
-**Dispatch.** `"format": "seekparquet"` with `format_version` 0 and `draft_revision` 1 is SeekParquet;
-`"format": "swath-dataset"` with `format_version` 2 is format 2 ([Dispatch](#dispatch)). A SeekParquet reader
-refuses every other version pair (`unsupported_version`).
+## Dispatch
 
-**Manifest.** SeekParquet allows only its own members, at the top level, in `key` and in a part; a producer's
-own metadata goes under `extensions`, by namespace. swath's is `extensions.swath`:
+A reader dispatches on `manifest.json`, before looking for anything else:
+
+| `manifest.json` has | Format | Accepted when |
+|---|---|---|
+| `"format": "seekparquet", "format_version": 0, "draft_revision": 1` | SeekParquet | the manifest is present and its coverage (`extensions.swath.coverage`) satisfies the reader ([Acceptance](#manifest)) |
+| `fileFormat`, `files`, `schemaId` (camelCase) | 1 (Java) | `_SUCCESS` exists, and the run summary covers the target (the legacy rule) |
+| anything else | – | never: not a dataset of either tool |
+
+A SeekParquet reader refuses every other version pair (`unsupported_version`). Builds of this port from `main`
+between 2026-11-05 and 2026-11-08 wrote `"format": "swath-dataset"` with `format_version` 2 (format 2); no
+reader reads it, and this tool does not take its directory for its own output (`--overwrite` refuses it), so
+re-list it into a new directory.
+
+## Files
+
+| Format 1 | SeekParquet |
+|---|---|
+| `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
+| `symlink.txt` (the part list) | removed: the manifest lists the parts |
+| `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 3: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `data/part-NNNNN.parquet` | unchanged |
+| `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
+
+## Manifest
+
+SeekParquet allows only its own members, at the top level, in `key` and in a part; a producer's own metadata
+goes under `extensions`, by namespace. swath's is `extensions.swath`:
 
 ```json
 {
@@ -42,133 +63,60 @@ own metadata goes under `extensions`, by namespace. swath's is `extensions.swath
   "key": {"column": "key", "unique": true},
   "extensions": {
     "swath": {
+      "version": 1,
       "published_at": "2026-11-08T18:00:00.123456Z",
       "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
       "scope": {"kind": "prefix", "prefix": "logs/"},
       "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
                    "exclusions": [], "filters": [], "snapshot": false,
-                   "listing_started_at": "…", "listing_finished_at": "…"},
-      "part_md5": ["…"]
+                   "listing_started_at": "…", "listing_finished_at": "…"}
     }
   },
   "parts": [
     {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
-     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r"}
+     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "sha256": "…"}
   ]
 }
 ```
 
-| Format 2 | SeekParquet |
+The member order is the seekparquet module's (`seekparquet.MarshalManifest`, which writes swath's manifests);
+JSON readers do not depend on it.
+
+| Format 1 field | SeekParquet field |
 |---|---|
-| `format` `swath-dataset`, `format_version` 2 | `format` `seekparquet`, `format_version` 0, `draft_revision` 1 |
-| `schema_id` | `schema_id` (unchanged) |
-| – (the key column was always `key`, keys always unique) | `key`: `{"column": "key", "unique": true}`; `unique` is false for the versions schemas (`--all-versions`), whose keys repeat on consecutive rows and never across parts |
-| `published_at`, `source`, `scope`, `coverage` | `extensions.swath.published_at`, `.source`, `.scope`, `.coverage` (same members and meaning) |
-| `parts[].md5` | `extensions.swath.part_md5[i]`, in manifest order (SeekParquet's part member is a `sha256`, which swath does not write) |
-| `parts[].path`, `rows`, `bytes`, `min_key_base64`, `max_key_base64` | unchanged (exact bounds, canonical standard base64) |
-
-Whole-source acceptance reads the same coverage fields from `extensions.swath` (below). A dataset of another
-producer may be SeekParquet without a swath extension; a reader that needs swath's coverage refuses it.
-
-**Footer.** Every part's key/value metadata repeats the manifest's version and key declaration:
-
-| Format 2 stamp | SeekParquet |
-|---|---|
-| `swath.profile` = `swath-dataset`, `swath.profile_version` = `2` | `seekparquet.format_version` = `0`, `seekparquet.draft_revision` = `1` |
-| `swath.schema_id` | `seekparquet.schema_id` |
-| – | `seekparquet.key_column` = `key`, `seekparquet.key_unique` = `true` or `false` (as the manifest's `key`) |
-| `swath.index_bound_bytes` = `1024` | removed: no column index bound is shortened |
-
-**Bounds.** Every column's ColumnIndex bounds are exact: each page's minimum and maximum (the key's: its first
-and last key). Format 2 shortened values longer than 1,024 bytes, and parquet-go shortens a maximum by
-incrementing its last kept byte, so a value whose first 1,024 bytes are all `0xFF` got a maximum below it: no
-upper bound at all, which Parquet and SeekParquet (RG-5) forbid. S3 and GCS keys and values are at most 1,024
-bytes, so only filesystem keys and link targets change. Statistics in the column chunk metadata were exact
-already.
-
-**Resume.** An interrupted run of a format 2 build is finished with that build or started over with
-`--overwrite`: the resume identity's dataset format and writer recipe changed, so this build refuses its journal.
-`--seed-from`, `swath show` and the output checks still read a committed format 2 dataset.
-
-**Replay fixtures.** `swath-replay` serves a SeekParquet dataset through the seekparquet module, a format 2
-dataset and a Java-era fixture through its own readers (`internal/replay/legacy`); the startup line's kind is
-`seekparquet`, `format-2` or `java-era`. It refuses a dataset whose keys repeat (`key.unique` false, an
-`--all-versions` listing) until the versions routes exist (#279): its routes continue after a key, never inside
-a key's group.
-
-## Dispatch
-
-A reader dispatches on `manifest.json`, before looking for anything else:
-
-| `manifest.json` has | Format | Accepted when |
-|---|---|---|
-| `"format": "seekparquet", "format_version": 0, "draft_revision": 1` | SeekParquet | the manifest is present and its coverage (`extensions.swath.coverage`) satisfies the reader (below) |
-| `"format": "swath-dataset", "format_version": 2` | 2 | the manifest is present and its coverage satisfies the reader (below) |
-| `fileFormat`, `files`, `schemaId` (camelCase) | 1 | `_SUCCESS` exists, and the run summary covers the target (the legacy rule) |
-| neither | – | never: not a dataset |
-
-A format-2 manifest is never read by the format-1 rule.
-
-## Files
-
-| Format 1 | Format 2 |
-|---|---|
-| `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
-| `symlink.txt` (the part list) | removed: the manifest lists the parts |
-| `manifest.json` | `manifest.json`, new shape (below) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 3: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
-| `data/part-NNNNN.parquet` | unchanged |
-| `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
-
-## Manifest
-
-```json
-{
-  "format": "swath-dataset",
-  "format_version": 2,
-  "schema_id": "swath/s3-objects/v1",
-  "published_at": "2026-11-05T18:00:00.123456Z",
-  "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
-  "scope": {"kind": "prefix", "prefix": "logs/"},
-  "coverage": {
-    "complete": true, "stop_reason": "completed", "skipped_entries": 0,
-    "exclusions": [], "filters": [], "snapshot": false,
-    "listing_started_at": "…", "listing_finished_at": "…"
-  },
-  "parts": [
-    {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
-     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "md5": "…"}
-  ]
-}
-```
-
-| Format 1 field | Format 2 field |
-|---|---|
-| `version` ("1") | `format`, `format_version` |
+| `version` ("1") | `format`, `format_version`, `draft_revision` |
 | `schemaId` | `schema_id` |
-| `creationTimestamp` (epoch ms) | `published_at` (RFC 3339, UTC) |
-| `sourceKind`, `sourceRoot`, `sourceBucket` | `source.kind`, `source.uri`, `source.container` |
-| – (inferred from the run summary's `config.target`) | `scope.kind` (`whole` or `prefix`), `scope.prefix` |
-| – (run summary `completed`, `config.filters`) | `coverage` |
+| – (the key column is `key`) | `key`: `{"column": "key", "unique": true}`; `unique` is false for the versions schemas (`--all-versions`), whose keys repeat on consecutive rows and never across parts |
+| – | `extensions.swath.version`: `1`, the version of the extension's own contract; a reader refuses any other value, or none ("unsupported swath metadata version") |
+| `creationTimestamp` (epoch ms) | `extensions.swath.published_at` (RFC 3339, UTC) |
+| `sourceKind`, `sourceRoot`, `sourceBucket` | `extensions.swath.source.kind`, `.uri`, `.container` |
+| – (inferred from the run summary's `config.target`) | `extensions.swath.scope.kind` (`whole` or `prefix`), `.prefix` |
+| – (run summary `completed`, `config.filters`) | `extensions.swath.coverage` |
 | `files[].key` | `parts[].path` (relative to the dataset root) |
-| `files[].size`, `rowCount`, `MD5checksum`, `minKey`, `maxKey` | `parts[].bytes`, `rows`, `md5`, `min_key_base64`, `max_key_base64` (exact, never truncated; standard base64 of the key bytes) |
+| `files[].size`, `rowCount`, `MD5checksum`, `minKey`, `maxKey` | `parts[].bytes`, `rows`, `sha256`, `min_key_base64`, `max_key_base64` (exact, never truncated; canonical standard base64 of the key bytes) |
 | `fileFormat`, `sorted`, `sortKey`, `fileSchema`, `totalRows` | removed (the format implies the first four; sum `rows` for the total) |
+
+`parts[].sha256` is the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which
+the format's validators check at the digest level. MD5 is not written anywhere. Development builds before
+`extensions.swath.version` existed wrote manifests without it (some with the parts' MD5s under
+`extensions.swath.part_md5`); no reader reads them, so re-list into a new directory.
 
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
 JSON. A reader decodes them and compares bytes (unsigned), never the base64 text. For the S3 schema the
 decoded bounds are UTF-8, as the keys are.
 
-**Acceptance.** A reader that needs the whole source accepts a dataset only if `coverage.complete` is true,
-`coverage.skipped_entries` is 0, `coverage.filters` is empty and `scope.kind` is `whole`. A missing or
-malformed `coverage` fails closed. `exclusions` lists what the listing left out by design (an output
+**Acceptance.** A reader that needs the whole source accepts a dataset only if `extensions.swath.coverage`
+has `complete` true, `skipped_entries` 0 and `filters` empty, and `extensions.swath.scope.kind` is `whole`. A
+missing or malformed coverage fails closed. `exclusions` lists what the listing left out by design (an output
 directory inside a listed tree); `snapshot` is always false: entries that changed while the listing ran may
-or may not be in it.
+or may not be in it. A dataset of another producer may be SeekParquet without a swath extension; a reader
+that needs swath's coverage refuses it.
 
 ## S3 schema
 
 `swath/canonical` becomes `swath/s3-objects/v1`, the current-object schema: every row is a current object.
 
-| Column | Format 1 | Format 2 |
+| Column | Format 1 | SeekParquet |
 |---|---|---|
 | `key`, `size`, `last_modified`, `etag`, `storage_class` | present | unchanged |
 | `size` | INT64, unannotated | INT64 with the standard `INT(64,true)` annotation (physical type unchanged) |
@@ -179,7 +127,7 @@ or may not be in it.
 | `is_delete_marker` | always false | removed |
 | `row_type` | always `OBJECT` | removed |
 
-The local schema becomes `swath-local/v1`: `key` and `link_target` are unannotated BYTE_ARRAY (names are
+The local schema becomes `swath/local-entries/v1`: `key` and `link_target` are unannotated BYTE_ARRAY (names are
 bytes; a name that is not UTF-8 is listed exactly, where format 1 skipped it), `blocks` is renamed `allocated_bytes`, `ctime` is renamed
 `metadata_changed_at`, and `mode`, `uid`, `gid`, `nlink` (`INT(32,false)`), `inode` and `dev`
 (`INT(64,false)`) are unsigned.
@@ -189,28 +137,42 @@ A reader that needs the format-1 columns restores them as constants: `NULL`, `NU
 
 ## Footer
 
-| Format 1 stamp | Format 2 |
+Every part's key/value metadata repeats the manifest's version and key declaration:
+
+| Format 1 stamp | SeekParquet |
 |---|---|
 | `swath.sort.order` | removed; within-file order is the standard `sorting_columns` (key, ascending) on every row group |
 | `swath.sort.mode` (`objects`) | removed |
-| `swath.sort.format_version` | `swath.profile` = `swath-dataset`, `swath.profile_version` = `2` |
+| `swath.sort.format_version` | `seekparquet.format_version` = `0`, `seekparquet.draft_revision` = `1` |
 | `swath.sort.file_index` | removed: the manifest orders the parts |
 | `swath.sort.file_final` | removed: completeness is the manifest's |
-| `swath.sort.index_bound_bytes` | `swath.index_bound_bytes` |
-| – | `swath.schema_id` |
+| – | `seekparquet.schema_id` |
+| – | `seekparquet.key_column` = `key`, `seekparquet.key_unique` = `true` or `false` (as the manifest's `key`) |
 
-**Truncation.** ColumnIndex min/max values longer than `swath.index_bound_bytes` (1,024) are truncated, so
-readers treat page bounds as conservative. Manifest bounds are exact.
+**Bounds.** Every column's ColumnIndex bounds are exact: each page's minimum and maximum (the key's: its first
+and last key), as Parquet and SeekParquet (RG-5) require. The Java writer truncated key bounds and recorded
+neither length it used: 1,024 bytes in served fixtures, the library default of 64 in older ones, cut on a code
+point boundary, so a truncated bound can be as short as 61 bytes. Its readers therefore treat page bounds as
+conservative; `swath-replay` treats every Java-era key bound of 61 bytes or more as possibly truncated
+(`javaera.BoundBytes`). A SeekParquet reader need not. Statistics in the column chunk metadata are exact, as
+they were.
+
+**Replay fixtures.** `swath-replay` serves a SeekParquet dataset through the seekparquet module and a Java-era
+fixture (format 1 sorted parts) through its own legacy reader (`internal/replay/legacy`); the startup line's
+kind is `seekparquet` or `java-era`. The legacy reader is transitional: it goes once the Go replay has
+replaced the Java replay (#352) and the fixtures are re-listed as SeekParquet datasets (#353); re-list a
+Java-era fixture you still need before then. It refuses a dataset whose keys repeat (`key.unique` false, an
+`--all-versions` listing) until the versions routes exist (#279): its routes continue after a key, never inside
+a key's group.
 
 ## Versions
 
 Four versions move independently: the dataset format (SeekParquet's `format_version` 0 and `draft_revision` 1,
-in the manifest and the `seekparquet.*` stamps; format 2 builds wrote 2), the
+in the manifest and the `seekparquet.*` stamps), the
 logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
-schema id" below), the private journal (version 8, never read by readers: version 8 adds the run UUID that durable spill files
-are bound to; a version 7 journal is read, with durable spill off, but every version 7 build wrote format 2, whose
-runs this build refuses to resume by their dataset format; a version 7 build refuses a version 8 journal; an
-interrupted run of an older build is finished with that build or started over with `--overwrite`) and the writer recipe
+schema id" below), the private journal (version 9, never read by readers: version 9 records each part's SHA-256 where versions 7
+and 8 recorded its MD5, so this build refuses those journals before recovery touches anything, and they refuse
+version 9; an interrupted run of an older build is finished with that build or started over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r3` since SeekParquet, in the resume identity, with the dataset format: a
 build of another recipe or format refuses the journal). `created_by` names the real build, so
 parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
@@ -268,11 +230,11 @@ The report's changes from version 1 to version 2 are in [Changes from 0.3 to 0.4
 Launch scripts change as follows: `swath list SOURCE -out DIR` → `swath list SOURCE -o DIR`;
 rerunning with `-resume` → `swath resume DIR`; `swath inspect DIR` → `swath show --journal DIR`; `-json` →
 `--report-format json`; `-fields` → `--metadata`; `-sequential`, `-max-keys`, `-no-journal`,
-`-no-spill` → `swath diag list …`; `swath list --count-only` → `swath count` (2026-11-07); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
+`-no-spill` → `swath diag list …`; `swath list --count-only` → `swath diag count` (`swath count` from 2026-11-07 to 2026-11-09; its per-prefix totals are `swath du`); `SWATH_LOCAL_CPUPROFILE`/`MEMPROFILE`/`ENGINE`/`SPLIT_TRACE` →
 `SWATH_CPUPROFILE`, `SWATH_MEMPROFILE`, `SWATH_LOCALFS_ENGINE`, `SWATH_SPLIT_TRACE`. Java's `--concurrency`
 is `--workers`, default 64 as Java's, whatever the CPU count;
 `--encoders` stays CPU-derived. Java's `--tune seed.mode=none` is `swath diag list --seed=false` (the seed is on
-by default, as Java's `shallow` is), and `--format discard` is `swath count`, which counts without ordering or
+by default, as Java's `shallow` is), and `--format discard` is `swath diag count`, which counts without ordering or
 spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
 `--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
@@ -313,7 +275,7 @@ the list below is the earlier history of the unreleased builds.
 - Structure probes are on by default on their evidence (`auto`: the open frontier, and bounded ranges whose
   chain stays inside one folder); `swath diag list --structure` takes `auto`, `on` or `off` after `=`, and the
   bare flag is `on`.
-- `--count-only` (now `swath count`) no longer runs the order stage: the report's `features.order` is false, `spill` is absent
+- `--count-only` (now `swath diag count`) no longer runs the order stage: the report's `features.order` is false, `spill` is absent
   and `max_buffered_bytes` is 0.
 - `swath diag list --seed-descent` was removed with the seed descent. The `seed.probes`, `seed.levels.*` and
   other counters of that descent are gone.
@@ -341,7 +303,7 @@ the list below is the earlier history of the unreleased builds.
 The 0.3 releases (the repository's `v0.3.x` tags) are the Java tool; 0.4 is the first release of this Go tool,
 and the Java tool is deprecated with it. Moving from Java 0.3 to Go 0.4 changes the launcher, the flags and the
 dataset format: the flag-by-flag mapping is [from-java.md](from-java.md) and
-[cli-inventory.md](cli-inventory.md), the dataset changes are the sections above. A run interrupted under Java
+[cli-inventory.md](cli-inventory.md), the dataset changes are [Files](#files) through [Versions](#versions). A run interrupted under Java
 is finished with Java or started over; `swath resume` reads only this tool's journal. The current flags are
 the generated help in [cli.md](cli.md#flags).
 
@@ -354,13 +316,14 @@ without a version and without a compatibility promise. Against those builds, 0.4
 (a removed name is an unknown flag, exit 2; there are no aliases, and a run interrupted under such a build is
 finished with it or started over): `--output` is `-o`; `--force` is `--overwrite`; `--endpoint-url` is
 `--endpoint`; `--quiet` is `-q`; `--spill-max` is `--spill-budget`; `swath list --count-only` is the command
-`swath count` (it refuses the output flags with exit 2); `--seed=false` and `--limiter-slow-start` moved to
-`swath diag list`, and `swath list` and `swath count` refuse every diagnostic flag with a message naming
-`swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+`swath diag count` (it refuses the output flags with exit 2; the builds of `main` from 2026-11-07 to 2026-11-09
+called it `swath count`, and `swath count` is now an unknown command: `swath du` totals a source, `swath diag
+count` measures its listing); `--seed=false` and `--limiter-slow-start` moved to `swath diag list`, and `swath
+list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 3.** Version 3 only adds fields; nothing of version 2 changes, and a version 2 reader
-reads version 3 by ignoring them:
+**Run report: version 3.** Version 3 adds fields, and a version 2 reader reads version 3 by ignoring them; one
+meaning is narrowed, a local tree's `output.object_bytes` (the last item):
 
 - **Durable spill:** `resources.spill.durable` (the durable spill's account, and on a resume what it accepted,
   rejected and replayed), `resources.spill.durable_off`, and the counters `reuse.ranges`, `reuse.gaps` and
@@ -372,6 +335,14 @@ reads version 3 by ignoring them:
   `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
   schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
   retained resume rows.
+- **Per-prefix totals** (`swath du`): `output.totals` (`depth`, `prefixes`, `max_prefixes`, `bytes_column`,
+  `objects`, `bytes`, `dirs`, `not_objects`, `unsized`, `links_once`, `linked_rows`, `inodes`, `max_inodes`),
+  present only on a `swath du` run.
+- **`output.object_bytes` of a local tree** is the apparent bytes of the files the run accepted (after the
+  filters): a directory's own size is no longer summed (it is no object's). On an unfiltered complete run it equals
+  the local counters' `bytes`, and `swath du`'s total of the same run without `--allocated` or
+  `--count-links-once`. Object stores are unchanged. The local provider's counters add `other_device_dirs`
+  (`--one-filesystem`).
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
@@ -399,30 +370,36 @@ is the full schema and "Run report" in [cli.md](cli.md#run-report) its descripti
 `limiter.throttle_permille`, `spill.logical_bytes`, `spill.decode_refused`. Removed: `split.rejected.done`,
 `split.skipped.not_continuing`.
 
-**The dataset** changed against those builds: it is SeekParquet ([SeekParquet](#seekparquet)); the Parquet
-schemas and data pages are unchanged. **Unchanged since those builds:** the journal's format, the
-exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
+**The dataset** changed against those builds: it is SeekParquet ([SeekParquet](#seekparquet)). Builds before
+2026-11-05 wrote format 1, as the Java tool does; those of 2026-11-05 to 2026-11-08 wrote format 2, whose Parquet
+schemas and data pages SeekParquet keeps but whose datasets no reader reads ([Dispatch](#dispatch)). **Unchanged since those builds:** the journal's format,
+the exit codes and outcome classes, `progress.json` and `error.json`. Spill files changed format (delta coding,
 zstd), but they are private to one run and never read across builds.
 
 ## The downstream reader: dispatch on schema id
 
-The downstream reader reads format 2 for every provider; for 0.4 it adds SeekParquet ([SeekParquet](#seekparquet)).
-What such a reader does, stated as the contract rather than as its code:
+The downstream reader reads SeekParquet datasets ([SeekParquet](#seekparquet)) for every provider. What such a
+reader does, stated as the contract rather than as its code:
 
-- **Open.** Read `manifest.json` first. `format` `seekparquet` (with `format_version` 0 and `draft_revision`
-  1) is SeekParquet: take swath's fields from `extensions.swath`. `format` `swath-dataset` is format 2: require
-  version 2. Neither reads `_SUCCESS` or a run summary. Any other manifest is format 1 and takes the legacy path.
-- **Whole-source acceptance.** From the coverage (`extensions.swath.coverage`; format 2's top-level
-  `coverage`): `complete` true, `stop_reason` `completed`, `skipped_entries` 0, `filters` present and empty,
+- **Open.** Read `manifest.json` first ([Dispatch](#dispatch)). `format` `seekparquet` (with `format_version`
+  0 and `draft_revision` 1) is SeekParquet: take swath's fields from `extensions.swath`; never read `_SUCCESS`
+  or a run summary. A format 1 manifest takes the legacy path; any other manifest is refused.
+- **Whole-source acceptance.** From the coverage (`extensions.swath.coverage`): `complete` true, `stop_reason` `completed`, `skipped_entries` 0, `filters` present and empty,
   `scope.kind` `whole`; a missing field refuses.
 - **Schema id.** Each schema id defines the columns a reader may rely on, by name and type; the reader dispatches
-  on it (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, the local schema) and checks `source.kind` and the
+  on it (`swath/s3-objects/v1`, `swath/gcs-objects/v1`, `swath/azblob-objects/v1`, the local schema) and checks `source.kind` and the
   container against what it was asked to open. A schema id is not a closed column set: a part may hold columns its
   id does not define, which the reader ignores, and an optional column of the id may be absent from some parts or
   all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
   build that writes the column mixes parts with and without it under one id (the resume identity freezes the
   schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
-  column of every schema id is present in every part.
+  column of every schema id is present in every part. `swath/azblob-objects/v1` is `key` (the blob name, up to
+  3,072 bytes: 1,024 UTF-16 units), `size` (`Content-Length`), `last_modified` (`Last-Modified`, µs at the wire's
+  1 s resolution), `etag` (opaque, as listed), `content_md5` (base64 as listed; null when absent, as for blobs
+  uploaded in blocks without one), `content_type`, `blob_type` (`BlockBlob`, `PageBlob`, `AppendBlob`),
+  `access_tier` (null when absent) and `creation_time` (`Creation-Time`, µs). As on GCS, `last_modified` also
+  moves when only a blob's metadata changes and `etag` is opaque, not a content hash: compare content with
+  `content_md5`, never ETags across stores.
 - **Versions schemas** (`swath list --all-versions`). `swath/s3-versions/v1` is the `swath/s3-objects/v1`
   columns in the same order, `size` nullable (null on delete markers, as are `etag`, `storage_class` and the
   checksums), then `version_id` (verbatim; `"null"` is a real ID), `is_latest` and `is_delete_marker`
@@ -444,23 +421,28 @@ What such a reader does, stated as the contract rather than as its code:
   Reader fixtures: `python3 -m unittest test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB.
 
 - **Keys.** Part bounds are base64 in the manifest and compare as bytes; local keys may be non-UTF-8.
-- **Part footers.** Every part carries the `seekparquet.*` stamps equal to the manifest's (format 2:
-  `swath.profile`, `swath.profile_version` 2 and `swath.schema_id`), and `key` ascending as the first sorting
-  column.
-- **Rows.** `key`, `size` and `last_modified` are read; a null `size` is rejected, so a local dataset listed
-  with names only is not readable by such a reader; directory rows of a local dataset are entries whose
-  keys end in `/`.
+- **Part footers.** Every part carries the `seekparquet.*` stamps equal to the manifest's, and `key` ascending
+  as the first sorting column.
+- **Rows.** `key`, `size` and `last_modified` are read; a null or negative `size` is rejected, so a local
+  dataset listed with names only is not readable by such a reader, and so is a `last_modified` outside the
+  years 1 to 9999; directory rows of a local dataset are entries whose keys end in `/`.
+- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract for
+  SeekParquet datasets: `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage above,
+  source kind and container) and `Stream` (current objects, the row checks above).
 - **Fixtures.** One dataset per schema written by this tool serves as the reader's fixture; the commands
   that produce them are the ones in docs/testing.md.
+
 
 ## Gates
 
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
-  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, the MD5s).
-- **SeekParquet conformance:** the suite's reader target against the seekparquet module this tool pins, and
-  this tool's datasets validated by the suite's reference adapter and read alike by both
+  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, each part's SHA-256 against `parts[].sha256`).
+- **SeekParquet conformance:** the suite's reader and validator targets against the seekparquet module this
+  tool pins, and this tool's datasets validated by the suite's reference adapter and the module's validator
+  (full and digest levels, every part declaring `sha256`) and read alike by both
   ([testing.md](testing.md#seekparquet-conformance)).
-- **Downstream reader:** opens and streams format-2 datasets of every schema (section above);
-  the probe is in [measurements.md](measurements.md#downstream-reader-compatibility).
+- **Downstream reader:** opens and streams this tool's datasets of every schema (section above); the recorded
+  probe ([measurements.md](measurements.md#downstream-reader-compatibility)) predates SeekParquet and is
+  historical.
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.

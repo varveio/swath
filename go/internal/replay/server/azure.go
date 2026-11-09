@@ -24,10 +24,13 @@ import (
 )
 
 // The Azure Blob flat List Blobs route, /{account}/{container}?restype=
-// container&comp=list, beside the other routes. serveOtherRoute hands it a
-// request whose path is /{account}/{one segment} and whose query names
-// restype or comp, before the method is checked (a POST with the Azure
-// selector is the Azure route's UnsupportedHttpVerb, not an S3 405); a
+// container&comp=list, and Get Account Information (restype=account&comp=
+// properties, on any resource path of the account), beside the other
+// routes. serveOtherRoute hands it a request whose path is
+// /{account}/{one segment} and whose query names restype or comp, or an
+// account-information request on /{account}, /{account}/ or
+// /{account}/{one segment}/ (azureClaims), before the method is checked
+// (a POST with the Azure selector is the Azure route's UnsupportedHttpVerb, not an S3 405); a
 // request that also carries the S3 selector is a replay 400: the replay
 // wire contract's routing (TestAzureRouting).
 
@@ -71,6 +74,9 @@ func (c *Config) validateAzure() error {
 	if !c.enabled(ProtocolAzure) {
 		if c.AzureAccount != "" {
 			return errors.New("--azure-account requires azure in --protocols")
+		}
+		if c.AzureHNS {
+			return errors.New("--azure-hns requires azure in --protocols")
 		}
 		return nil
 	}
@@ -128,14 +134,25 @@ func (s *Server) azureEndpoint() string {
 }
 
 // azureClaims reports whether the Azure route is enabled and the request
-// is its: the path /{account}/{one segment}, a restype or comp parameter.
+// is its: the path /{account}/{one segment} with a restype or comp
+// parameter, or, for Get Account Information only (restype=account), the
+// account path /{account} or /{account}/ (the ServiceEndpoint's) or
+// /{account}/{one segment}/. Other requests on those three paths stay on
+// the S3 route, as on the Java replay (replaydiff TestAzureS3RoutedCases).
 func (s *Server) azureClaims(path, rawQuery string) bool {
 	if s.azure == nil {
 		return false
 	}
-	container, ok := strings.CutPrefix(path, "/"+s.cfg.AzureAccount+"/")
-	return ok && container != "" && !strings.Contains(container, "/") &&
-		(hasQueryKey(rawQuery, "restype") || hasQueryKey(rawQuery, "comp"))
+	account := "/" + s.cfg.AzureAccount
+	rest, under := strings.CutPrefix(path, account+"/")
+	switch {
+	case under && rest != "" && !strings.Contains(rest, "/"):
+		return hasQueryKey(rawQuery, "restype") || hasQueryKey(rawQuery, "comp")
+	case path == account || path == account+"/",
+		under && len(rest) > 1 && strings.Index(rest, "/") == len(rest)-1:
+		return azure.SelectsAccountInformation(rawQuery)
+	}
+	return false
 }
 
 // admit takes a request's execution slot (queueing as a full worker pool
@@ -200,6 +217,10 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	a.active.Add(1)
 	defer a.active.Add(-1)
 
+	if azure.SelectsAccountInformation(rawQuery) {
+		s.serveAzureAccount(w, r, path, rawQuery, arrived, release)
+		return
+	}
 	req, err := azure.Parse(r.Method, path, rawQuery, r.Header, s.cfg.AzureAccount, s.cfg.Bucket)
 	if err != nil {
 		s.azurePath("request_refused", err.(*azure.Error).Reason)
@@ -296,6 +317,35 @@ func (s *Server) serveAzure(w http.ResponseWriter, r *http.Request, path, rawQue
 	s.azureWrite(w, r, 200, body, req, nil, arrived)
 }
 
+// The Get Account Information answer: a general-purpose v2 account with
+// locally redundant storage, flat unless Config.AzureHNS.
+const (
+	azureAccountKind = "StorageV2"
+	azureSKUName     = "Standard_LRS"
+)
+
+// serveAzureAccount answers Get Account Information (GET or HEAD): 200
+// with an empty body and the account's kind, SKU and hierarchical-namespace
+// status, or the route's error envelope. It reads nothing from the store
+// and holds no response permit.
+func (s *Server) serveAzureAccount(w http.ResponseWriter, r *http.Request, path, rawQuery string, arrived time.Time, release func()) {
+	req, err := azure.ParseAccountInfo(r.Method, path, rawQuery, r.Header, s.cfg.AzureAccount, s.cfg.Bucket)
+	if err != nil {
+		if err.(*azure.Error).Kind == azure.WrongMethod {
+			w.Header()["allow"] = []string{"GET, HEAD"}
+		}
+		s.azurePath("request_refused", err.(*azure.Error).Reason)
+		s.azureFail(w, r, arrived, err)
+		return
+	}
+	h := w.Header()
+	h["x-ms-is-hns-enabled"] = []string{strconv.FormatBool(s.cfg.AzureHNS)}
+	h["x-ms-account-kind"] = []string{azureAccountKind}
+	h["x-ms-sku-name"] = []string{azureSKUName}
+	release()
+	s.azureWrite(w, r, 200, nil, req, nil, arrived)
+}
+
 // azureFail answers an error: an Azure refusal as it is, anything else (a
 // store failure) as a 500 that carries no detail.
 func (s *Server) azureFail(w http.ResponseWriter, r *http.Request, arrived time.Time, err error) {
@@ -336,7 +386,9 @@ func (s *Server) azureWriteError(w http.ResponseWriter, r *http.Request, arrived
 // azureWrite sends a response with the Azure route's headers.
 func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, body [][]byte, req *azure.Request, e *azure.Error, arrived time.Time) {
 	h := w.Header()
-	h["Content-Type"] = []string{"application/xml"}
+	if len(body) > 0 {
+		h["Content-Type"] = []string{"application/xml"}
+	}
 	h["Content-Length"] = []string{strconv.Itoa(viewsLen(body))}
 	h["x-ms-request-id"] = []string{"replay-" + strconv.FormatUint(s.azure.requests.Add(1), 16)}
 	h["Date"] = []string{time.Now().UTC().Format(azure.HTTPTime)}
@@ -351,7 +403,7 @@ func (s *Server) azureWrite(w http.ResponseWriter, r *http.Request, status int, 
 		if strings.TrimSpace(e.Reason) != "" {
 			h["x-swath-replay-error"] = []string{e.Reason}
 		}
-		if e.Kind == azure.WrongMethod {
+		if e.Kind == azure.WrongMethod && h["allow"] == nil {
 			h["allow"] = []string{"GET"}
 		}
 	}

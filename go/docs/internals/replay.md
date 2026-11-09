@@ -17,8 +17,8 @@ and why.
 | `internal/replay/javanum` | the contract's number grammar: BMP-digit integers, the latency profile's floats, saturating conversion | – |
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances, the maximum and percentile windows) and the schema-2 JSON | – |
-| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
-| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts), `format2` (swath-dataset format 2) and `legacytest` (writes both for tests); formerly the public `go/sortedparquet` | – |
+| `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`, which opens it lazily and then calls `Dataset.Verify`, so a long-lived replay fails at startup on any bad part rather than on its first touch; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
+| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts) and `legacytest` (writes them for tests); formerly the public `go/sortedparquet` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
 | `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
@@ -225,7 +225,7 @@ registers at startup are created when the server starts, so a scrape tells a zer
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
 - **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
   `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
-  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset these meters are absent and the store's page, key, reseek and shortcut counters unset (`Sorted.PageStats` false): the seekparquet module reports no page work, so it is unavailable, not zero) and each
+  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset each module request carries its own `seekparquet.ReadStats`, added to the read's `legacy.Stats`: key and value pages decoded, keys decoded, row groups opened, page-index seeks, groups skipped whole and parts checked on first touch, `PartsOpened`, which stays zero because the store verifies every part at open) and each
   read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
   (`Config.IndexLoad`, `Config.IndexEntries`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on
@@ -457,20 +457,27 @@ exists (`gcs` `ported_test.go`, `server` `TestGCSShapeCountsAndRejectionMeter` a
 ### Routing
 
 `serveOtherRoute` hands the Azure route, after the GCS check, a request whose raw path is
-`/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded), before the method
-is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that also has
+`/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded), or whose raw path is
+`/{account}`, `/{account}/` or `/{account}/{one segment}/` and whose `restype` decodes to `account` (only Get
+Account Information is claimed there, so the Java replay's S3 answers on those paths stand: replaydiff
+`TestAzureS3RoutedCases`), before the method is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that also has
 `list-type` is the replay's ambiguous `400`; an unclaimed one goes to the S3 handler, or, without S3, gets the
 replay's `404`. The Azure flow takes the same request
 slot (released before the write), `begin`/`end` store registration, response permit and response memory as S3
 (reservation `2048 + 512 × pageSize`, first chunk sized from the entries returned, the XML rendered into the
 shared `output.Output` one entry at a time), applies the latency profile as a deadline, and answers shutdown
-with `503 ServerBusy`.
+with `503 ServerBusy`. A query whose `restype` decodes to `account` is Get Account Information instead
+(`azure.ParseAccountInfo`, sharing the list route's header and query checks, by GET or HEAD on any claimed path;
+both operations accept and ignore SAS parameters): it takes the request slot but
+no response permit or response memory, reads nothing from the store, and answers an empty `200` whose
+`x-ms-is-hns-enabled` is `Config.AzureHNS`.
 
 ### Order
 
 Azure lists names in UTF-16 code-unit order. For valid UTF-8 that is byte order except at the first differing
 byte, where lead bytes F0..F4 (a surrogate pair in UTF-16) rank before EE..EF (U+E000 to U+FFFF): byte ranks
-`00..ED, F0..F4, EE..EF, F5..FF` (`rank`, `Compare`). A prefix window is contiguous in both orders, and the
+`00..ED, F0..F4, EE..EF, F5..FF` (`internal/utf16order`, shared with the Azure client and the provider's byte-order
+adapter; `Compare` wraps it). A prefix window is contiguous in both orders, and the
 orders disagree only between an EE/EF branch and an F0..F4 branch under the same parent, so provider order over
 a byte range is the byte order with each such pair of sibling branches swapped. Two pieces build it on the
 byte-sorted store:

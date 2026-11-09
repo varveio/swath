@@ -39,8 +39,7 @@ func TestMain(m *testing.M) {
 }
 
 // fixtures builds the conformance fixtures once: a 10,000-key Java-era
-// fixture of three parts, the same keys in a format-2 dataset of four parts
-// (an earlier build's format), the same keys sorted into a SeekParquet
+// fixture of three parts, the same keys sorted into a SeekParquet
 // dataset by sort-fixture, a SeekParquet dataset of keys longer than the
 // 1,024-byte value index bound, and the Go lister's own S3 and local
 // datasets (golister_test.go).
@@ -61,7 +60,6 @@ func fixtures(t *testing.T) []fixture {
 		slices.Sort(long)
 		fixturesList = []fixture{
 			{"java-era-10k", writeJavaEra(t, filepath.Join(dir, "java"), keys, 3, 1500), KindJavaEra},
-			{"format2-10k", writeLegacyFormat2(t, filepath.Join(dir, "legacy"), keys, 4), KindFormat2},
 			{"seekparquet-10k", writeSorted(t, filepath.Join(dir, "f2"), keys, 0), KindSeekParquet},
 			{"seekparquet-long-keys", writeSorted(t, filepath.Join(dir, "long"), long, 4096), KindSeekParquet},
 			{"go-lister-s3", listS3(t, dir), KindSeekParquet},

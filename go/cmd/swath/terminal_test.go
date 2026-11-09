@@ -30,7 +30,7 @@ func snap() listing.ProgressSnapshot {
 // calls, the labelled estimate), its trailing fields dropped whole to fit
 // a terminal, and colour only when asked.
 func TestProgressRecord(t *testing.T) {
-	parts := progressParts(snap(), 75*time.Second, 2000)
+	parts := progressParts(snap(), 75*time.Second, 2000, "objects")
 	want := []string{"listing", "1,234,567 objects (+1,000 recovered)", "2,000 keys/s (avg 123,457)", "3 parts", "17 in flight",
 		"1m15s elapsed", "2,500 API calls", "~$0.013 (est. @ $0.005/1k LIST)"}
 	if strings.Join(parts, "|") != strings.Join(want, "|") {
@@ -51,7 +51,7 @@ func TestProgressRecord(t *testing.T) {
 	}
 	v := snap()
 	v.Objects, v.Requests, v.Verified = 0, 0, 5_000_000
-	if p := progressParts(v, time.Second, 0); p[0] != "verifying" || p[1] != "5.0 MB verified" {
+	if p := progressParts(v, time.Second, 0, "objects"); p[0] != "verifying" || p[1] != "5.0 MB verified" {
 		t.Fatalf("verification record %q", p)
 	}
 }
@@ -159,15 +159,18 @@ func TestStatsBlock(t *testing.T) {
 		Requests:   &listing.Requests{HTTPAttempts: 2000},
 		Cost:       &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
 		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}
-	got := statsLines(r, false)
+	got := statsLines(r, false, "objects")
 	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · 1.50 per 1k objects · in flight avg 0.00 · peak 0",
 		"~$0.010 (est. @ $0.005/1k LIST)", "2 files · 3.5 MB written · peak RSS 200.0 MB"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	if l := statsLines(r, false, rowNoun(true)); !strings.HasPrefix(l[0], "2,000,000 entries in ") { // a local tree's rows
+		t.Fatalf("local headline %q", l[0])
+	}
 	r.Outcome = listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}
 	r.Invocation.Out = "/data/ds"
-	if l := statsLines(r, false); l[0] != "INCOMPLETE (deadline) — resume: swath resume /data/ds" {
+	if l := statsLines(r, false, "objects"); l[0] != "INCOMPLETE (deadline) — resume: swath resume /data/ds" {
 		t.Fatalf("disposition %q", l[0])
 	}
 	short := &listing.Report{Timings: listing.Timings{SessionMs: 100}}

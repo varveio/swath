@@ -12,7 +12,8 @@ name: Nightly deep verification
 # The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
 # this workflow is the exhaustive/timing-realistic backstop.
 #
-# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64.
+# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos is
+# the Go default tier on macOS, which ci.yml runs on main and dispatch but not on pull requests.
 #
 # ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
 # outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
@@ -25,11 +26,11 @@ on:
   # Manual trigger for on-demand deep/perf runs from any branch; `jobs`
   # picks one job (go-shapes: the Go shape suite alone, which is how its
   # baseline is regenerated on a branch; go-race-nightly: the unsharded amd64
-  # race run alone).
+  # race run alone; go-xos-macos: the macOS default tier alone).
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly or go-shapes"
+        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos or go-shapes"
         required: false
         default: all
 
@@ -195,11 +196,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
+      # Restores the shared module cache and ci.yml's amd64 race build cache (go-race-rest); saves
+      # nothing off a push to main.
       - name: Set up Go (version from go/go.mod)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-race-rest
 
       # -timeout is per package binary and leaves the job's limit room for the packages queued
       # ahead of the last (the unsharded run took ~13 min), so a hang ends in a goroutine dump.
@@ -229,6 +231,32 @@ jobs:
           path: ${{ runner.temp }}/go-race-nightly.json
           if-no-files-found: ignore
 
+  # The Go default tier on macOS, as ci.yml go-xos runs it: vet and the whole suite without
+  # -race. ci.yml runs it on main and dispatch but not on pull requests, so a macOS-only break in
+  # a pull request shows on its merge to main at the latest; this run is the scheduled backstop.
+  go-xos-macos:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-macos'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      # Restores the shared module cache and ci.yml's macOS build cache (go-xos); saves nothing
+      # off a push to main.
+      - name: Set up Go (version from go/go.mod)
+        uses: ./.github/actions/setup-go
+        with:
+          key: go-xos
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (no -race)
+        run: go test -count=1 -timeout 25m ./...
+
   # The Go port's shape suite at full scale (go/bench/shapes; go/docs/testing.md): every bucket
   # shape at about 2M keys behind the in-process fake, with its service behaviours (latency
   # 10/50/200 ms, jitter, 1 % and 5 % throttling, a rate cap, slow prefixes, slow continuations
@@ -245,11 +273,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
+      # Restores the shared module cache and ci.yml's non-race build cache (go-nonrace); saves
+      # nothing off a push to main.
       - name: Set up Go (version from go/go.mod)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-nonrace
 
       - name: Shape suite against the baseline
         run: go run ./bench/shapes -out "$RUNNER_TEMP/shapes.json" -scratch "$RUNNER_TEMP/shapes" -baseline bench/baselines/shapes.json

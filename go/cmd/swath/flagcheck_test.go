@@ -35,7 +35,7 @@ func TestNegativeDurationsRefused(t *testing.T) {
 		}
 	}
 	var buf bytes.Buffer
-	if err := runCount(context.Background(), []string{src, "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--max-duration=0", "--stall-timeout=0", "--no-stats"}, &buf); err != nil {
 		t.Fatalf("zero durations: %v", err)
 	}
 }
@@ -54,6 +54,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		{[]string{"gs://bucket", "--request-timeout", "5s"}, "--request-timeout"},
 		{[]string{"s3://bucket", "--gcs-endpoint", "http://127.0.0.1:1"}, "--gcs-endpoint"},
 		{[]string{"s3://bucket", "--gcs-anonymous"}, "--gcs-anonymous"},
+		{[]string{"gs://bucket", "--azblob-sas", "sv=1&sig=x"}, "--azblob-sas"},
 		{[]string{src, "--anonymous"}, "--anonymous"},
 		{[]string{src, "--region", "eu-west-1"}, "--region"},
 		{[]string{src, "--request-rate", "10"}, "--request-rate"},
@@ -67,7 +68,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	// The flag set knows each provider flag's owners.
 	var o options
 	newFlags(&o, false)
-	for name, want := range map[string]string{"anonymous": "s3", "gcs-anonymous": "gs", "request-rate": "gs,s3"} {
+	for name, want := range map[string]string{"anonymous": "s3", "gcs-anonymous": "gs", "azblob-anonymous": "az", "request-rate": "az,gs,s3"} {
 		if got := strings.Join(o.owners[name], ","); got != want {
 			t.Errorf("owners of --%s: %q, want %q", name, got, want)
 		}
@@ -76,7 +77,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		t.Error("--workers, a command flag, has a provider owner")
 	}
 	var buf bytes.Buffer
-	if err := runCount(context.Background(), []string{src, "--no-stats", "--workers", "2"}, &buf, false); err != nil {
+	if err := runCount(context.Background(), []string{src, "--no-stats", "--workers", "2"}, &buf); err != nil {
 		t.Fatalf("a command flag with a local root: %v", err)
 	}
 }
@@ -92,7 +93,7 @@ func TestLocalTextRefusedUpFront(t *testing.T) {
 	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", filepath.Join(t.TempDir(), "rows.tsv")}} {
 		var buf bytes.Buffer
 		err := run(context.Background(), args, &buf, false)
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath count") {
+		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath du") {
 			t.Errorf("%v: exit %d (%v)", args, exitOf(err), err)
 		}
 		if buf.Len() != 0 {

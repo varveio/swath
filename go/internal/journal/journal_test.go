@@ -28,7 +28,7 @@ func TestCheck(t *testing.T) {
 		{"same", func(*Identity) {}, ""},
 		{"tool", func(i *Identity) { i.Tool = "swath" }, "tool"},
 		{"format", func(i *Identity) { i.Format = 2 }, "format"},
-		{"schema", func(i *Identity) { i.SchemaID = "swath-local/v0" }, "schema"},
+		{"schema", func(i *Identity) { i.SchemaID = "swath/local-entries/v0" }, "schema"},
 		{"provider", func(i *Identity) { i.Provider = "gcs" }, "provider"},
 		{"source", func(i *Identity) { i.Source = src("http://h:9000", ""); i.Source[0].Value = "s3://c/" }, "source"},
 		{"writer", func(i *Identity) { i.Writer = "w2" }, "writer"},
@@ -196,9 +196,10 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 		t.Fatalf("interior corruption: %v", err)
 	}
 	// A newer version, version 5 (legacy: a capped run could write one,
-	// and its identity lacks the S3 route) and version 6 (legacy: its
-	// acknowledged part may be at the unclaimed temporary name) are refused.
-	for _, v := range []int{9, 5, 6} {
+	// and its identity lacks the S3 route), version 6 (legacy: its
+	// acknowledged part may be at the unclaimed temporary name), and
+	// versions 7 and 8 (their records hold MD5 digests) are refused.
+	for _, v := range []int{Version + 1, 5, 6, 7, 8} {
 		j, _ = Create(out, Identity{}, nil)
 		j.Close()
 		b, _ = os.ReadFile(Path(out))

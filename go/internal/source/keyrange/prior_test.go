@@ -4,9 +4,12 @@
 package keyrange
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 	"math/rand"
 	"slices"
 	"strings"
@@ -158,14 +161,21 @@ func TestPriorOracle(t *testing.T) {
 // grown 10x, one emptied, a new folder between two cuts) still lists
 // every key; the grown segment is measured as grown on its first page and
 // split inside, the emptied one measured as shrunk.
+//
+// The grown tile's second page is held until every other range is done
+// (Run's "one-range-open"): the split needs demand, idle workers, while
+// the grown tile lists. Draining the other tiles in about 30 page
+// latencies while the grown one holds 100 pages did not guarantee it: on
+// macOS 163 split decisions across the run saw no idle worker (#332).
+// Released this way, its next page decides with three idle workers and
+// every page after it still to list.
 func TestPriorStale(t *testing.T) {
 	var base []string
 	for i := range 100000 {
 		base = append(base, fmt.Sprintf("logs/%07d", i*10))
 	}
 	// 10 cuts of 10,000 keys (four workers start with up to 15 tiles, so
-	// none merge); they drain the other tiles in about 30 page latencies,
-	// while the grown one holds 100 pages: demand arises while it lists.
+	// none merge); the grown one holds 100 pages.
 	pr := priorOf(base, 10000)
 	grownLo, grownHi := pr.Cuts[4].Key, pr.Cuts[5].Key
 	emptyLo, emptyHi := pr.Cuts[7].Key, pr.Cuts[8].Key
@@ -189,7 +199,14 @@ func TestPriorStale(t *testing.T) {
 	// A reorder budget that holds the whole listing: the tiles after the
 	// grown one finish instead of blocking on the frontier (spill does
 	// this in the command), so their workers go idle and ask for work.
-	got, st, leaves := runBudget(t, newSorted(keys, false, 1), Options{Prior: pr}, 4, 1<<20)
+	h := &tileHold{sorted: newSorted(keys, false, 1), lo: grownLo, release: make(chan struct{})}
+	var once sync.Once
+	defer order.SetDurableEvents(func(e string) {
+		if e == "one-range-open" {
+			once.Do(func() { close(h.release) })
+		}
+	})()
+	got, st, leaves := runBudget(t, h, Options{Prior: pr}, 4, 1<<20)
 	if !slices.Equal(got, keys) {
 		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}
@@ -210,6 +227,26 @@ func TestPriorStale(t *testing.T) {
 	if st.Get(cSeedRequests) != 0 || st.Get(cSeedFromTiles) != int64(len(pr.Cuts))+1 {
 		t.Fatalf("seed requests %d, tiles %d", st.Get(cSeedRequests), st.Get(cSeedFromTiles))
 	}
+}
+
+// tileHold holds the continuation pages of the range listing after lo (a
+// tile's own requests: its children start after their cursor or pivot)
+// until released; every other request passes.
+type tileHold struct {
+	*sorted
+	lo      string
+	release chan struct{}
+}
+
+func (h *tileHold) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	if in.StartAfter == h.lo && in.ContinuationToken != "" {
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return h.sorted.List(ctx, in)
 }
 
 // TestPriorRefused: a prior of another scope, out of order, repeated,

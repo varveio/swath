@@ -11,6 +11,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Generation is one generation of a Cloud Storage object, live or
@@ -30,15 +31,14 @@ type GenerationRow = schema.Row[Generation]
 // GenerationSchema is the GCS generations schema: the gcs-objects/v1
 // columns in the same order, then time_deleted. There is no is_latest
 // column: the live generation is the one whose time_deleted is null.
-var GenerationSchema = schema.Schema[Generation]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath/gcs-generations/v1", Key: schema.String, MaxKeyBytes: 1024, Groups: true},
+var GenerationSchema = schema.Bind(reader.GCSGenerationsV1, schema.Schema[Generation]{
+	Info: schema.Info{Name: "swath_listing"},
 	Columns: append(lift(Schema.Columns),
-		schema.Column[Generation]{Spec: schema.Spec{Name: "time_deleted", Type: schema.TimestampMicros},
-			Int: func(g *Generation) (int64, bool) { return g.TimeDeleted, g.TimeDeleted != 0 }}),
+		schema.Column[Generation]{Int: func(g *Generation) (int64, bool) { return g.TimeDeleted, g.TimeDeleted != 0 }}),
 	Bytes: func(g *Generation) int64 { return 48 + objectHeap(&g.Object) }, // six integers of 8 bytes
 	Heap:  func(g *Generation) int64 { return objectHeap(&g.Object) },
 	Codec: generationCodec{},
-}
+})
 
 // lift binds the current-object columns to a Generation's Object, so the
 // two schemas share their columns' names, types and accessors.

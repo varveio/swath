@@ -42,12 +42,20 @@ func proxied(t *testing.T, keys []string, plan faulttest.Plan) (*faulttest.Proxy
 // loaded host a time span can hold no request at all. A cut needs 39 fresh
 // throttles (15 % of the limiter's 256-answer window), so the 120 throttles
 // cut three times (16, 11, 7, 4); retries of throttled requests fall in
-// the storm too. "After the storm"
-// starts 200 ms after the last throttle and ends 10 s (the limiter's clean
-// window) after the first: growth comes back only that long after the
-// last real decrease, which no throttle precedes. Past it the limiter may
-// grow, as it should, so increases are checked only for a run that ended
-// inside it.
+// the storm too. "After the storm" starts 200 ms after the last throttle
+// and ends at the earliest point the limiter may grow, a conservative
+// bound on its first increase. The run reports no increase times, so a
+// run without one is clean to its end; with one, the window ends 10 s
+// (the limiter's clean window) after the last throttle, the earliest the
+// limiter can grow: its window since the last cut never
+// fills (a cut empties it, and fewer than 256 requests follow), so growth
+// waits for 10 s without a throttle answer, and the last answer comes
+// after the proxy saw the last throttle. Increases are checked only for a
+// run that ended inside those 10 s. The storm's length is up to the
+// host's backoff and scheduling (9.7 s on a Windows runner, #342), so the
+// window is anchored to its last throttle, never to its first. A request
+// arrives in it: the requests after the storm pay at least 60 ms each at
+// a limit of 4, far over 200 ms in all.
 func TestThrottleStormLowersConcurrency(t *testing.T) {
 	keys := testKeys()
 	for i := range 8000 {
@@ -78,13 +86,15 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 				last = i
 			}
 		}
-		from := last + int(200*time.Millisecond/faulttest.Step)
-		to := min(len(tl), first+int(cleanWindow/faulttest.Step))
+		v := st.Counters.Value
+		from, to := last+int(200*time.Millisecond/faulttest.Step), len(tl)
+		if v("limiter.increases") != 0 {
+			to = min(to, last+int(cleanWindow/faulttest.Step))
+		}
 		after, arrived := int64(0), int64(0) // most in flight after the storm, and the requests then
 		for i := from; i < to; i++ {
 			after, arrived = max(after, tl[i].MaxActive), arrived+tl[i].Arrived
 		}
-		v := st.Counters.Value
 		t.Logf("limiter %v: %+v, storm %d-%d ms, in flight after it %d (%d requests), decreases %d depth %d increases %d waits %d",
 			on, s, first*int(faulttest.Step/time.Millisecond), last*int(faulttest.Step/time.Millisecond), after, arrived,
 			v("limiter.decreases"), v("limiter.max_depth"), v("limiter.increases"), v("limiter.waits"))
@@ -97,7 +107,7 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 		if arrived == 0 {
 			t.Fatalf("no request arrived after the storm and inside the clean window:\n%s", faulttest.TSV(tl))
 		}
-		grew := v("limiter.increases") != 0 && len(tl) <= first+int(cleanWindow/faulttest.Step)
+		grew := v("limiter.increases") != 0 && len(tl) <= last+int(cleanWindow/faulttest.Step)
 		if !st.Counters.On("limiter") || v("limiter.decreases") == 0 || v("limiter.max_depth") < workers/2 || grew {
 			t.Fatalf("limiter counters: decreases %d depth %d increases %d", v("limiter.decreases"), v("limiter.max_depth"), v("limiter.increases"))
 		}

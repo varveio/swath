@@ -13,7 +13,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/localfs"
 )
 
-// TestLocalRecordingS3View reads a swath-local/v1 dataset the Go lister
+// TestLocalRecordingS3View reads a swath/local-entries/v1 dataset the Go lister
 // wrote through the window cache (packed, the placeholders held once per
 // window), through the bare reader (each row's Object), through a cache
 // whose arena limit sends every fill to the unpacked path, and as a
@@ -40,7 +40,7 @@ func TestLocalRecordingS3View(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if meta.SchemaID != "swath-local/v1" {
+		if meta.SchemaID != "swath/local-entries/v1" {
 			t.Fatalf("schema %q", meta.SchemaID)
 		}
 		t.Cleanup(func() { _ = s.Close() })

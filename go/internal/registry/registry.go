@@ -11,6 +11,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // A Factory opens one kind of source.
@@ -50,6 +52,10 @@ type Factory struct {
 	// Open validates the root and returns a source ready to list. It must
 	// not touch the output directory.
 	Open func(ctx context.Context, req Request) (Source, error)
+	// KeyPrefix, if set, returns the key prefix root names (s3://b/logs/ →
+	// "logs/"): the keys it lists start with it. Without it the keys are
+	// relative to the root (a local tree's).
+	KeyPrefix func(root string) (string, error)
 	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
 	// so its rows cannot be written as text; the command refuses a text run
 	// of it before opening it.
@@ -62,7 +68,25 @@ type Factory struct {
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.
 	Classify func(error) string
+	// Redact, if set, returns the root with any credential it carries
+	// replaced (an Azure SAS in its query), for everything that shows or
+	// records a root: the command line, the terminal and the report. The
+	// root itself still goes to Open.
+	Redact func(root string) string
+	// Secrets are the provider's flags that hold a secret, or a command
+	// that prints one: the command never records their values, and a resume
+	// must be given them again.
+	Secrets []Secret
+	// Usage is the root form for the command's help ("s3://bucket[/prefix]";
+	// "a local directory" for local paths).
+	Usage string
 }
+
+// Secret is a provider flag whose value is never recorded (Flag, without
+// dashes) and the environment variable the provider reads the same
+// credential from when the flag is absent ("" when none), which on resume
+// may stand in for the flag.
+type Secret struct{ Flag, Env string }
 
 // Request is what the pipeline tells a factory.
 type Request struct {
@@ -109,6 +133,9 @@ type Env struct {
 	Sizes *Sizes
 	// Versions counts the attempt's emitted version rows after filtering.
 	Versions *VersionCounts
+	// Totals, if set, sums the counted rows per key prefix (swath du); it
+	// needs Count.
+	Totals *totals.Tally
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a
@@ -177,16 +204,24 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 		p = newFiltered(p, keep, b.s, env.Filtered)
 	}
 	if env.Sizes != nil && !env.Empty {
-		if size := sizeColumn(b.s); size != nil {
+		if size := objectSize(b.s); size != nil {
 			env.Sizes.Measured = true
 			p = newSized(p, size, &env.Sizes.Bytes)
 		}
+	}
+	if env.Totals != nil && !env.Count {
+		return order.Stats{}, nil, errors.New("registry: per-prefix totals need a count")
 	}
 	if env.Count {
 		var observe order.Sink[P]
 		if observer.latest != nil || observer.deleted != nil {
 			observer.Sink = discard[P]{}
 			observe = observer
+		}
+		if env.Totals != nil {
+			if observe, err = bindTotals(env.Totals, b.s, observe); err != nil {
+				return order.Stats{}, nil, err
+			}
 		}
 		st, err := order.CountWithSink(ctx, p, env.Ordered, env.Order, observe)
 		return st, nil, err
@@ -281,6 +316,15 @@ func Register(f Factory) {
 		panic("registry: scheme registered twice: " + f.Scheme)
 	}
 	factories[f.Scheme] = f
+}
+
+// Redact is root as it may be shown or recorded (Factory.Redact): with its
+// provider's credential redacted, or as it is.
+func Redact(root string) string {
+	if f, err := Lookup(root); err == nil && f.Redact != nil {
+		return f.Redact(root)
+	}
+	return root
 }
 
 // Factories returns the registered factories, by scheme.

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -79,6 +80,28 @@ func (p *parser) reset(body []byte, versions bool) {
 	*p = parser{b: body, tmp: p.tmp[:0], arena: p.arena[:0], objs: p.objs[:0], prefixes: p.prefixes[:0], versions: versions}
 }
 
+// parsers keeps parsers' scratch buffers between pages.
+var parsers sync.Pool // *parser
+
+// ParseList parses a ListObjectsV2 response body (a ListBucketResult) with
+// the scanner. A body that does not parse is ErrSyntax.
+func ParseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
+
+// ParseVersions parses a ListObjectVersions response body (a
+// ListVersionsResult) with the scanner, then checks the page
+// (VersionPage.Validate).
+func ParseVersions(body []byte) (*VersionPage, error) { return pooled(body, (*parser).parseVersions) }
+
+// pooled runs parse on body with a pooled parser.
+func pooled[T any](body []byte, parse func(*parser, []byte) (*T, error)) (*T, error) {
+	p, _ := parsers.Get().(*parser)
+	if p == nil {
+		p = new(parser)
+	}
+	defer parsers.Put(p)
+	return parse(p, body)
+}
+
 // parseList parses a ListBucketResult document.
 func (p *parser) parseList(body []byte) (*Page, error) {
 	p.reset(body, false)
@@ -128,16 +151,14 @@ func (p *parser) parseVersions(body []byte) (*VersionPage, error) {
 // root skips the prolog (anything before the first start tag) and returns
 // the root element's name.
 func (p *parser) root() (name []byte, empty bool, err error) {
-	for {
-		k, name, empty, err := p.next()
-		if err != nil {
-			return nil, false, err
-		}
-		if k == tStart {
-			return name, empty, nil
-		}
+	k, name, empty, err := p.next()
+	switch {
+	case err != nil:
+		return nil, false, err
+	case k != tStart:
 		return nil, false, syntax("end tag </%s> before the root element", name)
 	}
+	return name, empty, nil
 }
 
 func (p *parser) listBody(self []byte) error {
@@ -732,7 +753,7 @@ func (p *parser) scalar(name []byte, empty bool) ([]byte, error) {
 		e := p.i + j
 		if e+2+len(name) < len(b) && b[e+1] == '/' && bytes.Equal(b[e+2:e+2+len(name)], name) &&
 			b[e+2+len(name)] == '>' && bytes.IndexByte(t, '&') < 0 && bytes.IndexByte(t, '\r') < 0 &&
-			bytes.Index(t, []byte("]]>")) < 0 {
+			!bytes.Contains(t, []byte("]]>")) {
 			p.i = e + 3 + len(name)
 			return t, nil
 		}
@@ -783,7 +804,7 @@ func (p *parser) scalar(name []byte, empty bool) ([]byte, error) {
 // appendText appends character data with entities decoded and line endings
 // normalised (encoding/xml's text()).
 func appendText(dst, t []byte) ([]byte, error) {
-	if bytes.Index(t, []byte("]]>")) >= 0 {
+	if bytes.Contains(t, []byte("]]>")) {
 		return nil, syntax("unescaped ]]> in character data")
 	}
 	for len(t) > 0 {

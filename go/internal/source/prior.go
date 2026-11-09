@@ -11,7 +11,7 @@ import (
 )
 
 // A prior is a key distribution a range-engine source starts from instead
-// of its delimiter seed (--seed-from; docs/internals/providers.md, "Warm start"):
+// of its delimiter seed (--seed-from; docs/internals/range-engine.md, "Warm start"):
 // ordered, byte-exact cut keys, each with the keys expected in the interval
 // it closes. It sets the initial tiles and their first estimates only
 // (keyrange's SeedFrom). It is source-neutral: a previous dataset, a cut
@@ -20,7 +20,7 @@ import (
 // Prior is a set of cut keys taken under one scope.
 type Prior struct {
 	// Source names where the cuts came from, for the run report: "dataset"
-	// (a committed format-2 dataset's parts and key page index) or "cuts"
+	// (a committed dataset's parts and key page index) or "cuts"
 	// (a cut file).
 	Source string
 	// Scope is the prefix the cuts were taken under; it must be the run's.

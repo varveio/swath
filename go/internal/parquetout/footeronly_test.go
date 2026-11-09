@@ -22,6 +22,8 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 	"golang.org/x/sys/cpu"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -35,7 +37,7 @@ import (
 type partDigests struct{ Data, Meta, Offsets, Values, Keys string }
 
 // footerOnlyGolden are the digests of the parts footerOnlyScenarios write,
-// recorded with the swath-dataset format 2 writer (a1177c7f, parquet-go
+// a frozen golden written by the 2026-11-05 layout (a1177c7f, parquet-go
 // v0.32.0, klauspost/compress v1.19.1) on linux/amd64 with AVX2.
 var footerOnlyGolden = map[string][]partDigests{
 	"unique": {
@@ -161,9 +163,10 @@ func digestPart(t *testing.T, path string) (partDigests, *format.FileMetaData, [
 
 // TestFooterOnlyChange: the SeekParquet writer writes the same data
 // pages, the same offset indexes, the same value-column indexes and the
-// same footer as the format 2 writer did, apart from the footer stamps and
-// the key column's index bounds, which are now exact; a part whose keys
-// fit within 1,024 bytes has the same key index too.
+// same footer as the frozen golden (written by the 2026-11-05 layout)
+// records, apart from the footer stamps and the key column's index bounds,
+// which are now exact; a part whose keys fit within 1,024 bytes has the
+// same key index too.
 func TestFooterOnlyChange(t *testing.T) {
 	for name, write := range footerOnlyScenarios() {
 		parts := write(t)
@@ -192,8 +195,8 @@ func TestFooterOnlyChange(t *testing.T) {
 				t.Errorf("%s part %d: %+v, golden %+v", name, i, g, w)
 			}
 			kv := footer(t, parts[i].Path)
-			stamps := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1", dataset.StampSchema: footerOnlySchemaIDs[name],
-				dataset.StampKeyColumn: "key", dataset.StampKeyUnique: strconv.FormatBool(name != "grouped")}
+			stamps := map[string]string{seekparquet.StampFormatVersion: "0", seekparquet.StampDraftRevision: "1", seekparquet.StampSchemaID: footerOnlySchemaIDs[name],
+				seekparquet.StampKeyColumn: "key", seekparquet.StampKeyUnique: strconv.FormatBool(name != "grouped")}
 			if !maps.Equal(kv, stamps) {
 				t.Errorf("%s part %d: footer key/value metadata %q, want %q", name, i, kv, stamps)
 			}

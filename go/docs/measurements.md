@@ -11,7 +11,7 @@ one session. Ratios held across sessions.
 
 **Commands as run.** Commands and flags are quoted as the build of the day took them. Since report version 2
 and the command-line cleanup ([upgrade.md](upgrade.md#command-line)): `swath list --count-only` is
-`swath count`; `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
+`swath diag count` (`swath count` from 2026-11-07 to 2026-11-09); `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
 are `swath diag list` (or `swath diag count`) flags, and the
 seed is on by default, so `--seed` alone is the default; `--spill-max` is `--spill-budget`; the report's
 `output.rows_listed` is `output.rows_emitted`, `output.bytes` `output.output_bytes`, `cost.api_calls`
@@ -444,7 +444,7 @@ repetition. *Cold* is the default (delimiter seed); *seeded* lists the same keys
 cold run's dataset (one part, its key page index read: 1,954 cuts merged into 256 tiles); *grown* replaces keys
 800,001–850,000 by ten keys each (2,450,000 keys, one segment 10×) and lists it cold and seeded from the stale
 dataset. Rows equal keys in every run; the seeded datasets are byte-identical to the cold ones (same parts, same
-MD5s).
+digests).
 
 | Arm | Wall, s (3 runs) | Requests / 1k keys | `split.max_depth` | Empty children (lower+upper) | Accepted splits | Mean active | Prior error within / grown |
 |---|---|---|---|---|---|---|---|
@@ -504,7 +504,7 @@ unchanged). (Before the megascenes fix the truncated first page was emitted and 
 
 The keyfake S3 fake (`keyfake-static`, 50 ms a page, ListObjectsV2, path-style, anonymous) on 4 shared cores,
 64 workers, `--count-only`, 3 interleaved repetitions, median; before is `go/engine` at `2cb204c2`, after adds
-the admission gates and the remainder rank ([providers](internals/providers.md#range-engine-internalsourcekeyrange)).
+the admission gates and the remainder rank ([range-engine.md](internals/range-engine.md)).
 The synthetic lists follow the shapes of the sweep's worst small lists: `mogreps` 1.04M objects flat at the
 root (`prods_op_mogreps-g_YYYYMMDD_RR_MM_TTT.nc`), `urma` 1.77M under 18,400 day folders
 (`akurma.YYYYMMDD/akurma.tHHz.<product>.grb2`), `zarr` 1.26M zarr chunks seven levels down under two top
@@ -711,9 +711,11 @@ That run used the build of the merged port, before the pivot policy and seed of 
 
 ## Recovery and part count
 
-**Verification read rate** (resume reads every retained part and checks its MD5): a 16 GiB, 4-vCPU VM, virtio
-disk, 1 GiB in 16 files of 64 MiB: 247, 306 and 376 MiB/s with the page cache dropped before each of three
-repetitions, 511 MiB/s warm, where MD5 on one core is the limit. 10,000 retained 64 MiB parts take roughly
+**Verification read rate** (resume reads every retained part and checks its digest; MD5 when measured,
+SHA-256 since journal version 9): a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB: 247, 306 and
+376 MiB/s with the page cache dropped before each of three repetitions, 511 MiB/s warm, where MD5 on one core
+was the limit. SHA-256 on one core of a Xeon Platinum 8581C (SHA extensions, 2026-11-08): 1,504 MiB/s, against
+692 for MD5; a CPU without the SHA extensions hashes SHA-256 slower than MD5. Not remeasured end to end. 10,000 retained 64 MiB parts take roughly
 30–45 minutes. Reproduce: `SWATH_VERIFY_DIR=DIR go test -run TestVerifyThroughput -v ./internal/listing`.
 
 **Part-count growth** (synthetic GCS fake, 8 workers, one-row parts, one run each):
@@ -757,6 +759,110 @@ Google's generated client 3.1 µs and 10,132. Reproduce:
 
 The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself added 0.7 MB. Cross-builds:
 [`../build.sh`](../build.sh).
+
+### SDK-backed clients (2026-11-09)
+
+Clients built with `-tags swath_sdkclient` ([clients.md](internals/clients.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
+measured on branches `exp/measure-preview` (S3) and `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers
+describe those runs.
+
+**S3 decoders** (`BenchmarkDecode` in `internal/source/s3/sdkclient`: one full client call per iteration through
+the real SDK stack and `objhttp.Guard` over an in-memory `RoundTripper`; a 1,000-entry page with URL-encoded keys,
+owners and checksums; `-benchtime=2000x -count=3`; the range is the lowest to highest of the three):
+
+| Decoder | List µs/object | List allocations/page | Versions µs/object | Versions allocations/page |
+|---|---:|---:|---:|---:|
+| scanner (production) | 1.66 to 1.92 | 392 | 1.93 to 2.11 | 392 |
+| SDK decoder (`SWATH_S3_DECODER=sdk`) | 14.6 to 16.4 | 102,464 | not applicable (versions always use the scanner) | |
+| scanner, body only | 1.14 to 1.21 | 3 | 1.12 to 1.28 | 3 |
+| `encoding/xml` walk (deleted) | 12.5 to 15.1 | 80,497 | 11.7 to 12.3 | 85,187 |
+
+A decoder on `encoding/xml` allocates per token and lands near the SDK's cost; a `RawToken` variant reached
+8.5 to 9.3 µs per object.
+
+**GCS** (`TestListClientCost`, 200,000 objects, `GOMAXPROCS=4`; a baseline that only reads the bodies is
+subtracted):
+
+| | Hand-rolled | Generated client, direct | `sdkclient` |
+|---|---:|---:|---:|
+| Client CPU over baseline, list loop | 2.37 µs/object | 2.96 | 3.11 |
+| Allocations per page over baseline | 5,065 | 10,142 | 10,149 |
+| Bytes per page over baseline | 1.03 MiB | 1.36 MiB | 1.65 MiB |
+
+**Azure** (`BenchmarkList` in `internal/source/azblob/sdkclient`: one full `List` call per iteration, request,
+bounded read, decoding, conversion and page validation, over an in-memory 5,000-entry page, the SDK client's Guard
+in place; `-benchtime=500x -count=3` on a shared 4-CPU box, so the ratios are the result, not the absolute numbers;
+a hierarchy page is half blobs and half prefixes):
+
+| Page | Client | ns/object | Allocations/page | Bytes/page |
+|---|---|---:|---:|---:|
+| flat | hand-rolled | 16,700 to 17,900 | 710,127 | 36.2 MB |
+| flat | `sdkclient` | 21,500 to 22,400 | 865,260 | 46.1 MB |
+| hierarchy | hand-rolled | 9,800 to 9,950 | 397,632 | 20.9 MB |
+| hierarchy | `sdkclient` | 12,300 to 13,300 | 485,276 | 25.0 MB |
+
+Both clients decode with `encoding/xml`, so the SDK client costs 1.2 to 1.3 times the hand-rolled client per object
+and 22 % more allocations; the envelope check is within noise. Stripped binaries on branch `exp/azblob-sdkclient`
+(Azure only tagged): default 24,301,730 bytes, tagged 24,445,090, +143 KB and 15 packages (azcore and azidentity
+are already linked in the default build; it links no `azblob` package at all).
+
+**Binary size** (linux/amd64, `CGO_ENABLED=0 -trimpath -ldflags='-s -w'`, branch `exp/gcs-sdkclient`; GCS only
+is tagged here):
+
+| Build | Bytes |
+|---|---:|
+| default | 21,426,338 |
+| `-tags swath_sdkclient` | 30,474,402 |
+
+The tagged build is 9.0 MB larger and links 188 more packages, 64 of them under `google.golang.org/grpc` and 30
+OpenTelemetry. The cost is inherent to the generated client: `google.golang.org/api/storage/v1` itself depends on
+gRPC through `google.golang.org/api/internal/settings.go`, however the service is constructed. These sizes
+are of a later tree than the table above, so they do not compare with it.
+
+**Whole-process comparison (2026-11-09, commit 915e0c0 of `exp/measure-preview`, 4 vCPU, 975,077 keys shaped like the
+`realistic` tree, medians; the fake server's CPU is not included).** Three S3 arms: the default build; the tagged build
+with the scanner decoding (production); the tagged build with the SDK decoding current-object pages
+(`SWATH_S3_DECODER=sdk`, measurement only). "Client CPU" is the share of profile samples with a frame in the client or
+SDK packages or `net/http`.
+
+Sequential `swath diag list --sequential` against `bench/s3fake` (976 pages):
+
+| S3 arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | parsing µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 3.81 | 3.15 | 3.23 | 65 | 1.06 | 0.62 |
+| tagged, scanner, `-o` | 3.83 | 3.72 | 3.81 | 71 | 1.27 | 0.52 |
+| tagged, SDK decoder, `-o` | 8.78 | 8.79 | 9.01 | 69 | 7.09 | 6.49 (`encoding/xml` 5.68) |
+| default, `count` | 4.13 | 3.18 | 3.26 | 27 | 1.11 | 0.75 |
+| tagged, scanner, `count` | 4.52 | 4.21 | 4.31 | 35 | 1.34 | 0.65 |
+| tagged, SDK decoder, `count` | 9.63 | 10.47 | 10.74 | 34 | 7.81 | 7.10 (`encoding/xml` 6.05) |
+
+Sequential GCS against `scalefake` at zero latency:
+
+| GCS arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | `encoding/json` µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 5.81 | 6.05 | 6.20 | 59 | 3.12 | 2.67 |
+| tagged (generated client), `-o` | 5.83 | 6.59 | 6.76 | 68 | 4.75 | 3.85 |
+| default, `count` | 5.57 | 5.20 | 5.33 | 24 | 3.87 | 3.27 |
+| tagged, `count` | 6.89 | 7.49 | 7.68 | 34 | 4.65 | 3.58 |
+
+Parallel `swath count`, 64 workers, `scalefake` at 20 ms latency (3 runs; no retries or throttles):
+
+| arm | wall s median (min to max) | process CPU s | µs CPU/object | peak RSS MiB |
+|---|---|---:|---:|---:|
+| S3 default | 1.06 (0.92 to 1.41) | 1.53 | 1.57 | 85 |
+| S3 tagged, scanner | 1.40 (1.16 to 1.71) | 2.53 | 2.60 | 92 |
+| S3 tagged, SDK decoder | 3.58 (3.43 to 7.04) | 11.56 | 11.85 | 90 |
+| GCS default | 2.09 (2.00 to 2.15) | 4.91 | 5.04 | 58 |
+| GCS tagged | 2.24 (2.11 to 2.37) | 5.58 | 5.72 | 95 |
+
+At 20 ms latency and 64 workers the SDK decoder makes the S3 listing CPU-bound on 4 cores: 11.6 CPU-seconds cannot
+fit in the 1 s the network allows, so wall time triples. The scanner through the SDK costs about 0.6 to 1.0 µs more
+process CPU per object than the hand-rolled client (the SDK's request machinery, about 0.6 µs of AWS frames, plus
+`net/http` and GC), and its wall-time range overlaps the default's. The generated GCS client adds 0.5 to 2.3 µs per
+object and 0.15 s of wall time here. Every arm produced byte-identical Parquet output. Stripped binaries at this
+commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 bytes, +205 packages and +25 modules.
+S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
+and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
 ## Local filesystem walker
 
@@ -1110,7 +1216,7 @@ query lists `1950census/43290879-Alabama/…-0001.jpg` first, yet `start-after=1
 `start-after=` that stored key both return `KeyCount=0 IsTruncated=false`.
 
 swath trusts a page that is not truncated as the end of its range
-([providers.md](internals/providers.md#range-engine-internalsourcekeyrange)), so the campaign's MinIO fixture
+([range-engine.md](internals/range-engine.md)), so the campaign's MinIO fixture
 is a list without that shape.
 
 ## Drain tail: read-ahead and segments, 2026-11-07/08
@@ -1244,6 +1350,35 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
 - Cold-cache medians of the local walker; `readlink` cost (80 symlinks in `realistic`).
 
+## The seekparquet module's part writer, 2026-11-08
+
+The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through
+`PartWriter.WritePage`); the bytes are unchanged (`TestFooterOnlyChange`). Writer alone, 300,000 rows of
+`parquetout`'s test schema, one part, best of four alternating runs on one shared Xeon Platinum 8581C host:
+
+| | swath writer (main 5de12601) | module, `WriteRows` (6dba953c) | module, `WritePage` (6401109d) |
+|---|---|---|---|
+| one column goroutine | 1,303 k rows/s | 803 (−37 %) | 1,235 (−5 %) |
+| four column goroutines | 2,166 k rows/s | 914 (−58 %) | 1,907 (−12 %) |
+
+`WriteRows` checks and copies every row; `WritePage` borrows the values from swath's page of rows, and what
+remains is its serial key-order check. Admission is back at swath's price (31.5 MiB an S3 encoder; the heap
+gate held four local writers, inputs retained, at 219.5 of 244 MiB).
+
+Shape suite, `nightly.yml` `go-shapes` dispatched on `main` and on the `WritePage` commit together (4-CPU
+runners), nine `pq.*` arms and 79 listing-only arms:
+
+| runs (main / branch) | `pq.*` main | `pq.*` branch | listing-only main | listing-only branch |
+|---|---|---|---|---|
+| 42529681487 / 42529679501 | 24.4 s | 31.1 s (+27.6 %) | 605.9 s | 649.3 s (+7.2 %) |
+| 42530957423 / 42530955503 | 29.3 s | 26.9 s (−8.1 %) | 639.7 s | 626.7 s (−2.0 %) |
+
+A single pair moves by tens of percent between runners (the same `main` took 24.4 s and 29.3 s), so these
+two pairs do not resolve a difference. Interleaved on one host (the dev VM, 4 vCPUs, full scale, two rounds
+of `pq.baseline`, `pq.highbytes`, `pq.punct_siblings`): `main` 15.32 s, the branch 15.12 s (−1.3 %). With
+`WriteRows` (runs 42525290072 / 42525288025) the `pq.*` arms took 29.0 s against 36.0 (+24.3 %) and the
+listing-only arms moved +0.9 %. One core hashes SHA-256 at 1,504 MiB/s and MD5 at 692.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's
@@ -1299,3 +1434,53 @@ The reader's own tests pass in the patched copy. `bench/diffds.py` finds the for
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
 ([upgrade.md, "The downstream reader: dispatch on schema id"](upgrade.md#the-downstream-reader-dispatch-on-schema-id)). The Java tool's reader does not read format 2, by design.
+
+## CI: Go caches, race shards and cross-OS legs, 2026-11-09
+
+Before (about 200 `ci.yml` runs, 2026-11-08/09, almost all Go-only changes): a warm run took 7–8 min and
+`go-race (rest)` was its critical path at 5.4–6.0 min, 8.0–8.4 on a build-cache miss. The repository's
+Actions cache held 16.3 GB against its 10 GB limit (the Go caches 9.15 GB in 16 per-job entries, each with
+its own copy of the module cache), so entries were evicted continuously; a miss cost `go-objfile` 5.3–5.7 min
+against 0.6, `go-reader` 2.5 against 0.5, `go-lint` 2.0 against 0.7. Every run over 13 min had waited 7–10
+min for a macOS runner. 35 of 200 runs failed; the platform-only failures were 7 macOS-only (six test-timing
+flakes fixed in the tests, #307 #317 #334 #336; one arm64 encoder-path difference, #308) and 6 Windows-only
+(three of one clock-tick flake, #320; one filesystem difference, #310).
+
+After #355 (shared module cache, per-job build caches, retention) and #356 (`rest` in three shards, Windows
+and Linux arm64 on pull requests, macOS on `main`), job wall times in minutes, one run each:
+
+| job | PR 42626611538 | `main` 42629790131 | `main` 42631148177 (warm) |
+|---|---|---|---|
+| `go-race (cmd-kill)` | 4.3 | 4.6 | 4.6 |
+| `go-race (rest-replay)` | 4.1 | 3.4 | 3.2 |
+| `go-race (rest-source)` | 3.4 | 4.8 | 2.7 |
+| `go-race (listing-rest)` | 2.8 | 2.9 | 3.0 |
+| `go-race (crash)`, `(durable)`, `(cmd)` | 2.4–2.5 | 2.5–2.9 | 2.4–2.5 |
+| `go-race (rest)` | 2.2 | 1.7 | 1.6 |
+| `go-xos (windows-latest)` | 5.0 | 5.8 | 5.4 |
+| `go-xos (ubuntu-24.04-arm)` | 5.4 | 5.6 | 4.6 |
+| `go-xos (macos-latest)` | not on pull requests | 7.8 | 7.5 |
+| `go-objfile` | – | 5.5 (build-cache miss) | 0.8 |
+| `go-lint`, `go-reader`, `go-nonrace` | – | 0.6, 0.9, 0.9 | 0.9, 0.9, 0.9 |
+
+No `rest*` shard is above `cmd-kill`; the `go-xos` legs are the longest Go jobs on a pull request, and
+`rest-source` moves 2.7–4.8 between runs (its packages' summed time was 716 s, `rest-replay`'s 510, the
+remainder's 338 in the `-json` artifact of run 42614118007). The warm `main` run's `go-lint` log shows the
+exact module-cache hit (`go-mod-Linux-X64-<deps>`) and the build-cache restore from the previous commit's
+key (`go-build-Linux-X64-go-lint-<deps>-<sha>`).
+
+Cache sizes as `gh cache list` reports them (zstd-compressed) after the warm run: the module cache 500–504
+MiB on each of Linux amd64, Linux arm64, Windows and macOS (2.0 GB); the build caches `go-objfile` 628,
+`go-build` 357, `go-lint` 206, `go-reader` 204, `go-race (cmd)` 161, `go-race (rest)` 157, `go-xos` 146–155
+per OS, `go-race (cmd-kill)` 140, `rest-source` 122, `rest-replay` 111, `go-fixtures` 106, `go-nonrace` 87,
+`crash`/`durable`/`listing-rest` 78 each (2.9 GB). One generation is about 4.9 GB; a second exists while
+two `main` runs overlap, and `go-cache-prune` deleted 6, 2 and 3 superseded entries in the three runs. The
+13 legacy combined entries (6.7 GB) were deleted by hand after #355 merged.
+
+The first `main` run after #355 (42628492522) was red: `go mod download all` adds the hashes it fetches to
+`go.sum`, so `go mod tidy -diff` failed in `go-lint`, `go-objfile` and `go-reader`; the module cache it
+saved was complete. #360 runs the download on a copy of each module's `go.mod` and `go.sum`. Usage stayed
+above 10 GB after the Go caches shrank because `docker-check` and `go-build` wrote BuildKit caches on pull
+requests, scoped to each pull request's ref (0.4–0.8 GB each, 1.8 GB over three open pull requests), and
+GitHub's CodeQL setup keeps a 672 MiB dependency cache per pull request head. #361 writes the BuildKit
+caches from `main` only; its own pull-request run left no `buildkit-blob` entry under its ref.

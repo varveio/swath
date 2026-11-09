@@ -45,9 +45,9 @@ func capture(t *testing.T, parts ...[]legacytest.Row) string {
 
 func obj(key string, i int) legacytest.Row { return legacytest.Object(key, i) }
 
-// TestSortsTwoPartsIntoAFormat2Dataset sorts two capture parts, keeps only
+// TestSortsTwoPartsIntoASeekParquetDataset sorts two capture parts, keeps only
 // OBJECT rows with their nulls, and writes the replay-owned schema.
-func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
+func TestSortsTwoPartsIntoASeekParquetDataset(t *testing.T) {
 	marker := obj("p/", 9)
 	marker.RowType, marker.Size = "COMMON_PREFIX", nil
 	deleted := obj("x", 8)
@@ -67,11 +67,14 @@ func TestSortsTwoPartsIntoAFormat2Dataset(t *testing.T) {
 	if !strings.HasPrefix(log.String(), "sort_fixture rows=6 objects=4 skipped=2 parts=1 ") {
 		t.Fatalf("summary %q", log.String())
 	}
-	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{VerifyOnOpen: true})
+	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sorted.Close()
+	if err := sorted.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	rows, err := sorted.Range(context.Background(), seekparquet.Range{Limit: 10, Columns: []string{"size", "etag"}})
 	if err != nil {
 		t.Fatal(err)
@@ -132,11 +135,14 @@ func TestKeyLimit(t *testing.T) {
 	if err != nil || stats.SchemaID != SchemaID {
 		t.Fatalf("with a key limit: %+v %v", stats, err)
 	}
-	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{VerifyOnOpen: true})
+	sorted, err := seekparquet.OpenDir(context.Background(), out, seekparquet.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sorted.Close()
+	if err := sorted.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	rows, err := sorted.Range(context.Background(), seekparquet.Range{Start: []byte(long + "a"), StartExclusive: true, Limit: 5})
 	if err != nil || len(rows) != 1 || string(rows[0].Key) != long+"b" {
 		t.Fatalf("read after a long key: %d rows, %v", len(rows), err)

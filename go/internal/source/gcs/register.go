@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Usage: "gs://bucket[/prefix]"})
 }
 
 // flagged is the GCS flag group's value: the GCS options and the range
@@ -185,4 +185,10 @@ func classify(err error) string {
 	default:
 		return string(c)
 	}
+}
+
+// keyPrefix is the key prefix a root names (registry.Factory.KeyPrefix).
+func keyPrefix(root string) (string, error) {
+	_, prefix, err := ParseURL(root)
+	return prefix, err
 }

@@ -38,7 +38,8 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [upg
   the first wave also fetches the first data page, so a one-page bucket lists in one round trip. The seed is on
   by default. `--seed-from PATH` starts from a previous dataset instead.
 - **Splits.** A busy range is split by its owner when workers are idle; there is no thief.
-- **Counting is a command.** Java's `--format discard` is `swath count SOURCE`.
+- **Counting is a command.** Java's `--format discard` is `swath diag count SOURCE`; `swath du SOURCE [-d N]`
+  totals a source per prefix, as `du`.
 - **Text rows** use the S3 API's field names (`Key`, `LastModified`, `ETag`, ...), so a JSONL line matches
   what `aws s3api list-objects-v2` prints for the object.
 

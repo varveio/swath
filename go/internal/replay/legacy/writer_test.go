@@ -50,8 +50,8 @@ func keyIndexOrders(t *testing.T, path string) []string {
 // TestTestWriterDeclaresAscendingKeyIndex requires the test writer's key
 // column index to declare ASCENDING, as the Java writer's sorted output
 // does and the Java server's rollup requires: one-page and many-page row
-// groups, in Java-era parts and format-2 datasets. A many-page group whose
-// page bounds descend keeps the order its bounds have.
+// groups. A many-page group whose page bounds descend keeps the order its
+// bounds have.
 func TestTestWriterDeclaresAscendingKeyIndex(t *testing.T) {
 	var keys []string
 	for i := range 300 {
@@ -72,15 +72,6 @@ func TestTestWriterDeclaresAscendingKeyIndex(t *testing.T) {
 			if want := "ASCENDING"; order[len(order)-len(want):] != want {
 				t.Fatalf("%s: key index %s", name, order)
 			}
-		}
-	}
-	f2 := filepath.Join(dir, "f2")
-	if _, err := legacytest.WriteFormat2(f2, legacytest.Dataset{Parts: []legacytest.Part{{Rows: rowsOf(keys), PageBytes: 512}}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, order := range keyIndexOrders(t, filepath.Join(f2, "data", "part-00000.parquet")) {
-		if order[len(order)-9:] != "ASCENDING" {
-			t.Fatalf("format 2: key index %s", order)
 		}
 	}
 	reversed := make([]string, len(keys))

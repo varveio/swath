@@ -84,7 +84,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 | Listing concurrency | `--workers` | 64, whatever the CPU count | listing waits on the service, not the CPU; it is also the request limiter's ceiling |
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
 | Encoders | `--encoders` | GOMAXPROCS | a ceiling: each is admitted against its working set (one writer and one shared codec state, at the schema's longest keys: 31.5 MiB for S3, 32.5 for GCS's ten columns, 61 MiB for a local path) from an allowance equal to `--row-budget`, and the descriptor limit; the default 128 MiB admits 4 for S3 and 3 for GCS. Once listing has ended the Parquet allowance grows by 1 MiB per worker (no page is in flight any more): at 64 workers 6 for S3 and 5 for GCS, at 256 12 and 11 (report: `resources.drain.encoders_after_listing`); a given `--encoders` is never raised. A warning names a shortfall. For a `.zst` text file it is the zstd jobs compressed at once, 16 MiB each of the same allowance (the default admits 8; see Memory) |
-| Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath count` never spills); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
 
 **Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
@@ -127,8 +127,9 @@ run (resumable; [ordering](internals/ordering.md#spill)).
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
   report names the filesystem (`resources.spill.fs_type`) and the run warns at start.
 
-`swath count` holds only pages in flight and the ranges queued for a worker: it counts rows as they
+A count (`swath du`, `swath diag count`) holds only pages in flight and the ranges queued for a worker: it counts rows as they
 arrive and never orders, buffers or spills them (`resources.features.order` false, `max_buffered_bytes` 0, no `spill`).
+`swath du` also holds one entry per distinct prefix (about 150 bytes each), capped by `--max-prefixes`.
 
 Read the actual figure from the report's `resources.peak_rss_bytes` on a representative run, and size the
 host from that, not from `--row-budget`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
@@ -213,7 +214,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
 | `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
-| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--row-budget`; `swath count` holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
+| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--row-budget`; a count holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
 | `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
 | `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
 | `resources.peak_heap_live_bytes` against `invocation.row_budget_bytes` (report) | a few times the budget plus the pages in flight | far beyond: memory the budget does not see |
@@ -285,7 +286,7 @@ value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the di
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
-The resume keeps every published part, verifies each against its journal record (size and MD5: reads every
+The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
 roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
@@ -300,8 +301,8 @@ deleted from the bucket since stays in the dataset, one added inside a certified
 metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
 during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
 that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
-`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8
-(a run interrupted under an older build resumes as before, relisting), spill on, `--spill-budget` of at least
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8 or
+later (this build writes and resumes version 9 only), spill on, `--spill-budget` of at least
 16 MiB, and the range engine (S3 and GCS; not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
@@ -370,7 +371,7 @@ dataset: a reader starts only once `manifest.json` exists, and a reader that nee
 empty and `scope.kind` `whole` (fields: [upgrade.md](upgrade.md)).
 
 ```bash
-swath show DIR            # format, schema, source, scope, coverage, parts, rows, key range
+swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
 swath show --journal DIR  # an interrupted run: the journal as JSON lines
 duckdb -c "SELECT count(*), sum(size) FROM read_parquet('DIR/data/*.parquet')"
 duckdb -c "SELECT storage_class, count(*), sum(size) FROM read_parquet('DIR/data/*.parquet') GROUP BY 1"
@@ -385,7 +386,9 @@ and the optional `time_created`, absent from parts written before it was listed:
 lists for the object. On GCS, `last_modified` also changes when only the object's metadata changes
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
-encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Both datasets list current
+encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
+`swath/azblob-objects/v1`, its columns and caveats in [upgrade.md](upgrade.md#the-downstream-reader-dispatch-on-schema-id).
+Every dataset lists current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.
@@ -459,7 +462,7 @@ and for S3 the delete-marker state, in wire order.
 ## When it goes wrong
 
 1. **The exit code and the `--report` file.** `outcome.class` and `outcome.cause`: the provider's failure class
-   (`auth`, `access_denied`, `no_such_bucket`, `redirect`, `throttle`, `timeout`, `protocol`, ...), `no_space`, or
+   (`auth`, `access_denied`, `no_such_bucket`, `redirect`, `throttle`, `timeout`, `protocol`, `unsupported`, ...), `no_space`, or
    a `stuck_*` cause. `outcome.unrecorded`, when set, says why `error.json` was not updated.
 2. **`DIR/error.json`**: the same outcome inside the dataset, current only when its `attempt.id` matches the
    report's. Without a report, only the exit code is current. A refused command that could not record its

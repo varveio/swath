@@ -240,7 +240,16 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		}
 		return readSegReport(t, at+" resume", rep)
 	}
-	for _, kill := range []string{"spill-seal:2", "spill-ledger-append:2"} {
+	// Each kill leaves the first certificate durable by construction:
+	// under SWATH_TEST_SERIAL_SEALS seal n waits for the (n-1)-th
+	// record cycle to start ("cycle-records", emitted before its append
+	// and sync), and the one flusher starts a cycle only once the one
+	// before has synced. So the third seal and the second append each
+	// come after the first record's ledger sync. (A kill at the second
+	// seal came after the first cycle started, not after it synced: on
+	// macOS, whose fsync is slow, the kill landed before it, the resume
+	// found no certificate and replayed nothing, #333.)
+	for _, kill := range []string{"spill-seal:3", "spill-ledger-append:2"} {
 		out := filepath.Join(t.TempDir(), "ds")
 		run(kill, exec.Command(bin, args(out)...), kill, "SWATH_TEST_SERIAL_SEALS=1")
 		engaged(kill, resume(kill, out, ""))
