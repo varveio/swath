@@ -743,7 +743,7 @@ func (c *Client) attempt(ctx context.Context, method string, u *url.URL, limit i
 	h.Set(headerVersion, Version)
 	h.Set(headerClientRequestID, requestID())
 	h.Set(headerAccept, acceptXML)
-	h.Set(headerUserAgent, buildinfo.Tool)
+	h.Set(headerUserAgent, buildinfo.UserAgent())
 	switch {
 	case c.key != nil:
 		h.Set(headerDate, time.Now().UTC().Format(http.TimeFormat))

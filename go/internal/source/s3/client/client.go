@@ -313,7 +313,7 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 		return nil, err
 	}
 	req.Host = u.Host
-	req.Header.Set("User-Agent", buildinfo.Tool)
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	if c.cfg.RequestPayer {
 		req.Header.Set("X-Amz-Request-Payer", "requester") // before signing: it is a signed header
 	}

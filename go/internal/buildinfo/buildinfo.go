@@ -52,3 +52,18 @@ func Read() Build {
 	}
 	return b
 }
+
+// UserAgent is the HTTP product token for this binary.
+func UserAgent() string { return Read().userAgent() }
+
+func (b Build) userAgent() string {
+	v := b.Version
+	if v == "" {
+		v = "devel"
+	}
+	if v == "devel" && b.Revision != "" {
+		// Eight revision characters keep a development token under 24 bytes.
+		v += "+" + b.Revision[:min(len(b.Revision), 8)]
+	}
+	return Tool + "/" + v
+}

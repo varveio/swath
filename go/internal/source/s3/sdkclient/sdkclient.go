@@ -46,6 +46,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 	smithymiddleware "github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
@@ -130,9 +131,25 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 		DisableS3ExpressSessionAuth: aws.Bool(true), // directory buckets are refused before any request
 		RequestChecksumCalculation:  aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation:  aws.ResponseChecksumValidationWhenRequired,
-		APIOptions:                  []func(*smithymiddleware.Stack) error{awsmiddleware.AddUserAgentKey(buildinfo.Tool), allowGzip},
+		APIOptions:                  []func(*smithymiddleware.Stack) error{prependUserAgent, allowGzip},
 	})
 	return c, nil
+}
+
+// prependUserAgent runs after the SDK builds its header: its AddUserAgent
+// helpers append products, and AddUserAgentKey also replaces the slash.
+func prependUserAgent(stack *smithymiddleware.Stack) error {
+	token := buildinfo.UserAgent()
+	return stack.Build.Insert(smithymiddleware.BuildMiddlewareFunc("SwathUserAgent", func(ctx context.Context, in smithymiddleware.BuildInput, next smithymiddleware.BuildHandler) (
+		smithymiddleware.BuildOutput, smithymiddleware.Metadata, error,
+	) {
+		req, ok := in.Request.(*smithyhttp.Request)
+		if !ok {
+			return smithymiddleware.BuildOutput{}, smithymiddleware.Metadata{}, fmt.Errorf("User-Agent: unexpected request %T", in.Request)
+		}
+		req.Header.Set("User-Agent", token+" "+req.Header.Get("User-Agent"))
+		return next.HandleBuild(ctx, in)
+	}), (&awsmiddleware.RequestUserAgent{}).ID(), smithymiddleware.After)
 }
 
 // fipsRegion resolves a FIPS region alias (fips-us-east-1, us-east-1-fips,
