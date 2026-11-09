@@ -13,7 +13,8 @@ request (`client.ErrBodyCap`, not retried, not asked again with fewer entries; A
 far below it). The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
 `--azblob-endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
 account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
-`http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--azblob-anonymous`; a SAS from
+`http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--anonymous` (shared with S3 and GCS, and the only way a request goes
+unauthenticated); a SAS from
 `--azblob-sas`, else the root's query when it names a SAS parameter (`sig`, `sv`, `se`, `sp`, ...; found by
 scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
 root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
@@ -23,14 +24,12 @@ the client's tests check the signature independently of the SDK); else Entra ID 
 its tokens coalesced by `tokensource.Shared`, each fetched before the attempt and sent as the request's
 `Authorization` header (the SDK's bearer policy and its 401 challenge re-send are never in the pipeline), and its
 failures classified as GCS's (no answer, 5xx, 408, 429 or a
-timeout retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the
-others the chain reads), a credential that will not work is a `CredentialError`. With nothing configured, on an Azure VM
-(its chassis asset tag) the same chain is used and its managed identity always kept. Off Azure the instance
-metadata service is never asked (a proxy refuses its address, a laptop's probe hangs): only the developer logins
-(the Azure CLI, the Azure Developer CLI) are, one token under the caller's context; when every one is absent the
-requests go unauthenticated with the client's note as a warning, as GCS goes without Application Default
-Credentials, so a public container lists without `--azblob-anonymous`; a refused grant refuses the run, and a
-timeout or a transport failure keeps the login and each request asks again. A SAS never
+timeout retried; a refused grant stops the request). The chain is the SDK's, built as it
+builds it (environment, workload identity, managed identity, the Azure CLI and Developer CLI logins), with no
+discovery of swath's own: a chain that will not build is a `CredentialError` at construction; one that finds
+no credential (azidentity's own error) or whose grant is refused fails the first request with class `auth`
+before it is sent, and nothing is listed; a timeout, a transport failure or a token endpoint's 5xx is retried
+per request (`TestEntraDefaultChain`). A public container needs `--anonymous`. A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that

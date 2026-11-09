@@ -457,8 +457,8 @@ var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-b
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
-var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
-	"bearer-token-command", "bearer-token-refresh-interval", "azblob-anonymous", "azblob-sas", "azblob-request-timeout"}
+var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
+	"bearer-token-command", "bearer-token-refresh-interval", "azblob-sas", "azblob-request-timeout"}
 
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
@@ -638,8 +638,8 @@ func nonNegativeDurations(f *flag.FlagSet) (err error) {
 }
 
 // foreignFlags refuses a provider flag given explicitly for a root of
-// another provider (gs://... --anonymous: S3's flag, which GCS would
-// ignore; GCS's is --gcs-anonymous). A root no provider takes is left to
+// another provider (gs://... --profile: S3's flag, which GCS would
+// ignore; GCS's is --gcs-credentials). A root no provider takes is left to
 // the lookup's own refusal.
 func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
 	pf, lerr := registry.Lookup(root)

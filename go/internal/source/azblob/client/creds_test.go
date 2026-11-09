@@ -11,9 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -308,92 +305,46 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 	}
 }
 
-// unavailableErr is azidentity's own absence signal: the chain with only
-// the environment credential, in an empty environment.
-func unavailableErr(t *testing.T) error {
-	t.Helper()
-	clearEntra(t)
-	t.Setenv("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential")
-	defer os.Unsetenv("AZURE_TOKEN_CREDENTIALS")
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = cred.GetToken(context.Background(), policy.TokenRequestOptions{Scopes: []string{storageScope}})
-	if err == nil || !unavailable(err) {
-		t.Fatalf("%v: not the unavailable signal", err)
-	}
-	return err
-}
-
-// TestEntraDiscovery: with nothing configured, one token is asked for at
-// New: off an Azure VM from the developer logins alone (newLoginCredential;
-// DefaultAzureCredential, whose managed identity probes the instance
-// metadata service, is never built there), on one from
-// DefaultAzureCredential. A credential found is used. Only azidentity's explicit absence
-// signal (every source unavailable) means unauthenticated requests, with a
-// note. A transient failure (a metadata service timing out, a transport
-// failure, a token endpoint's 503) keeps the chain, each request asking
-// again (classified transport or timeout, never anonymity). A refused
-// grant refuses the client; so does a credential the environment
-// configures that will not build. On an Azure VM the managed identity is
-// kept even when the chain reports itself unavailable. The lookup is
-// faked, so the outcome does not depend on the host.
-func TestEntraDiscovery(t *testing.T) {
-	absent := unavailableErr(t)
+// TestEntraDefaultChain: with no SAS, key or supplied credential, the
+// client always builds DefaultAzureCredential (never a discovery of its
+// own) and never lists unauthenticated. Its token is asked for per
+// attempt, before the request is sent: a token found is sent; a chain
+// that finds no credential (azidentity's own unavailable error, from the
+// real chain in an empty environment) and a refused grant fail the first
+// request with class auth and send no listing request; a token
+// endpoint's 503 is retried (transport); a chain that does not build
+// refuses the client.
+func TestEntraDefaultChain(t *testing.T) {
 	refusedErr := &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 401}}
 	for _, x := range []struct {
-		name       string
-		configured bool
-		azureVM    bool
-		cred       *countingCredential
-		buildErr   error
-		anonymous  bool
-		fails      bool
-		retryClass objhttp.Class // the first request's class when the chain is kept but failing
+		name     string
+		cred     azcore.TokenCredential // nil: the real chain, environment credential only
+		buildErr error
+		fails    bool          // New refuses
+		class    objhttp.Class // the first request's class; "" lists
 	}{
 		{name: "found", cred: &countingCredential{}},
-		{name: "absent", cred: &countingCredential{err: absent}, anonymous: true},
-		{name: "login command not found", cred: &countingCredential{err: fmt.Errorf("AzureCLICredential: %w", exec.ErrNotFound)}, anonymous: true},
-		{name: "metadata timeout", cred: &countingCredential{err: fmt.Errorf("ManagedIdentityCredential: %w", context.DeadlineExceeded)}, retryClass: objhttp.ClassTimeout},
-		{name: "transport failure", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{}}, retryClass: objhttp.ClassTransport},
-		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, retryClass: objhttp.ClassTransport},
-		{name: "absent on an Azure VM", azureVM: true, cred: &countingCredential{err: absent}, retryClass: objhttp.ClassAuth},
-		{name: "refused", cred: &countingCredential{err: refusedErr}, fails: true},
-		{name: "chain does not build", buildErr: errors.New("no credential"), anonymous: true},
-		{name: "configured, does not build", configured: true, buildErr: errors.New("invalid AZURE_TOKEN_CREDENTIALS"), fails: true},
+		{name: "absent", class: objhttp.ClassAuth},
+		{name: "refused", cred: &countingCredential{err: refusedErr}, class: objhttp.ClassAuth},
+		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, class: objhttp.ClassTransport},
+		{name: "does not build", buildErr: errors.New("invalid AZURE_TOKEN_CREDENTIALS"), fails: true},
 	} {
 		t.Run(x.name, func(t *testing.T) {
 			clearEntra(t)
-			if x.configured {
-				t.Setenv("AZURE_CLIENT_ID", "cid")
-			}
-			tag := t.TempDir() + "/chassis_asset_tag"
-			if x.azureVM {
-				os.WriteFile(tag, []byte(azureAssetTag+"\n"), 0o644)
-			}
-			oldTag, old, oldLogin := azureAssetTagFile, newDefaultCredential, newLoginCredential
-			t.Cleanup(func() { azureAssetTagFile, newDefaultCredential, newLoginCredential = oldTag, old, oldLogin })
-			azureAssetTagFile = tag
-			build := func() (azcore.TokenCredential, error) {
-				if x.buildErr != nil {
-					return nil, x.buildErr
+			if x.cred == nil && x.buildErr == nil {
+				t.Setenv("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential")
+			} else {
+				old := newDefaultCredential
+				t.Cleanup(func() { newDefaultCredential = old })
+				newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+					return x.cred, x.buildErr
 				}
-				return x.cred, nil
 			}
-			newLoginCredential = func() (azcore.TokenCredential, error) {
-				if x.configured || x.azureVM {
-					t.Error("the login chain built with a configured credential or on an Azure VM")
-				}
-				return build()
-			}
-			newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-				if !x.configured && !x.azureVM {
-					t.Error("DefaultAzureCredential built off an Azure VM with nothing configured")
-				}
-				return build()
-			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("")) }))
+			var listed atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				listed.Add(1)
+				fmt.Fprint(w, page(""))
+			}))
 			defer srv.Close()
 			c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1})
 			var ce *CredentialError
@@ -406,112 +357,21 @@ func TestEntraDiscovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			src, anon := c.Credentials()
-			if anon != x.anonymous || (anon && !strings.Contains(c.Note(), "no Azure credentials found")) {
-				t.Fatalf("credentials %q anonymous=%v note %q", src, anon, c.Note())
+			if src, anon := c.Credentials(); anon || !strings.Contains(src, "DefaultAzureCredential") {
+				t.Fatalf("credentials %q anonymous=%v", src, anon)
 			}
-			if x.retryClass != "" {
-				_, err := c.List(context.Background(), &ListInput{Container: "c"})
-				if !errors.As(err, &ce) || Classify(err) != x.retryClass {
-					t.Fatalf("first request: %v (class %q), want a %s credential error", err, Classify(err), x.retryClass)
+			_, err = c.List(context.Background(), &ListInput{Container: "c"})
+			if x.class == "" {
+				if err != nil || listed.Load() != 1 {
+					t.Fatalf("list: %v, %d requests", err, listed.Load())
 				}
+				return
+			}
+			if !errors.As(err, &ce) || Classify(err) != x.class || listed.Load() != 0 {
+				t.Fatalf("first request: %v (class %q, %d listing requests), want a %s credential error and none sent", err, Classify(err), listed.Load(), x.class)
 			}
 		})
 	}
-	// The caller's context bounds New, decided by signals, not timing: an
-	// ended context refuses it at once; one that ends while the discovery
-	// waits for its token ends it with that context's error. The asset tag
-	// is a missing file, so a CI runner that is an Azure VM probes too.
-	clearEntra(t)
-	oldTag, oldLogin := azureAssetTagFile, newLoginCredential
-	t.Cleanup(func() { azureAssetTagFile, newLoginCredential = oldTag, oldLogin })
-	azureAssetTagFile = t.TempDir() + "/none"
-	bc := blockingCredential{started: make(chan struct{})}
-	newLoginCredential = func() (azcore.TokenCredential, error) { return bc, nil }
-	done, cancelDone := context.WithCancel(context.Background())
-	cancelDone()
-	if _, err := New(done, Config{Account: "acct"}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("New under an ended context: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { <-bc.started; cancel() }()
-	if _, err := New(ctx, Config{Account: "acct"}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("New whose context ends during discovery: %v", err)
-	}
-}
-
-// TestNoMetadataProbeOffAzure: with nothing configured on a host that is
-// not an Azure VM, a public container lists anonymously with the note,
-// whatever the instance metadata service would do (a proxy's 403, or a
-// probe that hangs): no request reaches it. The real login chain runs
-// with no Azure CLI on the PATH; DefaultAzureCredential, if it were
-// built, would ask the fake metadata service.
-func TestNoMetadataProbeOffAzure(t *testing.T) {
-	for _, imds := range []string{"403", "hang"} {
-		t.Run(imds, func(t *testing.T) {
-			clearEntra(t)
-			// No az or azd on the PATH, the system's commands kept: on
-			// Windows azidentity would start cmd.exe from there, so the
-			// case is "the CLI is not installed", not "no shell".
-			path := t.TempDir()
-			if runtime.GOOS == "windows" {
-				path += string(os.PathListSeparator) + filepath.Join(os.Getenv("SystemRoot"), "System32")
-			} else {
-				path += string(os.PathListSeparator) + "/bin" + string(os.PathListSeparator) + "/usr/bin"
-			}
-			t.Setenv("PATH", path)
-			if _, err := exec.LookPath("az"); err == nil {
-				t.Skip("an az command is installed system-wide")
-			}
-			var asked atomic.Int64
-			meta := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				asked.Add(1)
-				if imds == "hang" {
-					<-r.Context().Done()
-					return
-				}
-				http.Error(w, "Destination IP is in a private/reserved range", 403)
-			}))
-			defer meta.Close()
-			oldTag, old := azureAssetTagFile, newDefaultCredential
-			t.Cleanup(func() { azureAssetTagFile, newDefaultCredential = oldTag, old })
-			azureAssetTagFile = t.TempDir() + "/none"
-			newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-				return metadataCredential{url: meta.URL}, nil
-			}
-			c, err := New(context.Background(), Config{Account: "acct", RequestTimeout: 2 * time.Second})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, anon := c.Credentials(); !anon || !strings.Contains(c.Note(), "no Azure credentials found") || asked.Load() != 0 {
-				t.Fatalf("anonymous %v, note %q, metadata requests %d", anon, c.Note(), asked.Load())
-			}
-		})
-	}
-}
-
-// metadataCredential asks a fake instance metadata service for a token,
-// as the managed identity credential would.
-type metadataCredential struct{ url string }
-
-func (m metadataCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, m.url+"/metadata/identity/oauth2/token", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return azcore.AccessToken{}, err
-	}
-	resp.Body.Close()
-	return azcore.AccessToken{}, &azidentity.AuthenticationFailedError{RawResponse: resp}
-}
-
-// blockingCredential closes started when asked for a token, then answers
-// only when its context ends.
-type blockingCredential struct{ started chan struct{} }
-
-func (b blockingCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
-	close(b.started)
-	<-ctx.Done()
-	return azcore.AccessToken{}, ctx.Err()
 }
 
 // TestAnonymousPrecedence: Anonymous sends nothing, whatever else is

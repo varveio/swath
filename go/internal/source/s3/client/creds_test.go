@@ -220,13 +220,13 @@ func webIdentitySTS(t *testing.T, delay time.Duration, status int, code string) 
 	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
 }
 
-// TestCredentialsFailClosed: only an empty chain goes anonymous. A source
-// the environment configures (here web identity, as on a hosted runner)
-// that is slow, mounted late, refused or down never becomes unsigned
-// requests: a slow STS (5 s, past the empty chain's 3 s probe) and a token
-// file mounted a second after start sign; a refused token is an auth
-// failure at start; an STS outage keeps the source and the requests retry
-// it; --anonymous never signs, even with keys in the environment.
+// TestCredentialsFailClosed: requests go unsigned only with --anonymous.
+// A source the environment configures (here web identity, as on a hosted
+// runner) that is slow or mounted late signs; one that is refused or whose
+// token service is down at start refuses the client (auth: a later outage
+// is retried per request, TestCredentialOutageRecovers); an empty chain
+// refuses it too, and none of them sends a listing request; --anonymous
+// never signs, even with keys in the environment.
 func TestCredentialsFailClosed(t *testing.T) {
 	setup := func(t *testing.T) (dir, token string) {
 		dir = t.TempDir()
@@ -289,35 +289,28 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, Classify(err))
 		}
 	})
+	// refused is the outcome of a client the first lookup could not
+	// serve: an auth failure, and no listing request sent.
+	refused := func(t *testing.T) {
+		t.Helper()
+		var sent atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); h(w, r) }))
+		t.Cleanup(srv.Close)
+		_, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
+		var ce *objhttp.CredentialError
+		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
+			t.Fatalf("%v (class %s), %d requests: want an auth failure and none sent", err, Classify(err), sent.Load())
+		}
+	}
 	t.Run("STS down", func(t *testing.T) {
 		_, token := setup(t)
 		os.WriteFile(token, []byte("jwt"), 0o600)
 		webIdentitySTS(t, 0, 503, "ServiceUnavailable")
-		srv := httptest.NewServer(http.HandlerFunc(h))
-		t.Cleanup(srv.Close)
-		c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true, MaxAttempts: 2,
-			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.auth.anonymous || !strings.Contains(c.Note(), "not available yet") {
-			t.Fatalf("anonymous %v, note %q", c.auth.anonymous, c.Note())
-		}
-		_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-		var ex *ExhaustedError
-		if !errors.As(err, &ex) || !Classify(err).Transient() {
-			t.Fatalf("STS down: %v (class %s), want a retried transient credential failure", err, Classify(err))
-		}
+		refused(t)
 	})
 	t.Run("empty chain", func(t *testing.T) {
 		isolate(t, t.TempDir())
-		c, _ := testClient(t, h, Config{Region: "us-east-1"})
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-		if a := auth.Load().(string); a != "" || c.auth.source != "anonymous (no credentials found)" {
-			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.source)
-		}
+		refused(t)
 	})
 	t.Run("anonymous", func(t *testing.T) {
 		isolate(t, t.TempDir())
@@ -331,32 +324,6 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatalf("--anonymous signed: %q", a)
 		}
 	})
-}
-
-// TestOnEC2 reads the instance signs from the DMI files.
-func TestOnEC2(t *testing.T) {
-	old := dmiRoot
-	t.Cleanup(func() { dmiRoot = old })
-	for _, c := range []struct {
-		file, value string
-		want        bool
-	}{
-		{"", "", false},
-		{"devices/virtual/dmi/id/sys_vendor", "Amazon EC2\n", true},
-		{"devices/virtual/dmi/id/board_asset_tag", "i-0123456789abcdef0\n", true},
-		{"hypervisor/uuid", "EC2E1916-9099-7CAF-FD21-012345ABCDEF\n", true},
-		{"devices/virtual/dmi/id/sys_vendor", "QEMU\n", false},
-	} {
-		dmiRoot = t.TempDir()
-		if c.file != "" {
-			p := filepath.Join(dmiRoot, c.file)
-			os.MkdirAll(filepath.Dir(p), 0o755)
-			os.WriteFile(p, []byte(c.value), 0o600)
-		}
-		if got := onEC2(); got != c.want {
-			t.Errorf("%s=%q: onEC2 %v, want %v", c.file, c.value, got, c.want)
-		}
-	}
 }
 
 // TestPartialCredentialsRefuse (durability review):

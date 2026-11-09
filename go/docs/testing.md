@@ -345,8 +345,9 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
   byte-identical datasets (SDK sequential vs client sequential, parallel and seeded, and SDK parallel) on a
   bucket with spaces, `+`, `%`, XML metacharacters, non-ASCII and 900-byte keys. Credentials and signing
   are the SDK's own modules; `TestCredentialChain` checks the chain's use (environment, profile,
-  anonymous, a missing profile); `TestCredentialsFailClosed` that a configured source that is slow, mounted
-  late, refused or down never becomes anonymous.
+  `--anonymous`, a missing profile, nothing configured refused); `TestCredentialsFailClosed` that requests
+  go unsigned only with `--anonymous`: a source that is slow or mounted late signs, one that is refused or
+  down at start and an empty chain refuse the client with no request sent.
 - **Page parser vs encoding/xml:** `FuzzParseList` (arbitrary documents) and `FuzzParseFields` (valid
   documents from fuzzed values) require that whenever encoding/xml accepts a document, the scanner returns the
   same page. `TestEveryTruncationFails` holds that no proper prefix of a page parses, so a cut body is never

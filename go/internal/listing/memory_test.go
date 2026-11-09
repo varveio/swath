@@ -102,7 +102,7 @@ func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 		base := liveHeap()
 		out := filepath.Join(t.TempDir(), "keys.tsv")
 		sum, err := Run(context.Background(), Config{
-			Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Policy: keyrange.Policy{}}},
+			Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{}}},
 			Output: OutputConfig{Text: &textout.Config{Path: out, Format: textout.TSV}},
 			// Four formatters (beyond what the budget admits, as asked): their
 			// queued batches are charged to the same budget.
@@ -176,7 +176,7 @@ func TestCountOnlyHoldsNothing(t *testing.T) {
 	runtime.GC()
 	base := liveHeap()
 	sum, err := Run(context.Background(), Config{
-		Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true}},
+		Source: SourceConfig{URI: "s3://bkt", Options: &S3Config{Endpoint: srv.URL, PathStyle: true, Anonymous: true}},
 		Limits: Limits{Workers: workers, RowBudget: minRowBudget}})
 	close(stop)
 	created := <-seen

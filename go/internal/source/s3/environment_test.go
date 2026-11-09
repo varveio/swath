@@ -68,7 +68,7 @@ func TestThrottleStormLowersConcurrency(t *testing.T) {
 	const cleanWindow = 10 * time.Second // objhttp's throttle-free time before any growth
 	for _, on := range []bool{true, false} {
 		px, ep := proxied(t, keys, faulttest.Plan{Seed: 1, Windows: []faulttest.Window{slow, storm}})
-		rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: workers,
+		rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Anonymous: true, Workers: workers,
 			Policy: keyrange.Policy{Seed: true}, Admission: objhttp.Admission{Limiter: on}}, workers)
 		if !slices.Equal(keysOf(rows), keys) {
 			t.Fatalf("limiter %v: %d keys, want %d", on, len(rows), len(keys))
@@ -129,7 +129,7 @@ func TestOneAdmission(t *testing.T) {
 		{Fraction: 1, Fault: faulttest.Latency, Delay: 2 * time.Millisecond},
 		{Fraction: 0.2, Fault: faulttest.Throttle},
 		{Fraction: 0.1, Fault: faulttest.Reset}}})
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: 1,
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Anonymous: true, Workers: 1,
 		Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, Admission: objhttp.Admission{Limiter: true}}, 8)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("%d keys, want %d", len(rows), len(keys))
@@ -194,7 +194,7 @@ func TestSlowStartStartsNarrow(t *testing.T) {
 	slow := faulttest.Window{Fraction: 1, Fault: faulttest.Latency, Delay: 60 * time.Millisecond}
 	const workers = 32
 	px, ep := proxied(t, keys, faulttest.Plan{Seed: 1, Windows: []faulttest.Window{slow}})
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Workers: workers,
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: ep, PathStyle: true, Anonymous: true, Workers: workers,
 		Policy: keyrange.Policy{Seed: true}, Admission: objhttp.Admission{Limiter: true, SlowStart: true}}, workers)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("%d keys, want %d", len(rows), len(keys))

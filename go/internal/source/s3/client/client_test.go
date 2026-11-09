@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 const okPage = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>k%20</Key><Size>1</Size></Contents></ListBucketResult>`
@@ -123,16 +125,14 @@ func isolate(t *testing.T, dir string) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	old := dmiRoot
-	dmiRoot = filepath.Join(dir, "sys") // not EC2, whatever the host is
-	t.Cleanup(func() { dmiRoot = old })
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
 }
 
 // TestCredentialChain: the SDK's default chain signs with environment keys
-// and profiles; -anonymous never signs; nothing found means anonymous; a
-// named profile that does not exist is an error.
+// and profiles; -anonymous never signs; nothing found refuses the client
+// (auth) with no request sent, never anonymity; a named profile that does
+// not exist is an error.
 func TestCredentialChain(t *testing.T) {
 	dir := t.TempDir()
 	isolate(t, dir)
@@ -152,9 +152,12 @@ func TestCredentialChain(t *testing.T) {
 		}
 		return c
 	}
-	// Nothing configured: anonymous.
-	if c := list(Config{}); auth.Load() != "" || !c.auth.anonymous {
-		t.Fatalf("unsigned expected, got %q", auth.Load())
+	// Nothing configured: refused, nothing sent.
+	var sent atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); w.Write([]byte(okPage)) }))
+	t.Cleanup(srv.Close)
+	if c, err := New(context.Background(), Config{Endpoint: srv.URL, PathStyle: true}); err == nil || Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
+		t.Fatalf("nothing configured: client %v, err %v (class %s), %d requests; want auth and none sent", c != nil, err, Classify(err), sent.Load())
 	}
 	// A named profile from the shared files, with its region.
 	if c := list(Config{Profile: "work"}); !strings.Contains(auth.Load().(string), "Credential=AKWORK/") || c.Region() != "eu-west-2" ||

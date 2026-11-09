@@ -40,7 +40,7 @@ func TestS3Dataset(t *testing.T) {
 		seed         bool
 	}{{"s3://bkt", "s3://bkt", false}, {"s3://bkt", "s3://bkt", true}, {"s3://bkt/logs/03/", "s3://bkt/logs/03/", false}} {
 		out := filepath.Join(t.TempDir(), "ds")
-		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: tc.seed}}}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10}})
+		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: tc.root, Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: tc.seed}}}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestS3ParallelEqualsSequential(t *testing.T) {
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, keys)), 5*time.Millisecond))
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
-		s3cfg.Endpoint, s3cfg.PathStyle = url, true
+		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.Anonymous = url, true, true
 		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
 		if err != nil {
 			t.Fatal(err)
@@ -147,7 +147,7 @@ func TestSummaryDistinguishesOffFromZero(t *testing.T) {
 	url := fakeS3(t, 300)
 	run := func(cfg Config) map[string]any {
 		t.Helper()
-		cfg.Source.URI, cfg.Source.Options.(*S3Config).Endpoint, cfg.Source.Options.(*S3Config).PathStyle = "s3://bkt", url, true
+		cfg.Source.URI, cfg.Source.Options.(*S3Config).Endpoint, cfg.Source.Options.(*S3Config).PathStyle, cfg.Source.Options.(*S3Config).Anonymous = "s3://bkt", url, true, true
 		sum, err := Run(context.Background(), cfg)
 		if err != nil {
 			t.Fatal(err)

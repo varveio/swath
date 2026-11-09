@@ -32,21 +32,20 @@ value is a `parse` failure, retried, never an empty final page), every item must
 the first reason and the message; a 400 names its query. The User-Agent is swath's product token
 (`swath-go/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
 the client: class, retry decision, attempts and counters, the answer, every body closed once, no redirect
-followed. Credentials: `--gcs-anonymous` sends none; `--gcs-credentials FILE` reads a service-account or
-authorized-user JSON; otherwise Application Default Credentials, and without any (no
-`GOOGLE_APPLICATION_CREDENTIALS`, no gcloud file, not on Google Cloud) the requests go unauthenticated (public
-buckets allow it). Credentials that are configured but do not load refuse the run (`client.CredentialError`,
-class `auth`), never anonymity; on a Google Cloud machine (DMI product name `Google`/`Google Compute Engine`,
-or `GCE_METADATA_HOST`) whose metadata server the client library did not detect in time, the compute metadata
-token source is used anyway and its failures are retried per attempt (S3 follows the same rule). The token source lives as long as the client: it is built on a context that is
+followed. Credentials: `--anonymous` (shared with S3 and Azure Blob) sends none, and is the only way a request goes
+unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials FILE` reads a service-account or
+authorized-user JSON; otherwise Application Default Credentials, found by the client library's own search
+(`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud). Credentials that
+cannot be found or do not load refuse the run before any listing request (`client.CredentialError`, class
+`auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
 never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
 waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
 time: `tokensource.Shared`, the coalescer S3's bearer tokens use, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
 transport failure or timeout is
 retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
 (`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
-local token endpoint; the last injects a failed ADC search, so its unreadable-gcloud, compute-metadata and
-anonymous outcomes hold on a Google Cloud host too). The token is fetched before the attempt is counted and set
+local token endpoint; the last injects a failed ADC search, so its refusal holds on a Google Cloud host too;
+`TestComputeTokenFromSearch` serves the compute token from a fake metadata server). The token is fetched before the attempt is counted and set
 as the request's `Authorization` header (the generated client is built without authentication), so a credential
 failure is a `CredentialError` and not an attempt. The scope is `devstorage.read_only`. The binary links
 `google.golang.org/api/storage/v1`, `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`

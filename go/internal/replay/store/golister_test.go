@@ -66,7 +66,7 @@ func listS3(t testing.TB, dir string) string {
 	t.Helper()
 	s3test.NoCredentials(t)
 	url := s3test.Bucket(t, listerKeys())
-	return listInto(t, dir, "go-s3", "s3://"+s3test.Name, &s3.Options{Endpoint: url, PathStyle: true})
+	return listInto(t, dir, "go-s3", "s3://"+s3test.Name, &s3.Options{Endpoint: url, PathStyle: true, Anonymous: true})
 }
 
 // listGCS lists listerKeys from the GCS fake, with full object resources

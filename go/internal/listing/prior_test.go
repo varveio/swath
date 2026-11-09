@@ -26,7 +26,7 @@ import (
 func listS3(t *testing.T, url, root, out, seedFrom string) (Report, error) {
 	t.Helper()
 	return Run(context.Background(), Config{Source: SourceConfig{URI: root, SeedFrom: seedFrom,
-		Options: &S3Config{Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Seed: true}}},
+		Options: &S3Config{Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Seed: true}}},
 		Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 16 << 10, Workers: 8}})
 }
 

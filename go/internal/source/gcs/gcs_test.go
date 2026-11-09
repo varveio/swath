@@ -497,7 +497,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
 	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-structure", "-gcs-anonymous", "-gcs-endpoint", "http://127.0.0.1:1/storage/v1/"}); err != nil {
+	if err := f.Parse([]string{"-seed", "-structure", "-anonymous", "-gcs-endpoint", "http://127.0.0.1:1/storage/v1/"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2})

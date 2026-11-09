@@ -91,7 +91,7 @@ func TestDatasetsMatchSDK(t *testing.T) {
 	srvURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 2*time.Millisecond))
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
-		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner = srvURL, true, true
+		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner, s3cfg.Anonymous = srvURL, true, true, true
 		if _, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 8 << 10, Workers: workers}}); err != nil {
 			t.Fatal(err)
 		}

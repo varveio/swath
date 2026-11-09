@@ -30,7 +30,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -271,40 +270,9 @@ func (c *Client) credentials(ctx context.Context) error {
 	case cfg.Credential != nil:
 		c.ts, c.source = c.shared(cfg.Credential), "token credential"
 	default:
-		return c.entra(ctx)
+		return c.entra()
 	}
 	return nil
-}
-
-// newLoginCredential is the unconfigured discovery's chain off an Azure
-// VM: the developer logins only (the Azure CLI, the Azure Developer CLI),
-// which run a local command and never ask the instance metadata service.
-// A login whose command is not installed (exec.LookPath: az, azd; az.cmd
-// on Windows through PATHEXT) is absent and left out, so with neither the
-// chain is an exec.ErrNotFound and nothing is started: azidentity would
-// run each through a shell (cmd.exe on Windows, /bin/sh elsewhere) and
-// report a shell it cannot start as an authentication failure without a
-// response, which reads as transient (tests replace it).
-var newLoginCredential = func() (azcore.TokenCredential, error) {
-	var logins []azcore.TokenCredential
-	if _, err := exec.LookPath("az"); err == nil {
-		cli, err := azidentity.NewAzureCLICredential(nil)
-		if err != nil {
-			return nil, err
-		}
-		logins = append(logins, cli)
-	}
-	if _, err := exec.LookPath("azd"); err == nil {
-		azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
-		if err != nil {
-			return nil, err
-		}
-		logins = append(logins, azd)
-	}
-	if len(logins) == 0 {
-		return nil, fmt.Errorf("neither the Azure CLI (az) nor the Azure Developer CLI (azd) is installed: %w", exec.ErrNotFound)
-	}
-	return azidentity.NewChainedTokenCredential(logins, nil)
 }
 
 // newDefaultCredential is azidentity's DefaultAzureCredential (tests
@@ -315,113 +283,27 @@ var newDefaultCredential = func(o *azidentity.DefaultAzureCredentialOptions) (az
 
 // entraVars are the environment variables by which DefaultAzureCredential
 // is configured (environment, workload identity and managed identity
-// credentials, and its own selector): when one is set, a failure is an
-// error, not anonymity.
+// credentials, and its own selector): Anonymous ignores them (anonymousNote).
 var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH",
 	"AZURE_USERNAME", "AZURE_FEDERATED_TOKEN_FILE", "IDENTITY_ENDPOINT", "MSI_ENDPOINT", "AZURE_TOKEN_CREDENTIALS"}
 
-func entraConfigured() bool {
-	for _, v := range entraVars {
-		if os.Getenv(v) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// entra sets up Entra ID. Configured by the environment, it is
-// DefaultAzureCredential, whose token failures are attempts' credential
-// errors. With nothing configured: on an Azure VM (its chassis asset tag)
-// the same chain, its managed identity kept even when it does not answer
-// now; elsewhere only the developer logins (newLoginCredential), never the
-// instance metadata service, which off Azure is a proxy's refusal or a
-// probe that hangs. There one token is asked for: found, it is used; when
-// every login is absent the requests go unauthenticated (the note says
-// so), as GCS goes without Application Default Credentials; a refused
-// grant is a credential error; a transient failure keeps the chain.
-func (c *Client) entra(ctx context.Context) error {
+// entra sets up Entra ID through DefaultAzureCredential, its chain as the
+// SDK builds it (environment, workload identity, managed identity, the
+// Azure CLI and Developer CLI logins). Its tokens are fetched per attempt,
+// before the attempt is sent: a chain that finds no credential fails the
+// first request with azidentity's own error (class auth), and nothing is
+// listed; a token endpoint's transient failure is retried.
+func (c *Client) entra() error {
 	const source = "Entra ID (DefaultAzureCredential)"
-	configured, vm := entraConfigured(), onAzureVM()
-	if !configured && !vm {
-		return c.login(ctx)
-	}
 	cred, err := newDefaultCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
-	switch {
-	case err != nil && configured:
-		return &CredentialError{Source: source, Err: err}
-	case err != nil:
-		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
-		return nil
-	case configured:
-		c.ts, c.source = c.shared(cred), source
-		return nil
-	}
-	// An Azure VM's managed identity is the configured source even when
-	// the metadata service does not answer now (DefaultAzureCredential
-	// reports a probe timeout as unavailable): never anonymity.
-	c.ts, c.source = c.shared(cred), source+" on an Azure VM"
-	return nil
-}
-
-// login is the unconfigured discovery off an Azure VM: the developer
-// logins (newLoginCredential), one token asked for under the caller's
-// context and the request timeout. No login installed (exec.ErrNotFound)
-// or none logged in (azidentity's unavailable signal: "not found on
-// path", "az login") is no credential: anonymous with the note, as a
-// missing gcloud login is for GCS. Only a login that ran and had its
-// token refused refuses the run.
-func (c *Client) login(ctx context.Context) error {
-	const source = "Entra ID (Azure CLI login)"
-	cred, err := newLoginCredential()
 	if err != nil {
-		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
-		return nil
-	}
-	pctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
-	defer cancel()
-	_, err = cred.GetToken(pctx, policy.TokenRequestOptions{Scopes: []string{storageScope}})
-	switch {
-	case err == nil:
-		c.ts, c.source = c.shared(cred), source
-	case ctx.Err() != nil:
-		return ctx.Err()
-	case refused(err):
 		return &CredentialError{Source: source, Err: err}
-	case unavailable(err), errors.Is(err, exec.ErrNotFound):
-		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
-	default:
-		// Found but not reachable now (a timeout, a transport failure, a
-		// token endpoint's 5xx): the chain stays and each attempt asks for
-		// its token again, a failure classified transport or timeout.
-		c.ts, c.source = c.shared(cred), source
-		c.note = "Entra ID token not obtained at start (" + err.Error() + "): retried per request"
 	}
+	c.ts, c.source = c.shared(cred), source
 	return nil
-}
-
-// unavailable reports azidentity's explicit absence signal: every source
-// of the chain said it has no credential (credentialUnavailableError, the
-// non-retriable error that is not an authentication failure).
-func unavailable(err error) bool {
-	var af *azidentity.AuthenticationFailedError
-	var nr interface{ NonRetriable() }
-	return !errors.As(err, &af) && errors.As(err, &nr)
-}
-
-// azureAssetTagFile holds the chassis asset tag Azure sets on its VMs
-// (tests move it); IMDS answers only there.
-var azureAssetTagFile = "/sys/class/dmi/id/chassis_asset_tag"
-
-// azureAssetTag is the chassis asset tag of every Azure VM.
-const azureAssetTag = "7783-7084-3265-9085-8269-3286-77"
-
-// onAzureVM reports an Azure VM by its chassis asset tag.
-func onAzureVM() bool {
-	b, _ := os.ReadFile(azureAssetTagFile)
-	return strings.TrimSpace(string(b)) == azureAssetTag
 }
 
 // tokenHTTP is the HTTP client of token exchanges: the first pooled
@@ -463,7 +345,11 @@ func (s credentialSource) Token() (*oauth2.Token, error) {
 // anonymousNote warns when Anonymous hides credentials the environment
 // holds.
 func anonymousNote(cfg Config) string {
-	if cfg.SAS != "" || cfg.SharedKey != "" || os.Getenv("AZURE_STORAGE_KEY") != "" || os.Getenv("AZURE_STORAGE_SAS_TOKEN") != "" || entraConfigured() {
+	configured := cfg.SAS != "" || cfg.SharedKey != "" || os.Getenv("AZURE_STORAGE_KEY") != "" || os.Getenv("AZURE_STORAGE_SAS_TOKEN") != ""
+	for _, v := range entraVars {
+		configured = configured || os.Getenv(v) != ""
+	}
+	if configured {
 		return "anonymous: ignoring the configured Azure credentials"
 	}
 	return ""
@@ -501,13 +387,6 @@ func transientToken(err error) bool {
 		return s >= 500 || s == 408 || s == 429
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
-}
-
-// refused reports a token endpoint's refusal (an answer that is not
-// transient).
-func refused(err error) bool {
-	var af *azidentity.AuthenticationFailedError
-	return errors.As(err, &af) && af.RawResponse != nil && !transientToken(err)
 }
 
 // Credentials names where the credentials came from (never the secret).

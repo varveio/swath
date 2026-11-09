@@ -17,8 +17,9 @@
 // Credentials live as long as the client: the token source is built on a
 // context that is never cancelled, whose HTTP client bounds each token
 // exchange by the request timeout, and every attempt waits for its token
-// under its own attempt deadline. Absent Application Default Credentials
-// mean anonymous access; configured but unusable ones refuse the client.
+// under its own attempt deadline. Requests go unauthenticated only with
+// Anonymous; Application Default Credentials that cannot be found or
+// loaded refuse the client.
 package client
 
 import (
@@ -26,13 +27,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -186,11 +184,11 @@ type Client struct {
 	counts objhttp.Counters
 }
 
-// New resolves credentials and builds the client. Without Application
-// Default Credentials (no GOOGLE_APPLICATION_CREDENTIALS, no gcloud file,
-// not on Google Cloud), requests go unauthenticated, which public buckets
-// allow. Credentials that are configured but do not load are a
-// *CredentialError.
+// New resolves credentials and builds the client. Requests go
+// unauthenticated only with cfg.Anonymous (a public bucket); otherwise
+// credentials that cannot be found or loaded (the client library's
+// Application Default Credentials search) are a *CredentialError, and
+// nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
@@ -244,22 +242,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	default:
+		c.source = "application default credentials"
 		creds, err := findCredentials(life, readScope)
-		switch {
-		case err == nil:
-			c.ts, c.source = tokensource.NewShared(creds.TokenSource, 0), "application default credentials"
-		case adcConfigured():
-			return nil, &CredentialError{Source: "application default credentials", Err: err}
-		case onGCEMachine():
-			// A Google Cloud machine whose metadata server did not answer the
-			// client library's detection in time: its service account is the
-			// configured source, never anonymity; token failures are retried
-			// per attempt like any refresh.
-			c.ts = tokensource.NewShared(google.ComputeTokenSource("", readScope), 0)
-			c.source = "compute metadata (detection failed: " + err.Error() + ")"
-		default:
-			c.source = "anonymous (no application default credentials)"
+		if err != nil {
+			return nil, &CredentialError{Source: c.source, Err: err}
 		}
+		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	}
 	for _, hc := range c.http {
 		g := *hc // keeps the pool's no-redirect policy
@@ -335,46 +323,10 @@ func (c *Client) pick() int {
 	return int((c.next.Add(1) - 1) % uint64(len(c.http)))
 }
 
-// adcConfigured reports whether Application Default Credentials are
-// configured in a place golang.org/x/oauth2/google reads: then a failure
-// to load them is an error, not anonymity. Only a well-known file that
-// does not exist means "not configured": one that cannot be examined (an
-// unreadable parent directory, an I/O error) fails closed, since it may
-// hold the credentials the operator meant.
-func adcConfigured() bool {
-	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") != "" {
-		return true
-	}
-	dir := os.Getenv("APPDATA")
-	if runtime.GOOS != "windows" {
-		home := os.Getenv("HOME")
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		dir = filepath.Join(home, ".config")
-	}
-	_, err := os.Stat(filepath.Join(dir, "gcloud", "application_default_credentials.json"))
-	return !errors.Is(err, fs.ErrNotExist)
-}
-
 // findCredentials is the client library's ADC search (tests replace it: on
 // a Google Cloud host the real one finds the metadata server, so what the
 // client does when the search fails could not be tested there).
 var findCredentials = google.FindDefaultCredentials
-
-// gceProductFile names the machine's product (tests move it).
-var gceProductFile = "/sys/class/dmi/id/product_name"
-
-// onGCEMachine reports a Google Cloud machine by its DMI product name (the
-// sign the metadata library itself trusts) or a configured metadata host.
-func onGCEMachine() bool {
-	if os.Getenv("GCE_METADATA_HOST") != "" {
-		return true
-	}
-	b, _ := os.ReadFile(gceProductFile)
-	n := strings.TrimSpace(string(b))
-	return n == "Google" || n == "Google Compute Engine"
-}
 
 // token waits for the token source under the attempt's deadline (ctx);
 // nil without credentials. A failure is a *CredentialError. Waiters
