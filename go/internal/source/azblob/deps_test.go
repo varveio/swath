@@ -19,9 +19,11 @@ func TestSDKClientBuildTag(t *testing.T) {
 		t.Skip("no go command")
 	}
 	for _, tagged := range []bool{false, true} {
-		args := []string{"list", "-deps", "-f", "{{.ImportPath}}"}
+		// -tags on the command line, so a GOFLAGS tag in the environment
+		// does not reach the untagged arm.
+		args := []string{"list", "-deps", "-f", "{{.ImportPath}}", "-tags="}
 		if tagged {
-			args = append(args, "-tags", "swath_sdkclient")
+			args[len(args)-1] = "-tags=swath_sdkclient"
 		}
 		out, err := exec.Command("go", append(args, "github.com/varveio/swath/go/cmd/swath")...).Output()
 		if err != nil {

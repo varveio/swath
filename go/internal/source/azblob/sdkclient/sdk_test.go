@@ -66,8 +66,9 @@ const testKey = "c2VjcmV0LWtleS1mb3ItdGVzdHM="
 // TestServiceVersionPinned: azblob v1.7.0 sends its own service version,
 // which the replay (answering only the captured 2026-06-06 and 2026-10-06)
 // refuses, and refuses ClientOptions.APIVersion; the client's requests
-// carry exactly one x-ms-version, client.Version, with the hand-rolled
-// client's User-Agent and Accept, signed under Shared Key.
+// carry exactly one x-ms-version, client.Version, with swath's User-Agent
+// product token once, before the SDK's own, and Accept, signed under Shared
+// Key.
 func TestServiceVersionPinned(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a", "b"})
 	plain, err := container.NewClientWithNoCredential(r.Endpoint+"/"+r.Container, &container.ClientOptions{ClientOptions: azcore.ClientOptions{
@@ -120,9 +121,12 @@ func TestServiceVersionPinned(t *testing.T) {
 					versions = append(versions, v...)
 				}
 			}
-			if !slices.Equal(versions, []string{client.Version}) || req.Header.Get("User-Agent") != buildinfo.Tool || req.Header.Get("Accept") != "application/xml" {
-				t.Errorf("%+v: x-ms-version %q, User-Agent %q, Accept %q", cfg, versions, req.Header.Get("User-Agent"), req.Header.Get("Accept"))
+			agent, token := req.Header.Get("User-Agent"), buildinfo.UserAgent()
+			if !slices.Equal(versions, []string{client.Version}) || !strings.HasPrefix(agent, token+" ") ||
+				!strings.Contains(agent, "azsdk-go-azblob/") || strings.Count(agent, token) != 1 || req.Header.Get("Accept") != "application/xml" {
+				t.Errorf("%+v: x-ms-version %q, User-Agent %q, Accept %q", cfg, versions, agent, req.Header.Get("Accept"))
 			}
+			t.Logf("User-Agent: %s", agent)
 			if cfg.SharedKey != "" {
 				verifySharedKey(t, req, "acct", cfg.SharedKey)
 			}

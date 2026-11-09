@@ -129,21 +129,23 @@ SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the 
 In the default build the SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`,
 `sdk/storage/azblob`) are test-only oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`,
 `TestClientPagesMatchGoogleClient`); the binary links none of them ([testing.md](../testing.md);
-`TestBinaryLinksAzidentityNotAzblob`). The `swath_sdkclient` build links the S3 and GCS ones, as the next
-subsection describes.
+`TestBinaryLinksAzidentityNotAzblob`). The `swath_sdkclient` build links all three, as the next subsection
+describes.
 
 ### The SDK-backed clients (`swath_sdkclient`, experiment)
 
-Experimental, and built only with `-tags swath_sdkclient`. `internal/source/s3/sdkclient` and
-`internal/source/gcs/sdkclient` take the same `client.Config` as the hand-rolled clients and return the same
-wire types (`client.Page`, `client.VersionPage`), so the provider code above them, the schemas and the resume
-identity do not change. An Azure Blob client of the same shape is in progress.
+Experimental, and built only with `-tags swath_sdkclient`. `internal/source/s3/sdkclient`,
+`internal/source/gcs/sdkclient` and `internal/source/azblob/sdkclient` take the same `client.Config` as the
+hand-rolled clients and return the same wire types (`client.Page`, `client.VersionPage`, `client.ListOutput`), so
+the provider code above them, the schemas and the resume identity do not change.
 
 **What the SDK owns.** S3 (`service/s3`): request construction, endpoint resolution (virtual-hosted and
 path-style, FIPS, dual-stack, custom endpoints), and credentials and SigV4 signing for the credentials swath
 resolves for it. GCS (`google.golang.org/api/storage/v1`): building the `objects.list` URL and decoding the JSON
-page. Both clients are built with the SDK's retryer off (`aws.NopRetryer`; the generated GCS `Do` makes one
-request), so one SDK call is one attempt.
+page. Azure (`sdk/storage/azblob` v1.7.0, the service and container clients): building the List Blobs and Get
+Account Information requests, Shared Key signing, and decoding the XML page. All three clients are built with the
+SDK's retries off (`aws.NopRetryer`; the generated GCS `Do` makes one request; azcore `MaxRetries: -1`), so one
+SDK call is one attempt.
 
 **What swath keeps.**
 
@@ -152,17 +154,24 @@ request), so one SDK call is one attempt.
 - *The failure vocabulary and attempt accounting.* Every failure maps to the classes of the hand-rolled client
   (throttle, timeout, server, redirect, auth, access denied, no such bucket, parse, other), and an attempt is
   counted from just before the SDK call until it returns. Credentials and bearer tokens are fetched before the
-  attempt is counted, so a credential failure is a `*objhttp.CredentialError` and not an attempt.
+  attempt is counted, so a credential failure is a `*objhttp.CredentialError` and not an attempt (for Azure, a
+  `*client.CredentialError`).
 - *Redirects refused, and route identity.* The HTTP client follows no redirect. `Route` is the URL the SDK's
   endpoint resolver names (S3) or the generated client sends (GCS), and the resume identity freezes it. S3 tests
   that every request, retried and continuation requests included, goes to exactly `Route`. A GCS endpoint whose
   path the generated client would send differently (an escaped separator or a dot segment) is refused when the
-  client is built, with a message to use the hand-rolled client.
-- *`objhttp.Guard`.* An `http.RoundTripper` below the SDK, shared by both clients. It reads a success body up to
-  16 MiB and an error body up to 64 KiB (longer success bodies fail the round trip; longer error bodies are
-  truncated), closes the original body on every path, and validates every 2xx before the SDK decodes it. A
-  Guard failure surfaces through `objhttp.Cause`, so the `url.Error` the HTTP client wraps around it is never
-  read as a transport failure.
+  client is built, with a message to use the hand-rolled client. The Azure clients are built on the hand-rolled
+  client's account root (`Core.Base`), so `Route` is the same URL in both builds.
+- *`objhttp.Guard`.* An `http.RoundTripper` below the SDK, shared by the three clients. It reads a success body
+  up to 16 MiB (Azure: 64 MiB, the hand-rolled client's cap, with the same `maxresults` halving above it) and an
+  error body up to 64 KiB (longer success bodies fail the round trip; longer error bodies are truncated), closes
+  the original body on every path, and validates every 2xx before the SDK decodes it. A Guard failure surfaces
+  through `objhttp.Cause`, so the `url.Error` the HTTP client wraps around it is never read as a transport
+  failure.
+- *The User-Agent.* Swath's product token (`buildinfo.UserAgent`, `swath-go/<version>`) comes first and the SDK's
+  own string follows, as the Java tool's `USER_AGENT_PREFIX` does: S3 through a build middleware inserted after
+  the SDK's, GCS by setting the header before the generated client's, Azure through azcore's telemetry policy
+  (`TelemetryOptions.ApplicationID`, which azcore cuts to 24 bytes; a development token is 23).
 - *`Stats.Client`* names the client that ran: `sdk` here, `hand-rolled` in the default build.
 
 **S3 decoding.** The hand-rolled scanner (`client.ParseList`, `client.ParseVersions`) is the only decoder of
@@ -184,15 +193,39 @@ The decoded page must have `kind == "storage#objects"`, and every item must be p
 `int64` and a time that is not RFC 3339 are parse failures. The fields selector starts with `kind` in both
 clients.
 
-**Selection.** The build tag chooses the client for both providers; there is no runtime flag. The default build
-uses the hand-rolled clients. `SWATH_S3_DECODER=sdk` makes the tagged S3 client decode current-object pages
+**Azure decoding and requests.** The SDK's decoder reads the page, and the Guard's `Validate` checks the envelope
+first, because the decoder reads an empty body, any root element, or a listing holding an `<Error>` as an empty
+final page: a listing's 200 must have `EnumerationResults` as its root, nothing but whitespace after it, and no
+`Error` element in it; the decoded page must hold `Blobs`. Names are checked for UTF-8. A hierarchy page comes
+back from the SDK as two arrays, blobs and prefixes; both are in wire (UTF-16 code-unit) order and no name is in
+both, so merging them with `utf16order.Compare` restores the one sequence the byte-order adapter needs
+(`TestDifferentialReplay`, `TestMergeOrder`); the merged page then passes `ListOutput.Validate` as the hand-rolled
+page does. One per-call policy, `pin`, runs before azcore's signing policy and sets what azblob v1.7.0 cannot:
+`x-ms-version` to the pinned `client.Version` (the SDK sends its own and refuses `ClientOptions.APIVersion`,
+`TestServiceVersionPinned`) and `startFrom`, which the v1.7.0 pagers drop (`TestStartFromSent`). Credentials:
+anonymous, SAS (in the account root the client is built on) and Entra ID use the SDK's no-credential client, and
+the Entra token comes from swath's `tokensource.Shared` before the attempt is counted and goes in as a request
+header (`policy.WithHTTPHeader`), so the SDK's bearer policy and its 401 challenge re-send are never in the
+pipeline (`TestBearer`: one request per 401); Shared Key is the SDK's own signing policy. `AccountInfo` goes
+through the SDK and reads `x-ms-is-hns-enabled` from the header as sent, through the same `client.HNS` as the
+hand-rolled client (exactly `true` or `false`; the SDK's own reading would take `0` for flat). `NamespaceInfo`
+stays the hand-rolled client's HEAD on the Data Lake host; with Shared Key it is not asked (`ErrNoDFSEndpoint`).
+The SAS is kept out of every error: the SDK's decoder errors quote what they could not read, so each refusal is
+scrubbed and re-wrapped (`TestRedactedRefusal`), and azcore's own log (written to stderr when
+`AZURE_SDK_GO_LOGGING=all`; it quotes failed requests' URLs) is replaced, process-wide, by one that scrubs each
+SAS client's token (`TestLogScrubbed`). `TestScriptedAnswers` holds the hand-rolled and SDK clients to the same
+class, requeue decision, error, page, counters and body-close counts over about forty scripted answers.
+
+**Selection.** The build tag chooses the client for all three providers; there is no runtime flag. The default
+build uses the hand-rolled clients. `SWATH_S3_DECODER=sdk` makes the tagged S3 client decode current-object pages
 with the SDK's decoder instead of the scanner. It exists to measure the decoders against each other and is not
 a production path: nothing checks the envelope there, and the SDK reads an empty body as an empty final page.
 Versions always go through the scanner.
 
-**Binary.** The default binary links neither SDK service client. `TestSDKClientBuildTag` (GCS) and
+**Binary.** The default binary links no SDK service client. `TestSDKClientBuildTag` (GCS and Azure) and
 `TestSDKClientOnlyWithTag` (S3) run `go list -deps` of `cmd/swath` with and without the tag and require the SDK
-packages to be present only with it. The tagged GCS build is about 9 MB larger
+packages to be present only with it. The tagged GCS build is about 9 MB larger; the Azure client adds about
+143 KB, since azcore and azidentity are linked in the default build already
 ([measurements](../measurements.md#sdk-backed-clients-2026-11-09)).
 
 **Known differences from the hand-rolled clients.**
@@ -208,6 +241,14 @@ packages to be present only with it. The tagged GCS build is about 9 MB larger
   request ID and region come only from an `<Error>` body, not from headers.
 - *S3, request.* `cfg.Now` is not used: the SDK signs with its own clock. The payload hash is the SDK's. There is
   no clock-skew correction, because the SDK's retry path is off.
+- *Azure, names.* An `Encoded` name is percent-decoded with query semantics (a literal `+` reads as a space; Azure
+  sends `+` as `%2B`, and every captured `Encoded` name escapes every reserved byte), and a malformed escape is a
+  parse failure, retried, not an invalid page. A root element with a namespace is refused; a second `Blobs` is
+  not; an XML comment after the root is refused (the hand-rolled parser allows it).
+- *Azure, pages.* A hierarchy page out of order across blobs and prefixes is merged into order and not detected
+  (the hand-rolled parser refuses it); one out of order within either kind still is. Any malformed date property,
+  not only the three a row keeps, fails the page, as does a malformed `Date` header on a listing. No
+  `x-ms-client-request-id` is sent, and the attempt's in-flight time includes the SDK's decoding.
 - *Transport replays.* `net/http` may replay an idempotent GET on a reused connection below the Guard, for both
   families of client. The counted unit is an application attempt.
 

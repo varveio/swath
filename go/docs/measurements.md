@@ -789,6 +789,23 @@ subtracted):
 | Allocations per page over baseline | 5,065 | 10,142 | 10,149 |
 | Bytes per page over baseline | 1.03 MiB | 1.36 MiB | 1.65 MiB |
 
+**Azure** (`BenchmarkList` in `internal/source/azblob/sdkclient`: one full `List` call per iteration, request,
+bounded read, decoding, conversion and page validation, over an in-memory 5,000-entry page, the SDK client's Guard
+in place; `-benchtime=500x -count=3` on a shared 4-CPU box, so the ratios are the result, not the absolute numbers;
+a hierarchy page is half blobs and half prefixes):
+
+| Page | Client | ns/object | Allocations/page | Bytes/page |
+|---|---|---:|---:|---:|
+| flat | hand-rolled | 16,700 to 17,900 | 710,127 | 36.2 MB |
+| flat | `sdkclient` | 21,500 to 22,400 | 865,260 | 46.1 MB |
+| hierarchy | hand-rolled | 9,800 to 9,950 | 397,632 | 20.9 MB |
+| hierarchy | `sdkclient` | 12,300 to 13,300 | 485,276 | 25.0 MB |
+
+Both clients decode with `encoding/xml`, so the SDK client costs 1.2 to 1.3 times the hand-rolled client per object
+and 22 % more allocations; the envelope check is within noise. Stripped binaries on branch `exp/azblob-sdkclient`
+(Azure only tagged): default 24,301,730 bytes, tagged 24,445,090, +143 KB and 15 packages (azcore and azidentity
+are already linked in the default build; it links no `azblob` package at all).
+
 **Binary size** (linux/amd64, `CGO_ENABLED=0 -trimpath -ldflags='-s -w'`, branch `exp/gcs-sdkclient`; GCS only
 is tagged here):
 

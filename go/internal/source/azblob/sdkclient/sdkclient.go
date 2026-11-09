@@ -25,8 +25,10 @@
 //   - pin, a per-call policy (before the retry and signing policies, so
 //     Shared Key signs what it sets): the service version (client.Version;
 //     azblob v1.7.0 sends 2026-04-06 and refuses ClientOptions.APIVersion,
-//     TestServiceVersionPinned), startFrom (the v1.7.0 pagers drop
-//     StartFrom, TestStartFromSent) and the User-Agent.
+//     TestServiceVersionPinned) and startFrom (the v1.7.0 pagers drop
+//     StartFrom, TestStartFromSent). The User-Agent is azcore's own
+//     telemetry policy's, swath's product token (buildinfo.UserAgent, its
+//     ApplicationID, 24 bytes at most) before the SDK's.
 //   - envelope, Guard.Validate on a listing's 200: its root must be
 //     EnumerationResults with nothing after it and no <Error> element in it
 //     (the SDK decodes an empty body, any root, or a listing holding an
@@ -131,8 +133,8 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 			Transport:       &h,
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
 			PerCallPolicies: []policy.Policy{pin{}},
-			Telemetry:       policy.TelemetryOptions{Disabled: true}, // pin sets the User-Agent
-			Logging:         policy.LogOptions{IncludeBody: false},   // and no query value (scrubLogs)
+			Telemetry:       policy.TelemetryOptions{ApplicationID: buildinfo.UserAgent()}, // swath's token, then the SDK's
+			Logging:         policy.LogOptions{IncludeBody: false},                         // and no query value (scrubLogs)
 		}}
 		var svc *service.Client
 		if cred != nil {
@@ -546,15 +548,13 @@ func (s *sent) safeURL(c *Client, container string) *url.URL {
 // pin is the per-call policy (azcore runs it before its retry policy and
 // the Shared Key signing policy): the service version client.Version,
 // replacing the SDK's own (the generated code keys it in lower case,
-// outside the canonical form, so that key is replaced); startFrom, which
-// azblob v1.7.0's pagers drop, when the SDK did not send it; and the
-// User-Agent the hand-rolled client sends.
+// outside the canonical form, so that key is replaced); and startFrom,
+// which azblob v1.7.0's pagers drop, when the SDK did not send it.
 type pin struct{}
 
 func (pin) Do(req *policy.Request) (*http.Response, error) {
 	r := req.Raw()
 	r.Header["x-ms-version"] = []string{client.Version}
-	r.Header.Set("User-Agent", buildinfo.Tool)
 	if s, _ := r.Context().Value(sentKey{}).(*sent); s != nil && s.startFrom != "" {
 		if q := r.URL.Query(); !q.Has("startFrom") {
 			q.Set("startFrom", s.startFrom)
