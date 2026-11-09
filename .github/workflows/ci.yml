@@ -652,6 +652,36 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
+  # The reader module (go/reader), a nested module of its own: vet, tidiness, the race tests
+  # (the dependency-graph check among them) and the static cross-builds. go-lint's gofmt
+  # covers it; the main module's tests decode its own writer's datasets with it.
+  go-reader:
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: go/reader
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Set up Go (version from go/go.mod)
+        if: needs.changes.outputs.go == 'true'
+        uses: ./.github/actions/setup-go
+        with:
+          key: go-reader
+
+      - name: vet, tidy, race tests, static cross-builds
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go mod tidy -diff
+          go test -race -count=1 -timeout 5m ./...
+          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
+          done
+
   # The Go default tier on the other operating systems the port ships for: plain `go test`
   # (no -race: slow on macOS, and the Windows race detector needs cgo) on macOS and Windows.
   # linux/arm64 is covered by the go-race shards. Only vet and the tests: gofmt, the shard
@@ -816,7 +846,7 @@ jobs:
   # required check never reports a conclusion, and the pull request waits forever instead of
   # going red.
   ci-gate:
-    needs: [changes, fast-tests, integration-tests, docker-check, go-lint, go-race, go-nonrace, go-build, go-objfile, go-xos, go-fixtures]
+    needs: [changes, fast-tests, integration-tests, docker-check, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

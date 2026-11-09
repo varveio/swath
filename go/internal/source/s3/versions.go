@@ -14,6 +14,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/client"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Version is a versions row's payload: one ListObjectVersions entry, a
@@ -35,26 +36,26 @@ type VersionRow = schema.Row[Version]
 // then version_id, is_latest and is_delete_marker. A key repeats once per
 // entry, in S3's order within the key (newest first), so the schema is
 // grouped.
-var VersionsSchema = schema.Schema[Version]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath/s3-versions/v1", Key: schema.String, MaxKeyBytes: 1024, QuotedETag: true, Groups: true},
+var VersionsSchema = schema.Bind(reader.S3VersionsV1, schema.Schema[Version]{
+	Info: schema.Info{Name: "swath_listing", QuotedETag: true},
 	Columns: []schema.Column[Version]{
-		{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(v *Version) (int64, bool) { return v.Size, !v.DeleteMarker }},
-		{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: func(v *Version) (int64, bool) { return v.Mtime, true }},
-		{Spec: schema.Spec{Name: "etag", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.ETag }), Delta: true},
-		{Spec: schema.Spec{Name: "storage_class", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.StorageClass })},
-		{Spec: schema.Spec{Name: "owner_id", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.OwnerID })},
-		{Spec: schema.Spec{Name: "owner_display_name", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.OwnerDisplayName })},
-		{Spec: schema.Spec{Name: "checksum_algorithm", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.ChecksumAlgorithm })},
-		{Spec: schema.Spec{Name: "checksum_type", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.ChecksumType })},
+		{Int: func(v *Version) (int64, bool) { return v.Size, !v.DeleteMarker }},
+		{Int: func(v *Version) (int64, bool) { return v.Mtime, true }},
+		{Str: nonEmpty(func(v *Version) string { return v.ETag }), Delta: true},
+		{Str: nonEmpty(func(v *Version) string { return v.StorageClass })},
+		{Str: nonEmpty(func(v *Version) string { return v.OwnerID })},
+		{Str: nonEmpty(func(v *Version) string { return v.OwnerDisplayName })},
+		{Str: nonEmpty(func(v *Version) string { return v.ChecksumAlgorithm })},
+		{Str: nonEmpty(func(v *Version) string { return v.ChecksumType })},
 		// Version IDs are unique except "null": a dictionary rarely pays.
-		{Spec: schema.Spec{Name: "version_id", Type: schema.String}, Str: nonEmpty(func(v *Version) string { return v.VersionID }), Delta: true},
-		{Spec: schema.Spec{Name: "is_latest", Type: schema.Bool, Required: true}, Bool: func(v *Version) (bool, bool) { return v.IsLatest, true }},
-		{Spec: schema.Spec{Name: "is_delete_marker", Type: schema.Bool, Required: true}, Bool: func(v *Version) (bool, bool) { return v.DeleteMarker, true }},
+		{Str: nonEmpty(func(v *Version) string { return v.VersionID }), Delta: true},
+		{Bool: func(v *Version) (bool, bool) { return v.IsLatest, true }},
+		{Bool: func(v *Version) (bool, bool) { return v.DeleteMarker, true }},
 	},
 	Bytes: func(v *Version) int64 { return 18 + versionHeap(v) },
 	Heap:  versionHeap,
 	Codec: versionCodec{},
-}
+})
 
 func versionHeap(v *Version) int64 { return objectHeap(&v.Object) + int64(len(v.VersionID)) }
 

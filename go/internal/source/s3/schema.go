@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Object is an S3 row's payload: one current object. Empty strings are
@@ -30,23 +31,23 @@ type Row = schema.Row[Object]
 // the schema has no version columns. Nullability is fixed at run start:
 // the owner columns are null unless -fetch-owner, the checksum columns are
 // null when S3 omits them, etag and storage_class when it does.
-var Schema = schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath/s3-objects/v1", Key: schema.String, MaxKeyBytes: 1024, QuotedETag: true},
+var Schema = schema.Bind(reader.S3ObjectsV1, schema.Schema[Object]{
+	Info: schema.Info{Name: "swath_listing", QuotedETag: true},
 	Columns: []schema.Column[Object]{
-		{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Size, true }},
-		{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: func(o *Object) (int64, bool) { return o.Mtime, true }},
+		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
+		{Int: func(o *Object) (int64, bool) { return o.Mtime, true }},
 		// ETags are unique hex: a dictionary never pays.
-		{Spec: schema.Spec{Name: "etag", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
-		{Spec: schema.Spec{Name: "storage_class", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
-		{Spec: schema.Spec{Name: "owner_id", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.OwnerID })},
-		{Spec: schema.Spec{Name: "owner_display_name", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.OwnerDisplayName })},
-		{Spec: schema.Spec{Name: "checksum_algorithm", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ChecksumAlgorithm })},
-		{Spec: schema.Spec{Name: "checksum_type", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ChecksumType })},
+		{Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
+		{Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
+		{Str: nonEmpty(func(o *Object) string { return o.OwnerID })},
+		{Str: nonEmpty(func(o *Object) string { return o.OwnerDisplayName })},
+		{Str: nonEmpty(func(o *Object) string { return o.ChecksumAlgorithm })},
+		{Str: nonEmpty(func(o *Object) string { return o.ChecksumType })},
 	},
 	Bytes: func(o *Object) int64 { return 16 + objectHeap(o) },
 	Heap:  objectHeap,
 	Codec: objectCodec{},
-}
+})
 
 func objectHeap(o *Object) int64 {
 	return int64(len(o.ETag) + len(o.StorageClass) + len(o.OwnerID) + len(o.OwnerDisplayName) + len(o.ChecksumAlgorithm) + len(o.ChecksumType))

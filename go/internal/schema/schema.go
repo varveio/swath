@@ -10,22 +10,26 @@ package schema
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"unsafe"
+
+	"github.com/varveio/swath/go/reader"
 )
 
-// Type is a column's physical and logical type.
-type Type uint8
+// Type is a column's physical and logical type: the reader module's, which
+// the schema ids are described in.
+type Type = reader.ColumnType
 
 const (
-	String          Type = iota // BYTE_ARRAY (STRING): UTF-8 the schema guarantees
-	Int32                       // INT32, unannotated
-	Int64                       // INT64, unannotated
-	TimestampMicros             // INT64 TIMESTAMP(MICROS, UTC)
-	Bool                        // BOOLEAN
-	Uint32                      // INT32 INT(32, unsigned)
-	Uint64                      // INT64 INT(64, unsigned)
-	Binary                      // BYTE_ARRAY, unannotated: arbitrary bytes
+	String          = reader.TypeString          // BYTE_ARRAY (STRING): UTF-8 the schema guarantees
+	Int32           = reader.TypeInt32           // INT32, unannotated
+	Int64           = reader.TypeInt64           // INT64, unannotated
+	TimestampMicros = reader.TypeTimestampMicros // INT64 TIMESTAMP(MICROS, UTC)
+	Bool            = reader.TypeBool            // BOOLEAN
+	Uint32          = reader.TypeUint32          // INT32 INT(32, unsigned)
+	Uint64          = reader.TypeUint64          // INT64 INT(64, unsigned)
+	Binary          = reader.TypeBinary          // BYTE_ARRAY, unannotated: arbitrary bytes
 )
 
 // Spec is a column's name, type and nullability.
@@ -121,6 +125,40 @@ type DeltaCodec[P any] interface {
 	Codec[P]
 	AppendDelta(dst []byte, prev, p *P) []byte
 	DecodeDelta(d *Decoder, prev, p *P)
+}
+
+// Bind returns s as the schema id's: its ID, key type, key cap and
+// grouping, and its columns' names, types and nullability are the reader
+// module's spec of id, so producers and readers share one description.
+// s.Columns are the spec's columns in order, each with the accessor its
+// type takes (Str for strings and binary, Int for integers and times, Bool)
+// and the producer's own encoding settings (Delta, MaxBytes). Bind panics
+// when they do not match the spec: a producer's bug, found when its
+// package loads.
+func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
+	spec, ok := reader.Schema(id)
+	if !ok || len(spec.Columns) != len(s.Columns) {
+		panic(fmt.Sprintf("schema %s: %d columns, the spec has %d", id, len(s.Columns), len(spec.Columns)))
+	}
+	s.ID, s.Key, s.MaxKeyBytes, s.Groups = string(id), spec.Key.Type, spec.MaxKeyBytes, !spec.UniqueKeys
+	s.Columns = append([]Column[P](nil), s.Columns...)
+	for i, c := range spec.Columns {
+		col := &s.Columns[i]
+		col.Name, col.Type, col.Required = c.Name, c.Type, c.Required
+		var takes bool
+		switch c.Type {
+		case String, Binary:
+			takes = col.Str != nil && col.Int == nil && col.Bool == nil
+		case Bool:
+			takes = col.Bool != nil && col.Str == nil && col.Int == nil
+		default:
+			takes = col.Int != nil && col.Str == nil && col.Bool == nil
+		}
+		if !takes {
+			panic(fmt.Sprintf("schema %s: column %s: its accessor does not read its type", id, c.Name))
+		}
+	}
+	return s
 }
 
 // ErrKeyTooLong reports a key over the schema's MaxKeyBytes.
