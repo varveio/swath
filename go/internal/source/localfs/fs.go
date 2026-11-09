@@ -73,8 +73,11 @@ type Stats struct {
 	Changed        int64    `json:"changed"`  // type changed between listing and stat; dropped
 	ReadlinkErrors int64    `json:"readlink_errors"`
 	Skipped        int64    `json:"skipped_dirs"`
-	Unsafe         int64    `json:"unsafe_dirs"` // a directory replaced by a symlink before open
-	Chunks         int64    `json:"chunks"`      // large-directory chunks statted in parallel
+	Unsafe         int64    `json:"unsafe_dirs"`           // a directory replaced by a symlink before open
+	Chunks         int64    `json:"chunks"`                // large-directory chunks statted in parallel
+	ParallelSorts  int64    `json:"parallel_sorts"`        // large directories whose entries were sorted in parallel runs
+	Presized       int64    `json:"presized"`              // large directories whose buffers were sized from st_size
+	CountProcs     int64    `json:"count_procs,omitempty"` // GOMAXPROCS a count ran with, when raised (opened.Run)
 	Samples        []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
@@ -109,6 +112,8 @@ func (s *Stats) add(o *Stats) {
 	s.Skipped += o.Skipped
 	s.Unsafe += o.Unsafe
 	s.Chunks += o.Chunks
+	s.ParallelSorts += o.ParallelSorts
+	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {

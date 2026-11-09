@@ -9,6 +9,20 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir` + `Lstat`, re-checking that an opened child directory is
   the one that was listed.
+- **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
+  buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
+  first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
+  `presized`). The sort compares keys after the directory's shared prefix; a directory of 32,768 entries or
+  more is sorted in runs of at least 16,384, concurrently (up to GOMAXPROCS), then merged pairwise
+  (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
+  directory's buffers rather than copies. Offsets are 32-bit: a directory whose names, or keys, pass 4 GiB is
+  skipped and counted in `read_errors`.
+- **A count runs with more processors.** A stat or a directory read that waits on the disk holds its Go
+  processor until the scheduler hands it off, so one processor per CPU leaves CPUs idle on a cold tree. A count
+  (`swath du`, `swath diag count`) raises GOMAXPROCS for the run, at most `--workers`, and restores it
+  (`count_procs` in the report): to 4 per CPU at the `stat` and `statx` tiers, to 2 per CPU at the `names`
+  tier, where more processors only add contention when the tree is warm. A count has no encoders, reorder
+  storage or readahead to resize; runs that write output keep GOMAXPROCS as it is.
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
