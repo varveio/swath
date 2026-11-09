@@ -4,8 +4,10 @@
 // Package azblobtest is test support for the Azure Blob provider (nothing
 // in the tool imports it): Keys, a hostile corpus for Azure's UTF-16
 // code-unit order; Serve, the replay server in-process over a sorted
-// fixture of any keys with its S3 and Azure routes on; and CompareUTF16,
-// that order written from its definition for fakes to sort with.
+// fixture of any keys with its S3 and Azure routes on; CompareUTF16, that
+// order written from its definition for fakes to sort with; and Store, an
+// in-memory List Blobs in that order with injected short, empty and failed
+// responses.
 package azblobtest
 
 import (

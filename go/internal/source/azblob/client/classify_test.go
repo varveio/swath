@@ -24,6 +24,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/utf16order"
 )
 
 const (
@@ -271,8 +272,8 @@ func TestCompareNames(t *testing.T) {
 		"\uf000", "\ufffd", "\ufffe", "\uffff", "\U00010000", "\U0001F600", "\U0010FFFF", "x\U0001F600y", "x\ue000", "x\uffffz"}
 	for _, a := range names {
 		for _, b := range names {
-			if got, want := compareNames(a, b), utf16Less(a, b); got != want {
-				t.Errorf("compareNames(%+q, %+q) = %d, UTF-16 says %d", a, b, got, want)
+			if got, want := utf16order.Compare(a, b), utf16Less(a, b); got != want {
+				t.Errorf("utf16order.Compare(%+q, %+q) = %d, UTF-16 says %d", a, b, got, want)
 			}
 		}
 	}

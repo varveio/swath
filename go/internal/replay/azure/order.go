@@ -7,6 +7,7 @@ import (
 	"bytes"
 
 	"github.com/varveio/swath/go/internal/replay/s3"
+	"github.com/varveio/swath/go/internal/utf16order"
 )
 
 // Azure Blob lists names in UTF-16 code-unit order. For valid UTF-8 that is
@@ -25,55 +26,18 @@ import (
 // each such pair of sibling branches swapped, recursively; cursor does that
 // as it reads the byte-sorted store.
 
-// rank is the position of a byte value in the provider order.
-func rank(v byte) int {
-	switch {
-	case v >= 0xf0 && v <= 0xf4:
-		return int(v) - 2
-	case v == 0xee || v == 0xef:
-		return int(v) + 5
-	}
-	return int(v)
-}
-
-func unrank(r int) byte {
-	switch {
-	case r >= 0xee && r <= 0xf2:
-		return byte(r + 2)
-	case r == 0xf3 || r == 0xf4:
-		return byte(r - 5)
-	}
-	return byte(r)
-}
-
-// Compare is the provider-order comparison of two names.
-func Compare(a, b []byte) int {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[i] != b[i] {
-			if rank(a[i]) < rank(b[i]) {
-				return -1
-			}
-			return 1
-		}
-	}
-	switch {
-	case len(a) < len(b):
-		return -1
-	case len(a) > len(b):
-		return 1
-	}
-	return 0
-}
+// Compare is the provider-order comparison of two names
+// (utf16order.Compare).
+func Compare(a, b []byte) int { return utf16order.Compare(a, b) }
 
 // upperOf is the least name after every name that starts with prefix in
 // provider order (the resume point past a skipped BlobPrefix subtree), or
 // nil when there is none.
 func upperOf(prefix []byte) []byte {
 	for i := len(prefix) - 1; i >= 0; i-- {
-		if r := rank(prefix[i]); r != 0xff {
+		if r := utf16order.Rank(prefix[i]); r != 0xff {
 			upper := bytes.Clone(prefix[:i+1])
-			upper[i] = unrank(r + 1)
+			upper[i] = utf16order.Unrank(r + 1)
 			return upper
 		}
 	}

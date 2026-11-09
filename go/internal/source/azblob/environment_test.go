@@ -30,7 +30,7 @@ import (
 // Account Information) alone.
 func TestFaultsRequeued(t *testing.T) {
 	defer keyrange.SetRequeueBackoff(5*time.Millisecond, 20*time.Millisecond)()
-	keys := lowKeys()
+	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
 	var timeouts, delayed, reset int64
 	for _, pol := range []keyrange.Policy{{Sequential: true, PageSize: 500}, {Seed: true, PageSize: 100}} {

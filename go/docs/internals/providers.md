@@ -11,8 +11,8 @@ with a token-only seek is listed as one sequential chain per root; one with no s
 sorts it inside the provider. Each provider declares this in `source.Capabilities` (`Seek`: `fabricable`,
 `token_only`, `none`; `Order`: `bytes`, `other`, `none`; `RankOracle`; `RangeEngine()` is the test, and
 `keyrange.New` refuses a `Description.Listing` that fails it): S3 and GCS are fabricable and byte-ordered without a
-rank oracle (`token_only` with `--sequential`); Azure Blob lists in UTF-16 code-unit order, and is declared
-byte-ordered only because its provider refuses every page or bound where the two orders could differ (below); the filesystem has no seek and no order (a directory is a
+rank oracle (`token_only` with `--sequential`); Azure Blob lists in UTF-16 code-unit order, and is byte-ordered
+through its provider's order adapter, which serves every engine query in byte order (below); the filesystem has no seek and no order (a directory is a
 range, read whole and sorted).
 
 ## The contract (`internal/source`)
@@ -275,8 +275,7 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
   `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key
   in range), `unsupported` (a source the tool refuses, `source.ErrUnsupported`: an S3 directory bucket, an Azure
-  account that is not positively flat, an Azure name at U+E000 and above; the run is `refused`, exit 2, its
-  journal kept), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
+  account that is not positively flat; the run is `refused`, exit 2, its journal kept), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
   (retried, then requeued); the rest stop the run, and the class is the run outcome's `cause`, except an
   invalid page, a protocol violation: `cause` `protocol`, the run marked unresumable
   ([durability.md](durability.md)).
@@ -409,8 +408,8 @@ as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-s
 (the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
 it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
 report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
-and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is refused at open,
-before any request (every name in scope would hold it).
+and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed
+through the adapter like any other.
 
 **Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
 the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
@@ -429,26 +428,44 @@ reason). The order defences cannot stand in: on a hierarchical-namespace account
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
 still ascends. `--all-versions` is refused the same way (versions, snapshots and deleted blobs are a later lane).
 
-**Order and the staged refusal.** Azure lists in UTF-16 code-unit order, which differs from byte order only
-between names whose first differing scalars are one in U+E000..U+FFFF (lead byte EE or EF) and one at U+10000 and
-above (F0..F4) under the same prefix. Until the provider reorders such pages (a later change replaces this
-stage with a byte-order fetch adapter), `fetch` refuses: a cursor (`After`) or, when bounded, a `Through` holding
-a byte in EE..F4 before the request is sent, and any raw item of a page, blob or `BlobPrefix`, holding one before
-the engine trims or drops anything. The error is "azblob: names at U+E000 and above are not supported yet
-(container C, first name N)", `source.Unsupported`, class `unsupported`: the engine does not requeue it, it is
-not a protocol violation (Azure's order is valid), the journal is not marked unresumable, and the run is
-`refused` (exit 2) with `cause` `unsupported` and `resumable` true, so a later build can resume it. Every run
-that could lose a key passes through such a page or bound before an affected key is emitted. A structure probe
-that meets one fails as advice (no boundary from it); a seed page fails the run. Real containers hit this:
-fullwidth forms (U+FF01..) are common in Japanese names, emoji are at U+1F300 and up.
+**Order: the byte-order adapter** (`internal/source/azblob/order`). Azure lists in UTF-16 code-unit order, which
+differs from byte order only between names whose first differing scalars are one in U+E000..U+FFFF (lead byte EE
+or EF) and one at U+10000 and above (F0..F4) under the same prefix. Real containers hold such pairs: fullwidth
+forms (U+FF01..) are common in Japanese names, emoji are at U+1F300 and up. `fetch` delegates to the adapter,
+which serves each engine query in byte order: it cuts the query's scope `(After, Through]` at the bounds' scalars
+in EE..F4 into spans that are intervals in both orders, each entered by `startFrom` at its minimum in both; it
+reads a span by `startFrom` and markers until an item outside it ends the span, dropping the exclusive start and
+the roll-up of the subtree a seek lands in; and it splits a span lazily before emitting a name at U+10000 and
+above whose U+E000..U+FFFF siblings are pending, so items read once are emitted without another request when
+the service has already passed them. Its seeks are its own names (a cut's first scalar, a subtree successor),
+sent as they are: Azure lists from any valid-UTF-8 `startFrom` unchanged, a trailing `.` and control characters
+included (probed live on 2026-11-08); `AcceptBound` governs only the engine's pivots. A chain's pages are
+committed whole, so a failed read repeats the same page; tokens are the adapter's (`chain:seq`). The provider
+wraps `Expand`: one adapter per range, released however `Expand` returns, holding at most `order.MaxChains`
+(64) idle chains (one with a continuation in flight is never evicted). A token the adapter no longer holds
+(`order.ErrToken`, which the engine never sends) is neither requeued nor a protocol violation: it fails the run,
+its journal resumable. The comparator (`internal/utf16order`) is the one the client's page check and the replay's
+Azure route use. The specification, with its worked examples and the facts it rests on, is
+`notes/plans/2026-11-08-azblob-order-adapter-spec.md` in the notes repository.
 
-**On the range engine.** `Description.Listing` is `keyrange.Listing` (with the refusal, every page taken is
-byte-ordered). `startFrom` is inclusive (`StartInclusive`); there is no end bound, so `Through` is never sent and
-the engine trims. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
+*Cost.* A query with no name at U+E000 and above in its bounds, its prefix or its results costs nothing extra:
+one span, the same requests as a plain marker chain, no split. Bounds count as well as names: the engine's
+frontier splits synthesise pivots from its whole alphabet, so over names just below U+E000 (lead byte ED) a
+bound at U+E000 and above can arrive and is cut like a name (`TestSynthesizedPivotListed`), which costs a seek
+and possibly an empty probe. An item equal to a bounded query's `Through` ends its span, so a
+range's last page does not read past its end (sound because `Through`'s path is cut at every group boundary:
+nothing in its span follows it in Azure's order; an addition to the specification's §4.1). Where such names are, each cut is a seek (`order_spans`,
+`order_seeks`; one per span, even an empty one: `order_probes`), each split may add one (an `E` group the read
+has not reached), and a span that ends before its response does discards the rest of that response
+(`order_overlap_rows`: a read asks for a full page). An adapter invariant broken (only an out-of-order page can
+do it) is the client's invalid page, a protocol violation.
+
+**On the range engine.** `Description.Listing` is `keyrange.Listing`: the adapter's pages are byte-ordered,
+start after `After` (exclusive; `StartInclusive` is false) and end at `Through`, which is never sent. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
 control character, not ending in `.` (Azure's name rules). `Requeue` is the client's `ExhaustedError` on a
 transient class, as for S3 and GCS; `InvalidPage` is the client's. Pages are `client.MaxPageSize` (5,000, the
-service's cap) unless `--page-size` lowers them. A page maps `Blob` items to rows and `BlobPrefix` items to
-`Prefixes`, `Truncated` when `NextMarker` is not empty, the marker its token.
+service's cap) unless `--page-size` lowers them. An adapter page maps `Blob` items to rows and `BlobPrefix` items
+to `Prefixes`, with the adapter's `Truncated` and token.
 
 **Schema** `swath/azblob-objects/v1`, its columns and their caveats as [upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)
 states them; `MaxKeyBytes` 3,072, `blob_type` dictionary-encoded, and a delta spill codec.
@@ -460,7 +477,10 @@ are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-fl
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles` (503 `ServerBusy` and 429),
 `timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`
 past the request timeout, cut to it) and `body_cap_shrinks` (a page past the 64 MiB body cap, asked again with
-`maxresults` halved). **Connections**: the GCS pool, one
+`maxresults` halved), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
+`order_seeks`, `order_probes` (span reads that found no member), `order_overlap_rows`, `order_empty_pages` (empty
+continuing pages followed inside a span's read), `order_stack_max`, `order_buffer_rows_max`, `order_responses`,
+`order_chains_evicted` and `order_chains_max`. **Connections**: the GCS pool, one
 transport per 16 workers (1 to 8). The client's anonymous note goes to the run's warnings.
 
 ## Range engine (`internal/source/keyrange`)

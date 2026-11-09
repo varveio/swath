@@ -31,11 +31,11 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3"
 )
 
-// lowKeys is the hostile corpus without the names that carry a byte in
-// EE..F4 (the staged refusal's): ASCII, U+00E9 and U+4E2D names, folder
-// markers, long names and the 5,000 filler names remain.
-func lowKeys() []string {
-	return slices.DeleteFunc(azblobtest.Keys(), highByte)
+// highByte reports whether s holds a byte in EE..F4: a lead byte of a
+// scalar at U+E000 and above, where Azure's order and byte order can
+// disagree.
+func highByte(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r >= 0xE000 })
 }
 
 // base is the replay's endpoint for --azblob-endpoint: without the
@@ -106,8 +106,11 @@ func replayOptions(r *azblobtest.Replay) Options {
 // Last-Modified at the Azure wire's second resolution (the dual-route
 // oracle; ETag, blob type, tier and content type are the Azure route's
 // own synthesis, replay/azure/xml.go, not compared).
+//
+// The corpus is the whole hostile one: names at U+E000 and above come
+// through the byte-order adapter, which engages in every configuration.
 func TestListReplay(t *testing.T) {
-	keys := lowKeys()
+	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
 	const epoch = 1_767_225_600_000_000
 	for _, c := range []struct {
@@ -138,6 +141,9 @@ func TestListReplay(t *testing.T) {
 			}
 		}
 		v := st.Counters.Value
+		if v("order_splits") == 0 || v("order_seeks") == 0 {
+			t.Fatalf("%s: order_splits %d, order_seeks %d: the adapter did not engage", c.name, v("order_splits"), v("order_seeks"))
+		}
 		if c.pol.Seed && v("seed.requests") == 0 || c.pol.Structure == keyrange.StructureOn && v("structure.requests") == 0 {
 			t.Fatalf("%s: seed requests %d, structure requests %d: the delimiter listings did not engage", c.name, v("seed.requests"), v("structure.requests"))
 		}
@@ -194,46 +200,6 @@ func (c *s3collect) Write(_ context.Context, segs [][]s3.Row) error {
 	return nil
 }
 
-// TestStagedRefusal: over the whole hostile corpus every configuration
-// stops with the staged refusal, class unsupported, never requeued and
-// not a protocol violation, and emits no key at or past the first name
-// that carries a byte in EE..F4; over the corpus without them the same
-// configurations list everything (TestListReplay).
-func TestStagedRefusal(t *testing.T) {
-	keys := azblobtest.Keys()
-	first := keys[slices.IndexFunc(keys, highByte)]
-	r := azblobtest.Serve(t, keys)
-	for _, c := range []struct {
-		name    string
-		pol     keyrange.Policy
-		workers int
-	}{
-		{"sequential", keyrange.Policy{Sequential: true}, 1},
-		{"sequential, page size 1", keyrange.Policy{Sequential: true, PageSize: 1}, 1},
-		{"8 workers, page size 7", keyrange.Policy{PageSize: 7}, 8},
-		{"64 workers, seed, structure", keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 64},
-		{"64 workers, page size 2, seed", keyrange.Policy{PageSize: 2, Seed: true}, 64},
-	} {
-		opt := replayOptions(r)
-		opt.Policy = c.pol
-		rows, st, err := run(t, opt, c.workers)
-		if !errors.Is(err, source.ErrUnsupported) || errors.Is(err, source.ErrProtocol) || classify(err) != "unsupported" {
-			t.Fatalf("%s: err %v (class %q), want the staged refusal", c.name, err, classify(err))
-		}
-		if !strings.Contains(err.Error(), "azblob: names at U+E000 and above are not supported yet (container corpus, first name ") {
-			t.Fatalf("%s: message %q", c.name, err)
-		}
-		if n := st.Counters.Value("requeues"); n != 0 {
-			t.Fatalf("%s: %d requeues", c.name, n)
-		}
-		for _, row := range rows {
-			if row.Key >= first {
-				t.Fatalf("%s: %q emitted, at or past %q", c.name, row.Key, first)
-			}
-		}
-	}
-}
-
 // pages is a supplied client that answers fixed pages in turn and counts
 // its List calls.
 type pages struct {
@@ -254,57 +220,84 @@ func (p *pages) List(_ context.Context, in *client.ListInput) (*client.ListOutpu
 	return &out, nil
 }
 
-// TestStagedRefusalBounds: a cursor or a bound with such a byte is refused
-// before any request is sent; so is a page whose only such name is a
-// delimiter prefix, or one whose such name is not its first item, with
-// the name in the message.
-func TestStagedRefusalBounds(t *testing.T) {
-	newP := func(c *pages) *Provider {
-		p, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c, Workers: 1})
+// fetchAll drains q through p.fetch, as the engine's chain would.
+func fetchAll(t *testing.T, p *Provider, q keyrange.Query) []string {
+	t.Helper()
+	var got []string
+	for {
+		pg, err := p.fetch(context.Background(), &q)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%+v: %v", q, err)
 		}
-		return p
-	}
-	for _, q := range []keyrange.Query{
-		{After: "p\U0001f600", Max: 10},
-		{After: "a", Through: "pｚ", Bounded: true, Max: 10},
-	} {
-		c := &pages{}
-		if _, err := newP(c).fetch(context.Background(), &q); !errors.Is(err, source.ErrUnsupported) || c.lists.Load() != 0 {
-			t.Fatalf("%+v: err %v after %d requests", q, err, c.lists.Load())
+		for _, r := range pg.Rows {
+			got = append(got, r.Key)
 		}
+		got = append(got, pg.Prefixes...)
+		if !pg.Truncated {
+			slices.Sort(got)
+			return got
+		}
+		q.Token = pg.Token
 	}
-	// An unbounded query ignores Through.
-	if _, err := newP(&pages{}).fetch(context.Background(), &keyrange.Query{After: "a", Through: "pｚ", Max: 10}); err != nil {
+}
+
+// TestHighBounds: a cursor, a bound or a scope at a name at U+E000 and
+// above, which the staged refusal used to refuse, lists exactly the keys
+// after the cursor and up to the bound, in byte order, through fetch over
+// the replay's Azure route; and fetch maps blobs to rows, prefixes to
+// Prefixes.
+func TestHighBounds(t *testing.T) {
+	keys := azblobtest.Keys()
+	r := azblobtest.Serve(t, keys)
+	opt := replayOptions(r)
+	opt.Anonymous, opt.Workers = true, 1
+	p, err := New(context.Background(), opt)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, out := range []client.ListOutput{
-		{Items: []client.Item{{Name: "a"}, {Name: "\U00010000/", Prefix: true}}},
-		{Items: []client.Item{{Name: "a"}, {Name: "b"}, {Name: "b"}}, NextMarker: "m"},
+	for _, q := range []keyrange.Query{
+		{After: "p\U0001f600", Max: 7},
+		{After: "a", Through: "pｚ", Bounded: true, Max: 7},
+		{After: "a", Through: "pｚ", Max: 7}, // unbounded: Through ignored
+		{Prefix: "r\U00010000", Max: 2},
+		{Prefix: "n1/n2/n3/", After: "n1/n2/n3/p\U00010000", Max: 5000},
 	} {
-		_, err := newP(&pages{out: []client.ListOutput{out}}).fetch(context.Background(), &keyrange.Query{Max: 10})
-		last := out.Items[len(out.Items)-1].Name
-		if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), fmt.Sprintf("first name %q", last)) {
-			t.Fatalf("page %+v: %v", out, err)
+		var want []string
+		for _, k := range keys {
+			if strings.HasPrefix(k, q.Prefix) && k > q.After && (!q.Bounded || k <= q.Through) {
+				want = append(want, k)
+			}
+		}
+		if got := fetchAll(t, p, q); !slices.Equal(got, want) {
+			t.Fatalf("%+v: %d keys, want %d", q, len(got), len(want))
 		}
 	}
-	// A page without them maps blobs to rows, prefixes to Prefixes.
-	pg, err := newP(&pages{out: []client.ListOutput{{Items: []client.Item{{Name: "a", Size: 3, BlobType: "PageBlob"}, {Name: "b/", Prefix: true},
-		{Name: "c"}}, NextMarker: "m"}}}).fetch(context.Background(), &keyrange.Query{Max: 10})
+	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "a", Size: 3, BlobType: "PageBlob"}, {Name: "b/", Prefix: true},
+		{Name: "c"}}}}}
+	sp, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pg, err := sp.fetch(context.Background(), &keyrange.Query{Delimiter: "/", Max: 10})
 	if err != nil || len(pg.Rows) != 2 || pg.Rows[0].Data.Size != 3 || pg.Rows[0].Data.BlobType != "PageBlob" ||
-		!slices.Equal(pg.Prefixes, []string{"b/"}) || !pg.Truncated || pg.Token != "m" {
+		!slices.Equal(pg.Prefixes, []string{"b/"}) || pg.Truncated {
 		t.Fatalf("page %+v, %v", pg, err)
 	}
 }
 
-// TestUnsafePrefixRefused: a scope prefix that carries a byte in EE..F4
-// is refused at open, before any request, not listed as an empty scope.
-func TestUnsafePrefixRefused(t *testing.T) {
-	c := &pages{err: errors.New("never asked")}
-	_, err := New(context.Background(), Options{Account: "acct", Container: "c", Prefix: "pｚ/", Client: c})
-	if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" || c.lists.Load() != 0 || !strings.Contains(err.Error(), `first name "pｚ/"`) {
-		t.Fatalf("%v", err)
+// TestHighPrefixListed: a scope prefix that carries a byte in EE..F4,
+// refused at open by the staged refusal, is listed exactly.
+func TestHighPrefixListed(t *testing.T) {
+	keys := azblobtest.Keys()
+	r := azblobtest.Serve(t, keys)
+	for _, prefix := range []string{"r\U00010000", "only-e/", "pｚ"} {
+		opt := replayOptions(r)
+		opt.Prefix = prefix
+		rows, _ := list(t, opt, 8)
+		want := slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !strings.HasPrefix(k, prefix) })
+		if got := keysOf(rows); len(want) == 0 || !slices.Equal(got, want) {
+			t.Fatalf("prefix %q: %q, want %q", prefix, got, want)
+		}
 	}
 }
 
@@ -338,32 +331,24 @@ func (s *sortedAPI) List(_ context.Context, in *client.ListInput) (*client.ListO
 	return out, nil
 }
 
-// TestSynthesizedPivotRefused: the engine's pivot alphabet includes every
+// TestSynthesizedPivotListed: the engine's pivot alphabet includes every
 // scalar from U+E000 up, so over keys that all sit below U+E000 (lead byte
-// ED) its frontier splits synthesise a bound at U+10000 and above. The
-// real engine sends it to fetch, which refuses it before any request with
-// it is sent: the run stops with the staged refusal naming a name that is
-// not a key.
-func TestSynthesizedPivotRefused(t *testing.T) {
+// ED) its frontier splits synthesise bounds at U+E000 and above, which
+// the staged refusal used to refuse. Through the adapter they are sent as
+// they are and the run completes with exact output.
+func TestSynthesizedPivotListed(t *testing.T) {
 	var keys []string
 	for r := rune(0xD000); r < 0xD7A0; r += 2 {
 		keys = append(keys, "k"+string(r))
 	}
 	slices.Sort(keys)
 	f := &sortedAPI{keys: keys}
-	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: f, Policy: keyrange.Policy{PageSize: 3}}, 64)
-	if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" {
-		t.Fatalf("err %v, want the staged refusal of a synthesised bound", err)
+	rows, _ := list(t, Options{Account: "acct", Container: "c", Client: f, Policy: keyrange.Policy{PageSize: 3}}, 64)
+	if got := keysOf(rows); !slices.Equal(got, keys) {
+		t.Fatalf("%d keys, want %d", len(got), len(keys))
 	}
-	named := err.Error()[strings.Index(err.Error(), "first name ")+len("first name "):]
-	name, uerr := strconv.Unquote(strings.TrimSuffix(named, ")"))
-	if uerr != nil || slices.Contains(keys, name) || !highByte(name) {
-		t.Fatalf("refused %q (%v): want a synthesised bound, not a key", named, uerr)
-	}
-	for _, from := range f.from {
-		if highByte(from) {
-			t.Fatalf("startFrom %q was sent", from)
-		}
+	if !slices.ContainsFunc(f.from, highByte) {
+		t.Fatal("no synthesised bound at U+E000 and above was sent")
 	}
 }
 
@@ -721,7 +706,8 @@ func TestEngineFlagsShared(t *testing.T) {
 }
 
 // TestInvalidPageClass: a page out of order is the client's invalid page,
-// which the engine wraps as a protocol violation (not the staged refusal).
+// which the engine wraps as a protocol violation: the adapter's order
+// check classes it as the client's invalid page.
 func TestInvalidPageClass(t *testing.T) {
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "b"}, {Name: "a"}}}}}
 	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: c, Policy: keyrange.Policy{Sequential: true}}, 1)
@@ -790,7 +776,7 @@ func (c cappedAPI) BodyCapShrinks() int64   { return c.shrinks }
 // the built client against the replay; body_cap_shrinks is reported from
 // the client.
 func TestClientCutsReported(t *testing.T) {
-	keys := lowKeys()
+	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
 	u, _ := url.Parse(base(r))
 	px := httputil.NewSingleHostReverseProxy(u)
@@ -821,7 +807,7 @@ func TestClientCutsReported(t *testing.T) {
 // client's pool, one transport per 16 workers, and the client's counters
 // follow the engine's.
 func TestPoolSizeReported(t *testing.T) {
-	r := azblobtest.Serve(t, lowKeys())
+	r := azblobtest.Serve(t, azblobtest.Keys())
 	for workers, want := range map[int]int64{1: 1, 40: 3} {
 		_, st := list(t, replayOptions(r), workers)
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {

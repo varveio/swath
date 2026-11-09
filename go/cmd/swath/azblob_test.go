@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -32,43 +31,29 @@ import (
 // segment, which the client takes from the root.
 func azEndpoint(r *azblobtest.Replay) string { return strings.TrimSuffix(r.Endpoint, "/"+r.Account) }
 
-// TestAzblobStagedRefusalOutcome: a run that meets an Azure name at
-// U+E000 and above stops as refused (exit 2) with cause unsupported, never
-// as a protocol violation: its journal is not marked unresumable, the
-// outcome says resumable, and a resume (by this build) is refused the same
-// way, the journal still intact.
-func TestAzblobStagedRefusalOutcome(t *testing.T) {
+// TestAzblobHostileCorpus: a run over the hostile corpus (names at U+E000
+// and above, which the staged refusal used to stop at) completes and
+// commits every key once in byte order, the adapter's counters in the
+// report.
+func TestAzblobHostileCorpus(t *testing.T) {
 	datasettest.RequireJournal(t)
 	captureStderr(t)
-	r := azblobtest.Serve(t, azblobtest.Keys())
+	keys := azblobtest.Keys()
+	r := azblobtest.Serve(t, keys)
 	out := filepath.Join(t.TempDir(), "ds")
-	ctx := context.Background()
-	check := func(at string, err error) {
-		t.Helper()
-		if c := exitCode(t, err); c != exitUsage {
-			t.Fatalf("%s: exit %d (%v), want %d", at, c, err, exitUsage)
-		}
-		var o outcome
-		b, _ := os.ReadFile(filepath.Join(out, errorName))
-		if json.Unmarshal(b, &o) != nil || o.Class != "refused" || o.Cause != "unsupported" || !o.Resumable ||
-			!strings.Contains(o.Message, "names at U+E000 and above are not supported yet") {
-			t.Fatalf("%s: outcome %s", at, b)
-		}
-		st, err := journal.Read(out)
-		if err != nil || st.Resumable() != nil {
-			t.Fatalf("%s: journal %v, resumable %v", at, err, st.Resumable())
-		}
-		if dataset.Committed(out) {
-			t.Fatalf("%s: committed", at)
-		}
+	if err := run(context.Background(), []string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(r), "--azblob-anonymous", "--workers", "8",
+		"--part-size", "4KiB", "-o", out}, io.Discard, false); err != nil {
+		t.Fatal(err)
 	}
-	check("run", run(ctx, []string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(r), "--azblob-anonymous", "--workers", "8",
-		"--part-size", "4KiB", "-o", out}, io.Discard, false))
-	check("resume", resume(ctx, []string{out}, io.Discard))
+	if !dataset.Committed(out) {
+		t.Fatal("not committed")
+	}
+	if got := datasetKeys(t, out); !slices.Equal(got, keys) {
+		t.Fatalf("%d keys, want %d in byte order", len(got), len(keys))
+	}
 }
 
-// sasReplay serves the corpus without names at U+E000 and above through
-// a slow proxy that counts the signatures (sig) requests carry.
+// sasReplay serves the hostile corpus through a slow proxy that counts the signatures (sig) requests carry.
 type sasReplay struct {
 	url  string
 	mu   sync.Mutex // seed and probe requests run beside the worker's
@@ -77,8 +62,7 @@ type sasReplay struct {
 
 func newSASReplay(t *testing.T) *sasReplay {
 	t.Helper()
-	keys := slices.DeleteFunc(azblobtest.Keys(), func(k string) bool { return strings.ContainsFunc(k, func(r rune) bool { return r >= 0xE000 }) })
-	r := azblobtest.Serve(t, keys)
+	r := azblobtest.Serve(t, azblobtest.Keys())
 	u, _ := url.Parse(azEndpoint(r))
 	px := httputil.NewSingleHostReverseProxy(u)
 	s := &sasReplay{sigs: map[string]int{}}

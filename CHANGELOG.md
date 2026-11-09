@@ -6,7 +6,8 @@ Notable changes per release. The full human summary for the current release is i
 ## Unreleased
 
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
-  accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`); names at U+E000 and above are refused for now.
+  accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
+  lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.
 
 ## 0.3.2 — 2026-09-03
 

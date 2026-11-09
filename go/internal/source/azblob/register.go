@@ -143,8 +143,8 @@ func (o *opened) Identity() source.Identity {
 	}}
 }
 
-// Capabilities: with the staged refusal pages are byte-ordered and
-// startFrom takes any name, so the range engine applies; --sequential
+// Capabilities: the byte-order adapter serves byte-ordered pages from
+// any start name, so the range engine applies; --sequential
 // lists one marker chain. A run with an object-count cap, or through a
 // supplied client that does not name its route, cannot resume (as for S3
 // and GCS).

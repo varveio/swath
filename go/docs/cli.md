@@ -397,8 +397,9 @@ Diagnostics:
   (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; asked only for the default endpoint).
   A hierarchical-namespace account is refused before any listing request (exit 2, cause `unsupported`), as is
   `--all-versions`; so is one whose namespace neither answer gives, unless `--azblob-flat` asserts it flat (the
-  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). A run that meets a name at U+E000 and above stops
-  refused (exit 2, cause `unsupported`, resumable) until a later build lists such names
+  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). Names at U+E000 and above, which
+  Azure lists in UTF-16 order, are listed in byte order like every other provider's, through a reordering adapter
+  whose cost shows in the report's `order_*` counters
   ([internals/providers.md](internals/providers.md#azure-blob-internalsourceazblob)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,
   by `swath list` and by `swath resume` before it settles anything;
