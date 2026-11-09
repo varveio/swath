@@ -61,7 +61,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 ## The list clients: hand-rolled on the SDK's auth
 
 Each object-store provider makes one call, its list request, through a client of its own, and takes
-authentication from the vendor's SDK modules.
+authentication from the vendor's SDK modules. The default build sends it through a hand-rolled client, described
+here. S3 and GCS can instead be built over the vendor's SDK service client with the build tag `swath_sdkclient`
+(experiment; [below](#the-sdk-backed-clients-swath_sdkclient-experiment)).
 
 **The SDK's.** S3: the credential chain (environment, shared config and profiles, SSO, web identity and STS,
 IMDS) and the SigV4 signer (`aws-sdk-go-v2/config`, `credentials`, `aws/signer/v4`). GCS: Google's
@@ -124,9 +126,90 @@ every 3xx, and request errors, 400 query echoes and messages are scrubbed of the
 `TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
 SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the evidence archive to the client.
 
-The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`, `sdk/storage/azblob`) are test-only
-oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the
-binary links none of them ([testing.md](../testing.md); `TestBinaryLinksAzidentityNotAzblob`).
+In the default build the SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`,
+`sdk/storage/azblob`) are test-only oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`,
+`TestClientPagesMatchGoogleClient`); the binary links none of them ([testing.md](../testing.md);
+`TestBinaryLinksAzidentityNotAzblob`). The `swath_sdkclient` build links the S3 and GCS ones, as the next
+subsection describes.
+
+### The SDK-backed clients (`swath_sdkclient`, experiment)
+
+Experimental, and built only with `-tags swath_sdkclient`. `internal/source/s3/sdkclient` and
+`internal/source/gcs/sdkclient` take the same `client.Config` as the hand-rolled clients and return the same
+wire types (`client.Page`, `client.VersionPage`), so the provider code above them, the schemas and the resume
+identity do not change. An Azure Blob client of the same shape is in progress.
+
+**What the SDK owns.** S3 (`service/s3`): request construction, endpoint resolution (virtual-hosted and
+path-style, FIPS, dual-stack, custom endpoints), and credentials and SigV4 signing for the credentials swath
+resolves for it. GCS (`google.golang.org/api/storage/v1`): building the `objects.list` URL and decoding the JSON
+page. Both clients are built with the SDK's retryer off (`aws.NopRetryer`; the generated GCS `Do` makes one
+request), so one SDK call is one attempt.
+
+**What swath keeps.**
+
+- *One retry owner.* `objhttp.Do` retries, backs off, honors `Retry-After` and admits requests through the
+  limiter, as for the hand-rolled clients. The SDK never retries.
+- *The failure vocabulary and attempt accounting.* Every failure maps to the classes of the hand-rolled client
+  (throttle, timeout, server, redirect, auth, access denied, no such bucket, parse, other), and an attempt is
+  counted from just before the SDK call until it returns. Credentials and bearer tokens are fetched before the
+  attempt is counted, so a credential failure is a `*objhttp.CredentialError` and not an attempt.
+- *Redirects refused, and route identity.* The HTTP client follows no redirect. `Route` is the URL the SDK's
+  endpoint resolver names (S3) or the generated client sends (GCS), and the resume identity freezes it. S3 tests
+  that every request, retried and continuation requests included, goes to exactly `Route`. A GCS endpoint whose
+  path the generated client would send differently (an escaped separator or a dot segment) is refused when the
+  client is built, with a message to use the hand-rolled client.
+- *`objhttp.Guard`.* An `http.RoundTripper` below the SDK, shared by both clients. It reads a success body up to
+  16 MiB and an error body up to 64 KiB (longer success bodies fail the round trip; longer error bodies are
+  truncated), closes the original body on every path, and validates every 2xx before the SDK decodes it. A
+  Guard failure surfaces through `objhttp.Cause`, so the `url.Error` the HTTP client wraps around it is never
+  read as a transport failure.
+- *`Stats.Client`* names the client that ran: `sdk` here, `hand-rolled` in the default build.
+
+**S3 decoding.** The hand-rolled scanner (`client.ParseList`, `client.ParseVersions`) is the only decoder of
+listing pages in the tagged build. The Guard captures the validated body (`objhttp.Capture`), and the SDK decodes
+a minimal replacement envelope in its place. The scanner is kept for two measured reasons. Through the same SDK
+stack, over a 1,000-object page with URL-encoded keys, the SDK's decoder cost about 14 µs per object and about
+102,000 allocations per page, the scanner about 1.8 µs and about 400 ([measurements](../measurements.md#sdk-backed-clients-2026-11-09)).
+And a versioned listing needs `<Version>` and `<DeleteMarker>` entries in wire order, which the SDK's two
+separate arrays cannot give back (`TestStockSDKLosesVersionsOrder`). The scanner reads the operation's own root
+element and refuses anything else, so an empty body or another operation's envelope is a parse failure and never
+an empty final page. For that reason the S3 Guard's `Validate` checks only the status: a 2xx other than 200 is an
+answer, read through `client.ResponseError` (an `<Error>` body's code, else the status text).
+Keys, prefixes and markers are requested with `encoding-type=url` and decoded once, by the scanner.
+
+**GCS decoding.** The generated client decodes the page, and swath checks what it decodes. The Guard's `Validate`
+rejects a 200 that carries a top-level `error` member (`"error": null` included), which the generated decoder
+would drop. A body is parsed for that only when it can hold one (a backslash, or `"error"` in any letter case).
+The decoded page must have `kind == "storage#objects"`, and every item must be present. A size that does not fit
+`int64` and a time that is not RFC 3339 are parse failures. The fields selector starts with `kind` in both
+clients.
+
+**Selection.** The build tag chooses the client for both providers; there is no runtime flag. The default build
+uses the hand-rolled clients. `SWATH_S3_DECODER=sdk` makes the tagged S3 client decode current-object pages
+with the SDK's decoder instead of the scanner. It exists to measure the decoders against each other and is not
+a production path: nothing checks the envelope there, and the SDK reads an empty body as an empty final page.
+Versions always go through the scanner.
+
+**Binary.** The default binary links neither SDK service client. `TestSDKClientBuildTag` (GCS) and
+`TestSDKClientOnlyWithTag` (S3) run `go list -deps` of `cmd/swath` with and without the tag and require the SDK
+packages to be present only with it. The tagged GCS build is about 9 MB larger
+([measurements](../measurements.md#sdk-backed-clients-2026-11-09)).
+
+**Known differences from the hand-rolled clients.**
+
+- *GCS.* All stricter. A `{}` body without `kind` is a parse failure, not an empty page (the servers swath talks
+  to send `kind`, an empty listing included). A negative size is a parse failure. A `null` item is a parse
+  failure.
+- *S3, region.* A FIPS region alias (`fips-us-east-1`, `us-east-1-fips`) resolves as the SDK resolves it: the
+  region without the alias and FIPS on, giving `https://BUCKET.s3-fips.us-east-1.amazonaws.com/`. The hand-rolled
+  client takes the alias as a region name, so a journal it wrote with an alias region does not resume through the
+  SDK client.
+- *S3, errors.* `Message` carries the status text when the error body has none. On a 2xx other than 200 the
+  request ID and region come only from an `<Error>` body, not from headers.
+- *S3, request.* `cfg.Now` is not used: the SDK signs with its own clock. The payload hash is the SDK's. There is
+  no clock-skew correction, because the SDK's retry path is off.
+- *Transport replays.* `net/http` may replay an idempotent GET on a reused connection below the Guard, for both
+  families of client. The counted unit is an application attempt.
 
 ## S3 (`internal/source/s3`)
 
