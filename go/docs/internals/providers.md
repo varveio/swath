@@ -95,9 +95,8 @@ validation of every page.
 `GET {endpoint}/{container}?restype=container&comp=list` with `prefix`, `delimiter`, `startFrom`, `marker` and
 `maxresults` only when set (never `endBefore` or `include`; spaces as `%20`, as the SDK sends them),
 `x-ms-version: 2026-10-06` pinned (the replay also serves 2026-06-06; the two behave alike), a fresh
-`x-ms-client-request-id` per attempt and the swath user agent; the default endpoint is
-`https://ACCOUNT.blob.core.windows.net`, any other one takes the account as its first path segment (the replay,
-Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`;
+`x-ms-client-request-id` per attempt and the swath user agent, to the endpoint and with the credentials the
+provider section describes ([below](#azure-blob-internalsourceazblob)). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`;
 `NamespaceInfo` sends Filesystem Get Properties (a HEAD) on the account's Data Lake host and reads
 `x-ms-namespace-enabled`, for anonymous admission (an endpoint other than `ACCOUNT.blob.core.windows.net` has
 no such host, and so has any endpoint that is not exactly `https://ACCOUNT.blob.core.windows.net`: `ErrNoDFSEndpoint`); in both a refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
@@ -121,22 +120,13 @@ only when it is `OperationTimedOut` or `InternalError`, and a `Retry-After` (sec
 the drawn backoff is waited out (`objhttp.RetryAfter`), at most the request timeout (a longer one is cut to it
 and counted in `retry_after_capped`; the attempt budget still ends the request, which the engine requeues).
 Redirects are never followed and their target is never quoted: the client's transport drops `Location` from
-every 3xx, and request errors are scrubbed of the SAS through their whole chain. Authentication, in precedence: anonymous; a SAS appended
-to every query and removed from every error (request URLs, 400 query echoes, redirect targets, messages); a
-Shared Key signature with `x-ms-date` per attempt (`TestSharedKeyMatchesSDK` compares it with the SDK's on both
-endpoint forms); Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`, its tokens
-coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a timeout
-retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the others the
-chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token is asked
-for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes the
-requests unauthenticated, with a note; a timeout, a transport failure or a token endpoint's 5xx keeps the chain and
-each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the managed identity is always kept.
-Connections are the GCS pool. `TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
+every 3xx, and request errors, 400 query echoes and messages are scrubbed of the SAS through their whole chain.
+`TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
 SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the evidence archive to the client.
 
 The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`, `sdk/storage/azblob`) are test-only
 oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the
-binary links none of them ([testing.md](../testing.md); `TestBinaryLinksNoAzblob`).
+binary links none of them ([testing.md](../testing.md); `TestBinaryLinksAzidentityNotAzblob`).
 
 ## S3 (`internal/source/s3`)
 
@@ -403,7 +393,15 @@ account then being the endpoint's first path segment (`http://127.0.0.1:10000` s
 scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
 root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
 `AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
-Key); else Entra ID (`DefaultAzureCredential`), else none, with the client's note as a warning. A SAS never
+Key: signed in the client with `x-ms-date` per attempt, `TestSharedKeyMatchesSDK` comparing it with the SDK's on
+both endpoint forms); else Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`,
+its tokens coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a
+timeout retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the
+others the chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token
+is asked for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes
+the requests unauthenticated, with the client's note as a warning; a timeout, a transport failure or a token
+endpoint's 5xx keeps the chain and each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the
+managed identity is always kept. A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
@@ -450,13 +448,8 @@ transient class, as for S3 and GCS; `InvalidPage` is the client's. Pages are `cl
 service's cap) unless `--page-size` lowers them. A page maps `Blob` items to rows and `BlobPrefix` items to
 `Prefixes`, `Truncated` when `NextMarker` is not empty, the marker its token.
 
-**Schema** `swath/azblob-objects/v1`: the key (the blob name), `size` (`Content-Length`), `last_modified`
-(`Last-Modified`, µs, at the wire's 1 s resolution), `etag` (opaque, as listed), `content_md5` (base64 as listed;
-null when absent), `content_type`, `blob_type` (`BlockBlob`, `PageBlob`, `AppendBlob`; dictionary-encoded),
-`access_tier` (null when absent) and `creation_time` (`Creation-Time`, µs, the logical type of `last_modified`).
-`MaxKeyBytes` is 3,072: a name is at most 1,024 UTF-16 units. As for GCS, `last_modified` also moves when only a
-blob's metadata or properties change, and `etag` is an opaque entity tag, not a content hash: compare content
-with `content_md5` (absent for blobs uploaded in blocks without one), never an ETag across stores.
+**Schema** `swath/azblob-objects/v1`, its columns and their caveats as [upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)
+states them; `MaxKeyBytes` 3,072, `blob_type` dictionary-encoded, and a delta spill codec.
 
 **Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
 service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case

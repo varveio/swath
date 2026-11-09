@@ -386,9 +386,8 @@ lists for the object. On GCS, `last_modified` also changes when only the object'
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
-`swath/azblob-objects/v1` (`key`, `size`, `last_modified`, `etag`, `content_md5`, `content_type`, `blob_type`,
-`access_tier`, `creation_time`); as on GCS, its `last_modified` moves on metadata writes and its `etag` is opaque:
-compare content with `content_md5`, null where Azure lists none. Every dataset lists current
+`swath/azblob-objects/v1`, its columns and caveats in [upgrade.md](upgrade.md#the-downstream-reader-dispatch-on-schema-id).
+Every dataset lists current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.

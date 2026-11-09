@@ -100,91 +100,58 @@ func replayOptions(r *azblobtest.Replay) Options {
 // i seconds after 2026-01-01 for the i-th key; the route's synthesised
 // ETag, type, tier and content type), sequentially and with 64 workers,
 // with the seed and structure probes (delimiter listings) engaged, at page
-// sizes 1, 2, 7 and 5,000; the default page is 5,000.
+// sizes 1, 2, 7 and 5,000; the default page is 5,000. Where s3 is set, the
+// same fixture through the replay's S3 route (the S3 provider) lists the
+// same keys in the same order, once each, with the same size and
+// Last-Modified at the Azure wire's second resolution (the dual-route
+// oracle; ETag, blob type, tier and content type are the Azure route's
+// own synthesis, replay/azure/xml.go, not compared).
 func TestListReplay(t *testing.T) {
 	keys := lowKeys()
 	r := azblobtest.Serve(t, keys)
 	const epoch = 1_767_225_600_000_000
-	check := func(name string, rows []Row) {
-		t.Helper()
+	for _, c := range []struct {
+		name    string
+		pol     keyrange.Policy
+		workers int
+		s3      bool
+	}{
+		{"sequential", keyrange.Policy{Sequential: true}, 1, true},
+		{"8 workers", keyrange.Policy{}, 8, false},
+		{"64 workers, seed, structure", keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 64, true},
+		{"page size 1", keyrange.Policy{PageSize: 1, Seed: true, Structure: keyrange.StructureOn}, 64, false},
+		{"page size 2", keyrange.Policy{PageSize: 2}, 8, false},
+		{"page size 7", keyrange.Policy{PageSize: 7, Seed: true, Structure: keyrange.StructureOn}, 64, true},
+		{"page size 5000", keyrange.Policy{PageSize: 5000, Sequential: true}, 1, false},
+	} {
+		opt := replayOptions(r)
+		opt.Policy = c.pol
+		rows, st := list(t, opt, c.workers)
 		if got := keysOf(rows); !slices.Equal(got, keys) {
-			t.Fatalf("%s: %d keys, want %d", name, len(got), len(keys))
+			t.Fatalf("%s: %d keys, want %d", c.name, len(got), len(keys))
 		}
 		for i, row := range rows {
 			o := row.Data
 			if o.Size != int64(i) || o.Mtime != epoch+int64(i)*1_000_000 || o.BlobType != "BlockBlob" || o.AccessTier != "Hot" ||
 				o.ETag == "" || o.ContentType != "application/octet-stream" || o.ContentMD5 != "" || o.CreationTime != 0 {
-				t.Fatalf("%s: row %d %q: %+v", name, i, row.Key, o)
+				t.Fatalf("%s: row %d %q: %+v", c.name, i, row.Key, o)
 			}
 		}
-	}
-	for _, c := range []struct {
-		name    string
-		pol     keyrange.Policy
-		workers int
-	}{
-		{"sequential", keyrange.Policy{Sequential: true}, 1},
-		{"8 workers", keyrange.Policy{}, 8},
-		{"64 workers, seed, structure", keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 64},
-		{"page size 1", keyrange.Policy{PageSize: 1, Seed: true, Structure: keyrange.StructureOn}, 64},
-		{"page size 2", keyrange.Policy{PageSize: 2}, 8},
-		{"page size 7", keyrange.Policy{PageSize: 7, Seed: true, Structure: keyrange.StructureOn}, 64},
-		{"page size 5000", keyrange.Policy{PageSize: 5000, Sequential: true}, 1},
-	} {
-		opt := replayOptions(r)
-		opt.Policy = c.pol
-		rows, st := list(t, opt, c.workers)
-		check(c.name, rows)
 		v := st.Counters.Value
 		if c.pol.Seed && v("seed.requests") == 0 || c.pol.Structure == keyrange.StructureOn && v("structure.requests") == 0 {
 			t.Fatalf("%s: seed requests %d, structure requests %d: the delimiter listings did not engage", c.name, v("seed.requests"), v("structure.requests"))
 		}
 		if c.pol.Sequential {
-			size := c.pol.PageSize
-			if size == 0 {
-				size = client.MaxPageSize
+			if want := int64((len(keys) + c.pol.PageSize - 1) / max(c.pol.PageSize, 1)); c.pol.PageSize > 0 && v("pages") != want {
+				t.Fatalf("%s: %d pages, want %d of %d", c.name, v("pages"), want, c.pol.PageSize)
 			}
-			if want := int64((len(keys) + size - 1) / size); v("pages") != want {
-				t.Fatalf("%s: %d pages, want %d of %d", c.name, v("pages"), want, size)
+			if c.pol.PageSize == 0 && v("pages") != 2 {
+				t.Fatalf("%s: the default page size: %d pages for %d keys, want 2", c.name, v("pages"), len(keys))
 			}
 		}
-	}
-	// The default page is client.MaxPageSize: the corpus lists in two.
-	opt := replayOptions(r)
-	opt.Sequential = true
-	_, st := list(t, opt, 1)
-	if n := st.Counters.Value("pages"); n != 2 {
-		t.Fatalf("default page size: %d pages for %d keys, want 2", n, len(keys))
-	}
-	// A prefix scope.
-	opt = replayOptions(r)
-	opt.Prefix = "f/"
-	rows, _ := list(t, opt, 8)
-	if len(rows) != 5000 || rows[0].Key != "f/0000" {
-		t.Fatalf("prefix f/: %d rows", len(rows))
-	}
-}
-
-// TestDualRoute: one fixture through the replay's S3 route (the S3
-// provider) and its Azure route (this provider) lists the same keys in the
-// same order, once each, with the same size and Last-Modified (at the
-// Azure wire's second resolution). The ETag, blob type, tier and content
-// type are the Azure route's own synthesis (replay/azure/xml.go), not the
-// fixture's, so they are not compared.
-func TestDualRoute(t *testing.T) {
-	keys := lowKeys()
-	r := azblobtest.Serve(t, keys)
-	for _, c := range []struct {
-		pol     keyrange.Policy
-		workers int
-	}{
-		{keyrange.Policy{Sequential: true}, 1},
-		{keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}, 64},
-		{keyrange.Policy{PageSize: 7, Seed: true}, 64},
-	} {
-		opt := replayOptions(r)
-		opt.Policy = c.pol
-		az, _ := list(t, opt, c.workers)
+		if !c.s3 {
+			continue
+		}
 		sp, err := s3.New(context.Background(), s3.Options{Bucket: r.Container, Endpoint: r.S3Endpoint, PathStyle: true, Anonymous: true,
 			Workers: c.workers, Policy: c.pol})
 		if err != nil {
@@ -194,15 +161,22 @@ func TestDualRoute(t *testing.T) {
 		if _, err := order.Run[s3.Range, s3.Object](context.Background(), sp, &sc, &s3.Schema, order.Options{Workers: c.workers, Budget: 1 << 22}); err != nil {
 			t.Fatal(err)
 		}
-		if len(az) != len(sc.rows) || len(az) != len(keys) {
-			t.Fatalf("%+v: azure %d rows, s3 %d, fixture %d", c.pol, len(az), len(sc.rows), len(keys))
+		if len(sc.rows) != len(rows) {
+			t.Fatalf("%s: azure %d rows, s3 %d", c.name, len(rows), len(sc.rows))
 		}
-		for i := range az {
-			a, b := az[i], sc.rows[i]
+		for i := range rows {
+			a, b := rows[i], sc.rows[i]
 			if a.Key != b.Key || a.Data.Size != b.Data.Size || a.Data.Mtime/1_000_000 != b.Data.Mtime/1_000_000 {
-				t.Fatalf("%+v: row %d: azure %q %d %d, s3 %q %d %d", c.pol, i, a.Key, a.Data.Size, a.Data.Mtime, b.Key, b.Data.Size, b.Data.Mtime)
+				t.Fatalf("%s: row %d: azure %q %d %d, s3 %q %d %d", c.name, i, a.Key, a.Data.Size, a.Data.Mtime, b.Key, b.Data.Size, b.Data.Mtime)
 			}
 		}
+	}
+	// A prefix scope.
+	opt := replayOptions(r)
+	opt.Prefix = "f/"
+	rows, _ := list(t, opt, 8)
+	if len(rows) != 5000 || rows[0].Key != "f/0000" {
+		t.Fatalf("prefix f/: %d rows", len(rows))
 	}
 }
 

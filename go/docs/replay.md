@@ -282,10 +282,7 @@ trailing slash (a container SAS sends it there). It answers `200` with an empty 
 `x-ms-is-hns-enabled: false` (`true` under `--azure-hns`), `x-ms-account-kind: StorageV2`,
 `x-ms-sku-name: Standard_LRS` and the headers above, and reads nothing from the fixture. Its refusals are the list
 route's: `x-ms-version` and `x-ms-client-request-id` as above, other methods `405 UnsupportedHttpVerb` with
-`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters (`server`
-`TestAzureAccountInformation`, and the Azure SDK's container and service clients in
-`TestAzureAccountInformationSDK`, through `azblobtest.PinVersion`: the pinned SDK sends a service version the
-replay does not answer).
+`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters.
 
 A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
 capture `azure-12a`; `azure` `TestRenderRefusals`).

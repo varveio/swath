@@ -423,11 +423,13 @@ What such a reader does, stated as the contract rather than as its code:
   all of them, which the reader reads as null. So a column added as optional keeps the id, and a run resumed by a
   build that writes the column mixes parts with and without it under one id (the resume identity freezes the
   schema id, not the column set). `swath/gcs-objects/v1` has one optional column, `time_created`; every other
-  column of every schema id is present in every part. `swath/azblob-objects/v1` is `key`, `size`,
-  `last_modified` (`Last-Modified`, 1 s resolution), `etag`, `content_md5` (base64, null when absent),
-  `content_type`, `blob_type`, `access_tier` (null when absent) and `creation_time`; its keys reach 3,072 bytes.
-  As on GCS, `last_modified` also moves when only a blob's metadata changes and `etag` is opaque, not a content
-  hash: compare content with `content_md5`, never ETags across stores.
+  column of every schema id is present in every part. `swath/azblob-objects/v1` is `key` (the blob name, up to
+  3,072 bytes: 1,024 UTF-16 units), `size` (`Content-Length`), `last_modified` (`Last-Modified`, µs at the wire's
+  1 s resolution), `etag` (opaque, as listed), `content_md5` (base64 as listed; null when absent, as for blobs
+  uploaded in blocks without one), `content_type`, `blob_type` (`BlockBlob`, `PageBlob`, `AppendBlob`),
+  `access_tier` (null when absent) and `creation_time` (`Creation-Time`, µs). As on GCS, `last_modified` also
+  moves when only a blob's metadata changes and `etag` is opaque, not a content hash: compare content with
+  `content_md5`, never ETags across stores.
 - **Versions schemas** (`swath list --all-versions`). `swath/s3-versions/v1` is the `swath/s3-objects/v1`
   columns in the same order, `size` nullable (null on delete markers, as are `etag`, `storage_class` and the
   checksums), then `version_id` (verbatim; `"null"` is a real ID), `is_latest` and `is_delete_marker`
