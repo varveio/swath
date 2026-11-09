@@ -252,7 +252,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
    normal start-up. S3 and GCS tile `(K, ⊤]` as a fresh run tiles the scope: with the seed (the default) from
    delimiter listings of every folder above K, keeping only cuts above K, else as one range `(K, ⊤]` that
-   splits ([providers.md](range-engine.md), "A resumed scope"). If K is not a
+   splits ([range-engine.md](range-engine.md), "A resumed scope"). If K is not a
    bound the provider accepts, the first tile starts at K's longest accepted prefix and drops keys up to K.
 5. Continues the router at the next ordinal with the recorded limit, so size cuts fall exactly where the
    uninterrupted run would have put them (a cut by `--part-interval` depends on timing in either run).

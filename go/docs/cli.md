@@ -400,7 +400,7 @@ Diagnostics:
   assertion is frozen for resume and shown in the report's `namespace`, `asserted`). Names at U+E000 and above, which
   Azure lists in UTF-16 order, are listed in byte order like every other provider's, through a reordering adapter
   whose cost shows in the report's `order_*` counters
-  ([internals/providers.md](internals/providers/azblob.md)).
+  ([internals/azblob.md](internals/providers/azblob.md)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,
   by `swath list` and by `swath resume` before it settles anything;
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
@@ -474,7 +474,7 @@ Diagnostics:
   The first wave also carries the scope's first data page: a complete page (the whole scope) lists a bucket of
   one page in one round trip; a truncated one is discarded, and the first tile starts at the scope's start (or
   the resumed key) as without it; a delimiter chain whose page held no folder is not
-  followed ([internals/providers.md](internals/range-engine.md));
+  followed ([internals/range-engine.md](internals/range-engine.md));
   `swath diag list --seed=false` starts from one
   range instead (an experiment: [measurements](measurements.md) has the seed's effect on split depth);
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
