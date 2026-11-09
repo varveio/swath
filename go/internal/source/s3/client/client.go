@@ -65,7 +65,6 @@ type Client struct {
 	retry  objhttp.Retry
 	counts objhttp.Counters
 
-	parsers sync.Pool // *parser
 	buffers sync.Pool // *bytes.Buffer
 }
 
@@ -345,12 +344,7 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
 	}
-	p, _ := c.parsers.Get().(*parser)
-	if p == nil {
-		p = new(parser)
-	}
-	defer c.parsers.Put(p)
-	page, err := parse(p, buf.Bytes())
+	page, err := pooled(buf.Bytes(), parse)
 	if err != nil {
 		if errors.Is(err, ErrSyntax) {
 			c.counts.ParseFailure()
