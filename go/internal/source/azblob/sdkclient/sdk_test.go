@@ -4,6 +4,7 @@
 package sdkclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -15,6 +16,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"reflect"
 	"slices"
 	"sort"
@@ -25,7 +28,6 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
@@ -540,24 +542,51 @@ func TestRedactedRefusal(t *testing.T) {
 	}
 }
 
-// TestLogScrubbed: the SDK's own log lines (a failed connection's
-// url.Error, an echoing 403's dump), which quote the SAS, reach the
-// listener scrubLogs installs without the signature, encoded or decoded.
+// TestLogScrubbed starts with azcore's environment-enabled stderr listener
+// in a fresh process: New must replace it before any SDK request logs the
+// SAS. No test listener is installed, so this covers production wiring as
+// well as scrubbing, independently of other tests' initialization order.
 func TestLogScrubbed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLogScrubProcess$")
+	cmd.Env = append(os.Environ(), "SWATH_TEST_LOGSCRUB=1", "AZURE_SDK_GO_LOGGING=all")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("log scrub helper: %v\nstdout: %s\nstderr: %s", err, stdout, stderr.String())
+	}
+	logged := stderr.String()
+	if logged == "" {
+		t.Fatal("the SDK did not log to stderr")
+	}
+	sas, err := url.ParseQuery(testSAS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sig := range []string{sas.Get("sig"), url.QueryEscape(sas.Get("sig"))} {
+		if strings.Contains(logged, sig) {
+			t.Errorf("stderr contains the signature %q: %s", sig, logged)
+		}
+	}
+	for _, want := range []string{"REDACTED", "REQUEST ERROR", "AuthorizationFailure"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("stderr does not contain %q: %s", want, logged)
+		}
+	}
+}
+
+// TestLogScrubProcess is run only by TestLogScrubbed's child process so
+// azcore's environment handling and scrubLogs' sync.Once both start fresh.
+func TestLogScrubProcess(t *testing.T) {
+	if os.Getenv("SWATH_TEST_LOGSCRUB") != "1" {
+		t.Skip("subprocess helper for TestLogScrubbed")
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { azureError(w, r, 403, "AuthorizationFailure") }))
 	t.Cleanup(srv.Close)
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close() // a connection refused
-	var mu sync.Mutex
-	var raw, logged []string
-	scrub := scrubbing(func(_ azlog.Event, msg string) { logged = append(logged, msg) })
-	azlog.SetListener(func(e azlog.Event, msg string) {
-		mu.Lock()
-		defer mu.Unlock()
-		raw = append(raw, msg)
-		scrub(e, msg)
-	})
-	t.Cleanup(func() { azlog.SetListener(nil) })
 	for _, ep := range []string{srv.URL, down.URL} {
 		c, err := New(context.Background(), client.Config{Endpoint: ep, Account: "acct", SAS: testSAS, MaxAttempts: 1})
 		if err != nil {
@@ -565,22 +594,6 @@ func TestLogScrubbed(t *testing.T) {
 		}
 		if _, err := c.List(context.Background(), &client.ListInput{Container: "c"}); err == nil || strings.Contains(err.Error(), secret) {
 			t.Fatalf("%s: %v", ep, err)
-		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	quoted := 0
-	for _, l := range raw {
-		if strings.Contains(l, secret) {
-			quoted++
-		}
-	}
-	if quoted < 2 {
-		t.Fatalf("the SDK's log quoted the signature in %d lines: the test proves nothing (%q)", quoted, raw)
-	}
-	for _, l := range logged {
-		if strings.Contains(l, secret) {
-			t.Errorf("logged: %q", l)
 		}
 	}
 }
