@@ -53,7 +53,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `presized`). The sort compares keys after the directory's shared prefix; a directory of 32,768 entries or
   more is sorted in runs of at least 16,384, concurrently (up to GOMAXPROCS), then merged pairwise
   (`parallel_sorts`); names in a directory are distinct, so the order is the serial sort's. Chunks take the
-  directory's buffers rather than copies.
+  directory's buffers rather than copies. Offsets are 32-bit: a directory whose names, or keys, pass 4 GiB is skipped and counted in
+  `read_errors`.
 - **A count runs with more processors.** A stat or a directory read that waits on the disk holds its Go
   processor until the scheduler hands it off, so one processor per CPU leaves CPUs idle on a cold tree.
   `swath count` raises GOMAXPROCS for the run, at most `--workers`, and restores it (`count_procs` in the
