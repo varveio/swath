@@ -2,7 +2,8 @@
 
 `github.com/varveio/swath/go/reader` is what a reader of swath datasets needs to know about swath on top of the
 [SeekParquet](https://github.com/varveio/seekparquet) module: the schema ids and their columns, the manifest's
-`extensions.swath`, and each schema's rows as typed values decoded from a `seekparquet.Row`.
+`extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, and a `Dataset` that
+opens a dataset, checks its schema, accepts it as a whole-source listing and streams its current objects.
 
 It is a nested Go module. It depends on the SeekParquet module (and through it parquet-go) and the standard
 library only: no cloud SDK, and not the swath lister (`github.com/varveio/swath/go`), which imports it instead.
@@ -29,32 +30,83 @@ type Position struct { Key []byte; Offset int64 } // embedded in every row
 func (Position) Cursor() *seekparquet.Cursor
 
 type Object, S3Object, S3Version, GCSObject, GCSGeneration, LocalEntry
-func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1 or gcs-objects/v1 only
+func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, swath-local/v1
 func DecodeS3Object(row seekparquet.Row) (S3Object, error)
 func DecodeS3Version(row seekparquet.Row) (S3Version, error)
 func DecodeGCSObject(row seekparquet.Row) (GCSObject, error)
 func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error)
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error)
 
+func Open(ctx context.Context, src seekparquet.Source, opt seekparquet.Options) (*Dataset, error)
+func OpenDir(ctx context.Context, path string, opt seekparquet.Options) (*Dataset, error)
+func (*Dataset) Metadata() Metadata
+func (*Dataset) SeekParquet() *seekparquet.Dataset // borrowed: the Dataset closes it
+func (*Dataset) CheckSchema(ctx context.Context) error
+func (*Dataset) AcceptWholeSource(kind, container string) error
+func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
+func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; seekparquet.ReadStats }
+func (*Dataset) Close() error
+
 type SemanticError struct { Kind Kind; Column string; Row *Position; Err error }
 const KindSchema, KindCoverage, KindRow Kind = "schema", "coverage", "row"
 var ErrSchema, ErrCoverage, ErrRow *SemanticError // errors.Is targets, by kind
 ```
 
-A reader opens the dataset with the module (`seekparquet.OpenDir`, or `OpenDataset` over objfile), parses its
-metadata, picks the decoder by `Metadata.SchemaID`, and reads rows projecting `SchemaSpec.ColumnNames()`:
+A reader of current objects opens the dataset, admits it once and streams it:
 
 ```go
-d, err := seekparquet.OpenDir(ctx, dir, seekparquet.Options{})
-meta, err := reader.ParseMetadata(d.Metadata())
-spec, ok := reader.Schema(meta.SchemaID) // S3VersionsV1, say
-rows, err := d.Range(ctx, seekparquet.Range{Prefix: []byte("logs/"), Limit: 1000, Columns: spec.ColumnNames()})
+d, err := reader.OpenDir(ctx, dir, seekparquet.Options{}) // or reader.Open over a seekparquet.Source (objfile)
+defer d.Close()
+err = d.CheckSchema(ctx)                 // at admission, not per read
+err = d.AcceptWholeSource("s3", "bucket") // the whole bucket, nothing skipped or filtered
+err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
+```
+
+A reader of anything else (versions, a key range, a listing by delimiter) queries the module's dataset and
+decodes its rows, projecting `SchemaSpec.ColumnNames()`:
+
+```go
+spec, ok := reader.Schema(d.Metadata().SchemaID) // S3VersionsV1, say
+rows, err := d.SeekParquet().Range(ctx, seekparquet.Range{Prefix: []byte("logs/"), Limit: 1000, Columns: spec.ColumnNames()})
 for _, r := range rows {
 	v, err := reader.DecodeS3Version(r)
 	// ...
 }
 // the next page: Range{..., Cursor: last.Cursor()}
 ```
+
+## What is checked, and when
+
+- **`Open`, `OpenDir`.** The module reads and checks the manifest and opens no part
+  (`seekparquet.OpenDataset`, `OpenDir`); its refusals are returned unchanged. `extensions.swath` is parsed
+  (a member of the wrong JSON type is a `KindCoverage` error) and the schema id must be one swath writes (else
+  `KindSchema`). A manifest without the extension opens; `AcceptWholeSource` refuses it.
+- **`CheckSchema`** (at admission). The manifest's key column and key uniqueness are the spec's, so a versions
+  dataset (keys repeat) never passes as current objects. Then `seekparquet.Dataset.Verify` checks every part
+  (size, footer, stamps with the schema id, key column, each row group's first key page), and each part's footer
+  schema is read with parquet-go: every spec column top-level and non-repeated, of the spec's physical and
+  logical type (strings STRING, binary unannotated, times TIMESTAMP(MICROS, UTC), unsigned integers INT(n,
+  false), signed ones INT(n, true) or unannotated), REQUIRED where the spec requires a value, present unless the
+  spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
+  column and the part. It reads two footers per part (Verify's and its own) and no data page.
+- **`AcceptWholeSource(kind, container)`.** The listing covers the whole of that source: `extensions.swath`
+  present, `source.kind` and `source.container` equal to the arguments (a filesystem has no container: pass
+  `""`), `scope.kind` `whole`, `coverage.complete` true, `coverage.stop_reason` `completed`,
+  `coverage.skipped_entries` 0 and `coverage.filters` present and empty. An absent member refuses. The first
+  failure is `KindCoverage` with `Column` naming the member (`coverage.filters`, say). Exclusions (what a
+  listing leaves out by design, such as an output directory inside a listed tree) and `coverage.snapshot` (a
+  listing is never a point-in-time snapshot) do not refuse.
+- **`Stream`.** Current objects only: a versions schema is refused (`KindSchema`) before any read. Every object
+  in dataset order through `seekparquet.Range`, 1,024 rows a request, each page after the previous page's last
+  row (`Cursor`), projecting `size`, `last_modified` and, for S3 and Cloud Storage, `etag` and
+  `storage_class`. The module checks every key page it decodes (order, bounds, page index). Each object must
+  have a size, at least 0, and a modification time, when it has one, in the years 1 to 9999; else `KindRow`
+  naming the column and the row. The first error ends the stream: `fn`'s and the module's
+  (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
+  `StreamStats` sums every Stream's requests, objects handed to `fn` and `ReadStats`.
+- **Not checked.** The parts' SHA-256 digests: `seekparquet.Validate` (or `ValidateDir`) at `LevelDigest`
+  compares them, and every part swath writes declares one. Rows no request decodes, and columns a request does
+  not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull` every value.
 
 ## Rows
 
@@ -69,8 +121,8 @@ versions, whose group can be longer than any page. An S3 delete marker's `Size` 
 generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it.
 
 `Object` is the small projection a reader of current objects needs (key, size, modification time, ETag,
-storage class), from `swath/s3-objects/v1` and `swath/gcs-objects/v1` only: a versions row is not a current
-object, and `DecodeObject` refuses its schema id.
+storage class), from `swath/s3-objects/v1`, `swath/gcs-objects/v1` and `swath-local/v1` (no ETag or storage
+class): a versions row is not a current object, and `DecodeObject` refuses its schema id.
 
 ## Errors
 
@@ -82,15 +134,14 @@ the schema id defines (its part lacks it, or the read did not project it) or hol
 `ParseMetadata` reads every member of `extensions.swath` as a pointer (a slice: nil) that is nil when absent, so
 a missing `coverage.complete` is never read as false; a member of the wrong JSON type is a `KindCoverage`
 error. A manifest without the extension parses with `Swath` false. Unknown members (an older build's
-`part_md5`) are ignored.
+`part_md5`) are ignored. `AcceptWholeSource`'s errors are `KindCoverage` with `Column` naming the member of
+`extensions.swath` at fault; `CheckSchema`'s are `KindSchema` naming the column, with the part in the message.
 
 ## What it is not
 
-It reads no bytes of a dataset. Opening, validation (`seekparquet.Validate`), cursors, range and delimiter
-queries, page decoding and refusal codes are the SeekParquet module's; storage is objfile's or the caller's.
-There is no publication, no provider client, no accepting or refusing a dataset by its coverage, and no
-grouping of versions. Accepting a whole-source dataset, schema checks at admission and current-object
-streaming come next (plan step 8b), on these types.
+Opening, validation (`seekparquet.Validate`), cursors, range and delimiter queries, page decoding and refusal
+codes are the SeekParquet module's; storage is objfile's or the caller's. There is no publication, no provider
+client, no grouping of versions and no streaming of them yet, and no totals or aggregates (plan step 8d).
 
 ## Tests
 
@@ -101,3 +152,12 @@ absent, unprojected and mistyped columns), `ParseMetadata` on present, absent an
 writer wrote for all five schemas: every column, nulls, keys that are not UTF-8, unsigned bounds, a part
 without `time_created` and one without `md5`, and S3 versions read in pages of 1, 4, 7 and 100 rows over
 several parts, continuing inside key groups by `Offset`.
+
+`dataset_test.go` writes datasets with the module's writer (`seekparquet/go/local`) to test `AcceptWholeSource`
+on every member it requires, present and absent; `Open` on an unknown schema id; `CheckSchema` on key
+uniqueness, the key column, an absent column, a column of another logical type, and a later part lacking a
+column the module accepts; `Stream`'s order and values over pages, nulls, its row checks, cancellation, `fn`'s
+error, a module refusal returned unchanged, and the refusal of a versions schema; and a part with corrupted
+bytes caught by digest validation. The lister's `TestReaderStreams*` tests admit and stream datasets its own
+writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
+(one without a size refused), and both versions schemas admitted and refused by `Stream`.
