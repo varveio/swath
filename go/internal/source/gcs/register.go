@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -127,30 +126,22 @@ func (o *opened[P]) target() string {
 }
 
 // Identity freezes what a resume must list the same, from the recorded
-// inputs: the source (bucket and prefix), the JSON API endpoint (the
-// default when none is given, a trailing slash added; scheme and host
+// inputs: the source (bucket and prefix), the JSON API endpoint as the
+// built client sends to it (client.Endpoint: the default when none is
+// given, a literal trailing slash added, escapes kept; scheme and host
 // case are the only other equivalence) and the billed project.
 // Credentials may change.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
-	ep := endpoint(opt.Endpoint)
+	ep, err := client.Endpoint(opt.Endpoint)
+	if err != nil {
+		ep = opt.Endpoint // unreachable: the client was built from it
+	}
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
 		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
 		{Name: "user project", Value: opt.UserProject},
 	}}
-}
-
-// endpoint is the JSON API base as the built client takes it: the default
-// when none is given, with a trailing slash.
-func endpoint(ep string) string {
-	if ep == "" {
-		return client.DefaultEndpoint
-	}
-	if !strings.HasSuffix(ep, "/") {
-		ep += "/"
-	}
-	return ep
 }
 
 // Capabilities: names list in byte order and startOffset takes any name,

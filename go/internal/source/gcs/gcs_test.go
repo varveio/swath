@@ -7,6 +7,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -377,6 +380,69 @@ func TestIdentity(t *testing.T) {
 	}
 	if src.(source.Capable).Capabilities().Resume {
 		t.Fatal("a supplied client declares resume")
+	}
+}
+
+// TestEndpointIdentityIsDestination: two endpoints record one identity
+// only if the listing sends its requests to one place. The escaped
+// trailing separator ("tenant%2F") is the case that once broke this: the
+// identity added a slash to the string while the client checked the
+// decoded path, and the generated client's relative resolution dropped
+// the last segment, so "tenant%2F" and "tenant%2F/" recorded one identity
+// and listed different paths.
+func TestEndpointIdentityIsDestination(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, strings.SplitN(r.RequestURI, "?", 2)[0])
+		mu.Unlock()
+		io.WriteString(w, `{"kind":"storage#objects"}`)
+	}))
+	defer srv.Close()
+	type sent struct{ base, identity, path string }
+	var got []sent
+	for base, want := range map[string]string{
+		"/tenant%2F":                  "/tenant//b/bkt/o",
+		"/tenant%2F/":                 "/tenant//b/bkt/o",
+		"/tenant":                     "/tenant/b/bkt/o",
+		"/tenant/":                    "/tenant/b/bkt/o",
+		"/tenant//":                   "/tenant//b/bkt/o",
+		"/storage/v1":                 "/storage/v1/b/bkt/o",
+		"/proxy%2Ftenant/storage/v1/": "/proxy/tenant/storage/v1/b/bkt/o",
+		"/proxy/tenant/storage/v1/":   "/proxy/tenant/storage/v1/b/bkt/o",
+		"/a/../storage/v1/":           "/storage/v1/b/bkt/o",
+		"/a/./storage/v1/":            "/a/storage/v1/b/bkt/o",
+	} {
+		opt := Options{Bucket: "bkt", Endpoint: srv.URL + base, Anonymous: true}
+		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &opt, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id string
+		for _, f := range src.(source.Identified).Identity().Fields {
+			if f.Name == "endpoint" {
+				id = f.Canonical
+			}
+		}
+		mu.Lock()
+		paths = nil
+		mu.Unlock()
+		list(t, Options{Bucket: "bkt", Endpoint: srv.URL + base}, 1)
+		mu.Lock()
+		to := slices.Compact(slices.Clone(paths))
+		mu.Unlock()
+		if len(to) != 1 || to[0] != want {
+			t.Fatalf("%s: requests to %q, want %q", base, to, want)
+		}
+		got = append(got, sent{base, id, want})
+	}
+	for _, a := range got {
+		for _, b := range got {
+			if a.identity == b.identity && a.path != b.path {
+				t.Errorf("%s and %s record identity %q but list %s and %s", a.base, b.base, a.identity, a.path, b.path)
+			}
+		}
 	}
 }
 

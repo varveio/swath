@@ -195,18 +195,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	ep := cfg.Endpoint
-	if ep == "" {
-		ep = DefaultEndpoint
+	ep, err := Endpoint(cfg.Endpoint)
+	if err != nil {
+		return nil, err
 	}
-	u, err := url.Parse(ep)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
-	}
-	if !strings.HasSuffix(u.Path, "/") {
-		u.Path += "/"
-	}
-	c := &Client{cfg: cfg, endpoint: u.String(), source: "anonymous",
+	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: Answer}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
@@ -286,6 +279,35 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 // headers to stderr unredacted, the Authorization header this client sets
 // included, and every response body.
 var quiet = slog.New(slog.DiscardHandler)
+
+// Endpoint is the JSON API base a client built with ep sends to, and the
+// form the resume identity records: DefaultEndpoint for "", an http(s) URL
+// with a host, its path's escapes kept as given and a literal trailing
+// slash added when the escaped path has none (so "tenant%2F" is the base
+// "tenant%2F/", not a base whose last segment the generated client's
+// relative resolution would drop). One string is one destination: the
+// client sends to exactly this base.
+//
+// The generated client resolves the request path against the base (dot
+// segments removed: "/a/../storage/v1/" sends to "/storage/v1/...") and
+// then re-escapes the decoded path, so an escaped separator is sent as a
+// separator ("/proxy%2Ftenant/storage/v1/" sends to
+// "/proxy/tenant/storage/v1/..."). Two such spellings record different
+// identities for one destination, which refuses a resume that would have
+// been safe; never the converse.
+func Endpoint(ep string) (string, error) {
+	if ep == "" {
+		ep = DefaultEndpoint
+	}
+	u, err := url.Parse(ep)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
+	}
+	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
+		u.Path, u.RawPath = u.Path+"/", p+"/"
+	}
+	return u.String(), nil
+}
 
 // connWorkers is the workers per pooled transport (one HTTP/2 connection
 // each, below the server's stream limit); maxConns caps the pool.
