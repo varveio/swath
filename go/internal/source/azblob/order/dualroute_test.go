@@ -45,37 +45,17 @@ func replayClient(t *testing.T, endpoint, account string) *client.Client {
 	return c
 }
 
-// list drains q through a, asking a failed page again (the engine's
-// requeue) up to retries times.
+// list is q's names through a, asking any failed page again up to
+// retries times (transport faults surface after the client's retries).
 func list(t *testing.T, a *Adapter, q keyrange.Query, retries int) []string {
 	t.Helper()
-	var out []string
-	for {
-		p, err := a.Fetch(context.Background(), &q)
-		if err != nil {
-			if retries--; retries >= 0 {
-				continue
-			}
-			t.Fatalf("%s: %v", short(q), err)
-		}
-		if len(p.Items) > q.Max {
-			t.Fatalf("a page of %d at Max %d", len(p.Items), q.Max)
-		}
-		out = append(out, names(p.Items)...)
-		if !p.Truncated {
-			return out
-		}
-		q.Token = p.Token
+	items, err := flat(walk(a, q, retries, func(error) bool { return true }))
+	if err != nil {
+		t.Fatalf("%s: %v", short(q), err)
 	}
+	return names(items)
 }
 
-// TestDualRoute is §7.3 without the engine: the adapter over the replay's
-// Azure route (UTF-16 order, through *client.Client) lists the hostile
-// corpus exactly as its byte order, the sorted fixture the S3 route
-// serves: the whole container at Max 1, 2, 7 and 5,000; rolled up at '/';
-// every prefix of the corpus's nested pairs; between the names holding a
-// byte in EE..F4; and the whole container behind faulttest's Azure
-// throttles and resets.
 // The full §7.3 (S3 route, shared fields, workers, seed and structure
 // modes, faults, crash and resume) and §7.4 belong to the wiring PR.
 func TestDualRoute(t *testing.T) {

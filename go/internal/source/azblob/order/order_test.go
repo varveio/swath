@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/source/azblob/client"
-	"github.com/varveio/swath/go/internal/source/azblob/order/ordertest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -24,36 +23,42 @@ const (
 	D7FF = "\uD7FF"
 )
 
-// drain reads q's chain to its end, asking a failed page again up to
-// retries times (the engine's requeue), and checks the page contract:
-// at most q.Max items, Truncated false only on the last page, a token on
-// every truncated page that differs from the one before.
-func drain(t testing.TB, a *Adapter, q keyrange.Query, retries int) ([]client.Item, error) {
-	if t != nil {
-		t.Helper()
-	}
-	var all []client.Item
+// walk reads q's chain to its end as pages, asking a failed page again
+// while retry admits the error, up to retries times (the engine's
+// requeue), and checks the page contract: at most q.Max items, Truncated
+// false only on the last page, a token on every truncated page that
+// differs from the one before.
+func walk(a *Adapter, q keyrange.Query, retries int, retry func(error) bool) ([][]client.Item, error) {
+	var pages [][]client.Item
 	for {
 		p, err := a.Fetch(context.Background(), &q)
 		if err != nil {
-			if retries > 0 && errors.Is(err, ordertest.ErrInjected) {
+			if retries > 0 && retry(err) {
 				retries--
 				continue
 			}
-			return all, err
+			return pages, err
 		}
 		if len(p.Items) > q.Max {
-			return all, fmt.Errorf("a page of %d items at Max %d", len(p.Items), q.Max)
+			return pages, fmt.Errorf("a page of %d items at Max %d", len(p.Items), q.Max)
 		}
-		all = append(all, p.Items...)
+		pages = append(pages, p.Items)
 		if !p.Truncated {
-			return all, nil
+			return pages, nil
 		}
 		if p.Token == "" || p.Token == q.Token {
-			return all, fmt.Errorf("truncated page with token %q after %q", p.Token, q.Token)
+			return pages, fmt.Errorf("truncated page with token %q after %q", p.Token, q.Token)
 		}
 		q.Token = p.Token
 	}
+}
+
+// injected admits the fake's injected failures only.
+func injected(err error) bool { return errors.Is(err, errInjected) }
+
+// flat is walk's pages concatenated.
+func flat(pages [][]client.Item, err error) ([]client.Item, error) {
+	return slices.Concat(pages...), err
 }
 
 func names(items []client.Item) []string {
@@ -158,9 +163,9 @@ func TestWorkedExamples(t *testing.T) {
 			if got := decompose(normalise(row.q.Prefix, row.q.After, row.q.Through, row.q.Bounded), row.q.Through); !slices.EqualFunc(got, row.spans, sameBounds) {
 				t.Errorf("spans %s, want %s", spanStrings(got), spanStrings(row.spans))
 			}
-			st := ordertest.New(row.keys)
+			st := newFake(row.keys)
 			a := New(st, "c", nil, 0)
-			items, err := drain(t, a, row.q, 0)
+			items, err := flat(walk(a, row.q, 0, injected))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,14 +187,14 @@ func TestWorkedExamples(t *testing.T) {
 
 // run drains q over keys with the store configured by setup, checks the
 // items against the oracle and returns the store.
-func run(t *testing.T, keys []string, q keyrange.Query, setup func(*ordertest.Store)) (*ordertest.Store, *Adapter) {
+func run(t *testing.T, keys []string, q keyrange.Query, setup func(*fakeStore)) (*fakeStore, *Adapter) {
 	t.Helper()
-	st := ordertest.New(keys)
+	st := newFake(keys)
 	if setup != nil {
 		setup(st)
 	}
 	a := New(st, "c", nil, 0)
-	items, err := drain(t, a, q, 8)
+	items, err := flat(walk(a, q, 8, injected))
 	if err != nil {
 		t.Fatalf("%v\n%s", err, st)
 	}
@@ -206,7 +211,7 @@ func every(n int) func(int) int { return func(int) int { return n } }
 // frontier b); S and E complete from their buffers, P-before the owner.
 // Two responses: the page and the marker's.
 func TestRawPageAcrossGroups(t *testing.T) {
-	st, a := run(t, []string{"a" + E, "a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *ordertest.Store) {
+	st, a := run(t, []string{"a" + E, "a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *fakeStore) {
 		s.Short = func(n int) int { return map[int]int{0: 3}[n] }
 	})
 	if got := st.Log()[0].Names; !slices.Equal(got, []string{"a" + S, "a" + E, "b"}) {
@@ -228,7 +233,7 @@ func TestGroupsAcrossPages(t *testing.T) {
 	for size := 1; size <= len(keys); size++ {
 		for _, max := range []int{1, 2, 1000} {
 			t.Run(fmt.Sprintf("page%d/max%d", size, max), func(t *testing.T) {
-				run(t, keys, keyrange.Query{Max: max}, func(s *ordertest.Store) { s.Short = every(size) })
+				run(t, keys, keyrange.Query{Max: max}, func(s *fakeStore) { s.Short = every(size) })
 			})
 		}
 	}
@@ -325,7 +330,7 @@ func TestRollupsAtSeeks(t *testing.T) {
 // [b] past S (one overlap row); the rest continues with [c]. Four
 // responses.
 func TestEmptySplitBranch(t *testing.T) {
-	st, a := run(t, []string{"a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *ordertest.Store) { s.Short = every(1) })
+	st, a := run(t, []string{"a" + S, "b", "c"}, keyrange.Query{Max: 1000}, func(s *fakeStore) { s.Short = every(1) })
 	if st.Responses() != 4 || a.Counter(COverlapRows) != 1 || a.Counter(CSeeks) != 2 {
 		t.Errorf("%d responses, %d overlap rows, %d seeks\n%s", st.Responses(), a.Counter(COverlapRows), a.Counter(CSeeks), st)
 	}
@@ -335,7 +340,7 @@ func TestEmptySplitBranch(t *testing.T) {
 // startFrom, prefix or delimiter, so every other test also proves that the
 // adapter resends a marker only with the query that issued it.
 func TestMarkerBoundToQuery(t *testing.T) {
-	st := ordertest.New([]string{"a", "b", "c"})
+	st := newFake([]string{"a", "b", "c"})
 	in := client.ListInput{StartFrom: "a", MaxResults: 1}
 	out, err := st.List(context.Background(), &in)
 	if err != nil || out.NextMarker == "" {
@@ -348,7 +353,7 @@ func TestMarkerBoundToQuery(t *testing.T) {
 		{StartFrom: "a", Delimiter: "/", Marker: out.NextMarker, MaxResults: 1},
 		{StartFrom: "a", Marker: "m99", MaxResults: 1},
 	} {
-		if _, err := st.List(context.Background(), &bad); !errors.Is(err, ordertest.ErrMarker) {
+		if _, err := st.List(context.Background(), &bad); !errors.Is(err, errMarker) {
 			t.Errorf("%+v: %v", bad, err)
 		}
 	}
@@ -366,10 +371,10 @@ func TestFailureRepeatsThePage(t *testing.T) {
 	q := keyrange.Query{Prefix: "a", After: "a" + D7FF + E, Max: 1000}
 	// Row 9's four seeks in one Fetch; the third fails. Two responses
 	// before it, four in the retry: six, in seven attempts.
-	st := ordertest.New(keys)
-	st.Fail = ordertest.FailAt(2)
+	st := newFake(keys)
+	st.Fail = failAt(2)
 	a := New(st, "c", nil, 0)
-	if _, err := a.Fetch(context.Background(), &q); !errors.Is(err, ordertest.ErrInjected) {
+	if _, err := a.Fetch(context.Background(), &q); !errors.Is(err, errInjected) {
 		t.Fatalf("the failing page: %v", err)
 	}
 	if a.Len() != 0 {
@@ -387,13 +392,13 @@ func TestFailureRepeatsThePage(t *testing.T) {
 	// run's pages, asked again on failure, equal the fault-free pages.
 	keys = []string{"a", "a" + E, "a" + E + "b", "a" + E + S, "a" + S, "a" + S + E, "b", "c"}
 	q = keyrange.Query{Max: 2}
-	clean := ordertest.New(keys)
+	clean := newFake(keys)
 	clean.Short = every(1)
 	want := pages(t, New(clean, "c", nil, 0), q, nil)
 	for n := range clean.Attempts() {
-		st := ordertest.New(keys)
+		st := newFake(keys)
 		st.Short = func(i int) int { return 1 }
-		st.Fail = ordertest.FailAt(n)
+		st.Fail = failAt(n)
 		if got := pages(t, New(st, "c", nil, 0), q, st); !slices.EqualFunc(got, want, slices.Equal) {
 			t.Errorf("failure at request %d: pages %q, want %q\n%s", n, got, want, st)
 		}
@@ -405,32 +410,24 @@ func TestFailureRepeatsThePage(t *testing.T) {
 
 // pages is q's chain as pages of names, a failed page asked again with the
 // same token.
-func pages(t *testing.T, a *Adapter, q keyrange.Query, st *ordertest.Store) [][]string {
+func pages(t *testing.T, a *Adapter, q keyrange.Query, st *fakeStore) [][]string {
 	t.Helper()
-	var out [][]string
-	for tries := 0; tries < 1000; tries++ {
-		p, err := a.Fetch(context.Background(), &q)
-		if errors.Is(err, ordertest.ErrInjected) {
-			continue
-		}
-		if err != nil {
-			t.Fatalf("%v\n%s", err, st)
-		}
-		out = append(out, names(p.Items))
-		if !p.Truncated {
-			return out
-		}
-		q.Token = p.Token
+	got, err := walk(a, q, 1000, injected)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, st)
 	}
-	t.Fatal("no end")
-	return nil
+	out := make([][]string, len(got))
+	for i, p := range got {
+		out[i] = names(p)
+	}
+	return out
 }
 
 // TestCharging: §6's worked cases. Max 1, keys {a, b}, responses [a]+M,
 // []+M, [b]: three. Prefix a, After a, Through ab, Max 1, keys {a, ab}:
 // [a]+M (the endpoint, dropped), then [ab]: two.
 func TestCharging(t *testing.T) {
-	st, a := run(t, []string{"a", "b"}, keyrange.Query{Max: 1}, func(s *ordertest.Store) {
+	st, a := run(t, []string{"a", "b"}, keyrange.Query{Max: 1}, func(s *fakeStore) {
 		s.Empty = func(n int) bool { return n == 1 }
 	})
 	if st.Responses() != 3 || a.Counter(CEmptyPages) != 1 {
@@ -442,7 +439,7 @@ func TestCharging(t *testing.T) {
 		t.Errorf("%d responses\n%s", st.Responses(), st)
 	}
 	// The endpoint arriving after empty continuing pages is still dropped.
-	run(t, []string{"a", "ab"}, q, func(s *ordertest.Store) { s.Empty = func(n int) bool { return n < 3 } })
+	run(t, []string{"a", "ab"}, q, func(s *fakeStore) { s.Empty = func(n int) bool { return n < 3 } })
 }
 
 // TestMaximumLengthBounds: bounds of 1,024 UTF-16 code units alternating
@@ -472,7 +469,7 @@ func TestMaximumLengthBounds(t *testing.T) {
 // TestTokens: a token is accepted only on its own chain, with the sequence
 // it was returned with and the chain's query.
 func TestTokens(t *testing.T) {
-	st := ordertest.New([]string{"a", "b", "c"})
+	st := newFake([]string{"a", "b", "c"})
 	a := New(st, "c", nil, 0)
 	q := keyrange.Query{Max: 1}
 	p, err := a.Fetch(context.Background(), &q)
@@ -498,7 +495,7 @@ func TestTokens(t *testing.T) {
 // TestCancelledRead: a cancelled read fails the page and registers
 // nothing.
 func TestCancelledRead(t *testing.T) {
-	a := New(ordertest.New([]string{"a"}), "c", nil, 0)
+	a := New(newFake([]string{"a"}), "c", nil, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := a.Fetch(ctx, &keyrange.Query{Max: 1}); !errors.Is(err, context.Canceled) || a.Len() != 0 {
@@ -548,7 +545,7 @@ func TestChainsEvicted(t *testing.T) {
 	for i := range 300 {
 		keys = append(keys, fmt.Sprintf("k%03d", i), fmt.Sprintf("k%03d", i)+S, fmt.Sprintf("k%03d", i)+E)
 	}
-	st := ordertest.New(keys)
+	st := newFake(keys)
 	st.Short = every(5)
 	a := New(st, "c", nil, 0)
 	live := keyrange.Query{Max: 1}

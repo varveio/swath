@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/azblob/order/ordertest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -20,7 +19,7 @@ import (
 func TestAbandonedChains(t *testing.T) {
 	keys := []string{"a", "a" + E, "a" + E + S, "a" + S, "a" + S + E, "b", "c", "d"}
 	goroutines := runtime.NumGoroutine()
-	st := ordertest.New(keys)
+	st := newFake(keys)
 	st.Short = every(1)
 	a := New(st, "c", nil, 0)
 	for round := range 3 {
@@ -45,8 +44,8 @@ func TestAbandonedChains(t *testing.T) {
 			tokens = append(tokens, q)
 		}
 		// A page that fails leaves its chain as it was.
-		failing := ordertest.New(keys)
-		failing.Fail = ordertest.FailAt(1)
+		failing := newFake(keys)
+		failing.Fail = failAt(1)
 		b := New(failing, "c", nil, 0)
 		q := keyrange.Query{Max: 1}
 		p, err := b.Fetch(context.Background(), &q)
@@ -54,7 +53,7 @@ func TestAbandonedChains(t *testing.T) {
 			t.Fatal(err)
 		}
 		q.Token = p.Token
-		if _, err := b.Fetch(context.Background(), &q); !errors.Is(err, ordertest.ErrInjected) || b.Len() != 1 {
+		if _, err := b.Fetch(context.Background(), &q); !errors.Is(err, errInjected) || b.Len() != 1 {
 			t.Fatalf("a failed page: %v, %d chains", err, b.Len())
 		}
 		b.Release()

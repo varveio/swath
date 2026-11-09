@@ -514,7 +514,7 @@ bytes, `a/` beside `a/b`, and filler past a 5,000-name page), `Serve` (swath-rep
 fixture of any keys, `--protocols=s3,azure`, optionally an HNS account; short pages come from `maxresults`, as
 the Go replay injects none), `PinVersion` (an Azure SDK transport that sends an `x-ms-version` the replay answers,
 since the pinned SDK sends a newer one) and `CompareUTF16` (UTF-16 code-unit order written from its definition, independent
-of the replay's `azure.Compare` and tested against it, for fakes to sort with); `internal/source/azblob/order/ordertest` is the byte-order adapter's List Blobs fake (keys in `CompareUTF16` order, inclusive `startFrom`, markers bound to their query, `maxresults`, roll-ups by Azure's rule, injected short, empty continuing and failed responses, every request recorded). A test
+of the replay's `azure.Compare` and tested against it, for fakes to sort with); the byte-order adapter's tests hold their own List Blobs fake (`internal/source/azblob/order/fake_test.go`: keys in `CompareUTF16` order, inclusive `startFrom`, markers bound to their query, `maxresults`, roll-ups by Azure's rule, injected short, empty continuing and failed responses, every request recorded). A test
 that injects faults wraps the handler; protocol oracles
 and malformed-response handlers stay in their tests. `keyrangetest` (engine laws), `scalefake` (lazy large
 keyspaces, key lists and service behaviors), `shapes` (bucket shapes, below) and `faulttest` (transport disturbance) keep their own purposes.
@@ -526,7 +526,7 @@ keyspaces, key lists and service behaviors), `shapes` (bucket shapes, below) and
 | gofakes3 (`s3test`, `bench/s3fake`) | a real S3 implementation: small buckets with object bodies | protocol, oracle and run-level tests; the `go-build` image smoke | the default suite: `go-race`, `go-xos`, `go-race-nightly` |
 | `gcstest` | the GCS JSON API with opaque page tokens bound to their query | GCS protocol and run-level tests, the GCS arms of `TestCrashMatrix` | the default suite |
 | `azblobtest` | swath-replay's Azure and S3 routes over one sorted fixture, in-process | Azure Blob provider tests | the default suite |
-| `ordertest` | List Blobs in UTF-16 order over a key list, with injected short, empty and failed responses | the Azure Blob byte-order adapter's tests | the default suite |
+| the `order` fake (`fake_test.go`) | List Blobs in UTF-16 order over a key list, with injected short, empty and failed responses | the Azure Blob byte-order adapter's tests | the default suite |
 | `scalefake` | lazy keyspaces and key files up to billions of keys, with service behaviors | the shape suite, `listing` memory and spill-format tests, measurements | the default suite, `go-nonrace`; full scale in `go-shapes` |
 | `keyfake` | a sorted production key list as ListObjectsV2 at a fixed page latency | measurements and the durable spill campaign; private, not in this repository | never |
 

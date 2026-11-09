@@ -12,7 +12,6 @@ import (
 
 	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
-	"github.com/varveio/swath/go/internal/source/azblob/order/ordertest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 )
 
@@ -82,8 +81,8 @@ func newCase(seed uint64) *propertyCase {
 
 // store is the case's fake: request n's page cap, empty page and failure
 // are drawn from (seed, n), the same on every run of the case.
-func (c *propertyCase) store() *ordertest.Store {
-	st := ordertest.New(c.keys)
+func (c *propertyCase) store() *fakeStore {
+	st := newFake(c.keys)
 	draw := func(n, hook int) *rand.Rand { return rand.New(rand.NewPCG(c.seed, uint64(3*n+hook))) }
 	st.Short = func(n int) int {
 		if r := draw(n, 0); r.IntN(4) < c.shortRate {
@@ -94,7 +93,7 @@ func (c *propertyCase) store() *ordertest.Store {
 	st.Empty = func(n int) bool { return draw(n, 1).IntN(10) < c.emptyRate }
 	st.Fail = func(n int) error {
 		if draw(n, 2).IntN(20) < c.failRate {
-			return ordertest.ErrInjected
+			return errInjected
 		}
 		return nil
 	}
@@ -103,12 +102,12 @@ func (c *propertyCase) store() *ordertest.Store {
 
 // check runs the case and returns what broke, "" when nothing did; the
 // adapter's counters are added to set.
-func (c *propertyCase) check(set *counters.Set) (string, *ordertest.Store) {
+func (c *propertyCase) check(set *counters.Set) (string, *fakeStore) {
 	st := c.store()
 	a := New(st, "c", set, 0)
 	before := a.Counter(CResponses)
 	a.trace = func(s span) { c.traced = append(c.traced, s) }
-	items, err := drain(testing.TB(nil), a, c.q, 1<<20)
+	items, err := flat(walk(a, c.q, 1<<20, injected))
 	if err != nil {
 		return err.Error(), st
 	}
