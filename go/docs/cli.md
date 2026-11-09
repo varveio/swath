@@ -400,7 +400,7 @@ Diagnostics:
   assertion is frozen for resume and shown in the report's `namespace`, `asserted`). Names at U+E000 and above, which
   Azure lists in UTF-16 order, are listed in byte order like every other provider's, through a reordering adapter
   whose cost shows in the report's `order_*` counters
-  ([internals/azblob.md](internals/providers/azblob.md)).
+  ([internals/providers/azblob.md](internals/providers/azblob.md)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,
   by `swath list` and by `swath resume` before it settles anything;
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
