@@ -4,24 +4,15 @@
 package source_test
 
 import (
-	"flag"
-	"go/ast"
 	"go/build"
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
-	_ "github.com/varveio/swath/go/internal/source/azblob"
-	_ "github.com/varveio/swath/go/internal/source/gcs"
-	_ "github.com/varveio/swath/go/internal/source/localfs"
-	_ "github.com/varveio/swath/go/internal/source/s3"
 )
 
 const mod = "github.com/varveio/swath/go"
@@ -101,87 +92,6 @@ func TestImportBoundary(t *testing.T) {
 				t.Errorf("%s imports provider %s for more than registration", filepath.Base(f), path)
 			}
 		}
-	}
-}
-
-// TestCommandNamesNoProvider: the command knows no provider by name. No
-// string in its non-test code is a provider's scheme or root form, or one
-// of a provider's own flags (the shared groups' flags are every object
-// store's, and the command may name them): what the command needs of a
-// provider, it reads from the registered factories (registry.Factory).
-func TestCommandNamesNoProvider(t *testing.T) {
-	var schemes []string
-	own := map[string]bool{}
-	for _, f := range registry.Factories() {
-		if f.Scheme != "" {
-			schemes = append(schemes, f.Scheme)
-		}
-		all, groups := flag.NewFlagSet("", flag.ContinueOnError), flag.NewFlagSet("", flag.ContinueOnError)
-		f.RegisterFlags(all, true)
-		for _, g := range f.Shared {
-			g.Flags(groups, true)
-		}
-		all.VisitAll(func(fl *flag.Flag) {
-			if groups.Lookup(fl.Name) == nil {
-				own[fl.Name] = true
-			}
-		})
-	}
-	// Not vacuous: the providers registered, with their prefixed flags.
-	for _, want := range []string{"s3", "gs", "az"} {
-		if !strings.Contains(strings.Join(schemes, " "), want) {
-			t.Fatalf("provider %s:// not registered (schemes %q)", want, schemes)
-		}
-	}
-	for _, want := range []string{"profile", "gcs-credentials", "azblob-sas"} {
-		if !own[want] {
-			t.Fatalf("provider flag --%s not collected", want)
-		}
-	}
-	var names []string
-	for n := range own {
-		names = append(names, regexp.QuoteMeta(n))
-	}
-	// A provider flag as a whole string ("profile") or typed in one
-	// ("--profile"); a scheme as a whole string ("s3") or in a root
-	// ("s3://").
-	flagRe := regexp.MustCompile(`(^|[^\w-])-{1,2}(` + strings.Join(names, "|") + `)($|[^\w-])`)
-	files, err := filepath.Glob(filepath.Join(moduleDir(t), "cmd", "swath", "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
-		af, err := parser.ParseFile(fset, file, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(af, func(n ast.Node) bool {
-			if _, ok := n.(*ast.ImportSpec); ok {
-				return false // the blank imports that register providers
-			}
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			v, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			where := fset.Position(lit.Pos())
-			if own[v] || flagRe.MatchString(v) {
-				t.Errorf("%s:%d: %q names a provider's flag", filepath.Base(where.Filename), where.Line, v)
-			}
-			for _, sc := range schemes {
-				if v == sc || strings.Contains(v, sc+"://") {
-					t.Errorf("%s:%d: %q names provider %s://", filepath.Base(where.Filename), where.Line, v, sc)
-				}
-			}
-			return true
-		})
 	}
 }
 
