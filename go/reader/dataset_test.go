@@ -399,8 +399,33 @@ func TestStreamCallbackError(t *testing.T) {
 		n++
 		return stop
 	})
-	if err != stop || n != 1 {
-		t.Fatalf("fn's error: %v after %d objects", err, n)
+	if err != stop || n != 1 || d.StreamStats().Objects != 1 {
+		t.Fatalf("fn's error: %v after %d objects, %d counted", err, n, d.StreamStats().Objects)
+	}
+}
+
+// TestStreamCallbackOwnsKey: fn changing an object's key, the last of a
+// page included, changes neither the rows after it nor the page that
+// continues from it.
+func TestStreamCallbackOwnsKey(t *testing.T) {
+	rows := s3Rows(2500)
+	d := openDir(t, writeDataset(t, s3Spec(), rows))
+	var keys []string
+	err := d.Stream(context.Background(), func(o Object) error {
+		keys = append(keys, string(o.Key))
+		o.Key[0] = 0xff
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != len(rows) {
+		t.Fatalf("streamed %d objects, want %d", len(keys), len(rows))
+	}
+	for i, r := range rows {
+		if keys[i] != r.Key {
+			t.Fatalf("object %d: key %q, want %q", i, keys[i], r.Key)
+		}
 	}
 }
 

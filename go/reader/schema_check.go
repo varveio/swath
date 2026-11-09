@@ -69,21 +69,21 @@ func (d *Dataset) checkPart(ctx context.Context, path string) error {
 		}
 		return fmt.Errorf("swath reader: part %s: read the footer: %w", path, err)
 	}
+	fields := map[string]parquet.Field{}
+	for _, f := range pf.Schema().Fields() {
+		fields[f.Name()] = f
+	}
 	for _, c := range append([]ColumnSpec{d.spec.Key}, d.spec.Columns...) {
-		if err := checkColumn(pf.Schema(), c); err != nil {
+		if err := checkColumn(fields[c.Name], c); err != nil {
 			return &SemanticError{Kind: KindSchema, Column: c.Name, Err: fmt.Errorf("part %s: %w", path, err)}
 		}
 	}
 	return nil
 }
 
-func checkColumn(s *parquet.Schema, c ColumnSpec) error {
-	var field parquet.Field
-	for _, f := range s.Fields() {
-		if f.Name() == c.Name {
-			field = f
-		}
-	}
+// checkColumn checks a part's top-level column against its spec; field is
+// nil when the part has no column of the spec's name.
+func checkColumn(field parquet.Field, c ColumnSpec) error {
 	switch {
 	case field == nil && c.MayBeAbsent:
 		return nil

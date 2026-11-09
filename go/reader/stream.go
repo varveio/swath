@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -34,7 +35,8 @@ func (d *Dataset) StreamStats() StreamStats {
 // Storage object, or a filesystem entry) in dataset order: ascending
 // unsigned byte order of the keys. It reads the dataset with
 // seekparquet.Range in pages, each continuing after the last row of the
-// one before (its Cursor), projecting only the columns Object holds.
+// one before (its Cursor), projecting only the columns Object holds. Each
+// Object owns its memory (its Key is a copy), so fn may keep or change it.
 //
 // A versions schema (swath/s3-versions/v1, swath/gcs-generations/v1) holds
 // history, not current objects: Stream refuses it with a SemanticError of
@@ -72,6 +74,7 @@ func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 		if len(rows) == 0 {
 			return nil
 		}
+		cursor = rows[len(rows)-1].Cursor()
 		for _, r := range rows {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -80,15 +83,15 @@ func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 			if err == nil {
 				err = checkObject(&o)
 			}
-			if err == nil {
-				err = fn(o)
-			}
 			if err != nil {
 				return err
 			}
+			o.Key = bytes.Clone(o.Key)
 			objects++
+			if err := fn(o); err != nil {
+				return err
+			}
 		}
-		cursor = rows[len(rows)-1].Cursor()
 	}
 }
 

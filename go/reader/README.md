@@ -103,7 +103,8 @@ for _, r := range rows {
   have a size, at least 0, and a modification time, when it has one, in the years 1 to 9999; else `KindRow`
   naming the column and the row. The first error ends the stream: `fn`'s and the module's
   (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
-  `StreamStats` sums every Stream's requests, objects handed to `fn` and `ReadStats`.
+  Each `Object` owns its key, a copy, so `fn` may keep or change it. `StreamStats` sums every Stream's
+  requests, objects handed to `fn` (counted before the call) and `ReadStats`.
 - **Not checked.** The parts' SHA-256 digests: `seekparquet.Validate` (or `ValidateDir`) at `LevelDigest`
   compares them, and every part swath writes declares one. Rows no request decodes, and columns a request does
   not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull` every value.
