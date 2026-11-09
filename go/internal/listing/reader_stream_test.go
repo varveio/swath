@@ -115,27 +115,35 @@ func TestReaderStreamsGCSObjects(t *testing.T) {
 	}
 }
 
-// TestReaderStreamsLocalEntries: a filesystem entry streams as an object
-// without an ETag or storage class; one listed without a size ends the
-// stream.
+// TestReaderStreamsLocalEntries: a filesystem's entries stream through
+// StreamLocal with their kind, link target and nulls: one listed without
+// a size keeps it nil. Stream refuses them: they are entries, not objects.
 func TestReaderStreamsLocalEntries(t *testing.T) {
 	rows := []localfs.Row{
-		{Key: "d", Data: localfs.Entry{Kind: localfs.KindDir, Size: 4096, Mtime: 7, Present: localfs.HasSize | localfs.HasMtime}},
+		{Key: "d/", Data: localfs.Entry{Kind: localfs.KindDir, Size: 4096, Mtime: 7, Present: localfs.HasSize | localfs.HasMtime}},
+		{Key: "d/l", Data: localfs.Entry{Kind: localfs.KindSymlink, LinkTarget: "../x", Present: localfs.HasLink}},
 		{Key: "d/\xff", Data: localfs.Entry{Kind: localfs.KindFile, Size: 3, Present: localfs.HasSize}},
+		{Key: "e", Data: localfs.Entry{Kind: localfs.KindUnknown}},
 	}
-	got, err := streamAll(admitDataset(t, &localfs.Schema, "local-fs", rows, 0))
-	if err != nil {
+	d := admitDataset(t, &localfs.Schema, "local-fs", rows, 0)
+	var got []reader.LocalEntry
+	if err := d.StreamLocal(context.Background(), func(e reader.LocalEntry) error {
+		got = append(got, e)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	sameObjects(t, got, []reader.Object{
-		{Position: reader.Position{Key: []byte("d")}, Size: ptr(int64(4096)), LastModified: micros(7)},
-		{Position: reader.Position{Key: []byte("d/\xff")}, Size: ptr(int64(3))},
-	})
-	rows = append(rows, localfs.Row{Key: "e", Data: localfs.Entry{Kind: localfs.KindUnknown}})
-	got, err = streamAll(admitDataset(t, &localfs.Schema, "local-fs", rows, 0))
-	var se *reader.SemanticError
-	if !errors.As(err, &se) || se.Kind != reader.KindRow || se.Column != "size" || string(se.Row.Key) != "e" || len(got) != 2 {
-		t.Fatalf("an entry without a size: %v after %d objects", err, len(got))
+	want := []reader.LocalEntry{
+		{Position: reader.Position{Key: []byte("d/")}, Kind: "DIR", Size: ptr(int64(4096)), LastModified: micros(7)},
+		{Position: reader.Position{Key: []byte("d/l")}, Kind: "SYMLINK", LinkTarget: ptr([]byte("../x"))},
+		{Position: reader.Position{Key: []byte("d/\xff")}, Kind: "FILE", Size: ptr(int64(3))},
+		{Position: reader.Position{Key: []byte("e")}, Kind: "UNKNOWN"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries %+v, want %+v", got, want)
+	}
+	if _, err := streamAll(d); !errors.Is(err, reader.ErrSchema) {
+		t.Fatalf("stream entries as objects: %v", err)
 	}
 }
 

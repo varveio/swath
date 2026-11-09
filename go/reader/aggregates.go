@@ -59,7 +59,9 @@ type AggregateOptions struct {
 // PrefixAggregate is the recursive totals of one prefix: every object
 // whose key begins with it, an object whose key is the prefix included. A
 // nil field was not requested or not computed; it is never a partial or
-// estimated total.
+// estimated total. Over a filesystem's entries they are Totals': entries
+// of every kind, a directory's own row "d/" included for "d/", and their
+// entry bytes (PathTotals).
 type PrefixAggregate struct {
 	// Count is the number of objects under the prefix. It is nil when its
 	// rows span a part no read has checked, whose row count is the
@@ -67,8 +69,9 @@ type PrefixAggregate struct {
 	Count *int64
 	// Bytes is the sum of their sizes. It is nil when the count is
 	// unknown, the prefix was not summed or did not fit the budget, the
-	// budget could not be proven (a size chunk without an OffsetIndex), or
-	// the sum does not fit an int64.
+	// budget could not be proven (a size chunk without an OffsetIndex), a
+	// filesystem entry under the prefix has no size, or the sum does not
+	// fit an int64.
 	Bytes *int64
 }
 
@@ -108,8 +111,10 @@ func (o AggregateOptions) budget() int64 {
 // planning checks every part holding those rows. Under SumsWithinBudget a
 // prefix is summed when the projected bytes it adds to those already
 // selected fit what remains of the budget; a prefix inside one already
-// selected, or whose pages are all charged already, adds none. Every summed object is checked as Stream checks its
-// size, failing with a SemanticError of KindRow.
+// // selected, or whose pages are all charged already, adds none. Every
+// summed object is checked as Stream checks its size (a filesystem entry
+// may lack one, which leaves its prefixes' sums nil), failing with a
+// SemanticError of KindRow.
 //
 // A context already ended or a closed Dataset fails it first, with the
 // context's error or seekparquet.ErrClosed. An invalid AggregateOptions is
@@ -199,9 +204,7 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 		return nil, err
 	}
 	for k, i := range selected {
-		if s := found.sums[k]; !s.overflow {
-			sums[i] = ptrTo(s.bytes)
-		}
+		sums[i] = found.sums[k].total()
 	}
 	return sums, nil
 }

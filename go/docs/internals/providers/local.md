@@ -48,7 +48,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on Windows), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
   (counter `other_device_dirs`); `Report` adds `one_filesystem` to the coverage's filters, so a dataset says it
-  stops at the root's filesystem.
+  stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no DIR row, and
+  `Report` adds `no_dirs` to the filters likewise.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
   admission prices it at that width, and a longer target stops the run with the typed `schema.ErrValueTooLong`, as
   a key over its cap does; a target within it is written byte for byte.

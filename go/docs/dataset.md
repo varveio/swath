@@ -101,7 +101,7 @@ module's. JSON readers must not depend on that order.
 | `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
 | `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | whole-source acceptance: `completed` |
 | `coverage.skipped_entries` | Entries the listing could not read | whole-source acceptance: `0` |
-| `coverage.filters` | The filters the run applied, as given | whole-source acceptance: present and empty |
+| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-filesystem`), `no_dirs` (`--no-dirs`) | whole-source acceptance: present and empty |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative: does not refuse |
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative: does not refuse |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
@@ -173,7 +173,8 @@ STRING (`BlockBlob`, `PageBlob`, `AppendBlob`), `access_tier` STRING (null when 
 timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only changes and `etag` is not a
 content hash: compare content with `content_md5`, and never compare ETags across stores.
 
-**`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them):
+**`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them and
+records `no_dirs` in `coverage.filters`, so whole-source acceptance refuses the dataset):
 
 | Column | Type | Source |
 |---|---|---|
@@ -190,6 +191,14 @@ content hash: compare content with `content_md5`, and never compare ETags across
 | `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
 
 Under `--metadata names` (no stat) the stat columns are null.
+
+**Local totals.** `go/reader` totals a local dataset's rows as selected (`Totals`, `Aggregates`, `Page`): the
+entry count counts entries of every kind, and a directory's path `d/` counts its own row `d/` once with the
+entries below it; the root has no row, so the root's count is the entries below it. The byte total sums `size`,
+`st_size`, directories' own sizes included: these are **entry bytes**, neither the files' content bytes nor disk
+usage (`allocated_bytes`). A directory's `size` and `last_modified` are its own, never its subtree's. Any selected
+entry without a size (`--metadata names`) makes the byte total unknown (nil), never 0. The reader owns these
+definitions.
 
 ## Keys and order
 

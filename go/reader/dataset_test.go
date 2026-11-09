@@ -99,7 +99,7 @@ func writeDataset[T any](t *testing.T, s spec, rows []T) string {
 
 // writeGeometry writes rows as writeDataset does, in pages of pageRows
 // rows and row groups of groupRows rows (0: the writer's default).
-func writeGeometry[T any](t *testing.T, s spec, rows []T, pageRows int, groupRows int64) string {
+func writeGeometry[T any](t testing.TB, s spec, rows []T, pageRows int, groupRows int64) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
 	schema := parquet.SchemaOf(new(T))
@@ -304,7 +304,7 @@ func TestCheckSchema(t *testing.T) {
 
 // appendPart adds the one part of the dataset at from to the dataset at
 // dir, as its last part, keeping dir's extensions.
-func appendPart(t *testing.T, dir, from string) {
+func appendPart(t testing.TB, dir, from string) {
 	t.Helper()
 	read := func(dir string) seekparquet.Manifest {
 		raw, err := os.ReadFile(filepath.Join(dir, seekparquet.ManifestName))
