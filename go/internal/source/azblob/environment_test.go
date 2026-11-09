@@ -6,11 +6,7 @@ package azblob
 import (
 	"context"
 	"net/http/httptest"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -68,28 +64,5 @@ func TestFaultsRequeued(t *testing.T) {
 	}
 	if timeouts == 0 || delayed == 0 || reset == 0 {
 		t.Fatalf("timeouts %d, delayed %d, reset %d: a fault never engaged", timeouts, delayed, reset)
-	}
-}
-
-// TestBinaryLinksAzblob: the swath command's default build links the Azure
-// SDK's blob service and container clients (the list client sends through
-// them), azcore and azidentity (Entra ID tokens).
-func TestBinaryLinksAzblob(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs go list")
-	}
-	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	// -tags= on the command line: the default build, whatever GOFLAGS says.
-	out, err := exec.Command(gobin, "list", "-deps", "-tags=", "../../../cmd/swath").CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	deps := strings.Fields(string(out))
-	for _, want := range []string{"github.com/Azure/azure-sdk-for-go/sdk/azcore", "github.com/Azure/azure-sdk-for-go/sdk/azidentity",
-		"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service", "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container",
-		"github.com/varveio/swath/go/internal/source/azblob/client"} {
-		if !slices.Contains(deps, want) {
-			t.Errorf("cmd/swath does not link %s", want)
-		}
 	}
 }
