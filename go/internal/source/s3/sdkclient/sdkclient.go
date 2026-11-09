@@ -8,9 +8,11 @@
 // the SDK does not provide: one retry owner (objhttp.Do; the SDK's retryer
 // is aws.NopRetryer), bounded and validated bodies (objhttp.Guard under the
 // SDK's HTTP client, which follows no redirect), the provider's failure
-// vocabulary, and a versions decoder that keeps <Version> and
-// <DeleteMarker> entries in wire order (versions.go). Credentials are
-// package client's resolution (client.LoadAuth).
+// vocabulary, and versions pages decoded by package client's scanner,
+// which keeps <Version> and <DeleteMarker> entries in wire order (the SDK
+// splits them into two lists that cannot be merged back:
+// TestStockSDKLosesVersionsOrder). Credentials are package client's
+// resolution (client.LoadAuth).
 package sdkclient
 
 import (
@@ -215,19 +217,16 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clie
 			if _, err := c.sdk.ListObjectsV2(actx, req); err != nil {
 				return nil, err
 			}
-			if c.dec == DecoderScanner {
-				return client.ParseList(capture.Body)
-			}
-			return decodeList(capture.Body)
+			return client.ParseList(capture.Body)
 		})
 	})
 }
 
 // ListObjectVersions sends one ListObjectVersions request on
 // ListObjectsV2's path. The SDK decodes a minimal envelope in place of the
-// body (objhttp.Capture); the captured body is decoded in wire order (the
-// walk, or the scanner with DecoderScanner), then checked
-// (VersionPage.Validate).
+// body (objhttp.Capture); package client's scanner decodes the captured
+// body in wire order and checks the page (VersionPage.Validate), whatever
+// the Decoder.
 func (c *Client) ListObjectVersions(ctx context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
 	if in.VersionIDMarker != "" && in.KeyMarker == "" {
 		return nil, errors.New("ListObjectVersions: a version-id marker without a key marker")
@@ -249,17 +248,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *client.VersionsInpu
 			if _, err := c.sdk.ListObjectVersions(actx, req); err != nil {
 				return nil, err
 			}
-			if c.dec == DecoderScanner {
-				return client.ParseVersions(capture.Body) // validated
-			}
-			pg, err := decodeVersions(capture.Body)
-			if err != nil {
-				return nil, err
-			}
-			if err := pg.Validate(); err != nil {
-				return nil, err
-			}
-			return pg, nil
+			return client.ParseVersions(capture.Body)
 		})
 	})
 }
@@ -271,20 +260,15 @@ var (
 	emptyVersions = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListVersionsResult>`)
 )
 
-// Decoder selects how 2xx listing bodies are decoded.
+// Decoder selects how current-object (ListObjectsV2) pages are decoded;
+// versions pages are always the scanner's.
 type Decoder int
 
 const (
-	// DecoderSDK: the SDK's generated deserializer decodes current-object
-	// pages; versions pages are decoded by the walk (walk.go), which keeps
-	// their wire order.
+	// DecoderSDK: the SDK's generated deserializer.
 	DecoderSDK Decoder = iota
-	// DecoderWalk: both listings are decoded from the captured body by the
-	// walk (encoding/xml's tokenizer); the SDK decodes an empty envelope.
-	DecoderWalk
-	// DecoderScanner: both listings are decoded from the captured body by
-	// package client's scanner (client.ParseList, client.ParseVersions);
-	// the SDK decodes an empty envelope.
+	// DecoderScanner: package client's scanner (client.ParseList) on the
+	// captured body; the SDK decodes an empty envelope.
 	DecoderScanner
 )
 
@@ -352,7 +336,7 @@ func attempt[T any](c *Client, ctx context.Context, capture *objhttp.Capture, ca
 // failure maps an attempt's error to the provider's vocabulary: a Guard
 // failure is its cause (ErrSyntax, the size cap, a credential error); an
 // HTTP answer other than 2xx is a *client.Error; a 2xx body the SDK could
-// not decode, or a versions body decodeVersions refused, is ErrSyntax; a
+// not decode, or a body the scanner refused, is ErrSyntax; a
 // transport failure stays one (an attempt timeout is ErrTimeout).
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError

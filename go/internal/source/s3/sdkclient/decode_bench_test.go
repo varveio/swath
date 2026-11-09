@@ -80,8 +80,8 @@ func (c canned) RoundTrip(req *http.Request) (*http.Response, error) {
 // iteration through the SDK-backed client, per decoder, over an in-memory
 // 1,000-entry answer: request building, signing (anonymous), endpoint
 // resolution, the Guard's read and validation, decoding and conversion.
-// The scanner and the walk run on the captured body while the SDK decodes
-// an empty envelope; the sdk arm decodes versions with the walk.
+// The scanner runs on the captured body while the SDK decodes an empty
+// envelope; versions are the scanner's in both arms.
 func BenchmarkDecode(b *testing.B) {
 	for _, d := range decoders {
 		for _, versions := range []bool{false, true} {
@@ -125,16 +125,14 @@ func BenchmarkDecode(b *testing.B) {
 	}
 }
 
-// BenchmarkDecodeBody is the walk and the scanner alone over the same
-// bodies (no request).
+// BenchmarkDecodeBody is the scanner alone over the same bodies (no
+// request).
 func BenchmarkDecodeBody(b *testing.B) {
 	list, vers := benchBody(false), benchBody(true)
 	for _, c := range []struct {
 		name string
 		f    func() error
 	}{
-		{"walk/list", func() error { _, err := decodeList(list); return err }},
-		{"walk/versions", func() error { _, err := decodeVersions(vers); return err }},
 		{"scanner/list", func() error { _, err := client.ParseList(list); return err }},
 		{"scanner/versions", func() error { _, err := client.ParseVersions(vers); return err }},
 	} {

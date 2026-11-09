@@ -17,7 +17,7 @@ import (
 var decoders = []struct {
 	name string
 	dec  Decoder
-}{{"sdk", DecoderSDK}, {"walk", DecoderWalk}, {"scanner", DecoderScanner}}
+}{{"sdk", DecoderSDK}, {"scanner", DecoderScanner}}
 
 // lister is what the differential tests compare: the hand-rolled client
 // and the SDK-backed one.

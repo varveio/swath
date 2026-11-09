@@ -19,20 +19,18 @@ const clientKind = "sdk"
 
 // newClient builds the SDK-backed client (package sdkclient).
 //
-// SWATH_S3_DECODER (sdk, the default; walk; scanner) selects the body
-// decoder (sdkclient.Decoder), so one tagged binary can measure all three.
+// SWATH_S3_DECODER (sdk, the default, or scanner) selects the body decoder
+// (sdkclient.Decoder), so one tagged binary can measure both.
 // It is temporary experiment plumbing, read here only, and goes when the
 // decoder is chosen.
 func newClient(ctx context.Context, cc client.Config) (built, error) {
 	dec := sdkclient.DecoderSDK
 	switch v := os.Getenv("SWATH_S3_DECODER"); v {
 	case "", "sdk":
-	case "walk":
-		dec = sdkclient.DecoderWalk
 	case "scanner":
 		dec = sdkclient.DecoderScanner
 	default:
-		return nil, fmt.Errorf("SWATH_S3_DECODER=%q: want sdk, walk or scanner", v)
+		return nil, fmt.Errorf("SWATH_S3_DECODER=%q: want sdk or scanner", v)
 	}
 	c, err := sdkclient.New(ctx, cc, sdkclient.WithDecoder(dec))
 	if err != nil {
