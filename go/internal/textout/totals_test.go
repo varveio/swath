@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +39,8 @@ func TestIEC(t *testing.T) {
 func TestTotalsJSONL(t *testing.T) {
 	rows := []totals.Prefix{
 		{Prefix: "", Objects: 3, Bytes: 7, Newest: 1, HasNewest: true},
-		{Prefix: "caf\xc3\xa9/\"q\"\t/", Objects: 1, Bytes: 2},
-		{Prefix: "bad\xff/", Objects: 1, Unsized: 1},
+		{Prefix: "caf\xc3\xa9/\"q\"\t/", Depth: 2, Objects: 1, Bytes: 2},
+		{Prefix: "bad\xff/", Depth: 1, Objects: 1, Unsized: 1},
 	}
 	var b bytes.Buffer
 	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true}, rows); err != nil {
@@ -53,8 +54,12 @@ func TestTotalsJSONL(t *testing.T) {
 		}
 		got = append(got, m)
 	}
-	if len(got) != 3 || got[1][FieldPrefix] != rows[1].Prefix || got[1][FieldSize] != 2.0 || got[1][FieldLastModified] != nil {
+	if len(got) != 3 || got[0][FieldDepth] != 0.0 || got[1][FieldDepth] != 2.0 || got[2][FieldDepth] != 1.0 ||
+		got[1][FieldPrefix] != rows[1].Prefix || got[1][FieldSize] != 2.0 || got[1][FieldLastModified] != nil {
 		t.Fatalf("%v", got)
+	}
+	if !strings.HasPrefix(strings.Split(b.String(), "\n")[2], `{"Depth":1,"PrefixBase64":`) {
+		t.Fatalf("member order: %q", b.String())
 	}
 	raw, err := base64.StdEncoding.DecodeString(got[2][FieldPrefixBase64].(string))
 	if err != nil || string(raw) != rows[2].Prefix || got[2][FieldPrefix] != nil || got[2][FieldSize] != 0.0 || got[2][FieldUnsized] != 1.0 {
@@ -68,14 +73,56 @@ func TestTotalsJSONL(t *testing.T) {
 func TestTotalsPartlySized(t *testing.T) {
 	rows := []totals.Prefix{{Objects: 2, Bytes: 7, Unsized: 1}}
 	for format, want := range map[string]string{
-		TSV:   "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t2\t0\t7\t1\t\n",
-		JSONL: `{"Prefix":"","Objects":2,"Dirs":0,"Size":7,"Unsized":1}` + "\n",
+		TSV:   "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t2\t0\t7\t1\t\t\n",
+		JSONL: `{"Depth":0,"Prefix":"","Objects":2,"Dirs":0,"Size":7,"Unsized":1}` + "\n",
 		Table: "Size  Files  Dirs  LastModified (local)  Prefix\n   -      2     0                        (total)\n",
 	} {
 		var b bytes.Buffer
 		if err := WriteTotals(&b, format, TotalsLayout{Local: true}, rows); err != nil || b.String() != want {
 			t.Errorf("%s: %v\n%q\nwant %q", format, err, b.String(), want)
 		}
+	}
+}
+
+// TestTotalsOrder: TSV and JSONL keep the rows in the order given (the
+// tally's byte order, the total first); the table puts the total last,
+// found by its Depth, not its place, and leaves the rows as they were.
+func TestTotalsOrder(t *testing.T) {
+	rows := []totals.Prefix{{Prefix: "logs/", Objects: 3, Bytes: 3}, {Prefix: "logs/a/", Depth: 1, Objects: 1, Bytes: 1},
+		{Prefix: "logs/a/b/", Depth: 2, Objects: 1, Bytes: 1}, {Prefix: "logs/c/", Depth: 1, Objects: 2, Bytes: 2}}
+	var b bytes.Buffer
+	if err := WriteTotals(&b, TSV, TotalsLayout{}, rows); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Depth\tObjects\tSize\tLastModified\tPrefix\n0\t3\t3\t\tlogs/\n1\t1\t1\t\tlogs/a/\n2\t1\t1\t\tlogs/a/b/\n1\t2\t2\t\tlogs/c/\n"; b.String() != want {
+		t.Fatalf("tsv %q", b.String())
+	}
+	b.Reset()
+	if err := WriteTotals(&b, JSONL, TotalsLayout{}, rows); err != nil {
+		t.Fatal(err)
+	}
+	var depths []string
+	for l := range strings.Lines(b.String()) {
+		depths = append(depths, l[len(`{"Depth":`):len(`{"Depth":`)+1])
+	}
+	if got := strings.Join(depths, ""); got != "0121" {
+		t.Fatalf("jsonl order %q", got)
+	}
+	// The total displaced in the input: still last in the table, the input
+	// untouched.
+	displaced := []totals.Prefix{rows[1], rows[0], rows[2], rows[3]}
+	before := slices.Clone(displaced)
+	b.Reset()
+	if err := WriteTotals(&b, Table, TotalsLayout{}, displaced); err != nil {
+		t.Fatal(err)
+	}
+	var prefixes []string
+	for l := range strings.Lines(b.String()) {
+		f := strings.Fields(l)
+		prefixes = append(prefixes, f[len(f)-1])
+	}
+	if got := strings.Join(prefixes, " "); got != "Prefix logs/a/ logs/a/b/ logs/c/ (total)" || !slices.Equal(displaced, before) {
+		t.Fatalf("table order %q", got)
 	}
 }
 
@@ -93,7 +140,7 @@ func TestTotalsTableLocalTime(t *testing.T) {
 		t.Fatalf("%q\nwant %q", b.String(), want)
 	}
 	b.Reset()
-	if err := WriteTotals(&b, TSV, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil || !strings.HasSuffix(b.String(), "\t1970-01-01T00:00:00+00:00\n") {
+	if err := WriteTotals(&b, TSV, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil || !strings.HasSuffix(b.String(), "\t1970-01-01T00:00:00+00:00\t\n") {
 		t.Fatalf("%v %q", err, b.String())
 	}
 }

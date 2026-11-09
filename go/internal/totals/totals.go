@@ -115,7 +115,10 @@ type Row struct {
 
 // Prefix is one prefix's totals.
 type Prefix struct {
-	Prefix  string
+	Prefix string
+	// Depth is the prefix's level below the origin: 0 for the total (the
+	// origin itself), else the '/' after the origin it ends at.
+	Depth   int
 	Objects int64
 	Dirs    int64 // directories below the prefix (a local tree's)
 	Bytes   int64 // the bytes of the objects that had a size: the whole size when Unsized is 0
@@ -416,7 +419,8 @@ func (t *Tally) finish() {
 }
 
 // Result is every prefix's totals in byte order of the prefix, so the
-// total (the origin) comes first and a parent before its children. Call
+// total (the origin, Depth 0) comes first and a parent before its
+// children. Call
 // it once the rows have all been flushed; an empty tally still has its
 // total.
 func (t *Tally) Result() []Prefix {
@@ -425,10 +429,11 @@ func (t *Tally) Result() []Prefix {
 	t.finish()
 	out := make([]Prefix, 0, max(1, len(t.cells)))
 	if t.cells[t.opt.Origin] == nil {
-		out = append(out, Prefix{Prefix: t.opt.Origin})
+		out = append(out, Prefix{Prefix: t.opt.Origin}) // depth 0
 	}
 	for p, c := range t.cells {
-		out = append(out, Prefix{Prefix: p, Objects: c.objects, Dirs: c.dirs, Bytes: c.bytes, Unsized: c.unsized, Newest: c.newest, HasNewest: c.hasNewest})
+		out = append(out, Prefix{Prefix: p, Depth: strings.Count(p[len(t.opt.Origin):], "/"), Objects: c.objects, Dirs: c.dirs, Bytes: c.bytes,
+			Unsized: c.unsized, Newest: c.newest, HasNewest: c.hasNewest})
 	}
 	slices.SortFunc(out, func(a, b Prefix) int { return cmp.Compare(a.Prefix, b.Prefix) })
 	return out

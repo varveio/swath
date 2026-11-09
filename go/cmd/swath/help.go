@@ -169,8 +169,9 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 	case cmd.du:
 		fmt.Fprintln(w, "usage: swath du SOURCE [-d N] [flags]")
 		fmt.Fprintln(w, "  totals SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels")
-		fmt.Fprintln(w, "  below SOURCE, a parent including its children, as du: on stdout as a table on a terminal, TSV")
-		fmt.Fprintln(w, "  otherwise, or --format jsonl. Bytes are the objects' sizes as listed, not storage or billing")
+		fmt.Fprintln(w, "  below SOURCE, a parent including its children, as du (sum rows of one Depth only): on stdout as a")
+		fmt.Fprintln(w, "  table on a terminal, the total last; TSV otherwise, or --format jsonl, the total first, at Depth 0.")
+		fmt.Fprintln(w, "  Bytes are the objects' sizes as listed, not storage or billing")
 	default:
 		fmt.Fprintln(w, "usage: swath list SOURCE [-o DIR|FILE|-] [flags]")
 		fmt.Fprintln(w, "  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text")

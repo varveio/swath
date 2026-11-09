@@ -60,14 +60,28 @@ func TestDu(t *testing.T) {
 		t.Fatal(err)
 	}
 	const newest, older = "2026-01-02T04:04:05+00:00", "2026-01-02T03:04:05+00:00"
-	want := "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n" +
-		"\t4\t4\t9\t0\t" + newest + "\n" +
-		"a/\t2\t1\t7\t0\t" + newest + "\n" +
-		"a/b/\t1\t0\t5\t0\t" + newest + "\n" +
-		"c/\t1\t0\t1\t0\t" + older + "\n" +
-		"e/\t0\t0\t0\t0\t\n"
+	want := "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n" +
+		"0\t4\t4\t9\t0\t" + newest + "\t\n" +
+		"1\t2\t1\t7\t0\t" + newest + "\ta/\n" +
+		"2\t1\t0\t5\t0\t" + newest + "\ta/b/\n" +
+		"1\t1\t0\t1\t0\t" + older + "\tc/\n" +
+		"1\t0\t0\t0\t0\t\te/\n"
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
+	}
+	// A row includes its descendants: the depth-1 rows leave out x, the
+	// file at the top, and all rows together count a/b/f three times; only
+	// Depth 0 is the total.
+	sums := map[string]int{}
+	for l := range strings.Lines(out.String()) {
+		f := strings.Split(l, "\t")
+		if n, err := strconv.Atoi(f[3]); err == nil {
+			sums[f[0]] += n
+			sums["all"] += n
+		}
+	}
+	if sums["0"] != 9 || sums["1"] != 8 || sums["all"] != 22 {
+		t.Fatalf("sums %v", sums)
 	}
 	var r listing.Report
 	readJSON(t, report, &r)
@@ -77,8 +91,8 @@ func TestDu(t *testing.T) {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
 	// The table: a heading, sizes in binary units, the newest time to the
-	// second in local time, the prefix last and the total named; -d is
-	// --depth.
+	// second in local time, the prefix last, and the total named and last,
+	// as du's; -d is --depth.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "-d", "1", "--format=table", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
@@ -89,17 +103,17 @@ func TestDu(t *testing.T) {
 	}
 	wantTable := "" +
 		"Size  Files  Dirs  LastModified (local)  Prefix\n" +
-		" 9 B      4     4  " + local(newest) + "   (total)\n" +
 		" 7 B      2     1  " + local(newest) + "   a/\n" +
 		" 1 B      1     0  " + local(older) + "   c/\n" +
-		" 0 B      0     0                        e/\n"
+		" 0 B      0     0                        e/\n" +
+		" 9 B      4     4  " + local(newest) + "   (total)\n"
 	if out.String() != wantTable {
 		t.Fatalf("table\n%s\nwant\n%s", out.String(), wantTable)
 	}
 	// Without -d, the total alone; swath diag count keeps its one line.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv"}, &out); err != nil ||
-		out.String() != "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t4\t4\t9\t0\t"+newest+"\n" {
+		out.String() != "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t9\t0\t"+newest+"\t\n" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	out.Reset()
@@ -132,9 +146,9 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 func TestDuUnsized(t *testing.T) {
 	root, _ := depthTree(t)
 	for format, want := range map[string]string{
-		"tsv":   "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t4\t4\t0\t4\t\na/\t2\t1\t0\t2\t\nc/\t1\t0\t0\t1\t\ne/\t0\t0\t0\t0\t\n",
-		"jsonl": `{"Prefix":"","Objects":4,"Dirs":4,"Size":0,"Unsized":4}` + "\n" + `{"Prefix":"a/","Objects":2,"Dirs":1,"Size":0,"Unsized":2}` + "\n" + `{"Prefix":"c/","Objects":1,"Dirs":0,"Size":0,"Unsized":1}` + "\n" + `{"Prefix":"e/","Objects":0,"Dirs":0,"Size":0,"Unsized":0}` + "\n",
-		"table": "Size  Files  Dirs  LastModified (local)  Prefix\n   -      4     4                        (total)\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n",
+		"tsv":   "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t0\t4\t\t\n1\t2\t1\t0\t2\t\ta/\n1\t1\t0\t0\t1\t\tc/\n1\t0\t0\t0\t0\t\te/\n",
+		"jsonl": `{"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":0,"Unsized":4}` + "\n" + `{"Depth":1,"Prefix":"a/","Objects":2,"Dirs":1,"Size":0,"Unsized":2}` + "\n" + `{"Depth":1,"Prefix":"c/","Objects":1,"Dirs":0,"Size":0,"Unsized":1}` + "\n" + `{"Depth":1,"Prefix":"e/","Objects":0,"Dirs":0,"Size":0,"Unsized":0}` + "\n",
+		"table": "Size  Files  Dirs  LastModified (local)  Prefix\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n   -      4     4                        (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -159,7 +173,7 @@ func TestDuJSONL(t *testing.T) {
 	for _, k := range keys {
 		size += len(k) // the fake's object bodies are their keys
 	}
-	if !strings.HasPrefix(lines[0], `{"Prefix":"","Objects":50,"Size":`+strconv.Itoa(size)+`,"LastModified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"Prefix":"`) {
+	if !strings.HasPrefix(lines[0], `{"Depth":0,"Prefix":"","Objects":50,"Size":`+strconv.Itoa(size)+`,"LastModified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"Depth":1,"Prefix":"`) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
@@ -183,7 +197,7 @@ func TestDuOrigin(t *testing.T) {
 		var rows []string
 		for l := range strings.Lines(out.String()) {
 			f := strings.Split(l, "\t")
-			rows = append(rows, f[0]+" "+f[1])
+			rows = append(rows, f[0]+":"+strings.TrimSuffix(f[len(f)-1], "\n")+" "+f[1]) // depth:prefix (last) objects
 		}
 		return strings.Join(rows[1:], ",")
 	}
@@ -191,11 +205,11 @@ func TestDuOrigin(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"s3://bkt/logs/2026/", "-d", "1"}, "logs/2026/ 4,logs/2026/01/ 2,logs/2026/02/ 1"},
-		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "logs/2026/ 3,logs/2026/01/ 2,logs/2026/02/ 1"},
-		{[]string{"s3://bkt/logs", "-d", "1"}, " 5,logs/ 5"},
-		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "^logs/2026/"}, "logs/ 4,logs/2026/ 4"},
-		{[]string{"s3://bkt", "-d", "2"}, " 6,logs/ 5,logs/2026/ 4,logs/2027/ 1,other/ 1"},
+		{[]string{"s3://bkt/logs/2026/", "-d", "1"}, "0:logs/2026/ 4,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
+		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/ 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
+		{[]string{"s3://bkt/logs", "-d", "1"}, "0: 5,1:logs/ 5"},
+		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "^logs/2026/"}, "0:logs/ 4,1:logs/2026/ 4"},
+		{[]string{"s3://bkt", "-d", "2"}, "0: 6,1:logs/ 5,2:logs/2026/ 4,2:logs/2027/ 1,1:other/ 1"},
 	} {
 		if got := du(tc.args...); got != tc.want {
 			t.Errorf("%v: %q, want %q", tc.args, got, tc.want)
@@ -338,7 +352,7 @@ func TestDuStopDuringOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	readJSON(t, report, &r)
-	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "Prefix\t") {
+	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "Depth\t") {
 		t.Fatalf("outcome %+v, wall %d ms, rows %q", r.Outcome, r.Timings.WallMs, w.String())
 	}
 }

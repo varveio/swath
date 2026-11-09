@@ -225,8 +225,9 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 $ swath du --help
 usage: swath du SOURCE [-d N] [flags]
   totals SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels
-  below SOURCE, a parent including its children, as du: on stdout as a table on a terminal, TSV
-  otherwise, or --format jsonl. Bytes are the objects' sizes as listed, not storage or billing
+  below SOURCE, a parent including its children, as du (sum rows of one Depth only): on stdout as a
+  table on a terminal, the total last; TSV otherwise, or --format jsonl, the total first, at Depth 0.
+  Bytes are the objects' sizes as listed, not storage or billing
   SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
@@ -636,43 +637,52 @@ Diagnostics:
   pass and a directory left with nothing is no row. The bytes are the objects' sizes as listed: not storage
   consumed, compression, replicas or a bill.
 
-  Rows go to stdout sorted by prefix in byte order, the total first and a parent before its children, in
-  `--format` `auto` (the table on a terminal, TSV otherwise), `table`, `tsv` or `jsonl`. The table is for reading:
-  a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below 1 KiB), a local
-  tree's files counted as `Files`, the newest time to the second in the reader's local time (as `ls -l` and `du --time`; `TZ`
-  chooses it), and the prefix last, as `du` prints its paths, the total named `(total)`:
+  Rows go to stdout in `--format` `auto` (the table on a terminal, TSV otherwise), `table`, `tsv` or `jsonl`. TSV
+  and JSONL are sorted by prefix in byte order, the total first and a parent before its children; the table keeps
+  that order for the other rows and puts the total last. Each row includes everything below it (the total
+  includes every row), so add up rows of one depth only, never across depths: the depth-1 rows together leave
+  out the objects directly under SOURCE, and all rows together count an object once per level it is under. The
+  table is for reading: a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below
+  1 KiB), a local tree's files counted as `Files`, the newest time to the second in the reader's local time (as
+  `ls -l` and `du --time`; `TZ` chooses it), the prefix last, as `du` prints its paths, and the total last, named
+  `(total)`, as `du` and `wc` end on theirs:
 
   ```text
       Size  Files  Dirs  LastModified (local)  Prefix
-  5.88 MiB    681    97  2026-11-09 13:03:32   (total)
    695 KiB     73    11  2026-11-09 02:44:49   bench/
    429 KiB     48     2  2026-11-09 13:03:32   cmd/
+  5.88 MiB    681    97  2026-11-09 13:03:32   (total)
   ```
 
   TSV and JSONL are for programs and are the same for every source of a kind: exact bytes and microsecond UTC
-  times (`+00:00`), fields `Prefix`, `Objects`, `Dirs` (local trees), `Size` (`AllocatedSize` with
-  `--allocated`), `Unsized` (local trees) and `LastModified`. They say objects for a local tree's files too, so a
-  script reads every source with the same names; only the table says `Files`. The total's `Prefix` is SOURCE's
-  prefix (empty for a whole bucket or a local tree). `Size` is the bytes of the objects that had a size, and
-  `Unsized` counts the files that had none (`--metadata names` reads no sizes), as `rclone size --json`'s
-  `sizeless`: a size with `Unsized` above 0 leaves those files out, and the table shows it as `-`. A time is
-  missing when no object under the prefix had one: empty in TSV and in the table, absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
+  times (`+00:00`), fields `Depth`, `Objects`, `Dirs` (local trees), `Size` (`AllocatedSize` with `--allocated`),
+  `Unsized` (local trees), `LastModified` and `Prefix`, in that order in TSV (the numbers first and the name
+  last, as `du` prints a size and then its path). `Depth` is the row's level below SOURCE: 0 is the total, which
+  stays the first row, in byte order; select it by `Depth`, not by its place or its prefix
+  (`jq 'select(.Depth == 0) | .Size'`; `jq 'select(.Depth == 1)'` for the children). The total's `Prefix` is
+  SOURCE's prefix up to its last `/` (empty for a whole bucket or a local tree, so a TSV total line ends with an
+  empty field: split TSV at tabs, `awk -F'\t'` or `cut`, never at runs of blanks). The fields say objects for a
+  local tree's files too, so a script reads every source with the same names; only the table says `Files`.
+  `Size` is the bytes of the objects that had a size, and `Unsized` counts the files that had none
+  (`--metadata names` reads no sizes), as `rclone size --json`'s `sizeless`: a size with `Unsized` above 0 leaves
+  those files out, and the table shows it as `-`. A time is missing when no object under the prefix had one:
+  empty in TSV and in the table, absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
   JSONL a prefix that is not UTF-8 (a local name's bytes, which a JSON string cannot carry exactly) is
   `PrefixBase64`, its exact bytes in standard base64, instead of `Prefix`:
 
   ```text
   $ swath du s3://bucket/logs/ -d 2 --format tsv
-  Prefix	Objects	Size	LastModified
-  logs/	4	9	2026-01-02T04:04:05+00:00
-  logs/a/	2	7	2026-01-02T04:04:05+00:00
-  logs/a/b/	1	5	2026-01-02T04:04:05+00:00
-  logs/c/	1	1	2026-01-02T03:04:05+00:00
+  Depth	Objects	Size	LastModified	Prefix
+  0	4	9	2026-01-02T04:04:05+00:00	logs/
+  1	2	7	2026-01-02T04:04:05+00:00	logs/a/
+  2	1	5	2026-01-02T04:04:05+00:00	logs/a/b/
+  1	1	1	2026-01-02T03:04:05+00:00	logs/c/
   ```
 
   ```text
   $ swath du /data -d 2 --format jsonl
-  {"Prefix":"","Objects":4,"Dirs":4,"Size":9,"Unsized":0,"LastModified":"2026-01-02T04:04:05+00:00"}
-  {"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"Unsized":0,"LastModified":"2026-11-09T11:38:25+00:00"}
+  {"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":9,"Unsized":0,"LastModified":"2026-01-02T04:04:05+00:00"}
+  {"Depth":2,"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"Unsized":0,"LastModified":"2026-11-09T11:38:25+00:00"}
   ```
 
   Rows are written once the count completes, before the run's end is stamped and its outcome settled, so the

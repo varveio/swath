@@ -45,7 +45,7 @@ func bruteWith(rows []Row, opt Options, counts func(Row) bool) []Prefix {
 			}
 			p := m[key[:end]]
 			if p == nil {
-				p = &Prefix{Prefix: key[:end]}
+				p = &Prefix{Prefix: key[:end], Depth: k}
 				m[key[:end]] = p
 			}
 			if r.Dir && key[:end] == r.Key {
@@ -189,9 +189,9 @@ func TestShortKeysAndDepth(t *testing.T) {
 	}
 	want := []Prefix{
 		{Prefix: "", Objects: 4, Dirs: 1, Bytes: 7, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/", Objects: 3, Dirs: 1, Bytes: 6, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/", Objects: 2, Bytes: 4, Unsized: 1, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/c/", Objects: 1, Bytes: 4, Newest: 9, HasNewest: true},
+		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Bytes: 6, Unsized: 1, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/", Depth: 2, Objects: 2, Bytes: 4, Unsized: 1, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/c/", Depth: 3, Objects: 1, Bytes: 4, Newest: 9, HasNewest: true},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
@@ -221,8 +221,8 @@ func TestOrigin(t *testing.T) {
 	}
 	want := []Prefix{
 		{Prefix: "logs/2026/", Objects: 5, Bytes: 5},
-		{Prefix: "logs/2026/01/", Objects: 2, Bytes: 2},
-		{Prefix: "logs/2026/02/", Objects: 1, Bytes: 1},
+		{Prefix: "logs/2026/01/", Depth: 1, Objects: 2, Bytes: 2},
+		{Prefix: "logs/2026/02/", Depth: 1, Objects: 1, Bytes: 1},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"iter"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -21,6 +22,7 @@ import (
 // cannot carry exactly; AllocatedSize replaces Size with --allocated; a
 // local tree's rows add Dirs and Unsized.
 const (
+	FieldDepth         = "Depth"
 	FieldPrefix        = "Prefix"
 	FieldPrefixBase64  = "PrefixBase64"
 	FieldObjects       = "Objects"
@@ -55,8 +57,11 @@ type TotalsLayout struct {
 	Loc *time.Location
 }
 
-// WriteTotals writes per-prefix totals (swath du), in the order given, the
-// total first: TSV under a header line, JSONL, or the table. TSV and JSONL
+// WriteTotals writes per-prefix totals (swath du): TSV under a header line
+// and JSONL in the order given (byte order, the total first), each row's
+// Depth first (0: the total), TSV's prefix last as du prints its path; or
+// the table, the total last, as du's and wc's. A row includes its
+// descendants, so only rows of one depth may be summed. TSV and JSONL
 // carry exact bytes and microsecond UTC times; Size is the bytes of the
 // objects that had a size, and a local tree's Unsized counts those that
 // had none (as rclone size's sizeless); a time is left out (empty in TSV,
@@ -72,7 +77,7 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 	var tw tableWidths
 	switch format {
 	case TSV:
-		b = append(b, FieldPrefix+"\t"+FieldObjects...)
+		b = append(b, FieldDepth+"\t"+FieldObjects...)
 		if l.Local {
 			b = append(b, "\t"+FieldDirs...)
 		}
@@ -80,7 +85,7 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 		if l.Local {
 			b = append(b, "\t"+FieldUnsized...)
 		}
-		b = append(b, "\t"+FieldLastModified+"\n"...)
+		b = append(b, "\t"+FieldLastModified+"\t"+FieldPrefix+"\n"...)
 	case JSONL:
 	case Table:
 		tw = widths(l, rows)
@@ -88,11 +93,10 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 	default:
 		return fmt.Errorf("text output: per-prefix totals have no %q format", format)
 	}
-	for i := range rows {
-		r := &rows[i]
+	for r := range totalsOrder(format, rows) {
 		switch format {
 		case TSV:
-			b = appendEscaped(b, r.Prefix, false)
+			b = strconv.AppendInt(b, int64(r.Depth), 10)
 			b = strconv.AppendInt(append(b, '\t'), r.Objects, 10)
 			if l.Local {
 				b = strconv.AppendInt(append(b, '\t'), r.Dirs, 10)
@@ -105,11 +109,13 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 			if r.HasNewest {
 				b = appendISO(b, r.Newest)
 			}
+			b = appendEscaped(append(b, '\t'), r.Prefix, false)
 		case JSONL:
+			b = strconv.AppendInt(append(b, `{"`+FieldDepth+`":`...), int64(r.Depth), 10)
 			if utf8.ValidString(r.Prefix) {
-				b = appendJSON(append(b, `{"`+FieldPrefix+`":`...), r.Prefix)
+				b = appendJSON(append(b, `,"`+FieldPrefix+`":`...), r.Prefix)
 			} else {
-				b = append(b, `{"`+FieldPrefixBase64+`":"`...)
+				b = append(b, `,"`+FieldPrefixBase64+`":"`...)
 				b = append(base64.StdEncoding.AppendEncode(b, []byte(r.Prefix)), '"')
 			}
 			b = strconv.AppendInt(append(b, `,"`+FieldObjects+`":`...), r.Objects, 10)
@@ -125,7 +131,7 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 			}
 			b = append(b, '}')
 		case Table:
-			b = tw.row(b, l, r, i == 0)
+			b = tw.row(b, l, r)
 		}
 		b = append(b, '\n')
 		if _, err := bw.Write(b); err != nil {
@@ -137,6 +143,28 @@ func WriteTotals(w io.Writer, format string, l TotalsLayout, rows []totals.Prefi
 		return err
 	}
 	return bw.Flush()
+}
+
+// totalsOrder yields rows in format's order: as given, but for the table,
+// whose total (Depth 0) comes after the other rows, as du's and wc's.
+func totalsOrder(format string, rows []totals.Prefix) iter.Seq[*totals.Prefix] {
+	return func(yield func(*totals.Prefix) bool) {
+		emit := func(keep func(*totals.Prefix) bool) bool {
+			for i := range rows {
+				if r := &rows[i]; keep(r) && !yield(r) {
+					return false
+				}
+			}
+			return true
+		}
+		if format != Table {
+			emit(func(*totals.Prefix) bool { return true })
+			return
+		}
+		if emit(func(r *totals.Prefix) bool { return r.Depth > 0 }) {
+			emit(func(r *totals.Prefix) bool { return r.Depth == 0 })
+		}
+	}
 }
 
 // sizeField is the bytes' field name.
@@ -196,7 +224,7 @@ func (w tableWidths) header(b []byte, l TotalsLayout) []byte {
 	return append(b, "  "+FieldPrefix+"\n"...)
 }
 
-func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix, total bool) []byte {
+func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix) []byte {
 	var num [24]byte
 	b = appendPadded(b, appendIEC(num[:0], r), w.size)
 	b = appendPadded(append(b, "  "...), strconv.AppendInt(num[:0], r.Objects, 10), w.objects)
@@ -219,7 +247,7 @@ func (w tableWidths) row(b []byte, l TotalsLayout, r *totals.Prefix, total bool)
 		}
 	}
 	b = append(b, "  "...)
-	if total {
+	if r.Depth == 0 {
 		return append(b, headingTotal...)
 	}
 	return appendEscaped(b, r.Prefix, false)
