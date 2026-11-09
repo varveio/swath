@@ -50,7 +50,7 @@ func ValidateDigests(ctx context.Context, src Source, opt Options) (DigestResult
 		return DigestResult{}, err
 	}
 	report, err := seekparquet.Validate(ctx, src, seekparquet.ValidateOptions{Level: seekparquet.LevelDigest, Limits: opt.Limits})
-	return digestResult(report, err, parts)
+	return digestResult(ctx, report, err, parts)
 }
 
 // ValidateDigestsDir validates the dataset in the local directory at path,
@@ -61,7 +61,7 @@ func ValidateDigestsDir(ctx context.Context, path string, opt Options) (DigestRe
 		return DigestResult{}, err
 	}
 	report, err := seekparquet.ValidateDir(ctx, path, seekparquet.ValidateOptions{Level: seekparquet.LevelDigest, Limits: opt.Limits})
-	return digestResult(report, err, parts)
+	return digestResult(ctx, report, err, parts)
 }
 
 // digestParts checks an opened dataset's identity, closes it, and returns
@@ -87,8 +87,13 @@ func digestParts(d *Dataset, err error) (int, error) {
 }
 
 // digestResult turns a digest validation of a dataset of parts parts into
-// a result, or an error unless it compared every part's digest.
-func digestResult(report *seekparquet.Report, err error, parts int) (DigestResult, error) {
+// a result, or an error unless it compared every part's digest. A context
+// that ended is its error even with a complete report: the module does
+// not check it after the last read.
+func digestResult(ctx context.Context, report *seekparquet.Report, err error, parts int) (DigestResult, error) {
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		return DigestResult{}, err
 	}

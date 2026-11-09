@@ -142,14 +142,17 @@ for _, r := range rows {
 - **`List(req)`.** Current objects only, as `Stream`: a versions schema is refused (`KindSchema`) before any
   read. One request of the module's delimited listing (`seekparquet.Dataset.List`), which routes it, skips each
   common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
-  up to and including the first one), projecting the columns `Object` holds. Entries are in ascending byte order,
+  up to and including the first one; `Delimiter` 0 is the NUL byte, a delimiter like any other, not "no
+  rollup"), projecting the columns `Object` holds. Entries are in ascending byte order,
   at most `Limit`; each is an `Object` or a `CommonPrefix`, owning its bytes. `Entry.Cursor` is the
   continuation after the entry: the row cursor (key and offset) after an object, the prefix cursor after a common
   prefix, so the next page starts after every key that rolls up to it; repeating the request with each page's
-  last cursor lists every entry once. Each object is checked as `Stream` checks it; a row that fails is the
+  last cursor lists every entry once; a cursor before `Prefix`'s keys lists from the first of them, one after
+  them lists nothing. Each object is checked as `Stream` checks it; a row that fails is the
   `KindRow` error and no entries. The module's errors are returned unchanged: `*RefusalError`, `ErrClosed`
   after `Close`, `ErrInvalidRequest` (a `Limit` that is not positive, a malformed cursor), the Source's and the
-  context's. `Stats`, when set, receives the request's `ReadStats`, whether it succeeds or fails; `List` does
+  context's. `Stats`, when set, is reset when the request starts (a refusal before any read leaves it zero) and receives
+  the request's `ReadStats`, whether it succeeds or fails; `List` does
   not add to `StreamStats`.
 - **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
   a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
@@ -188,7 +191,7 @@ for _, r := range rows {
   `seekparquet.Validate` (`ValidateDir`) at `LevelDigest` hashes every part's bytes. A mismatch or a missing part
   is the module's `*RefusalError`, unchanged (the module reports it in a failed report with no error); an
   incomplete level (a storage error, a limit) is an error wrapping its cause, and an ended context the context's
-  error: success means every part's digest was compared (`CheckedParts`, 0 for an empty dataset). The parts are
+  error, even when the module's report is complete (it does not check the context after the last read): success means every part's digest was compared (`CheckedParts`, 0 for an empty dataset). The parts are
   not checked as Parquet (that is `CheckSchema`'s and the reads'). The caller validates, then opens, the same
   immutable bytes: one Source whose files are pinned to one stored object each, or a local directory that does
   not change in between.
@@ -252,12 +255,14 @@ bytes caught by digest validation.
 
 `list_test.go` lists keys holding `a`, `a/`, `a/b`, `a/b0` and `ab/x` over three parts against an oracle, by
 several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects and prefixes; checks an entry's
-values, that changing a returned key or prefix changes neither its cursor nor the next page, the refusal of a
-versions schema before any read, a row check failing the listing with its statistics kept, a missing part's
+values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
+after a prefix's keys, a NUL delimiter, the refusal of a versions schema before any read (statistics reset), a row check failing the listing with its statistics kept, a missing part's
 refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset`. `digest_test.go` validates a
 good dataset (directory and Source), an empty one, a corrupted part (the module's failed report with no error
 returned as its refusal), a part without a SHA-256, datasets swath did not write (refused reading the manifest
-alone), and a storage error and a cancellation mid-way, both errors. The lister's `TestReaderStreams*` tests admit and stream datasets its own
+alone), a storage error and a cancellation at the second part, a cancellation during the last read (the module's
+report is complete; the context's error is returned), and a complete report comparing fewer digests than parts,
+all errors. The lister's `TestReaderStreams*` tests admit and stream datasets its own
 writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 (one without a size refused), and both versions schemas admitted and refused by `Stream`.
 

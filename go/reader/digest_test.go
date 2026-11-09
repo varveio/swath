@@ -6,6 +6,7 @@ package reader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,19 +111,75 @@ func (s partSource) Open(ctx context.Context, path string) (seekparquet.SourceFi
 }
 
 // TestValidateDigestsIncomplete: a storage error leaves the module's
-// level incomplete with no error, and a context ended mid-way stops it:
-// both are errors here, never success.
+// level incomplete with no error, and a context ended mid-way stops it,
+// each at the first part's open and at the second's, after the first
+// part's digest compared: both are errors here, never success.
 func TestValidateDigestsIncomplete(t *testing.T) {
 	dir := digestDir(t)
-	failure := errors.New("storage down")
-	src := partSource{newCountingSource(t, dir), func() error { return failure }}
-	if got, err := ValidateDigests(context.Background(), src, Options{}); !errors.Is(err, failure) || got != (DigestResult{}) {
-		t.Fatalf("storage error: %+v, %v", got, err)
+	for _, at := range []int{1, 2} {
+		t.Run(fmt.Sprintf("part %d", at), func(t *testing.T) {
+			failure := errors.New("storage down")
+			n := 0
+			src := partSource{newCountingSource(t, dir), func() error {
+				if n++; n == at {
+					return failure
+				}
+				return nil
+			}}
+			got, err := ValidateDigests(context.Background(), src, Options{})
+			if !errors.Is(err, failure) || got != (DigestResult{}) || !strings.Contains(err.Error(), fmt.Sprintf("data/part-%05d.parquet", at-1)) {
+				t.Fatalf("storage error: %+v, %v", got, err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			n = 0
+			src = partSource{newCountingSource(t, dir), func() error {
+				if n++; n == at {
+					cancel()
+				}
+				return nil
+			}}
+			if got, err := ValidateDigests(ctx, src, Options{}); !errors.Is(err, context.Canceled) || got != (DigestResult{}) {
+				t.Fatalf("cancelled: %+v, %v", got, err)
+			}
+		})
+	}
+}
+
+// TestValidateDigestsCancelledAtLastRead: a context ended during the last
+// part's last read, which returns every byte, leaves the module's report
+// complete; it is the context's error here.
+func TestValidateDigestsCancelledAtLastRead(t *testing.T) {
+	dir := digestDir(t)
+	src := newCountingSource(t, dir)
+	if _, err := ValidateDigests(context.Background(), src, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	_, reads := src.taken()
+	if last := reads[len(reads)-1]; last.path != "data/part-00001.parquet" {
+		t.Fatalf("last read %+v, want the last part's", last)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	src = partSource{newCountingSource(t, dir), func() error { cancel(); return nil }}
+	src = newCountingSource(t, dir)
+	src.cancelAt, src.cancel = len(reads), cancel
 	if got, err := ValidateDigests(ctx, src, Options{}); !errors.Is(err, context.Canceled) || got != (DigestResult{}) {
-		t.Fatalf("cancelled: %+v, %v", got, err)
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if _, again := src.taken(); len(again) != len(reads) {
+		t.Fatalf("%d reads, want %d: the cancellation was not at the last read", len(again), len(reads))
+	}
+}
+
+// TestDigestResultCountsEveryPart: a complete report that compared fewer
+// digests than the manifest has parts is not success.
+func TestDigestResultCountsEveryPart(t *testing.T) {
+	report := &seekparquet.Report{Levels: []seekparquet.LevelReport{{Level: seekparquet.LevelDigest, Result: seekparquet.Complete,
+		Checked: seekparquet.Checked{Parts: 1, Digests: 1}}}}
+	if got, err := digestResult(context.Background(), report, nil, 2); err == nil || got != (DigestResult{}) {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if got, err := digestResult(context.Background(), report, nil, 1); err != nil || got.CheckedParts != 1 {
+		t.Fatalf("%+v, %v", got, err)
 	}
 }

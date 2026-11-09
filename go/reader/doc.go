@@ -19,7 +19,7 @@
 // Stream hands on every current object, checking each one's size and
 // modification time; List lists them by delimiter a page at a time,
 // through the module's delimited listing, checking each object as Stream
-// does. None of them checks the parts' digests or the rows no request
+// does (Delimiter 0 is the NUL byte). None of them checks the parts' digests or the rows no request
 // decodes.
 //
 // ValidateDigests, at import, checks that a dataset is swath's from its

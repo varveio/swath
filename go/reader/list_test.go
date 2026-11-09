@@ -135,13 +135,19 @@ func TestListOwnsBytes(t *testing.T) {
 	}
 }
 
+// TestListRefusesVersions: refused before any read, with the request's
+// statistics reset from the work a previous request left in them.
 func TestListRefusesVersions(t *testing.T) {
 	s := s3Spec()
 	s.id, s.key.Unique = S3VersionsV1, false
 	d, src := openSource(t, writeDataset(t, s, s3Rows(3)))
 	src.reset()
-	if got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10}); !errors.Is(err, ErrSchema) || got != nil {
+	st := ReadStats{PartsOpened: 3, KeysDecoded: 7, SourceReads: 9}
+	if got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10, Stats: &st}); !errors.Is(err, ErrSchema) || got != nil {
 		t.Fatalf("list versions: %+v, %v", got, err)
+	}
+	if st != (ReadStats{}) {
+		t.Fatalf("stats after a refusal before any read: %+v", st)
 	}
 	if _, reads := src.taken(); len(reads) != 0 {
 		t.Fatalf("%d reads before refusing", len(reads))
@@ -226,5 +232,39 @@ func TestEntryCursor(t *testing.T) {
 	key[0], prefix[0] = 'x', 'x'
 	if !bytes.Equal(oc.Key, []byte("k")) || oc.Offset != 2 || oc.Prefix != nil || !bytes.Equal(pc.Prefix, []byte("p/")) || pc.Key != nil {
 		t.Fatalf("cursors %+v %+v", oc, pc)
+	}
+}
+
+// TestListCursorOutsidePrefix: a cursor before the prefix's keys lists
+// from the first of them, one after them lists nothing.
+func TestListCursorOutsidePrefix(t *testing.T) {
+	d := openDir(t, listDir(t))
+	for _, tc := range []struct {
+		name   string
+		cursor *Cursor
+		want   []string
+	}{
+		{"row before", &Cursor{Key: []byte("a")}, listOracle(listKeys, "c/", '/')},
+		{"prefix before", &Cursor{Prefix: []byte("a/")}, listOracle(listKeys, "c/", '/')},
+		{"row after", &Cursor{Key: []byte("d")}, nil},
+		{"prefix after", &Cursor{Prefix: []byte("c0")}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := listAll(t, d, ListRequest{Prefix: []byte("c/"), Delimiter: '/', Cursor: tc.cursor, Limit: 100})
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("listed %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestListNULDelimiter: Delimiter 0 is the NUL byte, rolled up like any
+// other, not a listing without rollup.
+func TestListNULDelimiter(t *testing.T) {
+	keys := []string{"a", "b\x00x", "b\x00y", "b/c", "c"}
+	d := openDir(t, writeDataset(t, s3Spec(), keyRows(keys)))
+	got := listAll(t, d, ListRequest{Limit: 2})
+	if want := []string{"o:a", "p:b\x00", "o:b/c", "o:c"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("listed %q, want %q", got, want)
 	}
 }

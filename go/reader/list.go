@@ -17,15 +17,17 @@ import (
 type ListRequest struct {
 	// Prefix scopes the listing; empty lists every key.
 	Prefix []byte
-	// Delimiter is the single delimiter byte.
+	// Delimiter is the single delimiter byte. 0 is the NUL byte, a
+	// delimiter like any other: there is no listing without rollup.
 	Delimiter byte
 	// Cursor, when set, continues the listing after an entry it returned
-	// (Entry.Cursor).
+	// (Entry.Cursor). A cursor before Prefix's keys lists from the first
+	// of them; one after them lists nothing.
 	Cursor *Cursor
 	// Limit is the most entries returned. It must be positive.
 	Limit int
-	// Stats, when not nil, receives the request's read statistics, set
-	// whether it succeeds or fails.
+	// Stats, when not nil, receives the request's read statistics: reset
+	// when the request starts, and set whether it succeeds or fails.
 	Stats *ReadStats
 }
 
@@ -61,6 +63,9 @@ func (e Entry) Cursor() *Cursor {
 // Close, an error wrapping ErrInvalidRequest (a Limit that is not
 // positive, a malformed Cursor), the Source's, and the context's.
 func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
+	if req.Stats != nil {
+		*req.Stats = ReadStats{}
+	}
 	columns := objectColumns(d.spec.ID)
 	if columns == nil {
 		return nil, semantic(KindSchema, "", nil, "%s holds versions, not current objects", d.spec.ID)
