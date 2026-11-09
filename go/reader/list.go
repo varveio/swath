@@ -41,9 +41,10 @@ type ListRequest struct {
 // key: without a cursor, and after any cursor an earlier page returned. A
 // prefix cursor resumes after every key under its prefix, so the next
 // prefix starts at its first key; a row cursor is an object's key, which
-// never rolls up to a prefix of the same listing. Only a row cursor made
-// up inside a prefix's keys skips the object at its exact key, and that
-// prefix is then returned without it.
+// never rolls up to a prefix of the same listing. Only a cursor made up
+// inside a prefix's keys (a row cursor, or a prefix cursor for a deeper
+// prefix) skips the object at its exact key, and that prefix is then
+// returned without it.
 type Entry struct {
 	Object       *Object
 	CommonPrefix []byte

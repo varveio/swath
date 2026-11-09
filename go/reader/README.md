@@ -157,8 +157,8 @@ for _, r := range rows {
   the module's exact row (`seekparquet.Entry.Exact`, spec LIST-8) in the same request, when that object is the
   first key the listing reached under the prefix. That holds without a cursor and after every cursor a page
   returned: a prefix cursor resumes after all of its prefix's keys, and an object's row cursor never lies inside
-  a prefix of the same listing. Only a row cursor made up inside a prefix's keys skips the object, and the prefix
-  then comes without it. `Entry.Cursor` is the continuation after the entry: the row cursor (key and offset)
+  a prefix of the same listing. Only a cursor made up inside a prefix's keys (a row cursor, or a prefix cursor
+  for a deeper prefix such as `a/b/` under `a/`) skips the object, and the prefix then comes without it. `Entry.Cursor` is the continuation after the entry: the row cursor (key and offset)
   after an object, the prefix cursor after a common prefix (its exact-key object included), so the next page
   starts after every key that rolls up to it; repeating the request with each page's
   last cursor lists every entry once; a cursor before `Prefix`'s keys lists from the first of them, one after
