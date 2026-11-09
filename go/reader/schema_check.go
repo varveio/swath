@@ -7,9 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
-	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
@@ -21,7 +19,9 @@ import (
 // the module then holds strictly ascending. Then the module checks every
 // part (seekparquet.Dataset.Verify: its size, footer, stamps, which carry
 // the schema id, key column, and the first key page of each row group),
-// and CheckSchema reads each part's footer schema: every column of the
+// and CheckSchema reads each part's columns from the footer the module
+// checked and reads the part through (seekparquet.Dataset.Columns), so
+// what it admits is what later reads decode: every column of the
 // spec is a top-level, non-repeated column of the spec's physical and
 // logical type, stored REQUIRED where the spec requires a value, and
 // present unless the spec says a part may lack it. Columns the spec does
@@ -29,8 +29,8 @@ import (
 //
 // A disagreement with the spec is a SemanticError of KindSchema naming the
 // column and the part; the module's refusals (*seekparquet.RefusalError)
-// and storage errors are returned unchanged. It reads one footer per part
-// beyond Verify's and no data page: neither the values (Stream checks the
+// and storage errors are returned unchanged. It reads nothing beyond
+// Verify's reads: neither the values (Stream checks the
 // rows it reads) nor the parts' digests (seekparquet.Validate at
 // LevelDigest) are checked.
 func (d *Dataset) CheckSchema(ctx context.Context) error {
@@ -44,68 +44,58 @@ func (d *Dataset) CheckSchema(ctx context.Context) error {
 	if err := d.sp.Verify(ctx); err != nil {
 		return err
 	}
-	for _, p := range d.meta.Manifest.Parts {
-		if err := d.checkPart(ctx, p.Path); err != nil {
+	for i, p := range d.meta.Manifest.Parts {
+		if err := d.checkPart(ctx, i, p.Path); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (d *Dataset) checkPart(ctx context.Context, path string) error {
-	f, err := d.src.Open(ctx, path)
+// checkPart checks part i's columns, from the footer the module checked
+// and reads the part through.
+func (d *Dataset) checkPart(ctx context.Context, i int, path string) error {
+	columns, err := d.sp.Columns(ctx, i)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	var r io.ReaderAt = f
-	if b, ok := f.(seekparquet.ContextBinder); ok {
-		r = b.WithContext(ctx)
-	}
-	pf, err := parquet.OpenFile(r, f.Size(), parquet.SkipPageIndex(true), parquet.SkipBloomFilters(true))
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("swath reader: part %s: read the footer: %w", path, err)
-	}
-	fields := map[string]parquet.Field{}
-	for _, f := range pf.Schema().Fields() {
-		fields[f.Name()] = f
+	byName := map[string]*seekparquet.Column{}
+	for j := range columns {
+		byName[columns[j].Name] = &columns[j]
 	}
 	for _, c := range append([]ColumnSpec{d.spec.Key}, d.spec.Columns...) {
-		if err := checkColumn(fields[c.Name], c); err != nil {
+		if err := checkColumn(byName[c.Name], c); err != nil {
 			return &SemanticError{Kind: KindSchema, Column: c.Name, Err: fmt.Errorf("part %s: %w", path, err)}
 		}
 	}
 	return nil
 }
 
-// checkColumn checks a part's top-level column against its spec; field is
+// checkColumn checks a part's top-level column against its spec; col is
 // nil when the part has no column of the spec's name.
-func checkColumn(field parquet.Field, c ColumnSpec) error {
+func checkColumn(col *seekparquet.Column, c ColumnSpec) error {
 	switch {
-	case field == nil && c.MayBeAbsent:
+	case col == nil && c.MayBeAbsent:
 		return nil
-	case field == nil:
+	case col == nil:
 		return errors.New("absent from the part")
-	case !field.Leaf() || field.Repeated():
+	case col.Group || col.Repetition == format.Repeated:
 		return errors.New("not a top-level, non-repeated column")
-	case c.Required && !field.Required():
+	case c.Required && col.Repetition != format.Required:
 		return errors.New("optional; the schema requires a value")
-	case !typeIs(field.Type(), c.Type):
-		return fmt.Errorf("a %s column (%s), not the schema's type", field.Type().Kind(), field.Type())
+	case !typeIs(col, c.Type):
+		return fmt.Errorf("a %s column (%s), not the schema's type", col.Type, col.Logical)
 	}
 	return nil
 }
 
-// typeIs reports whether a column of type t stores values of the spec's
-// type: its physical type, and the logical type that gives the values
-// their meaning (a signed integer may be unannotated).
-func typeIs(t parquet.Type, want ColumnType) bool {
+// typeIs reports whether a column stores values of the spec's type: its
+// physical type, and the logical type that gives the values their meaning
+// (a signed integer may be unannotated).
+func typeIs(col *seekparquet.Column, want ColumnType) bool {
 	var lt format.LogicalTypeValue
-	if l := t.LogicalType(); l != nil {
-		lt = l.Value
+	if col.Logical != nil {
+		lt = col.Logical.Value
 	}
 	integer := func(width int8, signed bool) bool {
 		i, ok := lt.(*format.IntType)
@@ -114,26 +104,26 @@ func typeIs(t parquet.Type, want ColumnType) bool {
 	switch want {
 	case TypeString:
 		_, ok := lt.(*format.StringType)
-		return t.Kind() == parquet.ByteArray && ok
+		return col.Type == format.ByteArray && ok
 	case TypeBinary:
-		return t.Kind() == parquet.ByteArray && lt == nil
+		return col.Type == format.ByteArray && lt == nil
 	case TypeBool:
-		return t.Kind() == parquet.Boolean && lt == nil
+		return col.Type == format.Boolean && lt == nil
 	case TypeInt32:
-		return t.Kind() == parquet.Int32 && integer(32, true)
+		return col.Type == format.Int32 && integer(32, true)
 	case TypeUint32:
-		return t.Kind() == parquet.Int32 && integer(32, false)
+		return col.Type == format.Int32 && integer(32, false)
 	case TypeInt64:
-		return t.Kind() == parquet.Int64 && integer(64, true)
+		return col.Type == format.Int64 && integer(64, true)
 	case TypeUint64:
-		return t.Kind() == parquet.Int64 && integer(64, false)
+		return col.Type == format.Int64 && integer(64, false)
 	case TypeTimestampMicros:
 		ts, ok := lt.(*format.TimestampType)
 		if !ok || !ts.IsAdjustedToUTC {
 			return false
 		}
 		_, micros := ts.Unit.Value.(*format.MicroSeconds)
-		return t.Kind() == parquet.Int64 && micros
+		return col.Type == format.Int64 && micros
 	}
 	return false
 }

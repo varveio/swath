@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -471,4 +472,26 @@ func TestDigestCorruption(t *testing.T) {
 	if lr.Result != seekparquet.Failed || lr.Failure.Code != seekparquet.CodeDigestMismatch || lr.At.Part != "data/part-00000.parquet" {
 		t.Fatalf("digest level %+v", lr)
 	}
+}
+
+// TestCheckSchemaReadsTheVerifiedPart: CheckSchema checks the columns of the
+// part file the module verified and reads, not of a file put at its path
+// since: a part whose last_modified is not a timestamp, replaced after
+// Verify by one whose is, is still refused.
+func TestCheckSchemaReadsTheVerifiedPart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("an open file cannot be renamed over on Windows")
+	}
+	dir := writeDataset(t, s3Spec(), []s3RowUntimed{{Key: "a", Size: ptr(int64(1))}})
+	good := writeDataset(t, s3Spec(), []s3Row{{Key: "a", Size: ptr(int64(1))}})
+	d := openDir(t, dir)
+	ctx := context.Background()
+	if err := d.SeekParquet().Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join("data", "part-00000.parquet")
+	if err := os.Rename(filepath.Join(good, part), filepath.Join(dir, part)); err != nil {
+		t.Fatal(err)
+	}
+	semanticAt(t, d.CheckSchema(ctx), KindSchema, "last_modified")
 }

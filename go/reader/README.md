@@ -83,12 +83,14 @@ for _, r := range rows {
   `KindSchema`). A manifest without the extension opens; `AcceptWholeSource` refuses it.
 - **`CheckSchema`** (at admission). The manifest's key column and key uniqueness are the spec's, so a versions
   dataset (keys repeat) never passes as current objects. Then `seekparquet.Dataset.Verify` checks every part
-  (size, footer, stamps with the schema id, key column, each row group's first key page), and each part's footer
-  schema is read with parquet-go: every spec column top-level and non-repeated, of the spec's physical and
+  (size, footer, stamps with the schema id, key column, each row group's first key page), and each part's columns
+  are read from the footer the module checked and reads the part through (`seekparquet.Dataset.Columns`, legacy
+  converted types folded into logical ones), so a file put at a part's path later is never what is checked:
+  every spec column top-level and non-repeated, of the spec's physical and
   logical type (strings STRING, binary unannotated, times TIMESTAMP(MICROS, UTC), unsigned integers INT(n,
   false), signed ones INT(n, true) or unannotated), REQUIRED where the spec requires a value, present unless the
   spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
-  column and the part. It reads two footers per part (Verify's and its own) and no data page.
+  column and the part. It reads nothing beyond Verify's reads.
 - **`AcceptWholeSource(kind, container)`.** The listing covers the whole of that source: `extensions.swath`
   present, `source.kind` and `source.container` equal to the arguments (a filesystem has no container: pass
   `""`), `scope.kind` `whole`, `coverage.complete` true, `coverage.stop_reason` `completed`,
