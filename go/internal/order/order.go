@@ -76,6 +76,12 @@ type Options struct {
 	// previous row's, never one equal to After. Stats.DistinctKeys counts
 	// the keys.
 	Groups bool
+	// Unordered (Count only): a range's rows may come in any order, from a
+	// provider that skips its sort because nothing consumes the order (a
+	// local directory, whose names are distinct). Count then checks no
+	// order within a range and counts every row as a distinct key. Not with
+	// After or Groups.
+	Unordered bool
 	// ListingDone, if set, is called once, without the stage's lock, when
 	// the provider has finished: every range expanded, none in flight
 	// (Stats.ListingDone). The drain may still have rows to hand on. A

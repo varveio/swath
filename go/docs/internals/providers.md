@@ -60,10 +60,14 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   report): to 4 per CPU at the `stat` and `statx` tiers, to 2 per CPU at the `names` tier, where more
   processors only add contention when the tree is warm. A count has no encoders, reorder storage or readahead
   to resize; runs that write output keep GOMAXPROCS as it is.
+- **A count does not sort.** Nothing consumes a count's order, so the getdents engine skips each directory's
+  sort (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
+  (`TestUnsortedCountEqualsSortedListing`). Warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
+  −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../measurements.md)).
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
-  is bracketed by checks, the portable engine checks every 1,024 entries, and stat checks as before.
+  is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and stat checks as before.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed; there is no `-one-file-system` yet.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's

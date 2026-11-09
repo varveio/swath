@@ -70,11 +70,12 @@ type Stats struct {
 	Changed        int64    `json:"changed"`  // type changed between listing and stat; dropped
 	ReadlinkErrors int64    `json:"readlink_errors"`
 	Skipped        int64    `json:"skipped_dirs"`
-	Unsafe         int64    `json:"unsafe_dirs"`           // a directory replaced by a symlink before open
-	Chunks         int64    `json:"chunks"`                // large-directory chunks statted in parallel
-	ParallelSorts  int64    `json:"parallel_sorts"`        // large directories whose entries were sorted in parallel runs
-	Presized       int64    `json:"presized"`              // large directories whose buffers were sized from st_size
-	CountProcs     int64    `json:"count_procs,omitempty"` // GOMAXPROCS a count ran with, when raised (opened.Run)
+	Unsafe         int64    `json:"unsafe_dirs"`             // a directory replaced by a symlink before open
+	Chunks         int64    `json:"chunks"`                  // large-directory chunks statted in parallel
+	ParallelSorts  int64    `json:"parallel_sorts"`          // large directories whose entries were sorted in parallel runs
+	Unsorted       int64    `json:"unsorted_dirs,omitempty"` // directories a count read without sorting (opened.Run)
+	Presized       int64    `json:"presized"`                // large directories whose buffers were sized from st_size
+	CountProcs     int64    `json:"count_procs,omitempty"`   // GOMAXPROCS a count ran with, when raised (opened.Run)
 	Samples        []string `json:"error_samples,omitempty"`
 }
 
@@ -107,6 +108,7 @@ func (s *Stats) add(o *Stats) {
 	s.Unsafe += o.Unsafe
 	s.Chunks += o.Chunks
 	s.ParallelSorts += o.ParallelSorts
+	s.Unsorted += o.Unsorted
 	s.Presized += o.Presized
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
@@ -127,8 +129,11 @@ type Provider struct {
 	root   string
 	opt    Options
 	native bool
-	mu     sync.Mutex
-	stats  Stats
+	// unsorted: a count, whose rows nothing orders; a directory's entries
+	// are not sorted (order.Options.Unordered). Set before listing starts.
+	unsorted bool
+	mu       sync.Mutex
+	stats    Stats
 }
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)

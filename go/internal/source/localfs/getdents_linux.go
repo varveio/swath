@@ -115,16 +115,11 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	p.resolveUnknown(fd, sc)
 	buildKeys(r.prefix, sc)
-	if done(ctx) { // a sort of a huge directory is not interruptible: check around it
+	if p.unsorted {
+		st.Unsorted++
+	} else if err := sortChecked(ctx, len(r.prefix), sc, st); err != nil {
 		unix.Close(fd)
-		return ctx.Err()
-	}
-	if sortEntries(len(r.prefix), sc) {
-		st.ParallelSorts++
-	}
-	if done(ctx) {
-		unix.Close(fd)
-		return ctx.Err()
+		return err
 	}
 
 	if len(sc.ents) > chunkThreshold && p.opt.Fields != Names {
@@ -238,6 +233,21 @@ func buildKeys(prefix string, sc *scratch) {
 		e.keyOff, e.keyLen = uint32(start), uint32(len(arena)-start)
 	}
 	sc.keys = arena
+}
+
+// sortChecked sorts a directory's entries, checking for a stop around the
+// sort: a huge directory's sort is not interruptible.
+func sortChecked(ctx context.Context, plen int, sc *scratch, st *Stats) error {
+	if done(ctx) {
+		return ctx.Err()
+	}
+	if sortEntries(plen, sc) {
+		st.ParallelSorts++
+	}
+	if done(ctx) {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // sortEntries sorts a directory's entries by key, in parallel for a large

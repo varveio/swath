@@ -247,7 +247,10 @@ between the children). The report says so: `features.order` false, `spill` absen
 
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
 provider), the progress file's `ordered` counter, and a per-range order check: each range's keys strictly
-ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). What it does not
+ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). A provider that
+skips its sort for a count sets `Options.Unordered`, which drops that check and counts every row as a distinct
+key; it takes no `After` and no groups (`TestCountUnordered`). The local source does, since names in a
+directory are distinct and nothing consumes a count's order. What it does not
 verify is the stream-wide guard across ranges: two ranges that overlap, each ascending, are counted
 twice where `Run` would fail on the repeated key. Coverage and disjointness are the provider's tiling in
 either case, and the object-store providers check it per range: the range engine sends each range's first

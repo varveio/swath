@@ -24,7 +24,8 @@ import (
 // queued ranges.
 //
 // What it checks: every range's rows strictly ascending (nondecreasing
-// with Options.Groups), and after Options.After. What it does not: the stream-wide guard across ranges
+// with Options.Groups), and after Options.After; with Options.Unordered,
+// nothing about order. What it does not: the stream-wide guard across ranges
 // (Run's send), which catches a provider whose ranges overlap. Coverage
 // and disjointness are the provider's tiling, as in Run. If counted is set
 // it is advanced with every row (the progress file's "ordered").
@@ -38,6 +39,9 @@ func Count[R, P any](ctx context.Context, p source.Provider[R, P], counted *atom
 func CountWithSink[R, P any](ctx context.Context, p source.Provider[R, P], counted *atomic.Int64, opt Options, sink Sink[P]) (Stats, error) {
 	if opt.Workers < 1 {
 		return Stats{}, errors.New("order: workers must be positive")
+	}
+	if opt.Unordered && (opt.After != nil || opt.Groups) {
+		return Stats{}, errors.New("order: an unordered count takes no resume key and no groups")
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -157,6 +161,9 @@ func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	if e.c.opt.Unordered {
+		return e.c.add(rows, int64(len(rows)))
+	}
 	if !e.hasLast && e.c.opt.After != nil {
 		e.last, e.hasLast = *e.c.opt.After, true
 	}
@@ -171,16 +178,22 @@ func (e *countEmitter[R, P]) Rows(rows []schema.Row[P]) error {
 		}
 		e.last, e.hasLast, e.sent = k, true, true
 	}
-	if e.c.sink != nil {
-		if err := e.c.sink.Write(e.c.ctx, [][]schema.Row[P]{rows}); err != nil {
+	return e.c.add(rows, names)
+}
+
+// add hands a range's checked rows to the sink and adds them, names of
+// them distinct keys, to the totals.
+func (c *counter[R, P]) add(rows []schema.Row[P], names int64) error {
+	if c.sink != nil {
+		if err := c.sink.Write(c.ctx, [][]schema.Row[P]{rows}); err != nil {
 			return err
 		}
 	}
-	e.c.names.Add(names)
+	c.names.Add(names)
 	n := int64(len(rows))
-	e.c.rows.Add(n)
-	if e.c.counted != nil {
-		e.c.counted.Add(n)
+	c.rows.Add(n)
+	if c.counted != nil {
+		c.counted.Add(n)
 	}
 	return nil
 }
