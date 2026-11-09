@@ -448,9 +448,12 @@ What such a reader does, stated as the contract rather than as its code:
 - **Part footers.** Every part carries the `seekparquet.*` stamps equal to the manifest's (format 2:
   `swath.profile`, `swath.profile_version` 2 and `swath.schema_id`), and `key` ascending as the first sorting
   column.
-- **Rows.** `key`, `size` and `last_modified` are read; a null `size` is rejected, so a local dataset listed
-  with names only is not readable by such a reader; directory rows of a local dataset are entries whose
-  keys end in `/`.
+- **Rows.** `key`, `size` and `last_modified` are read; a null or negative `size` is rejected, so a local
+  dataset listed with names only is not readable by such a reader, and so is a `last_modified` outside the
+  years 1 to 9999; directory rows of a local dataset are entries whose keys end in `/`.
+- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract for
+  SeekParquet datasets: `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage above,
+  source kind and container) and `Stream` (current objects, the row checks above).
 - **Fixtures.** One dataset per schema written by this tool serves as the reader's fixture; the commands
   that produce them are the ones in docs/testing.md.
 

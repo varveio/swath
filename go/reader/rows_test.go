@@ -115,7 +115,11 @@ func TestDecodeObject(t *testing.T) {
 			t.Fatalf("%s: %+v, %v", id, o, err)
 		}
 	}
-	for _, id := range []SchemaID{S3VersionsV1, GCSGenerationsV1, LocalV1, "swath/canonical"} {
+	local := row(t, LocalV1, "d/", 0, map[string]seekparquet.Value{"size": val(parquet.Int64Value(0)), "kind": val(parquet.ByteArrayValue([]byte("DIR")))})
+	if o, err := DecodeObject(LocalV1, local); err != nil || *o.Size != 0 || o.LastModified != nil || o.ETag != nil || o.StorageClass != nil || string(o.Key) != "d/" {
+		t.Fatalf("%s: %+v, %v", LocalV1, o, err)
+	}
+	for _, id := range []SchemaID{S3VersionsV1, GCSGenerationsV1, "swath/canonical"} {
 		if _, err := DecodeObject(id, row(t, S3ObjectsV1, "k", 0, values)); !errors.Is(err, ErrSchema) {
 			t.Errorf("%s: %v, want a schema error", id, err)
 		}

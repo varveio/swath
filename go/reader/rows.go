@@ -30,8 +30,9 @@ func (p Position) Cursor() *seekparquet.Cursor {
 	return &seekparquet.Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
 }
 
-// Object is a current object as a reader of any object store's current
-// objects sees it: an S3 or Cloud Storage row (DecodeObject).
+// Object is a current object, or a filesystem entry, as a reader of any
+// source's current objects sees it: an S3, Cloud Storage or filesystem row
+// (DecodeObject). ETag and StorageClass are nil for a filesystem entry.
 type Object struct {
 	Position
 	Size         *int64
@@ -113,16 +114,32 @@ type LocalEntry struct {
 // column is one of KindRow.
 
 // DecodeObject decodes a current object of swath/s3-objects/v1 or
-// swath/gcs-objects/v1, the schema id of the row's dataset. Every other
-// id is a KindSchema error: a versions row is not a current object.
+// swath/gcs-objects/v1, or an entry of swath-local/v1, the schema id of the
+// row's dataset. Every other id is a KindSchema error: a versions row is
+// not a current object.
 func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
-	if id != S3ObjectsV1 && id != GCSObjectsV1 {
+	columns := objectColumns(id)
+	if columns == nil {
 		return Object{}, semantic(KindSchema, "", nil, "schema id %q holds no current objects", id)
 	}
 	d := decoder{spec: schemas[id], row: &row}
-	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		ETag: d.string("etag"), StorageClass: d.string("storage_class")}
+	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified")}
+	if len(columns) > 2 {
+		o.ETag, o.StorageClass = d.string("etag"), d.string("storage_class")
+	}
 	return o, d.err
+}
+
+// objectColumns returns the columns DecodeObject reads for a schema id,
+// nil for one that holds no current objects.
+func objectColumns(id SchemaID) []string {
+	switch id {
+	case S3ObjectsV1, GCSObjectsV1:
+		return []string{"size", "last_modified", "etag", "storage_class"}
+	case LocalV1:
+		return []string{"size", "last_modified"}
+	}
+	return nil
 }
 
 // DecodeS3Object decodes a swath/s3-objects/v1 row.
