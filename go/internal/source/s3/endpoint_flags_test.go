@@ -5,12 +5,15 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -57,5 +60,27 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 	}
 	if path.Load() != "/bkt" || host.Load() != srv[len("http://"):] {
 		t.Fatalf("request to %v%v", host.Load(), path.Load())
+	}
+}
+
+func TestBearerFlagConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--bearer-token-refresh-interval=1m"}, "--bearer-token-refresh-interval requires --bearer-token-command"},
+		{[]string{"--bearer-token-command=unused", "--profile=work"}, "--bearer-token-command excludes --anonymous and --profile"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			f := flag.NewFlagSet("t", flag.ContinueOnError)
+			opt := factory(t).RegisterFlags(f, false)
+			if err := f.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			opened, err := open(t.Context(), registry.Request{Root: "s3://bkt", Options: opt, Workers: 1})
+			if opened != nil || !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("opened %v, error %v", opened, err)
+			}
+		})
 	}
 }

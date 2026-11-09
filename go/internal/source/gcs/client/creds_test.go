@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/oauth2"
-
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -255,46 +253,34 @@ func TestADCConfiguredButBroken(t *testing.T) {
 	}
 }
 
-// slowTokens takes 200 ms per token and records the calls and the most
-// concurrent ones.
-type slowTokens struct{ calls, now, most atomic.Int64 }
-
-func (s *slowTokens) Token() (*oauth2.Token, error) {
-	s.calls.Add(1)
-	n := s.now.Add(1)
-	defer s.now.Add(-1)
-	for m := s.most.Load(); n > m && !s.most.CompareAndSwap(m, n); m = s.most.Load() {
-	}
-	time.Sleep(200 * time.Millisecond)
-	return &oauth2.Token{AccessToken: "t", Expiry: time.Now().Add(-time.Second)}, nil // expired: every wait asks again
-}
-
-// TestTokenWaitersCoalesce: attempts that give up waiting for a slow token
-// source leave no goroutine behind each; all waiters share one outstanding
-// call, so the source is never called concurrently.
-func TestTokenWaitersCoalesce(t *testing.T) {
-	ts := &slowTokens{}
-	c, err := withTokens(Config{Endpoint: "http://127.0.0.1:1/storage/v1/"}, ts)
+// TestConcurrentBearerRequests checks the client's token-source wiring and
+// bearer injection. Shared's waiter and refresh mechanics live in tokensource.
+func TestConcurrentBearerRequests(t *testing.T) {
+	tok := newTokenServer(t, 3600)
+	tok.delay = 10 * time.Millisecond
+	file := adc(t, authorizedUser(tok.URL))
+	listings := newListServer(t)
+	c, err := New(context.Background(), Config{Endpoint: listings.URL + "/storage/v1/", CredentialsFile: file})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	start := time.Now()
-	for range 40 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 10 {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-				_, _ = objhttp.WaitToken(ctx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
-				cancel()
+	for range 4 {
+		wg.Go(func() {
+			if _, err := c.List(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
-	elapsed := time.Since(start)
-	if ts.most.Load() != 1 || ts.calls.Load() > int64(elapsed/(200*time.Millisecond))+2 {
-		t.Fatalf("400 waits over %s: %d token calls, at most %d at once", elapsed, ts.calls.Load(), ts.most.Load())
+	if got := listings.seen(); len(got) != 4 || tok.refreshes.Load() != 1 {
+		t.Fatalf("headers %q after %d refreshes", got, tok.refreshes.Load())
+	} else {
+		for _, auth := range got {
+			if auth != "Bearer tok-1" {
+				t.Errorf("Authorization %q", auth)
+			}
+		}
 	}
 }
 

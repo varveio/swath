@@ -63,37 +63,62 @@ func get(t *testing.T, g *Guard, url string) (*http.Response, []byte, error) {
 }
 
 func TestGuardCap(t *testing.T) {
-	const max = 100
-	for _, tc := range []struct {
-		size int
-		fail bool
-	}{{max - 1, false}, {max, false}, {max + 1, true}, {10 * max, true}} {
-		t.Run(fmt.Sprint(tc.size), func(t *testing.T) {
-			srv := serve(t, 200, tc.size)
-			resp, body, err := get(t, &Guard{MaxBody: max}, srv.URL)
-			if !tc.fail {
-				if err != nil || len(body) != tc.size || resp.ContentLength != int64(tc.size) {
-					t.Fatalf("err %v, %d bytes, ContentLength %d", err, len(body), resp.ContentLength)
-				}
-				return
+	const limit = 100
+	for _, status := range []int{200, 201, 299, 403, 503} {
+		for _, size := range []int{limit - 1, limit, limit + 1, 10 * limit} {
+			for _, declared := range []bool{false, true} {
+				t.Run(fmt.Sprintf("status=%d/size=%d/declared=%v", status, size, declared), func(t *testing.T) {
+					original := strings.NewReader(strings.Repeat("x", size))
+					var closed atomic.Int32
+					validated := false
+					length := int64(-1)
+					if declared {
+						length = int64(size)
+					}
+					g := &Guard{MaxBody: limit, MaxError: limit,
+						Next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+							return &http.Response{StatusCode: status, ContentLength: length, Header: make(http.Header), Body: &countingBody{ReadCloser: io.NopCloser(original), n: &closed}}, nil
+						}),
+						Validate: func(_ *http.Request, gotStatus int, body []byte) error {
+							validated = true
+							if gotStatus != status || len(body) != size {
+								t.Errorf("validated status %d, %d bytes", gotStatus, len(body))
+							}
+							return nil
+						},
+					}
+					resp, err := g.RoundTrip(mustReq(t, "http://example.test/list"))
+					success := status/100 == 2
+					tooLarge := success && size > limit
+					if closed.Load() != 1 || size-original.Len() != min(size, limit+1) {
+						t.Fatalf("closed %d times, read %d bytes", closed.Load(), size-original.Len())
+					}
+					if validated != (success && !tooLarge) {
+						t.Errorf("Validate called: %v", validated)
+					}
+					if tooLarge {
+						var ge *GuardError
+						var tl *TooLargeError
+						if resp != nil || !errors.As(err, &ge) || !errors.As(err, &tl) || tl.Limit != limit || Cause(err) != ge.Err || errors.Is(err, ErrSyntax) || Transport(Cause(err)) {
+							t.Fatalf("response %v, error %v: want terminal Guard cap error", resp, err)
+						}
+						if want := fmt.Sprintf("response larger than %d bytes", limit); Cause(err).Error() != want {
+							t.Errorf("cause %q, want %q", Cause(err), want)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer resp.Body.Close()
+					body, err := io.ReadAll(resp.Body)
+					want := min(size, limit)
+					if err != nil || len(body) != want || resp.StatusCode != status || resp.ContentLength != int64(want) || resp.Header.Get("Content-Length") != fmt.Sprint(want) {
+						t.Fatalf("error %v, body %d bytes, response %+v", err, len(body), resp)
+					}
+				})
 			}
-			var ge *GuardError
-			if !errors.As(err, &ge) {
-				t.Fatalf("err %v is not a *GuardError", err)
-			}
-			if Cause(err) != ge.Err {
-				t.Errorf("Cause %v, want %v", Cause(err), ge.Err)
-			}
-			if errors.Is(Cause(err), ErrSyntax) || errors.Is(err, ErrSyntax) {
-				t.Errorf("an over-cap body must not be ErrSyntax: %v", err)
-			}
-			if want := fmt.Sprintf("response larger than %d bytes", max); Cause(err).Error() != want {
-				t.Errorf("cause %q, want %q", Cause(err), want)
-			}
-			if tl, ok := errors.AsType[*TooLargeError](err); !ok || tl.Limit != max {
-				t.Errorf("err %v: want a *TooLargeError of limit %d", err, max)
-			}
-		})
+		}
 	}
 }
 

@@ -591,3 +591,14 @@ func withHost(req *http.Request, target *url.URL) *http.Request {
 	out.URL.Scheme, out.URL.Host, out.Host = target.Scheme, target.Host, target.Host
 	return out
 }
+
+func TestEndpointRefusal(t *testing.T) {
+	for _, ep := range []string{"http://%zz/", "http://host/%zz", "ftp://host/", "host/path", "http:///path"} {
+		t.Run(ep, func(t *testing.T) {
+			c, err := New(t.Context(), Config{Endpoint: ep, Account: "acct", Anonymous: true})
+			if c != nil || err == nil || !strings.Contains(err.Error(), "endpoint") {
+				t.Fatalf("client %v, error %v", c, err)
+			}
+		})
+	}
+}

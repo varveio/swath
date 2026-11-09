@@ -5,6 +5,7 @@ package tokensource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -74,8 +75,12 @@ func TestRefreshAfterInterval(t *testing.T) {
 		t.Fatal(tok)
 	}
 	c.fail.Store(true)
-	if tok, err := s.Token(context.Background()); err == nil {
-		t.Fatalf("a failed refresh gave %v", tok)
+	if tok, err := s.Token(context.Background()); err == nil || tok != nil {
+		t.Fatalf("a failed refresh gave %v, %v", tok, err)
+	}
+	c.fail.Store(false)
+	if tok, err := s.Token(t.Context()); err != nil || tok.AccessToken != "t4" {
+		t.Fatalf("recovery: token %v, error %v", tok, err)
 	}
 }
 
@@ -118,5 +123,39 @@ func TestSharedKeepsExpiryMargin(t *testing.T) {
 				t.Fatal("cached token replaced")
 			}
 		})
+	}
+}
+
+// Abandoned waits do not start another refresh or cancel the shared one.
+func TestAbandonedWaitsShareRefresh(t *testing.T) {
+	c := &counting{release: make(chan struct{})}
+	defer close(c.release)
+	s := NewShared(c)
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			if tok, err := s.Token(ctx); tok != nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("abandoned wait: %v, %v", tok, err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := c.n.Load(); got != 1 {
+		t.Fatalf("%d outstanding refreshes, want 1", got)
+	}
+	// A live waiter receives the outstanding refresh's result.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if tok, err := s.Token(t.Context()); err != nil || tok.AccessToken != "t1" {
+			t.Errorf("live wait: %v, %v", tok, err)
+		}
+	}()
+	c.release <- struct{}{}
+	<-done
+	if got := c.n.Load(); got != 1 {
+		t.Fatalf("%d refreshes, want 1", got)
 	}
 }

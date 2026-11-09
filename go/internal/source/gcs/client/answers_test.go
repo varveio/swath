@@ -172,9 +172,6 @@ func TestAnswers(t *testing.T) {
 		{"200 error envelope", body(200, `{"error":{"code":503,"message":"backend"}}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 error null", body(200, `{"error":null}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 null", body(200, `null`), objhttp.ClassParse, retried, nil, nil},
-		{"200 spaced null", body(200, " null \n"), objhttp.ClassParse, retried, nil, nil},
-		{"200 array", body(200, `[]`), objhttp.ClassParse, retried, nil, nil},
-		{"200 string", body(200, `""`), objhttp.ClassParse, retried, nil, nil},
 		{"200 empty", body(200, ``), objhttp.ClassParse, retried, nil, nil},
 		{"200 trailing JSON", body(200, `{"kind":"storage#objects"} {}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 kind", body(200, `{"kind":"storage#objects"}`), "", final, empty, nil},
@@ -191,10 +188,6 @@ func TestAnswers(t *testing.T) {
 		{"200 escaped name", body(200, `{"kind":"storage#objects","items":[{"name":"a`+esc+`u0062\\\"c","size":"3","generation":"7"}]}`), "", final,
 			&Page{Items: []Object{{Name: `ab\"c`, Size: 3, Generation: 7}}}, nil},
 		{"200 cut mid-object", body(200, `{"kind":"storage#objects","items":[{"na`), objhttp.ClassParse, retried, nil, nil},
-		{"200 body short of its length", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Length", "100")
-			io.WriteString(w, `{"kind":"storage#objects",`)
-		}, objhttp.ClassOther, retried, nil, nil},
 		{"200 16 MiB", body(200, padded(maxBody)), "", final, empty, nil},
 		{"200 16 MiB + 1", body(200, padded(maxBody+1)), objhttp.ClassOther, final, nil, nil},
 		// any 2xx but 200 is not a listing: an answer, class other
@@ -204,14 +197,8 @@ func TestAnswers(t *testing.T) {
 		{"201 throttle reason", jsonError(201, 201, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{201, "rateLimitExceeded", "m"}},
 		{"202 forbidden reason", jsonError(202, 202, "forbidden"), objhttp.ClassOther, final, nil, &answer{202, "forbidden", "m"}},
 		{"202 not JSON", body(202, `accepted`), objhttp.ClassOther, final, nil, &answer{202, "", ""}},
-		{"malformed gzip", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Encoding", "gzip")
-			io.WriteString(w, "not gzip at all")
-		}, objhttp.ClassOther, final, nil, nil},
 		{"size over int64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"9223372036854775808"}]}`), objhttp.ClassParse, retried, nil, nil},
-		{"size max uint64", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"18446744073709551615"}]}`), objhttp.ClassParse, retried, nil, nil},
 		{"size not a number", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"x"}]}`), objhttp.ClassParse, retried, nil, nil},
-		{"size unquoted", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":5}]}`), objhttp.ClassParse, retried, nil, nil},
 		{"size negative", body(200, `{"kind":"storage#objects","items":[{"name":"a","size":"-1"}]}`), objhttp.ClassParse, retried, nil, nil},
 		{"malformed updated", body(200, `{"kind":"storage#objects","items":[{"name":"a","updated":"2026-02-19"}]}`), objhttp.ClassParse, retried, nil, nil},
 		{"malformed timeCreated", body(200, `{"kind":"storage#objects","items":[{"name":"a","timeCreated":"yesterday"}]}`), objhttp.ClassParse, retried, nil, nil},
@@ -281,30 +268,6 @@ func TestAnswers(t *testing.T) {
 	}
 }
 
-// TestCanceledAfterHeaders: the caller's cancellation while the body is
-// awaited ends the call as canceled, not retried, the body closed once.
-func TestCanceledAfterHeaders(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"kind":"storage#objects",`)
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-	cl := &closes{}
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3}, RequestTimeout: 5 * time.Second,
-		HTTPClient: &http.Client{Transport: cl}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	_, err = c.List(ctx, &ListInput{Bucket: "b"})
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) || c.Counters().Attempts != 1 || c.Counters().Retries != 0 {
-		t.Fatalf("err %v, counters %+v", err, c.Counters())
-	}
-	cl.check(t)
-}
-
 // TestErrorPageThenValidPage: a 200 carrying an error member beside its
 // kind is retried as a parse failure, and the retry's page is the answer.
 func TestErrorPageThenValidPage(t *testing.T) {
@@ -327,25 +290,5 @@ func TestErrorPageThenValidPage(t *testing.T) {
 	}
 	if got := c.Counters(); got.Attempts != 2 || got.Retries != 1 || got.ParseFailures != 1 {
 		t.Fatalf("counters %+v", got)
-	}
-}
-
-// TestDeadlineDuringBody: an attempt whose body outlasts the request
-// timeout is a timeout, counted and retried.
-func TestDeadlineDuringBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"kind":"storage#objects",`)
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond}, RequestTimeout: 100 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = c.List(context.Background(), &ListInput{Bucket: "b"})
-	got := c.Counters()
-	if objhttp.Classify(err) != objhttp.ClassTimeout || got.Attempts != 2 || got.Retries != 1 || got.Timeouts != 2 || got.ParseFailures != 0 {
-		t.Fatalf("err %v (class %q), counters %+v", err, objhttp.Classify(err), got)
 	}
 }

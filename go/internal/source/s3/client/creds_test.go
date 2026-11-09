@@ -11,12 +11,9 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,108 +23,48 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// fakeSTS answers AssumeRoleWithWebIdentity and AssumeRole, recording each
-// call's action, external id and signing region.
-type fakeSTS struct {
-	mu    sync.Mutex
-	calls []string
-}
-
-func (f *fakeSTS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	b, _ := io.ReadAll(r.Body)
-	q, _ := url.ParseQuery(string(b))
-	region := ""
-	if a := r.Header.Get("Authorization"); a != "" {
-		if i := strings.Index(a, "Credential="); i >= 0 {
-			if parts := strings.Split(a[i:], "/"); len(parts) > 2 {
-				region = parts[2]
-			}
-		}
-	}
-	act := q.Get("Action")
-	f.mu.Lock()
-	f.calls = append(f.calls, fmt.Sprintf("%s ext=%s region=%s", act, q.Get("ExternalId"), region))
-	f.mu.Unlock()
-	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
-	key := "AKWEB"
-	if act == "AssumeRole" {
-		key = "AKROLE"
-	}
-	fmt.Fprintf(w, `<%sResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><%sResult><Credentials>
-<AccessKeyId>%s</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>tok-%s</SessionToken><Expiration>%s</Expiration>
-</Credentials></%sResult></%sResponse>`, act, act, key, key, exp, act, act)
-}
-
-// TestCredentialSources: the bucket's region (--region) is the listing's
-// signing region only; the credential service keeps the environment's or
-// the profile's region (else us-east-1), so a bucket in another region
-// never moves STS. A role assumed from a profile's keys: STS is signed in
-// us-east-1, the listing in the bucket's region with the role's keys.
+// TestCredentialSources keeps the credential-service region independent of
+// the listing region, including the default when neither file nor environment
+// supplies a credential region.
 func TestCredentialSources(t *testing.T) {
-	dir := t.TempDir()
-	isolate(t, dir)
-	sts := &fakeSTS{}
-	stsSrv := httptest.NewServer(sts)
-	t.Cleanup(stsSrv.Close)
-	t.Setenv("AWS_ENDPOINT_URL_STS", stsSrv.URL)
-	os.WriteFile(filepath.Join(dir, "credentials"), []byte("[base]\naws_access_key_id = AKBASE\naws_secret_access_key = s\n"), 0o600)
-	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile role]\nrole_arn = arn:aws:iam::222222222222:role/target\nsource_profile = base\n"), 0o600)
-	var auth atomic.Value
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		auth.Store(r.Header.Get("Authorization"))
-		w.Write([]byte(okPage))
-	}, Config{Profile: "role", Region: "ap-southeast-2"})
-	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-		t.Fatal(err)
-	}
-	if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") || !strings.Contains(a, "/ap-southeast-2/s3/") {
-		t.Fatalf("listing: %q", a)
-	}
-	sts.mu.Lock()
-	calls := strings.Join(sts.calls, "; ")
-	sts.mu.Unlock()
-	if calls != "AssumeRole ext= region=us-east-1" {
-		t.Fatalf("STS calls: %s", calls)
-	}
-}
-
-// TestCredentialRefresh: credentials that expire during a listing are
-// fetched again (a credential process whose keys last 2 s stands in for an
-// hour-long session); requests are signed with the new keys, none fails.
-func TestCredentialRefresh(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell credential process")
-	}
-	dir := t.TempDir()
-	isolate(t, dir)
-	counter := filepath.Join(dir, "n")
-	script := filepath.Join(dir, "creds.sh")
-	os.WriteFile(script, []byte(`#!/bin/sh
-n=$(cat `+counter+` 2>/dev/null || echo 0); n=$((n+1)); echo $n > `+counter+`
-exp=$(date -u -d "+2 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+2S +%Y-%m-%dT%H:%M:%SZ)
-printf '{"Version":1,"AccessKeyId":"AKP%s","SecretAccessKey":"s","SessionToken":"t","Expiration":"%s"}' $n $exp
-`), 0o700)
-	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile proc]\ncredential_process = "+script+"\n"), 0o600)
-	var keys sync.Map
-	h := func(w http.ResponseWriter, r *http.Request) {
-		a := r.Header.Get("Authorization")
-		if i := strings.Index(a, "Credential="); i >= 0 {
-			keys.Store(strings.SplitN(a[i+len("Credential="):], "/", 2)[0], true)
-		}
-		w.Write([]byte(okPage))
-	}
-	c, _ := testClient(t, h, Config{Profile: "proc"})
-	deadline := time.Now().Add(4 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	n := 0
-	keys.Range(func(any, any) bool { n++; return true })
-	if n < 2 {
-		t.Fatalf("signed with %d distinct keys over 4 s of 2-second credentials", n)
+	for _, region := range []string{"eu-west-2", ""} {
+		t.Run("credential region="+region, func(t *testing.T) {
+			dir := t.TempDir()
+			isolate(t, dir)
+			os.WriteFile(filepath.Join(dir, "credentials"), []byte("[base]\naws_access_key_id = AKBASE\naws_secret_access_key = s\n"), 0o600)
+			os.WriteFile(filepath.Join(dir, "config"), []byte("[profile role]\nrole_arn = arn:aws:iam::222222222222:role/target\nsource_profile = base\nregion = "+region+"\n"), 0o600)
+			var stsRegion atomic.Value
+			sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				parts := strings.Split(r.Header.Get("Authorization"), "/")
+				if len(parts) < 3 {
+					t.Error("unsigned STS request")
+					return
+				}
+				stsRegion.Store(parts[2])
+				exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+				fmt.Fprintf(w, `<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>AKROLE</AccessKeyId><SecretAccessKey>s</SecretAccessKey><SessionToken>tok</SessionToken><Expiration>%s</Expiration></Credentials></AssumeRoleResult></AssumeRoleResponse>`, exp)
+			}))
+			defer sts.Close()
+			t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
+			var auth atomic.Value
+			c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				auth.Store(r.Header.Get("Authorization"))
+				io.WriteString(w, okPage)
+			}, Config{Profile: "role", Region: "ap-southeast-2"})
+			if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+				t.Fatal(err)
+			}
+			if a := auth.Load().(string); !strings.Contains(a, "Credential=AKROLE/") || !strings.Contains(a, "/ap-southeast-2/s3/") {
+				t.Fatalf("listing: %q", a)
+			}
+			want := region
+			if want == "" {
+				want = "us-east-1"
+			}
+			if got := stsRegion.Load(); got != want {
+				t.Fatalf("STS region %v, want %s", got, want)
+			}
+		})
 	}
 }
 

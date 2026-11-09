@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -24,10 +25,11 @@ type onePerRequest struct {
 }
 
 func (p onePerRequest) Retrieve(context.Context) (aws.Credentials, error) {
-	if p.retrieved.Add(1) > p.sent.Load()+1 {
+	n := p.retrieved.Add(1)
+	if n > p.sent.Load()+1 {
 		return aws.Credentials{}, errors.New("a second lookup for one request")
 	}
-	return aws.Credentials{AccessKeyID: "AKTEST", SecretAccessKey: "s", Source: "test"}, nil
+	return aws.Credentials{AccessKeyID: fmt.Sprintf("AKTEST%d", n), SecretAccessKey: "s", SessionToken: fmt.Sprintf("token%d", n), Source: "test"}, nil
 }
 
 // TestCredentialsRetrievedOncePerAttempt: the credentials are looked up
@@ -36,21 +38,24 @@ func (p onePerRequest) Retrieve(context.Context) (aws.Credentials, error) {
 func TestCredentialsRetrievedOncePerAttempt(t *testing.T) {
 	s3test.NoCredentials(t)
 	var retrieved, sent atomic.Int32
-	var auth atomic.Value
 	url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sent.Add(1)
-		auth.Store(r.Header.Get("Authorization"))
+		n := sent.Add(1)
+		if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=AKTEST%d/", n)) || r.Header.Get("X-Amz-Security-Token") != fmt.Sprintf("token%d", n) {
+			t.Errorf("attempt %d: authorization %q, token %q", n, auth, r.Header.Get("X-Amz-Security-Token"))
+		}
+		if n < 3 {
+			w.WriteHeader(500)
+			io.WriteString(w, `<Error><Code>InternalError</Code></Error>`)
+			return
+		}
 		io.WriteString(w, okPage)
 	}))
 	c := newTest(t, testConfig(url))
 	c.auth.credentials, c.auth.anonymous, c.auth.source = onePerRequest{&retrieved, &sent}, false, "test"
-	for range 3 {
-		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
 	}
-	if retrieved.Load() != sent.Load() || c.Counters().Attempts != 3 ||
-		!strings.HasPrefix(auth.Load().(string), "AWS4-HMAC-SHA256 Credential=AKTEST/") {
-		t.Fatalf("%d lookups for %d requests, %+v, authorization %q", retrieved.Load(), sent.Load(), c.Counters(), auth.Load())
+	if retrieved.Load() != 3 || sent.Load() != 3 || c.Counters().Attempts != 3 || c.Counters().Retries != 2 {
+		t.Fatalf("%d lookups for %d requests, %+v", retrieved.Load(), sent.Load(), c.Counters())
 	}
 }

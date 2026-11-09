@@ -52,10 +52,6 @@ import (
 // behave the same for listing.
 const Version = "2026-10-06"
 
-// DefaultEndpoint is the blob service of an account, ACCOUNT standing for
-// the account name.
-const DefaultEndpoint = "https://ACCOUNT.blob.core.windows.net"
-
 // storageScope is the Entra ID scope of Azure Storage.
 const storageScope = "https://storage.azure.com/.default"
 
@@ -224,7 +220,7 @@ func (n noLocation) RoundTrip(req *http.Request) (*http.Response, error) {
 // baseURL is the account's root URL, ending in '/'.
 func baseURL(endpoint, account string) (*url.URL, error) {
 	if endpoint == "" {
-		return &url.URL{Scheme: "https", Host: account + ".blob.core.windows.net", Path: "/"}, nil
+		return &url.URL{Scheme: "https", Host: account + blobSuffix, Path: "/"}, nil
 	}
 	u, err := url.Parse(endpoint)
 	switch {
@@ -355,7 +351,7 @@ func transientToken(err error) bool {
 		}
 		return objhttp.TransientStatus(af.RawResponse.StatusCode)
 	}
-	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
+	return objhttp.Transport(err)
 }
 
 // Credentials names where the credentials came from (never the secret).
@@ -520,13 +516,19 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	return resp.Header, nil
 }
 
-// responseError is a non-200 answer as an *Error: the code given (azcore's
-// ResponseError.ErrorCode, with XML character decoding restored), the
-// message read from the bounded body, both scrubbed of the SAS, a
+// responseError is a non-200 answer as an *Error: the header code, else
+// decoded XML code, else the SDK code (which also reads JSON); the message
+// from the bounded XML body, both scrubbed of the SAS; a
 // redirect's target withheld, a 400's query (without the SAS), the
 // Retry-After wait.
 func (c *Client) responseError(resp *http.Response, code string, body []byte, u *url.URL) *Error {
-	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: errorMessage(body),
+	decoded, message := errorDocument(body)
+	if header := resp.Header.Get(headerErrorCode); header != "" {
+		code = header
+	} else if decoded != "" {
+		code = decoded
+	}
+	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: message,
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
 	if len(e.Code) > maxErrorBody {
 		e.Code = e.Code[:maxErrorBody]

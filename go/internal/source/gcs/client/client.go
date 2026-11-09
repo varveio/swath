@@ -189,8 +189,10 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
 		Meter: objhttp.NewMeter(cfg.Retry)}
 	// The token source keeps this context for every refresh: it must
-	// outlive New's caller's deadline, and its HTTP client bounds each token
-	// exchange (the attempt deadline bounds the wait, token below).
+	// outlive New's caller's deadline. The attempt deadline bounds the wait
+	// for a token. This HTTP client bounds exchanges that use it; metadata
+	// exchanges use the metadata SDK's background context, HTTP timeout
+	// and retry policy.
 	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
 		&http.Client{Transport: pool[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
@@ -217,7 +219,7 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 	for _, hc := range pool {
 		g := *hc // keeps the pool's no-redirect policy
 		g.Transport = &objhttp.Guard{Next: hc.Transport, Validate: validate}
-		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
+		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint),
 			option.WithLogger(quiet))
 		if err != nil {
 			return nil, err

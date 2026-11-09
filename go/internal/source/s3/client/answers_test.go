@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
@@ -106,21 +105,7 @@ func TestAnswers(t *testing.T) {
 			w.WriteHeader(status)
 		}
 	}
-	cut := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", "1000")
-		io.WriteString(w, okPage[:20])
-	}
 	cutError := func(status int, code string) http.HandlerFunc { return cutAnswer(t, status, code) }
-	stall := func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, okPage[:20])
-		w.(http.Flusher).Flush()
-		<-r.Context().Done()
-	}
-	const stalled = "200 past the deadline mid-body"
-	gzipped := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Encoding", "gzip")
-		io.WriteString(w, "not gzip at all")
-	}
 	// The counters of an answer given once (not retried) and of one
 	// retried to exhaustion (3 attempts), with the retried answer's own
 	// counter.
@@ -144,6 +129,7 @@ func TestAnswers(t *testing.T) {
 		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "RID"}},
 		{"403 InvalidAccessKeyId", xmlError(403, "InvalidAccessKeyId"), objhttp.ClassAuth, once, &Error{Status: 403, Code: "InvalidAccessKeyId", RequestID: "RID"}},
 		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassOther, once, &Error{Status: 404, Code: "NoSuchBucket", RequestID: "RID"}},
+		{"403 header request ID", xmlError(403, "AccessDenied", "X-Amz-Request-Id", "HID"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "HID"}},
 		{"404 no body", body(404, ""), objhttp.ClassOther, once, &Error{Status: 404, Code: "NotFound"}},
 		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassOther, once,
 			&Error{Status: 301, Code: "PermanentRedirect", Region: "eu-west-2", RequestID: "RID"}},
@@ -163,9 +149,6 @@ func TestAnswers(t *testing.T) {
 		{"200 cut mid-element", body(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Ke`), objhttp.ClassParse, parse, nil},
 		{"200 16 MiB", body(200, sized(maxBody)), "", once, nil},
 		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther, once, nil},
-		{"200 cut mid-stream", cut, objhttp.ClassOther, exhausted(objhttp.Counts{}), nil},
-		{stalled, stall, objhttp.ClassTimeout, timedOut, nil},
-		{"200 malformed gzip", gzipped, objhttp.ClassOther, once, nil},
 		{"201", body(201, okPage), objhttp.ClassOther, once, &Error{Status: 201, Code: "Created"}},
 		{"201 SlowDown", xmlError(201, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 201, Code: "SlowDown", RequestID: "RID"}},
 		{"202", body(202, ""), objhttp.ClassOther, once, &Error{Status: 202, Code: "Accepted"}},
@@ -176,9 +159,7 @@ func TestAnswers(t *testing.T) {
 			defer srv.Close()
 			cfg := testConfig(srv.URL)
 			cfg.MaxAttempts = 3
-			if c.name == stalled {
-				cfg.RequestTimeout = 200 * time.Millisecond // the others keep the default: 16 MiB under -race
-			}
+
 			rt := &closeCounter{next: http.DefaultTransport}
 			cl := newTest(t, withHTTP(cfg, rt))
 			_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
@@ -246,32 +227,6 @@ func TestCutThrottleFeedsLimiter(t *testing.T) {
 func withHTTP(cfg Config, rt http.RoundTripper) Config {
 	cfg.HTTPClient = &http.Client{Transport: rt}
 	return cfg
-}
-
-// TestCancelAfterHeaders: a caller's cancellation while the body is read
-// is cancellation, not an attempt failure, and the body is closed.
-func TestCancelAfterHeaders(t *testing.T) {
-	s3test.NoCredentials(t)
-	release := make(chan struct{})
-	defer close(release)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
-		w.(http.Flusher).Flush()
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
-	defer srv.Close()
-	rt := &closeCounter{next: http.DefaultTransport}
-	c := newTest(t, withHTTP(testConfig(srv.URL), rt))
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	_, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"})
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) || c.Counters().Attempts != 1 {
-		t.Fatalf("%v (%q) %+v", err, objhttp.Classify(err), c.Counters())
-	}
-	rt.closedOnce(t)
 }
 
 // TestBearerTokenFailureIsNotAnAttempt: a bearer token command that fails

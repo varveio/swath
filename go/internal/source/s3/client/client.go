@@ -304,14 +304,11 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 }
 
 // failure maps an attempt's error to safe provider diagnostics. A Guard
-// failure keeps its marker for objhttp.Normalize to recover the cause (objhttp.ErrSyntax, a 2xx answer other than 200, the size
-// cap, a credential error, a failed 2xx body read: a cut body is
-// transport, a read past the attempt's deadline ErrTimeout); an HTTP
-// answer other than 2xx is a *Error, its body cut or not (the Guard hands
-// up the bytes read, and the status classifies it); a 2xx body the SDK
-// could not decode is objhttp.ErrSyntax; the
-// scanner's objhttp.ErrSyntax and objhttp.ErrInvalidPage stand; a transport failure stays
-// one (an attempt timeout is ErrTimeout).
+// failure keeps its marker for objhttp.Normalize to recover the cause:
+// syntax, a non-200 2xx answer, the cap, credentials or a failed body read.
+// An HTTP answer outside 2xx becomes an *Error even when its body is cut;
+// the status classifies it. The scanner's syntax and invalid-page errors
+// stand, and a transport failure stays one. An attempt timeout is ErrTimeout.
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError
 	if errors.As(err, &ge) {
@@ -321,10 +318,6 @@ func (c *Client) failure(actx, ctx context.Context, err error) error {
 	if errors.As(err, &re) && re.HTTPStatusCode() != 0 { // 0: no answer (the SDK wraps a send failure too)
 		if s := re.HTTPStatusCode(); s < 200 || s > 299 {
 			return responseError(re, err)
-		}
-		var de *smithy.DeserializationError
-		if errors.As(err, &de) {
-			return fmt.Errorf("%w: %v", objhttp.ErrSyntax, de)
 		}
 		return err
 	}
@@ -341,9 +334,6 @@ func (c *Client) failure(actx, ctx context.Context, err error) error {
 func responseError(re *awshttp.ResponseError, err error) *Error {
 	status := re.HTTPStatusCode()
 	e := &Error{Status: status, RequestID: re.RequestID}
-	if e.RequestID == "" {
-		e.RequestID = re.Response.Header.Get("X-Amz-Request-Id")
-	}
 	var ae smithy.APIError
 	if errors.As(err, &ae) && ae.ErrorCode() != "UnknownError" { // the SDK's name for a body without a code
 		e.Code, e.Message = ae.ErrorCode(), ae.ErrorMessage()

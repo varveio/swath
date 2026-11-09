@@ -109,7 +109,6 @@ func (c *Client) services(bodyCap int64) error {
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
 			PerCallPolicies: []policy.Policy{pin{}},
 			Telemetry:       policy.TelemetryOptions{ApplicationID: buildinfo.UserAgent()}, // swath's token, then the SDK's
-			Logging:         policy.LogOptions{IncludeBody: false},
 		}}
 		var svc *service.Client
 		var err error
@@ -233,13 +232,7 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 	u := s.safeURL(c, container)
 	if re, ok := errors.AsType[*azcore.ResponseError](err); ok && re.RawResponse != nil {
 		body, _ := runtime.Payload(re.RawResponse)
-		code := re.ErrorCode
-		if re.RawResponse.Header.Get(headerErrorCode) == "" {
-			if decoded := errorCode(body); decoded != "" {
-				code = decoded
-			}
-		}
-		return c.responseError(re.RawResponse, code, body, u)
+		return c.responseError(re.RawResponse, re.ErrorCode, body, u)
 	}
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)

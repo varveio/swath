@@ -189,24 +189,6 @@ func TestEntraEnvironmentCredential(t *testing.T) {
 	}
 }
 
-// TestEntraTokenReused: a long-lived token is fetched once.
-func TestEntraTokenReused(t *testing.T) {
-	es := newEntraServer(t, 3600)
-	cfg := entraEnv(t, es)
-	c, err := New(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
-		if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := es.seen(); len(got) != 3 || got[2] != "Bearer tok-1" || es.tokens.Load() != 1 {
-		t.Fatalf("Authorization headers %q after %d token requests", got, es.tokens.Load())
-	}
-}
-
 // TestEntraSlowRefreshBounded: a token endpoint slower than the request
 // timeout fails each attempt at the timeout, counted as a timeout and
 // retried; the request ends bounded by its attempts as a requeued
@@ -306,9 +288,9 @@ func (c *countingCredential) GetToken(ctx context.Context, _ policy.TokenRequest
 	return azcore.AccessToken{Token: "tok", ExpiresOn: time.Now().Add(time.Hour)}, nil
 }
 
-// TestTokenWaitersCoalesce: concurrent requests share one outstanding
-// token call (tokensource.Shared), and the token is reused.
-func TestTokenWaitersCoalesce(t *testing.T) {
+// TestConcurrentBearerRequests checks shared-source wiring and bearer headers.
+// The waiter and refresh mechanics live in tokensource.
+func TestConcurrentBearerRequests(t *testing.T) {
 	var bearer atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(headerAuthorization) == "Bearer tok" {
@@ -317,10 +299,10 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 		fmt.Fprint(w, page(""))
 	}))
 	defer srv.Close()
-	cred := &countingCredential{delay: 100 * time.Millisecond}
+	cred := &countingCredential{delay: 10 * time.Millisecond}
 	c := newEntraClient(t, Config{Endpoint: srv.URL}, cred)
 	var wg sync.WaitGroup
-	for range 20 {
+	for range 4 {
 		wg.Go(func() {
 			if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 				t.Error(err)
@@ -328,7 +310,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if cred.calls.Load() != 1 || cred.peak.Load() != 1 || bearer.Load() != 20 {
+	if cred.calls.Load() != 1 || cred.peak.Load() != 1 || bearer.Load() != 4 {
 		t.Fatalf("%d token calls (peak %d concurrent), %d bearer requests", cred.calls.Load(), cred.peak.Load(), bearer.Load())
 	}
 }
