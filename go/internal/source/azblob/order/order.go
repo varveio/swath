@@ -107,7 +107,10 @@ func stackBound(after, through string) int {
 
 var (
 	// ErrToken: a continuation token that is not the last one its chain
-	// returned, or that names no live chain.
+	// returned, or that names no live chain (released or evicted). It is
+	// neither transient nor a protocol violation: the engine does not
+	// requeue it, and the run fails without marking its journal
+	// unresumable (the engine never sends such a token).
 	ErrToken = errors.New("order: unknown or stale continuation token")
 	// ErrInvariant: the adapter's state contradicts itself, which only a
 	// page outside the listing contract (out of Azure's order) or a bug
@@ -142,6 +145,7 @@ type Adapter struct {
 
 	mu     sync.Mutex
 	chains map[uint64]*chain
+	busy   map[uint64]int // chains with a continuation in flight, by id: never evicted
 	next   uint64
 	clock  uint64 // ticks on every commit: a chain's used is its last tick
 
@@ -156,7 +160,7 @@ func New(l Lister, container string, set *counters.Set, base counters.ID) *Adapt
 	if set == nil {
 		set, base = counters.New(CounterDefs), 0
 	}
-	return &Adapter{l: l, container: container, set: set, base: base, chains: map[uint64]*chain{}}
+	return &Adapter{l: l, container: container, set: set, base: base, chains: map[uint64]*chain{}, busy: map[uint64]int{}}
 }
 
 // Counter is the value of counter i of CounterDefs.
@@ -264,10 +268,19 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 		}
 		a.mu.Lock()
 		base = a.chains[id]
-		a.mu.Unlock()
 		if base == nil || base.seq != seq || !base.same(q) {
+			a.mu.Unlock()
 			return nil, ErrToken
 		}
+		a.busy[id]++
+		a.mu.Unlock()
+		defer func() {
+			a.mu.Lock()
+			if a.busy[id]--; a.busy[id] == 0 {
+				delete(a.busy, id)
+			}
+			a.mu.Unlock()
+		}()
 		c = base.clone()
 	}
 	page, err := a.fill(ctx, c, limit)
@@ -290,8 +303,7 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 		c.used = a.clock
 		a.chains[id] = c
 		page.Token = strconv.FormatUint(id, 10) + ":" + strconv.FormatUint(c.seq, 10)
-		for len(a.chains) > MaxChains {
-			a.evict()
+		for len(a.chains) > MaxChains && a.evict() {
 		}
 		a.max(CChainsMax, int64(len(a.chains)))
 	case id != 0:
@@ -300,17 +312,23 @@ func (a *Adapter) Fetch(ctx context.Context, q *keyrange.Query) (*Page, error) {
 	return page, nil
 }
 
-// evict drops the least recently used chain; a.mu is held.
-func (a *Adapter) evict() {
+// evict drops the least recently used idle chain (none with a
+// continuation in flight), reporting false when every chain is busy: the
+// registry then holds more than MaxChains until they return. a.mu is held.
+func (a *Adapter) evict() bool {
 	var oldest uint64
 	var lru *chain
 	for id, c := range a.chains {
-		if lru == nil || c.used < lru.used {
+		if a.busy[id] == 0 && (lru == nil || c.used < lru.used) {
 			oldest, lru = id, c
 		}
 	}
+	if lru == nil {
+		return false
+	}
 	delete(a.chains, oldest)
 	a.add(CChainsEvicted, 1)
+	return true
 }
 
 func parseToken(t string) (id, seq uint64, err error) {
@@ -417,6 +435,16 @@ func (a *Adapter) consume(c *chain, i int, items []client.Item, marker string) {
 		}
 		sp.buf = append(sp.buf, items[k])
 		sp.sk.accepted = true
+		if c.bounded && n == c.through {
+			// Through ends its span: §3.1 cuts Through's path at every
+			// group boundary, so no member of its span follows it in
+			// Azure's order (a later one would differ from Through first
+			// at an EE..EF byte against F0..F4, which a cut separates).
+			// The read stops here instead of reading past it.
+			a.end(sp)
+			a.add(COverlapRows, int64(len(items)-k-1))
+			return
+		}
 	}
 	if marker == "" {
 		a.end(sp)

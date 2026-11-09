@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
@@ -584,5 +585,90 @@ func TestChainsEvicted(t *testing.T) {
 	}
 	if _, err := a.Fetch(context.Background(), &keyrange.Query{After: keys[0], Max: 1, Token: first}); !errors.Is(err, ErrToken) {
 		t.Errorf("an evicted chain's token: %v", err)
+	}
+}
+
+// TestThroughEndsItsSpan: an item equal to Through ends its span without
+// reading past it. Keys {a, b, c, d}, (a, b], Max 2: one response [a, b]
+// with a marker, b emitted, the chain done. At a Through holding a
+// scalar above U+FFFF, the S group's own span stops at it too.
+func TestThroughEndsItsSpan(t *testing.T) {
+	q := bounded("", "a", "b")
+	q.Max = 2
+	st, a := run(t, []string{"a", "b", "c", "d"}, q, nil)
+	if st.Responses() != 1 || a.Counter(COverlapRows) != 0 {
+		t.Errorf("%d responses, %d overlap rows\n%s", st.Responses(), a.Counter(COverlapRows), st)
+	}
+	// (ab, aS]: spans (ab, a\xEE), [a\xEE, a\xF0), [a\xF0, aS\x00); the
+	// last seeks aS and stops there, before aSb and aE.
+	keys := []string{"ac", "a" + E, "a" + S, "a" + S + "b", "b"}
+	if st, _ := run(t, keys, bounded("", "ab", "a"+S), nil); st.Responses() != 3 || st.Log()[2].Names[0] != "a"+S {
+		t.Errorf("%d responses\n%s", st.Responses(), st)
+	}
+}
+
+// blocking is a Lister that holds its first continuation (a request with
+// a marker) until release is closed, saying so on entered.
+type blocking struct {
+	l       Lister
+	held    atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blocking) List(ctx context.Context, in *client.ListInput) (*client.ListOutput, error) {
+	if in.Marker != "" && b.held.CompareAndSwap(false, true) {
+		b.entered <- struct{}{}
+		<-b.release
+	}
+	return b.l.List(ctx, in)
+}
+
+// TestInFlightChainNotEvicted: a chain whose continuation is in flight is
+// never evicted, however many chains register meanwhile (the others are,
+// least recently used first); it commits when its read returns, and its
+// new token continues it.
+func TestInFlightChainNotEvicted(t *testing.T) {
+	var keys []string
+	for i := range 3 * MaxChains {
+		keys = append(keys, fmt.Sprintf("k%03d", i))
+	}
+	b := &blocking{l: azblobtest.NewStore(keys), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	a := New(b, "c", nil, 0)
+	q := keyrange.Query{Max: 1}
+	p, err := a.Fetch(context.Background(), &q)
+	if err != nil || !p.Truncated {
+		t.Fatal(p, err)
+	}
+	q.Token = p.Token
+	next := make(chan string, 1)
+	go func() {
+		p, err := a.Fetch(context.Background(), &q)
+		if err != nil || len(p.Items) != 1 || p.Items[0].Name != keys[1] {
+			t.Errorf("the in-flight continuation: %+v %v", p, err)
+			next <- ""
+			return
+		}
+		next <- p.Token
+	}()
+	<-b.entered
+	for i := range 2 * MaxChains {
+		if _, err := a.Fetch(context.Background(), &keyrange.Query{After: keys[i], Max: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 1 + 2 × MaxChains registered, MaxChains kept, the busy one among
+	// them.
+	if a.Len() != MaxChains || a.Counter(CChainsEvicted) != MaxChains+1 {
+		t.Fatalf("%d chains, %d evicted", a.Len(), a.Counter(CChainsEvicted))
+	}
+	close(b.release)
+	tok := <-next
+	if tok == "" {
+		t.FailNow()
+	}
+	q.Token = tok
+	if p, err := a.Fetch(context.Background(), &q); err != nil || p.Items[0].Name != keys[2] {
+		t.Fatalf("after the commit: %+v %v", p, err)
 	}
 }

@@ -442,12 +442,16 @@ sent as they are: Azure lists from any valid-UTF-8 `startFrom` unchanged, a trai
 included (probed live on 2026-11-08); `AcceptBound` governs only the engine's pivots. A chain's pages are
 committed whole, so a failed read repeats the same page; tokens are the adapter's (`chain:seq`). The provider
 wraps `Expand`: one adapter per range, released however `Expand` returns, holding at most `order.MaxChains`
-(64) idle chains. The comparator (`internal/utf16order`) is the one the client's page check and the replay's
+(64) idle chains (one with a continuation in flight is never evicted). A token the adapter no longer holds
+(`order.ErrToken`, which the engine never sends) is neither requeued nor a protocol violation: it fails the run,
+its journal resumable. The comparator (`internal/utf16order`) is the one the client's page check and the replay's
 Azure route use. The specification, with its worked examples and the facts it rests on, is
 `notes/plans/2026-11-08-azblob-order-adapter-spec.md` in the notes repository.
 
 *Cost.* A container (or a query) with no name at U+E000 and above costs nothing extra: one span, the same
-requests as a plain marker chain, no split. Where such names are, each cut is a seek (`order_spans`,
+requests as a plain marker chain, no split. An item equal to a bounded query's `Through` ends its span, so a
+range's last page does not read past its end (sound because `Through`'s path is cut at every group boundary:
+nothing in its span follows it in Azure's order; an addition to the specification's §4.1). Where such names are, each cut is a seek (`order_spans`,
 `order_seeks`; one per span, even an empty one: `order_probes`), each split may add one (an `E` group the read
 has not reached), and a span that ends before its response does discards the rest of that response
 (`order_overlap_rows`: a read asks for a full page). An adapter invariant broken (only an out-of-order page can

@@ -147,6 +147,9 @@ func TestAzurePageSize(t *testing.T) {
 				if got := keysOf(c.rows); !slices.Equal(got, keys) {
 					t.Fatalf("%s: %d keys, want %d", what, len(got), len(keys))
 				}
+				if v := p.Stats().Counters.Value("bound_drops"); v != 0 {
+					t.Fatalf("%s: bound_drops %d", what, v)
+				}
 				for _, r := range st.Log() {
 					if r.In.MaxResults > page {
 						t.Fatalf("%s: a request for %d", what, r.In.MaxResults)
@@ -157,11 +160,15 @@ func TestAzurePageSize(t *testing.T) {
 	}
 }
 
-// TestAzureBoundDropsCoveredPrefixes: a delimiter page from a bound holds
-// neither the prefix equal to it nor the one it lies in, at an ASCII and
-// a high bound, with the adapter's exclusive start (the engine's
-// bound_drops stay zero: nothing is left for it to drop).
-func TestAzureBoundDropsCoveredPrefixes(t *testing.T) {
+// TestFetchDropsCoveredPrefixes: a delimiter page that fetch returns from
+// a bound holds neither the prefix equal to it nor the one it lies in, at
+// an ASCII and a high bound: the adapter's exclusive start leaves the
+// engine nothing to drop. (Not a restatement of keyrange's
+// TestInclusiveBoundDropsCoveredPrefixes, which tests the engine's drop of
+// an inclusive provider's prefixes; with StartInclusive false that path is
+// off, and TestAzurePageSize checks bound_drops stays zero through the
+// engine.)
+func TestFetchDropsCoveredPrefixes(t *testing.T) {
 	keys := []string{"f05/a", "f06/a", "f06/x/y", "f07/a", "f08/a", "f/a", "f/b", "f\U00010000/a"}
 	st := azblobtest.NewStore(keys)
 	p := azureEngine(t, st, keyrange.Options{Workers: 1})
@@ -454,12 +461,18 @@ func (s *stopAfter) Write(ctx context.Context, segs [][]Row) error {
 	return nil
 }
 
-// TestAzureResumeAfterCrash: a seeded run with 8 workers stopped once it
-// has published n rows, resumed after its last published key: the two
-// runs together list every key once, in order.
+// TestAzureResumeAfterCrash: a seeded run with 8 workers is cancelled
+// once it has published n rows (the cancel path); the journal of a crash
+// there would hold the n-th row as its last key, so exactly the first n
+// rows are taken as published, whatever more one sink batch carried. The
+// resume after the n-th lists the rest: together every key once, in order.
+// Every arm resumes (n is below the corpus's size).
 func TestAzureResumeAfterCrash(t *testing.T) {
 	keys := utf16Keys()
 	for _, n := range []int{1, 50, 200, len(keys) - 1} {
+		if n >= len(keys) {
+			t.Fatalf("n=%d of %d keys: nothing to resume", n, len(keys))
+		}
 		st := azblobtest.NewStore(keys)
 		st.Short = func(n int) int { return 1 + n%4 }
 		ctx, cancel := context.WithCancelCause(context.Background())
@@ -471,16 +484,17 @@ func TestAzureResumeAfterCrash(t *testing.T) {
 		}
 		got := keysOf(first.rows)
 		if len(got) < n || !slices.Equal(got, keys[:len(got)]) {
-			t.Fatalf("n=%d: the first run published %d rows, not a prefix", n, len(got))
+			t.Fatalf("n=%d: the first run published %d rows, not a prefix of at least n", n, len(got))
 		}
-		if len(got) == len(keys) {
-			continue
-		}
-		k := got[len(got)-1]
+		got = got[:n]
 		second := &collect{}
-		if err := runRows(t, context.Background(), azureEngine(t, azblobtest.NewStore(keys),
-			keyrange.Options{Seed: true, Workers: 8, Resume: &keyrange.Resume{After: k}}), 8, second); err != nil {
+		resumed := azblobtest.NewStore(keys)
+		if err := runRows(t, context.Background(), azureEngine(t, resumed,
+			keyrange.Options{Seed: true, Workers: 8, Resume: &keyrange.Resume{After: got[n-1]}}), 8, second); err != nil {
 			t.Fatalf("n=%d resume: %v", n, err)
+		}
+		if resumed.Responses() == 0 || len(second.rows) == 0 {
+			t.Fatalf("n=%d: the resume listed nothing (%d responses)", n, resumed.Responses())
 		}
 		if all := append(got, keysOf(second.rows)...); !slices.Equal(all, keys) {
 			t.Fatalf("n=%d: %d + %d keys, want %d", n, len(got), len(second.rows), len(keys))
