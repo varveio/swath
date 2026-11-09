@@ -15,6 +15,7 @@ const (
 	S3VersionsV1     SchemaID = "swath/s3-versions/v1"     // S3 versions and delete markers (--all-versions)
 	GCSObjectsV1     SchemaID = "swath/gcs-objects/v1"     // Cloud Storage live objects
 	GCSGenerationsV1 SchemaID = "swath/gcs-generations/v1" // Cloud Storage generations (--all-versions)
+	AzblobObjectsV1  SchemaID = "swath/azblob-objects/v1"  // Azure Blob current blobs
 	LocalV1          SchemaID = "swath-local/v1"           // a filesystem tree
 )
 
@@ -92,8 +93,9 @@ func Schema(id SchemaID) (SchemaSpec, bool) {
 	return s, true
 }
 
-// maxObjectKeyBytes is the longest S3 key and Cloud Storage object name.
-const maxObjectKeyBytes = 1024
+// maxObjectKeyBytes is the longest S3 key and Cloud Storage object name;
+// maxBlobNameBytes the longest Azure blob name (1,024 UTF-16 code units).
+const maxObjectKeyBytes, maxBlobNameBytes = 1024, 3072
 
 var (
 	textKey   = ColumnSpec{Name: "key", Type: TypeString, Required: true}
@@ -139,6 +141,18 @@ var schemas = map[SchemaID]SchemaSpec{
 	// generation.
 	GCSGenerationsV1: {ID: GCSGenerationsV1, Key: textKey, MaxKeyBytes: maxObjectKeyBytes, Columns: concat(gcsColumns,
 		ColumnSpec{Name: "time_deleted", Type: TypeTimestampMicros})},
+	// Every column is nullable: content_md5 and access_tier where Azure
+	// lists none, the others where a listing omits them.
+	AzblobObjectsV1: {ID: AzblobObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxBlobNameBytes, Columns: []ColumnSpec{
+		{Name: "size", Type: TypeInt64},
+		{Name: "last_modified", Type: TypeTimestampMicros},
+		{Name: "etag", Type: TypeString},
+		{Name: "content_md5", Type: TypeString},
+		{Name: "content_type", Type: TypeString},
+		{Name: "blob_type", Type: TypeString},
+		{Name: "access_tier", Type: TypeString},
+		{Name: "creation_time", Type: TypeTimestampMicros},
+	}},
 	// Names are bytes; identifiers are unsigned; allocated_bytes is
 	// st_blocks × 512 and metadata_changed_at is ctime.
 	LocalV1: {ID: LocalV1, Key: binaryKey, UniqueKeys: true, Columns: []ColumnSpec{

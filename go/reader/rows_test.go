@@ -107,6 +107,24 @@ func TestDecodeErrors(t *testing.T) {
 	}
 }
 
+// TestDecodeAzblobObject: every column of an Azure row, nulls kept nil.
+func TestDecodeAzblobObject(t *testing.T) {
+	r := row(t, AzblobObjectsV1, "dir/blob", 0, map[string]seekparquet.Value{
+		"size": val(parquet.Int64Value(42)), "last_modified": val(parquet.Int64Value(1_767_225_600_000_000)),
+		"etag": val(parquet.ByteArrayValue([]byte("0x8DE"))), "content_type": val(parquet.ByteArrayValue([]byte("text/plain"))),
+		"blob_type": val(parquet.ByteArrayValue([]byte("BlockBlob"))), "creation_time": val(parquet.Int64Value(1_767_225_000_000_000)),
+	})
+	o, err := DecodeAzblobObject(r)
+	if err != nil || *o.Size != 42 || *o.ETag != "0x8DE" || *o.ContentType != "text/plain" || *o.BlobType != "BlockBlob" ||
+		o.ContentMD5 != nil || o.AccessTier != nil || o.LastModified.Unix() != 1_767_225_600 || o.CreationTime.Unix() != 1_767_225_000 ||
+		string(o.Key) != "dir/blob" {
+		t.Fatalf("decoded %+v, %v", o, err)
+	}
+	if _, err := DecodeAzblobObject(row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{"blob_type": absent})); !errors.Is(err, ErrSchema) {
+		t.Fatalf("blob_type absent: %v", err)
+	}
+}
+
 func TestDecodeObject(t *testing.T) {
 	values := map[string]seekparquet.Value{"size": val(parquet.Int64Value(7)), "storage_class": val(parquet.ByteArrayValue([]byte("STANDARD")))}
 	for _, id := range []SchemaID{S3ObjectsV1, GCSObjectsV1} {
@@ -114,6 +132,12 @@ func TestDecodeObject(t *testing.T) {
 		if err != nil || *o.Size != 7 || *o.StorageClass != "STANDARD" || o.ETag != nil || o.LastModified != nil || string(o.Key) != "k" {
 			t.Fatalf("%s: %+v, %v", id, o, err)
 		}
+	}
+	// An Azure blob's storage class is its access tier.
+	o, err := DecodeObject(AzblobObjectsV1, row(t, AzblobObjectsV1, "k", 0, map[string]seekparquet.Value{
+		"size": val(parquet.Int64Value(7)), "access_tier": val(parquet.ByteArrayValue([]byte("Cool")))}))
+	if err != nil || *o.Size != 7 || *o.StorageClass != "Cool" {
+		t.Fatalf("azblob: %+v, %v", o, err)
 	}
 	for _, id := range []SchemaID{S3VersionsV1, GCSGenerationsV1, LocalV1, "swath/canonical"} {
 		if _, err := DecodeObject(id, row(t, S3ObjectsV1, "k", 0, values)); !errors.Is(err, ErrSchema) {
