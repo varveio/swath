@@ -110,6 +110,7 @@ func TestAnswers(t *testing.T) {
 		w.Header().Set("Content-Length", "1000")
 		io.WriteString(w, okPage[:20])
 	}
+	cutError := func(status int, code string) http.HandlerFunc { return cutAnswer(t, status, code) }
 	stall := func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, okPage[:20])
 		w.(http.Flusher).Flush()
@@ -149,6 +150,10 @@ func TestAnswers(t *testing.T) {
 		{"307", redirect(307), objhttp.ClassOther, once, &Error{Status: 307, Code: "TemporaryRedirect"}},
 		{"308", redirect(308), objhttp.ClassRedirect, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text
 		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassServer, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
+		// A real truncation (the connection closed mid-body): the status,
+		// headers and bytes read so far still make the answer.
+		{"403 connection cut mid-body", cutError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "Forbidden", RequestID: "HID"}},
+		{"503 connection cut mid-body", cutError(503, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 503, Code: "ServiceUnavailable", RequestID: "HID"}},
 		{"error body over 64 KiB", body(403, `<Error><Code>AccessDenied</Code><Message>`+strings.Repeat("m", 70<<10)+`</Message></Error>`), objhttp.ClassAccessDenied, once,
 			&Error{Status: 403, Code: "Forbidden"}},
 		{"200 Error envelope", xmlError(200, "InternalError"), objhttp.ClassParse, parse, nil},
@@ -193,6 +198,47 @@ func TestAnswers(t *testing.T) {
 			rt.closedOnce(t)
 		})
 	}
+}
+
+// cutAnswer writes the status line, X-Amz-Request-Id HID and a
+// Content-Length of 1,000, then part of an <Error> body naming code, and
+// closes the connection: a real HTTP truncation of an error answer.
+func cutAnswer(t *testing.T, status int, code string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, bw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		fmt.Fprintf(bw, "HTTP/1.1 %d %s\r\nX-Amz-Request-Id: HID\r\nContent-Type: application/xml\r\nContent-Length: 1000\r\n\r\n"+
+			`<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Mess`, status, http.StatusText(status), code)
+		bw.Flush()
+	}
+}
+
+// TestCutThrottleFeedsLimiter: a 503 whose body is cut by the connection
+// closing is still a throttle answer to the limiter: every attempt's
+// throttle is recorded, as for a complete 503.
+func TestCutThrottleFeedsLimiter(t *testing.T) {
+	s3test.NoCredentials(t)
+	srv := httptest.NewServer(cutAnswer(t, 503, "SlowDown"))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	cfg.MaxAttempts = 3
+	cfg.Limiter = objhttp.NewLimiter(64)
+	rt := &closeCounter{next: http.DefaultTransport}
+	cl := newTest(t, withHTTP(cfg, rt))
+	_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
+	if Classify(err) != objhttp.ClassThrottle {
+		t.Fatalf("%v (%q)", err, Classify(err))
+	}
+	n := cl.Counters()
+	l := n.Limiter
+	if n.Throttles != 3 || l.ThrottlePermille == 0 || l.Decreases+l.FloorThrottles+l.Stale+l.Tolerated != 3 {
+		t.Fatalf("counters %+v, limiter %+v: want 3 throttles recorded", requests(n), l)
+	}
+	rt.closedOnce(t)
 }
 
 // withHTTP supplies an HTTP client over rt whose policy follows redirects
