@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,8 +20,31 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// testSAS is a SAS whose signature is easy to find in a message.
+// testSAS is a SAS whose signature is easy to find in a message. Its
+// parameters are not in sorted order: the SDK sends them sorted in among
+// the request's, so the SAS never reaches the wire as one string.
 const testSAS = "sv=2026-10-06&ss=b&srt=co&sp=rl&se=2026-12-01T00%3A00%3A00Z&sig=TopSecretSig%2Bpart%3D"
+
+// sasLeak is the first form of a testSAS parameter (name and value: as
+// sent, decoded, or escaped once more) or of its signature found in text;
+// "" when none is.
+func sasLeak(text string) string {
+	if strings.Contains(text, "TopSecretSig") {
+		return "TopSecretSig"
+	}
+	q, _ := url.ParseQuery(testSAS)
+	for k, vs := range q {
+		for _, v := range vs {
+			enc := url.QueryEscape(v)
+			for _, f := range []string{k + "=" + enc, k + "=" + v, k + "%3D" + url.QueryEscape(enc), k + "%3D" + enc} {
+				if strings.Contains(text, f) {
+					return f
+				}
+			}
+		}
+	}
+	return ""
+}
 
 // TestSASOnEveryRequest: the SAS (with or without '?') is sent with the
 // listing and account-information queries, every parameter as given, and
@@ -64,9 +88,11 @@ func TestSASOnEveryRequest(t *testing.T) {
 	}
 }
 
-// TestSASRedacted: the SAS's signature appears in no error: not a
-// transport error's URL, a 400's query echo, a redirect target, nor a
-// message that quotes it.
+// TestSASRedacted: no parameter of the SAS appears in an error: not in a
+// transport error's URL, a 400's query echo (the SDK's sorted query, as
+// sent, decoded or escaped again), a redirect target, nor a message that
+// quotes the signature; the 400's parsed query keeps the request's own
+// parameters only.
 func TestSASRedacted(t *testing.T) {
 	sig, _ := url.QueryUnescape("TopSecretSig%2Bpart%3D")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +102,17 @@ func TestSASRedacted(t *testing.T) {
 			w.WriteHeader(400)
 			var msg strings.Builder
 			xml.EscapeText(&msg, []byte("bad sig "+sig+" in "+r.URL.RawQuery))
+			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>InvalidQueryParameterValue</Code><Message>%s</Message></Error>", msg.String())
+		case "400-escaped", "400-decoded":
+			// the query quoted escaped once more, or decoded
+			q := url.QueryEscape(r.URL.RawQuery)
+			if strings.HasSuffix(r.URL.Query().Get("prefix"), "decoded") {
+				q, _ = url.QueryUnescape(r.URL.RawQuery)
+			}
+			w.Header().Set(headerErrorCode, "InvalidQueryParameterValue")
+			w.WriteHeader(400)
+			var msg strings.Builder
+			xml.EscapeText(&msg, []byte("bad query "+q))
 			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>InvalidQueryParameterValue</Code><Message>%s</Message></Error>", msg.String())
 		case "403":
 			w.Header().Set(headerErrorCode, codeAuthFailed)
@@ -103,22 +140,32 @@ func TestSASRedacted(t *testing.T) {
 	for _, x := range []struct {
 		c      *Client
 		prefix string
-	}{{c, "400"}, {c, "403"}, {c, "redirect"}, {c, "bad-location"}, {c, "slow"}, {down, "refused"}} {
+	}{{c, "400"}, {c, "400-escaped"}, {c, "400-decoded"}, {c, "403"}, {c, "redirect"}, {c, "bad-location"}, {c, "slow"}, {down, "refused"}} {
 		_, err := x.c.List(context.Background(), &ListInput{Container: "c", Prefix: x.prefix})
 		if err == nil {
 			t.Fatalf("%s: no error", x.prefix)
 		}
-		// The SDK sorts the SAS's parameters in among the request's, so a
-		// quoted query keeps them: only the signature is secret.
-		if msg := err.Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "elsewhere") {
-			t.Errorf("%s: the SAS or a redirect target leaks: %s", x.prefix, msg)
+		if msg := err.Error(); sasLeak(msg) != "" || strings.Contains(msg, "elsewhere") {
+			t.Errorf("%s: the SAS (%q) or a redirect target leaks: %s", x.prefix, sasLeak(msg), msg)
+		}
+		if e, ok := errors.AsType[*Error](err); ok && strings.HasPrefix(x.prefix, "400") {
+			q, _ := url.ParseQuery(e.Query)
+			sas, _ := url.ParseQuery(testSAS)
+			for k := range sas {
+				if q.Has(k) {
+					t.Errorf("%s: the parsed query %q keeps the SAS's %s", x.prefix, e.Query, k)
+				}
+			}
+			if q.Get("prefix") != x.prefix || q.Get("comp") != "list" || !strings.Contains(e.Message, "comp") {
+				t.Errorf("%s: the query or message lost the request's own parameters: %q, %q", x.prefix, e.Query, e.Message)
+			}
 		}
 		if strings.Contains(x.prefix, "redirect") || x.prefix == "bad-location" {
 			if Classify(err) != objhttp.ClassRedirect {
 				t.Errorf("%s: class %q (%v)", x.prefix, Classify(err), err)
 			}
 		}
-		if _, err := x.c.AccountInfo(context.Background(), x.prefix); err != nil && strings.Contains(err.Error(), "TopSecretSig") {
+		if _, err := x.c.AccountInfo(context.Background(), x.prefix); err != nil && sasLeak(err.Error()) != "" {
 			t.Errorf("%s: account information leaks the SAS: %v", x.prefix, err)
 		}
 	}
@@ -131,10 +178,46 @@ func TestSASRedacted(t *testing.T) {
 	// Recursive redaction: a SAS quoted deep inside a wrapped error.
 	u, _ := url.Parse(srv.URL + "/acct/c?comp=list")
 	inner := &url.Error{Op: "Get", URL: srv.URL + "?" + testSAS, Err: fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: "x?" + testSAS, Err: fmt.Errorf("location %q", "https://e/?sig="+sig)})}
-	if msg := c.redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
+	if msg := c.redact(fmt.Errorf("outer: %w", inner), u).Error(); sasLeak(msg) != "" || strings.Contains(msg, "se=2026") {
 		t.Errorf("nested errors leak: %s", msg)
 	}
 	if _, err := New(context.Background(), Config{Account: "acct", SAS: "%zz&sig=TopSecretSig"}); err == nil || strings.Contains(err.Error(), "TopSecretSig") {
 		t.Errorf("malformed SAS: %v", err)
+	}
+}
+
+// TestScrubSASParameters: every parameter of the configured SAS is found
+// by name in text, whatever order the SAS was given in and the text holds
+// it in, and however it was encoded (as sent, lower-case escapes, decoded,
+// escaped once more); its value is replaced and the rest of the text kept.
+func TestScrubSASParameters(t *testing.T) {
+	// the configured SAS, in yet another order
+	sas := "sig=TopSecretSig%2Bpart%3D&se=2026-12-01T00%3A00%3A00Z&sp=rl&sv=2026-10-06&srt=co&ss=b"
+	c := newTestClient(t, Config{Account: "acct", SAS: "?" + sas})
+	for _, x := range []struct{ in, want string }{
+		{ // the SDK's sorted query, as sent
+			"q comp=list&prefix=p&restype=container&se=2026-12-01T00%3A00%3A00Z&sig=TopSecretSig%2Bpart%3D&sp=rl&srt=co&ss=b&sv=2026-10-06 end",
+			"q comp=list&prefix=p&restype=container&se=REDACTED&sig=REDACTED&sp=REDACTED&srt=REDACTED&ss=REDACTED&sv=REDACTED end",
+		},
+		{ // re-encoded: lower-case escapes, the expiry and signature escaped differently
+			"?ss=b&se=2026-12-01T00%3a00%3a00Z&prefix=p&sig=TopSecretSig%2bpart%3d&sv=2026-10-06&sp=rl&srt=co",
+			"?ss=REDACTED&se=REDACTED&prefix=p&sig=REDACTED&sv=REDACTED&sp=REDACTED&srt=REDACTED",
+		},
+		{ // decoded
+			"(comp=list&se=2026-12-01T00:00:00Z&sig=TopSecretSig+part=&sp=rl&srt=co&ss=b&sv=2026-10-06&prefix=p q)",
+			"(comp=list&se=REDACTED&sig=REDACTED&sp=REDACTED&srt=REDACTED&ss=REDACTED&sv=REDACTED&prefix=p q)",
+		},
+		{ // escaped once more (the query quoted inside another URL)
+			"u=" + url.QueryEscape("comp=list&se=2026-12-01T00%3A00%3A00Z&sp=rl&sv=2026-10-06&prefix=p"),
+			"u=comp%3Dlist%26se%3DREDACTED%26sp%3DREDACTED%26sv%3DREDACTED%26prefix%3Dp",
+		},
+		{ // not a SAS parameter: kept
+			"spr=https&prefix=sp&marker=se",
+			"spr=https&prefix=sp&marker=se",
+		},
+	} {
+		if got := c.scrub(x.in); got != x.want {
+			t.Errorf("scrub(%q)\n got  %q\n want %q", x.in, got, x.want)
+		}
 	}
 }

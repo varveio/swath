@@ -33,8 +33,11 @@ Credentials, so a public container lists without `--azblob-anonymous`; a refused
 timeout or a transport failure keeps the login and each request asks again. A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
-(the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS signature: answers that
-quote the query, redirect targets, transport errors and the SDK decoder's errors are scrubbed. The Azure SDK's own
+(the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that
+quote the query, redirect targets, transport errors and the SDK decoder's errors are scrubbed of every parameter
+the SAS names, found by name wherever the SDK sorted it into the query and however it is encoded (as sent,
+decoded, escaped again), its value replaced and the rest of the text kept; a 400's parsed query drops the SAS's
+parameters and keeps the request's (`TestSASRedacted`, `TestScrubSASParameters`). The Azure SDK's own
 log, which quotes request URLs, is off in swath: the command clears azcore's log listener at startup, so
 `AZURE_SDK_GO_LOGGING=all` prints nothing. The root is redacted where the command parses
 it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the

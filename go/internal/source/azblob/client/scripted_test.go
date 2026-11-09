@@ -23,9 +23,6 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// secret is testSAS's signature: it must never reach an error.
-const secret = "TopSecretSig"
-
 // echoError writes an Azure error answer that quotes the request's query
 // (SAS included, as sent and decoded) in its message, as some answers do.
 func echoError(w http.ResponseWriter, r *http.Request, status int, code string) {
@@ -288,17 +285,17 @@ func TestScriptedAnswers(t *testing.T) {
 			}
 			if err != nil {
 				got.Class, got.Requeue = Classify(err), objhttp.Requeue(Classify)(err)
-				if strings.Contains(err.Error(), secret) {
-					t.Errorf("the signature in the error: %v", err)
+				if leak := sasLeak(err.Error()); leak != "" {
+					t.Errorf("the SAS's %q in the error: %v", leak, err)
 				}
 				if e, ok := errors.AsType[*Error](err); ok {
 					got.Answer = e
 					if strings.HasPrefix(e.Message, "m ") {
-						// an echoing answer: its message kept, the signature
-						// redacted (the SDK sorts the SAS in among the
-						// parameters, so only its sig is redacted)
+						// an echoing answer: its message kept, every SAS
+						// parameter redacted wherever the SDK sorted it,
+						// the request's own parameters kept
 						scrubbed.Add(1)
-						if !strings.Contains(e.Message, "sig=REDACTED") || !strings.Contains(e.Message, "sp=rl") {
+						if sasLeak(e.Message) != "" || !strings.Contains(e.Message, "sig=REDACTED") || !strings.Contains(e.Message, "comp=list&") {
 							t.Errorf("message %q", e.Message)
 						}
 						cp := *e
