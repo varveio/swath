@@ -177,7 +177,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, base: base,
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
 	// client: the resume identity freezes the route (as the S3 and GCS

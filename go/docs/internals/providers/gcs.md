@@ -51,15 +51,17 @@ failure is a `CredentialError` and not an attempt. The scope is `devstorage.read
 `google.golang.org/api/storage/v1`, `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`
 (`TestBinaryLinksGeneratedStorageClient`); `TestClientPagesMatchGoogleClient` compares the client's pages, through
 the production fields selector too, with the generated client's own full responses. Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
-(100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
-vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `redirect` (any 3xx: redirects are never followed, also through a supplied HTTP client, because the resume identity freezes the endpoint; `TestGCSRedirectCannotChangeResumeSource`), `throttle` (429,
-`rateLimitExceeded`, `userRateLimitExceeded`), `timeout` (an attempt past the request timeout, 408), `server`
-(another 5xx), `transport`, `parse` (a 200 that does not parse, or whose body is not an objects.list envelope: `null`, `{}`, another JSON value or
-an error envelope, which would otherwise read as an empty final page; `TestInvalidSuccessEnvelopeIsRetried`,
-`TestGCSInvalidEnvelopeNeverCommits`), `invalid_page` (a parsed page that breaks the
-contract: `client.ErrInvalidPage`, which the engine wraps as a protocol violation: the outcome's `cause` is
-`protocol` and the run is marked unresumable), `canceled`, `other`; the class is the run
-outcome's `cause` (`TestClassify` drives each through the client, `TestInvalidPageClass` through the engine).
+(100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Failures* are normalized once into `objhttp.Failure` with transient/throttle/timeout signals,
+HTTP status, the first reason, and a safe cause. A 403 with `rateLimitExceeded` or
+`userRateLimitExceeded` is a throttle; another 403 is a terminal permission refusal. A token endpoint
+outage or timeout remains transient, independently of report labels. Diagnostics retain `auth`,
+`access_denied`, `throttle`, `timeout`, `parse` and `unsupported`
+([Run report](../../cli.md#run-report)); other errors keep status/reason without a separate label.
+A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
+(`TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `client.ErrInvalidPage`;
+the engine wraps it as a protocol violation (`cause` `protocol`, unresumable). Redirects are never
+followed, including with a supplied HTTP client, so they cannot change the resume source
+(`TestGCSRedirectCannotChangeResumeSource`).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`

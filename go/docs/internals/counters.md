@@ -281,5 +281,12 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 <!-- s3:end -->
 
+Every object-store attempt is normalized once into an error carrying transient, throttle and timeout
+signals, HTTP status, provider code or reason, and a safe cause. Admission feedback, retries and these
+counters consume that same value; parse accounting uses its `parse` diagnostic. Exhaustion wraps it,
+and the engine requeues from its transient signal rather than a report label. Credential failures can
+supply timeout/retry signals before any listing request is sent, so those counters need not be bounded
+by `attempts`.
+
 The summary also carries `anonymous`, `credentials`, `region` and `mean_active` (time-weighted active
 ranges), which are not counters.

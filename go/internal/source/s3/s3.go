@@ -300,7 +300,7 @@ func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 
 // requeue: a transient failure whose client retries were exhausted is
 // asked again (keyrange.Description.Requeue).
-var requeue = objhttp.Requeue(client.Classify)
+var requeue = objhttp.Requeue
 
 // Restart continues after the last published key.
 func (p *provider[P]) Restart(after string) {

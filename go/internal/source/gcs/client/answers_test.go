@@ -134,20 +134,20 @@ func TestAnswers(t *testing.T) {
 		*answer
 	}{
 		{"429 rateLimitExceeded", jsonError(429, 429, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{429, "rateLimitExceeded", "m"}},
-		{"503", jsonError(503, 503, "backendError"), objhttp.ClassServer, retried, nil, &answer{503, "backendError", "m"}},
-		{"500", jsonError(500, 500, "internalError"), objhttp.ClassServer, retried, nil, &answer{500, "internalError", "m"}},
+		{"503", jsonError(503, 503, "backendError"), objhttp.ClassOther, retried, nil, &answer{503, "backendError", "m"}},
+		{"500", jsonError(500, 500, "internalError"), objhttp.ClassOther, retried, nil, &answer{500, "internalError", "m"}},
 		{"408", jsonError(408, 408, ""), objhttp.ClassTimeout, retried, nil, &answer{408, "", "m"}},
 		{"403 forbidden", jsonError(403, 403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "forbidden", "m"}},
 		{"403 rateLimitExceeded", jsonError(403, 403, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{403, "rateLimitExceeded", "m"}},
-		{"404", jsonError(404, 404, "notFound"), objhttp.ClassNoSuchBucket, final, nil, &answer{404, "notFound", "m"}},
+		{"404", jsonError(404, 404, "notFound"), objhttp.ClassOther, final, nil, &answer{404, "notFound", "m"}},
 		{"400", jsonError(400, 400, "invalid"), objhttp.ClassOther, final, nil, &answer{400, "invalid", "m"}},
 		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", ""}},
 		// the HTTP status, not the body's code (googleapi.Error.Code)
-		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassServer, retried, nil, &answer{503, "invalid", "m"}},
-		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassNoSuchBucket, final, nil, &answer{404, "notFound", "m"}},
-		{"301", redirect(301), objhttp.ClassRedirect, final, nil, &answer{301, "", moved}},
-		{"302", redirect(302), objhttp.ClassRedirect, final, nil, &answer{302, "", moved}},
-		{"307", redirect(307), objhttp.ClassRedirect, final, nil, &answer{307, "", moved}},
+		{"503 whose body says 400", jsonError(503, 400, "invalid"), objhttp.ClassOther, retried, nil, &answer{503, "invalid", "m"}},
+		{"404 whose body says 429", jsonError(404, 429, "notFound"), objhttp.ClassOther, final, nil, &answer{404, "notFound", "m"}},
+		{"301", redirect(301), objhttp.ClassOther, final, nil, &answer{301, "", moved}},
+		{"302", redirect(302), objhttp.ClassOther, final, nil, &answer{302, "", moved}},
+		{"307", redirect(307), objhttp.ClassOther, final, nil, &answer{307, "", moved}},
 		{"200 error envelope", body(200, `{"error":{"code":503,"message":"backend"}}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 error null", body(200, `{"error":null}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 null", body(200, `null`), objhttp.ClassParse, retried, nil, nil},
@@ -173,7 +173,7 @@ func TestAnswers(t *testing.T) {
 		{"200 body short of its length", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "100")
 			io.WriteString(w, `{"kind":"storage#objects",`)
-		}, objhttp.ClassTransport, retried, nil, nil},
+		}, objhttp.ClassOther, retried, nil, nil},
 		{"200 16 MiB", body(200, padded(maxBody)), "", final, empty, nil},
 		{"200 16 MiB + 1", body(200, padded(maxBody+1)), objhttp.ClassOther, final, nil, nil},
 		// any 2xx but 200 is not a listing: an answer, class other
@@ -278,7 +278,7 @@ func TestCanceledAfterHeaders(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_, err = c.List(ctx, &ListInput{Bucket: "b"})
 	cancel()
-	if Classify(err) != objhttp.ClassCanceled || c.Counters().Attempts != 1 || c.Counters().Retries != 0 {
+	if !errors.Is(err, context.DeadlineExceeded) || c.Counters().Attempts != 1 || c.Counters().Retries != 0 {
 		t.Fatalf("err %v, counters %+v", err, c.Counters())
 	}
 	cl.check(t)

@@ -544,8 +544,8 @@ func TestInvalidPageClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if classify(err) != "invalid_page" || client.Classify(err) == objhttp.ClassParse {
-		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
+	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || client.Classify(err) == objhttp.ClassParse {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
 	}
 }
 

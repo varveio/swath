@@ -463,7 +463,7 @@ and for S3 the delete-marker state, in wire order.
 ## When it goes wrong
 
 1. **The exit code and the `--report` file.** `outcome.class` and `outcome.cause`: the provider's failure class
-   (`auth`, `access_denied`, `no_such_bucket`, `redirect`, `throttle`, `timeout`, `protocol`, `unsupported`, ...), `no_space`, or
+   (`auth`, `access_denied`, `throttle`, `timeout`, `parse`, `protocol`, `unsupported`), `no_space`, or
    a `stuck_*` cause. `outcome.unrecorded`, when set, says why `error.json` was not updated.
 2. **`DIR/error.json`**: the same outcome inside the dataset, current only when its `attempt.id` matches the
    report's. Without a report, only the exit code is current. A refused command that could not record its

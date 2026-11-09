@@ -365,7 +365,7 @@ func TestParseVersionsInvalidPage(t *testing.T) {
 		`<ListVersionsResult><IsTruncated>true</IsTruncated><CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes></ListVersionsResult>`,
 	} {
 		_, err := parseVersions([]byte(doc))
-		if !errors.Is(err, ErrInvalidPage) || errors.Is(err, ErrSyntax) || Classify(err) != objhttp.ClassInvalidPage {
+		if !errors.Is(err, ErrInvalidPage) || errors.Is(err, ErrSyntax) || Classify(err) != objhttp.ClassOther {
 			t.Errorf("%q: %v, want an invalid page", doc, err)
 		}
 	}

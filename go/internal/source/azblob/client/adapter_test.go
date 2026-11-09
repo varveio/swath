@@ -263,7 +263,7 @@ func TestSDKDecoding(t *testing.T) {
 		{"hierarchy out of order across kinds", "/", "", listHead + `<Blob><Name>b</Name></Blob><BlobPrefix><Name>a/</Name></BlobPrefix>` + listTail,
 			result{names: []string{"a/", "b"}}},
 		{"hierarchy out of order within a kind", "/", "", listHead + `<Blob><Name>b</Name></Blob><Blob><Name>a</Name></Blob><BlobPrefix><Name>c/</Name></BlobPrefix>` + listTail,
-			result{class: objhttp.ClassInvalidPage}},
+			result{class: objhttp.ClassOther}},
 		{"malformed Date header", "", "someday", page("", "a"), result{class: objhttp.ClassParse}},
 		{"malformed date not kept", "", "", listHead + `<Blob><Name>a</Name><Properties><DeletedTime>soon</DeletedTime></Properties></Blob>` + listTail,
 			result{class: objhttp.ClassParse}},
@@ -289,6 +289,8 @@ func TestSDKDecoding(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("%+v (%v), want %+v", got, err, c.want)
+			} else if c.want.class == objhttp.ClassOther && !errors.Is(err, ErrInvalidPage) {
+				t.Fatalf("%v does not wrap ErrInvalidPage", err)
 			} else if c.want.class == objhttp.ClassParse && !errors.Is(err, objhttp.ErrSyntax) {
 				t.Errorf("%v does not wrap ErrSyntax", err)
 			}

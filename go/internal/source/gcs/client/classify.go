@@ -3,42 +3,28 @@
 
 package client
 
-import (
-	"errors"
-
-	"github.com/varveio/swath/go/internal/source/objhttp"
-)
+import "github.com/varveio/swath/go/internal/source/objhttp"
 
 // ErrInvalidPage marks a page that parsed but breaks the listing contract
 // (out of order, truncated without a token); the range engine wraps it.
 var ErrInvalidPage = objhttp.ErrInvalidPage
 
-// Classify returns the class of err (objhttp's vocabulary, with the JSON
-// API's answers mapped by status and reason).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err, Answer) }
+// Classify returns the stored report label (or normalizes a construction error).
+func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
 
-// Answer maps an *Error to its class (objhttp.Retry.Answer); ok is false
-// when err holds none.
-func Answer(err error) (objhttp.Class, bool) {
-	var se *Error
-	if !errors.As(err, &se) {
-		return "", false
+// Failure preserves reason-sensitive throttling, including a 403.
+func (e *Error) Failure() objhttp.Failure {
+	f := objhttp.Failure{Status: e.Status, Code: e.Reason}
+	f.Throttle = e.Status == 429 || e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded"
+	f.Timeout = !f.Throttle && e.Status == 408
+	f.Transient = f.Throttle || e.Status >= 500 || e.Status == 408
+	if !f.Transient {
+		switch e.Status {
+		case 401:
+			f.Class = objhttp.ClassAuth
+		case 403:
+			f.Class = objhttp.ClassAccessDenied
+		}
 	}
-	switch {
-	case se.Throttle():
-		return objhttp.ClassThrottle, true
-	case se.Status == 408:
-		return objhttp.ClassTimeout, true
-	case se.Status >= 500:
-		return objhttp.ClassServer, true
-	case se.Status/100 == 3:
-		return objhttp.ClassRedirect, true
-	case se.Status == 401:
-		return objhttp.ClassAuth, true
-	case se.Status == 403:
-		return objhttp.ClassAccessDenied, true
-	case se.Status == 404:
-		return objhttp.ClassNoSuchBucket, true
-	}
-	return objhttp.ClassOther, true
+	return f
 }

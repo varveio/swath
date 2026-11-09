@@ -137,19 +137,19 @@ func TestAnswers(t *testing.T) {
 		{"429 SlowDown", xmlError(429, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 429, Code: "SlowDown", RequestID: "RID"}},
 		{"503 SlowDown", xmlError(503, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 503, Code: "SlowDown", RequestID: "RID"}},
 		{"503 no body", body(503, ""), objhttp.ClassThrottle, throttled, &Error{Status: 503, Code: "ServiceUnavailable"}},
-		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassServer, exhausted(Counters{}), &Error{Status: 500, Code: "InternalError", RequestID: "RID"}},
-		{"500 html", body(500, "<html>oops"), objhttp.ClassServer, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
+		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalError", RequestID: "RID"}},
+		{"500 html", body(500, "<html>oops"), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
 		{"400 RequestTimeout", xmlError(400, "RequestTimeout"), objhttp.ClassTimeout, timedOut, &Error{Status: 400, Code: "RequestTimeout", RequestID: "RID"}},
 		{"408", body(408, ""), objhttp.ClassTimeout, timedOut, &Error{Status: 408, Code: "RequestTimeout"}}, // the code from the status text
 		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "RID"}},
 		{"403 InvalidAccessKeyId", xmlError(403, "InvalidAccessKeyId"), objhttp.ClassAuth, once, &Error{Status: 403, Code: "InvalidAccessKeyId", RequestID: "RID"}},
-		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassNoSuchBucket, once, &Error{Status: 404, Code: "NoSuchBucket", RequestID: "RID"}},
-		{"404 no body", body(404, ""), objhttp.ClassNoSuchBucket, once, &Error{Status: 404, Code: "NotFound"}},
-		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassRedirect, once,
+		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassOther, once, &Error{Status: 404, Code: "NoSuchBucket", RequestID: "RID"}},
+		{"404 no body", body(404, ""), objhttp.ClassOther, once, &Error{Status: 404, Code: "NotFound"}},
+		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassOther, once,
 			&Error{Status: 301, Code: "PermanentRedirect", Region: "eu-west-2", RequestID: "RID"}},
 		{"307", redirect(307), objhttp.ClassOther, once, &Error{Status: 307, Code: "TemporaryRedirect"}},
-		{"308", redirect(308), objhttp.ClassRedirect, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text
-		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassServer, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
+		{"308", redirect(308), objhttp.ClassOther, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text
+		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
 		// A real truncation (the connection closed mid-body): the status,
 		// headers and bytes read so far still make the answer.
 		{"403 connection cut mid-body", cutError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "Forbidden", RequestID: "HID"}},
@@ -163,7 +163,7 @@ func TestAnswers(t *testing.T) {
 		{"200 cut mid-element", body(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Ke`), objhttp.ClassParse, parse, nil},
 		{"200 16 MiB", body(200, sized(maxBody)), "", once, nil},
 		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther, once, nil},
-		{"200 cut mid-stream", cut, objhttp.ClassTransport, exhausted(Counters{}), nil},
+		{"200 cut mid-stream", cut, objhttp.ClassOther, exhausted(Counters{}), nil},
 		{stalled, stall, objhttp.ClassTimeout, timedOut, nil},
 		{"200 malformed gzip", gzipped, objhttp.ClassOther, once, nil},
 		{"201", body(201, okPage), objhttp.ClassOther, once, &Error{Status: 201, Code: "Created"}},
@@ -268,7 +268,7 @@ func TestCancelAfterHeaders(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"})
 	cancel()
-	if Classify(err) != objhttp.ClassCanceled || c.Counters().Attempts != 1 {
+	if !errors.Is(err, context.DeadlineExceeded) || c.Counters().Attempts != 1 {
 		t.Fatalf("%v (%q) %+v", err, Classify(err), c.Counters())
 	}
 	rt.closedOnce(t)

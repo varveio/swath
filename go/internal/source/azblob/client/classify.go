@@ -4,7 +4,6 @@
 package client
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -73,21 +72,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Throttle reports the service asking the client to slow down.
-func (e *Error) Throttle() bool { return e.Status == 429 || e.Code == codeServerBusy }
-
-// Retryable reports an answer worth repeating: 408, 429, 502, 503, 504,
-// and a 500 that is OperationTimedOut or InternalError.
-func (e *Error) Retryable() bool {
-	switch e.Status {
-	case 408, 429, 502, 503, 504:
-		return true
-	case 500:
-		return e.Code == codeOperationTimedOut || e.Code == codeInternalError
-	}
-	return false
-}
-
 // RetryAfter is the service's wait before the next attempt
 // (objhttp.RetryAfter).
 func (e *Error) RetryAfter() time.Duration { return e.Wait }
@@ -127,43 +111,40 @@ type ExhaustedError = objhttp.ExhaustedError
 // ErrSyntax marks a 200 whose body did not parse (objhttp.ErrSyntax).
 var ErrSyntax = objhttp.ErrSyntax
 
-// Classify returns the class of err (objhttp's vocabulary, with Azure's
-// answers mapped by error code first and status second: an
-// AuthenticationFailed arrives as a 403).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err, answer) }
+// Classify returns the stored report label (or normalizes a construction error).
+func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
 
-func answer(err error) (objhttp.Class, bool) {
-	var e *Error
-	if !errors.As(err, &e) {
-		return "", false
+// Failure keeps Azure's code-sensitive 500 policy. A generic 500 (or 501)
+// is terminal even though other providers retry it.
+func (e *Error) Failure() objhttp.Failure {
+	f := objhttp.Failure{Status: e.Status, Code: e.Code}
+	switch e.Status {
+	case 408, 429, 502, 503, 504:
+		f.Transient = true
+	case 500:
+		f.Transient = e.Code == codeOperationTimedOut || e.Code == codeInternalError
 	}
 	switch e.Code {
 	case codeNoAuthentication, codeAuthFailed, codeInvalidAuthInfo:
-		return objhttp.ClassAuth, true
+		f.Class = objhttp.ClassAuth
 	case codeAuthorization, codePermissionMismatch:
-		return objhttp.ClassAccessDenied, true
-	case codeContainerNotFound:
-		return objhttp.ClassNoSuchBucket, true
+		f.Class = objhttp.ClassAccessDenied
 	case codeServerBusy:
-		return objhttp.ClassThrottle, true
+		f.Throttle = true
 	case codeOperationTimedOut:
-		return objhttp.ClassTimeout, true
-	case codeInternalError:
-		return objhttp.ClassServer, true
+		f.Timeout = true
+	case codeInternalError, codeContainerNotFound:
+	default:
+		switch e.Status {
+		case 429:
+			f.Throttle = true
+		case 408:
+			f.Timeout = true
+		case 401:
+			f.Class = objhttp.ClassAuth
+		case 403:
+			f.Class = objhttp.ClassAccessDenied
+		}
 	}
-	switch {
-	case e.Status == 429:
-		return objhttp.ClassThrottle, true
-	case e.Status == 408:
-		return objhttp.ClassTimeout, true
-	case e.Status >= 500:
-		return objhttp.ClassServer, true
-	case e.Status/100 == 3:
-		return objhttp.ClassRedirect, true
-	case e.Status == 401:
-		return objhttp.ClassAuth, true
-	case e.Status == 403:
-		return objhttp.ClassAccessDenied, true
-	}
-	return objhttp.ClassOther, true
+	return f
 }

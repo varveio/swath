@@ -97,7 +97,7 @@ func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 	}
 	p, err := page(out)
 	if err != nil {
-		return nil, c.syntax(err)
+		return nil, err
 	}
 	return p, nil
 }
@@ -145,7 +145,7 @@ func mayHoldError(body []byte) bool {
 // service's answer as an *Error (by the HTTP status sent, which a
 // googleapi.Error's body-supplied code may contradict; another 2xx too), a
 // 200 body the generated decoder refused as ErrSyntax, the Guard's own failures
-// unwrapped (objhttp.Cause), an attempt timeout as objhttp.ErrTimeout.
+// resolved by objhttp.Normalize, an attempt timeout as objhttp.ErrTimeout.
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 	var ge *googleapi.Error
 	switch {
@@ -162,21 +162,14 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 		}
 		return e
 	case s.status == http.StatusOK:
-		return c.syntax(fmt.Errorf("%w: %w", objhttp.ErrSyntax, err))
+		return fmt.Errorf("%w: %w", objhttp.ErrSyntax, err)
 	case s.status/100 == 2:
 		return responseError(s.status, s.body.Body)
 	}
-	err = objhttp.Cause(err)
 	if errors.Is(err, objhttp.ErrSyntax) {
-		return c.syntax(err)
+		return err
 	}
 	return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
-}
-
-// syntax counts a parse failure and returns err.
-func (c *Client) syntax(err error) error {
-	c.counts.ParseFailure()
-	return err
 }
 
 // responseError is the answer a 2xx other than 200 and its body make: the
