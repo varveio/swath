@@ -90,8 +90,8 @@ const (
 // the workers) and restores the setting when it returns; a count has no
 // encoders, reorder storage or readahead, the other readers of GOMAXPROCS.
 // Every run that writes output keeps the setting as it is. A count's rows
-// are not ordered: the native engine does not sort a directory's entries
-// (names in a directory are distinct, and nothing consumes the order).
+// are not ordered: neither engine sorts a directory's entries (names in a
+// directory are distinct, and nothing consumes the order).
 func (o *opened) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
 	if env.Count {
 		o.p.unsorted = true

@@ -11,6 +11,13 @@ Notable changes per release. The full human summary for the current release is i
   provider's default credentials (`objfile/remote.Open`). Every ranged read now checks the offset the store served,
   and the GCS client `remote.Open` builds also checks the requests the SDK's reader sends on its own: a read returns
   exactly the requested bytes or fails.
+- Go port: `go/reader` adds `AdmitWhole` and `AdmitWholeDir`, which admit a whole current-object listing in one
+  fixed order (digests, schema, coverage, a current-objects schema, `published_at`) and return its `Identity`
+  (the manifest's SHA-256 and `published_at`); `ReopenWhole` and `ReopenWholeDir`, which reopen it from a sealed
+  source and refuse another identity (`ErrIdentityMismatch`); `IsRefusal`; and `Dataset.Page`, a listing page
+  with its next cursor and its prefixes' totals. `AcceptWholeSource` takes a `WholeSource{Kind, Container, URI}`
+  and identifies an Azure container by its account and a filesystem by its root (`source.uri`), and requires the
+  schema id to be of the source's kind.
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
   accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.

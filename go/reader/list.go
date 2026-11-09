@@ -83,7 +83,7 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	}
 	columns := objectColumns(d.spec.ID)
 	if columns == nil {
-		return nil, semantic(KindSchema, "", nil, "%s holds versions, not current objects", d.spec.ID)
+		return nil, notCurrent(d.spec.ID)
 	}
 	got, err := d.sp.List(ctx, seekparquet.List{Prefix: req.Prefix, Delimiter: req.Delimiter, Cursor: req.Cursor,
 		Limit: req.Limit, Columns: columns, Stats: req.Stats})

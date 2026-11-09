@@ -55,7 +55,7 @@ func (d *Dataset) StreamStats() StreamStats {
 func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 	columns := objectColumns(d.spec.ID)
 	if columns == nil {
-		return semantic(KindSchema, "", nil, "%s holds versions, not current objects", d.spec.ID)
+		return notCurrent(d.spec.ID)
 	}
 	var objects int64
 	defer func() {
@@ -115,7 +115,14 @@ func (d *Dataset) addRead(st *seekparquet.ReadStats) {
 	d.statsMu.Lock()
 	defer d.statsMu.Unlock()
 	d.stats.Requests++
-	s := &d.stats.ReadStats
+	addStats(&d.stats.ReadStats, *st)
+}
+
+// addStats adds a request's statistics to s, when s is not nil.
+func addStats(s *ReadStats, st ReadStats) {
+	if s == nil {
+		return
+	}
 	s.PartsOpened += st.PartsOpened
 	s.KeyPagesDecoded += st.KeyPagesDecoded
 	s.ValuePagesDecoded += st.ValuePagesDecoded

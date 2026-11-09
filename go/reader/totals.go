@@ -62,7 +62,7 @@ func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, err
 	}
 	columns := objectColumns(d.spec.ID)
 	if columns == nil {
-		return nil, semantic(KindSchema, "", nil, "%s holds versions, not current objects", d.spec.ID)
+		return nil, notCurrent(d.spec.ID)
 	}
 	unique, of := distinct(paths)
 	spans := make([]keySpan, len(unique))
@@ -80,13 +80,13 @@ func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, err
 		}
 	}
 
-	sums, err := d.sumSpans(ctx, spans, []string{"size", "last_modified"})
+	sums, err := d.sumSpans(ctx, spans, []string{"size", "last_modified"}, nil)
 	if err != nil {
 		return nil, err
 	}
 	totals := make([]PathTotals, len(unique))
 	for i, s := range sums.sums {
-		n, err := d.count(ctx, spans[i])
+		n, err := d.count(ctx, spans[i], nil)
 		if err != nil {
 			return nil, err
 		}
@@ -217,11 +217,12 @@ func distinct[T ~string | ~[]byte](in []T) (unique []T, of []int) {
 
 // count returns the number of rows of span, nil when the plan's count
 // relies on a part no read has checked.
-func (d *Dataset) count(ctx context.Context, span keySpan) (*int64, error) {
+func (d *Dataset) count(ctx context.Context, span keySpan, st *ReadStats) (*int64, error) {
 	plan, err := d.sp.PlanRanges(ctx, []seekparquet.Range{span.rng()}, nil)
 	if err != nil {
 		return nil, err
 	}
+	addStats(st, plan.Stats())
 	n, exact := plan.Count()
 	if !exact {
 		return nil, nil
@@ -240,7 +241,7 @@ type spanSums struct {
 // "last_modified" when it is to be summed too) and scans them once, adding
 // each object to every span holding its key. It records each object whose
 // key is a span's lower bound, with what columns gives of it.
-func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []string) (spanSums, error) {
+func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []string, st *ReadStats) (spanSums, error) {
 	out := spanSums{sums: make([]objectSum, len(spans)), exact: make(map[string]Object)}
 	if len(spans) == 0 {
 		return out, nil
@@ -249,6 +250,7 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 	if err != nil {
 		return spanSums{}, err
 	}
+	addStats(st, plan.Stats())
 	order := make([]int, len(spans))
 	for i := range order {
 		order[i] = i
@@ -261,7 +263,9 @@ func (d *Dataset) sumSpans(ctx context.Context, spans []keySpan, columns []strin
 	timed := slices.Contains(columns, "last_modified")
 	var active []int
 	next := 0
-	err = plan.Scan(ctx, nil, func(r seekparquet.Row) error {
+	var scanned ReadStats
+	defer func() { addStats(st, scanned) }()
+	err = plan.Scan(ctx, &scanned, func(r seekparquet.Row) error {
 		dec := decoder{spec: d.spec, row: &r}
 		o := Object{Position: dec.position(), Size: dec.int64("size")}
 		if timed {

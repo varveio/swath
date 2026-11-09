@@ -357,7 +357,7 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 					t.Fatalf("count: rows %d files %d dirs %d bytes %d; listing: rows %d files %d dirs %d bytes %d",
 						st.Rows, got.Files, got.Dirs, got.Bytes, len(sorted), want.Files, want.Dirs, want.Bytes)
 				}
-				if p.native && got.Unsorted != got.DirsRead {
+				if got.Unsorted != got.DirsRead {
 					t.Fatalf("unsorted_dirs %d, want every directory read (%d)", got.Unsorted, got.DirsRead)
 				}
 				// The same keys, through a sink on the provider the run left unsorted.
