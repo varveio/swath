@@ -45,8 +45,7 @@ func flags(f *flag.FlagSet, diag bool, shared any) any {
 	common, _ := shared.(*keyrange.Common)
 	o := &flagged{common: common}
 	f.StringVar(&o.Endpoint, "azblob-endpoint", "", "Azure Blob: blob service `URL` replacing "+client.DefaultEndpoint+" (Azurite, the replay server); the account is then its first path segment")
-	f.BoolVar(&o.Anonymous, "azblob-anonymous", false, "Azure Blob: send no credentials, ignoring any in the environment")
-	f.StringVar(&o.SAS, "azblob-sas", "", "Azure Blob: shared access signature `TOKEN` (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else "+EnvSAS+"; with none, an account key in "+EnvKey+" (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials")
+	f.StringVar(&o.SAS, "azblob-sas", "", "Azure Blob: shared access signature `TOKEN` (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else "+EnvSAS+"; with none, an account key in "+EnvKey+" (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none")
 	f.BoolVar(&o.Flat, "azblob-flat", false, "Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report")
 	f.DurationVar(&o.Timeout, "azblob-request-timeout", 30*time.Second, "Azure Blob: per-request timeout; a request that exceeds it is retried")
 	return o
@@ -66,7 +65,7 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
+			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
 		}
 	case *Options: // a library caller
 		opt = *o

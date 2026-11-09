@@ -74,7 +74,8 @@ func Bucket(t testing.TB, keys []string) string {
 }
 
 // NoCredentials hides the host's AWS credentials, profiles and instance
-// metadata from the test, so a run is anonymous unless it says otherwise.
+// metadata from the test: a run then lists only with Anonymous (or the
+// credentials it sets itself), and fails with auth otherwise.
 func NoCredentials(t testing.TB) {
 	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
 		"AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"} {

@@ -46,10 +46,10 @@ unsigned requests in that case.
 (`--profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
 profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMDSv2).
 
-- Requests go unsigned only when no source is configured anywhere and the lookup (bounded at 3 s) finds
-  nothing, or with `--anonymous`, which ignores every credential.
-- A configured source is waited for up to 30 s. A source that fails for good is `auth`. One that fails
-  transiently (an STS 5xx or throttle) is kept and retried with each request.
+- Requests go unsigned only with `--anonymous`, which ignores every credential: a public bucket needs it.
+- The chain's first lookup is waited for up to 30 s (a web-identity token file mounted late included). A
+  lookup that fails, an empty chain among them, stops the run with cause `auth` before any listing request.
+  Later refreshes that fail transiently (an STS 5xx or throttle) are retried with each request.
 - Refused before any request as configured but broken: an access key without its secret or the reverse, a
   session token without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`, a profile that does
   not exist.
@@ -67,8 +67,9 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
 
 **GCS.** `--gcs-credentials FILE` (a service-account or authorized-user JSON), else Application Default
 Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
-Requests go unauthenticated only when none exists, or with `--gcs-anonymous`. A
-`GOOGLE_APPLICATION_CREDENTIALS` that names a missing file is refused (`auth`). The token scope is
+Requests go unauthenticated only with `--anonymous` (a public bucket needs it). Credentials that cannot be
+found or loaded (no ADC anywhere, a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file) are refused
+(`auth`) before any listing request. The token scope is
 `devstorage.read_only`. Requester-pays buckets: `--gcs-user-project PROJECT` bills that project; it is part of
 the resume identity.
 
@@ -279,7 +280,7 @@ OOM kill loses nothing durable: the journal is crash-safe and the resume reconci
 value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
 `--spill-reserve`, `--spill-compress` and `--spill-plain`, `--part-interval`, `--report-format`, `--report`,
 `--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and `--profile`,
-`--anonymous`, `--request-timeout`, `--gcs-anonymous`, `--gcs-credentials`, `--gcs-request-timeout`,
+`--anonymous`, `--request-timeout`, `--gcs-credentials`, `--gcs-request-timeout`,
 `--limiter`, `--limiter-slow-start`, `--request-rate`, `--bearer-token-command`, `--bearer-token-refresh-interval`
 (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each

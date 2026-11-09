@@ -720,7 +720,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
 	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-azblob-anonymous", "-azblob-endpoint", base(r), "-azblob-request-timeout", "7s"}); err != nil {
+	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-anonymous", "-azblob-endpoint", base(r), "-azblob-request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: v, Workers: 2})

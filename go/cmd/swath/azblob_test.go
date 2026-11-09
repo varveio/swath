@@ -44,7 +44,7 @@ func TestAzblobHostileCorpus(t *testing.T) {
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), []string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(r), "--azblob-anonymous", "--workers", "8",
+	if err := run(context.Background(), []string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(r), "--anonymous", "--workers", "8",
 		"--part-size", "4KiB", "-o", out}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}

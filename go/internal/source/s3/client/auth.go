@@ -6,16 +6,12 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 
@@ -28,15 +24,9 @@ import (
 // identity, credential processes, assume-role through stscreds, container
 // credentials, IMDSv2). The SDK's service client signs with them (SigV4).
 
-// credentialProbe bounds the first credential lookup of an empty chain
-// (the environment names no source, so only the instance metadata service
-// is left), so a host without credentials falls back to anonymous quickly.
-// credentialWait bounds the first lookup of a configured source: a slow
-// token exchange is waited for, never taken for absence.
-const (
-	credentialProbe = 3 * time.Second
-	credentialWait  = 30 * time.Second
-)
+// credentialWait bounds the first credential lookup: a slow token exchange
+// is waited for, never taken for absence.
+const credentialWait = 30 * time.Second
 
 // auth is the resolved region and credentials a client signs with.
 type auth struct {
@@ -48,16 +38,13 @@ type auth struct {
 	note        string              // a one-time warning for the user, or ""
 }
 
-// loadAuth resolves the region and credentials. With -anonymous no
-// credentials are looked up. Otherwise the default chain runs once. Only an
-// empty chain (no source configured anywhere: no environment keys, profile,
-// web identity, credential process, SSO, role or container endpoint, and no
-// sign of an instance metadata service) whose lookup finds nothing goes
-// unsigned. A configured source fails closed: a lookup that fails for good
-// is a *objhttp.CredentialError (class auth); one that fails transiently (a
-// token service's 5xx or throttle, a cut connection, past its wait) keeps
-// the source, and each request's signing retries it (then the range is
-// requeued), as a refresh failure mid-run would.
+// loadAuth resolves the region and credentials. With Anonymous (and only
+// then) no credentials are looked up and requests go unsigned. Otherwise
+// the SDK's default chain runs once, under credentialWait: credentials it
+// cannot give (none configured, a refused grant, a token service that does
+// not answer) are a *objhttp.CredentialError (class auth) and nothing is
+// sent. Once a lookup has succeeded, each request's signing refreshes them,
+// a transient refresh failure retried (then the range requeued).
 func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	// The SDK's own log lines (an IMDS fallback warning on every host
 	// without instance metadata) are not for swath's users.
@@ -72,14 +59,11 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	opts = append(opts, config.WithDefaultRegion("us-east-1"))
 	if cfg.Anonymous || cfg.Bearer != nil {
 		opts = append(opts, config.WithCredentialsProvider(aws.AnonymousCredentials{}))
-	}
-	if !cfg.Anonymous && cfg.Bearer == nil {
+	} else if why := partialEnvCredentials(); why != "" {
 		// Credential intent the SDK drops without a word (one key of a
-		// pair, a role without its token) would read as an empty chain
-		// and list unsigned: it is configured, and broken.
-		if why := partialEnvCredentials(); why != "" {
-			return nil, &objhttp.CredentialError{Source: "environment", Err: errors.New(why)}
-		}
+		// pair, a role without its token) would leave another source of
+		// the chain to sign: it is configured, and broken.
+		return nil, &objhttp.CredentialError{Source: "environment", Err: errors.New(why)}
 	}
 	ac, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
@@ -91,41 +75,36 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if a.region == "" {
 		a.region = ac.Region // the environment's or the profile's, else us-east-1
 	}
-	if cfg.Bearer != nil {
+	switch {
+	case cfg.Bearer != nil:
 		// The token replaces the credential chain: nothing else is looked up.
 		a.bearer, a.source = cfg.Bearer, "bearer token command"
 		return a, nil
-	}
-	if cfg.Anonymous || ac.Credentials == nil {
+	case cfg.Anonymous:
 		a.anonymous, a.source = true, "anonymous"
 		return a, nil
+	case ac.Credentials == nil:
+		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: errors.New("no credential provider")}
 	}
-	src, tokenFile := configuredSource(ac)
-	if src == "" && cfg.Profile != "" {
+	src, tf := "AWS default chain", tokenFile(ac)
+	if cfg.Profile != "" {
 		src = "profile " + cfg.Profile
 	}
-	wait := credentialProbe
-	if src != "" {
-		wait = credentialWait
+	if tf != "" {
+		src += ", web identity"
 	}
-	lookup, cancel := context.WithTimeout(ctx, wait)
+	lookup, cancel := context.WithTimeout(ctx, credentialWait)
 	defer cancel()
-	c, err := retrieve(lookup, ac.Credentials, tokenFile)
+	c, err := retrieve(lookup, ac.Credentials, tf)
 	switch {
 	case ctx.Err() != nil:
 		// The caller gave up (a signal, its deadline): not a verdict on
 		// the credentials.
 		return nil, context.Cause(ctx)
-	case err == nil:
-		a.credentials, a.source = ac.Credentials, c.Source
-	case src == "":
-		a.anonymous, a.source = true, "anonymous (no credentials found)"
-	case transientRefresh(err):
-		a.credentials, a.source = ac.Credentials, src
-		a.note = joinNotes(a.note, fmt.Sprintf("credentials (%s) not available yet: %v; requests retry them", src, err))
-	default:
+	case err != nil:
 		return nil, &objhttp.CredentialError{Source: src, Err: err}
 	}
+	a.credentials, a.source = ac.Credentials, c.Source
 	return a, nil
 }
 
@@ -153,75 +132,26 @@ func retrieve(ctx context.Context, p aws.CredentialsProvider, tokenFile string) 
 	}
 }
 
-// configuredSource names the credential source the environment or the
-// shared files configure ("" for an empty chain), and the web-identity
-// token file if one is named.
-func configuredSource(ac aws.Config) (src, tokenFile string) {
-	imdsOn := true
+// tokenFile is the web-identity token file the environment or the shared
+// config names ("" for none): the first lookup waits for it (retrieve).
+func tokenFile(ac aws.Config) string {
 	for _, s := range ac.ConfigSources {
-		var e *config.EnvConfig
-		var sc *config.SharedConfig
+		var f string
 		switch v := s.(type) {
 		case config.EnvConfig:
-			e = &v
+			f = v.WebIdentityTokenFilePath
 		case *config.EnvConfig:
-			e = v
+			f = v.WebIdentityTokenFilePath
 		case config.SharedConfig:
-			sc = &v
+			f = v.WebIdentityTokenFile
 		case *config.SharedConfig:
-			sc = v
+			f = v.WebIdentityTokenFile
 		}
-		switch {
-		case e != nil:
-			if e.EC2IMDSClientEnableState == imds.ClientDisabled {
-				imdsOn = false
-			}
-			if e.EC2IMDSEndpoint != "" && src == "" {
-				src = "instance metadata (AWS_EC2_METADATA_SERVICE_ENDPOINT)"
-			}
-			switch {
-			case e.Credentials.AccessKeyID != "":
-				return "environment keys", ""
-			case e.WebIdentityTokenFilePath != "":
-				return "web identity (AWS_WEB_IDENTITY_TOKEN_FILE)", e.WebIdentityTokenFilePath
-			case e.ContainerCredentialsEndpoint != "" || e.ContainerCredentialsRelativePath != "":
-				return "container credentials", ""
-			case e.SharedConfigProfile != "":
-				src = "profile " + e.SharedConfigProfile
-			}
-		case sc != nil:
-			switch {
-			case sc.WebIdentityTokenFile != "":
-				return "profile " + sc.Profile + " (web identity)", sc.WebIdentityTokenFile
-			case sc.Credentials.AccessKeyID != "", sc.RoleARN != "", sc.CredentialProcess != "",
-				sc.CredentialSource != "", sc.SSOSession != nil, sc.SSOStartURL != "", sc.LoginSession != "":
-				return "profile " + sc.Profile, ""
-			}
-			if sc.EC2IMDSEndpoint != "" && src == "" {
-				src = "instance metadata (profile " + sc.Profile + ")"
-			}
+		if f != "" {
+			return f
 		}
 	}
-	if src == "" && imdsOn && onEC2() {
-		src = "instance metadata"
-	}
-	return src, ""
-}
-
-// dmiRoot is where onEC2 reads the machine's identity (tests move it).
-var dmiRoot = "/sys"
-
-// onEC2 reports the signs Linux gives of an EC2 instance (where the
-// instance metadata service holds a role's credentials): the DMI vendor
-// or asset tag, or a Xen hypervisor id. Elsewhere it is false.
-func onEC2() bool {
-	read := func(p string) string {
-		b, _ := os.ReadFile(filepath.Join(dmiRoot, p))
-		return strings.TrimSpace(string(b))
-	}
-	return strings.Contains(read("devices/virtual/dmi/id/sys_vendor"), "Amazon") ||
-		strings.HasPrefix(read("devices/virtual/dmi/id/board_asset_tag"), "i-") ||
-		strings.HasPrefix(strings.ToLower(read("hypervisor/uuid")), "ec2")
+	return ""
 }
 
 // partialEnvCredentials names credential intent in the environment that
@@ -306,11 +236,4 @@ func transientRefresh(err error) bool {
 		return false
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func joinNotes(a, b string) string {
-	if a == "" || b == "" {
-		return a + b
-	}
-	return a + "; " + b
 }

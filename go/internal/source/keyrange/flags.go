@@ -33,6 +33,10 @@ type Common struct {
 	// versions and delete markers, GCS generations, in the providers'
 	// versions schemas.
 	AllVersions bool
+	// Anonymous sends no credentials (--anonymous): the one way an object
+	// store is listed unauthenticated. Without it a source with no usable
+	// credentials fails (class auth) before any listing request.
+	Anonymous bool
 }
 
 // Options are the engine options this policy sets.
@@ -63,6 +67,7 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 	p, a := &c.Policy, &c.Admission
 	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them")
 	f.BoolVar(&c.AllVersions, "all-versions", false, "list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts")
+	f.BoolVar(&c.Anonymous, "anonymous", false, "credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing")
 	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
 	if diag {
 		f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too")

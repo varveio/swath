@@ -122,7 +122,7 @@ func TestRowsMatchSDK(t *testing.T) {
 	sdk := newSDKOracle(url)
 	for _, seq := range []bool{true, false} {
 		want, _ := list(t, Options{Bucket: "bkt", Client: sdk, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
-		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
+		got, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, FetchOwner: true, Workers: 4, Policy: keyrange.Policy{Sequential: seq}}, 4)
 		if len(got) != len(keys) || len(got) != len(want) {
 			t.Fatalf("rows %d, sdk %d, keys %d", len(got), len(want), len(keys))
 		}

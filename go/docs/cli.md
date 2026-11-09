@@ -38,7 +38,7 @@ the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-budget`, 
 `--part-interval`, the diagnostic `--spill-compress`, `--spill-plain` and `--spill-reserve`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
-authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`, `--gcs-anonymous`,
+authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`,
 `--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`,
 `--bearer-token-command`, `--bearer-token-refresh-interval`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
@@ -79,12 +79,12 @@ Source and output:
         replace a previous dataset in -o
   --format string
         stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
+  --anonymous
+        credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   --endpoint URL
         S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
-  --anonymous
-        S3: send unsigned requests, ignoring any credentials
   --path-style
         S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   --profile profile
@@ -105,18 +105,14 @@ Source and output:
         list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  --gcs-anonymous
-        GCS: send no credentials, ignoring any in the environment
   --gcs-credentials file
         GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
   --gcs-user-project project
         GCS: bill a requester-pays bucket's requests to this project
   --azblob-endpoint URL
         Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
-  --azblob-anonymous
-        Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
-        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
   --azblob-flat
         Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
@@ -212,7 +208,7 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-anonymous, azblob-sas, azblob-request-timeout (operational) may change.
+profile, anonymous, request-timeout, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-sas, azblob-request-timeout (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath count --help
@@ -222,12 +218,12 @@ usage: swath count SOURCE [flags]
   SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
+  --anonymous
+        credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   --endpoint URL
         S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
-  --anonymous
-        S3: send unsigned requests, ignoring any credentials
   --path-style
         S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   --profile profile
@@ -248,18 +244,14 @@ Source and output:
         list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
   --gcs-endpoint URL
         GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  --gcs-anonymous
-        GCS: send no credentials, ignoring any in the environment
   --gcs-credentials file
         GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
   --gcs-user-project project
         GCS: bill a requester-pays bucket's requests to this project
   --azblob-endpoint URL
         Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
-  --azblob-anonymous
-        Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
-        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
   --azblob-flat
         Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
@@ -337,7 +329,7 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-anonymous, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-anonymous, azblob-sas, azblob-request-timeout (operational) may change.
+profile, anonymous, request-timeout, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-sas, azblob-request-timeout (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath diag list --help
@@ -383,12 +375,12 @@ Diagnostics:
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
   not `1.3b`).
 - **Provider flags** (`S3:`, `GCS:` and `Azure Blob:` in the list, and the range-engine flags the object stores
-  share) apply to their own sources only: one given for another source (`gs://... --anonymous`, where GCS takes
-  `--gcs-anonymous`; `--endpoint` against `--gcs-endpoint` or `--azblob-endpoint`; an S3 flag on a local tree)
+  share) apply to their own sources only: one given for another source (`gs://... --profile`, where GCS takes
+  `--gcs-credentials`; `--endpoint` against `--gcs-endpoint` or `--azblob-endpoint`; an S3 flag on a local tree)
   is refused (exit 2) rather than ignored.
 - **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--azblob-endpoint URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
-  `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--azblob-anonymous`, else a SAS (`--azblob-sas`, the
+  `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--anonymous`, else a SAS (`--azblob-sas`, the
   root's query when it names a SAS parameter, or `AZURE_STORAGE_SAS_TOKEN`), else an account key
   (`AZURE_STORAGE_KEY`), else Entra ID (`DefaultAzureCredential`). A SAS is never recorded or shown (the root is
   redacted to `?sig=[redacted]` in the terminal, the journal and the report): `swath resume` must be given one
@@ -515,12 +507,15 @@ Diagnostics:
   strictly spaced. A quota shared across a fleet is the use. Counters `rate.waits`, `rate.wait_ns`.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
-- **S3 credentials:** `--anonymous` sends unsigned requests whatever the environment holds. Otherwise the AWS
-  SDK's default credential chain applies: environment, shared files and profiles (`--profile`), SSO, web
-  identity, credential processes, AssumeRole, container and instance roles. Requests go unsigned only when
-  the chain is empty (the environment and the shared files name no source, and the machine shows no sign of
-  EC2) and the lookup finds nothing; a configured source that fails stops the run with cause `auth`, and one
-  that is slow or failing transiently is waited for and retried, never replaced by anonymity. Secrets are never taken from flags (they would show in `ps`). Details:
+- **Credentials (all object stores):** `--anonymous` (one flag for S3, GCS and Azure Blob) sends no
+  credentials whatever the environment holds, and it is the only way a request goes unauthenticated: a
+  public bucket or container needs it. Without it, a source with no usable credentials (none configured,
+  or configured and broken) stops the run with cause `auth` before any listing request; there is no
+  fallback to anonymity.
+- **S3 credentials:** the AWS SDK's default credential chain applies: environment, shared files and profiles
+  (`--profile`), SSO, web identity, credential processes, AssumeRole, container and instance roles. Its first
+  lookup is waited for up to 30 s (a web-identity token file mounted late included); a refresh that fails
+  transiently later is retried with each request. Secrets are never taken from flags (they would show in `ps`). Details:
   [internals/providers/s3.md](internals/providers/s3.md).
 - **Bearer tokens** (S3 client, Java's flags): `--bearer-token-command CMD` runs `CMD` with `/bin/sh -c`, or on
   Windows with `cmd.exe /d /s /c "CMD"` (`%ComSpec%`, so write it in cmd syntax there); its

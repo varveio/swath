@@ -18,12 +18,12 @@ decision to add it later).
 | `--profile NAME` | `--profile` | kept | – |
 | `--endpoint-url URL` | `--endpoint URL` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
-| `--no-sign-request` | `--anonymous` | renamed | – |
+| `--no-sign-request` | `--anonymous` (one flag for S3, GCS and Azure Blob; `--gcs-anonymous` and `--azblob-anonymous` removed) | renamed | shared 2026-11-09 (owner: anonymity is explicit) |
 | `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
 | `--fetch-owner` | `--fetch-owner` | kept | – |
 | `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Credential-chain failure fails the run | a configured source that fails stops the run with cause `auth`; requests go unsigned only for an empty chain or `--anonymous` | kept | – |
+| Credential-chain failure fails the run | a chain that gives no credentials (empty, or configured and broken) stops the run with cause `auth` before any listing request; requests go unsigned only with `--anonymous` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also a local directory and `gs://bucket[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 

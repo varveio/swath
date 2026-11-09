@@ -105,7 +105,7 @@ func keysOf(rows []Row) []string {
 func TestListFakeBucket(t *testing.T) {
 	keys := testKeys()
 	url := fakeBucket(t, keys, 0)
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Sequential: true}}, 1)
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Sequential: true}}, 1)
 	if !slices.Equal(keysOf(rows), keys) {
 		t.Fatalf("got %d keys, want %d", len(rows), len(keys))
 	}
@@ -121,13 +121,13 @@ func TestListFakeBucket(t *testing.T) {
 func TestPrefixAndLimit(t *testing.T) {
 	keys := testKeys()
 	url := fakeBucket(t, keys, 0)
-	seq, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Sequential: true}}, 1)
+	seq, _ := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Sequential: true}}, 1)
 	if !slices.Equal(keysOf(seq), keys) {
 		t.Fatalf("sequential: %d keys", len(seq))
 	}
 	for _, w := range []int{1, 4, 8} {
 		for _, seed := range []bool{false, true} {
-			par, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Workers: w, Policy: keyrange.Policy{Seed: seed}}, w)
+			par, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Workers: w, Policy: keyrange.Policy{Seed: seed}}, w)
 			if !slices.Equal(keysOf(par), keys) {
 				t.Fatalf("parallel w%d seed=%v: %d keys", w, seed, len(par))
 			}
@@ -141,11 +141,11 @@ func TestPrefixAndLimit(t *testing.T) {
 			}
 		}
 	}
-	pre, _ := list(t, Options{Bucket: "bkt", Prefix: "a/", Endpoint: url, PathStyle: true, Workers: 2}, 2)
+	pre, _ := list(t, Options{Bucket: "bkt", Prefix: "a/", Endpoint: url, PathStyle: true, Anonymous: true, Workers: 2}, 2)
 	if !slices.Equal(keysOf(pre), []string{"a/", "a/x", "a/y/z"}) {
 		t.Fatalf("prefix: %q", keysOf(pre))
 	}
-	lim, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Sequential: true, MaxKeys: 1500}}, 1)
+	lim, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Sequential: true, MaxKeys: 1500}}, 1)
 	if len(lim) != 1500 || st.Counters.Value("truncated_at_max_keys") == 0 || !slices.Equal(keysOf(lim), keys[:1500]) {
 		t.Fatalf("limit: %d rows truncated=%v", len(lim), st.Counters.Value("truncated_at_max_keys"))
 	}
@@ -157,7 +157,7 @@ func TestPrefixAndLimit(t *testing.T) {
 func TestRetriesAreCounted(t *testing.T) {
 	keys := testKeys()[:50]
 	url := fakeBucket(t, keys, 2)
-	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Policy: keyrange.Policy{Sequential: true}}, 1)
+	rows, st := list(t, Options{Bucket: "bkt", Endpoint: url, PathStyle: true, Anonymous: true, Policy: keyrange.Policy{Sequential: true}}, 1)
 	if len(rows) != 50 || st.Counters.Value("retries") != 2 {
 		t.Fatalf("rows %d retries %d", len(rows), st.Counters.Value("retries"))
 	}
