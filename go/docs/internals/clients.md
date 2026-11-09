@@ -26,28 +26,34 @@ clients are described in [providers.md](providers.md) and the page of each provi
   makes one request; azcore `MaxRetries: -1`), so one SDK call is one attempt. `objhttp.Do` retries with
   full-jitter backoff, honors a provider-supplied `Retry-After`, admits each attempt through the limiter and
   the request rate, counts attempts, retries, throttles, timeouts and parse failures, and hands an exhausted
-  failure to the engine, whose `Description.Requeue` is `objhttp.Requeue`: only an exhausted call with a stored
-  transient signal is requeued. A nil requeue predicate does not authorize requeue. The counted unit is an
-  application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
+  engine listing failure to the engine, whose `Description.Requeue` is `objhttp.Requeue`: only an exhausted
+  call with a stored transient signal is requeued. Provider admission runs before the engine exists and
+  can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
+  requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's
   deadline (all waiters sharing one outstanding call, `tokensource.Shared`), before an attempt is counted: a
   credential failure is a `*objhttp.CredentialError` (class `auth`, or retried when transient) and no request is
   sent. Azure's Entra token goes in as a request header, never through azcore's bearer policy and its 401
   challenge re-send (`TestBearer`).
 - **Explicit anonymity.** Requests go unsigned only with `--anonymous`. Without it, credentials the SDK's chain does
-  not find or cannot load fail the run with `auth` before anything is listed; swath never falls back to anonymous
-  requests, and the command's error ends with "(a public bucket needs --anonymous)".
-- **`objhttp.Guard`**, an `http.RoundTripper` below each SDK client: it reads a 2xx body up to its cap (16 MiB; Azure
-  64 MiB) and hands it to the provider's validation before the SDK decodes it, so an empty body, a `null`, another
-  operation's envelope or an embedded error is a `parse` failure, retried, and never an empty final page. The cap is
-  the memory one in-flight response may hold (bodies are read whole, outside the engine's memory budget); an Azure
-  page past it is a terminal refusal (`ErrBodyCap`), and the requested page size stays unchanged. Another status has
-  its body cut to 64 KiB. A non-2xx whose body read is cut (the connection closed mid-body) keeps its status and the
-  bytes read, so the status still decides; only a cut 2xx is a connection failure, retried
-  (`TestGuardCutErrorBodyKeepsAnswer`, and a
-  real-truncation row in each provider's answers table). The original body is closed once on every path. A Guard
-  failure is a `*GuardError`, recovered through `objhttp.Cause`, so the `url.Error` `net/http` wraps around it is
-  never read as a retryable connection failure.
+  not find or cannot load stop the run before listing; swath never falls back to anonymous
+  requests. Credential failures normally have class `auth`; failed Entra acquisition during Azure
+  namespace admission can instead yield `refused`, cause `unsupported` (exit 2), when flatness
+  cannot be established. Provider-specific diagnostics describe the credential source.
+- **`objhttp.Guard`**, an `http.RoundTripper` below each SDK client: it accepts 2xx bodies of at most
+  16 MiB for S3/GCS or 64 MiB for Azure, then invokes provider-specific validation before passing the
+  body upward. These are accepted-body byte limits, not memory limits: the buffer can have spare
+  capacity (and grow while reading up to cap + 1 bytes), and decoded rows and strings allocate separately.
+  Bodies and decoded pages sit outside the engine's row budget; worker calls and concurrent seed/probe
+  calls each hold their own allocations. An Azure body past its cap is a terminal refusal (`ErrBodyCap`),
+  with no page-size reduction. Non-2xx bodies are truncated to 64 KiB for diagnostics. A cut non-2xx
+  keeps its status and bytes read; a cut 2xx is a retryable connection failure. The original body is
+  closed once on every path. Guard failures are `*GuardError`, recovered through `objhttp.Cause`,
+  so the wrapping `url.Error` is never mistaken for a retryable connection failure.
+  Guard validation is only part of page validation: S3 scans its captured listing body after the SDK
+  call; GCS decodes in the SDK, then maps and validates rows; Azure checks the XML envelope in the
+  Guard, then checks and maps the SDK result. Malformed-page failures can therefore occur after the
+  Guard delivers status 200. A captured 200 does not certify a valid listing page.
 - **Redirects are answers**, never followed, also through a supplied HTTP client: the resume identity freezes where
   requests go. Azure drops the `Location` header before `net/http` sees it, so a malformed one never reaches an
   error.
@@ -94,7 +100,9 @@ backoff (5 s), limiter and request-rate cap. Request timeout is separate; constr
 `NewMeter(cfg.Retry)`, which applies retry defaults and owns `Retry` plus the atomic `Tally Counters`.
 Do not copy a used meter. Clients pass `Retry` to `objhttp.Do` and `&Tally` to attempt accounting;
 `Answered()`, `Live() source.Requests` and `Counters() objhttp.Counts` read that same account. `Live` adds the
-limiter's current limit, and `Counters` adds limiter and rate activity.
+limiter's current limit, and `Counters` adds limiter and rate activity. Retry-loop `retries` and
+`timeouts` include failures during credential waits, before HTTP accounting starts; either can
+increase while `attempts` remains zero.
 
 `objhttp.Activity` observes optional `Counters`, `Live` and `Answered` methods on the chosen client, whether
 built or supplied. It owns no retry policy or counters. Providers embed `objhttp.Observe(client)` and use
@@ -125,7 +133,7 @@ mean a response delivered upward through the Guard: they are set only after the 
 body passes validation. A body-read or validation failure therefore leaves status zero even if raw response
 headers arrived. This distinction keeps GCS body-deadline classification and Azure decoder-refusal detection
 aligned with what the SDK received. A non-2xx with a cut body is still delivered and retains its status.
-`Body` holds the validated 2xx bytes; `Replace`, when set by validation's owner, is the minimal envelope the
+`Body` holds the 2xx bytes accepted by the Guard; `Replace`, when set by validation's owner, is the minimal envelope the
 SDK decodes instead. `TestCaptureDelivery` and `TestCaptureWithoutAnswer` in `source/objhttp` pin the timing.
 
 GCS uses the capture directly for SDK errors and success status. Azure retains its per-attempt `sent` state
@@ -180,8 +188,10 @@ latency valve remains +1. Slow start is off by default. Counters `limiter.*` and
 `slow_start.{doubles,ramp_ns,end_limit}` distinguish engagement and brakes; feature `slow_start` distinguishes
 a disabled ramp from an enabled one that did not engage.
 
-`objhttp.Rate` (`--request-rate N`, disabled by default) spaces attempts with a one-token bucket refilled
-every `1/N` seconds. A canceled wait returns its token. `rate.*` and feature `request_rate` report it.
+`objhttp.Rate` (`--request-rate N`, disabled by default) reserves tokens `1/N` seconds apart,
+with one token immediately available. Actual sends can bunch when a caller is delayed after its
+reservation by scheduling. A canceled wait returns its reservation only if no later reservation
+exists. `rate.*` and feature `request_rate` report it.
 Azure parses `Retry-After` and caps it at the request timeout; `Do` takes the larger of that wait and its
 jittered backoff for the receiving call. It does not pause the limiter or other callers. S3 and GCS do not
 extract `Retry-After`.
@@ -195,7 +205,7 @@ controller.
 
 ## S3 decoding
 
-swath's scanner (`xml.go`) is the only decoder of listing pages. The Guard captures the validated body
+swath's scanner (`xml.go`) is the only decoder of listing pages. The Guard captures the bounded body
 (`objhttp.Capture`) and the SDK decodes a minimal replacement envelope in its place. The scanner is kept for two
 measured reasons: through the same SDK stack, over a 1,000-object page with URL-encoded keys, the SDK's decoder
 cost about 14 µs per object and about 102,000 allocations per page, the scanner about 1.8 µs and about 400

@@ -21,13 +21,15 @@ hides configured credentials detected by the Azure client.
 clients ([clients.md](../clients.md)). Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.7.0), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
-decodes it (an `EnumerationResults` root, nothing after it, no `Error` element in it, and `Blobs` in the decoded
-page), a per-call policy pins `x-ms-version` to `2026-10-06` and sends `startFrom` (which the v1.7.0 pagers drop), and
+decodes it (an `EnumerationResults` root, nothing after it, no `Error` element in it). The decoded
+page must hold `Blobs`. A per-call policy pins `x-ms-version` to `2026-10-06` and sends `startFrom`
+(which the v1.7.0 pagers drop), and
 a hierarchy page's blobs and prefixes, which the SDK returns apart, are merged back into wire order (UTF-16 code-unit
 order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.
-A success body is capped at 64 MiB, the memory one in-flight response may hold: a listing page past it fails the
-request (`client.ErrBodyCap`, not retried, not asked again with fewer entries; Azure answers at most 5,000 entries,
-far below it). The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
+The accepted success-body limit is 64 MiB; a listing page past it fails the request
+(`client.ErrBodyCap`, not retried, not asked again with fewer entries). This does not bound buffer
+capacity or decoded-page allocations; see [shared body handling](../clients.md#what-swath-keeps).
+The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
 the shared `--endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
 account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
 `http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--anonymous` (shared with S3 and GCS, and the only way a request goes
@@ -44,9 +46,11 @@ failures classified as GCS's (no answer, 5xx, 408, 429 or a
 timeout retried; a refused grant stops the request). The chain is the SDK's, built as it
 builds it (environment, workload identity, managed identity, the Azure CLI and Developer CLI logins), with no
 discovery of swath's own: a chain that will not build is an `objhttp.CredentialError` at construction; one that finds
-no credential (azidentity's own error) or whose grant is refused fails the first request with class `auth`
-before it is sent, and nothing is listed; a timeout, a transport failure or a token endpoint's 5xx is retried
-per request (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
+no credential (azidentity's own error) or whose grant is refused fails before sending the request.
+During namespace admission this can leave flatness unknown, producing `refused`, cause
+`unsupported` (exit 2), unless `--azblob-flat` asserts it. A credential failure during engine
+listing normally has class `auth`; transient token failures are retried per call
+(`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
 when no credentials were found. An endpoint with user information is refused (`source` `TestRegisteredEndpointRefusals`). A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
@@ -77,7 +81,9 @@ The assertion is the identity's `flat_asserted` field and the report's `namespac
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
-still ascends. `--all-versions` is refused the same way (versions, snapshots and deleted blobs are a later lane).
+still ascends. `--all-versions` is refused with the same outcome; versions, snapshots and deleted
+blobs are unsupported. Admission runs before the range engine is constructed, so exhausted admission
+calls do not reach engine requeue.
 
 ## Order: the byte-order adapter
 

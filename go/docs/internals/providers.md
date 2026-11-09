@@ -166,6 +166,8 @@ These integrations still require work outside the provider directory:
 | `cmd/swath/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
 | `internal/source/registered_test.go` | Central registration, interface, restart, locator and client-reporting coverage. |
 | `internal/listing/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
+| `internal/listing/reader_fixtures_test.go`, `scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py` | When adding conformance support: produce the schema's fixture in `TestSeekParquetFixtures`, select it in the shell runner and declare projected columns in Python's `COLUMNS`. The scripts live at the repository root. |
+| `internal/replay/store/sorted.go` | When adding replay support: register the schema projection in `objectProjections`; unknown schema IDs currently replay keys only. |
 | `go.mod`, `go.sum` | Additional SDK dependencies, if needed. |
 
 Shared help in `internal/source/flags.go` and `internal/source/keyrange/flags.go` contains provider examples;

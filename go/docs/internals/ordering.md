@@ -84,8 +84,9 @@ filter (`registry/filtered.go`) that keeps at most half of a page's rows or char
 (`Schema.Detach`: a row slice and one string buffer sized to them, through the payload codec), so a sparse filter
 cannot hold whole pages for a few charged rows (`TestSparseFilterPipelinePlateau`). The encoders' queues add the bytes of every queued
 batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
-written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. Pages being
-parsed (16 MiB for S3/GCS, 64 MiB for Azure), codecs and the garbage collector are outside it.
+written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer.
+Response buffers, decoded pages, codecs and garbage collector headroom are outside it;
+[shared body handling](clients.md#what-swath-keeps) distinguishes accepted-body limits from memory usage.
 
 The budget bounds the bytes of rows read but not yet drained. A worker waits before claiming a range, and before
 publishing rows, while the budget is used up. Two exceptions keep the walk live and both were forced by S3,
@@ -149,8 +150,8 @@ holds the smallest peak of three runs to that bound: the sampled live heap reads
 collection lands at a burst, while a pinned page shows in every run.
 
 **What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
-metadata in flight; outside it are response bodies being parsed (16 MiB each for S3/GCS, 64 MiB for Azure,
-one per in-flight request, probes included), arena slack (a surviving string keeps its page's allocation alive, which the row count only
+metadata in flight; outside it are response buffers and decoded pages
+([body limits and allocations](clients.md#what-swath-keeps), probes included), arena slack (a surviving string keeps its page's allocation alive, which the row count only
 approximates), compression scratch (a pooled spill encoder per concurrent writer, about 1.5 MiB each with its 1 MiB
 window), open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
 largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
@@ -159,17 +160,13 @@ headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (sy
 by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
-a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it, each priced
-from the provider's schema before the source opens (`parquetout.EncoderBytes`, `registry.Factory.EncoderBytes`):
-one writer (its row group, a page buffer per column, and its wide values, the key and any column with
-`schema.Spec.MaxBytes` such as a local path's link target, priced at their longest) and one state of the router's
-codec, which every writer shares and which makes states only as encoders are admitted (a zstd state that has
-compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 31.5 MiB for S3, 32.5 for
-GCS and 61 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
-writers' live heap, 24 pages each at the longest values, within four encoders' price, before admission raises
-the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Descriptors bound the count
-too: as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker and
-a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 4 for S3). An explicit `--encoders` above that is honored with a warning.
+a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it,
+each priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
+`registry.Factory.EncoderBytes`). [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
+own the calculation, per-schema prices and measured margins. Descriptors bound the default count too:
+as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker
+and a reserve of 32 (`listing.admitEncoders`). An explicit `--encoders N` bypasses default memory
+and descriptor admission and is honored with a warning on a resource shortfall.
 
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is

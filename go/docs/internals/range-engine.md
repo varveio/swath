@@ -35,8 +35,9 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     after the engine's.
 
 The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
-`Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size (default 1,000): data and
-seed requests ask for it, structure probes for no more, and the floors count pages of it. The
+`Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size: the engine fallback
+is 1,000 (S3/GCS); Azure selects 5,000 before construction. Data and seed requests ask for it,
+structure probes for no more, and the floors count pages of it. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
 A continuing structure probe (a provider may cut pages short) is a partial
 sample whatever its length (its furthest folder is the pivot). Its tests (`internal/source/keyrange`) run on a fake listing
@@ -69,22 +70,21 @@ oracle is the first kind of witness.
 
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --seed=false` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points
-`(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, 1,000 entries a page,
+`(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, the configured page size,
 `Probe` set):
 - *The first data page.* The first wave also carries the scope's first data page (no delimiter, from the
   start a first tile would use; `Options.SeedFirstPage`, which the command's policy sets with the seed). When it
   is not truncated the scope fits in one page: the seed emits it, the delimiter requests still in flight are
   canceled, and the seed stops there with no tile (`seed.stop.one_page`, `seed.first_page_keys`), one round
-  trip in all, as `--seed=false` (red team: 100 and 1,000 keys took 4x the `--seed=false` wall, 70 requests per
-  1,000 keys on 100). A truncated page is discarded (`seed.first_page_discarded`, one request more) and the
-  tiles are the seed's alone, from the scope's start. Emitting it and starting the first tile after it left
-  the 12.6M-key megascenes list with a serial tail (12 s to 20 s, mean active 57 to 35, for the same requests
-  and splits; `TestSeedFirstPageLargeFirstTile` is its shape).
-- *Pagination.* The top level follows its continuation token up to 4 pages (`seed.pages`), so a top level of
-  up to about 4,000 folders is tiled whole; past that it is `seed.truncated`. Four pages are already four
+  trip in all, as `--seed=false`. A truncated page is discarded (`seed.first_page_discarded`, one
+  request more), and the tiles start from the scope's start. `TestSeedFirstPageLargeFirstTile`
+  checks that the first tile can split across the discarded page. Dated evidence:
+  [seed measurements](../measurements.md#red-team-fixes-2026-11-07).
+- *Pagination.* The top level follows its continuation token up to 4 pages (`seed.pages`), so a top level
+  with up to four pages of folders is tiled whole; past that it is `seed.truncated`. Four pages are already four
   times the most cuts a seed keeps. A chain whose last page held no folder (objects only) is not followed
   (`seed.flat_chains`; the level then stops as `seed.stop.flat` if it found no folder): each further page of
-  a flat level is a round trip that finds no cut (the red team's flat leaves spent 4-6 waves for none). The
+  a flat level is a round trip that finds no cut. The
   cost: a level with more than a page of objects before its first folder is not tiled past them, and the
   tiles split there as any range does.
 - *Descent.* While a level holds fewer folders than `--workers`, the next level is listed under every one of
@@ -98,8 +98,8 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   request and, on its chain, a round trip: the seed charges each one before it is sent (a wave costs its
   longest chain), and when one would pass a budget the chain stops there, truncated, with that budget's stop
   reason; without that charge, a delimiter chain behind empty pages would run unbudgeted inside one seed page.
-  Java's serial 256-probe descent spent 13.5 s of a 39 s run on its chain; here a wave sends its requests at once, so the cost is the number of waves: 1 for a wide top level, 2
-  for a narrow one, 5 for the date layout.
+  A wave sends its requests concurrently, so the cost is the number of waves: 1 for a wide top
+  level, 2 for a narrow one, 5 for the date layout.
 - *Cuts.* Every folder found at every level is a cut (a descended folder stays one, and its children lie
   inside its tile), sorted, filtered by the provider's bound predicate (`seed.unsafe`) and evenly subsampled to
   at most `min(1000, 4 × workers)` (`seed.subsampled`). `seed.level.<n>.cuts` counts the folders found at each
@@ -133,14 +133,16 @@ in the interval it closes, and the scope they were taken under. Two sources fill
 - *a cut file*: one key per line, ascending bytewise without repeats, optionally a tab and the expected count;
   every line has a count or none does (uncounted cuts weigh one each). Its cuts are held for the run and
   merged into at most 1,000 tiles, so the file is bounded: more than 262,144 cuts or 16 MiB (counted while reading, so a
-  pipe or a growing file is bounded too) is refused before any request (`ErrPrior`; `maxCutFileCuts`, `maxCutFileBytes`, about 30 MiB held at most). Thin a larger one,
+  pipe or a growing file is bounded too) is refused before listing pages (`ErrPrior`; `maxCutFileCuts`, `maxCutFileBytes`, about 30 MiB held at most). Thin a larger one,
   every nth line with its count the sum of the lines it replaces (`TestSeedFromCutFileBounded`).
 
-Identity, checked before any request (exit 2, class `refused`, `ErrPrior`): a dataset's manifest must name the
+Identity, checked before listing pages (exit 2, class `refused`, `ErrPrior`; Azure namespace
+admission requests can precede this check): a dataset's manifest must name the
 run's source kind and container (the bucket), and its scope must be the run's prefix exactly: a dataset of
 `s3://b/logs/` does not seed `s3://b` nor `s3://b/logs/2026/` (a prefix mismatch is refused, not clipped). The
 manifest records no endpoint or region, so those are not checked: a dataset of another store's bucket of the same
-name is accepted, which can make the run slower, never wrong. A cut file records no scope: every cut must carry the
+name is accepted, which can make the run slower, never wrong. Azure's account URI is not compared
+either: verify that the prior belongs to the same account yourself. A cut file records no scope: every cut must carry the
 run's prefix. Either way the cuts must ascend, be valid UTF-8 and at most 1,024 bytes. The prior is not the output
 directory; the sequential listing and sources off the range engine (the filesystem) refuse it.
 
@@ -232,8 +234,8 @@ pages of 100 by default, the million-key list in pages of 1,000 with `SWATH_PERF
 gap (a date's `day=32`-`day=99`, a letter after a counter's digits), which only a structure probe can see.
 
 **Slow-range splitting** (off by default, `swath diag list --slow-split`; `Options.SlowSplit`). Demand is idle
-workers and the rank counts keys, so a range whose pages are slow (one folder at 2 s a page among 200 ms pages,
-the red team's `hotcold.narrow.d200`) stays on one worker until the rest drains (`split.skipped.no_demand`).
+workers and the rank counts keys, so a range whose pages are slow can stay on one worker
+until the rest drains (`split.skipped.no_demand`).
 With the switch each range keeps its page latency (an EWMA, weight 0.5 on the newest page; children start from
 their parent's), the rank reads time left (keys left × page latency) in place of keys left, and a bounded range
 splits without an idle worker (`split.reason.slow_range`) when its page latency is at least 4 times the run's

@@ -717,11 +717,13 @@ Diagnostics:
 - **Warm start:** `--seed-from PATH` (S3, GCS and Azure Blob) starts the range engine from a previous listing's key
   distribution instead of the delimiter seed: no seed request, and the scope tiled into up to
   `min(1000, 4 × --workers)` ranges of about equal expected keys. PATH is either a committed dataset directory of
-  the same source and scope (the manifest's bucket and prefix must be the run's; its parts' bounds, row counts and
-  key page index give the cuts) or a cut file: one key per line, ascending bytewise without repeats, each inside the
-  scope, optionally followed by a tab and the keys expected since the previous cut (every line or none), at most
+  the same source and scope (the manifest's source kind, bucket/container and prefix must be the run's;
+  its parts' bounds, row counts and key page index give the cuts). Azure's account URI is not compared:
+  verify the account yourself; endpoint and region are not checked either. Alternatively, PATH can be
+  a cut file: one key per line, ascending bytewise without repeats, each inside the scope, optionally followed by a tab and the keys expected since the previous cut (every line or none), at most
   262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it replaces). Anything
-  else is refused before any request (exit 2, class `refused`): another bucket or prefix, an unsorted or repeated
+  else is refused before listing pages (exit 2, class `refused`); Azure namespace admission requests
+  can already have run. Refusals include another bucket or prefix, an unsorted or repeated
   cut, a cut outside the scope, a cut file past those bounds, the output directory itself, `--sequential`, a filesystem source. Production should
   seed from the previous dataset, which carries identity and counts; a cut file is for priors from elsewhere (an
   S3 Inventory, a prefix list, another tool's segments). A prior changes only how the work is first divided: the
@@ -738,8 +740,12 @@ Diagnostics:
 - **Credentials (all object stores):** `--anonymous` (one flag for S3, GCS and Azure Blob) sends no
   credentials whatever the environment holds, and it is the only way a request goes unauthenticated: a
   public bucket or container needs it. Without it, a source with no usable credentials (none configured,
-  or configured and broken) stops the run with cause `auth` before any listing request; there is no
-  fallback to anonymity. Credential errors identify the failed credential source; their wording differs by provider.
+  or configured and broken) stops the run before listing; there is no fallback to anonymity.
+  Credential failures normally have cause `auth` (exit 1); failed Entra acquisition during Azure
+  namespace admission can instead yield `refused`, cause `unsupported` (exit 2), when flatness
+  remains unknown without `--azblob-flat`. See
+  [Azure admission](internals/providers/azblob.md#provider-implementation). Credential errors identify
+  the failed credential source; their wording differs by provider.
 - **S3 credentials:** the AWS SDK's default credential chain applies: environment, shared files and profiles
   (`--profile`), SSO, web identity, credential processes, AssumeRole, container and instance roles. Its first
   lookup is waited for up to 30 s (a web-identity token file mounted late included); a refresh that fails
@@ -771,11 +777,12 @@ Diagnostics:
   instead of delta-coding them, the comparison arm
   ([internals/ordering.md](internals/ordering.md)).
 - **Encoders:** the default count is GOMAXPROCS lowered to what the resources carry: one writer's working set
-  and one state of the shared codec, priced from the provider's schema at its longest keys (31.5 MiB for S3, 32.5 for GCS, 61 MiB for a
-  local path), each from an allowance equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
+  and one state of the shared codec, priced from the provider's schema
+  ([per-schema sizes](internals/parquet-output.md#writer-buffers-and-admission)), each from an allowance
+  equal to `--row-budget`, apart from the rows, and the descriptor limit (after the spill readers,
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
-  when the resources cannot carry it, a warning names the shortfall. For a `.zst` text file the same flag
-  is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
+  it bypasses default resource admission, with a warning when the resources cannot carry it.
+  For a `.zst` text file the same flag is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
   synchronous encoder ([operating.md](operating.md#sizing-a-run), Memory).
 - **Row bound per part:** `--part-rotation-max-rows N` (default 0: off; Java's default was 2,000,000 with
   256 MB parts) also closes a part at N rows. The cut depends on the rows only, so it is part of the resume
@@ -888,11 +895,11 @@ Diagnostics:
   | `answered` | requests the service answered usably (a sign the service is up, not progress) |
   | `frontier` | the listing's pages: those that held an entry or ended a chain, and empty continuing pages within the first 1,024 of their run (the watchdog's liveness with `advance`) |
   | `empty_chain_pages` | empty continuing pages past the first 1,024 of their run: answered, followed, not progress |
-  | `throttles`, `timeouts` | throttle answers; attempts past the request timeout |
+  | `throttles`, `timeouts` | throttle failures; timeout failures, including credential waits before HTTP accounting starts |
   | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
   | `rows_retained` | rows a resume kept from the interrupted run (not in `objects`) |
-  | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS, Azure Blob) |
+  | `requests`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](internals/clients.md#retry-policy-and-accounting)) |
   | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
   | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
   | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
@@ -992,9 +999,11 @@ and provider code or reason in the message without a separate report label. Inva
 violations; caller cancellation keeps its stop disposition.
 
 **Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
-is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,
-`throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,
-and past the per-request timeout. `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
+is the one request count: every counted HTTP attempt (pages, probes, client retries, engine requeues).
+`retries` counts retry-loop repetitions, `throttles` counts throttle failures and `timeouts` counts
+timeout failures. Credential waits can fail before HTTP accounting starts, so `retries` and `timeouts`
+can increase with zero `http_attempts`; they are not subsets of the HTTP count. See
+[retry accounting](internals/clients.md#retry-policy-and-accounting). `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint` spells it); both `null` on a
 custom endpoint, whose tariff is unknown, and for every Azure Blob run (no tariff estimate). `keys_per_sec` is `rows_emitted` over `listing_ms`;
