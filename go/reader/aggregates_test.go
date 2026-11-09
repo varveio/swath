@@ -322,6 +322,23 @@ func TestAggregatesSumsStayWithinBudget(t *testing.T) {
 		t.Error("no budget summed some children and skipped others")
 	}
 
+	// Two siblings in one size page: the second adds nothing once the
+	// first has paid for the page, and is summed with it.
+	siblings := [][]byte{[]byte("a/"), []byte("b/")}
+	sd := openDir(t, writeDataset(t, s3Spec(), keyRows([]string{"a/1", "b/1"})))
+	page, err := sd.SeekParquet().PlanRanges(context.Background(), []seekparquet.Range{seekparquet.PrefixRange(siblings[0], 0)}, []string{"size"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, _ := page.ProjectedBytes()
+	pair, err := sd.Aggregates(context.Background(), siblings, AggregateOptions{Sums: SumsWithinBudget, SumBudgetBytes: cost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pair[0].Bytes == nil || *pair[0].Bytes != 0 || pair[1].Bytes == nil || *pair[1].Bytes != 1 {
+		t.Fatalf("siblings in one page under a budget of %d: %s %s, want bytes 0 and 1", cost, describeAggregate(pair[0]), describeAggregate(pair[1]))
+	}
+
 	got, err := openDir(t, dir).Aggregates(context.Background(), children, AggregateOptions{Sums: SumsAlways})
 	if err != nil {
 		t.Fatal(err)
@@ -420,5 +437,28 @@ func TestAggregatesOneByteSumBudgetOpensNothingNew(t *testing.T) {
 	}
 	if n, _ := columnBytes(t, dir, summed, "size"); n == 0 {
 		t.Error("summing every prefix read no size page")
+	}
+}
+
+// TestAggregatesAndTotalsRefuseClosedOrCancelled: a closed Dataset or an
+// ended context fails a request that would read nothing.
+func TestAggregatesAndTotalsRefuseClosedOrCancelled(t *testing.T) {
+	d := openDir(t, writeDataset(t, s3Spec(), s3Rows(5)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := d.Aggregates(ctx, [][]byte{[]byte("k")}, AggregateOptions{}); !errors.Is(err, context.Canceled) || got != nil {
+		t.Errorf("cancelled aggregates, sums off: %v, %v", got, err)
+	}
+	if got, err := d.Totals(ctx, nil); !errors.Is(err, context.Canceled) || got != nil {
+		t.Errorf("cancelled totals of no path: %v, %v", got, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.Aggregates(context.Background(), [][]byte{[]byte("k")}, AggregateOptions{}); !errors.Is(err, seekparquet.ErrClosed) || got != nil {
+		t.Errorf("aggregates after close, sums off: %v, %v", got, err)
+	}
+	if got, err := d.Totals(context.Background(), nil); !errors.Is(err, seekparquet.ErrClosed) || got != nil {
+		t.Errorf("totals of no path after close: %v, %v", got, err)
 	}
 }

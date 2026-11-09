@@ -138,11 +138,13 @@ for _, r := range rows {
   selected (`RangePlan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
   shared with a prefix already selected counted once) fit what remains of `SumBudgetBytes` (0:
   `DefaultSumBudget`); a prefix inside one already selected adds nothing. Footers, key pages and page indexes
-  read to plan are not charged; a remaining budget below the smallest possible page plans nothing more, and a
-  prefix whose size chunk has no OffsetIndex, so that its cost cannot be proven, is not summed under a budget.
+  read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
+  smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
+  cannot be proven, is not summed under a budget.
   `Bytes` is nil for a prefix not summed and for a sum that overflows an int64; `Count` is reported only with
   `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
-  `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates.
+  `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates. Both calls fail first on a
+  context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
 - **Not checked.** The parts' SHA-256 digests: `seekparquet.Validate` (or `ValidateDir`) at `LevelDigest`
   compares them, and every part swath writes declares one. Rows no request decodes, and columns a request does
   not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull` every value.

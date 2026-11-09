@@ -52,7 +52,7 @@ type AggregateOptions struct {
 	// prefixes share counted once; zero means DefaultSumBudget. It must be
 	// zero for any other mode. Opening a part and reading its footer, key
 	// pages and page indexes to plan the sums are not charged. A budget
-	// that cannot hold another page plans no further prefix.
+	// that cannot hold one page plans nothing.
 	SumBudgetBytes int64
 }
 
@@ -108,15 +108,20 @@ func (o AggregateOptions) budget() int64 {
 // planning checks every part holding those rows. Under SumsWithinBudget a
 // prefix is summed when the projected bytes it adds to those already
 // selected fit what remains of the budget; a prefix inside one already
-// selected adds none. Every summed object is checked as Stream checks its
+// selected, or whose pages are all charged already, adds none. Every summed object is checked as Stream checks its
 // size, failing with a SemanticError of KindRow.
 //
-// An invalid AggregateOptions is an error wrapping
+// A context already ended or a closed Dataset fails it first, with the
+// context's error or seekparquet.ErrClosed. An invalid AggregateOptions is
+// an error wrapping
 // seekparquet.ErrInvalidRequest, and a versions schema a SemanticError of
 // KindSchema, both before any read. The module's refusals and the Source's
 // errors are returned unchanged, and a context that ends fails Aggregates
 // with its error. No aggregates are returned with an error.
 func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions) ([]PrefixAggregate, error) {
+	if err := d.usable(ctx); err != nil {
+		return nil, err
+	}
 	if err := opt.validate(); err != nil {
 		return nil, err
 	}
@@ -126,9 +131,6 @@ func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt Aggrega
 	out := make([]PrefixAggregate, len(prefixes))
 	if !opt.Counts && opt.Sums == SumsOff {
 		return out, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 	unique, of := distinct(prefixes)
 	spans := make([]keySpan, len(unique))
@@ -205,7 +207,9 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 // or a chunk's dictionary, holds rows between that one and the candidate,
 // and so rows of the last one selected. What a candidate adds is then the
 // projected bytes of it and the last one selected, less those of the last
-// one alone.
+// one alone, zero when its pages are all charged already. Until one is
+// selected every candidate adds at least a page, so a budget below the
+// smallest page plans none.
 func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates []int, budget int64) ([]int, error) {
 	order := slices.Clone(candidates)
 	slices.SortFunc(order, func(a, b int) int { return bytes.Compare(spans[a].lo, spans[b].lo) })
@@ -217,7 +221,7 @@ func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates 
 			selected = append(selected, i)
 			continue
 		}
-		if budget-used < minPageBytes {
+		if last < 0 && budget < minPageBytes {
 			continue
 		}
 		alone, ok, err := d.projectedSize(ctx, spans[i])

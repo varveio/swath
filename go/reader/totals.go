@@ -53,9 +53,11 @@ type PathTotals struct {
 // SemanticError of KindSchema before it reads. The module's refusals
 // (*seekparquet.RefusalError) and the Source's errors are returned
 // unchanged, and a context that ends fails Totals with its error, checked
-// before and after the reads. No totals are returned with an error.
+// before and after the reads; a closed Dataset fails it with
+// seekparquet.ErrClosed, whatever the paths. No totals are returned with
+// an error.
 func (d *Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error) {
-	if err := ctx.Err(); err != nil {
+	if err := d.usable(ctx); err != nil {
 		return nil, err
 	}
 	columns := objectColumns(d.spec.ID)
@@ -143,6 +145,16 @@ func (d *Dataset) fillExact(ctx context.Context, totals []PathTotals, columns []
 		o.ETag, o.StorageClass = dec.string("etag"), dec.string("storage_class")
 		return dec.err
 	})
+}
+
+// usable returns the context's error, or seekparquet.ErrClosed for a
+// closed Dataset, from a plan of nothing, which reads nothing.
+func (d *Dataset) usable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := d.sp.PlanRanges(ctx, nil, nil)
+	return err
 }
 
 // keySpan is the keys [lo, hi) one path or prefix selects; a nil hi is
