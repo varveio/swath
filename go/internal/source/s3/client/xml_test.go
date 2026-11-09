@@ -8,7 +8,6 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -26,6 +25,8 @@ func (r *refTime) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// refList: KeyCount is not on the page but is read, as the scanner does,
+// so a malformed count is refused by both.
 type refList struct {
 	XMLName               xml.Name `xml:"ListBucketResult"`
 	IsTruncated           bool
@@ -57,9 +58,9 @@ func reference(body []byte) (*Page, error) {
 		}
 		return url.QueryUnescape(s)
 	}
-	pg := &Page{IsTruncated: r.IsTruncated, KeyCount: r.KeyCount, EncodingType: r.EncodingType}
+	pg := &Page{IsTruncated: r.IsTruncated}
 	if r.NextContinuationToken != nil {
-		pg.NextContinuationToken, pg.HasContinuation = *r.NextContinuationToken, true
+		pg.NextContinuationToken = *r.NextContinuationToken
 	}
 	pg.Contents = make([]Object, len(r.Contents))
 	for i, c := range r.Contents {
@@ -127,7 +128,7 @@ func TestParseSample(t *testing.T) {
 		pg.Contents[0].Size != 434234 || pg.Contents[0].OwnerDisplayName != "me" ||
 		pg.Contents[0].Mtime != time.Date(2009, 10, 12, 17, 50, 30, 0, time.UTC).UnixMicro() ||
 		pg.Contents[1].Mtime != time.Date(2024, 2, 29, 23, 59, 59, 123456000, time.UTC).UnixMicro() ||
-		!pg.IsTruncated || !pg.HasContinuation || pg.KeyCount != 3 || len(pg.CommonPrefixes) != 1 || pg.CommonPrefixes[0] != "photos/" {
+		!pg.IsTruncated || pg.NextContinuationToken != "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=" || len(pg.CommonPrefixes) != 1 || pg.CommonPrefixes[0] != "photos/" {
 		t.Fatalf("%+v", pg)
 	}
 	agree(t, []byte(sample))
@@ -249,12 +250,6 @@ func FuzzParseFields(f *testing.F) {
 			t.Skip()
 		}
 		agree(t, body)
-		if _, err := reference(body); err == nil {
-			pg, _ := parse(body)
-			if !strings.EqualFold(pg.EncodingType, "url") {
-				t.Fatal("encoding type lost")
-			}
-		}
 	})
 }
 

@@ -39,7 +39,6 @@ type Page struct {
 	Contents              []Object
 	CommonPrefixes        []string
 	IsTruncated           bool
-	HasContinuation       bool
 	NextContinuationToken string
 }
 
@@ -152,7 +151,7 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 	n := 0
 	for ; i < len(f.Keys) && strings.HasPrefix(f.Keys[i], prefix); i++ {
 		if n == size {
-			out.IsTruncated, out.NextContinuationToken, out.HasContinuation = true, strconv.Itoa(i), true
+			out.IsTruncated, out.NextContinuationToken = true, strconv.Itoa(i)
 			break
 		}
 		k := f.Keys[i]

@@ -49,8 +49,8 @@ func serveVersions(t *testing.T, body string) string {
 
 // TestVersionsKeepWireOrder: a <Version>, <DeleteMarker>, <Version> run of
 // one key with equal timestamps comes back in wire order: the "null"
-// version ID verbatim, the key, NextKeyMarker and the echoed Prefix and
-// KeyMarker decoded once ('+' a space), the NextVersionIdMarker verbatim.
+// version ID verbatim, the key and NextKeyMarker decoded once ('+' a
+// space), the NextVersionIdMarker verbatim.
 func TestVersionsKeepWireOrder(t *testing.T) {
 	s3test.NoCredentials(t)
 	c := newTest(t, testConfig(serveVersions(t, versionsBody("VDV"))))
@@ -69,7 +69,7 @@ func TestVersionsKeepWireOrder(t *testing.T) {
 		kinds += map[bool]string{false: "V", true: "D"}[v.DeleteMarker]
 	}
 	if kinds != "VDV" || got.Versions[0].VersionID != "null" || got.Versions[2].ETag != `"ev2"` ||
-		got.NextKeyMarker != "a+b c/%" || got.NextVersionIDMarker != "v+2%2F" || got.Prefix != "a+b c" || got.KeyMarker != "a%" {
+		got.NextKeyMarker != "a+b c/%" || got.NextVersionIDMarker != "v+2%2F" {
 		t.Fatalf("%s %+v", kinds, got)
 	}
 }
