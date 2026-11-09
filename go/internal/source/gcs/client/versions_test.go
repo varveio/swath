@@ -147,8 +147,7 @@ func (r toServer) RoundTrip(req *http.Request) (*http.Response, error) {
 // expectedPage spells them out (every item's every field, the prefixes and
 // the token), in wire order (names ascending, generations ascending within
 // a name) with timeDeleted on exactly the noncurrent generations; without
-// kind they are refused; and a page served over HTTP takes
-// the ordinary request path with versions=true.
+// kind they are refused. The versions=true request is TestRequests'.
 func TestVersionsCaptureParses(t *testing.T) {
 	for _, c := range []struct {
 		file     string
@@ -222,20 +221,6 @@ func TestVersionsCaptureParses(t *testing.T) {
 	if e := p.Items[0]; e.Name != "empty.test" || e.Size != 0 || e.Generation != 1646943531464293 ||
 		e.TimeDeleted != usec(t, "2022-03-10T20:19:06Z") || p.Items[1].Name == e.Name {
 		t.Fatalf("empty.json: %+v", p.Items)
-	}
-
-	srv := newServer(t)
-	srv.body = capture(t, "single2.json", true)
-	cl, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err = cl.List(context.Background(), &ListInput{Bucket: "b", StartOffset: "GRCm39/README.txt", PageToken: "t", MaxResults: 2, Versions: true})
-	if err != nil || len(p.Items) != 2 || p.Items[0].TimeDeleted != 0 || p.Items[0].Generation != 1688688031116446 {
-		t.Fatalf("page %+v, %v", p, err)
-	}
-	if got := srv.query; got.Get("versions") != "true" || got.Get("pageToken") != "t" || got.Get("fields") != "" {
-		t.Fatalf("query %v", got)
 	}
 }
 
