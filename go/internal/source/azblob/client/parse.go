@@ -36,15 +36,15 @@ func (p *ListOutput) Validate(sent string) error {
 	return nil
 }
 
-// errorBody reads an <Error> document's Code and Message (the BOM
-// stripped); both empty when the body is not one.
-func errorBody(body []byte) (code, message string) {
+// errorMessage reads an <Error> document's Message (the BOM stripped) from
+// the bounded body; empty when the body is not one. The code is azcore's
+// (ResponseError.ErrorCode).
+func errorMessage(body []byte) string {
 	var w struct {
-		Code    string `xml:"Code"`
 		Message string `xml:"Message"`
 	}
 	if xml.Unmarshal(bytes.TrimPrefix(body, bom), &w) != nil {
-		return "", ""
+		return ""
 	}
-	return w.Code, w.Message
+	return w.Message
 }

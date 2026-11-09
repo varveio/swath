@@ -135,8 +135,10 @@ fails the page, as does a malformed `Date` header on a listing.
 `NamespaceInfo`, for anonymous admission, is swath's own HEAD (Filesystem Get Properties) on the account's Data Lake
 host, which azblob does not have, reading `x-ms-namespace-enabled`; an endpoint other than
 `https://ACCOUNT.blob.core.windows.net` has no such host, and with Shared Key it is not asked (`ErrNoDFSEndpoint`).
-In both a refusal or a missing header is an error, never "flat". The error code of a non-2xx answer comes from
-`x-ms-error-code`, else the body's `<Code>`; `AuthenticationFailed` arrives as a 403 and `ServerBusy` as a 503, so
+In both a refusal or a missing header is an error, never "flat". The error code of a non-2xx answer is azcore's
+`ResponseError.ErrorCode` (`x-ms-error-code`, else the body's `<Code>`); swath reads only the message from the
+bounded error body, scrubbed of the SAS (`NamespaceInfo`'s HEAD has no body: its code is the header's).
+`AuthenticationFailed` arrives as a 403 and `ServerBusy` as a 503, so
 the code decides before the status, and a 500 is retried only when it is `OperationTimedOut` or `InternalError`.
 
 ## Measurements

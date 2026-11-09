@@ -49,8 +49,8 @@ const (
 // Error is a non-200 answer.
 type Error struct {
 	Status int
-	// Code is x-ms-error-code, or the body's <Code> when the header is
-	// absent (some answers omit it).
+	// Code is azcore's ResponseError.ErrorCode: x-ms-error-code, or the
+	// body's <Code> when the header is absent (some answers omit it).
 	Code    string
 	Message string
 	Query   string // the request's query without the SAS, on a 400

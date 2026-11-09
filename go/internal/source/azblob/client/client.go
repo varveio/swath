@@ -560,17 +560,18 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, c.responseError(resp, body, u)
+		// a HEAD answer has no body: its code is the header's
+		return nil, c.responseError(resp, resp.Header.Get(headerErrorCode), body, u)
 	}
 	return resp.Header, nil
 }
 
-// responseError is a non-200 answer as an *Error: the code from
-// x-ms-error-code or else the body, a redirect's target, a 400's query
-// (without the SAS), the Retry-After wait.
-func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Error {
-	code, msg := errorBody(body)
-	e := &Error{Status: resp.StatusCode, Code: resp.Header.Get(headerErrorCode), Message: msg,
+// responseError is a non-200 answer as an *Error: the code given (azcore's
+// ResponseError.ErrorCode: x-ms-error-code, else the body's), the message
+// read from the bounded body and scrubbed, a redirect's target withheld, a
+// 400's query (without the SAS), the Retry-After wait.
+func (c *Client) responseError(resp *http.Response, code string, body []byte, u *url.URL) *Error {
+	e := &Error{Status: resp.StatusCode, Code: code, Message: errorMessage(body),
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
 	if e.Wait > c.cfg.RequestTimeout {
 		// A wait past the attempt deadline the caller set holds a worker
@@ -578,9 +579,6 @@ func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Er
 		// counted; the attempt budget still bounds the total.
 		e.Wait = c.cfg.RequestTimeout
 		c.retryAfterCapped.Add(1)
-	}
-	if e.Code == "" {
-		e.Code = code
 	}
 	if e.Status/100 == 3 {
 		e.Message = "redirect not followed" // its target is never quoted: it may carry the SAS
