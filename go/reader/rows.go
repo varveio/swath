@@ -31,7 +31,8 @@ func (p Position) Cursor() *seekparquet.Cursor {
 }
 
 // Object is a current object as a reader of any object store's current
-// objects sees it: an S3 or Cloud Storage row (DecodeObject).
+// objects sees it: an S3, Cloud Storage or Azure Blob row (DecodeObject;
+// an Azure blob's StorageClass is its access tier).
 type Object struct {
 	Position
 	Size         *int64
@@ -86,6 +87,19 @@ type GCSGeneration struct {
 	TimeDeleted *time.Time
 }
 
+// AzblobObject is a swath/azblob-objects/v1 row: one current Azure blob.
+type AzblobObject struct {
+	Position
+	Size         *int64
+	LastModified *time.Time // Last-Modified, 1 s resolution; moves on metadata writes
+	ETag         *string    // opaque, not a content hash
+	ContentMD5   *string    // base64, as listed
+	ContentType  *string
+	BlobType     *string // BlockBlob, PageBlob or AppendBlob
+	AccessTier   *string
+	CreationTime *time.Time
+}
+
 // LocalEntry is a swath-local/v1 row: one filesystem entry below the root.
 // Key is the path's bytes, which need not be UTF-8.
 type LocalEntry struct {
@@ -112,16 +126,31 @@ type LocalEntry struct {
 // another type is a SemanticError of KindSchema; a null in a required
 // column is one of KindRow.
 
-// DecodeObject decodes a current object of swath/s3-objects/v1 or
-// swath/gcs-objects/v1, the schema id of the row's dataset. Every other
-// id is a KindSchema error: a versions row is not a current object.
+// DecodeObject decodes a current object of swath/s3-objects/v1,
+// swath/gcs-objects/v1 or swath/azblob-objects/v1, the schema id of the
+// row's dataset. Every other id is a KindSchema error: a versions row is
+// not a current object.
 func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
-	if id != S3ObjectsV1 && id != GCSObjectsV1 {
+	class := "storage_class"
+	switch id {
+	case S3ObjectsV1, GCSObjectsV1:
+	case AzblobObjectsV1:
+		class = "access_tier"
+	default:
 		return Object{}, semantic(KindSchema, "", nil, "schema id %q holds no current objects", id)
 	}
 	d := decoder{spec: schemas[id], row: &row}
 	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		ETag: d.string("etag"), StorageClass: d.string("storage_class")}
+		ETag: d.string("etag"), StorageClass: d.string(class)}
+	return o, d.err
+}
+
+// DecodeAzblobObject decodes a swath/azblob-objects/v1 row.
+func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error) {
+	d := decoder{spec: schemas[AzblobObjectsV1], row: &row}
+	o := AzblobObject{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
+		ETag: d.string("etag"), ContentMD5: d.string("content_md5"), ContentType: d.string("content_type"),
+		BlobType: d.string("blob_type"), AccessTier: d.string("access_tier"), CreationTime: d.time("creation_time")}
 	return o, d.err
 }
 
