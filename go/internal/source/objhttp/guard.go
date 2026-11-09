@@ -1,0 +1,150 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package objhttp
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+)
+
+const (
+	defaultMaxBody  = 16 << 20
+	defaultMaxError = 64 << 10
+)
+
+// Guard is an http.RoundTripper that bounds and validates every response
+// before the SDK client above it decodes it. It is SDK-agnostic: the SDK
+// sees an ordinary response whose body is already in memory.
+//
+// A 2xx body is read up to MaxBody and handed to Validate; a longer one or a
+// rejection fails the round trip with a *GuardError. Any other status has its
+// body truncated to MaxError (silently: the SDK decodes what it gets). The
+// original body is closed on every path. Every error the Guard itself
+// returns, a failed body read included, is a *GuardError; transport errors
+// from Next pass through untouched.
+type Guard struct {
+	Next     http.RoundTripper // nil: http.DefaultTransport
+	MaxBody  int64             // 2xx bodies; zero is 16 MiB
+	MaxError int64             // non-2xx bodies; zero is 64 KiB
+	// Validate inspects a fully read 2xx body (any 2xx, an empty 204
+	// included). A non-nil error (wrap ErrSyntax for a garbled or
+	// wrong-envelope body) fails the round trip with a *GuardError.
+	Validate func(req *http.Request, status int, body []byte) error
+	// Header, if set, runs first on a clone of the request (a bearer
+	// token); its error fails the round trip with a *GuardError.
+	Header func(req *http.Request) error
+}
+
+// GuardError marks a Guard failure. http.Client wraps it in a *url.Error (a
+// net.Error, which Transport would read as a retryable connection failure) and
+// SDKs wrap further; Cause recovers the cause.
+type GuardError struct{ Err error }
+
+func (e *GuardError) Error() string { return "response guard: " + e.Err.Error() }
+func (e *GuardError) Unwrap() error { return e.Err }
+
+// Cause returns the cause of the *GuardError err holds (through its Unwrap
+// chain), or err unchanged when it holds none. An adapter calls it before
+// Classify so the url.Error around the failure is not mistaken for a
+// transport failure.
+func Cause(err error) error {
+	var ge *GuardError
+	if errors.As(err, &ge) {
+		return ge.Err
+	}
+	return err
+}
+
+// Capture asks the Guard, through the request context (WithCapture), for the
+// validated 2xx body. Replace, when set, is what the SDK decodes instead (a
+// minimal envelope). One Capture serves one attempt and is never shared
+// across goroutines.
+type Capture struct {
+	Body    []byte // set by the Guard: the validated 2xx body
+	Replace []byte // set by Validate's owner: handed upward instead of Body
+}
+
+type captureKey struct{}
+
+// WithCapture returns a context that makes a Guard fill c.
+func WithCapture(ctx context.Context, c *Capture) context.Context {
+	return context.WithValue(ctx, captureKey{}, c)
+}
+
+// RoundTrip implements http.RoundTripper.
+func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
+	if g.Header != nil {
+		req = req.Clone(req.Context()) // the caller's request is not ours to change
+		if err := g.Header(req); err != nil {
+			if req.Body != nil {
+				_ = req.Body.Close() // the RoundTripper contract
+			}
+			return nil, &GuardError{Err: err}
+		}
+	}
+	next := g.Next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	resp, err := next.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	limit := orDefault(g.MaxError, defaultMaxError)
+	if ok {
+		limit = orDefault(g.MaxBody, defaultMaxBody)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		// Wrapped, so Cause strips the url.Error around it: a cut body
+		// (io.ErrUnexpectedEOF, a net.Error) is still a transport failure,
+		// a malformed one (gzip.ErrHeader) is not.
+		return nil, &GuardError{Err: err}
+	}
+	if int64(len(body)) > limit {
+		if ok {
+			return nil, &GuardError{Err: fmt.Errorf("response larger than %d bytes", limit)}
+		}
+		body = body[:limit]
+	}
+	if ok {
+		if g.Validate != nil {
+			if err := g.Validate(req, resp.StatusCode, body); err != nil {
+				return nil, &GuardError{Err: err}
+			}
+		}
+		if c, _ := req.Context().Value(captureKey{}).(*Capture); c != nil {
+			c.Body = body
+			if c.Replace != nil {
+				body = c.Replace
+			}
+		}
+	}
+
+	out := *resp
+	out.Body = io.NopCloser(bytes.NewReader(body))
+	out.ContentLength = int64(len(body))
+	out.Header = resp.Header.Clone()
+	if out.Header == nil {
+		out.Header = http.Header{}
+	}
+	out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	out.TransferEncoding = nil
+	return &out, nil
+}
+
+func orDefault(v, def int64) int64 {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
