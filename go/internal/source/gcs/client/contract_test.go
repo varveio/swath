@@ -39,7 +39,7 @@ func TestRetryContract(t *testing.T) {
 		Garbled:  func(w http.ResponseWriter) { fmt.Fprint(w, `{"kind":"storage#objects","items":[{"na`) },
 	}
 	objhttptest.Contract(t, wire, func(s objhttptest.Settings) objhttptest.Client {
-		c, err := New(context.Background(), Config{Endpoint: s.Endpoint + "/storage/v1/", Anonymous: true, RequestTimeout: s.Timeout,
+		c, err := New(context.Background(), Config{Endpoint: s.Endpoint + "/storage/v1/", Anonymous: true, RequestTimeout: s.Timeout, HTTPClient: s.HTTPClient,
 			Retry: objhttp.Retry{MaxAttempts: s.Retry.MaxAttempts, BaseBackoff: s.Retry.BaseBackoff, MaxBackoff: s.Retry.MaxBackoff, Limiter: s.Retry.Limiter}})
 		if err != nil {
 			t.Fatal(err)

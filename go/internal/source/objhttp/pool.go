@@ -43,7 +43,10 @@ func Pool(workers int, supplied *http.Client, wrap func(http.RoundTripper) http.
 	for i := range pool {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
-		t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
+		if t.TLSClientConfig == nil {
+			t.TLSClientConfig = &tls.Config{}
+		}
+		t.TLSClientConfig.ClientSessionCache = cache
 		pool[i] = &http.Client{Transport: wrap(t), CheckRedirect: noRedirect}
 	}
 	return pool

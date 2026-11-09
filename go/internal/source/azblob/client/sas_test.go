@@ -253,3 +253,46 @@ func TestScrubSASParameters(t *testing.T) {
 		}
 	}
 }
+
+// secretTransport returns an error whose text quotes the SAS independently
+// of net/http's request URL, forcing redact to preserve the network signals.
+type secretTransport struct{ timeout bool }
+
+func (s secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if s.timeout {
+		<-req.Context().Done()
+	}
+	return nil, &secretNetError{timeout: s.timeout}
+}
+
+type secretNetError struct{ timeout bool }
+
+func (e *secretNetError) Error() string   { return "transport failure: " + testSAS }
+func (e *secretNetError) Timeout() bool   { return e.timeout }
+func (e *secretNetError) Temporary() bool { return false }
+
+func TestScrubbedTransportSignals(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(fmt.Sprint(timeout), func(t *testing.T) {
+			c := newTestClient(t, Config{Endpoint: "http://storage.test", SAS: testSAS, RequestTimeout: 20 * time.Millisecond,
+				Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, HTTPClient: &http.Client{Transport: secretTransport{timeout}}})
+			safe := c.route("c")
+			redacted := c.redact(fmt.Errorf("send: %w", &secretNetError{timeout: timeout}), &safe)
+			var ne net.Error
+			var scrubbed *scrubbedNetError
+			if !errors.As(redacted, &scrubbed) || !errors.As(redacted, &ne) || ne.Timeout() != timeout || !objhttp.Transport(redacted) || sasLeak(redacted.Error()) != "" {
+				t.Fatalf("redacted error: %v", redacted)
+			}
+			_, err := c.List(t.Context(), &ListInput{Container: "c"})
+			f := objhttp.Normalize(err)
+			counts := c.Counters()
+			wantClass := objhttp.ClassOther
+			if timeout {
+				wantClass = objhttp.ClassTimeout
+			}
+			if err == nil || !objhttp.Requeue(err) || !f.Transient || f.Timeout != timeout || f.Class != wantClass || counts.Attempts != 2 || counts.Retries != 1 || (counts.Timeouts != 0 && !timeout || timeout && counts.Timeouts != 2) || sasLeak(err.Error()) != "" {
+				t.Fatalf("error %v, failure %+v, counters %+v", err, f, counts)
+			}
+		})
+	}
+}

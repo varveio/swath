@@ -284,3 +284,15 @@ func TestCallerCancellationPrecedesCredentialFailure(t *testing.T) {
 		t.Fatalf("canceled caller: %v (%+v), counts %+v", err, f, counts.Load())
 	}
 }
+
+func TestTextConnectionReset(t *testing.T) {
+	for _, err := range []error{errors.New("read: connection reset by peer"), fmt.Errorf("send: %w", errors.New("connection reset"))} {
+		f := Normalize(err)
+		if !Transport(err) || !f.Transient || f.Timeout || f.Throttle || f.Class != ClassOther || !Requeue(&ExhaustedError{Attempts: 2, Err: f}) {
+			t.Fatalf("text-only reset: %+v", f)
+		}
+	}
+	if Transport(errors.New("unrelated failure")) {
+		t.Fatal("unrelated text is transport")
+	}
+}

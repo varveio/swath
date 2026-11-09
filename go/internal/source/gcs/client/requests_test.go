@@ -149,7 +149,7 @@ func TestRequests(t *testing.T) {
 // escapes kept, except an escaped separator, which is sent as a separator,
 // and dot segments removed (docs/internals/providers/gcs.md, "Endpoint").
 func TestEndpoint(t *testing.T) {
-	for _, ep := range []string{"ftp://host/storage/v1/", "storage/v1/", "http:///storage/v1/", "http://%zz/",
+	for _, ep := range []string{"ftp://host/storage/v1/", "storage/v1/", "http:///storage/v1/", "http://%zz/", "http://host/%zz",
 		"http://host/%7B%7D/storage/v1/", "http://host/%7Btenant%7D/storage/v1/", "http://host/%7b%7d/",
 		"http://host/{}/storage/v1/", "http://host/{tenant}/storage/v1/", "http://host/a%7D/", "http://host/storage/v1/{"} {
 		if _, err := New(context.Background(), Config{Endpoint: ep, Anonymous: true}); err == nil {

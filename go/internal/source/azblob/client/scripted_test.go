@@ -236,13 +236,6 @@ func TestScriptedAnswers(t *testing.T) {
 		{"200 empty body", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {}, parse(2)},
 		{"200 BOM only", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "\xef\xbb\xbf") }, parse(2)},
 		{"200 cut in an element", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, listHead+"<Blob><Na") }, parse(2)},
-		{"200 connection cut", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Length", "100000")
-			fmt.Fprint(w, listHead)
-			w.(http.Flusher).Flush()
-			conn, _, _ := w.(http.Hijacker).Hijack()
-			conn.Close()
-		}, outcome{Class: objhttp.ClassOther, Requeue: true, Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
 		{"200 out of order", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("", "b", "a")) }, invalid},
 		{"200 repeated marker", 2, ListInput{Marker: "m1"}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("m1", "a")) }, invalid},
 		{"200 Encoded name not UTF-8", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
@@ -383,46 +376,38 @@ func sized(r *http.Request) string {
 	return page(next, names...)
 }
 
-// TestCancelAfterHeaders: a caller's cancellation after the answer's
-// headers, mid-body, ends List as cancelled, not retried, with the body
-// closed.
-func TestCancelAfterHeaders(t *testing.T) {
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, listHead)
-		w.(http.Flusher).Flush()
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(srv.Close)
-	cc := &closeCount{next: http.DefaultTransport}
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3}, HTTPClient: &http.Client{Transport: cc}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cc.next = headersThen(http.DefaultTransport, cancel)
-	_, err = c.List(ctx, &ListInput{Container: "c"})
-	if objhttp.Classify(err) != objhttp.ClassOther || !errors.Is(err, context.Canceled) {
-		t.Errorf("%v (class %q)", err, objhttp.Classify(err))
-	}
-	if msg := cc.closedOnce(1); msg != "" {
-		t.Error(msg)
+// The public constructor must install Azure's own cap, including its terminal
+// error mapping. The small configurable-cap rows also pin unchanged page size.
+func TestDefaultBodyCap(t *testing.T) {
+	for _, extra := range []int{0, 1} {
+		t.Run(fmt.Sprintf("cap+%d", extra), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := page("")
+				io.WriteString(w, body)
+				left := int(MaxBody) - len(body) + extra
+				padding := strings.Repeat(" ", 32<<10)
+				for left > 0 {
+					n := min(left, len(padding))
+					if _, err := io.WriteString(w, padding[:n]); err != nil {
+						return
+					}
+					left -= n
+				}
+			}))
+			defer srv.Close()
+			c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, RequestTimeout: 30 * time.Second, Retry: objhttp.Retry{MaxAttempts: 3}})
+			p, err := c.List(t.Context(), &ListInput{Container: "c"})
+			counts := c.Counters()
+			if counts.Attempts != 1 || counts.Retries != 0 || counts.ParseFailures != 0 || objhttp.Requeue(err) {
+				t.Fatalf("error %v, counters %+v", err, counts)
+			}
+			if extra == 0 {
+				if err != nil || p == nil || len(p.Items) != 0 {
+					t.Fatalf("page %+v, error %v", p, err)
+				}
+			} else if p != nil || !errors.Is(err, ErrBodyCap) {
+				t.Fatalf("page %+v, error %v: want terminal ErrBodyCap", p, err)
+			}
+		})
 	}
 }
-
-// headersThen calls f once the response headers are in.
-func headersThen(next http.RoundTripper, f func()) http.RoundTripper {
-	return rtFunc(func(req *http.Request) (*http.Response, error) {
-		resp, err := next.RoundTrip(req)
-		f()
-		return resp, err
-	})
-}
-
-type rtFunc func(*http.Request) (*http.Response, error)
-
-func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package tokensource shares an OAuth token among a client's concurrent
-// requests: golang.org/x/oauth2's ReuseTokenSourceWithExpiry caches it
+// requests: golang.org/x/oauth2's ReuseTokenSource caches it
 // until it expires, and golang.org/x/sync/singleflight lets one refresh run
 // while the other callers wait on it or on their own context. Command is a
 // token source that runs a shell command (--bearer-token-command).
@@ -29,15 +29,11 @@ type Shared struct {
 	g  singleflight.Group
 }
 
-// NewShared caches src's tokens until early before their expiry. With
-// early 0, a src that is already a reuse source (an SDK's, such as the
-// compute metadata source's 225 s margin) keeps its own margin; any other
-// src gets oauth2's default.
-func NewShared(src oauth2.TokenSource, early time.Duration) *Shared {
-	if early == 0 {
-		return &Shared{ts: oauth2.ReuseTokenSource(nil, src)}
-	}
-	return &Shared{ts: oauth2.ReuseTokenSourceWithExpiry(nil, src, early)}
+// NewShared caches src's tokens until expiry. A src that is already a
+// reuse source keeps its own expiry margin; any other src gets oauth2's
+// default.
+func NewShared(src oauth2.TokenSource) *Shared {
+	return &Shared{ts: oauth2.ReuseTokenSource(nil, src)}
 }
 
 // Token is the current token.

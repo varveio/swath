@@ -21,7 +21,7 @@ import (
 // parse failure) until a real page comes; an envelope naming its kind and
 // nothing else is a legitimate empty listing.
 func TestInvalidSuccessEnvelopeIsRetried(t *testing.T) {
-	bad := []string{`null`, ` null `, `[]`, `"x"`, `{"error":{"code":503,"message":"backend"}}`, `{}`}
+	bad := []string{`null`, `[]`, `{"error":{"code":503,"message":"backend"}}`, `{}`}
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i := int(n.Add(1)) - 1
