@@ -760,6 +760,50 @@ Google's generated client 3.1 µs and 10,132. Reproduce:
 The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself added 0.7 MB. Cross-builds:
 [`../build.sh`](../build.sh).
 
+### SDK-backed clients (2026-11-09)
+
+Clients built with `-tags swath_sdkclient` ([providers.md](internals/providers.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
+measured on branches `exp/measure-preview` (S3) and `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers
+describe those runs.
+
+**S3 decoders** (`BenchmarkDecode` in `internal/source/s3/sdkclient`: one full client call per iteration through
+the real SDK stack and `objhttp.Guard` over an in-memory `RoundTripper`; a 1,000-entry page with URL-encoded keys,
+owners and checksums; `-benchtime=2000x -count=3`; the range is the lowest to highest of the three):
+
+| Decoder | List µs/object | List allocations/page | Versions µs/object | Versions allocations/page |
+|---|---:|---:|---:|---:|
+| scanner (production) | 1.66 to 1.92 | 392 | 1.93 to 2.11 | 392 |
+| SDK decoder (`SWATH_S3_DECODER=sdk`) | 14.6 to 16.4 | 102,464 | not applicable (versions always use the scanner) | |
+| scanner, body only | 1.14 to 1.21 | 3 | 1.12 to 1.28 | 3 |
+| `encoding/xml` walk (deleted) | 12.5 to 15.1 | 80,497 | 11.7 to 12.3 | 85,187 |
+
+A decoder on `encoding/xml` allocates per token and lands near the SDK's cost; a `RawToken` variant reached
+8.5 to 9.3 µs per object.
+
+**GCS** (`TestListClientCost`, 200,000 objects, `GOMAXPROCS=4`; a baseline that only reads the bodies is
+subtracted):
+
+| | Hand-rolled | Generated client, direct | `sdkclient` |
+|---|---:|---:|---:|
+| Client CPU over baseline, list loop | 2.37 µs/object | 2.96 | 3.11 |
+| Allocations per page over baseline | 5,065 | 10,142 | 10,149 |
+| Bytes per page over baseline | 1.03 MiB | 1.36 MiB | 1.65 MiB |
+
+**Binary size** (linux/amd64, `CGO_ENABLED=0 -trimpath -ldflags='-s -w'`, branch `exp/gcs-sdkclient`; GCS only
+is tagged here):
+
+| Build | Bytes |
+|---|---:|
+| default | 21,426,338 |
+| `-tags swath_sdkclient` | 30,474,402 |
+
+The tagged build is 9.0 MB larger and links 188 more packages, 64 of them under `google.golang.org/grpc` and 30
+OpenTelemetry. The cost is inherent to the generated client: `google.golang.org/api/storage/v1` itself depends on
+gRPC through `google.golang.org/api/internal/settings.go`, however the service is constructed. These sizes
+are of a later tree than the table above, so they do not compare with it.
+
+Whole-process CPU, wall time and peak RSS per build: see the measurement pass (pending)
+
 ## Local filesystem walker
 
 Trees are synthetic (`bench/gen_tree.py`, seed 20261105): `realistic` is 971,927 non-directory entries and
