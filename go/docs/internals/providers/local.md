@@ -35,9 +35,9 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   client: 199,722 LOOKUPs to none, 5.85 s to 2.42 s ([measurements](../../measurements.md)). The heuristic is
   the kernel's and can change; the client's first reads are short (19, then 5 entries) and are not hinted, as
   hinting after them measured worse (3,277 LOOKUPs).
-- **A count does not sort.** Nothing consumes a count's order, so the getdents engine skips each directory's
-  sort (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
-  (`TestUnsortedCountEqualsSortedListing`). Warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
+- **A count does not sort.** Nothing consumes a count's order, so both engines skip each directory's sort
+  (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
+  (`TestUnsortedCountEqualsSortedListing`). getdents engine, warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
   −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../../measurements.md)).
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).

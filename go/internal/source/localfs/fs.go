@@ -322,7 +322,11 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		}
 		rows = append(rows, row)
 	}
-	sortRows(rows)
+	if p.unsorted {
+		st.Unsorted++
+	} else {
+		sortRows(rows)
+	}
 	return p.emit(r, rows, e, st)
 }
 
