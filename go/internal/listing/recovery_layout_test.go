@@ -6,7 +6,7 @@ package listing
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -60,10 +60,10 @@ func newLayoutRun(t *testing.T, records int) *layoutRun {
 		if err := os.WriteFile(filepath.Join(lr.out, dataset.DataDir, dataset.PartName(i)), body, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		sum := md5.Sum(body)
+		sum := sha256.Sum256(body)
 		key := dataset.Key(string(rune('a' + i)))
 		rec := journal.Record{Ordinal: i, RowsTotal: int64(i + 1),
-			Part: dataset.PartInfo{Rows: 1, Bytes: int64(len(body)), MinKey: key, MaxKey: key, MD5: hex.EncodeToString(sum[:])}}
+			Part: dataset.PartInfo{Rows: 1, Bytes: int64(len(body)), MinKey: key, MaxKey: key, SHA256: hex.EncodeToString(sum[:])}}
 		if err := j.Append(rec); err != nil {
 			t.Fatal(err)
 		}

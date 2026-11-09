@@ -22,6 +22,8 @@ import (
 	"github.com/parquet-go/parquet-go/format"
 	"golang.org/x/sys/cpu"
 
+	seekparquet "github.com/varveio/seekparquet/go"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -192,8 +194,8 @@ func TestFooterOnlyChange(t *testing.T) {
 				t.Errorf("%s part %d: %+v, golden %+v", name, i, g, w)
 			}
 			kv := footer(t, parts[i].Path)
-			stamps := map[string]string{dataset.StampFormatVersion: "0", dataset.StampDraftRevision: "1", dataset.StampSchema: footerOnlySchemaIDs[name],
-				dataset.StampKeyColumn: "key", dataset.StampKeyUnique: strconv.FormatBool(name != "grouped")}
+			stamps := map[string]string{seekparquet.StampFormatVersion: "0", seekparquet.StampDraftRevision: "1", seekparquet.StampSchemaID: footerOnlySchemaIDs[name],
+				seekparquet.StampKeyColumn: "key", seekparquet.StampKeyUnique: strconv.FormatBool(name != "grouped")}
 			if !maps.Equal(kv, stamps) {
 				t.Errorf("%s part %d: footer key/value metadata %q, want %q", name, i, kv, stamps)
 			}

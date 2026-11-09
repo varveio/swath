@@ -10,6 +10,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
 	"github.com/varveio/swath/go/internal/replay/store"
+	"github.com/varveio/swath/go/reader"
 )
 
 // NativeSchemaID is the schema id of a dataset the lister wrote from a
@@ -17,7 +18,7 @@ import (
 // checksums and the content type, which the route renders instead of the
 // synthetic values, and the creation time where the part holds the
 // optional time_created column.
-const NativeSchemaID = "swath/gcs-objects/v1"
+const NativeSchemaID = string(reader.GCSObjectsV1)
 
 // Item is one listed object as the route renders it. Size and Updated are
 // 0 when the fixture stores a null. Native is nil for a fixture without

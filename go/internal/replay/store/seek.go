@@ -58,13 +58,13 @@ func isSeekParquet(dir string) bool {
 		return false
 	}
 	var head manifestHead
-	return json.Unmarshal(b, &head) == nil && head.Format == "seekparquet"
+	return json.Unmarshal(b, &head) == nil && head.Format == seekparquet.Format
 }
 
 // seekReader serves a SeekParquet dataset through the seekparquet module:
 // its range reads and its delimited listing. Keys must be unique
-// (ErrRepeatedKeys). It does not count the page work the legacy core counts (legacy.Stats stays
-// zero; Sorted.PageStats is false): the module does not report it.
+// (ErrRepeatedKeys). A read's page work is the module's per-request
+// seekparquet.ReadStats, added to the read's legacy.Stats (count).
 type seekReader struct {
 	d       *seekparquet.Dataset
 	root    *os.Root
@@ -104,16 +104,23 @@ func (s *cachedSource) Open(ctx context.Context, path string) (seekparquet.Sourc
 }
 
 // openSeek opens the SeekParquet dataset in dir, its parts through files,
-// checking every row group's first key page and each part's last
-// (VerifyOnOpen, as the legacy core decodes them at open), and the type of
-// every column of expect a part has (legacy.CheckColumns).
+// checking every part, every row group's first key page and each part's
+// last at open (Dataset.Verify, as the legacy core decodes them at open:
+// a long-lived local reader fails fast rather than on a part's first
+// touch), and the type of every column of expect a part has
+// (legacy.CheckColumns).
 func openSeek(ctx context.Context, dir string, expect []legacy.Column, files *legacy.FileCache) (*seekReader, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
 	}
 	src := &cachedSource{root: root, dir: dir, files: files, opened: map[string]*legacy.CachedFile{}}
-	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{VerifyOnOpen: true})
+	d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+	if err == nil {
+		if err = d.Verify(ctx); err != nil {
+			_ = d.Close()
+		}
+	}
 	if err != nil {
 		_ = root.Close()
 		return nil, err
@@ -224,12 +231,29 @@ func after(key []byte) *seekparquet.Cursor {
 	return &seekparquet.Cursor{Key: bytes.Clone(key), Offset: math.MaxInt64}
 }
 
-func (r *seekReader) Read(ctx context.Context, rng legacy.Range, _ *legacy.Stats) ([]legacy.Row, error) {
+// count adds the module's counts of one request to stats: pages (key and
+// value), keys decoded, row groups opened, page-index seeks, groups
+// skipped whole, and parts checked on their first touch.
+func count(stats *legacy.Stats, st *seekparquet.ReadStats) {
+	if stats == nil {
+		return
+	}
+	stats.PagesDecoded += st.KeyPagesDecoded + st.ValuePagesDecoded
+	stats.KeysDecoded += st.KeysDecoded
+	stats.GroupsOpened += st.RowGroupsOpened
+	stats.Reseeks += st.PageIndexSeeks
+	stats.GroupShortcuts += st.GroupsSkipped
+	stats.PartsOpened += st.PartsOpened
+}
+
+func (r *seekReader) Read(ctx context.Context, rng legacy.Range, stats *legacy.Stats) ([]legacy.Row, error) {
 	if rng.Limit <= 0 {
 		return nil, nil
 	}
+	var st seekparquet.ReadStats
+	defer count(stats, &st)
 	out, err := r.d.Range(ctx, seekparquet.Range{Start: rng.From, StartExclusive: rng.From != nil && !rng.FromInclusive, End: rng.To,
-		Limit: rng.Limit, Columns: rng.Columns})
+		Limit: rng.Limit, Columns: rng.Columns, Stats: &st})
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +288,7 @@ func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.S
 // continues after that prefix (a prefix cursor): the only common prefix at
 // or before the start that a later key can roll up to is the start's own,
 // and every key under it is skipped with it.
-func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, _ *legacy.Stats) ([]legacy.Entry, error) {
+func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *legacy.Stats) ([]legacy.Entry, error) {
 	if rl.Limit <= 0 {
 		return nil, nil
 	}
@@ -273,7 +297,7 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, _ *legacy
 	if c := bytes.Compare(from, prefix); from == nil || c < 0 || c == 0 && rl.FromInclusive {
 		// Every candidate key begins with the prefix, so is at or after
 		// the start.
-		return r.list(ctx, list, nil)
+		return r.list(ctx, list, nil, stats)
 	}
 	if !bytes.HasPrefix(from, prefix) || rl.To != nil && bytes.Compare(from, rl.To) >= 0 {
 		// After every key that begins with the prefix, or at or past the
@@ -287,17 +311,21 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, _ *legacy
 	switch {
 	case rolled != nil && rl.SuppressAtOrBeforeFrom:
 		list.Cursor = &seekparquet.Cursor{Prefix: bytes.Clone(rolled)}
-		return r.list(ctx, list, nil)
+		return r.list(ctx, list, nil, stats)
 	case !rl.FromInclusive:
 		list.Cursor = after(from)
-		return r.list(ctx, list, nil)
+		return r.list(ctx, list, nil, stats)
 	}
 	// An inclusive start inside the prefix: its own group first.
 	limit, columns := rl.Limit, rl.Columns
 	if rolled != nil {
 		limit, columns = 1, nil
 	}
-	group, err := r.d.Range(ctx, seekparquet.KeyRange(from, limit, columns...))
+	var st seekparquet.ReadStats
+	lookup := seekparquet.KeyRange(from, limit, columns...)
+	lookup.Stats = &st
+	group, err := r.d.Range(ctx, lookup)
+	count(stats, &st)
 	if err != nil {
 		return nil, err
 	}
@@ -317,14 +345,17 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, _ *legacy
 		list.Limit -= len(lead)
 	}
 	list.Cursor = after(from)
-	return r.list(ctx, list, lead)
+	return r.list(ctx, list, lead, stats)
 }
 
 // list runs req and appends its entries to lead; a common prefix lead
 // ends with is not repeated, and the result keeps at most the request's
 // limit of entries after lead's rows.
-func (r *seekReader) list(ctx context.Context, req seekparquet.List, lead []legacy.Entry) ([]legacy.Entry, error) {
+func (r *seekReader) list(ctx context.Context, req seekparquet.List, lead []legacy.Entry, stats *legacy.Stats) ([]legacy.Entry, error) {
+	var st seekparquet.ReadStats
+	req.Stats = &st
 	entries, err := r.d.List(ctx, req)
+	count(stats, &st)
 	if err != nil {
 		return nil, err
 	}

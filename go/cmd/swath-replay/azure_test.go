@@ -31,6 +31,12 @@ func TestAzureFlagsAndStartupLine(t *testing.T) {
 	if err != nil || cfg.AzureAccount != "replay" || strings.Join(cfg.Protocols, ",") != "azure,s3" {
 		t.Fatalf("%+v %v", cfg, err)
 	}
+	if f, err = parseServe([]string{"--fixture", "f", "--bucket", "bkt", "--protocols", "azure", "--azure-hns"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if hns, err := f.config(); err != nil || cfg.AzureHNS || !hns.AzureHNS {
+		t.Fatalf("--azure-hns: %+v %v", hns, err)
+	}
 	fixture := filepath.Join(t.TempDir(), "keys.tsv")
 	if err := os.WriteFile(fixture, []byte("a/1\t5\t1767225600000000\n"), 0o644); err != nil {
 		t.Fatal(err)

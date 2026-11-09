@@ -47,16 +47,18 @@ own metadata goes under `extensions`, by namespace. swath's is `extensions.swath
       "scope": {"kind": "prefix", "prefix": "logs/"},
       "coverage": {"complete": true, "stop_reason": "completed", "skipped_entries": 0,
                    "exclusions": [], "filters": [], "snapshot": false,
-                   "listing_started_at": "…", "listing_finished_at": "…"},
-      "part_md5": ["…"]
+                   "listing_started_at": "…", "listing_finished_at": "…"}
     }
   },
   "parts": [
     {"path": "data/part-00000.parquet", "rows": 1000, "bytes": 81234,
-     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r"}
+     "min_key_base64": "bG9ncy9h", "max_key_base64": "bG9ncy9r", "sha256": "…"}
   ]
 }
 ```
+
+The member order is the seekparquet module's (`seekparquet.MarshalManifest`, which writes swath's manifests);
+JSON readers do not depend on it.
 
 | Format 2 | SeekParquet |
 |---|---|
@@ -64,7 +66,7 @@ own metadata goes under `extensions`, by namespace. swath's is `extensions.swath
 | `schema_id` | `schema_id` (unchanged) |
 | – (the key column was always `key`, keys always unique) | `key`: `{"column": "key", "unique": true}`; `unique` is false for the versions schemas (`--all-versions`), whose keys repeat on consecutive rows and never across parts |
 | `published_at`, `source`, `scope`, `coverage` | `extensions.swath.published_at`, `.source`, `.scope`, `.coverage` (same members and meaning) |
-| `parts[].md5` | `extensions.swath.part_md5[i]`, in manifest order (SeekParquet's part member is a `sha256`, which swath does not write) |
+| `parts[].md5` | `parts[].sha256`: the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which the format's validators check at the digest level. Builds before journal version 9 wrote the parts' MD5s under `extensions.swath.part_md5` and no `sha256`; their datasets stay readable (`swath show`, `--seed-from`), and the extension member is ignored. MD5 is no longer written anywhere. |
 | `parts[].path`, `rows`, `bytes`, `min_key_base64`, `max_key_base64` | unchanged (exact bounds, canonical standard base64) |
 
 Whole-source acceptance reads the same coverage fields from `extensions.swath` (below). A dataset of another
@@ -207,10 +209,9 @@ readers treat page bounds as conservative. Manifest bounds are exact.
 Four versions move independently: the dataset format (SeekParquet's `format_version` 0 and `draft_revision` 1,
 in the manifest and the `seekparquet.*` stamps; format 2 builds wrote 2), the
 logical schema (`schema_id`, kept when a column is added as optional; see "The downstream reader: dispatch on
-schema id" below), the private journal (version 8, never read by readers: version 8 adds the run UUID that durable spill files
-are bound to; a version 7 journal is read, with durable spill off, but every version 7 build wrote format 2, whose
-runs this build refuses to resume by their dataset format; a version 7 build refuses a version 8 journal; an
-interrupted run of an older build is finished with that build or started over with `--overwrite`) and the writer recipe
+schema id" below), the private journal (version 9, never read by readers: version 9 records each part's SHA-256 where versions 7
+and 8 recorded its MD5, so this build refuses those journals before recovery touches anything, and they refuse
+version 9; an interrupted run of an older build is finished with that build or started over with `--overwrite`) and the writer recipe
 (`parquetout.Recipe`, `swath-go/parquet-r3` since SeekParquet, in the resume identity, with the dataset format: a
 build of another recipe or format refuses the journal). `created_by` names the real build, so
 parts are byte-identical within a build only; a part claimed but not recorded when a run stopped is reproduced
@@ -447,18 +448,22 @@ What such a reader does, stated as the contract rather than as its code:
 - **Part footers.** Every part carries the `seekparquet.*` stamps equal to the manifest's (format 2:
   `swath.profile`, `swath.profile_version` 2 and `swath.schema_id`), and `key` ascending as the first sorting
   column.
-- **Rows.** `key`, `size` and `last_modified` are read; a null `size` is rejected, so a local dataset listed
-  with names only is not readable by such a reader; directory rows of a local dataset are entries whose
-  keys end in `/`.
+- **Rows.** `key`, `size` and `last_modified` are read; a null or negative `size` is rejected, so a local
+  dataset listed with names only is not readable by such a reader, and so is a `last_modified` outside the
+  years 1 to 9999; directory rows of a local dataset are entries whose keys end in `/`.
+- **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract for
+  SeekParquet datasets: `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage above,
+  source kind and container) and `Stream` (current objects, the row checks above).
 - **Fixtures.** One dataset per schema written by this tool serves as the reader's fixture; the commands
   that produce them are the ones in docs/testing.md.
 
 ## Gates
 
 - **DuckDB:** `bench/diffds.py` (row sets both ways with the projection above, strict ascending order within
-  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, the MD5s).
-- **SeekParquet conformance:** the suite's reader target against the seekparquet module this tool pins, and
-  this tool's datasets validated by the suite's reference adapter and read alike by both
+  and across parts, min/max keys, counts); `verify.py` (the manifest, the stamps, the bounds, each part's SHA-256 against `parts[].sha256`).
+- **SeekParquet conformance:** the suite's reader and validator targets against the seekparquet module this
+  tool pins, and this tool's datasets validated by the suite's reference adapter and the module's validator
+  (full and digest levels, every part declaring `sha256`) and read alike by both
   ([testing.md](testing.md#seekparquet-conformance)).
 - **Downstream reader:** opens and streams format-2 datasets of every schema (section above);
   the probe is in [measurements.md](measurements.md#downstream-reader-compatibility).
