@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.os || '["windows-latest", "macos-latest"]') }}
+        os: ${{ fromJSON(inputs.os || '["macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 150
     defaults:
@@ -42,9 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'claude/stoic-ritchie-ugt91m' }}", path: swath-a}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'main' }}", path: swath-a}
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'claude/localfs-count-unsorted' }}", path: swath-b}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'go/localfs-darwin-fstatat' }}", path: swath-b}
       - uses: actions/setup-go@v5
         with: {go-version-file: swath-b/go/go.mod, cache: false}
       - uses: actions/setup-python@v5
@@ -69,7 +69,7 @@ jobs:
           B="$RUNNER_TEMP/bin"
           if [ "$RUNNER_OS" = Windows ]; then B=$(cygpath -m "$B"); X=.exe; else X=; fi
           SWATH_A="$B/swath-a$X" SWATH_B="$B/swath-b$X" GEN=go/bench/gen_tree.py OUT="$RUNNER_TEMP/out" \
-            TREES="${{ inputs.trees || 'huge' }}" WARM_REPS="${{ inputs.warm_reps || '1' }}" COLD_REPS="${{ inputs.cold_reps || '1' }}" \
+            TREES="${{ inputs.trees || 'huge' }}" WARM_REPS="${{ inputs.warm_reps || '6' }}" COLD_REPS="${{ inputs.cold_reps || '3' }}" \
             bash go/bench/xos-bench.sh
       - uses: actions/upload-artifact@v4
         if: always()
