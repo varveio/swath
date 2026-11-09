@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
+	swathreader "github.com/varveio/swath/go/reader"
 )
 
 // Counters are the store's work counters, plain atomics read by whoever
@@ -376,11 +377,11 @@ var gcsObjects = objectProjection{size: "size", lastModified: "last_modified", e
 // objectProjections maps declared schema ids to the Object projection.
 // A schema id not listed projects keys only.
 var objectProjections = map[string]objectProjection{
-	"swath/canonical":         s3Objects,
-	"swath/s3-objects/v1":     s3Objects,
-	"swath-replay/objects/v1": s3Objects,
-	"swath/gcs-objects/v1":    gcsObjects,
-	"swath-local/v1":          localObjects,
+	"swath/canonical":                s3Objects,
+	string(swathreader.S3ObjectsV1):  s3Objects,
+	"swath-replay/objects/v1":        s3Objects,
+	string(swathreader.GCSObjectsV1): gcsObjects,
+	string(swathreader.LocalV1):      localObjects,
 }
 
 // localObjects is the S3 view of a local tree's recording, which holds

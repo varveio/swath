@@ -18,6 +18,7 @@ require (
 	github.com/klauspost/compress v1.20.3
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/varveio/seekparquet/go v0.1.1-0.20261108221443-6401109d1e5d
+	github.com/varveio/swath/go/reader v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
@@ -75,3 +76,6 @@ require (
 	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+// The reader module is developed in this repository, in ./reader.
+replace github.com/varveio/swath/go/reader => ./reader
