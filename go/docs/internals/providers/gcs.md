@@ -3,9 +3,21 @@
 **Client** (`internal/source/gcs/client`). Google's generated JSON API client
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
-`userProject` when set, and its own `alt=json` and `prettyPrint=false` (`TestRequests`). The endpoint
-(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`) must be an `http` or `https` URL with a
-host; its path is the generated client's to resolve (`TestEndpoint`). On Google's endpoint the request asks for
+`userProject` when set, and its own `alt=json` and `prettyPrint=false` (`TestRequests`). **Endpoint**
+(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host
+and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
+template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
+client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
+escapes are kept, so `…/tenant%2F` is the base `…/tenant%2F/`. The generated client then resolves `b/BUCKET/o`
+against that base and re-escapes the decoded path, and swath accepts its reading: dot segments are removed
+(`/a/../storage/v1/` lists `/storage/v1/b/BUCKET/o`, `/a/./storage/v1/` lists `/a/storage/v1/b/BUCKET/o`) and
+an escaped separator is sent as a separator (`/proxy%2Ftenant/storage/v1/` lists
+`/proxy/tenant/storage/v1/b/BUCKET/o`, `/tenant%2F` lists `/tenant//b/BUCKET/o`); other escapes are sent as given
+(`/custom%20base/v1`). Two such spellings of one destination record different identities, which refuses a resume
+that was safe; two endpoints with one identity always list one path (`TestEndpoint`,
+`TestEndpointIdentityIsDestination`). The generated client is built with a logger that emits nothing: its
+default one, switched on by `GOOGLE_SDK_GO_LOGGING_LEVEL`, writes request headers, `Authorization` included,
+and response bodies to stderr (`TestSDKLogsNothing`). On Google's endpoint the request asks for
 the listed fields only (`fields=kind,nextPageToken,prefixes,items(name,size,updated,…)`); another endpoint (an
 emulator or the replay server) gets the full response. The generated client makes one request per call and never
 retries: `objhttp.Do` retries, backs off and admits requests, and an attempt is counted from just before the call
@@ -72,8 +84,8 @@ composite objects, whose `crc32c` remains, and omits both hashes from listings o
 customer-managed (CMEK) or customer-supplied (CSEK) keys. A missing hash is a null column, and when both are null
 a comparison needs a hash from elsewhere
 ([object resource](https://cloud.google.com/storage/docs/json_api/v1/objects),
-[ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume is the recorded inputs: the source (bucket and prefix), the endpoint (the default when
-none is given, a trailing slash added; scheme and host case are the only other equivalence) and the billed project
+[ETags](https://cloud.google.com/storage/docs/metadata#etags)). **Identity** for resume is the recorded inputs: the source (bucket and prefix), the endpoint (as
+`client.Endpoint` normalizes it for the client, above; scheme and host case are the only other equivalence) and the billed project
 (`--gcs-user-project`), as given (`TestIdentity`); credentials may change. A run with `--max-keys`, or through a
 supplied `Options.Client` (whose endpoint and project are not those inputs), cannot resume.
 Counters: the engine's, then the client's (`attempts`, `retries`, `throttles`, `timeouts`,

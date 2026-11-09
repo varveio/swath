@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -66,16 +67,34 @@ var shapes = []ListInput{
 	{Prefix: "p", Delimiter: "/", StartOffset: "s+%", EndOffset: "e&=#?", PageToken: "tok/+=", MaxResults: 1000, Versions: true},
 }
 
-// TestRequests: on Google's endpoint, each listing input is one GET of
-// /storage/v1/b/BUCKET/o carrying exactly its parameters, set ones only:
-// the production fields selector (a generations listing's with versions),
-// projection=noAcl, the bucket's userProject when billed, and the
-// generated client's alt=json and prettyPrint=false.
+// addressed records the URL each request was addressed to, before toServer
+// rewrites its origin to the test server.
+type addressed struct {
+	toServer
+	mu   sync.Mutex
+	last *url.URL
+}
+
+func (a *addressed) RoundTrip(req *http.Request) (*http.Response, error) {
+	a.mu.Lock()
+	a.last = new(url.URL)
+	*a.last = *req.URL
+	a.mu.Unlock()
+	return a.toServer.RoundTrip(req)
+}
+
+// TestRequests: by default each listing input is one GET of
+// https://storage.googleapis.com/storage/v1/b/BUCKET/o, as addressed by
+// the client before the test sends it to its server, carrying exactly its
+// parameters, set ones only: the production fields selector (a generations
+// listing's with versions), projection=noAcl, the bucket's userProject
+// when billed, and the generated client's alt=json and prettyPrint=false.
 func TestRequests(t *testing.T) {
 	rec := newRecorder(t)
 	u, _ := url.Parse(rec.URL)
 	for _, project := range []string{"", "billed-p"} {
-		c, err := New(context.Background(), Config{Anonymous: true, UserProject: project, HTTPClient: &http.Client{Transport: toServer{u}}})
+		to := &addressed{toServer: toServer{u}}
+		c, err := New(context.Background(), Config{Anonymous: true, UserProject: project, HTTPClient: &http.Client{Transport: to}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,6 +102,12 @@ func TestRequests(t *testing.T) {
 			in.Bucket = "bkt"
 			if _, err := c.List(context.Background(), &in); err != nil {
 				t.Fatal(err)
+			}
+			to.mu.Lock()
+			sent := to.last
+			to.mu.Unlock()
+			if origin := sent.Scheme + "://" + sent.Host + sent.EscapedPath(); origin != "https://storage.googleapis.com/storage/v1/b/bkt/o" {
+				t.Fatalf("project %q %+v: addressed to %s", project, in, sent)
 			}
 			req := rec.last()
 			want := url.Values{"alt": {"json"}, "prettyPrint": {"false"}, "projection": {"noAcl"}, "fields": {fields}}
@@ -114,9 +139,11 @@ func TestRequests(t *testing.T) {
 // TestEndpoint: an endpoint is an http(s) URL with a host and no
 // URI-template brace in its path, literal or escaped (the generated client
 // expands the request path as a template: an empty expression panics, a
-// named one is dropped); the trailing slash is optional; the base path is
-// kept as given, escapes included; another endpoint than Google's gets no
-// fields selector.
+// named one is dropped); the trailing slash is optional; another endpoint
+// than Google's gets no fields selector. Each base sends to the path the
+// generated client makes of it, stated here as the server receives it:
+// escapes kept, except an escaped separator, which is sent as a separator,
+// and dot segments removed (docs/internals/providers/gcs.md, "Endpoint").
 func TestEndpoint(t *testing.T) {
 	for _, ep := range []string{"ftp://host/storage/v1/", "storage/v1/", "http:///storage/v1/", "http://%zz/",
 		"http://host/%7B%7D/storage/v1/", "http://host/%7Btenant%7D/storage/v1/", "http://host/%7b%7d/",
@@ -127,9 +154,14 @@ func TestEndpoint(t *testing.T) {
 	}
 	rec := newRecorder(t)
 	for base, path := range map[string]string{
-		"/storage/v1/":      "/storage/v1/b/bkt/o",
-		"/storage/v1":       "/storage/v1/b/bkt/o",
-		"/custom%20base/v1": "/custom%20base/v1/b/bkt/o",
+		"/storage/v1/":                "/storage/v1/b/bkt/o",
+		"/storage/v1":                 "/storage/v1/b/bkt/o",
+		"":                            "/b/bkt/o",
+		"/custom%20base/v1":           "/custom%20base/v1/b/bkt/o",
+		"/tenant%2F":                  "/tenant//b/bkt/o",
+		"/proxy%2Ftenant/storage/v1/": "/proxy/tenant/storage/v1/b/bkt/o",
+		"/a/../storage/v1/":           "/storage/v1/b/bkt/o",
+		"/a/./storage/v1/":            "/a/storage/v1/b/bkt/o",
 	} {
 		c, err := New(context.Background(), Config{Endpoint: rec.URL + base, Anonymous: true})
 		if err != nil {
@@ -138,8 +170,9 @@ func TestEndpoint(t *testing.T) {
 		if _, err := c.List(context.Background(), &ListInput{Bucket: "bkt"}); err != nil {
 			t.Fatal(err)
 		}
-		if got := rec.last().URL; got.EscapedPath() != path || got.Query().Has("fields") {
-			t.Errorf("%s: sent %s, want path %s and no fields", base, got, path)
+		req := rec.last()
+		if got, _, _ := strings.Cut(req.RequestURI, "?"); got != path || req.URL.Query().Has("fields") {
+			t.Errorf("%q: sent %s, want path %s and no fields", base, req.RequestURI, path)
 		}
 	}
 	if _, err := New(context.Background(), Config{Anonymous: true}); err != nil {
