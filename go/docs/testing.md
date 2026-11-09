@@ -130,8 +130,9 @@ module key keep the first and the rest only log a warning. A job on `main` that 
 runs `go mod download all` in all three modules before it can save one: the jobs build different module
 graphs (the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed,
 which an exact hit never repairs. `all`, not the build list alone: `go mod tidy -diff` in `go-lint` also loads
-the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). A job that fails
-saves nothing.
+the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). The download runs
+on a copy of each module's `go.mod` and `go.sum`, since it adds the hashes it fetches to `go.sum` and the
+checkout must stay as committed for `go mod tidy -diff`. A job that fails saves nothing.
 
 Retention: after the Go jobs of a push to `main` (passed or not), `go-cache-prune` runs
 [`scripts/ci/go-cache-prune.sh`](../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
