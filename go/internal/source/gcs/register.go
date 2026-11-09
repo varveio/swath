@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -125,25 +126,39 @@ func (o *opened[P]) target() string {
 	return t
 }
 
-// Identity freezes what a resume must list the same: the source, the
-// route requests go to (the JSON API base and the bucket), and the billed
-// project, both as the client sends them. A supplied client must name both
-// (Routed), or the run declines resume.
+// Identity freezes what a resume must list the same, from the recorded
+// inputs: the source (bucket and prefix), the JSON API endpoint (the
+// default when none is given, a trailing slash added; scheme and host
+// case are the only other equivalence) and the billed project.
+// Credentials may change.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
+	ep := endpoint(opt.Endpoint)
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "route", Value: o.p.route, Canonical: objhttp.CanonicalRoute(o.p.route)},
-		{Name: "user project", Value: o.p.project},
+		{Name: "endpoint", Value: ep, Canonical: objhttp.CanonicalRoute(ep)},
+		{Name: "user project", Value: opt.UserProject},
 	}}
+}
+
+// endpoint is the JSON API base as the built client takes it: the default
+// when none is given, with a trailing slash.
+func endpoint(ep string) string {
+	if ep == "" {
+		return client.DefaultEndpoint
+	}
+	if !strings.HasSuffix(ep, "/") {
+		ep += "/"
+	}
+	return ep
 }
 
 // Capabilities: names list in byte order and startOffset takes any name,
 // so the range engine applies; --sequential lists one token chain. A run
-// with an object-count cap, or through a supplied client that does not
-// name its route, cannot resume (as for S3).
+// with an object-count cap, or through a supplied client (whose endpoint
+// and billed project are not the recorded inputs), cannot resume.
 func (o *opened[P]) Capabilities() source.Capabilities {
-	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
+	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.opt.Client == nil)
 }
 
 func (o *opened[P]) Restart(after string) error {

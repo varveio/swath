@@ -50,9 +50,9 @@ func TestClassify(t *testing.T) {
 		case "bad-request":
 			answer(400, "invalid")
 		case "parse":
-			fmt.Fprint(w, `{"items":[{"name":"a","size":"x"}]}`)
+			fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"x"}]}`)
 		case "garbled":
-			fmt.Fprint(w, `{"items":[`)
+			fmt.Fprint(w, `{"kind":"storage#objects","items":[`)
 		case "slow":
 			select {
 			case <-time.After(5 * time.Second):

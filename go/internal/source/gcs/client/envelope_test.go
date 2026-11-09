@@ -14,23 +14,24 @@ import (
 )
 
 // TestInvalidSuccessEnvelopeIsRetried: a 200 whose body is `null`, another
-// JSON value or an error envelope is not an empty final page: it is
-// retried like a garbled body (counted as a parse failure) until a real
-// page comes; `{}` is a legitimate empty listing.
+// JSON value, an error envelope or an object without the objects kind is
+// not an empty final page: it is retried like a garbled body (counted as a
+// parse failure) until a real page comes; an envelope naming its kind and
+// nothing else is a legitimate empty listing.
 func TestInvalidSuccessEnvelopeIsRetried(t *testing.T) {
-	bad := []string{`null`, ` null `, `[]`, `"x"`, `{"error":{"code":503,"message":"backend"}}`}
+	bad := []string{`null`, ` null `, `[]`, `"x"`, `{"error":{"code":503,"message":"backend"}}`, `{}`}
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i := int(n.Add(1)) - 1
 		if r.URL.Query().Get("prefix") == "empty" {
-			fmt.Fprint(w, `{}`)
+			fmt.Fprint(w, `{"kind":"storage#objects"}`)
 			return
 		}
 		if i < len(bad) {
 			fmt.Fprint(w, bad[i])
 			return
 		}
-		fmt.Fprint(w, `{"items":[{"name":"a","size":"1","updated":"2026-01-01T00:00:00Z"}]}`)
+		fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1","updated":"2026-01-01T00:00:00Z"}]}`)
 	}))
 	defer srv.Close()
 	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 9,

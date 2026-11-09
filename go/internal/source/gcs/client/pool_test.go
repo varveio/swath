@@ -35,7 +35,7 @@ func TestTransportPoolSpreadsConnections(t *testing.T) {
 			mu.Lock()
 			perConn[r.RemoteAddr]++
 			mu.Unlock()
-			w.Write([]byte(`{}`))
+			w.Write([]byte(`{"kind":"storage#objects"}`))
 		}))
 		srv.EnableHTTP2 = true
 		srv.StartTLS()
@@ -48,8 +48,8 @@ func TestTransportPoolSpreadsConnections(t *testing.T) {
 			hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots
 		}
 		n := c.Transports()
-		if n != PoolSize(workers) {
-			t.Fatalf("%d workers: %d transports, want %d", workers, n, PoolSize(workers))
+		if n != PoolSize(workers) || len(c.svc) != n {
+			t.Fatalf("%d workers: %d transports, %d services, want %d", workers, n, len(c.svc), PoolSize(workers))
 		}
 		list := func() {
 			if _, err := c.List(context.Background(), &ListInput{Bucket: "b"}); err != nil {
@@ -85,7 +85,7 @@ func TestSuppliedClientIsOnePool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := c.Transports(); n != 1 {
-		t.Fatalf("%d transports with a supplied client, want 1", n)
+	if n := c.Transports(); n != 1 || len(c.svc) != 1 {
+		t.Fatalf("%d transports, %d services with a supplied client, want 1", n, len(c.svc))
 	}
 }

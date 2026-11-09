@@ -79,7 +79,7 @@ func newListServer(t *testing.T) *listServer {
 			http.Error(w, `{"error":{"code":401,"message":"no credentials","errors":[{"reason":"required"}]}}`, 401)
 			return
 		}
-		fmt.Fprint(w, `{"items":[{"name":"a","size":"1"}]}`)
+		fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
 	}))
 	t.Cleanup(ls.Close)
 	return ls
@@ -375,7 +375,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 			defer wg.Done()
 			for range 10 {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-				_, _ = c.Token(ctx)
+				_, _ = c.token(ctx)
 				cancel()
 			}
 		}()
@@ -422,7 +422,7 @@ func TestComputeFallbackKeepsMargin(t *testing.T) {
 		t.Fatalf("source %q: want the compute metadata fallback", src)
 	}
 	for range 2 {
-		if _, err := c.Token(context.Background()); err != nil {
+		if _, err := c.token(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -30,11 +30,13 @@ func TestRetryContract(t *testing.T) {
 		}
 	}
 	wire := objhttptest.Wire{
-		OK:       func(w http.ResponseWriter) { fmt.Fprint(w, `{"items":[{"name":"a","size":"1"}]}`) },
+		OK: func(w http.ResponseWriter) {
+			fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
+		},
 		Throttle: jsonError(429, "rateLimitExceeded"),
 		Server:   jsonError(503, "backendError"),
 		Denied:   jsonError(403, "forbidden"),
-		Garbled:  func(w http.ResponseWriter) { fmt.Fprint(w, `{"items":[{"na`) },
+		Garbled:  func(w http.ResponseWriter) { fmt.Fprint(w, `{"kind":"storage#objects","items":[{"na`) },
 	}
 	objhttptest.Contract(t, wire, func(s objhttptest.Settings) objhttptest.Client {
 		c, err := New(context.Background(), Config{Endpoint: s.Endpoint + "/storage/v1/", Anonymous: true, RequestTimeout: s.Timeout,
