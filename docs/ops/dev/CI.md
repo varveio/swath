@@ -263,9 +263,10 @@ generation under this layout is to be measured on the first `main` pushes and re
 
 - **Gradle:** `gradle/actions/setup-gradle` with its defaults in `ci.yml` and `nightly.yml`.
   `release.yml` disables it and builds the tag from a cold cache.
-- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-replay-go`.
-  `docker-check` and `go-build` write with `ignore-error`, because a fork pull request's token
-  cannot write the cache and that should degrade to a warning, not a red build.
+- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-replay-go`,
+  written from `main` only (`docker-publish` and `go-build` on a push). A pull request reads
+  them and writes nothing: a cache written on a pull request is scoped to that pull request's
+  ref, so it serves no other run while taking 0.5–1 GB of the quota per open pull request.
 - **Code scanning** (GitHub's CodeQL setup, outside these workflows) also uses the repository's
   cache budget.
 
