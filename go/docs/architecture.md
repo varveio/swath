@@ -80,7 +80,8 @@ columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet 
 a dataset's schema, accepts it as a whole-source listing, streams and lists its current objects, and validates its
 digests at import; the SeekParquet module
 and the standard library only; [../reader/README.md](../reader/README.md)) and `go/objfile` (a dataset in an object
-store opened as files read by byte range; [../objfile/README.md](../objfile/README.md)). The lister imports
+store opened as files read by byte range, pinned across opens and process restarts, by URI with default
+credentials through `objfile/remote`; [../objfile/README.md](../objfile/README.md)). The lister imports
 `go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
 specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. Neither nested
 module imports the lister.

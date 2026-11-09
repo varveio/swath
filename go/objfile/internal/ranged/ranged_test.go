@@ -44,7 +44,7 @@ func TestBodyRetry(t *testing.T) {
 			if len(offs) <= cuts {
 				body.n = 7
 			}
-			return Response{Body: body, Pin: pin, Total: int64(len(data)), Length: n}, nil
+			return Response{Body: body, Pin: pin, Start: off, Total: int64(len(data)), Length: n}, nil
 		}
 		f := New("obj", int64(len(data)), pin, get)
 		p := make([]byte, 50)
@@ -85,5 +85,28 @@ func TestPinCheck(t *testing.T) {
 	served, total = Pin{ETag: "a"}, 11
 	if _, err := f.ReadAt(make([]byte, 2), 0); !errors.Is(err, objfile.ErrObjectChanged) {
 		t.Fatalf("read of another size: %v", err)
+	}
+}
+
+// TestServedStart: a response is the requested range or the read fails; one
+// that states no start is the object from its first byte.
+func TestServedStart(t *testing.T) {
+	data := []byte("0123456789")
+	for _, c := range []struct {
+		off, start int64
+		ok         bool
+	}{{0, 0, true}, {0, -1, true}, {4, 4, true}, {4, 5, false}, {4, 3, false}, {4, -1, false}} {
+		get := func(_ context.Context, off, n int64, _ Pin) (Response, error) {
+			from := max(c.start, 0)
+			return Response{Body: io.NopCloser(bytes.NewReader(data[from : from+n])), Pin: Pin{ETag: "e"}, Start: c.start, Total: 10, Length: n}, nil
+		}
+		p := make([]byte, 3)
+		n, err := New("obj", 10, Pin{ETag: "e"}, get).ReadAt(p, c.off)
+		if c.ok != (err == nil) || err != nil && errors.Is(err, objfile.ErrObjectChanged) {
+			t.Errorf("read at %d served from %d: %d, %v", c.off, c.start, n, err)
+		}
+		if c.ok && string(p) != string(data[c.off:c.off+3]) {
+			t.Errorf("read at %d = %q", c.off, p)
+		}
 	}
 }

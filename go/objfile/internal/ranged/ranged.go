@@ -30,11 +30,13 @@ type Pin struct {
 func (p Pin) IsZero() bool { return p == Pin{} }
 
 // Response is a ranged read's body and what its headers said: the version
-// served, the object's total size and the body's length (each -1 when not
-// given).
+// served, the offset of the body's first byte, the object's total size and
+// the body's length (each -1 when not given). A response that states no
+// start serves the object from its first byte.
 type Response struct {
 	Body   io.ReadCloser
 	Pin    Pin
+	Start  int64
 	Total  int64
 	Length int64
 }
@@ -152,16 +154,19 @@ func (f *file) open(ctx context.Context, off, n int64) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := f.check(res, n); err != nil {
+	if err := f.check(res, off, n); err != nil {
 		res.Body.Close()
 		return nil, err
 	}
 	return res.Body, nil
 }
 
-func (f *file) check(res Response, n int64) error {
+func (f *file) check(res Response, off, n int64) error {
 	if res.Total >= 0 && res.Total != f.size {
 		return fmt.Errorf("%w: size %d, opened at %d", objfile.ErrObjectChanged, res.Total, f.size)
+	}
+	if start := max(res.Start, 0); start != off {
+		return fmt.Errorf("the store served bytes from %d for a range from %d", start, off)
 	}
 	if res.Length >= 0 && res.Length != n {
 		return fmt.Errorf("the store returned %d bytes for a range of %d", res.Length, n)
@@ -185,15 +190,32 @@ func (f *file) fail(err error) error {
 	return &fs.PathError{Op: "read", Path: f.name, Err: err}
 }
 
-// Total returns the total size a Content-Range header value states, or -1.
-func Total(contentRange string) int64 {
-	_, total, ok := strings.Cut(contentRange, "/")
+// ContentRange parses a Content-Range header value, "bytes first-last/total".
+func ContentRange(v string) (first, last, total int64, ok bool) {
+	rng, ok := strings.CutPrefix(v, "bytes ")
 	if !ok {
-		return -1
+		return 0, 0, 0, false
 	}
-	n, err := strconv.ParseInt(total, 10, 64)
-	if err != nil {
-		return -1
+	rng, size, ok := strings.Cut(rng, "/")
+	a, b, ok2 := strings.Cut(rng, "-")
+	if !ok || !ok2 {
+		return 0, 0, 0, false
 	}
-	return n
+	first, err1 := strconv.ParseInt(a, 10, 64)
+	last, err2 := strconv.ParseInt(b, 10, 64)
+	total, err3 := strconv.ParseInt(size, 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil || first < 0 || last < first || total < 0 {
+		return 0, 0, 0, false
+	}
+	return first, last, total, true
+}
+
+// Stated returns the first byte and the total size a Content-Range header
+// value states, as a Response carries them: each -1 when v does not parse.
+func Stated(v string) (start, total int64) {
+	first, _, total, ok := ContentRange(v)
+	if !ok {
+		return -1, -1
+	}
+	return first, total
 }

@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
+  JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
+  parses dataset roots (`ParseLocation`: `s3://`, `gs://`, `az://ACCOUNT/CONTAINER`) and opens one with each
+  provider's default credentials (`objfile/remote.Open`). Every ranged read now checks the offset the store served,
+  and the GCS client `remote.Open` builds also checks the requests the SDK's reader sends on its own: a read returns
+  exactly the requested bytes or fails.
 - Go port: `go/reader` adds `AdmitWhole` and `AdmitWholeDir`, which admit a whole current-object listing in one
   fixed order (digests, schema, coverage, a current-objects schema, `published_at`) and return its `Identity`
   (the manifest's SHA-256 and `published_at`); `ReopenWhole` and `ReopenWholeDir`, which reopen it from a sealed
