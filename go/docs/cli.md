@@ -14,7 +14,7 @@ swath --version                         print the build (tool, module version, V
 `swath resume --help`, `swath show --help`, `swath diag --help`, `swath diag list --help`) prints its flags and
 exits 0.
 
-SOURCE is a local directory, `s3://bucket[/prefix]` or `gs://bucket[/prefix]`. `swath list` writes a dataset to `-o DIR`
+SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `az://account/container[/prefix]`. `swath list` writes a dataset to `-o DIR`
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
 below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
 buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
@@ -70,7 +70,7 @@ $ swath list --help
 usage: swath list SOURCE [-o DIR|FILE|-] [flags]
   -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text
   file; no -o, or -o -, text rows on stdout
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
   -o directory
@@ -117,6 +117,8 @@ Source and output:
         Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
         Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -217,7 +219,7 @@ $ swath count --help
 usage: swath count SOURCE [flags]
   lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
   arrive, never ordered, buffered or spilled; prints one line, or the run report
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
   --region string
@@ -258,6 +260,8 @@ Source and output:
         Azure Blob: send no credentials, ignoring any in the environment
   --azblob-sas TOKEN
         Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential), else no credentials
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
   --metadata tier
         local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
   --no-dirs
@@ -340,7 +344,7 @@ $ swath diag list --help
 usage: swath diag list SOURCE [flags]
   every swath list flag (swath list --help), and the diagnostic flags below:
   they exist to run an experiment or a comparison, not to operate the tool
-  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]
+  SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Diagnostics:
   --seed
@@ -385,11 +389,15 @@ Diagnostics:
 - **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--azblob-endpoint URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
   `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--azblob-anonymous`, else a SAS (`--azblob-sas`, the
-  root's query when it carries `sig`, or `AZURE_STORAGE_SAS_TOKEN`), else an account key (`AZURE_STORAGE_KEY`),
-  else Entra ID (`DefaultAzureCredential`). A SAS is never recorded: `swath resume` must be given one again, and
-  may be given another. Only accounts that report a flat namespace are listed: a hierarchical-namespace account,
-  or one whose namespace cannot be read (an anonymous caller is never told), is refused before any listing
-  request (exit 2, cause `unsupported`), as is `--all-versions`. A run that meets a name at U+E000 and above stops
+  root's query when it names a SAS parameter, or `AZURE_STORAGE_SAS_TOKEN`), else an account key
+  (`AZURE_STORAGE_KEY`), else Entra ID (`DefaultAzureCredential`). A SAS is never recorded or shown (the root is
+  redacted to `?sig=[redacted]` in the terminal, the journal and the report): `swath resume` must be given one
+  again, by `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`, whichever the run used, and may be given another. Only accounts that report a flat namespace are listed, by Get Account Information or,
+  when that is refused (an anonymous caller always is) or silent, by the account's Data Lake host
+  (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; asked only for the default endpoint).
+  A hierarchical-namespace account is refused before any listing request (exit 2, cause `unsupported`), as is
+  `--all-versions`; so is one whose namespace neither answer gives, unless `--azblob-flat` asserts it flat (the
+  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). A run that meets a name at U+E000 and above stops
   refused (exit 2, cause `unsupported`, resumable) until a later build lists such names
   ([internals/providers.md](internals/providers.md#azure-blob-internalsourceazblob)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,

@@ -41,7 +41,7 @@ var helpGroups = []helpGroup{
 		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
 		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
 		{name: "gcs-endpoint"}, {name: "gcs-anonymous"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
-		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"},
+		{name: "azblob-endpoint"}, {name: "azblob-anonymous"}, {name: "azblob-sas"}, {name: "azblob-flat"},
 		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"},
 		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
 		{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},
@@ -144,7 +144,7 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 		fmt.Fprintln(w, "  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text")
 		fmt.Fprintln(w, "  file; no -o, or -o -, text rows on stdout")
 	}
-	fmt.Fprintln(w, "  SOURCE is a local directory, s3://bucket[/prefix], gs://bucket[/prefix] or az://account/container[/prefix]")
+	fmt.Fprintln(w, "  SOURCE is "+sourceForms())
 	for _, g := range helpGroups {
 		if cmd.diag != (g.title == diagnosticGroup) {
 			continue

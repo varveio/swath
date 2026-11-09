@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package client is a small Azure Blob Storage client: List Blobs (flat or
-// with a delimiter) and Get Account Information only, authenticated by a
+// with a delimiter), Get Account Information and, on the account's Data
+// Lake host, Filesystem Get Properties (NamespaceInfo, which exists for
+// anonymous admission: only it tells an anonymous caller whether the
+// namespace is flat) only, authenticated by a
 // SAS, an account key signed here (Shared Key), Entra ID tokens from
 // azidentity's DefaultAzureCredential, or nothing, with counted retries and
 // typed errors from objhttp.
@@ -136,13 +139,27 @@ type Client struct {
 	source string
 	note   string
 
+	maxBody          int64 // MaxBody; tests lower it
 	retry            objhttp.Retry
 	counts           objhttp.Counters
 	retryAfterCapped atomic.Int64
+	bodyCapShrinks   atomic.Int64
 }
+
+// MaxBody is the body cap: the memory one in-flight response may hold.
+// Responses are read whole and sit outside the engine's memory budget, so
+// the cap is fixed, not derived from the page size; a page past it is
+// asked again with fewer entries (List).
+const MaxBody = 64 << 20
+
+// errBodyCap is a 200 whose body passed the cap (List halves maxresults).
+var errBodyCap = errors.New("response larger than the body cap")
 
 // New resolves credentials and builds the client.
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
@@ -153,7 +170,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, base: base,
+	c := &Client{cfg: cfg, base: base, maxBody: MaxBody,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
@@ -247,6 +264,22 @@ func (c *Client) credentials(ctx context.Context) error {
 	return nil
 }
 
+// newLoginCredential is the unconfigured discovery's chain off an Azure
+// VM: the developer logins only (the Azure CLI, the Azure Developer CLI),
+// which run a local command and never ask the instance metadata service
+// (tests replace it).
+var newLoginCredential = func() (azcore.TokenCredential, error) {
+	cli, err := azidentity.NewAzureCLICredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	return azidentity.NewChainedTokenCredential([]azcore.TokenCredential{cli, azd}, nil)
+}
+
 // newDefaultCredential is azidentity's DefaultAzureCredential (tests
 // replace it to fake an empty environment on any host).
 var newDefaultCredential = func(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
@@ -269,19 +302,26 @@ func entraConfigured() bool {
 	return false
 }
 
-// entra sets up Entra ID through DefaultAzureCredential. Configured by the
-// environment, its token failures are attempts' credential errors. With
-// nothing configured it may still find a managed identity or an Azure CLI
-// login: one token is asked for under the request timeout, and when none
-// comes the requests go unauthenticated (the note says so); a refused
-// grant is a credential error.
+// entra sets up Entra ID. Configured by the environment, it is
+// DefaultAzureCredential, whose token failures are attempts' credential
+// errors. With nothing configured: on an Azure VM (its chassis asset tag)
+// the same chain, its managed identity kept even when it does not answer
+// now; elsewhere only the developer logins (newLoginCredential), never the
+// instance metadata service, which off Azure is a proxy's refusal or a
+// probe that hangs. There one token is asked for: found, it is used; when
+// every login is absent the requests go unauthenticated (the note says
+// so), as GCS goes without Application Default Credentials; a refused
+// grant is a credential error; a transient failure keeps the chain.
 func (c *Client) entra(ctx context.Context) error {
 	const source = "Entra ID (DefaultAzureCredential)"
+	configured, vm := entraConfigured(), onAzureVM()
+	if !configured && !vm {
+		return c.login(ctx)
+	}
 	cred, err := newDefaultCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
-	configured := entraConfigured()
 	switch {
 	case err != nil && configured:
 		return &CredentialError{Source: source, Err: err}
@@ -292,11 +332,21 @@ func (c *Client) entra(ctx context.Context) error {
 		c.ts, c.source = c.shared(cred), source
 		return nil
 	}
-	if onAzureVM() {
-		// An Azure VM's managed identity is the configured source even when
-		// the metadata service does not answer now (DefaultAzureCredential
-		// reports a probe timeout as unavailable): never anonymity.
-		c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	// An Azure VM's managed identity is the configured source even when
+	// the metadata service does not answer now (DefaultAzureCredential
+	// reports a probe timeout as unavailable): never anonymity.
+	c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	return nil
+}
+
+// login is the unconfigured discovery off an Azure VM: the developer
+// logins (newLoginCredential), one token asked for under the caller's
+// context and the request timeout.
+func (c *Client) login(ctx context.Context) error {
+	const source = "Entra ID (Azure CLI login)"
+	cred, err := newLoginCredential()
+	if err != nil {
+		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
 		return nil
 	}
 	pctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
@@ -344,9 +394,10 @@ func onAzureVM() bool {
 }
 
 // tokenHTTP is the HTTP client of token exchanges: the first pooled
-// transport, each exchange bounded by the request timeout.
+// transport. Each exchange is bounded by the token call's context
+// (credentialSource), the one deadline whose expiry is classified.
 func (c *Client) tokenHTTP() *http.Client {
-	return &http.Client{Transport: c.http[0].Transport, Timeout: c.cfg.RequestTimeout}
+	return &http.Client{Transport: c.http[0].Transport}
 }
 
 // shared wraps cred as the client's coalesced token source.
@@ -368,6 +419,11 @@ func (s credentialSource) Token() (*oauth2.Token, error) {
 	defer cancel()
 	t, err := s.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{storageScope}})
 	if err != nil {
+		if ctx.Err() != nil {
+			// azidentity flattens the deadline into its message: the call's
+			// own context says it ran out of time (a timeout, retried).
+			return nil, fmt.Errorf("token call past %s: %w: %w", s.timeout, ctx.Err(), err)
+		}
 		return nil, err
 	}
 	return &oauth2.Token{AccessToken: t.Token, TokenType: "Bearer", Expiry: t.ExpiresOn}, nil
@@ -402,6 +458,9 @@ func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 // response) and an exchange's own timeout may pass; a refused grant and a
 // credential that is unavailable will not.
 func transientToken(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	var af *azidentity.AuthenticationFailedError
 	if errors.As(err, &af) {
 		if af.RawResponse == nil {
@@ -459,6 +518,10 @@ func (c *Client) Live() objhttp.Live {
 	return l
 }
 
+// BodyCapShrinks is the number of times a response past the body cap made
+// List halve maxresults (body_cap_shrinks).
+func (c *Client) BodyCapShrinks() int64 { return c.bodyCapShrinks.Load() }
+
 // RetryAfterCapped is the number of answers whose Retry-After was cut to
 // the request timeout (retry_after_capped).
 func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
@@ -507,12 +570,35 @@ func (c *Client) listURL(in *ListInput) url.URL {
 }
 
 // List sends one List Blobs request, retrying retryable failures
-// (objhttp.Do), and validates the page (ErrInvalidPage).
+// (objhttp.Do), and validates the page (ErrInvalidPage). A response past
+// the body cap is asked again with maxresults halved, the marker and query
+// unchanged (the next page continues from the shorter one's NextMarker),
+// down to 1; only a single entry past the cap is a parse failure. Each
+// List starts again at the caller's page size.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
+	req := *in // sent as the caller set it until a response passes the cap
+	for {
+		p, err := c.list(ctx, &req)
+		if !errors.Is(err, errBodyCap) {
+			return p, err
+		}
+		if req.MaxResults == 1 {
+			c.counts.ParseFailure()
+			return nil, fmt.Errorf("%w: one entry's page is larger than %d bytes", ErrSyntax, c.maxBody)
+		}
+		if req.MaxResults <= 0 || req.MaxResults > MaxPageSize {
+			req.MaxResults = MaxPageSize // what the server answered with
+		}
+		req.MaxResults = max(req.MaxResults/2, 1)
+		c.bodyCapShrinks.Add(1)
+	}
+}
+
+// list is one logical List Blobs request at in's page size.
+func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	u := c.listURL(in)
-	limit := bodyCap(in.MaxResults)
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) {
-		_, body, err := c.attempt(ctx, &u, limit)
+		_, body, err := c.attempt(ctx, http.MethodGet, &u, c.maxBody)
 		if err != nil {
 			return nil, err
 		}
@@ -533,9 +619,9 @@ func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	})
 }
 
-// errHNSUnknown is an account-information answer without
+// ErrHNSUnknown is an account-information answer without
 // x-ms-is-hns-enabled: the namespace is unknown, never taken for flat.
-var errHNSUnknown = errors.New("account information without " + headerHNSEnabled)
+var ErrHNSUnknown = errors.New("account information without " + headerHNSEnabled)
 
 // AccountInfo sends Get Account Information on the container's path
 // (restype=account&comp=properties, which a SAS scoped to the container
@@ -546,7 +632,7 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 	u := c.route(container)
 	u.RawQuery = encodeQuery(url.Values{"restype": {"account"}, "comp": {"properties"}})
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
-		hdr, _, err := c.attempt(ctx, &u, maxErrorBody)
+		hdr, _, err := c.attempt(ctx, http.MethodGet, &u, maxErrorBody)
 		if err != nil {
 			return false, err
 		}
@@ -556,21 +642,80 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 		case "false":
 			return false, nil
 		}
-		return false, errHNSUnknown
+		return false, ErrHNSUnknown
 	})
 }
 
-// attempt sends one GET of u (the SAS appended on the wire only) and
-// returns a 200's header and body, read up to limit bytes; any other
-// answer is an *Error. Errors never carry the SAS.
-func (c *Client) attempt(ctx context.Context, u *url.URL, limit int64) (http.Header, []byte, error) {
+// ErrNamespaceUnknown is a Filesystem Get Properties answer without
+// x-ms-namespace-enabled: unknown, never taken for flat.
+var ErrNamespaceUnknown = errors.New("filesystem properties without " + headerNamespaceEnabled)
+
+// ErrNoDFSEndpoint: the client's endpoint is not an account's blob host
+// (ACCOUNT.blob.core.windows.net), so it has no Data Lake (DFS) host to
+// ask.
+var ErrNoDFSEndpoint = errors.New("no Data Lake endpoint: the blob endpoint is not ACCOUNT.blob.core.windows.net")
+
+// dfsSuffix and blobSuffix are the public cloud's Data Lake and blob host
+// suffixes.
+const blobSuffix, dfsSuffix = ".blob.core.windows.net", ".dfs.core.windows.net"
+
+// NamespaceInfo sends Filesystem Get Properties (HEAD
+// https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem) and
+// reports whether the account has a hierarchical namespace, from
+// x-ms-namespace-enabled. It exists for anonymous admission: Azure answers
+// an anonymous Get Account Information with 401, but tells an anonymous
+// caller of a public container this header (checked live on 2026-11-08).
+// The DFS host is the blob host with its blob label replaced, so only the
+// exact default endpoint, https://ACCOUNT.blob.core.windows.net without a
+// port or path, has one; any other endpoint answers ErrNoDFSEndpoint. Credentials, retries and classification are
+// AccountInfo's; a refused call or a missing header is an error, never
+// "flat".
+func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, error) {
+	if !c.defaultEndpoint() {
+		return false, ErrNoDFSEndpoint
+	}
+	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
+		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
+		hdr, _, err := c.attempt(ctx, http.MethodHead, &u, maxErrorBody)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(hdr.Get(headerNamespaceEnabled)) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return false, ErrNamespaceUnknown
+	})
+}
+
+// defaultEndpoint: the client's endpoint is exactly the account's blob
+// host, https://ACCOUNT.blob.core.windows.net with no port or path (the
+// default, or that URL given explicitly), the only form with a Data Lake
+// host beside it.
+func (c *Client) defaultEndpoint() bool {
+	if c.cfg.Endpoint == "" {
+		return true
+	}
+	u, err := url.Parse(c.cfg.Endpoint)
+	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Host, c.cfg.Account+blobSuffix) &&
+		(u.Path == "" || u.Path == "/") && u.User == nil
+}
+
+// attempt sends one request of u with method (GET or HEAD; the SAS
+// appended on the wire only) and returns a 200's header and body, read up
+// to limit bytes; any other answer is an *Error. Errors never carry the
+// SAS.
+func (c *Client) attempt(ctx context.Context, method string, u *url.URL, limit int64) (http.Header, []byte, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	wire := *u
 	if c.sas != "" {
 		wire.RawQuery += "&" + c.sas
 	}
-	req, err := http.NewRequestWithContext(actx, http.MethodGet, wire.String(), nil)
+	req, err := http.NewRequestWithContext(actx, method, wire.String(), nil)
 	if err != nil {
 		return nil, nil, c.redact(err, u)
 	}
@@ -609,8 +754,7 @@ func (c *Client) attempt(ctx context.Context, u *url.URL, limit int64) (http.Hea
 		return nil, nil, c.responseError(resp, body, u)
 	}
 	if int64(len(body)) > limit {
-		// No valid answer is this large (bodyCap): a corrupt one, retried.
-		return nil, nil, fmt.Errorf("%w: Azure response larger than %d bytes", ErrSyntax, limit)
+		return nil, nil, errBodyCap
 	}
 	return resp.Header, body, nil
 }

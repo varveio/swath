@@ -99,7 +99,7 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 	if err != nil {
 		return nil, Metadata{}, err
 	}
-	s := &Sorted{sem: semaphore.NewWeighted(int64(readers)), readers: readers, files: legacy.NewFileCache(opts.MaxOpenFiles), pageStats: true}
+	s := &Sorted{sem: semaphore.NewWeighted(int64(readers)), readers: readers, files: legacy.NewFileCache(opts.MaxOpenFiles)}
 	meta := Metadata{Ordering: OrderingProfile}
 	if info.IsDir() && isSeekParquet(path) {
 		dataset, err := openSeek(ctx, path, expect, s.files)
@@ -112,7 +112,6 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 			_ = s.reader.Close()
 			return nil, Metadata{}, err
 		}
-		s.pageStats = false
 	} else if info.IsDir() && format2.IsDataset(path) {
 		dataset, err := format2.Open(ctx, path, expect, s.files)
 		if err != nil {

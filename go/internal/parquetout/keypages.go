@@ -8,22 +8,19 @@ import (
 	"os"
 
 	pq "github.com/parquet-go/parquet-go"
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/go/internal/dataset"
 )
 
-// KeyPage is one page of a part's key column: its greatest key and its rows.
-type KeyPage struct {
-	Max  string
-	Rows int64
-}
-
-// KeyPages reads the key column's page index of a part (1,024-row pages):
-// each page's greatest key from the column index and its row count from the
-// offset index, in key order. Only the footer and the key column's two
-// index sections are read, never a data page. The greatest key is exact in
-// a SeekParquet part; a format 2 part (an earlier build's, read by
-// --seed-from) rounded one longer than 1,024 bytes up, above every key of
-// its page (S3 and GCS keys fit within it).
-func KeyPages(path string) ([]KeyPage, error) {
+// KeyPages reads the key column's page index of a part (1,024-row pages)
+// in key order, never a data page. A SeekParquet part is read by the
+// module (seekparquet.InspectKeyPages, which checks its footer and stamps
+// first), its bounds exact; a part of a legacy format 2 dataset (an
+// earlier build's, read by --seed-from) by its footer alone, its greatest
+// key rounded up when longer than 1,024 bytes, above every key of its page
+// (S3 and GCS keys fit within it).
+func KeyPages(path string, legacy bool) ([]seekparquet.KeyPage, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -33,15 +30,19 @@ func KeyPages(path string) ([]KeyPage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !legacy {
+		return seekparquet.InspectKeyPages(f, fi.Size(), dataset.KeyColumn)
+	}
 	pf, err := pq.OpenFile(f, fi.Size(), pq.SkipPageIndex(true), pq.SkipBloomFilters(true))
 	if err != nil {
 		return nil, err
 	}
-	leaf, ok := pf.Schema().Lookup("key")
+	leaf, ok := pf.Schema().Lookup(dataset.KeyColumn)
 	if !ok {
 		return nil, fmt.Errorf("%s: no key column", path)
 	}
-	var pages []KeyPage
+	var pages []seekparquet.KeyPage
+	var start int64
 	for g, rg := range pf.RowGroups() {
 		cc := rg.ColumnChunks()[leaf.ColumnIndex]
 		ci, err := cc.ColumnIndex()
@@ -65,8 +66,10 @@ func KeyPages(path string) ([]KeyPage, error) {
 			if rows <= 0 {
 				return nil, fmt.Errorf("%s: row group %d: page %d holds %d rows", path, g, i, rows)
 			}
-			pages = append(pages, KeyPage{Max: string(ci.MaxValue(i).ByteArray()), Rows: rows})
+			pages = append(pages, seekparquet.KeyPage{RowGroup: g, FirstRow: start + oi.FirstRowIndex(i), Rows: rows,
+				Min: ci.MinValue(i).ByteArray(), Max: ci.MaxValue(i).ByteArray()})
 		}
+		start += rg.NumRows()
 	}
 	return pages, nil
 }

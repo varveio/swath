@@ -553,14 +553,11 @@ func (r *Router[P]) encode(p *part[P]) {
 			r.done1(b)
 			continue
 		}
-	write:
 		for _, seg := range b.segs {
-			for i := range seg {
-				if err := w.write(&seg[i]); err != nil {
-					p.err = fmt.Errorf("part %d: %w", p.ordinal, err)
-					r.fail(p.err)
-					break write
-				}
+			if err := w.write(seg); err != nil {
+				p.err = fmt.Errorf("part %d: %w", p.ordinal, err)
+				r.fail(p.err)
+				break
 			}
 			if r.opt.Encoded != nil {
 				r.opt.Encoded.Add(int64(len(seg)))

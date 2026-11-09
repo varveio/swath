@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Usage: "gs://bucket[/prefix]"})
 }
 
 // flagged is the GCS flag group's value: the GCS options and the range

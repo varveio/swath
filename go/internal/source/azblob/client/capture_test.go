@@ -175,19 +175,23 @@ func captureServer(t *testing.T, id string, steps []captureExchange) *httptest.S
 		if got, want := pairs(r.URL.RawQuery), pairs(ex.Request.Query); !slices.Equal(got, want) {
 			t.Errorf("%s step %d: query %q, captured %q", id, n, got, want)
 		}
-		for _, h := range ex.Response.Headers {
-			switch strings.ToLower(h.Name) {
-			case "content-length", "transfer-encoding":
-			default:
-				w.Header().Add(h.Name, h.Value)
-			}
-		}
-		w.WriteHeader(ex.Response.Status)
-		b, _ := base64.StdEncoding.DecodeString(ex.Response.Body)
-		w.Write(b)
+		writeCaptured(w, ex)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// writeCaptured writes ex's captured response: its headers but the
+// framing ones, its status and its body.
+func writeCaptured(w http.ResponseWriter, ex captureExchange) {
+	for _, h := range ex.Response.Headers {
+		if n := strings.ToLower(h.Name); n != "content-length" && n != "transfer-encoding" {
+			w.Header().Add(h.Name, h.Value)
+		}
+	}
+	w.WriteHeader(ex.Response.Status)
+	b, _ := base64.StdEncoding.DecodeString(ex.Response.Body)
+	w.Write(b)
 }
 
 // pairs is a query's decoded name=value pairs, sorted.
@@ -317,7 +321,7 @@ func TestCaptures(t *testing.T) {
 			}
 			// maxresults above 5,000 is echoed but answered with at most
 			// 5,000 entries, so the body cap holds.
-			if len(p.Items) > MaxPageSize || int64(len(body)) > bodyCap(in.MaxResults) {
+			if len(p.Items) > MaxPageSize || int64(len(body)) > MaxBody {
 				t.Errorf("%s: maxresults %d: %d items in %d bytes", c.id, in.MaxResults, len(p.Items), len(body))
 			}
 			if in.MaxResults > MaxPageSize && len(p.Items) == MaxPageSize && p.NextMarker != "" {
@@ -344,16 +348,7 @@ func checkErrorAnswer(t *testing.T, id string, ex captureExchange, in *ListInput
 			code = h.Value
 		}
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, h := range ex.Response.Headers {
-			if n := strings.ToLower(h.Name); n != "content-length" && n != "transfer-encoding" {
-				w.Header().Add(h.Name, h.Value)
-			}
-		}
-		w.WriteHeader(ex.Response.Status)
-		b, _ := base64.StdEncoding.DecodeString(ex.Response.Body)
-		w.Write(b)
-	}))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { writeCaptured(w, ex) }))
 	defer srv.Close()
 	cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, MaxAttempts: 1})
 	if err != nil {

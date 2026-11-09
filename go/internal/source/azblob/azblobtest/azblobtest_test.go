@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -90,8 +89,7 @@ func TestKeysAreAValidHostileCorpus(t *testing.T) {
 
 // enumeration is the part of a List Blobs page the tests read.
 type enumeration struct {
-	Names      []string `xml:"Blobs>Blob>Name"`
-	NextMarker string   `xml:"NextMarker"`
+	Names []string `xml:"Blobs>Blob>Name"`
 }
 
 func get(t *testing.T, target string, header ...string) (*http.Response, []byte) {
@@ -115,85 +113,36 @@ func get(t *testing.T, target string, header ...string) (*http.Response, []byte)
 	return resp, body
 }
 
-// walkAzure lists the container flat with maxresults pageSize, following
-// NextMarker, and returns the names in the order served.
-func walkAzure(t *testing.T, r *Replay, pageSize int) []string {
-	t.Helper()
-	var names []string
-	marker := ""
-	for {
-		target := fmt.Sprintf("%s/%s?restype=container&comp=list&maxresults=%d", r.Endpoint, r.Container, pageSize)
-		if marker != "" {
-			target += "&marker=" + url.QueryEscape(marker)
-		}
-		resp, body := get(t, target, "x-ms-version", azure.Version20261006)
-		if resp.StatusCode != 200 {
-			t.Fatalf("%d %s", resp.StatusCode, body)
-		}
-		var page enumeration
-		if err := xml.Unmarshal(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")), &page); err != nil {
-			t.Fatal(err)
-		}
-		if len(page.Names) > pageSize {
-			t.Fatalf("a page of %d at maxresults=%d", len(page.Names), pageSize)
-		}
-		names = append(names, page.Names...)
-		if marker = page.NextMarker; marker == "" {
-			return names
-		}
-	}
-}
-
-// TestServeListsTheCorpusInProviderOrder walks the corpus through the
-// Azure route at page sizes 1, 2, 7 and 5,000, each walk the corpus in the
-// replay's provider order, and through the S3 route in byte order.
-func TestServeListsTheCorpusInProviderOrder(t *testing.T) {
-	keys := Keys()
+// TestServeLifecycle: Serve names its routes, serves the longest names
+// (3,072 bytes) through both, the Azure route in its provider order and
+// the S3 route in byte order, and Stop may be called more than once. Full
+// traversals at every page size are the SDK oracle's (client
+// TestClientPagesMatchSDK) and the provider's tests'.
+func TestServeLifecycle(t *testing.T) {
+	long := slices.DeleteFunc(Keys(), func(k string) bool { return len(k) < MaxNameBytes-2 })
+	keys := append([]string{"a", "b/c"}, long...)
+	slices.Sort(keys)
 	r := Serve(t, keys)
 	if r.Account != "replay" || r.Container != Container || !strings.HasSuffix(r.Endpoint, "/replay") {
 		t.Fatalf("%+v", r)
 	}
 	want := slices.Clone(keys)
 	slices.SortFunc(want, func(a, b string) int { return azure.Compare([]byte(a), []byte(b)) })
-	if slices.Equal(want, keys) {
-		t.Fatal("the corpus does not exercise the provider order")
+	resp, body := get(t, r.Endpoint+"/"+r.Container+"?restype=container&comp=list", "x-ms-version", azure.Version20261006)
+	var page enumeration
+	if err := xml.Unmarshal(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")), &page); resp.StatusCode != 200 || err != nil {
+		t.Fatalf("%d %v %s", resp.StatusCode, err, body)
 	}
-	for _, size := range []int{1, 2, 7, 5000} {
-		if size == 1 && testing.Short() {
-			continue
-		}
-		if got := walkAzure(t, r, size); !slices.Equal(got, want) {
-			t.Errorf("maxresults=%d: %d names, not the provider order", size, len(got))
-		}
+	if !slices.Equal(page.Names, want) || slices.Equal(want, keys) || slices.IndexFunc(page.Names, func(k string) bool { return len(k) == MaxNameBytes }) < 0 {
+		t.Fatalf("Azure route: %d names, not the provider order with the longest names", len(page.Names))
 	}
-
-	var s3keys []string
-	token := ""
-	for {
-		target := r.S3Endpoint + "/" + r.Container + "?list-type=2&max-keys=1000"
-		if token != "" {
-			target += "&continuation-token=" + url.QueryEscape(token)
-		}
-		resp, body := get(t, target)
-		if resp.StatusCode != 200 {
-			t.Fatalf("S3 %d %s", resp.StatusCode, body)
-		}
-		var page struct {
-			Keys  []string `xml:"Contents>Key"`
-			Token string   `xml:"NextContinuationToken"`
-		}
-		if err := xml.Unmarshal(body, &page); err != nil {
-			t.Fatal(err)
-		}
-		s3keys = append(s3keys, page.Keys...)
-		if token = page.Token; token == "" {
-			break
-		}
+	resp, body = get(t, r.S3Endpoint+"/"+r.Container+"?list-type=2")
+	var s3page struct {
+		Keys []string `xml:"Contents>Key"`
 	}
-	if !slices.Equal(s3keys, keys) {
-		t.Errorf("S3 route: %d keys, not the byte order", len(s3keys))
+	if err := xml.Unmarshal(body, &s3page); resp.StatusCode != 200 || err != nil || !slices.Equal(s3page.Keys, keys) {
+		t.Fatalf("S3 route: %d %v, %d keys", resp.StatusCode, err, len(s3page.Keys))
 	}
-
 	r.Stop()
 	r.Stop()
 }

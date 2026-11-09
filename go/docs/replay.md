@@ -282,10 +282,7 @@ trailing slash (a container SAS sends it there). It answers `200` with an empty 
 `x-ms-is-hns-enabled: false` (`true` under `--azure-hns`), `x-ms-account-kind: StorageV2`,
 `x-ms-sku-name: Standard_LRS` and the headers above, and reads nothing from the fixture. Its refusals are the list
 route's: `x-ms-version` and `x-ms-client-request-id` as above, other methods `405 UnsupportedHttpVerb` with
-`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters (`server`
-`TestAzureAccountInformation`, and the Azure SDK's container and service clients in
-`TestAzureAccountInformationSDK`, through `azblobtest.PinVersion`: the pinned SDK sends a service version the
-replay does not answer).
+`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters.
 
 A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
 capture `azure-12a`; `azure` `TestRenderRefusals`).
@@ -425,7 +422,7 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag |
 | `delimiter.path{path}` | on first use | `rollup` or `walk` for an S3 delimiter page |
-| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup; absent over a SeekParquet dataset (the seekparquet module reports no page work: unavailable, not zero) | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages |
+| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks; over a SeekParquet dataset, the seekparquet module's per-request counts (`ReadStats`: row groups opened, groups skipped, keys decoded, page-index seeks). A key cursor stays open on its group for the whole rollup and decodes whole key pages |
 | `handle_cache.opens`, `.evictions`, `.waits`, `.open`, `.peak`, `.limit` | from startup | every part is read through one descriptor cache: first opens and reopens after eviction, evictions, and reads that waited for a descriptor as counters; descriptors open, at most, and the limit (half the soft descriptor limit, at most 4,096) as gauges |
 | `sortfixture.build.latency`, `sortfixture.output.bytes` | from startup, zero | recorded by `sort-fixture`, never by a server |
 | `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |

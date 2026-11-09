@@ -27,54 +27,6 @@ var bom = []byte("\xef\xbb\xbf")
 // means 5,000.
 const MaxPageSize = 5000
 
-// The body cap is derived from the page size, not fixed. A name is at most
-// 1,024 UTF-16 code units, so at most 3,072 bytes of UTF-8 (a scalar of
-// three UTF-8 bytes is one unit; one of four bytes is two units). Its
-// widest spelling on the wire is the Encoded form, which percent-encodes
-// every byte but the 66 unreserved ones: 3 x 3,072 = 9,216 bytes (XML
-// escaping is wider per byte only for ASCII metacharacters, "&quot;" at 6
-// bytes, and 6 x 1,024 = 6,144 is less).
-//
-// The properties an uploader sets (Content-Type, Content-Encoding,
-// Content-Language, Cache-Control, Content-Disposition) have no documented
-// length of their own: they arrive as request headers of one Put Blob or
-// Set Blob Properties call (which sets all five together), and Azure's
-// front end (HTTP.sys, "Microsoft-HTTPAPI/2.0" in every capture) refuses a
-// request whose request line and headers pass MaxRequestBytes, 16,384
-// bytes by default. So the five together hold at most 16,384 bytes, at
-// most 6 x 16,384 = 98,304 once XML-escaped. The fixed properties
-// (Creation-Time, Last-Modified, Etag, Content-Length, Content-MD5,
-// Content-CRC64, BlobType, AccessTier and the lease and encryption flags)
-// and the entry's tags take about 660 bytes (azure-08d: 3,505,280 bytes for
-// 5,000 entries of 45-byte names): fixedEntryBytes allows 2,048. An entry
-// is thus at most 9,216 + 98,304 + 2,048 = 109,568 bytes. The envelope
-// holds the declaration, ServiceEndpoint, the Prefix and Delimiter echoes
-// (each at most a name, 18 KiB escaped) and two opaque markers (under 200
-// bytes in every capture): envelopeBytes. A 5,000-entry page is capped at
-// 64 KiB + 5,000 x 109,568 bytes, about 522 MiB; real pages are far smaller
-// (3.5 MB in the captures) and the read grows only with the body. A body
-// past the cap cannot be a valid page: it is a parse failure, retried and
-// then requeued, never a terminal failure.
-const (
-	maxNameBytes    = 3 * 1024
-	maxNameWire     = 3 * maxNameBytes
-	maxUserProps    = 16 << 10 // HTTP.sys MaxRequestBytes default
-	xmlEscapeFactor = 6        // "&quot;" for '"'
-	fixedEntryBytes = 2 << 10
-	envelopeBytes   = 64 << 10
-	maxEntryOnWire  = maxNameWire + xmlEscapeFactor*maxUserProps + fixedEntryBytes
-)
-
-// bodyCap is the most bytes a page of maxResults entries can take (0 or
-// more than MaxPageSize: MaxPageSize).
-func bodyCap(maxResults int) int64 {
-	n := maxResults
-	if n <= 0 || n > MaxPageSize {
-		n = MaxPageSize
-	}
-	return envelopeBytes + int64(n)*maxEntryOnWire
-}
-
 // wireName is a <Name>: XML text, or with Encoded="true" percent-encoded
 // UTF-8 (Azure encodes a name XML cannot carry, one with U+FFFE or
 // U+FFFF).

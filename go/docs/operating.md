@@ -285,7 +285,7 @@ value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the di
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
-The resume keeps every published part, verifies each against its journal record (size and MD5: reads every
+The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
 roughly 30-45 minutes; progress shows as `verified_bytes`), then continues after the last published key K.
 Rows listed but not yet in a published part are listed again, except those in a **certified spill file**:
@@ -300,8 +300,8 @@ deleted from the bucket since stays in the dataset, one added inside a certified
 metadata and filtering are as observed then. The gaps, and every key a run lists, reflect the bucket as it is
 during the resume. On a static source the dataset is byte-identical to an uninterrupted run either way. A run
 that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
-`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8
-(a run interrupted under an older build resumes as before, relisting), spill on, `--spill-budget` of at least
+`DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8 or
+later (this build writes and resumes version 9 only), spill on, `--spill-budget` of at least
 16 MiB, and the range engine (S3 and GCS; not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
@@ -386,9 +386,8 @@ lists for the object. On GCS, `last_modified` also changes when only the object'
 (`time_created` is the write time), and `etag` is not a content hash: compare GCS content with `md5` or `crc32c`,
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
-`swath/azblob-objects/v1` (`key`, `size`, `last_modified`, `etag`, `content_md5`, `content_type`, `blob_type`,
-`access_tier`, `creation_time`); as on GCS, its `last_modified` moves on metadata writes and its `etag` is opaque:
-compare content with `content_md5`, null where Azure lists none. Every dataset lists current
+`swath/azblob-objects/v1`, its columns and caveats in [upgrade.md](upgrade.md#the-downstream-reader-dispatch-on-schema-id).
+Every dataset lists current
 objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
 verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
 only on the manifest's contract ([upgrade.md](upgrade.md)); Java swath's reader does not open it.

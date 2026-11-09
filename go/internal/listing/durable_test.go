@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -555,9 +556,9 @@ func TestDurableCompressionFlip(t *testing.T) {
 	}
 }
 
-// TestDurableVersions: a version 7 journal resumes with durable spill off,
-// writing nothing of version 8; a version 9 journal is refused before
-// recovery changes anything.
+// TestDurableVersions: a journal of another version (7 and 8 recorded
+// MD5 digests; 10 is a later build's) is refused before recovery changes
+// anything, the durable spill included; the current version resumes.
 func TestDurableVersions(t *testing.T) {
 	datasettest.RequireJournal(t)
 	url, _, ref, out := durableFixture(t)
@@ -565,49 +566,37 @@ func TestDurableVersions(t *testing.T) {
 		path := journal.Path(dir)
 		jb, _ := os.ReadFile(path)
 		size := binary.LittleEndian.Uint32(jb[:4])
-		hdr := string(jb[8 : 8+size])
-		i := strings.Index(hdr, `,"run_uuid"`)
 		cur := fmt.Sprintf(`"version":%d`, journal.Version)
-		nh := strings.Replace(hdr, cur, fmt.Sprintf(`"version":%d`, v), 1)
-		if v == 7 && i > 0 {
-			j := strings.Index(nh, `,"run_uuid"`)
-			k := strings.Index(nh[j+1:], `"`) // the key's closing quote
-			_ = k
-			end := strings.Index(nh[j:], `}`)
-			nh = nh[:j] + nh[j+end:]
-		}
+		nh := strings.Replace(string(jb[8:8+size]), cur, fmt.Sprintf(`"version":%d`, v), 1)
 		frame := make([]byte, 8, 8+len(nh))
 		binary.LittleEndian.PutUint32(frame[:4], uint32(len(nh)))
 		frame = append(frame, nh...)
 		binary.LittleEndian.PutUint32(frame[4:8], crc32.Update(crc32.Checksum(frame[:4], crc32.MakeTable(crc32.Castagnoli)), crc32.MakeTable(crc32.Castagnoli), []byte(nh)))
 		os.WriteFile(path, append(frame, jb[8+size:]...), 0o644)
 	}
-	nine := filepath.Join(t.TempDir(), "nine")
-	if err := os.CopyFS(nine, os.DirFS(out)); err != nil {
+	for _, v := range []int{7, 8, journal.Version + 1} {
+		dir := filepath.Join(t.TempDir(), strconv.Itoa(v))
+		if err := os.CopyFS(dir, os.DirFS(out)); err != nil {
+			t.Fatal(err)
+		}
+		setVersion(dir, v)
+		before := snapshot(t, dir)
+		_, err := Run(context.Background(), durableConfig(url, dir, true))
+		var ve *journal.VersionError
+		if !errors.As(err, &ve) || ve.Found != v {
+			t.Fatalf("version %d: %v", v, err)
+		}
+		if after := snapshot(t, dir); len(after) != len(before) {
+			t.Fatalf("version %d: files changed", v)
+		}
+		if got := durableFiles(t, dir); len(got) != len(durableFiles(t, out)) {
+			t.Fatalf("version %d: durable spill changed", v)
+		}
+	}
+	if _, err := Run(context.Background(), durableConfig(url, out, true)); err != nil {
 		t.Fatal(err)
 	}
-	setVersion(nine, 9)
-	before := snapshot(t, nine)
-	_, err := Run(context.Background(), durableConfig(url, nine, true))
-	var ve *journal.VersionError
-	if !errors.As(err, &ve) || ve.Found != 9 {
-		t.Fatalf("version 9: %v", err)
-	}
-	if after := snapshot(t, nine); len(after) != len(before) {
-		t.Fatalf("version 9: files changed")
-	}
-	if got := durableFiles(t, nine); len(got) != len(durableFiles(t, out)) {
-		t.Fatalf("version 9: durable spill changed")
-	}
-	setVersion(out, 7)
-	sum, err := Run(context.Background(), durableConfig(url, out, true))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sameDataset(t, "version 7", ref, out)
-	if sp := sum.Resources.Spill; sp.Durable != nil || sp.DurableOff != "journal version 7" {
-		t.Fatalf("version 7 resumed with durable spill: %+v", sp)
-	}
+	sameDataset(t, "current version", ref, out)
 }
 
 // TestDurableChangedSource: retained observation. Between the crash and the

@@ -53,10 +53,10 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, the page parser | objhttp |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
-| `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`), `Info` | – |
+| `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`), `Info`; `Bind` takes a schema id's key settings and its columns' names, types and nullability from the reader module's spec | reader (the nested module) |
 | `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)) | schema, dataset |
 | `internal/filter` | Java's seven row filters and the `--include` prefix narrowing | schema |
-| `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset, buildinfo |
+| `internal/parquetout` | schema binding, codec, part router (`Router[P]`), encoders over the seekparquet module's part writer | schema, dataset, buildinfo, seekparquet |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order, the part cut rule a sink states for the segment tail (`SegmentPlan`) | faults |
 | `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
@@ -70,6 +70,15 @@ The list clients are hand-rolled on the SDKs' authentication; what is the SDK's,
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
 transitively.
+
+**Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
+inherit the lister's dependencies: `go/reader` (`github.com/varveio/swath/go/reader`: the schema ids and their
+columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows; the SeekParquet module and
+the standard library only; [../reader/README.md](../reader/README.md)) and `go/objfile` (a dataset in an object
+store opened as files read by byte range; [../objfile/README.md](../objfile/README.md)). The lister imports
+`go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
+specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. Neither nested
+module imports the lister.
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`fs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`

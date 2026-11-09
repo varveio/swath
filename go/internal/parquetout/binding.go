@@ -11,15 +11,13 @@ import (
 
 	pq "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
-	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
 
 // nodeOf builds the Parquet schema for s: the key column, then s.Columns in
-// declaration order. The key column is delta-encoded with an ascending
-// single-page index, and integer columns carry the standard INT annotation
-// (signed or not).
+// declaration order. The key column is delta-encoded, and integer columns
+// carry the standard INT annotation (signed or not).
 func nodeOf[P any](s *schema.Schema[P]) *pq.Schema {
 	specs := s.Specs()
 	delta := make([]bool, len(specs))
@@ -70,6 +68,8 @@ func insertOptional(tag string) string {
 	return tag + ",optional"
 }
 
+// root sets the encoding of the fields with schema.Column.Delta; the
+// module's part writer marks the key column's index ascending.
 type root struct {
 	pq.Node
 	delta []bool // per field: DELTA_BYTE_ARRAY (schema.Column.Delta)
@@ -77,10 +77,7 @@ type root struct {
 
 func (r root) Fields() []pq.Field {
 	fields := append([]pq.Field(nil), r.Node.Fields()...)
-	for i, f := range fields {
-		if i == 0 {
-			fields[i] = ascendingKey{f}
-		}
+	for i := range fields {
 		if r.delta[i] {
 			fields[i] = encoded{fields[i], &pq.DeltaByteArray}
 		}
@@ -95,28 +92,6 @@ type encoded struct {
 }
 
 func (f encoded) Encoding() encoding.Encoding { return f.enc }
-
-// ascendingKey stamps BoundaryOrder ASCENDING on a one-page column index
-// (accepted by older Java readers); multi-page indexes are untouched.
-type ascendingKey struct{ pq.Field }
-
-func (f ascendingKey) Type() pq.Type { return ascendingType{f.Field.Type()} }
-
-type ascendingType struct{ pq.Type }
-
-func (t ascendingType) NewColumnIndexer(sizeLimit int) pq.ColumnIndexer {
-	return ascendingIndexer{t.Type.NewColumnIndexer(sizeLimit)}
-}
-
-type ascendingIndexer struct{ pq.ColumnIndexer }
-
-func (ix ascendingIndexer) ColumnIndex() format.ColumnIndex {
-	index := ix.ColumnIndexer.ColumnIndex()
-	if len(index.NullPages) == 1 {
-		index.BoundaryOrder = format.Ascending
-	}
-	return index
-}
 
 // fillKey writes the key column (column 0) of rows into dst.
 func fillKey[P any](dst []pq.Value, rows []schema.Row[P]) {

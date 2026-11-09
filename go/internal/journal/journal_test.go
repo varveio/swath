@@ -196,9 +196,10 @@ func TestInteriorCorruptionFailsClosed(t *testing.T) {
 		t.Fatalf("interior corruption: %v", err)
 	}
 	// A newer version, version 5 (legacy: a capped run could write one,
-	// and its identity lacks the S3 route) and version 6 (legacy: its
-	// acknowledged part may be at the unclaimed temporary name) are refused.
-	for _, v := range []int{9, 5, 6} {
+	// and its identity lacks the S3 route), version 6 (legacy: its
+	// acknowledged part may be at the unclaimed temporary name), and
+	// versions 7 and 8 (their records hold MD5 digests) are refused.
+	for _, v := range []int{Version + 1, 5, 6, 7, 8} {
 		j, _ = Create(out, Identity{}, nil)
 		j.Close()
 		b, _ = os.ReadFile(Path(out))

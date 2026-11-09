@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"slices"
@@ -251,7 +252,7 @@ func sdkItem(b *container.BlobItem) Item {
 		it.ETag = string(*p.ETag)
 	}
 	if len(p.ContentMD5) > 0 {
-		it.ContentMD5 = base64Std(p.ContentMD5)
+		it.ContentMD5 = base64.StdEncoding.EncodeToString(p.ContentMD5)
 	}
 	it.ContentType = deref(p.ContentType)
 	if p.BlobType != nil {
