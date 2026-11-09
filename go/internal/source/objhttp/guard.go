@@ -103,7 +103,16 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	if ok {
 		limit = orDefault(g.MaxBody, defaultMaxBody)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	// A declared length within the limit is read into one allocation (the
+	// MinRead spare keeps ReadFrom from growing it for the final EOF read);
+	// otherwise the buffer grows as io.ReadAll's would.
+	size := int64(bytes.MinRead)
+	if n := resp.ContentLength; n >= 0 && n <= limit {
+		size += n
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, size))
+	_, err = buf.ReadFrom(io.LimitReader(resp.Body, limit+1))
+	body := buf.Bytes()
 	if err != nil {
 		// Wrapped, so Cause strips the url.Error around it: a cut body
 		// (io.ErrUnexpectedEOF, a net.Error) is still a transport failure,
