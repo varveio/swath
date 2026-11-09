@@ -26,8 +26,9 @@ jobs:
   # file is Go-only (go/**, Dockerfile.replay-go and its ignore file); anything else -- this
   # workflow, root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
   # tiers. go=true when go/**, this workflow, Dockerfile.replay-go (and its ignore file), the
-  # replay smoke script or the race shard table changed. The jobs still RUN and succeed with their
-  # steps skipped (not `skipped` as jobs), so ci-gate keeps requiring every job on a pull request.
+  # replay smoke script, the race shard table or the SeekParquet conformance scripts changed. The
+  # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
+  # requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
   # its own, wider detection. go_shards is the go-race matrix, from the shard table.
   changes:
@@ -65,7 +66,7 @@ jobs:
             fi
             # grep reads every line rather than exiting at the first match while git still writes
             # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -557,8 +558,8 @@ jobs:
                 ./build.sh -o "$RUNNER_TEMP/$cmd-${target%/*}-${target#*/}" "./cmd/$cmd"
             done
           done
-          # The journal's tests (its Windows lock test included) compile for
-          # Windows, where they are never run.
+          # The journal's tests (its Windows lock test included) compile for Windows without
+          # cgo, as the static builds do; go-xos (windows) runs them.
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/journal-windows.test" ./internal/journal
           # Each CI build names its commit (build.sh stamps it).
           for cmd in swath swath-replay; do
@@ -830,6 +831,30 @@ jobs:
             echo "::error::fixture-tier tests that did not run: $(comm -23 <(echo "$want") <(echo "$ran") | paste -sd' ' -)"
             exit 1
           fi
+
+  # Bounded retention for the Go build caches: after the Go jobs of a push to main, every
+  # `go-build-` cache except the newest of its family is deleted (scripts/ci/go-cache-prune.sh),
+  # so main keeps one generation per job instead of filling the repository's cache quota. It runs
+  # when a Go job failed too, since the caches of the jobs that passed were saved. Housekeeping,
+  # not a gate: ci-gate does not need it. The only job with `actions: write`.
+  go-cache-prune:
+    needs: [go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    concurrency:
+      group: go-cache-prune
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Delete all but the newest Go build cache per job
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/ci/go-cache-prune.sh
 
   # The single required status check on `main`, and the only job here that exists for the
   # branch rule rather than for what it runs.

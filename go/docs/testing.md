@@ -87,7 +87,8 @@ of the `keyrange` laws. CI never passes `-short`.
 `ci.yml` `changes` diffs the pull request's base (or the push's previous commit) against `HEAD`:
 
 - **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.replay-go` or its ignore file,
-  `scripts/ci/smoke-replay-container.sh` or `scripts/ci/go-race-shards.sh`.
+  `scripts/ci/smoke-replay-container.sh`, `scripts/ci/go-race-shards.sh`, or the SeekParquet conformance scripts
+  (`scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py`).
 - **Java change:** any path outside `go/` and `Dockerfile.replay-go*`, so a documentation or script change
   runs the Java tiers.
 
@@ -105,17 +106,39 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 |---|---|---|
 | `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a Go change, a single `go-race (off)` leg whose steps skip | per shard |
-| `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes` | ubuntu-latest |
-| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows go test -c ./internal/journal`; the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+| `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the four targets | ubuntu-latest |
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
-version `go.mod` names, with the module and build caches restored from the job's newest cache, keyed per job
-(and race shard), runner OS and architecture, `go.sum` and commit. Only a push to `main` saves, under its
-commit's key, so parallel jobs never overwrite one another's caches with partial ones and a pull request
-restores `main`'s newest without saving. The DuckDB downloads (`integration-tests`, the dispatch-only
+version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
+modules (`go`, `go/objfile`, `go/reader`).
+
+| Cache | Path | Key | Restores from |
+|---|---|---|---|
+| module | `GOMODCACHE` | `go-mod-OS-ARCH-DEPS`, one per runner OS and architecture, shared by every job | the exact key, else the newest `go-mod-OS-ARCH-` |
+| build | `GOCACHE` | `go-build-OS-ARCH-JOB-DEPS-SHA`, JOB the job (and race shard) | the exact key, else the job's newest with the same DEPS, else the job's newest |
+
+Only a push to `main` saves, each cache when the job ends; a pull request, the nightly jobs and stress
+dispatches restore without saving. A saved key is never overwritten, so concurrent saves of the shared
+module key keep the first and the rest only log a warning. A job on `main` that finds no exact module key
+runs `go mod download all` in all three modules before it can save one: the jobs build different module
+graphs (the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed,
+which an exact hit never repairs. `all`, not the build list alone: `go mod tidy -diff` in `go-lint` also loads
+the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). A job that fails
+saves nothing.
+
+Retention: after the Go jobs of a push to `main` (passed or not), `go-cache-prune` runs
+[`scripts/ci/go-cache-prune.sh`](../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
+lists every `go-build-` cache on `main` once, groups them by family (the key without DEPS and SHA, and the
+cache version), keeps the newest by creation time and deletes the older ones, with a table of what it kept in
+the step summary. Newest by creation, not this run's commit: `main` runs overlap, and an older run finishing
+last must not delete a newer run's caches. `ci-gate` does not need it. Module caches are not pruned: one per
+OS and architecture per dependency set, and GitHub evicts the superseded ones after seven days unused. The
+compressed size of one generation is measured on the first `main` pushes after this layout and recorded in
+[measurements.md](measurements.md). The DuckDB downloads (`integration-tests`, the dispatch-only
 container smoke) retry five times, and the SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on
@@ -182,6 +205,9 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `deep-and-perf`, `osv-scan` | the Java tiers and the supply-chain scan ([docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, or their own name |
 
+Both Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module cache,
+and the build cache of `go-race (rest)` (`go-race-nightly`) or `go-nonrace` (`go-shapes`).
+
 There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run, and no Go dependency scan in CI.
 
 ### Stress repeats
@@ -205,7 +231,9 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 | `shuffle` | `false` | `-shuffle=on`; the seed is in the output, so `-shuffle=SEED` replays an order |
 | `os` | `ubuntu-latest` | `ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest` |
 
-It runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
+It sets up Go through `.github/actions/setup-go`, restoring without saving the shared module cache and the
+build cache of the `ci.yml` job on the same runner (`go-race (rest)` on `ubuntu-latest`, `go-race (listing-rest)`
+on `ubuntu-24.04-arm`, `go-xos` on macOS and Windows, a build without `-race`), and runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
 `go-stress-OS-ARCH` artifact. Stress takes a package pattern and a `-run` pattern, not a race shard: to repeat
 a shard, pass its row's arguments from [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh).
