@@ -296,10 +296,10 @@ func TestSDKDecoding(t *testing.T) {
 	}
 }
 
-// TestAccountInfoExact: the client reads x-ms-is-hns-enabled exactly:
-// "true" and "false" are the answer, any other value (another spelling,
-// "1", "0") or none is unknown, never flat, whatever the SDK's ParseBool
-// would make of it.
+// TestAccountInfoExact: Get Account Information reads x-ms-is-hns-enabled
+// exactly: "true" and "false" are the answer, any other value (another
+// spelling, "1", "0") or none is unknown, never flat, whatever the SDK's
+// ParseBool would make of it; a refusal is an error, never flat.
 func TestAccountInfoExact(t *testing.T) {
 	type answer struct {
 		hns     bool
@@ -337,6 +337,19 @@ func TestAccountInfoExact(t *testing.T) {
 			t.Errorf("%q: %+v (%v), want %+v", c.header, got, err, c.want)
 		}
 		srv.Close()
+	}
+	// A refusal is an error with its class, never flat; the request goes to
+	// the container path under the account segment.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "comp=properties&restype=account" || r.URL.Path != "/acct/denied" {
+			t.Errorf("request %s ?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		azureError(w, 403, codeAuthorization)
+	}))
+	defer srv.Close()
+	cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+	if hns, err := cl.AccountInfo(context.Background(), "denied"); hns || Classify(err) != objhttp.ClassAccessDenied {
+		t.Errorf("denied: hns %v, class %q (%v)", hns, Classify(err), err)
 	}
 }
 
