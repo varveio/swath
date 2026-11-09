@@ -85,7 +85,7 @@ filter (`registry/filtered.go`) that keeps at most half of a page's rows or char
 cannot hold whole pages for a few charged rows (`TestSparseFilterPipelinePlateau`). The encoders' queues add the bytes of every queued
 batch to the same budget (`order.Shared`, fed by the router's `Account` hook) and release them once
 written. A slow encoder therefore slows producers instead of growing a second, unaccounted buffer. Pages being
-parsed (each capped at 16 MiB), codecs and the garbage collector are outside it.
+parsed (16 MiB for S3/GCS, 64 MiB for Azure), codecs and the garbage collector are outside it.
 
 The budget bounds the bytes of rows read but not yet drained. A worker waits before claiming a range, and before
 publishing rows, while the budget is used up. Two exceptions keep the walk live and both were forced by S3,
@@ -149,8 +149,8 @@ holds the smallest peak of three runs to that bound: the sampled live heap reads
 collection lands at a burst, while a pinned page shows in every run.
 
 **What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
-metadata in flight; outside it are response bodies being parsed (up to 16 MiB each, one per worker in the
-worst case), arena slack (a surviving string keeps its page's allocation alive, which the row count only
+metadata in flight; outside it are response bodies being parsed (16 MiB each for S3/GCS, 64 MiB for Azure,
+one per in-flight request, probes included), arena slack (a surviving string keeps its page's allocation alive, which the row count only
 approximates), compression scratch (a pooled spill encoder per concurrent writer, about 1.5 MiB each with its 1 MiB
 window), open spill readers (at most 8 × 64 KiB) and the drainer's reused read and decode buffers (each the size of the
 largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
@@ -167,11 +167,9 @@ codec, which every writer shares and which makes states only as encoders are adm
 compressed a page over one block keeps about 10.6 MiB: one 8 MiB window and a block, with zstd's lower encoder memory). That is 31.5 MiB for S3, 32.5 for
 GCS and 61 MiB for a local path's (4,096-byte keys and link targets); `TestWriterAdmissionCoversHeap` holds four
 writers' live heap, 24 pages each at the longest values, within four encoders' price, before admission raises
-the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Before, each writer
-had a codec of its own with a state per column goroutine, against a constant 24 MiB (98.5 MiB measured for one
-S3 writer at four encoders). Descriptors bound the count
+the codec's states (the constants are measurements: [parquet-output.md](parquet-output.md)). Descriptors bound the count
 too: as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker and
-a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 4 for S3). An explicit `--encoders` above that is honoured with a warning.
+a reserve of 32 (`listing.admitEncoders`; the default 128 MiB admits 4 for S3). An explicit `--encoders` above that is honored with a warning.
 
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
 the report's `timings.listing_done_at`), the default count is raised to `listing.admitAfterListing`: no page is
@@ -269,9 +267,8 @@ request after its `lo`, refuses any key at or below the last one (`lo` first) an
 (`keyrange` `expandRange`), so a service answering out of bounds cannot make two ranges overlap; only
 intervals that overlap from the engine's own splits or seed cuts could, which T1, the metamorphic laws and
 `TestSeedListsEveryKey` test. A local directory's children are its distinct subdirectories. The guard
-across ranges was defence in depth against a provider that breaks its tiling, and it still runs on every
-run that writes. `Count` cannot apply it cheaply: the stream order is a tree walk, and checking it means
-keeping each finished range's first and last key until its neighbours finish, the tree `Count` exists to
+across ranges protects against a provider that breaks its tiling and runs on every listing with ordered output. `Count` cannot apply it cheaply: the stream order is a tree walk, and checking it means
+keeping each finished range's first and last key until its neighbors finish, the tree `Count` exists to
 avoid.
 
 ## Cancellation
@@ -309,20 +306,20 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   one rows type and its reader refuses every other, so a frame of an unknown or foreign format is never
   decoded. The trailer is written when the range ends and checked after replay. Children have their own
   files, so a parent's trailer says nothing about them.
-- **Delta rows.** Within a range rows are sorted, so neighbours share long key prefixes, times cluster and
+- **Delta rows.** Within a range rows are sorted, so neighbors share long key prefixes, times cluster and
   storage classes and owners repeat. A delta frame's body is the row count, the storage its decoded rows may
   own (the keys' bytes plus the payloads' `Heap`, an upper bound on what decoding copies), the payload coding
   (contextual or stateless), then per row: the length of the prefix its key shares with the previous key
   (bytes, not UTF-8 units: keys are bytes), the rest of the key, length-prefixed, and the payload. A producer
-  with a `schema.DeltaCodec[P]` (S3) codes its payload against the previous row's: `s3.Object` writes a flags
+  with a `schema.DeltaCodec[P]` (S3, GCS and Azure) codes its payload against the previous row's: `s3.Object` writes a flags
   byte, its size as a signed varint (as the plain codec does), its time as the signed (zigzag) varint of its
   difference from the previous time, or the time itself when the difference overflows int64, its ETag as 16
   raw bytes when it is exactly 32 lowercase hex digits (an MD5, as `s3.Object` carries it, quotes stripped),
   as a flag when it repeats the previous one and as the string itself otherwise (uppercase, multipart
   `hex-N`, quoted or empty: only a spelling that round-trips byte for byte is taken raw), and each other
-  string as a flag when it repeats the previous row's, else the string. GCS and localfs keep their
-  stateless `schema.Codec[P]` (only the producer's fields: `fs.Entry` writes its present values) inside
-  delta frames: their keys are prefix-coded all the same. A plain frame holds each key whole and the
+  string as a flag when it repeats the previous row's, else the string. GCS and Azure use the
+  [shared payload delta codec](#payload-delta-codec). The filesystem uses its stateless `schema.Codec[P]`
+  (`localfs.Entry` writes its present values) inside delta frames; its keys are still prefix-coded. A plain frame holds each key whole and the
   payload through `schema.Codec[P]`. The previous row is the frame's own, reset at every frame: a frame
   decodes alone, without the file before it, which reopening an evicted reader at its position needs, and the codecs hold no state, so one serves every emitter at once (`Schema.Detach`
   uses the stateless codec too). On the fake S3 fixture of `TestSpillFormatsIdentical` delta frames take
@@ -379,7 +376,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   is replayed (`TestSpillMarkersInByteMode`, the one order test in byte mode). A failed run closes every
   open spill reader. The report's `resources` carries `peak_nodes`, `peak_markers`, `peak_ahead_rows` (rows received and
   not yet handed on, in memory or spilled), `frontier_stuck_max_ns` (the longest interval in which the
-  drainer handed nothing on, closed on every drain exit, so a cancelled or failed run reports its last
+  drainer handed nothing on, closed on every drain exit, so a canceled or failed run reports its last
   stall: `TestInterruptedRunReportsStall`; the interval is closed after the final flush, so a last sink write that
   blocks counts: `TestFinalFlushReportsStall`) and, under `spill`, `peak_bytes`, `peak_readers`, `max_bytes`,
   `reserve_bytes`, `dir` and `fs_type` (the spill filesystem: on `tmpfs` spill is memory, and the run warns
@@ -462,7 +459,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`). Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
   cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
-- **What bounds the tail now.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
+- **What bounds the tail.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
   (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
   the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
   machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming
@@ -524,9 +521,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   copies too, so a finished part keeps nothing of its rows (`TestSegmentsCompletedPartsReleaseStorage`: about
   1,200 finished parts, spilled or in memory, within two budgets when the last segment finishes). `TestSegmentsSizedToBudget` plans exactly two workers at 1,000-byte keys among
   220-byte ones into stalled encoders: they wait fewer than 16 times and hold within the budget;
-  `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. The first
-  form of that gate counted the tree too and admitted every worker: with the tree full they waited tens of
-  thousands of times on Batch, tails up to 3× longer (2026-11-07). Beside its writer and that share a worker
+  `TestSegmentsStayWithinBudget` understates the share so that the safety must hold the bound. Beside its writer and that share a worker
   holds one batch of row headers, and the read-ahead stops when segments begin.
 
 The report's `resources.drain.segments` (fields in [counters.md](counters.md)) gives the engagement `reason`,
@@ -550,13 +545,34 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   as units of the rest (its file's rows are already on disk and certified), so they can begin before the
   drainer reaches it.
 
+## Payload delta codec
+
+`schema.AppendDelta(dst []byte, prev, cur schema.DeltaFields) []byte` and
+`schema.DecodeDelta(d *schema.Decoder, prev, cur schema.DeltaFields)` implement the GCS and Azure payloads'
+field encoding. Each provider selects fields in its own spill order using `DeltaFields{Ints, Strings}`;
+previous and current lists must have equal lengths, every pointer must be non-nil, and at most eight strings
+fit the mask. These are programmer preconditions. The helper owns no field selection or null policy.
+
+The byte contract is one string-repeat mask byte, then each integer's signed varint of
+`int64(uint64(cur) - uint64(prev))`, then each changed string as an unsigned-varint byte length followed by
+its raw bytes. Mask bit i means string i repeats; unused mask bits are invalid. Decoding adds the integer
+difference with unsigned wrapping arithmetic and converts back to `int64`. This preserves integer extremes
+without an absolute-value fallback. Repeated strings share previous storage; changed strings use the
+`Decoder`'s storage and owning budget. Malformed or truncated data fails through the decoder.
+
+GCS current objects and generations and Azure blobs use this helper. S3's payload codec has its own flags
+and absolute-time fallback, described in [delta rows](#spill); it does not use this encoding.
+`schema` `TestDeltaExtremeIntegers`, `TestDeltaRepeatMasks`, `TestDeltaMalformed` and `TestDeltaOwningBudget`
+cover the helper. `TestDeltaHistoricalBytes` in each of `source/gcs` and `source/azblob` pins fixed payload
+vectors as well as round trips, so shared implementation alone cannot establish byte compatibility.
+
 ## Durable spill
 
 A journaled run (journal version 8 and later) keeps the spill files that certify their rows: a resume replays them
 instead of listing those keys again. The design record is the durable-spill contract; this section is what
 the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
 
-- **Fences.** A range engine range (`keyrange`, S3 and GCS) declares coverage through the emitter
+- **Fences.** A range engine range (`keyrange`, S3, GCS and Azure) declares coverage through the emitter
   (`source.Fencer`): `Span(llo, hi, open)` before its first row, `llo = max(lo, after)`, so after an unsafe
   resume key the logical start is K, never the request bound below it; then a fence after every page (its
   cursor), at a split (the split cursor, before the children) and at its end (`hi`, or ⊤). A fence is

@@ -91,6 +91,16 @@ The contributor reference is
   statement of the invariants, ordering, Parquet output, providers, testing, CLI); a change
   to `go/` is not done until its page there is current. Measurements are recorded in
   [`go/docs/measurements.md`](go/docs/measurements.md).
+- A provider's runtime integration is its directory under `go/internal/source/` plus one blank
+  import in `go/cmd/swath`; reader contracts, verifier support and central conformance tests
+  still need explicit integration. Follow the verified
+  [provider checklist](go/docs/internals/providers.md#adding-a-provider). Providers compose
+  shared flag groups, the range engine and `keyrange.Registered`, `objhttp` client plumbing
+  and schema helpers; credential, endpoint, identity and wire policies stay provider-owned.
+  The internal owners are [clients](go/docs/internals/clients.md),
+  [restart](go/docs/internals/range-engine.md#resume),
+  [schemas](go/docs/internals/parquet-output.md#schemas) and
+  [spill codecs](go/docs/internals/ordering.md#payload-delta-codec).
 - The gate is `cd go && go vet ./... && go test -race ./...`; CI runs it sharded. Locally
   run the tests you change, not the whole suite; repeats go through `go-stress.yml`. Static
   builds use `CGO_ENABLED=0`.

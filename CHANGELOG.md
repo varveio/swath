@@ -15,7 +15,7 @@ Notable changes per release. The full human summary for the current release is i
   `Seeded`, `Reusing`, `Fencing`), set to the provider, in place of eleven forwarding methods in each
   `register.go`; each asserts its whole interface set, and a test opens every provider through the registry
   and checks them. The providers' `Restart` returns an error, and their client activity (`Faults`,
-  `Requests`, `Answered`) is one `objhttp.Activity`. No behaviour changes.
+  `Requests`, `Answered`) is one `objhttp.Activity`. No behavior changes.
 - Go port: `go/reader` declares each versions schema's column roles once, in its spec (`SchemaSpec.Versions`,
   `VersionSpec{ID, Latest, DeleteMarker, DeletedAt}`): `swath/s3-versions/v1` names `version_id`, `is_latest` and
   `is_delete_marker`, `swath/gcs-generations/v1` names `generation` and `time_deleted`, and the current-object

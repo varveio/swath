@@ -14,7 +14,9 @@ type DeltaFields struct {
 }
 
 // AppendDelta appends a string-repeat mask, wrapping signed integer
-// differences, then length-prefixed strings that differ from prev.
+// differences, then length-prefixed strings that differ from prev. Integer
+// differences use int64(uint64(cur)-uint64(prev)); bit i of the mask means
+// string i repeats, otherwise its raw bytes follow a uvarint length.
 func AppendDelta(dst []byte, prev, cur DeltaFields) []byte {
 	at := len(dst)
 	dst = append(dst, 0)
@@ -34,7 +36,9 @@ func AppendDelta(dst []byte, prev, cur DeltaFields) []byte {
 }
 
 // DecodeDelta reads AppendDelta's encoding. Repeated strings share prev's
-// storage; new strings use d's storage and its owning budget.
+// storage; new strings use d's storage and its owning budget. Integers are
+// reconstructed by unsigned wrapping addition. Unknown mask bits and
+// malformed values fail through d.Err().
 func DecodeDelta(d *Decoder, prev, cur DeltaFields) {
 	flags := d.Byte()
 	known := byte((1 << len(cur.Strings)) - 1)

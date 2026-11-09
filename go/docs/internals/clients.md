@@ -17,15 +17,17 @@ clients are described in [providers.md](providers.md) and the page of each provi
   through `DefaultAzureCredential` (environment, workload identity, managed identity, the Azure CLI and Developer CLI
   logins) and Shared Key signing; a SAS is part of the account URL the SDK client is built on.
 - **Decoding**, except where a paragraph below says swath decodes (S3's listing pages) or checks what was decoded.
-- **The transport**, under the Guard (below).
+- **Service-call transport integration.** The SDK sends through the Go HTTP clients swath supplies;
+  [pool construction](#pool-construction) and the Guard below govern those clients.
 
 ## What swath keeps
 
 - **One retry owner.** Every SDK client is built with its retries off (`aws.NopRetryer`; the generated GCS `Do`
   makes one request; azcore `MaxRetries: -1`), so one SDK call is one attempt. `objhttp.Do` retries with
-  full-jitter backoff, honours `Retry-After` up to the request timeout, admits each attempt through the limiter and
+  full-jitter backoff, honors a provider-supplied `Retry-After`, admits each attempt through the limiter and
   the request rate, counts attempts, retries, throttles, timeouts and parse failures, and hands an exhausted
-  failure to the engine, which requeues the range; a run never fails on a transient answer. The counted unit is an
+  failure to the engine, whose `Description.Requeue` is `objhttp.Requeue`: only an exhausted call with a stored
+  transient signal is requeued. A nil requeue predicate does not authorize requeue. The counted unit is an
   application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
 - **Credentials before the attempt.** Credentials and bearer tokens are fetched, and waited for under the attempt's
   deadline (all waiters sharing one outstanding call, `tokensource.Shared`), before an attempt is counted: a
@@ -49,20 +51,19 @@ clients are described in [providers.md](providers.md) and the page of each provi
 - **Redirects are answers**, never followed, also through a supplied HTTP client: the resume identity freezes where
   requests go. Azure drops the `Location` header before `net/http` sees it, so a malformed one never reaches an
   error.
-- **The transport pool** (GCS and Azure, `objhttp.Pool`): one transport per 16 workers, 1 to 8, because Go's HTTP/2
-  transport opens a second connection only at the server's stream limit; the transports share one TLS session
-  cache. A supplied HTTP client is used alone. Each provider installs its own Guard and SDK client on every pooled
-  transport; the report's `transport.pool_size` is the pool's size.
+- **The transport pool** (`objhttp.Pool`): see [pool construction](#pool-construction). S3 takes one client;
+  GCS and Azure size their pools by workers and rotate their SDK services.
 - **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction without quoting
-  it (`TestEndpointUserinfoRefused`). `registry.RedactArgv`, shared by the command and listing, replaces the value
+  it (`source` `TestRegisteredEndpointRefusals`). `registry.RedactArgv`, shared by the command and listing, replaces the value
   of every URL flag the shared flag groups declare (`source.FlagGroup.URLs`: the store group's `--endpoint`,
   which every object store takes) with `[redacted]` when it carries user information or
   cannot be parsed, in either argument spelling. Valid endpoints without user information are retained for
   resume. This covers failure reports, successful reports and journal arguments, including recorded arguments
-  supplied to listing (`TestEndpointUserinfoReports`, `TestRecordedEndpointUserinfo`, `TestRedactEndpointArgv`).
+  supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`, `listing` `TestRecordedEndpointUserinfo`,
+  `registry` `TestRedactEndpointArgv`).
   The SAS is scrubbed by parameter name from every error's code and message, 400 query echoes and SDK decoder
   errors included (`TestSASRedacted`, `TestScrubSASParameters`, `TestRedactedRefusal`). The SDKs' own logs, which quote request headers or URLs, are off: S3 and GCS give their
-  clients a logger that discards everything (`TestSDKLogsNothing`), and the command turns azcore's off at startup
+  clients a logger that discards everything (`logging.Nop` for S3; `gcs/client` `TestSDKLogsNothing`), and the command turns azcore's off at startup
   (`TestAzureSDKLogSuppressed`).
 - **Identity and admission.** The resume identity is the inputs the listing was asked with (bucket or container,
   prefix, endpoint, region, addressing flags), not a resolver's route; each provider page lists its fields.
@@ -70,7 +71,9 @@ clients are described in [providers.md](providers.md) and the page of each provi
 
 **The failure vocabulary.** `objhttp.Normalize` computes one `*objhttp.Failure` per failed attempt, reachable
 through `errors.As`: transient, throttle and timeout signals, the HTTP status, the provider's code or reason, and a
-cause that has passed the provider's redaction boundary. Admission, counters, the limiter, retry, reporting and the
+cause that has passed the provider's redaction boundary. The shared vocabulary lives in `objhttp`, including
+`Counters`, `CredentialError`, `ExhaustedError`, `ErrSyntax` and `ErrInvalidPage`; clients do not re-export it.
+`objhttp.Label` supplies the factory's report label (`ClassOther` becomes an empty label). Admission, counters, the limiter, retry, reporting and the
 engine's requeue consume that value; exhaustion wraps it, and `errors.Is` still reaches the cancellation and
 invalid-page sentinels. The report's diagnostic labels are `auth`, `access_denied`, `throttle`, `timeout`, `parse`
 and `unsupported`, the ones [cli.md](../cli.md#run-report) documents; other errors keep their status and code
@@ -82,6 +85,113 @@ string follows, as the Java tool's `USER_AGENT_PREFIX` does: S3 through a build 
 SDK's, GCS by setting the header before the generated client's, Azure through azcore's telemetry policy
 (`TelemetryOptions.ApplicationID`, which azcore cuts to 24 bytes; a development token is 23). `TestUserAgent`,
 `TestCredentialsAndHeaders` and `TestServiceVersionPinned` pin it.
+
+## Retry policy and accounting
+
+Every client `Config` embeds `objhttp.Retry`: maximum attempts (default 9), base backoff (100 ms), maximum
+backoff (5 s), limiter and request-rate cap. Request timeout is separate; constructors use
+`source.DefaultRequestTimeout` (30 s) when it is unset. A built client embeds `*objhttp.Meter`, made by
+`NewMeter(cfg.Retry)`, which applies retry defaults and owns `Retry` plus the atomic `Tally Counters`.
+Do not copy a used meter. Clients pass `Retry` to `objhttp.Do` and `&Tally` to attempt accounting;
+`Answered()`, `Live() source.Requests` and `Counters() objhttp.Counts` read that same account. `Live` adds the
+limiter's current limit, and `Counters` adds limiter and rate activity.
+
+`objhttp.Activity` observes optional `Counters`, `Live` and `Answered` methods on the chosen client, whether
+built or supplied. It owns no retry policy or counters. Providers embed `objhttp.Observe(client)` and use
+`Activity.Store(set, first)` in their `Stats` method; an unsupported observation reads zero and does not
+store counters. Pool-size and Azure capped-wait probes, counter order and JSON report structs stay
+provider-owned.
+
+## Token waits
+
+`objhttp.WaitToken(ctx, ts, source, timeout, transient)` waits on `*tokensource.Shared` for GCS and Azure.
+A nil source needs no token. It returns `*objhttp.CredentialError` on failure, before a listing request is
+sent or counted. A wait whose context ends is transient and timed out; another error uses the provider's
+transient predicate and records a wrapped deadline as a timeout. The retry loop gives caller cancellation
+precedence over a credential-internal deadline. `objhttp.TransientStatus` shares only the credential HTTP
+predicate (status at least 500, 408 or 429); SDK error inspection and precedence stay in each client.
+S3 retains its AWS retrieval and signing path and its bearer-header wrapper.
+
+`tokensource.NewShared(src)` coalesces concurrent refreshes and caches tokens with `oauth2.ReuseTokenSource`.
+A source that already caches keeps its expiry margin. Canceling a wait leaves the one refresh running, so
+later waiters join it and no second refresh starts. The source's own exchange lifetime is separate from the
+attempt's wait; the [GCS provider page](providers/gcs.md) describes metadata refresh's timeout boundary.
+
+## Capture timing
+
+One `objhttp.Capture`, installed by `WithCapture`, belongs to one attempt and is never shared across
+goroutines. The Guard copies `URL` before sending, even when no response is delivered. `Status` and `Header`
+mean a response delivered upward through the Guard: they are set only after the body is bounded and a 2xx
+body passes validation. A body-read or validation failure therefore leaves status zero even if raw response
+headers arrived. This distinction keeps GCS body-deadline classification and Azure decoder-refusal detection
+aligned with what the SDK received. A non-2xx with a cut body is still delivered and retains its status.
+`Body` holds the validated 2xx bytes; `Replace`, when set by validation's owner, is the minimal envelope the
+SDK decodes instead. `TestCaptureDelivery` and `TestCaptureWithoutAnswer` in `source/objhttp` pin the timing.
+
+GCS uses the capture directly for SDK errors and success status. Azure retains its per-attempt `sent` state
+for `startFrom`, policy context, a scrubbed URL and decoder checks; S3 uses `Body` / `Replace` for its scanner.
+The captured URL is not a diagnostic redaction boundary: each client must sanitize it before retaining it
+in an error.
+
+## Pool construction
+
+`objhttp.Pool(workers, supplied, wrap)` returns HTTP clients. With no supplied client it clones
+`http.DefaultTransport` for each, retains the clone's TLS settings and sets only `ClientSessionCache` on
+its TLS configuration. Transports share that cache, set `MaxIdleConns` to 0 (no global idle cap) and
+`MaxIdleConnsPerHost` to 1,024. The size is `ceil(workers/16)`, clamped to 1..8: below a server's HTTP/2
+stream limit a single transport uses one connection. S3 calls `Pool(1, ...)[0]`; GCS rotates generated
+services; Azure rotates corresponding service and HTTP-client slices. Selection stays provider-owned.
+
+With a supplied HTTP client the pool is one copy of it, preserving its timeout and transport (the default
+transport when nil) and leaving the original unchanged. Every returned client refuses redirects. Each
+provider installs its Guard and SDK client over the returned transport; Azure also removes `Location`
+before `net/http` can parse it. GCS and Azure report `transport.pool_size`.
+
+## Request admission
+
+All three object-store providers build `objhttp.Admission.New(workers)` for their own clients, beside the
+engine's `keyrange.Policy`. The CLI enables the adaptive limiter by default (`--limiter=false` disables
+it); a library caller's zero `Admission` leaves it off. A supplied listing client owns its admission.
+`Admission.Off` supplies feature states for reporting; the range engine does not admit HTTP requests.
+Namespace admission (for example Azure's flat-namespace check) is a separate provider decision.
+
+`objhttp.Do` takes a limiter permit, then a rate token, before invoking each attempt: data pages, seed and
+structure probes, retries and requeues all use it. It releases the permit however the attempt ends, including
+a panic, and holds none during backoff. Lowering the limit stops new grants until in-flight attempts drain;
+it does not cancel requests already sent. Admission waits are excluded from latency samples.
+
+The limiter starts at the worker count. Its window has `clamp(4 * workers, 256, 4096)` slots, recording usable
+successes and throttle answers to attempts sent since the last cut. Unfilled slots count as successes.
+A throttle at or above 15 % of the window multiplies the limit by 0.7, floored at 1, and clears the window.
+A cut due at the floor changes neither the window nor its cut timestamp (`limiter.floor_throttles`).
+Answers to attempts sent before the cut cannot cut again (`limiter.cuts_suppressed.round_trip`); a throttle
+below the threshold is tolerated (`limiter.cuts_suppressed.tolerated`).
+
+On successful answers, growth adds one permit at most once per second, up to the worker count, while the
+window is below 7.5 % throttles and has filled since a cut, or after 10 s with no throttle answer.
+Three attempt timeouts in the 10 s timeout window freeze growth. An EWMA of successful attempt latency
+above twice its rolling-minimum baseline also freezes growth; the baseline re-floors every minute. During
+a latency freeze a +1 valve step is allowed at most every 30 s with more than `max(1, limit/32)` successes
+in that valve window. Timeouts end slow start and hold growth; they do not lower the limit.
+
+`swath diag list --limiter-slow-start` starts at `min(4, workers)` and doubles at paced growth steps until
+the worker count, the first cut or an attempt timeout. A tolerated throttle does not end the ramp, and the
+latency valve remains +1. Slow start is off by default. Counters `limiter.*` and
+`slow_start.{doubles,ramp_ns,end_limit}` distinguish engagement and brakes; feature `slow_start` distinguishes
+a disabled ramp from an enabled one that did not engage.
+
+`objhttp.Rate` (`--request-rate N`, disabled by default) spaces attempts with a one-token bucket refilled
+every `1/N` seconds. A canceled wait returns its token. `rate.*` and feature `request_rate` report it.
+Azure parses `Retry-After` and caps it at the request timeout; `Do` takes the larger of that wait and its
+jittered backoff for the receiving call. It does not pause the limiter or other callers. S3 and GCS do not
+extract `Retry-After`.
+
+The tuning evidence is S3-shaped synthetic listings and the simulated streams in `objhttp/limiter_test.go`:
+`TestLimiterToleratesRandomThrottles` covers random 1 % and 5 % backgrounds, and
+`TestLimiterPlateausUnderRateCap` covers rate caps. It does not establish fit for live S3, GCS or Azure
+throttling. [Issue 385](https://github.com/varveio/swath/issues/385) tracks per-provider validation and tuning
+gaps; its candidate rules are not implemented. Each provider page describes the signals it feeds this shared
+controller.
 
 ## S3 decoding
 
@@ -152,7 +262,6 @@ the code decides before the status, and a 500 is retried only when it is `Operat
 
 ## Measurements
 
-CPU per object, allocations and binary sizes of these clients against the hand-rolled clients they replaced, and the
-whole-process comparison that decided the adoption, are in
+CPU per object, allocations, binary sizes and whole-process comparisons are recorded in
 [measurements.md](../measurements.md#client-cpu-per-object-and-binary-size) and its
 [2026-11-09 section](../measurements.md#sdk-backed-clients-2026-11-09).

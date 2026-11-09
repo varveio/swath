@@ -29,13 +29,13 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page (SeekParquet GEO-1 recommends at most 1,024 key rows a page). The column index carries page bounds; header statistics would duplicate them. |
-| Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value: the 1,024-byte limit of the 2026-11-05 layout did that to any key or value over 1,024 bytes (filesystem paths and link targets). `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
+| Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value. Exact bounds therefore matter for long filesystem paths and link targets. `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
 | Row groups | byte target 8 MiB on the writer's `Size()` estimate, checked at page boundaries; ceiling 1,000,000 rows | served geometry; the estimate is the encoded payload, not a heap bound. |
 | Codec | zstd, klauspost `SpeedDefault` with entropy coding of all-literal blocks enabled | pure Go (`CGO_ENABLED=0`). The default wrapper skips entropy coding on all-literal blocks, which loses most of the gain on hex ETags. |
 | Codec states | one pool per router, shared by its writers: single-state zstd encoders made as concurrent page compressions need them, up to the encoders admitted (raised by `Router.Admit`), reused last-in first-out | a state keeps the history of the largest page it compressed (about 10.6 MiB once a page passes one 128 KiB zstd block, with zstd's lower encoder memory, which changes how the encoder allocates its history and scratch, not its window or matching: `TestLowerEncoderMemIsByteIdentical` compares 33 raw inputs, three patterns at eleven sizes up to 9 MiB, with and without it; it is evidence, not proof for every frame or reuse history, and exercises no schema). The 10.6 MiB and the 12 MiB priced are measured residency and allowance, not a bound the library guarantees. The spill frames' zstd encoders are separate and set apart: `order.spillEncoderOptions`, a 1 MiB window with the same lower-memory mode, about 1.5 MiB each ([ordering](ordering.md)); the Parquet codec keeps the default 8 MiB window, which its bytes (`parquetout.Recipe`) depend on, so a pool handed round in turn warms every state; output does not depend on the state (`EncodeAll` resets it). |
 | Writer admission | `parquetout.EncoderBytes(schema)`: the 8 MiB row group, a 1 MiB page buffer per column, 2.5× the key at its cap and 4× each column with `schema.Spec.MaxBytes`, and one codec state (12 MiB once a page passes one zstd block, else 2 MiB): 31.5 MiB for S3, 32.5 for GCS, 61 for a local path | the 12 MiB state, the 1 MiB column buffer and the 2.5× and 4× factors are measurements against klauspost/compress v1.19.1 (v1.20.3, which the seekparquet module requires, passes the heap gate and writes the same pages; not remeasured) and parquet-go v0.32.0 (live heap after GC across 24 pages a writer, random values at the longest lengths: one S3 writer at 1,024-byte keys 24.5 MiB, four 25.6 each; the filesystem schema with 4,096-byte keys and link targets 48 each, all with zstd's lower encoder memory), not values derived from the libraries: remeasure on an upgrade of either, and keep `TestWriterAdmissionCoversHeap` passing. The module's page intake (`WritePage`) borrows the values from the rows and copies nothing, so the price is the one swath's own writer had; remeasured on it (2026-11-08, `SWATH_HEAP_GATES=1`): one S3 writer 24.2 of 31.5 MiB, four 64.4 of 126, four local writers 137.4 of 244 with rows made a page at a time and 219.5 with all rows kept live (10 %). The price holds a margin over the measurements: four S3 writers 84 MiB of 126 priced (33 %); four local writers with binary 4,096-byte keys and link targets, 24 pages each, about 170 of 244 with rows made a page at a time and 216 with all 800 MB of rows kept live beside them, every admitted codec state warmed (12 %, the worst case measured). The margin is measured, not derived, and `TestWriterAdmissionCoversHeap` exercises it: both local arms run in the gate. A value is held to its column's `MaxBytes` (`schema.ErrValueTooLong`), so the widths priced are the widths written. |
 | Column parallelism | a page's columns may be encoded on several goroutines | used when fewer parts than encoders are open, so a one-part run uses every core. Output is byte-identical to serial encoding (tested). |
-| Key length | per schema (`schema.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | the key's column-index bounds are exact at any length (above); `TestKeyLimits` covers both. |
+| Key length | per schema (`schema.Info.MaxKeyBytes`): 1,024 bytes for S3 (contracts §6; a longer key is the typed `schema.ErrKeyTooLong`), no cap for filesystem paths | the key's column-index bounds are exact at any length (above); `TestKeyLimits` covers both. |
 | `sorting_columns` | every row group records `key` ascending (standard Parquet metadata) | SeekParquet RG-1; generic readers learn the order without the stamps; metadata only, rows already arrive sorted. |
 | `created_by` | `swath-go version <module version or devel> (build <revision>[-dirty])`, from the build itself (`internal/buildinfo`: the revision `build.sh` links in, else the toolchain's VCS stamp; shortened to 12 hex digits) | bytes are identical within a build; across builds only the recipe (`parquetout.Recipe`, `swath-go/parquet-r3`: r2 was format 2's stamps and shortened key bounds) is promised. A part a resume reproduces (claimed, never recorded) keeps the claimed part's own `created_by` and columns. |
 
@@ -129,7 +129,7 @@ abort closes every segment's queue unpublished.
 **The part limit.** A dataset has at most 100,000 parts (`part-00000` to `part-99999`: ordinals have five digits, `dataset.MaxParts`); at the defaults (64 MiB parts, about 30 bytes per row) it takes about 200 billion objects or 35 days of uninterrupted 30-second time cuts; in practice a small `--part-size` or `--part-rotation-max-rows` reaches it. The router refuses to open part 100,000
 (`dataset.ErrPartLimit`, checked when it would open the part) after the parts before it are published, so the
 journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
-(`TestRouterRefusesPartPastLimit`); a segment refused there stops waiting for that publication when the run is cancelled, and gives its encoder slot back (`TestSegmentPastLimitCancels`). `dataset.PartOrdinal` refuses a six-digit name.
+(`TestRouterRefusesPartPastLimit`); a segment refused there stops waiting for that publication when the run is canceled, and gives its encoder slot back (`TestSegmentPastLimitCancels`). `dataset.PartOrdinal` refuses a six-digit name.
 
 **The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) is a
 rotation target: a part open that long with rows is closed although not full (the router's ticker cuts only an
@@ -232,18 +232,35 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
-producer defines its schema beside its code. The S3, GCS and local producers bind it to the descriptor
-`go/reader` registers for its id (`schema.Bind`, `reader.Schema`), and `TestProducerSchemasGolden` pins those
-five. `Bind` also copies the spec's version roles (`reader.VersionSpec`: the version ID, latest or deleted-at and
-delete-marker columns) into `schema.Info.Versions` and checks them as the producer's package loads;
-`schema.BindVersions` derives their accessors (`ID`, `Latest`, the optional `DeleteMarker`), the one
-interpretation of version rows that the text output, the versions counts and the per-prefix totals share.
-`registry.Bind` resolves them once, when the provider opens its source, and panics on roles that do not define
-the rows (a producer's bug), so a malformed declaration is refused before the listing creates any journal,
-dataset or text file. No
-consumer binds `is_latest`, `is_delete_marker`, `time_deleted`, `version_id` or `generation` by name.
-`Info.Groups` stays the ordering property: a versions schema groups, grouped rows need not be versions. The Azure producer defines `swath/azblob-objects/v1` directly (`internal/source/azblob/schema.go`). The Parquet node is built
-from that list; `TestFooterMatchesSchema` checks the footer against a test schema with one column of every type.
+producer defines its schema beside its code. All producers bind their accessors to the specification
+`go/reader` registers for the schema id (`schema.Bind`, `reader.Schema`), which owns column order, names,
+types, nullability and key settings. This includes Azure's `reader.AzblobObjectsV1` binding in
+`internal/source/azblob/schema.go`; Azure keeps its accessors, `Delta` preferences, logical and heap accounting,
+and codec beside the provider. `azblob` `TestSchemaBinding` checks its reader contract and field behavior.
+`listing` `TestProducerSchemasGolden` pins the five S3, GCS and local schemas. The Parquet node is built from the bound
+columns; `parquetout` `TestFooterMatchesSchema` checks the footer against a test schema with one column of
+every type. `schema.NonEmpty` adapts a string accessor so the empty string is null; providers choose where
+that interpretation applies.
+
+### Version roles
+
+`reader.SchemaSpec.Versions` (`reader.VersionSpec`) declares the version ID, exactly one of latest or
+deleted-at, and an optional delete-marker column. `schema.Bind` copies the declaration into
+`schema.Info.Versions` and checks it against the producer accessors when the package loads.
+`schema.BindVersions` derives `ID`, `Latest` and optional `DeleteMarker` accessors: IDs are strings or signed
+64-bit integers formatted in decimal; latest is a required boolean or the absence of a nullable deleted-at
+timestamp. A present zero timestamp means deleted. Latest and delete-marker flags must be required booleans
+with accessors; missing, repeated or mistyped role columns are refused. A schema with roles must group keys.
+`Info.Groups` is the ordering property; grouped rows need not be versions.
+
+`registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer
+declaration before the listing creates a journal, dataset or text file. Generic lister consumers—text
+output, version counts and per-prefix totals—share this interpretation. They do not infer roles from names
+such as `is_latest`, `generation` or `time_deleted`. The reader module's typed decoders still bind named
+columns for their specific row contracts. `registry` `TestVersionRolesFollowDeclaration` and `listing`
+`TestVersionReportFollowsDeclaration` place contradictory conventional columns beside declared roles;
+`TestVersionRolesRefusedBeforeOutput` in `listing` checks refusal before output creation.
+
 The Parquet schema name is `swath_listing` for every schema. The schema ids, their grammar
 (`swath/<row-contract>/vN`) and their row contracts (columns, types, nullability, key encoding) are in
 [../dataset.md](../dataset.md#schema-registry).

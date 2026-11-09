@@ -19,7 +19,8 @@ const connWorkers, maxConns = 16, 8
 // second connection only at the server's stream limit (~100), so one
 // transport would carry every worker on one connection. Each is a clone
 // of http.DefaultTransport keeping up to 1,024 idle connections per host,
-// and all share one TLS session cache, so later connections resume.
+// and all share one TLS session cache, so later connections resume. Cloned
+// TLS settings are retained; only ClientSessionCache is replaced.
 // Supplied: a copy of it, alone, over its transport (http.DefaultTransport
 // when nil). No client follows a redirect, a supplied one included: a
 // redirect is an answer, since the resume identity freezes where requests

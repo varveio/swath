@@ -303,7 +303,8 @@ func (p *Engine[P]) ID(i int) counters.ID { return counters.ID(len(Counters) + i
 func (p *Engine[P]) Set() *counters.Set { return p.c }
 
 // Restart continues after the last published key (source.Resumable).
-// It must be called before execution.
+// It must be called before execution. The engine owns resume state; a
+// provider can promote this method without keeping a second copy.
 func (p *Engine[P]) Restart(after string) error {
 	p.opt.Resume = &Resume{After: after}
 	return nil

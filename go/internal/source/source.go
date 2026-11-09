@@ -14,15 +14,16 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 )
 
-// ErrProtocol marks a service answer that breaks the listing contract in a
-// way the engine cannot recover from (keys out of order or repeated, a
+// ErrProtocol marks a violation of the listing contract that the engine
+// cannot recover from (keys out of order or repeated, a
 // repeated continuation token, a page outside its range): the run fails,
 // and its journal marks it unresumable, since a resume would walk back into
 // the same service.
 var ErrProtocol = errors.New("protocol violation")
 
-// ErrUnsupported marks a source the tool refuses before any request (an
-// S3 directory bucket): the caller's to change.
+// ErrUnsupported marks a source the tool refuses before listing (an S3
+// directory bucket or an Azure namespace that is not positively flat).
+// Admission may make requests to establish whether the source is supported.
 var ErrUnsupported = errors.New("unsupported source")
 
 // Violation marks err as a protocol violation (errors.Is ErrProtocol),

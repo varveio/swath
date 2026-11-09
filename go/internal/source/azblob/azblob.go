@@ -89,8 +89,8 @@ type Options struct {
 	Workers int
 	Warn    func(string) // one-time warnings for the user; may be nil
 	Client  API          // optional; built from the options above when nil
-	// AllVersions is refused: versions, snapshots and deleted blobs are a
-	// later lane.
+	// AllVersions is refused: versions, snapshots and deleted blobs are
+	// not supported.
 	AllVersions bool
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy

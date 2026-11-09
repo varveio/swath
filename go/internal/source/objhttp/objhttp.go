@@ -3,8 +3,9 @@
 
 // Package objhttp is the HTTP support the object-store listing clients
 // share: the retry loop (attempts, full-jitter backoff, exhaustion), the
-// failure classes and transport classification, the client counters and
-// route canonicalization. What a service's answers mean (status codes,
+// failure vocabulary and transport classification, retry policy and meters,
+// token waits, response guards and captures, transport pools and route
+// canonicalization. What a service's answers mean (status codes,
 // error codes and reasons), its payload parsing and its authentication stay
 // in each client.
 package objhttp
@@ -350,8 +351,9 @@ type Counts struct {
 	Retries   int64 `json:"retries"`   // attempts repeated after a retryable failure
 	Throttles int64 `json:"throttles"` // attempts answered with a throttle, retried or not
 	Timeouts  int64 `json:"timeouts"`  // attempts past the per-request timeout, retried or not
-	// ParseFailures counts 200 responses whose body did not parse (a cut or
-	// garbled body); they are retried like transport faults, never dropped.
+	// ParseFailures counts 200 responses refused as ErrSyntax. They are
+	// retried, never dropped. A failed body read is classified separately
+	// from a malformed document delivered to the parser.
 	ParseFailures int64 `json:"parse_failures"`
 	// InflightMax is the most attempts in flight at once (admitted, from
 	// send to body read); InflightNs sums their time in flight, so

@@ -66,8 +66,8 @@ type Config struct {
 	Endpoint string // JSON API base; default DefaultEndpoint
 	// Anonymous sends no credentials, whatever the environment holds.
 	Anonymous bool
-	// CredentialsFile is a service-account or authorized-user JSON file;
-	// else Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
+	// CredentialsFile is a Google credential JSON file loaded by the
+	// pinned OAuth library; else Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
 	// gcloud's file, the metadata server).
 	CredentialsFile string
 	UserProject     string        // billed project for a requester-pays bucket

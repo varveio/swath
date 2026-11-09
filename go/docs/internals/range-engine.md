@@ -43,14 +43,17 @@ sample whatever its length (its furthest folder is the pivot). Its tests (`inter
 API over a sorted key slice (`keyrange/keyrangetest`, with the fixture and hostile keyspaces).
 
 **Rules** (the generic contracts are in [contracts.md](contracts.md)): a range `(a, b]`
-lists `a < k ≤ b`, and its right neighbour starts after `b` (the boundary belongs to the left); a synthesized
+lists `a < k ≤ b`, and its right neighbor starts after `b` (the boundary belongs to the left); a synthesized
 pivot is valid UTF-8, strictly between its bounds and adds no code point from the unsafe set (safe pivots);
-keys are at most 1,024 bytes (`schema.ErrKeyTooLong`).
+synthesized pivots are at most 1,024 bytes. Row key limits belong to the bound schema
+(`schema.ErrKeyTooLong`), not the engine; Azure permits longer names.
 
 **Paging.** A range is `(lo, hi]`: `lo = ""` is ⊥, the open frontier has `hi = ⊤`. The first page starts
 after `lo`, later pages follow the continuation token. Keys past `hi` are trimmed (`overfetch_keys`); a page
-whose last key equals `hi` ends the range without another request; a page that is not truncated ends it. A truncated
-page without a token, a truncated page with no key in range, or a key not after its predecessor is an error.
+whose last key equals `hi` ends an ungrouped range without another request; a page that is not truncated
+ends it. A truncated page without a token or a descending/repeated key is an error (group mode's repeated
+keys are described below). Empty continuing pages follow their tokens under the bounded cycle and
+progress checks in [contracts.md](contracts.md#execution-and-recovery).
 
 **What is trusted.** swath takes a page that is not truncated as the true end of its range: every key the
 service holds after the page's start, up to the range's end, was on that page. Nothing in one reply can show
@@ -71,7 +74,7 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
 - *The first data page.* The first wave also carries the scope's first data page (no delimiter, from the
   start a first tile would use; `Options.SeedFirstPage`, which the command's policy sets with the seed). When it
   is not truncated the scope fits in one page: the seed emits it, the delimiter requests still in flight are
-  cancelled, and the seed stops there with no tile (`seed.stop.one_page`, `seed.first_page_keys`), one round
+  canceled, and the seed stops there with no tile (`seed.stop.one_page`, `seed.first_page_keys`), one round
   trip in all, as `--seed=false` (red team: 100 and 1,000 keys took 4x the `--seed=false` wall, 70 requests per
   1,000 keys on 100). A truncated page is discarded (`seed.first_page_discarded`, one request more) and the
   tiles are the seed's alone, from the scope's start. Emitting it and starting the first tile after it left
@@ -216,8 +219,7 @@ children, 1.82 requests per 1,000 keys). One estimate serves both the rank and t
   6M-key slice). A page of fewer than two keys gives no estimate (`split.estimate_none`).
 - *The rank* is by estimated remainder: the open frontier first, then the larger remainder `(c, hi]` by the
   range's last page, ranges whose page could not read their bound (+∞, a bound in another folder) above every
-  finite estimate, and age within a class and on ties: a strict total order (`TestRank`), as a cyclic one gave
-  every range a rank of one and with one idle worker none split. A child starts with its share of the parent's estimate, `(c, m]` or
+  finite estimate, and age within a class and on ties: a strict total order (`TestRank`). A child starts with its share of the parent's estimate, `(c, m]` or
   `(m, hi]`, until its own first page; without either, the keys it has listed. The keys listed alone reset in
   every child, so a rank by them is a rank by age, blind to an upper child holding most of a remainder.
 
@@ -282,7 +284,7 @@ The coarsest level with a folder inside `(c, hi)` gives the range its boundaries
 later split decision, if the result has arrived, a bounded range pivots on the median boundary inside
 `(c, hi)`, or the furthest when that level's page was full; the policy's pivot is used otherwise. A split never
 waits for a probe (`structure.late` counts decisions taken while one was in flight). A probe still in flight
-when its range's `Expand` returns is cancelled. Children inherit the boundaries inside their bounds, so one
+when its range's `Expand` returns is canceled. Children inherit the boundaries inside their bounds, so one
 probe serves several generations of splits, and they inherit the count of consecutive probes that found no
 folder at any level: eight in a row along a range's ancestry stop probing there and below
 (`structure.suppressed`; `structure.suppressed_inherited` when the eight were all an ancestor's), so a flat
@@ -379,8 +381,17 @@ generation and the anchor its upper child carries.
 byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
 then marked incomplete).
 
-**Resume.** `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root is
-one range `(K, ⊤]`, split as on a fresh run; S3 is `source.Resumable` through it ([durability.md](durability.md)).
+## Resume
+
+`func (*Engine[P]) Restart(after string) error` sets the engine's `Options.Resume` and returns `nil`.
+Call it before execution (`Root` or `Expand`). S3, GCS and Azure promote this method; they keep no separate
+resume state in provider options. The registered source exposes it through `keyrange.Registered`.
+
+`Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root
+is one range `(K, ⊤]`, split as on a fresh run. The engine chooses K's longest accepted start bound and drops
+rows through K. Group mode drops every version of K, across pages. `source` `TestRegisteredRestart` checks
+remaining keys and complete version groups through registry opening; engine resume and crash tests cover
+range tiling and recovery ([durability.md](durability.md)).
 
 ## Group mode (`groups.go`)
 

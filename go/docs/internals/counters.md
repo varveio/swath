@@ -43,8 +43,10 @@ nanoseconds, up to 2^40 ns; one atomic per bucket) and reported as three derived
 above it. Attempts of 2^40 ns (about 18 min 20 s) or longer land in one open-ended bucket past the 156 finite
 ones, counted by `inflight.latency_overflow`; a percentile that falls there reads 9223372036854775807 (the
 largest gauge value), never the last finite edge, which would read as a bound (`TestLatencySaturation`). The
-buckets themselves are not counters: 157 rows would swamp the report for the four numbers a reader uses. Every attempt is timed from send to body read, failed ones included (a timed-out attempt lands at
-`--request-timeout`).
+buckets themselves are not counters: 157 rows would swamp the report for the four numbers a reader uses. The built client's [`objhttp.Meter`](clients.md#retry-policy-and-accounting) owns these readings.
+Attempt timing starts after credential readiness and includes the SDK call and decoding, failed calls
+included. Admission feedback measures the attempt callback, including credential waits, and excludes
+limiter/rate waits ([request admission](clients.md#request-admission)).
 
 Derived readings of the range engine's counters: the mean leaf depth is `split.leaf_depth_sum` /
 `split.leaves`; the work a frontier split hands out is `split.frontier_handout_keys` /

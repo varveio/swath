@@ -23,7 +23,7 @@ every provider shares (the contract, the registry and the capabilities).
 | Page | What it covers |
 |---|---|
 | [providers/local.md](providers/local.md) | the local filesystem (`internal/source/localfs`): engines, metadata tiers, chunked directories |
-| [providers/s3.md](providers/s3.md) | S3 (`internal/source/s3`): credentials, the adaptive limiter, versions, the schema, the range engine's page fetch |
+| [providers/s3.md](providers/s3.md) | S3 (`internal/source/s3`): credentials, overload signals, versions, the schema, the range engine's page fetch |
 | [providers/gcs.md](providers/gcs.md) | GCS (`internal/source/gcs`): credentials, generations, the schema, route parity |
 | [providers/azblob.md](providers/azblob.md) | Azure Blob (`internal/source/azblob`): credentials, admission, the byte-order adapter, the schema |
 | [clients.md](clients.md) | the list clients of the object-store providers: one per provider on the vendor's SDK service client, and what swath keeps around it |
@@ -33,7 +33,7 @@ every provider shares (the contract, the registry and the capabilities).
 
 ```go
 type Emitter[R, P any] interface {
-    Rows(rows []schema.Row[P]) error // next rows of this range, ascending; the slice now belongs to the caller
+    Rows(rows []schema.Row[P]) error // next rows of this range, ascending; ownership passes to the emitter
     Child(r R) error                 // a child range whose whole subtree sorts here
 }
 type Provider[R, P any] interface {
@@ -42,14 +42,10 @@ type Provider[R, P any] interface {
 }
 ```
 
-`P` is the provider's row payload (`fs.Entry`, `s3.Object`), bound to columns by its `schema.Schema[P]`, which
-lives beside the provider. A provider with a versions listing (`--all-versions`) binds a versions schema id
-(`schema.Bind`) and declares nothing more: the spec in `go/reader` names the schema's version roles (version ID,
-latest or deleted-at, delete marker; `reader.VersionSpec`), and the text output, versions counts and per-prefix
-totals read the rows through them (`schema.BindVersions`), never through the provider or its registration. A new
-versions schema adds its spec there with its roles: a future Azure one would declare its string identifier and
-an explicit latest boolean, and no delete-marker role unless its rows are delete markers (neither a snapshot nor
-a soft-deleted blob is one).
+`P` is the provider's row payload (`localfs.Entry`, `s3.Object`), bound to columns by its `schema.Schema[P]`, which
+lives beside the provider. A versions listing binds a schema with declared
+[version roles](parquet-output.md#version-roles); generic lister consumers read those roles rather than
+provider-specific column names.
 
 A range is a provider-defined value. `Expand` emits its content in ascending key order: every key of a child's
 subtree sorts after everything emitted before the child and before everything emitted after it. `Expand` may
@@ -86,14 +82,15 @@ it did not name or a value of another type: a programming error, not a dropped f
 owned by those providers, so it is accepted for any of their roots and refused for any other (a local tree).
 A group declares its own `Operational` flags, `Hints` and `URLs` (flags whose value a recorded command line
 redacts when it carries user information, `registry.RedactArgv`) once, not per provider. Two groups exist.
-The store group (`source.StoreGroup`, value `*source.Store`), which S3, GCS and Azure Blob name: `--endpoint`
+The store group (`source.StoreGroup`, value `*source.Store`), named by S3, GCS and Azure Blob, supplies `--endpoint`
 (the provider's own service replaced; part of each provider's resume identity, `endpoint` with its canonical
-route), `--request-timeout` (default 30 s) and `--anonymous` (the only way a request goes unauthenticated); the
-last two are operational. The range engine's (`keyrange.Group`, value `*keyrange.Common`: a `keyrange.Policy`,
-an `objhttp.Admission` and `--all-versions`): the policy flags `--seed`, `--structure`, `--slow-split`,
-`--floors`, `--sequential`, `--max-keys`, `--page-size` and the admission flags `--limiter`,
-`--limiter-slow-start`, `--request-rate`; all but `--limiter`, `--request-rate` and `--all-versions` diagnostic,
-registered with `diag` only. A provider's own flags keep its prefix (`--gcs-credentials`, `--azblob-sas`; S3's
+route), `--request-timeout` and `--anonymous` (the only way a request goes unauthenticated); the
+last two are operational.
+
+The range engine's group (`keyrange.Group`, value `*keyrange.Common`) holds a `keyrange.Policy`,
+an `objhttp.Admission` and version-mode selection. `keyrange.Flags` registers the policy comparisons and
+slow start only when `diag` is true; the ordinary help shows the supported controls. The generated CLI
+help ([cli.md](../cli.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials`, `--azblob-sas`; S3's
 are unprefixed, the Java tool's names). Each provider's `Open` reads the group values into its options. A test
 or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
 
@@ -113,13 +110,13 @@ A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: 
 for `P`), its schema `Info`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
 against the rows ordered). Optional interfaces, each found by a type assertion:
 
-| Interface | Meaning | S3 | Azure Blob | fs |
-|---|---|---|---|---|
-| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `CanonicalRoute`), region, path style, fips, dual-stack, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
-| `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | `(K, ⊤]` | – |
-| `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
-| `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |
-| `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `azblob`, coverage | `listing` |
+| Interface | Meaning | Object stores | Local filesystem |
+|---|---|---|---|
+| `Identified` | Source-owned resume identity fields and their canonical forms | Each provider page owns its identity fields | – |
+| `Resumable` | `Restart(after)` before `Root` | Promoted from the engine ([resume](range-engine.md#resume)) | – |
+| `Capable` | Per-instance capabilities; an instance may decline resume despite implementing it | S3, GCS and Azure | – |
+| `Excluder` | Leaves an output directory inside its root out after output preparation | – | yes |
+| `Reporter` | Named stats, text line, errors, metadata tier, coverage and run-summary activity | `s3`, `gcs`, `azblob` | `listing` |
 
 The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
 (`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
@@ -127,10 +124,10 @@ The other optional interfaces are the live run's: `Live` (`Answered`), `Advancin
 are listed once, as `keyrange.Registered` (with `Listed`): its opened source embeds that interface set to the
 provider, beside the `registry.Bound` of the same provider, so the methods are promoted and nothing else of the
 provider is (not its `Root`, `Expand`, `Stats`, `Options` or counter `Set`); a provider that lacks one fails to
-compile there, where an absent method would otherwise silently turn its capability off. The provider, not its
-`Engine`, satisfies it: `Restart` also records the resume in the provider's options, and `Answered`, `Requests` and
-`Faults` are its client's, read through an `objhttp.Activity` the provider embeds, observed once the client is
-chosen (each part reads zero where a supplied client does not count it). What an object store's `register.go`
+compile there, where an absent method would otherwise silently turn its capability off. The provider satisfies it by composing the engine's methods, including
+[engine-owned restart](range-engine.md#resume), with the client's request activity through
+[`objhttp.Activity`](clients.md#retry-policy-and-accounting). Set `Registered: p`, not `p.Engine`: the engine
+alone does not supply the client's `Answered`, `Requests` or `Faults`. What an object store's `register.go`
 writes is then its flags, `open` (the options, the provider, the opened struct), and the provider's own methods:
 `Locator`, `Identity`, `Capabilities` (whether this instance can resume), `Report`, `Tariff` where it has one,
 and a `var _` block asserting the opened type's whole set per row type (`registry.Source`, `keyrange.Registered`,
@@ -140,6 +137,48 @@ through `registry.Lookup` and checks the interfaces and capabilities.
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
 like every run with an output. `swath resume` on it is an error.
 
+## Adding a provider
+
+The runtime integration is one directory under `internal/source/` and one blank import in `cmd/swath`.
+The directory holds the provider's range and payload types, constructor and options, schema accessors and
+spill codec, page mapping, URL parsing, identity and reporting, tests and fixtures. An object store also
+holds its `client/` SDK adapter and any service-specific ordering adapter. A filesystem provider implements
+its own expansion instead of using the range engine.
+
+Its `register.go` registers the factory described above; writes its own flag declarations and copies the
+shared group values into its explicit library options in `open`; constructs the provider; and binds the
+opened source with `registry.Bind`. A range-engine source embeds `keyrange.Registered` set to that same
+provider. The opened type supplies `Locator`, `Identity`, `Capabilities`, `Report` and, where known,
+`Tariff`, with compile-time interface assertions for each row type. The factory declares classification
+(`objhttp.Label` for the object stores), encoder admission, prefix helpers, root redaction, secrets,
+operational flags, help hints and root usage as applicable. Command dispatch, scheme lists, help, flag
+ownership, resume overrides and argument redaction derive from registration.
+
+These integrations still require work outside the provider directory:
+
+| Touch point | When needed |
+|---|---|
+| `cmd/swath/main.go` | The blank import that registers the provider. The command's spelling guard discovers this roster; it needs no second provider import. |
+| `reader/schema.go` | A public dataset schema specification, including version roles when applicable. A directly declared producer schema can list without reader support. |
+| `reader/metadata.go` | Schema-to-source mapping in `sourceKinds` and identity policy in `acceptSource` / `AcceptWholeSource`. |
+| `reader/rows.go` | Current-object projection in `objectColumns` and any new typed row decoder. |
+| `dataset_schema.py`, `verify.py` | Independent schema and verifier support. |
+| `cmd/swath/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
+| `internal/source/registered_test.go` | Central registration, interface, restart, locator and client-reporting coverage. |
+| `internal/listing/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
+| `go.mod`, `go.sum` | Additional SDK dependencies, if needed. |
+
+Shared help in `internal/source/flags.go` and `internal/source/keyrange/flags.go` contains provider examples;
+updating them is an optional wording change. Documentation and generated help blocks also need review.
+No command branch or pipeline import of the provider is needed.
+
+The three object stores compose `source.StoreGroup`, `keyrange.Group`, `keyrange.Engine` and `Registered`,
+[`objhttp` client plumbing](clients.md), and the [schema bindings](parquet-output.md#schemas) and
+[payload codec helpers](ordering.md#payload-delta-codec). Explicit provider ownership remains important:
+credential selection and warnings, endpoint grammar and identity, namespace admission, accepted bounds,
+wire request and row mapping, status/code precedence, decoding checks, report shape, pool-size probes and
+pricing. The shared helpers do not choose these policies.
+
 ## Provider capabilities
 
 What a provider must state about itself (built: `source.Capable` with `Resume`, `Seek` and `RankOracle`,
@@ -148,11 +187,13 @@ What a provider must state about itself (built: `source.Capable` with `Resume`, 
 - **Order:** output is unsigned byte order; a provider whose native order differs sorts or partitions inside
   itself; there are no per-range comparators.
 - **Bounds:** explicit bound inclusivity, as S3's `(lo, hi]`.
-- **Bounded cost:** one `Rows` call has a bounded cost; no unbounded in-memory directory or page.
+- **Bounded batches:** stream rows in batches; the order stage splits large `Rows` calls into publish
+  batches. Provider staging sits outside that budget: object-store clients cap response bodies, while the
+  filesystem reads and sorts a directory's names before handing out chunks ([local.md](providers/local.md)).
 - **Restart:** start after a key; the journal stores no provider state. A provider that can only replay
   tokens must re-list to the key or declare `Capabilities.Resume` false.
-- **Disposal:** a cancelled run releases every queued range's resources: the order stage disposes ranges it
+- **Disposal:** a canceled run releases every queued range's resources: the order stage disposes ranges it
   never expands, including children an `Expand` emitted before failing (`Child` takes ownership even when it
   returns an error). A range a worker has taken is the provider's: its `Expand` releases it however it ends,
-  a return on an already-cancelled context included. Filesystem chunks release their shared directory
+  a return on an already-canceled context included. Filesystem chunks release their shared directory
   descriptor both ways (`TestCancelReleasesChunkFDs`, `TestCancelledChunkReleasesItsFD`).
