@@ -243,9 +243,9 @@ func buildKeys(prefix string, sc *scratch) {
 // sortEntries sorts a directory's entries by key, in parallel for a large
 // directory, and reports whether it did so in parallel.
 func sortEntries(plen int, sc *scratch) bool {
-	runs := min(runtime.GOMAXPROCS(0), len(sc.ents)/sortRunMin)
-	if len(sc.ents) < parallelSortMin || runs < 2 {
-		runs = 1
+	runs := 1
+	if len(sc.ents) >= parallelSortMin { // GOMAXPROCS(0) takes the scheduler lock: not per small directory
+		runs = max(1, min(runtime.GOMAXPROCS(0), len(sc.ents)/sortRunMin))
 	}
 	sortRuns(plen, sc, runs)
 	return runs > 1

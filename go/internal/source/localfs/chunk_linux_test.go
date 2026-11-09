@@ -60,9 +60,9 @@ func TestCancelledChunkReleasesItsFD(t *testing.T) {
 	}
 }
 
-// TestStatCountRaisesProcsAndRestores: a stat-tier count runs with
-// countProcsFactor processors per CPU (at most the workers), records it,
-// and restores GOMAXPROCS; a names-tier count leaves it alone.
+// TestStatCountRaisesProcsAndRestores: a count runs with countProcsFactor
+// processors per CPU at a stat tier and namesCountProcsFactor at the names
+// tier (at most the workers), records it, and restores GOMAXPROCS.
 func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "f"), nil, 0o644); err != nil {
@@ -83,7 +83,7 @@ func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 		}
 		want := int64(2 * countProcsFactor)
 		if fields == Names {
-			want = 0
+			want = 2 * namesCountProcsFactor
 		}
 		if got := src.(*opened).p.Stats().CountProcs; got != want {
 			t.Fatalf("%s: count_procs %d, want %d", fields, got, want)

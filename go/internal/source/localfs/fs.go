@@ -74,7 +74,7 @@ type Stats struct {
 	Chunks         int64    `json:"chunks"`                // large-directory chunks statted in parallel
 	ParallelSorts  int64    `json:"parallel_sorts"`        // large directories whose entries were sorted in parallel runs
 	Presized       int64    `json:"presized"`              // large directories whose buffers were sized from st_size
-	CountProcs     int64    `json:"count_procs,omitempty"` // GOMAXPROCS a stat-tier count ran with, when raised (opened.Run)
+	CountProcs     int64    `json:"count_procs,omitempty"` // GOMAXPROCS a count ran with, when raised (opened.Run)
 	Samples        []string `json:"error_samples,omitempty"`
 }
 
