@@ -75,81 +75,80 @@ func TestUserAgent(t *testing.T) {
 // routeOf is a request URL's route: scheme, host and escaped path.
 func routeOf(u *url.URL) string { return u.Scheme + "://" + u.Host + u.EscapedPath() }
 
-// TestRequestURLs: for every endpoint form the provider supports, every
-// request goes to the URL the table names (scheme, host and escaped path):
-// the first page, a retried attempt, a continuation and a versions page;
-// the query carries the listing's parameters, encoding-type=url included.
-// The requests are recorded under the Guard. A FIPS region alias is the
-// SDK's to resolve: it sends to the region's FIPS host.
+// TestRequestURLs: the endpoint options swath maps reach the SDK, and the
+// request goes where the provider's recorded identity says it does
+// (register.go endpointCanonical): spellings that share one identity send
+// to one URL, and spellings it keeps apart send to different ones. A
+// virtual-host endpoint keeps its path byte for byte (/s3 and /s3/ are two
+// request paths); path-style and a pathless endpoint fold one trailing
+// slash; escapes and dot segments are sent as given. Recorded under the
+// Guard.
 func TestRequestURLs(t *testing.T) {
 	s3test.NoCredentials(t)
 	for _, c := range []struct {
-		name   string
-		cfg    Config
-		bucket string
-		route  string
+		name  string
+		cfg   Config
+		route string
 	}{
-		{"default endpoint", Config{Region: "eu-west-1"}, "bkt", "https://bkt.s3.eu-west-1.amazonaws.com/"},
-		{"dotted bucket", Config{Region: "us-east-1"}, "a.b", "https://s3.us-east-1.amazonaws.com/a.b"},
-		{"path-style", Config{Region: "us-east-1", PathStyle: true}, "bkt", "https://s3.us-east-1.amazonaws.com/bkt"},
-		{"custom IP endpoint", Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:9000"}, "bkt", "http://127.0.0.1:9000/bkt"},
-		{"custom IPv6 endpoint", Config{Region: "us-east-1", Endpoint: "http://[::1]:9000"}, "bkt", "http://[::1]:9000/bkt"},
-		{"custom endpoint with a path", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/"}, "bkt", "https://bkt.minio.example/s3/"},
-		// Virtual-host addressing keeps the endpoint's path as given: /s3
-		// and /s3/ are two request paths (and so may be two namespaces).
-		{"custom endpoint with a path, no slash, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3"}, "bkt",
-			"https://bkt.minio.example/s3"},
-		{"custom endpoint, no path, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example"}, "bkt", "https://bkt.minio.example/"},
-		{"custom endpoint, root path, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example/"}, "bkt", "https://bkt.minio.example/"},
-		{"custom endpoint with a path, path-style", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/", PathStyle: true}, "bkt",
-			"https://minio.example/s3/bkt"},
-		{"custom endpoint with a path, no slash", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3", PathStyle: true}, "bkt",
-			"https://minio.example/s3/bkt"},
-		{"custom endpoint with an escaped path", Config{Region: "us-east-1", Endpoint: "https://minio.example/a%20b/", PathStyle: true}, "bkt",
-			"https://minio.example/a%20b/bkt"},
-		{"custom endpoint with dot segments", Config{Region: "us-east-1", Endpoint: "https://minio.example/x/../y/", PathStyle: true}, "bkt",
-			"https://minio.example/x/../y/bkt"},
-		{"FIPS", Config{Region: "us-gov-west-1", FIPS: true}, "bkt", "https://bkt.s3-fips.us-gov-west-1.amazonaws.com/"},
-		{"dual-stack", Config{Region: "eu-west-1", DualStack: true}, "bkt", "https://bkt.s3.dualstack.eu-west-1.amazonaws.com/"},
-		{"FIPS and dual-stack", Config{Region: "us-east-1", FIPS: true, DualStack: true}, "bkt", "https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/"},
-		{"cn-north-1", Config{Region: "cn-north-1"}, "bkt", "https://bkt.s3.cn-north-1.amazonaws.com.cn/"},
-		{"FIPS alias fips-us-east-1", Config{Region: "fips-us-east-1"}, "bkt", "https://bkt.s3-fips.us-east-1.amazonaws.com/"},
-		{"FIPS alias us-east-1-fips", Config{Region: "us-east-1-fips"}, "bkt", "https://bkt.s3-fips.us-east-1.amazonaws.com/"},
+		{"region", Config{Region: "eu-west-1"}, "https://bkt.s3.eu-west-1.amazonaws.com/"},
+		{"path-style", Config{Region: "us-east-1", PathStyle: true}, "https://s3.us-east-1.amazonaws.com/bkt"},
+		{"FIPS and dual-stack", Config{Region: "us-east-1", FIPS: true, DualStack: true}, "https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/"},
+		{"virtual-host, path with a slash", Config{Endpoint: "https://minio.example/s3/"}, "https://bkt.minio.example/s3/"},
+		{"virtual-host, path without a slash", Config{Endpoint: "https://minio.example/s3"}, "https://bkt.minio.example/s3"},
+		{"virtual-host, no path", Config{Endpoint: "https://minio.example"}, "https://bkt.minio.example/"},
+		{"virtual-host, root path", Config{Endpoint: "https://minio.example/"}, "https://bkt.minio.example/"},
+		{"path-style, path with a slash", Config{Endpoint: "https://minio.example/s3/", PathStyle: true}, "https://minio.example/s3/bkt"},
+		{"path-style, path without a slash", Config{Endpoint: "https://minio.example/s3", PathStyle: true}, "https://minio.example/s3/bkt"},
+		{"path-style, escaped path", Config{Endpoint: "https://minio.example/a%20b/", PathStyle: true}, "https://minio.example/a%20b/bkt"},
+		{"path-style, dot segments", Config{Endpoint: "https://minio.example/x/../y/", PathStyle: true}, "https://minio.example/x/../y/bkt"},
 	} {
-		rec := &recorder{fail: 1}
+		rec := &recorder{}
 		cfg := c.cfg
-		cfg.Anonymous, cfg.HTTPClient, cfg.MaxAttempts = true, &http.Client{Transport: rec}, 2
-		cl := newTest(t, cfg)
-		ctx := context.Background()
-		// A 503, then the first page: the retried attempt.
-		if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: c.bucket, Prefix: "p/", StartAfter: "p/a b", MaxKeys: 7, FetchOwner: true}); err != nil {
+		if cfg.Region == "" {
+			cfg.Region = "us-east-1"
+		}
+		cfg.Anonymous, cfg.HTTPClient = true, &http.Client{Transport: rec}
+		if _, err := newTest(t, cfg).ListObjectsV2(context.Background(), &ListInput{Bucket: "bkt"}); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: c.bucket, ContinuationToken: "1/tok+==", Delimiter: "/"}); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
+		if got := routeOf(rec.urls[0]); got != c.route {
+			t.Errorf("%s: request to %s, want %s", c.name, got, c.route)
 		}
-		if _, err := cl.ListObjectVersions(ctx, &VersionsInput{Bucket: c.bucket, KeyMarker: "k%", VersionIDMarker: "null"}); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if len(rec.urls) != 4 {
-			t.Fatalf("%s: %d requests", c.name, len(rec.urls))
-		}
-		for i, u := range rec.urls {
-			if routeOf(u) != c.route {
-				t.Errorf("%s: request %d to %s, want %s", c.name, i, u, c.route)
+	}
+}
+
+// TestRequestOptions: each listing input swath sets reaches its query
+// parameter, encoding-type=url on every request (the scanner decodes the
+// keys once), and an unset input is absent.
+func TestRequestOptions(t *testing.T) {
+	s3test.NoCredentials(t)
+	rec := &recorder{}
+	cl := newTest(t, Config{Region: "us-east-1", Anonymous: true, HTTPClient: &http.Client{Transport: rec}})
+	ctx := context.Background()
+	if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: "bkt", Prefix: "p/", StartAfter: "p/a b", MaxKeys: 7, FetchOwner: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: "bkt", ContinuationToken: "1/tok+==", Delimiter: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.ListObjectVersions(ctx, &VersionsInput{Bucket: "bkt", KeyMarker: "k%", VersionIDMarker: "null"}); err != nil {
+		t.Fatal(err)
+	}
+	inputs := []string{"prefix", "start-after", "max-keys", "fetch-owner", "continuation-token", "delimiter", "key-marker", "version-id-marker"}
+	for i, want := range []map[string]string{
+		{"list-type": "2", "encoding-type": "url", "prefix": "p/", "start-after": "p/a b", "max-keys": "7", "fetch-owner": "true"},
+		{"list-type": "2", "encoding-type": "url", "continuation-token": "1/tok+==", "delimiter": "/"},
+		{"versions": "", "encoding-type": "url", "key-marker": "k%", "version-id-marker": "null"},
+	} {
+		q := rec.urls[i].Query()
+		for k, v := range want {
+			if !q.Has(k) || q.Get(k) != v {
+				t.Errorf("request %d: query %s, want %s=%q", i, rec.urls[i].RawQuery, k, v)
 			}
 		}
-		for i, want := range []map[string]string{
-			{"list-type": "2", "encoding-type": "url", "prefix": "p/", "start-after": "p/a b", "max-keys": "7", "fetch-owner": "true"},
-			{"list-type": "2", "encoding-type": "url", "prefix": "p/", "start-after": "p/a b", "max-keys": "7", "fetch-owner": "true"},
-			{"list-type": "2", "encoding-type": "url", "continuation-token": "1/tok+==", "delimiter": "/", "start-after": ""},
-			{"versions": "", "encoding-type": "url", "key-marker": "k%", "version-id-marker": "null"},
-		} {
-			q := rec.urls[i].Query()
-			for k, v := range want {
-				if q.Get(k) != v || q.Has(k) != (v != "" || k == "versions") {
-					t.Errorf("%s: request %d: query %s, want %s=%q", c.name, i, rec.urls[i].RawQuery, k, v)
-				}
+		for _, k := range inputs {
+			if _, set := want[k]; q.Has(k) && !set {
+				t.Errorf("request %d: query %s sends unset %s", i, rec.urls[i].RawQuery, k)
 			}
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -22,9 +23,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
-	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/utf16order"
 )
 
 const (
@@ -179,7 +178,7 @@ func TestClassify(t *testing.T) {
 		{"token exchange timeout", fmt.Errorf("msal: %w", context.DeadlineExceeded), objhttp.ClassTimeout},
 		{"credential unavailable", errors.New("EnvironmentCredential: missing environment variable AZURE_TENANT_ID"), objhttp.ClassAuth},
 	} {
-		e := newTestClient(t, Config{Endpoint: srv.URL, Credential: failingCredential{x.err}, MaxAttempts: 1})
+		e := newEntraClient(t, Config{Endpoint: srv.URL, MaxAttempts: 1}, failingCredential{x.err})
 		_, err := e.List(context.Background(), &ListInput{Container: "c"})
 		var ce *CredentialError
 		var ex *ExhaustedError
@@ -269,20 +268,6 @@ func TestInvalidPage(t *testing.T) {
 	}
 }
 
-// TestCompareNames: compareNames is UTF-16 code-unit order on valid UTF-8,
-// against the code units themselves.
-func TestCompareNames(t *testing.T) {
-	names := []string{"", "a", "a/", "a\x00", "ab", "\u007f", "\u0080", "\u07ff", "\u0800", "\ud7ff", "\ue000", "\uefff",
-		"\uf000", "\ufffd", "\ufffe", "\uffff", "\U00010000", "\U0001F600", "\U0010FFFF", "x\U0001F600y", "x\ue000", "x\uffffz"}
-	for _, a := range names {
-		for _, b := range names {
-			if got, want := utf16order.Compare(a, b), utf16Less(a, b); got != want {
-				t.Errorf("utf16order.Compare(%+q, %+q) = %d, UTF-16 says %d", a, b, got, want)
-			}
-		}
-	}
-}
-
 // TestEnvelopeRetried: a 200 whose body is not a listing envelope (an
 // <Error>, another root, no XML, nothing, an EnumerationResults without
 // Blobs or with an Error inside, content after its close) is retried like
@@ -351,52 +336,42 @@ func TestRedirectRefused(t *testing.T) {
 	}
 }
 
-// TestRequestShape: the List Blobs request the client sends: the container
-// path under the account segment of a non-default endpoint, restype and
-// comp, the other parameters only when set (spaces as %20, '+' as %2B),
-// never endBefore or include; x-ms-version pinned, Accept and no
-// credentials when anonymous (the User-Agent is TestServiceVersionPinned's).
+// TestRequestShape: the List Blobs options the client maps: the container
+// path under the account segment of a non-default endpoint, each set input
+// as its query parameter (startFrom included, which the SDK's flat pager
+// drops), an unset one absent, never include or endBefore, no credentials
+// when anonymous; the route; and the configurations New refuses. The
+// version, Accept and User-Agent headers are TestServiceVersionPinned's.
 func TestRequestShape(t *testing.T) {
 	var mu sync.Mutex
 	var reqs []*http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		reqs = append(reqs, r)
-		first := len(reqs) == 1
 		mu.Unlock()
-		if first {
-			azureError(w, 500, codeInternalError)
-			return
-		}
 		fmt.Fprint(w, page(""))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL + "/", Anonymous: true, BaseBackoff: time.Millisecond})
-	if _, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "a b+c/\u00e9", Delimiter: "/", StartFrom: "a b+c/\u00e9/x",
-		Marker: "m", MaxResults: 10}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(reqs) != 3 {
-		t.Fatalf("%d requests", len(reqs))
-	}
-	r := reqs[0]
-	if r.URL.Path != "/acct/c" || strings.Contains(r.URL.RawQuery, "+") ||
-		r.URL.RawQuery != "comp=list&delimiter=%2F&marker=m&maxresults=10&prefix=a%20b%2Bc%2F%C3%A9&restype=container&startFrom=a%20b%2Bc%2F%C3%A9%2Fx" {
-		t.Errorf("request %s ?%s", r.URL.Path, r.URL.RawQuery)
-	}
-	if q := reqs[2].URL.RawQuery; q != "comp=list&restype=container" {
-		t.Errorf("bare request ?%s", q)
-	}
-	for _, r := range reqs {
-		if r.Header.Get(headerVersion) != "2026-10-06" || r.Header.Get("Accept") != "application/xml" ||
-			!strings.HasPrefix(r.Header.Get(headerUserAgent), buildinfo.UserAgent()+" ") || r.Header.Get(headerAuthorization) != "" {
-			t.Errorf("headers %v", r.Header)
+	c := newTestClient(t, Config{Endpoint: srv.URL + "/", Anonymous: true})
+	full := &ListInput{Container: "c", Prefix: "a b+c/\u00e9", Delimiter: "/", StartFrom: "a b+c/\u00e9/x", Marker: "m", MaxResults: 10}
+	for _, in := range []*ListInput{full, {Container: "c"}} {
+		if _, err := c.List(context.Background(), in); err != nil {
+			t.Fatal(err)
 		}
 	}
-	t.Logf("User-Agent: %s", reqs[0].Header.Get(headerUserAgent))
+	want := []map[string]string{
+		{"restype": "container", "comp": "list", "prefix": full.Prefix, "delimiter": "/", "startFrom": full.StartFrom, "marker": "m", "maxresults": "10"},
+		{"restype": "container", "comp": "list"},
+	}
+	for i, r := range reqs {
+		got := map[string]string{}
+		for k, v := range r.URL.Query() {
+			got[k] = strings.Join(v, ",")
+		}
+		if r.URL.Path != "/acct/c" || !maps.Equal(got, want[i]) || r.Header.Get(headerAuthorization) != "" {
+			t.Errorf("request %d: %s %v, Authorization %q", i, r.URL.Path, got, r.Header.Get(headerAuthorization))
+		}
+	}
 	if got := c.Route("c"); got != srv.URL+"/acct/c" {
 		t.Errorf("route %s", got)
 	}
@@ -409,40 +384,6 @@ func TestRequestShape(t *testing.T) {
 		if _, err := New(context.Background(), bad); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
-	}
-}
-
-// TestAccountInfo: Get Account Information on the container path reads
-// x-ms-is-hns-enabled; a missing header and a refusal are errors (the
-// namespace is unknown), never flat.
-func TestAccountInfo(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RawQuery != "comp=properties&restype=account" || r.URL.Path != "/acct/"+r.URL.Path[len("/acct/"):] {
-			t.Errorf("request %s ?%s", r.URL.Path, r.URL.RawQuery)
-		}
-		switch r.URL.Path {
-		case "/acct/flat":
-			w.Header().Set(headerHNSEnabled, "false")
-		case "/acct/hns":
-			w.Header().Set(headerHNSEnabled, "true")
-		case "/acct/denied":
-			azureError(w, 403, codeAuthorization)
-			return
-		}
-		w.Header().Set("x-ms-account-kind", "StorageV2")
-	}))
-	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	for container, want := range map[string]bool{"flat": false, "hns": true} {
-		if got, err := c.AccountInfo(context.Background(), container); err != nil || got != want {
-			t.Errorf("%s: %v, %v", container, got, err)
-		}
-	}
-	if _, err := c.AccountInfo(context.Background(), "unknown"); !errors.Is(err, ErrHNSUnknown) {
-		t.Errorf("no header: %v", err)
-	}
-	if _, err := c.AccountInfo(context.Background(), "denied"); Classify(err) != objhttp.ClassAccessDenied {
-		t.Errorf("denied: class %q (%v)", Classify(err), err)
 	}
 }
 

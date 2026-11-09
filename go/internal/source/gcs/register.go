@@ -101,10 +101,13 @@ func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
 func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
-// (source.Priced): only on the provider's own service; a custom endpoint
-// has no known tariff, and the report then gives no figure.
+// (source.Priced): only on the provider's own service, however its
+// endpoint is spelled (compared canonically, as the identity is); a
+// custom endpoint has no known tariff, and the report then gives no
+// figure.
 func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
-	if (o.p.opt.Endpoint == "" || o.p.opt.Endpoint == client.DefaultEndpoint) && o.p.opt.Client == nil {
+	ep, err := client.Endpoint(o.p.opt.Endpoint)
+	if err == nil && objhttp.CanonicalRoute(ep) == objhttp.CanonicalRoute(client.DefaultEndpoint) && o.p.opt.Client == nil {
 		return 0.005, "gcs-class-a-reference-rate"
 	}
 	return 0, ""
@@ -134,7 +137,10 @@ func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
 	ep, err := client.Endpoint(opt.Endpoint)
 	if err != nil {
-		ep = opt.Endpoint // unreachable: the client was built from it
+		// Only a supplied client, which never resumes, gets here with an
+		// endpoint it does not use; the value is not recorded (it may hold
+		// a password).
+		ep = ""
 	}
 	return source.Identity{Provider: "gcs", Fields: []source.IdentityField{
 		{Name: "source", Value: "gs://" + opt.Bucket + "/" + opt.Prefix},

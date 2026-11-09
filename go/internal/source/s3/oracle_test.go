@@ -5,7 +5,6 @@ package s3
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,7 +15,9 @@ import (
 )
 
 // sdkOracle is the AWS SDK's stock S3 client, with its own decoder, as the
-// provider's API: the oracle the client is held to. It does not ask for
+// provider's API: the oracle the provider's rows are held to (the client's
+// pages are held to the stock decoder by the client package's
+// TestScannerConformsToSDKDecoder). It does not ask for
 // encoding-type=url, so keys arrive raw.
 type sdkOracle struct{ c *awss3.Client }
 
@@ -71,47 +72,6 @@ func (s *sdkOracle) ListObjectsV2(ctx context.Context, in *client.ListInput) (*c
 		pg.CommonPrefixes = append(pg.CommonPrefixes, aws.ToString(p.Prefix))
 	}
 	return pg, nil
-}
-
-// TestClientPagesMatchSDK sends the same requests through the client and
-// the AWS SDK's stock client and compares every page field.
-func TestClientPagesMatchSDK(t *testing.T) {
-	keys := append(testKeys(), "sp ace", "pl+us", "pct%41", "amp&<>", "q\"'")
-	url := fakeBucket(t, keys, 0)
-	ours, err := client.New(context.Background(), client.Config{Endpoint: url, PathStyle: true, Anonymous: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdk := newSDKOracle(url)
-	for _, start := range []client.ListInput{
-		{MaxKeys: 7},
-		{MaxKeys: 1000, FetchOwner: true},
-		{Prefix: "data/year=2021/", MaxKeys: 100},
-		{StartAfter: "a/x", MaxKeys: 50},
-		{Delimiter: "/", MaxKeys: 3},
-		{Prefix: "a/", Delimiter: "/"},
-	} {
-		in := start
-		in.Bucket = "bkt"
-		for pages := 0; ; pages++ {
-			a, err := ours.ListObjectsV2(context.Background(), &in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, err := sdk.ListObjectsV2(context.Background(), &in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			a.EncodingType = "" // requested by the client only
-			if !reflect.DeepEqual(a, b) {
-				t.Fatalf("%+v page %d:\nclient %+v\n   sdk %+v", in, pages, a, b)
-			}
-			if !a.IsTruncated {
-				break
-			}
-			in.StartAfter, in.ContinuationToken = "", a.NextContinuationToken
-		}
-	}
 }
 
 // TestRowsMatchSDK lists through the client and the stock SDK client,

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
@@ -51,22 +51,6 @@ func (r *recorder) last() *http.Request {
 	return r.reqs[len(r.reqs)-1]
 }
 
-// shapes are listing inputs with keys that need escaping, and generations
-// listings.
-var shapes = []ListInput{
-	{MaxResults: 7},
-	{},
-	{Prefix: "data/year=2021/", MaxResults: 100},
-	{StartOffset: "a/x", EndOffset: "data/year=2020/part-00100.parquet\x00", MaxResults: 50},
-	{Delimiter: "/", MaxResults: 3},
-	{Prefix: "a/", Delimiter: "/"},
-	{StartOffset: "pct%41", EndOffset: "sp ace"},
-	{StartOffset: "ctl\x01", MaxResults: 1},
-	{Versions: true, MaxResults: 9},
-	{Versions: true, StartOffset: "a\x00", Delimiter: "/", MaxResults: 4},
-	{Prefix: "p", Delimiter: "/", StartOffset: "s+%", EndOffset: "e&=#?", PageToken: "tok/+=", MaxResults: 1000, Versions: true},
-}
-
 // addressed records the URL each request was addressed to, before toServer
 // rewrites its origin to the test server.
 type addressed struct {
@@ -83,22 +67,32 @@ func (a *addressed) RoundTrip(req *http.Request) (*http.Response, error) {
 	return a.toServer.RoundTrip(req)
 }
 
-// TestRequests: by default each listing input is one GET of
-// https://storage.googleapis.com/storage/v1/b/BUCKET/o, as addressed by
-// the client before the test sends it to its server, carrying exactly its
-// parameters, set ones only: the production fields selector (a generations
-// listing's with versions), projection=noAcl, the bucket's userProject
-// when billed, and the generated client's alt=json and prettyPrint=false.
+// TestRequests: the listing inputs swath maps. By default a listing is a
+// GET addressed to https://storage.googleapis.com/storage/v1/b/BUCKET/o;
+// each set input (offsets, the continuation token, the delimiter, the page
+// size) reaches its parameter and an unset one is absent; the bucket's
+// userProject is sent when billed; projection=noAcl and the production
+// fields selector are always sent, and a generations listing sends
+// versions=true with a selector that asks for timeDeleted as well.
+// Serialization the generated client owns (alt, prettyPrint, escaping) is
+// not asserted.
 func TestRequests(t *testing.T) {
+	if versionFields == fields || !strings.Contains(versionFields, "timeDeleted") || strings.Contains(fields, "timeDeleted") {
+		t.Fatal("the versions field mask must add timeDeleted, and only it")
+	}
 	rec := newRecorder(t)
 	u, _ := url.Parse(rec.URL)
+	inputs := []string{"prefix", "delimiter", "startOffset", "endOffset", "pageToken", "maxResults", "versions", "userProject"}
 	for _, project := range []string{"", "billed-p"} {
 		to := &addressed{toServer: toServer{u}}
 		c, err := New(context.Background(), Config{Anonymous: true, UserProject: project, HTTPClient: &http.Client{Transport: to}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, in := range shapes {
+		for _, in := range []ListInput{
+			{},
+			{Prefix: "p", Delimiter: "/", StartOffset: "a\x00", EndOffset: "e&=#?", PageToken: "tok/+=", MaxResults: 1000, Versions: true},
+		} {
 			in.Bucket = "bkt"
 			if _, err := c.List(context.Background(), &in); err != nil {
 				t.Fatal(err)
@@ -109,16 +103,14 @@ func TestRequests(t *testing.T) {
 			if origin := sent.Scheme + "://" + sent.Host + sent.EscapedPath(); origin != "https://storage.googleapis.com/storage/v1/b/bkt/o" {
 				t.Fatalf("project %q %+v: addressed to %s", project, in, sent)
 			}
-			req := rec.last()
-			want := url.Values{"alt": {"json"}, "prettyPrint": {"false"}, "projection": {"noAcl"}, "fields": {fields}}
+			want := map[string]string{"projection": "noAcl", "fields": fields}
 			set := func(k, v string) {
 				if v != "" {
-					want.Set(k, v)
+					want[k] = v
 				}
 			}
 			if in.Versions {
-				want.Set("fields", versionFields)
-				want.Set("versions", "true")
+				want["fields"], want["versions"] = versionFields, "true"
 			}
 			set("prefix", in.Prefix)
 			set("delimiter", in.Delimiter)
@@ -127,10 +119,22 @@ func TestRequests(t *testing.T) {
 			set("pageToken", in.PageToken)
 			set("userProject", project)
 			if in.MaxResults > 0 {
-				want.Set("maxResults", strconv.Itoa(in.MaxResults))
+				want["maxResults"] = strconv.Itoa(in.MaxResults)
 			}
-			if req.Method != http.MethodGet || req.URL.EscapedPath() != "/storage/v1/b/bkt/o" || !reflect.DeepEqual(req.URL.Query(), want) {
-				t.Fatalf("project %q %+v: %s %s, want query %v", project, in, req.Method, req.URL, want)
+			req := rec.last()
+			q := req.URL.Query()
+			if req.Method != http.MethodGet {
+				t.Errorf("project %q %+v: %s", project, in, req.Method)
+			}
+			for k, v := range want {
+				if !q.Has(k) || q.Get(k) != v {
+					t.Errorf("project %q %+v: query %v, want %s=%q", project, in, q, k, v)
+				}
+			}
+			for _, k := range inputs {
+				if _, ok := want[k]; q.Has(k) && !ok {
+					t.Errorf("project %q %+v: query %v sends unset %s", project, in, q, k)
+				}
 			}
 		}
 	}
@@ -198,6 +202,24 @@ func TestEmptyListingCarriesKind(t *testing.T) {
 	}
 }
 
+// found is a credential search that finds ts, or fails with err.
+type found struct {
+	ts  oauth2.TokenSource
+	err error
+}
+
+func (f found) find(context.Context, ...string) (*google.Credentials, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &google.Credentials{TokenSource: f.ts}, nil
+}
+
+// withTokens builds a client whose credential search finds ts.
+func withTokens(cfg Config, ts oauth2.TokenSource) (*Client, error) {
+	return newClient(context.Background(), cfg, found{ts: ts}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+}
+
 type tokens struct{ err error }
 
 func (s tokens) Token() (*oauth2.Token, error) {
@@ -207,8 +229,8 @@ func (s tokens) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: "tok", TokenType: "bearer", Expiry: time.Now().Add(time.Hour)}, nil
 }
 
-// TestCredentialsAndHeaders: each attempt carries the shared token source's
-// bearer token and swath's product token (prepended to the generated
+// TestCredentialsAndHeaders: each attempt carries the credentials' shared
+// token source's bearer token and swath's product token (prepended to the generated
 // client's own User-Agent); a token the source will not issue is a
 // credential failure before any request (no attempt counted).
 func TestCredentialsAndHeaders(t *testing.T) {
@@ -218,7 +240,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 		io.WriteString(w, `{"kind":"storage#objects"}`)
 	}))
 	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: tokens{}})
+	c, err := withTokens(Config{Endpoint: srv.URL + "/storage/v1/"}, tokens{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +250,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 	if want := buildinfo.UserAgent() + " " + googleapi.UserAgent; auth != "Bearer tok" || agent != want {
 		t.Fatalf("Authorization %q, User-Agent %q", auth, agent)
 	}
-	c, err = New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: tokens{errors.New("refused")}})
+	c, err = withTokens(Config{Endpoint: srv.URL + "/storage/v1/"}, tokens{errors.New("refused")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +258,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 	if Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 {
 		t.Fatalf("err %v, counters %+v", err, c.Counters())
 	}
-	if source, anonymous := c.Credentials(); source != "token source" || anonymous {
+	if source, anonymous := c.Credentials(); source != "application default credentials" || anonymous {
 		t.Fatalf("credentials %q %v", source, anonymous)
 	}
 }

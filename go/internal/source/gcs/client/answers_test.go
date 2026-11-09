@@ -69,6 +69,22 @@ func jsonError(status int, code int, reason string) func(http.ResponseWriter, *h
 	}
 }
 
+// cutError writes the status line, a Content-Length of 1,000 and the start
+// of a JSON error body naming reason, then closes the connection: a real
+// HTTP truncation of an error answer.
+func cutError(status int, reason string) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		conn, bw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		fmt.Fprintf(bw, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n"+
+			`{"error":{"code":%d,"message":"m","errors":[{"reason":%q`, status, http.StatusText(status), status, reason)
+		bw.Flush()
+	}
+}
+
 func body(status int, s string) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
@@ -140,6 +156,11 @@ func TestAnswers(t *testing.T) {
 		{"403 forbidden", jsonError(403, 403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "forbidden", "m"}},
 		{"403 rateLimitExceeded", jsonError(403, 403, "rateLimitExceeded"), objhttp.ClassThrottle, retried, nil, &answer{403, "rateLimitExceeded", "m"}},
 		{"404", jsonError(404, 404, "notFound"), objhttp.ClassOther, final, nil, &answer{404, "notFound", "m"}},
+		// The Guard keeps a cut error answer's status and the bytes read:
+		// the status decides, as for the complete answer (a body cut before
+		// its reason gives none).
+		{"403 connection cut mid-body", cutError(403, "forbidden"), objhttp.ClassAccessDenied, final, nil, &answer{403, "", ""}},
+		{"503 connection cut mid-body", cutError(503, "backendError"), objhttp.ClassOther, retried, nil, &answer{503, "", ""}},
 		{"400", jsonError(400, 400, "invalid"), objhttp.ClassOther, final, nil, &answer{400, "invalid", "m"}},
 		{"401 not JSON", body(401, "denied"), objhttp.ClassAuth, final, nil, &answer{401, "", ""}},
 		// the HTTP status, not the body's code (googleapi.Error.Code)

@@ -24,7 +24,6 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -74,15 +73,13 @@ type Config struct {
 	BaseBackoff     time.Duration // default 100 ms
 	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
-	// Workers sizes the built transport pool (PoolSize); a supplied
+	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
 	// Rate, if set, caps attempts per second (objhttp.Rate).
 	Rate *objhttp.Rate
-	// TokenSource overrides the credential lookup (tests).
-	TokenSource oauth2.TokenSource
 }
 
 // ListInput is one objects.list request. StartOffset is inclusive and
@@ -166,8 +163,7 @@ var ErrSyntax = objhttp.ErrSyntax
 type Client struct {
 	cfg      Config
 	endpoint string             // the JSON API base, with a trailing slash
-	http     []*http.Client     // the transport pool, requests round-robin (pick)
-	svc      []*storage.Service // one per pooled transport, over its Guard
+	svc      []*storage.Service // one per pooled transport, over its Guard; requests round-robin (pick)
 	next     atomic.Uint64
 	ts       *tokensource.Shared // nil: anonymous
 	source   string
@@ -182,6 +178,27 @@ type Client struct {
 // Application Default Credentials search) are a *CredentialError, and
 // nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+}
+
+// credentialFinder finds the credentials of a client given none: the
+// client library's Application Default Credentials search (librarySearch), or in
+// tests a fixed answer, so what the client does with each outcome does not
+// depend on the host (on Google Cloud the real search finds the metadata
+// server).
+type credentialFinder interface {
+	find(ctx context.Context, scopes ...string) (*google.Credentials, error)
+}
+
+type librarySearch struct{}
+
+func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Credentials, error) {
+	return google.FindDefaultCredentials(ctx, scopes...)
+}
+
+// newClient is New with its credential search and its transport pool
+// given.
+func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []*http.Client) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
@@ -192,35 +209,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
-	// Redirects are answers, never followed, also through a supplied HTTP
-	// client: the resume identity freezes the endpoint the requests go to
-	// (as S3's client does).
-	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if cfg.HTTPClient == nil {
-		// One transport per connWorkers workers: Go's HTTP/2 transport opens a
-		// second connection only at the server's stream limit (~100), so one
-		// transport would carry every worker on one connection. The pool's
-		// transports share one TLS session cache, so later connections resume.
-		cache := tls.NewLRUClientSessionCache(0)
-		for range PoolSize(cfg.Workers) {
-			t := http.DefaultTransport.(*http.Transport).Clone()
-			t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
-			t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
-			c.http = append(c.http, &http.Client{Transport: t, CheckRedirect: noRedirect})
-		}
-	} else {
-		hc := *cfg.HTTPClient
-		hc.CheckRedirect = noRedirect
-		c.http = []*http.Client{&hc}
-	}
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
 	// exchange (the attempt deadline bounds the wait, token below).
 	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
-		&http.Client{Transport: c.http[0].Transport, Timeout: cfg.RequestTimeout})
+		&http.Client{Transport: pool[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
-	case cfg.TokenSource != nil:
-		c.ts, c.source = tokensource.NewShared(cfg.TokenSource, 0), "token source"
 	case cfg.Anonymous:
 	case cfg.CredentialsFile != "":
 		c.source = "file " + cfg.CredentialsFile
@@ -235,13 +229,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	default:
 		c.source = "application default credentials"
-		creds, err := findCredentials(life, readScope)
+		creds, err := finder.find(life, readScope)
 		if err != nil {
 			return nil, &CredentialError{Source: c.source, Err: err}
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	}
-	for _, hc := range c.http {
+	for _, hc := range pool {
 		g := *hc // keeps the pool's no-redirect policy
 		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
 		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
@@ -262,7 +256,7 @@ var quiet = slog.New(slog.DiscardHandler)
 
 // Endpoint is the JSON API base a client built with ep sends to, and the
 // form the resume identity records: DefaultEndpoint for "", an http(s) URL
-// with a host, its path's escapes kept as given and a literal trailing
+// with a host and no user information (a password would be recorded), its path's escapes kept as given and a literal trailing
 // slash added when the escaped path has none (so "tenant%2F" is the base
 // "tenant%2F/", not a base whose last segment the generated client's
 // relative resolution would drop). One string is one destination: the
@@ -283,7 +277,12 @@ func Endpoint(ep string) (string, error) {
 		ep = DefaultEndpoint
 	}
 	u, err := url.Parse(ep)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	switch {
+	case err != nil:
+		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
+	case u.User != nil:
+		return "", fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
 		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
 	}
 	if strings.ContainsAny(u.Path, "{}") {
@@ -295,30 +294,15 @@ func Endpoint(ep string) (string, error) {
 	return u.String(), nil
 }
 
-// connWorkers is the workers per pooled transport (one HTTP/2 connection
-// each, below the server's stream limit); maxConns caps the pool.
-const connWorkers, maxConns = 16, 8
-
-// PoolSize is the number of transports a built client spreads its requests
-// over for workers: one per connWorkers, at least 1, at most maxConns.
-func PoolSize(workers int) int {
-	return min(max((workers+connWorkers-1)/connWorkers, 1), maxConns)
-}
-
 // Transports is the size of the client's transport pool (1 with a supplied
 // HTTPClient): the report's transport.pool_size.
-func (c *Client) Transports() int { return len(c.http) }
+func (c *Client) Transports() int { return len(c.svc) }
 
 // pick is the index of the transport (and service) the next request
 // takes, round-robin.
 func (c *Client) pick() int {
-	return int((c.next.Add(1) - 1) % uint64(len(c.http)))
+	return int((c.next.Add(1) - 1) % uint64(len(c.svc)))
 }
-
-// findCredentials is the client library's ADC search (tests replace it: on
-// a Google Cloud host the real one finds the metadata server, so what the
-// client does when the search fails could not be tested there).
-var findCredentials = google.FindDefaultCredentials
 
 // token waits for the token source under the attempt's deadline (ctx);
 // nil without credentials. A failure is a *CredentialError. Waiters

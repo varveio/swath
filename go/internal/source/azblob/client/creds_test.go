@@ -131,6 +131,34 @@ func entraEnv(t *testing.T, es *entraServer) Config {
 		HTTPClient: &http.Client{Transport: rewrite{u.Host, es.Client().Transport}}}
 }
 
+// fixed is an Entra ID source that builds cred, or fails with err.
+type fixed struct {
+	cred azcore.TokenCredential
+	err  error
+}
+
+func (f fixed) credential(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+	return f.cred, f.err
+}
+
+// withEntra is New's construction with cred as the Entra ID credential.
+func withEntra(cred azcore.TokenCredential) build {
+	return build{bodyCap: MaxBody, entra: fixed{cred: cred}}
+}
+
+// newEntraClient builds a client whose Entra ID credential is cred.
+func newEntraClient(t *testing.T, cfg Config, cred azcore.TokenCredential) *Client {
+	t.Helper()
+	if cfg.Account == "" {
+		cfg.Account = "acct"
+	}
+	c, err := newClient(context.Background(), cfg, withEntra(cred))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 // TestEntraEnvironmentCredential: Entra ID through DefaultAzureCredential
 // configured by the environment gets a token at the first request and a
 // fresh one when it expires, although the context New ran under has
@@ -290,7 +318,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 	}))
 	defer srv.Close()
 	cred := &countingCredential{delay: 100 * time.Millisecond}
-	c := newTestClient(t, Config{Endpoint: srv.URL, Credential: cred})
+	c := newEntraClient(t, Config{Endpoint: srv.URL}, cred)
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
@@ -331,14 +359,10 @@ func TestEntraDefaultChain(t *testing.T) {
 	} {
 		t.Run(x.name, func(t *testing.T) {
 			clearEntra(t)
+			b := build{bodyCap: MaxBody, entra: fixed{x.cred, x.buildErr}}
 			if x.cred == nil && x.buildErr == nil {
 				t.Setenv("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential")
-			} else {
-				old := newDefaultCredential
-				t.Cleanup(func() { newDefaultCredential = old })
-				newDefaultCredential = func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-					return x.cred, x.buildErr
-				}
+				b.entra = defaultChain{}
 			}
 			var listed atomic.Int64
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -346,7 +370,7 @@ func TestEntraDefaultChain(t *testing.T) {
 				fmt.Fprint(w, page(""))
 			}))
 			defer srv.Close()
-			c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1})
+			c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, b)
 			var ce *CredentialError
 			if x.fails {
 				if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth {
@@ -385,7 +409,7 @@ func TestAnonymousPrecedence(t *testing.T) {
 		fmt.Fprint(w, page(""))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, SAS: "sig=x", SharedKey: testKey, Credential: &countingCredential{}})
+	c := newEntraClient(t, Config{Endpoint: srv.URL, Anonymous: true, SAS: "sig=x", SharedKey: testKey}, &countingCredential{})
 	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 		t.Fatal(err)
 	}

@@ -55,9 +55,9 @@ package client
 // refused; a second <Blobs> is not refused, and a comment after the root
 // is; any malformed date property, not only the three a row keeps, fails
 // the page, as does a malformed Date header on a listing. Get Account
-// Information's x-ms-is-hns-enabled is read from the header as sent (HNS:
+// Information's x-ms-is-hns-enabled is read from the header as sent (hns:
 // exactly "true" or "false"), not from the SDK's strconv.ParseBool reading,
-// which takes "0" for flat (TestAccountInfo).
+// which takes "0" for flat (TestAccountInfoExact).
 
 import (
 	"bytes"
@@ -85,8 +85,9 @@ import (
 )
 
 // services builds one SDK service client per pooled transport, each over
-// a Guard, on the account's root (the SAS appended to it).
-func (c *Client) services() error {
+// a Guard capping success bodies at bodyCap (MaxBody), on the account's
+// root (the SAS appended to it).
+func (c *Client) services(bodyCap int64) error {
 	root := c.base.String()
 	if c.sas != "" {
 		root += "?" + c.sas
@@ -99,7 +100,7 @@ func (c *Client) services() error {
 		}
 	}
 	for _, hc := range c.http {
-		g := &objhttp.Guard{Next: hc.Transport, MaxBody: MaxBody, MaxError: maxErrorBody, Validate: envelope}
+		g := &objhttp.Guard{Next: hc.Transport, MaxBody: bodyCap, MaxError: maxErrorBody, Validate: envelope}
 		h := *hc // keeps the pool's no-redirect policy
 		h.Transport = record{g}
 		opt := &service.ClientOptions{ClientOptions: azcore.ClientOptions{
@@ -119,7 +120,7 @@ func (c *Client) services() error {
 		if err != nil {
 			return err
 		}
-		c.svc, c.guards = append(c.svc, svc), append(c.guards, g)
+		c.svc = append(c.svc, svc)
 	}
 	return nil
 }
@@ -182,7 +183,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 // AccountInfo sends Get Account Information on the container's path
 // (restype=account&comp=properties, which a SAS scoped to the container
 // may call) and reports whether the account has a hierarchical namespace,
-// from the 200's x-ms-is-hns-enabled as sent (HNS: exactly "true" or
+// from the 200's x-ms-is-hns-enabled as sent (hns: exactly "true" or
 // "false"; anything else is ErrHNSUnknown, never flat). A refused call is
 // an error the caller takes for "unknown", never for flat.
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
@@ -200,7 +201,7 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 		case s.refused(err) || err == nil:
 			// the header as sent, not the SDK's strconv.ParseBool reading
 			// of it ("1" and "0" are not Azure's answers)
-			return HNS(s.header)
+			return hns(s.header)
 		}
 		return false, c.failure(actx, ctx, s, err, container)
 	})

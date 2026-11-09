@@ -83,14 +83,14 @@ func (p *parser) reset(body []byte, versions bool) {
 // parsers keeps parsers' scratch buffers between pages.
 var parsers sync.Pool // *parser
 
-// ParseList parses a ListObjectsV2 response body (a ListBucketResult) with
+// parseList parses a ListObjectsV2 response body (a ListBucketResult) with
 // the scanner. A body that does not parse is ErrSyntax.
-func ParseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
+func parseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
 
-// ParseVersions parses a ListObjectVersions response body (a
+// parseVersions parses a ListObjectVersions response body (a
 // ListVersionsResult) with the scanner, then checks the page
 // (VersionPage.Validate).
-func ParseVersions(body []byte) (*VersionPage, error) { return pooled(body, (*parser).parseVersions) }
+func parseVersions(body []byte) (*VersionPage, error) { return pooled(body, (*parser).parseVersions) }
 
 // pooled runs parse on body with a pooled parser.
 func pooled[T any](body []byte, parse func(*parser, []byte) (*T, error)) (*T, error) {

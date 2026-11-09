@@ -298,10 +298,10 @@ func TestSDKDecoding(t *testing.T) {
 	}
 }
 
-// TestAccountInfoExact: the client reads x-ms-is-hns-enabled exactly:
-// "true" and "false" are the answer, any other value (another spelling,
-// "1", "0") or none is unknown, never flat, whatever the SDK's ParseBool
-// would make of it.
+// TestAccountInfoExact: Get Account Information reads x-ms-is-hns-enabled
+// exactly: "true" and "false" are the answer, any other value (another
+// spelling, "1", "0") or none is unknown, never flat, whatever the SDK's
+// ParseBool would make of it; a refusal is an error, never flat.
 func TestAccountInfoExact(t *testing.T) {
 	type answer struct {
 		hns     bool
@@ -339,6 +339,19 @@ func TestAccountInfoExact(t *testing.T) {
 			t.Errorf("%q: %+v (%v), want %+v", c.header, got, err, c.want)
 		}
 		srv.Close()
+	}
+	// A refusal is an error with its class, never flat; the request goes to
+	// the container path under the account segment.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "comp=properties&restype=account" || r.URL.Path != "/acct/denied" {
+			t.Errorf("request %s ?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		azureError(w, 403, codeAuthorization)
+	}))
+	defer srv.Close()
+	cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+	if hns, err := cl.AccountInfo(context.Background(), "denied"); hns || Classify(err) != objhttp.ClassAccessDenied {
+		t.Errorf("denied: hns %v, class %q (%v)", hns, Classify(err), err)
 	}
 }
 
@@ -449,7 +462,7 @@ func TestBearer(t *testing.T) {
 		}
 		fmt.Fprint(w, page(""))
 	})
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Credential: fakeToken{tok: "tok"}, MaxAttempts: 3})
+	c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 3}, withEntra(fakeToken{tok: "tok"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +477,7 @@ func TestBearer(t *testing.T) {
 	if Classify(err) != objhttp.ClassAuth || len(cp.reqs) != n+1 {
 		t.Fatalf("challenge: %v (class %q), %d requests", err, Classify(err), len(cp.reqs)-n)
 	}
-	bad, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Credential: fakeToken{err: errors.New("refused")}, MaxAttempts: 1})
+	bad, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, withEntra(fakeToken{err: errors.New("refused")}))
 	if err != nil {
 		t.Fatal(err)
 	}

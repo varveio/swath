@@ -10,17 +10,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// TestFixturesThroughClient: the captured S3 answers in testdata
-// (ListObjectVersions, and the ListObjectsV2 one), replayed over HTTP,
-// come back through the client as the scanner decodes the body, every
-// field, and none is an empty page but the captures of one.
+// TestFixturesThroughClient: a wiring check. Each captured S3 answer in
+// testdata (ListObjectVersions, and the ListObjectsV2 one), replayed over
+// HTTP, comes back through the client with as many entries, prefixes and
+// the truncation flag as its body holds: the client hands the captured
+// body to the scanner. The scanner's field decoding is held to the SDK's by
+// TestScannerConformsToSDKDecoder.
 func TestFixturesThroughClient(t *testing.T) {
 	s3test.NoCredentials(t)
 	files, err := filepath.Glob(filepath.Join("testdata", "versions", "*.xml"))
@@ -35,21 +36,25 @@ func TestFixturesThroughClient(t *testing.T) {
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			srv := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
 			c, ctx := newTest(t, testConfig(srv)), context.Background()
+			n := func(element string) int { return strings.Count(string(body), "<"+element+">") }
+			truncated := strings.Contains(string(body), "<IsTruncated>true</IsTruncated>")
+			var entries, prefixes int
+			var gotTruncated bool
 			if strings.Contains(string(body), "<ListBucketResult") {
-				got, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"})
-				want, werr := ParseList(body)
-				if err != nil || werr != nil || !reflect.DeepEqual(got, want) {
-					t.Fatalf("client %+v (%v)\nscanner %+v (%v)", got, err, want, werr)
+				pg, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"})
+				if err != nil {
+					t.Fatal(err)
 				}
-				return
+				entries, prefixes, gotTruncated = len(pg.Contents), len(pg.CommonPrefixes), pg.IsTruncated
+			} else {
+				pg, err := c.ListObjectVersions(ctx, &VersionsInput{Bucket: "b"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				entries, prefixes, gotTruncated = len(pg.Versions), len(pg.CommonPrefixes), pg.IsTruncated
 			}
-			got, err := c.ListObjectVersions(ctx, &VersionsInput{Bucket: "b"})
-			want, werr := ParseVersions(body)
-			if err != nil || werr != nil || !reflect.DeepEqual(got, want) {
-				t.Fatalf("client %+v (%v)\nscanner %+v (%v)", got, err, want, werr)
-			}
-			if len(got.Versions)+len(got.CommonPrefixes) == 0 && !strings.Contains(f, "past-end") && !strings.Contains(f, "zero-max") && !strings.Contains(f, "special-echo") {
-				t.Fatalf("empty page from %s", f)
+			if want := n("Contents") + n("Version") + n("DeleteMarker"); entries != want || prefixes != n("CommonPrefixes") || gotTruncated != truncated {
+				t.Fatalf("entries %d, prefixes %d, truncated %v; the body holds %d, %d, %v", entries, prefixes, gotTruncated, want, n("CommonPrefixes"), truncated)
 			}
 		})
 	}

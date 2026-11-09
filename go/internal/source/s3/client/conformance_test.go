@@ -23,8 +23,8 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// differentialKeys are the provider oracle's keys (TestClientPagesMatchSDK)
-// and the hostile encoding minefield (keyrangetest.Hostile).
+// differentialKeys are the provider oracle's keys (TestRowsMatchSDK) and
+// the hostile encoding minefield (keyrangetest.Hostile).
 func differentialKeys() []string {
 	keys := []string{"a", "a-b", "a.b", "a/", "a/x", "a/y/z", "a0", "ab", "b/c", "é", "日本/x", "z~", "\x7f",
 		"sp ace", "pl+us", "pct%41", "amp&<>", "q\"'"}
@@ -96,7 +96,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
 			if strings.Contains(string(body), "<ListBucketResult") {
-				want, err := ParseList(body)
+				want, err := parseList(body)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -106,7 +106,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 				}
 				return
 			}
-			pg, err := ParseVersions(body)
+			pg, err := parseVersions(body)
 			if err != nil {
 				t.Fatal(err)
 			}

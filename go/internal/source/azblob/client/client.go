@@ -14,15 +14,14 @@
 // Entra ID tokens live as long as the client: they are fetched by a token
 // source whose HTTP client bounds each exchange by the request timeout, and
 // every attempt waits for its token under its own attempt deadline, all
-// waiters sharing one outstanding call (tokensource.Shared). Without a
-// configured credential and with none found, requests go unauthenticated
-// (public containers allow it); a credential that is configured but will
-// not load is a *CredentialError, never anonymity.
+// waiters sharing one outstanding call (tokensource.Shared). Requests go
+// unauthenticated only with Anonymous; a credential that is configured but
+// will not load, or a DefaultAzureCredential chain that finds none, is a
+// *CredentialError, never anonymity.
 package client
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -76,15 +75,13 @@ type Config struct {
 	// leading '?', appended to every request and kept out of every error.
 	SAS string
 	// SharedKey is the account key (base64): the SDK signs requests.
-	SharedKey string
-	// Credential overrides the Entra ID lookup (tests).
-	Credential     azcore.TokenCredential
+	SharedKey      string
 	RequestTimeout time.Duration // per attempt; default 30 s
 	MaxAttempts    int           // default 9
 	BaseBackoff    time.Duration // default 100 ms
 	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
-	// Workers sizes the built transport pool (PoolSize); a supplied
+	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
@@ -130,12 +127,11 @@ type ListOutput struct {
 // the account's root, the transport pool with one SDK service client per
 // transport, the credentials, the retry policy and the counters.
 type Client struct {
-	cfg    Config
-	base   *url.URL          // ends in '/': the account's root
-	http   []*http.Client    // the pool: redirects never followed, Location dropped
-	svc    []*service.Client // one per pooled transport, the same order
-	guards []*objhttp.Guard  // the same order (tests lower MaxBody)
-	next   atomic.Uint64
+	cfg  Config
+	base *url.URL          // ends in '/': the account's root
+	http []*http.Client    // the pool: redirects never followed, Location dropped
+	svc  []*service.Client // one per pooled transport, the same order
+	next atomic.Uint64
 
 	sas    string              // without '?'; "" when none
 	sasKey *regexp.Regexp      // any parameter of the SAS in text (sasParams); nil when none
@@ -163,6 +159,31 @@ var ErrBodyCap = errors.New("response larger than the body cap")
 // New resolves credentials and builds the transport pool and the SDK
 // clients over it.
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	return newClient(ctx, cfg, build{bodyCap: MaxBody, entra: defaultChain{}})
+}
+
+// build is what New fixes and tests vary: the success body cap and the
+// source of the Entra ID credential.
+type build struct {
+	bodyCap int64
+	entra   entraSource
+}
+
+// entraSource builds the Entra ID credential: azidentity's
+// DefaultAzureCredential (defaultChain), or in tests a fixed one, so what
+// the client does with each outcome does not depend on the host.
+type entraSource interface {
+	credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error)
+}
+
+type defaultChain struct{}
+
+func (defaultChain) credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+	return azidentity.NewDefaultAzureCredential(o)
+}
+
+// newClient is New with its body cap and Entra ID source given.
+func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -179,37 +200,15 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	c := &Client{cfg: cfg, base: base,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
-	// Redirects are answers, never followed, also through a supplied HTTP
-	// client: the resume identity freezes the route (as the S3 and GCS
-	// clients do).
-	// The Location header is removed before net/http sees it (noLocation):
-	// a malformed one would otherwise end the request in an error that
-	// quotes it, SAS included, before CheckRedirect runs.
-	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if cfg.HTTPClient == nil {
-		// One transport per connWorkers workers, sharing one TLS session
-		// cache (the GCS client's pool, for the same HTTP/2 reason).
-		cache := tls.NewLRUClientSessionCache(0)
-		for range PoolSize(cfg.Workers) {
-			t := http.DefaultTransport.(*http.Transport).Clone()
-			t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
-			t.TLSClientConfig = &tls.Config{ClientSessionCache: cache}
-			c.http = append(c.http, &http.Client{Transport: noLocation{t}, CheckRedirect: noRedirect})
-		}
-	} else {
-		hc := *cfg.HTTPClient
-		hc.CheckRedirect = noRedirect
-		next := hc.Transport
-		if next == nil {
-			next = http.DefaultTransport
-		}
-		hc.Transport = noLocation{next}
-		c.http = []*http.Client{&hc}
-	}
-	if err := c.credentials(ctx); err != nil {
+	// Redirects are answers, never followed (objhttp.Pool). The Location
+	// header is removed before net/http sees it (noLocation): a malformed
+	// one would otherwise end the request in an error that quotes it, SAS
+	// included, before CheckRedirect runs.
+	c.http = objhttp.Pool(cfg.Workers, cfg.HTTPClient, func(next http.RoundTripper) http.RoundTripper { return noLocation{next} })
+	if err := c.credentials(b.entra); err != nil {
 		return nil, err
 	}
-	if err := c.services(); err != nil {
+	if err := c.services(b.bodyCap); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -235,7 +234,12 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 		return &url.URL{Scheme: "https", Host: account + ".blob.core.windows.net", Path: "/"}, nil
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
+	switch {
+	case err != nil:
+		return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
+	case u.User != nil:
+		return nil, fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "":
 		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", endpoint)
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + account + "/"
@@ -244,9 +248,8 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 }
 
 // credentials resolves the credential in precedence order: anonymous, a
-// SAS, a shared key, a supplied token credential, then Entra ID through
-// DefaultAzureCredential.
-func (c *Client) credentials(ctx context.Context) error {
+// SAS, a shared key, then Entra ID through entra.
+func (c *Client) credentials(entra entraSource) error {
 	cfg := c.cfg
 	switch {
 	case cfg.Anonymous:
@@ -267,18 +270,10 @@ func (c *Client) credentials(ctx context.Context) error {
 			return &CredentialError{Source: c.source, Err: err}
 		}
 		c.key = cfg.SharedKey
-	case cfg.Credential != nil:
-		c.ts, c.source = c.shared(cfg.Credential), "token credential"
 	default:
-		return c.entra()
+		return c.entra(entra)
 	}
 	return nil
-}
-
-// newDefaultCredential is azidentity's DefaultAzureCredential (tests
-// replace it to fake an empty environment on any host).
-var newDefaultCredential = func(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-	return azidentity.NewDefaultAzureCredential(o)
 }
 
 // entraVars are the environment variables by which DefaultAzureCredential
@@ -293,9 +288,9 @@ var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SEC
 // before the attempt is sent: a chain that finds no credential fails the
 // first request with azidentity's own error (class auth), and nothing is
 // listed; a token endpoint's transient failure is retried.
-func (c *Client) entra() error {
+func (c *Client) entra(entra entraSource) error {
 	const source = "Entra ID (DefaultAzureCredential)"
-	cred, err := newDefaultCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
+	cred, err := entra.credential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
@@ -398,16 +393,6 @@ func (c *Client) Credentials() (source string, anonymous bool) {
 // none).
 func (c *Client) Note() string { return c.note }
 
-// connWorkers is the workers per pooled transport (one HTTP/2 connection
-// each, below the server's stream limit); maxConns caps the pool.
-const connWorkers, maxConns = 16, 8
-
-// PoolSize is the number of transports a built client spreads its requests
-// over for workers: one per connWorkers, at least 1, at most maxConns.
-func PoolSize(workers int) int {
-	return min(max((workers+connWorkers-1)/connWorkers, 1), maxConns)
-}
-
 // Transports is the size of the client's transport pool (1 with a supplied
 // HTTPClient): the report's transport.pool_size.
 func (c *Client) Transports() int { return len(c.http) }
@@ -463,10 +448,10 @@ func encodeQuery(q url.Values) string { return strings.ReplaceAll(q.Encode(), "+
 // x-ms-is-hns-enabled: the namespace is unknown, never taken for flat.
 var ErrHNSUnknown = errors.New("account information without " + headerHNSEnabled)
 
-// HNS reads an account-information answer's x-ms-is-hns-enabled exactly as
+// hns reads an account-information answer's x-ms-is-hns-enabled exactly as
 // Azure sends it: "true" is a hierarchical namespace, "false" a flat one,
 // anything else (absent, another spelling) ErrHNSUnknown, never flat.
-func HNS(h http.Header) (bool, error) {
+func hns(h http.Header) (bool, error) {
 	switch h.Get(headerHNSEnabled) {
 	case "true":
 		return true, nil

@@ -334,7 +334,7 @@ func (p *Provider) admit(ctx context.Context) error {
 			p.opt.Warn(fmt.Sprintf("azblob: account %s: the namespace could not be read (%v); listing as flat, as --azblob-flat asserts", p.opt.Account, err))
 		}
 	default:
-		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%v); only flat accounts are listed (--azblob-flat asserts it)", p.opt.Account, err))
+		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azblob-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
 }

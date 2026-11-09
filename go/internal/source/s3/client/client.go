@@ -14,8 +14,8 @@
 // objhttp.Guard, under an HTTP client that follows no redirect, bounds the
 // body, reads a 2xx other than 200 as an answer, and captures a 200's body;
 // the SDK's deserializer is handed a minimal envelope in its place, and
-// this package's scanner decodes the captured body (ParseList,
-// ParseVersions: the operation's envelope, whole, or ErrSyntax), as Java
+// this package's scanner decodes the captured body (parseList,
+// parseVersions: the operation's envelope, whole, or ErrSyntax), as Java
 // swath's StreamingListObjectsV2Interceptor does. Measured through the same
 // stack over a 1,000-entry page, the SDK's deserializer cost about 14 µs
 // per object and 100,000 allocations per page against the scanner's 1.8 µs
@@ -107,7 +107,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	var base *string
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		switch {
+		case err != nil:
+			return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
+		case u.User != nil:
+			return nil, fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+		case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
 			return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", cfg.Endpoint)
 		}
 		base, fips, dualStack = aws.String(cfg.Endpoint), false, false
@@ -242,7 +247,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 		req.RequestPayer = types.RequestPayerRequester
 	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) {
-		return attempt(c, ctx, emptyList, ParseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
 		})
@@ -270,7 +275,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 		req.RequestPayer = types.RequestPayerRequester
 	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*VersionPage, error) {
-		return attempt(c, ctx, emptyVersions, ParseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err
 		})

@@ -595,3 +595,39 @@ func TestPoolSizeReported(t *testing.T) {
 		}
 	}
 }
+
+// TestEndpointUserinfoRefused: an endpoint with user information is
+// refused before anything is recorded, and the refusal never quotes the
+// password, which the journal identity and the run report would otherwise
+// carry.
+func TestEndpointUserinfoRefused(t *testing.T) {
+	for _, ep := range []string{"http://user:s3cret@127.0.0.1:1/storage/v1/", "https://user:s3cret@storage.googleapis.com/storage/v1/", "http://:s3cret@h/"} {
+		_, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1})
+		if err == nil || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s: %v", ep, err)
+		}
+	}
+}
+
+// TestTariff: the reference rate labels Google's own endpoint however it
+// is spelled (no trailing slash, host case), as the identity compares it;
+// another endpoint and a supplied client get none.
+func TestTariff(t *testing.T) {
+	for ep, want := range map[string]bool{"": true, client.DefaultEndpoint: true, "https://storage.googleapis.com/storage/v1": true,
+		"HTTPS://Storage.GoogleAPIs.com/storage/v1/": true, "http://127.0.0.1:1/storage/v1/": false, "https://storage.googleapis.com/other/v1/": false} {
+		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rate, basis := src.(source.Priced).Tariff(); (rate > 0 && basis != "") != want {
+			t.Errorf("%q: tariff %v %q, want one: %v", ep, rate, basis, want)
+		}
+	}
+	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rate, _ := src.(source.Priced).Tariff(); rate != 0 {
+		t.Errorf("supplied client: tariff %v", rate)
+	}
+}

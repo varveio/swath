@@ -26,7 +26,7 @@ every provider shares (the contract, the registry and the capabilities).
 | [providers/s3.md](providers/s3.md) | S3 (`internal/source/s3`): credentials, the adaptive limiter, versions, the schema, the range engine's page fetch |
 | [providers/gcs.md](providers/gcs.md) | GCS (`internal/source/gcs`): credentials, generations, the schema, route parity |
 | [providers/azblob.md](providers/azblob.md) | Azure Blob (`internal/source/azblob`): credentials, admission, the byte-order adapter, the schema |
-| [clients.md](clients.md) | the list clients shared by the object-store providers: hand-rolled on the SDKs' auth, and the SDK-backed clients behind `swath_sdkclient` |
+| [clients.md](clients.md) | the list clients of the object-store providers: one per provider on the vendor's SDK service client, and what swath keeps around it |
 | [range-engine.md](range-engine.md) | the range engine (`internal/source/keyrange`): splitting, seeds and priors, admission, resume, group mode |
 
 ## The contract (`internal/source`)

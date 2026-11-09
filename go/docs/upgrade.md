@@ -261,7 +261,11 @@ the list below is the earlier history of the unreleased builds.
   or an Entra ID chain that finds none, now stops the run with cause `auth` before any listing request,
   where it listed a public bucket unauthenticated: give `--anonymous` for a public bucket or container (it
   may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
-  `auth` too, rather than a note and retried requests; later refreshes are still retried.
+  `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
+  with "(a public bucket needs --anonymous)".
+- An endpoint URL with user information (`http://user:password@host/`, through `--endpoint`,
+  `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
+  its password recorded in the journal identity; give credentials through the provider's own configuration.
 - S3 journals written by an earlier build do not resume. The S3 resume identity now records the listing's inputs
   as given (the endpoint, empty for AWS's own, the region, path-style, FIPS and dual-stack) in place of the
   endpoint URL the earlier client resolved (`route`), so `swath resume` of such a run is refused before any part

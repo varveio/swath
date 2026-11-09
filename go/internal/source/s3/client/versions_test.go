@@ -143,8 +143,6 @@ func referenceVersions(body []byte) (*VersionPage, error) {
 	return pg, nil
 }
 
-func parseVersions(body []byte) (*VersionPage, error) { return new(parser).parseVersions(body) }
-
 // agreeVersions: whenever encoding/xml accepts a versions document, the
 // scanner returns the same page.
 func agreeVersions(t *testing.T, body []byte) {

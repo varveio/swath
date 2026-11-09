@@ -53,7 +53,6 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/objhttp` | what both object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client counters, route canonicalization; `objhttptest` holds the retry contract both clients pass | counters |
 | `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, the page parser | objhttp |
-| `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`, `Container`: a row that is no object, a local directory), `Info`; `Bind` takes a schema id's key settings and its columns' names, types and nullability from the reader module's spec | reader (the nested module) |
 | `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)); `swath du`'s prefix rows (TSV, JSONL with `PrefixBase64` for a name that is not UTF-8, or the readable table) | schema, dataset, totals |
@@ -66,8 +65,8 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/faults` | named crash points for the crash-matrix tests (one atomic load in production) | – |
 | `internal/buildinfo` | the binary's identity (tool, module version, VCS revision, the linker's `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
-The list clients are hand-rolled on the SDKs' authentication; what is the SDK's, what is ours and why:
-[internals/clients.md](internals/clients.md#the-list-clients-hand-rolled-on-the-sdks-auth).
+The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
+[internals/clients.md](internals/clients.md).
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
