@@ -24,7 +24,7 @@ decision to add it later).
 | `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Credential-chain failure fails the run | a chain that gives no credentials (empty, or configured and broken) stops the run with cause `auth` before any listing request; requests go unsigned only with `--anonymous` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
-| Source `s3://bucket[/prefix]`, path taken literally | the same; also a local directory and `gs://bucket[/prefix]` | kept | – |
+| Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
 ## Listing scope and filters
@@ -38,7 +38,7 @@ decision to add it later).
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--storage-class CLASS[,CLASS]` | `--storage-class` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Current objects only; versions not listed | current objects only | kept | versions mode parked, 2026-11-05 |
+| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](cli.md) and [schema registry](dataset.md#schema-registry) |
 
 ## Output formats and datasets
 
@@ -52,7 +52,7 @@ decision to add it later).
 | TSV/table escaping: a control byte as `\xNN`, backslash unescaped | JSON's string escapes (`\\ \b \f \n \r \t \u00xx`) in all three formats | renamed | 2026-11-06 (owner: text output in the shapes people already know): reversible (the old rule was not: a key containing `\x09` read back as a tab) and one rule instead of two |
 | Table: size in 14, time in 24, key | the `aws s3 ls` line: `YYYY-MM-DD HH:MM:SS`, size in 10, key (UTC) | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
 | `--format discard` | `swath diag count SOURCE` (rows counted as they arrive, never ordered, buffered or spilled; the Go port's `swath list --count-only` until 0.4, `swath count` 2026-11-07 to 2026-11-09) | renamed | command 2026-11-07 (owner: the cleanest CLI surface); `swath diag count` 2026-11-09 (owner: `swath du` totals a source per prefix with readable output, the measurement's one line moves to `diag`) |
-| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for object-store stdout; local `list` requires a dataset | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
 | `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
 | `--compression none\|gzip\|zstd` (text only) | the `-o` name's `.gz`/`.zst`; stdout through a pipe (`\| zstd`) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the name says it for a file; a pipe does it for stdout) |
@@ -66,7 +66,7 @@ decision to add it later).
 | `symlink.txt` part list | none; the manifest lists the parts | removed | not ported, 2026-11-06: no value now |
 | `manifest.json` (format 1, camelCase) | `manifest.json` format 2 with `coverage`; SeekParquet with `extensions.swath.coverage` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | `.swath-state.json` | `.swath/` workspace (`lock`, `journal`, `parts/`, `spill/`) | renamed | – |
-| Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1`, 9 columns (`version_id`, `is_latest`, `is_delete_marker`, `row_type` dropped) | renamed | dataset format 2 and versions mode parked, 2026-11-05 |
+| Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1` for current S3 objects; source- and mode-specific schemas include S3 versions and GCS generations | renamed | [current schema registry](dataset.md#schema-registry); no reserved version columns in current-object schemas |
 | Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id`; then `seekparquet.*` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `-o` directory refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
 | One run per output at a time | output lock; journaled output refused on Windows | kept | – |
@@ -91,12 +91,12 @@ decision to add it later).
 | Java | Go | Status | Decision |
 |---|---|---|---|
 | `swath resume <dir>` | `swath resume DIR` | kept | – |
-| `--checkpoint auto` (`.swath/checkpoint.sqlite`) | journal at `DIR/.swath/journal`, always on for S3 and GCS; local runs keep none | renamed | record journal replaces the SQLite checkpoint, 2026-11-05 |
+| `--checkpoint auto` (`.swath/checkpoint.sqlite`) | journal at `DIR/.swath/journal`, on for S3, GCS and Azure Blob datasets where supported; local runs keep none | renamed | record journal replaces the SQLite checkpoint, 2026-11-05 |
 | `--checkpoint PATH` | none | removed | record journal replaces the SQLite checkpoint, 2026-11-05; not ported, 2026-11-06: no value now (the SQLite checkpoint surface) |
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
 | `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
 | `--overwrite`, `--force` | `--overwrite` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | committed parts kept exactly once; everything after the last committed part's key re-listed | kept (coarser) | part-granular journal, re-list after the last published key, 2026-11-05 |
+| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](operating.md#stopping-and-resuming) replaces the earlier prefix-only description |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
 | Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |

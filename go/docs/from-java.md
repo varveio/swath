@@ -1,6 +1,9 @@
 # Coming from the Java CLI
 
-For someone who has run the Java `swath` CLI. This tool is a separate binary with its own launcher. Every
+For someone who has run the Java `swath` CLI. Go is unreleased on main and will replace
+Java at release; Java v0.3.2 remains the latest published distribution. Build Go from
+source using the [Go guide](guide.md). The binaries currently have different launchers
+and output contracts. Every
 Java option, output mode, exit code and report field, with its Go counterpart and the decision behind it, is
 in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dataset.md](dataset.md) (the swath dataset) and [upgrade.md](upgrade.md) (what changed from the Java layout).
 
@@ -8,11 +11,15 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 
 - **Sources.** `s3://bucket[/prefix]` on general-purpose buckets, with the same credential chain, `--profile`,
   `--region`, S3-compatible endpoints and bearer tokens for GCS's XML API. This tool adds native `gs://`
-  through the GCS JSON API and local directory trees.
-- **Output.** Text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file (optionally `.gz`
-  or `.zst`), and a sorted Parquet dataset in a directory. The seven filters (`--include`, `--exclude`, sizes,
+  through the GCS JSON API, `az://account/container[/prefix]` for Azure Blob flat namespaces,
+  and local or mounted directory trees.
+- **Output.** Object-store text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file
+  (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Local `list` requires
+  dataset output; local `du` summaries go directly to stdout. The seven filters (`--include`, `--exclude`, sizes,
   times, storage classes) are kept. Their regular expressions are Go's RE2, not Java's.
-- **Resume.** `swath resume DIR` continues an interrupted S3 or GCS run. The exit codes keep their meaning:
+- **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
+  Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
+  and resume ([platform limits](operating.md#known-limits)). The exit codes keep their meaning:
   0, 1, 2, 74, 75, 124, 130 and 143.
 - **Controls.** `--max-duration`, `--request-rate`, `--report`, `--progress`, `--stats`, `-v` and `-q`.
 
@@ -24,11 +31,13 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
   disposable spill files under the output (`--spill-budget`, by default up to half the free space). There is
   no merge pass at the end. A large sorted run spills almost every row once, so plan disk for it
   ([operators.md](operators.md#disk-sizing)).
-- **The durable prefix.** A resume keeps the published parts and lists everything after the last published
-  key again. Java resumed each range from its own checkpointed cursor, so this tool repeats more work after a
-  kill: on large sorted runs, most of what was listed.
-- **The dataset.** `manifest.json` installed last is the commit (not `_SUCCESS`). The S3 schema has 9 columns.
-  Java's reader does not read this format ([upgrade.md](upgrade.md)).
+- **The durable prefix.** A resume keeps published parts and continues after the last published key.
+  Validated durable spill can preserve additional work where supported; gaps are listed again.
+  This differs from Java's per-range checkpoints. It does not promise to retain every row already
+  fetched ([recovery details](operating.md#stopping-and-resuming)).
+- **The dataset.** `manifest.json` installed last is the commit (not `_SUCCESS`). Schemas are source-
+  and mode-specific: current objects, local entries, S3 versions and GCS generations have different
+  fields ([dataset.md](dataset.md)). Java's reader does not read this format ([upgrade.md](upgrade.md)).
 - **The request limiter.** Java cuts the limit by 0.7 on every throttle answer and grows it only after 10 s
   without one. Here a cut happens at most once per round trip, and only while 15 % or more of the recent
   answers (the last 4 × `--workers`, at least 256) are throttles. The limit grows by one per second while under
@@ -72,9 +81,11 @@ is under "Run report" in [cli.md](cli.md).
 
 ## What is not here
 
-- **Azure.** Neither tool lists Azure Blob storage.
-- **Object versions.** Version history and delete markers are not listed; the Java columns reserved for them
-  are gone from the schema.
+- **Azure hierarchical namespaces and Azure versions.** Go lists current blobs in flat namespaces;
+  it does not list hierarchical namespaces, blob versions, snapshots or deleted blobs.
+- **S3 directory buckets and GCS soft-deleted objects.** These are outside the supported listing scope.
+  Go does support `--all-versions` for S3 versions and delete markers and GCS live and noncurrent
+  generations, under their own schemas. The Java release does not implement these modes.
 - **Java's thief splits, unsorted Parquet (`--no-sort`), the SQLite checkpoint, OTLP metrics, partitioned
   text datasets and `--tune`.** Each decision and its reason is in [cli-inventory.md](cli-inventory.md).
 

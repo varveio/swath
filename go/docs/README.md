@@ -1,4 +1,10 @@
-# The Go port's documentation
+# Go documentation
+
+This documentation describes the unreleased Go implementation on main. The latest
+published release is Java v0.3.2. Go will replace Java at release.
+
+- **First run:** [guide.md](guide.md), with local summaries, object-store text listings,
+  dataset output and source-specific limits.
 
 Who reads what. Each page owns its facts; the others link to it.
 
@@ -26,7 +32,9 @@ Who reads what. Each page owns its facts; the others link to it.
 - **Reviewer:** [internals/contracts.md](internals/contracts.md) (what is promised and which test holds it),
   [measurements.md](measurements.md) (the evidence, by run and date), [testing.md](testing.md).
 
-The repository's root [README.md](../../README.md), [docs/internals/algorithms.md](../../docs/internals/algorithms.md),
-[docs/internals/architecture.md](../../docs/internals/architecture.md) and the public
-[field guide](https://swath.varve.io/field-guide/) describe the Java engine, not this port. The
+The root [README.md](../../README.md) introduces the Go implementation. The root
+[Java algorithm](../../docs/internals/algorithms.md),
+[Java architecture](../../docs/internals/architecture.md) and historical
+[Java v0.3.2 field guide](https://swath.varve.io/field-guide/) describe the Java engine.
+Use [release-tagged Java docs](https://github.com/varveio/swath/tree/v0.3.2/docs) for that release. The
 language-neutral contracts in [docs/internals/contracts.md](../../docs/internals/contracts.md) bind both.
