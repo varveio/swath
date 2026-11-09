@@ -15,14 +15,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
-	pq "github.com/parquet-go/parquet-go"
-
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -120,10 +120,15 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	url := s3test.Serve(t, s3test.Handler(b))
 	slowURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 3*time.Millisecond))
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
+	az := azblobtest.Serve(t, gcstest.Keys(4000))
+	// The hostile corpus: names at U+E000 and above listed through the
+	// byte-order adapter, its pairs on both sides of the filler.
+	azh := azblobtest.Serve(t, azblobtest.Keys())
 	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
 	// unsplit: the first occurrences the seeded arms never reach (their
-	// ranges are a page each; the s3-unseeded arm crosses split).
-	unsplit := map[string]bool{"s3 split": true, "gcs split": true, "s3-interval split": true}
+	// ranges are a page each; the s3-unseeded and azblob-unseeded arms
+	// cross split).
+	unsplit := map[string]bool{"s3 split": true, "gcs split": true, "azblob split": true, "s3-interval split": true}
 	for _, prov := range []struct {
 		name    string
 		src     []string
@@ -137,6 +142,19 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
 		{"s3-unseeded", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, []string{"--part-interval=0"}, false},
+		// Azure pages are 5,000 by default: 1,000, as the others, so the
+		// seed tiles these keys as it does theirs.
+		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+			"--azblob-anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
+		// Unseeded, as s3-unseeded: one range whose owner splits, so the
+		// split points and recovery after an owner split are crossed on the
+		// Azure route too.
+		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+			"--azblob-anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
+		// The hostile corpus, unseeded so that it splits: crashes inside
+		// the adapter's split spans resume to the same parts.
+		{"azblob-hostile", []string{"az://" + azh.Account + "/" + azh.Container, "--azblob-endpoint", strings.TrimSuffix(azh.Endpoint, "/"+azh.Account),
+			"--azblob-anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {
@@ -464,34 +482,7 @@ func manifestBytes(t *testing.T, dir string) []byte {
 // closed by time differ between runs, their rows may not.
 func sameRows(t *testing.T, at, ref, out string) {
 	t.Helper()
-	keys := func(dir string) []string {
-		var m dataset.Manifest
-		b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
-		if err != nil || json.Unmarshal(b, &m) != nil {
-			t.Fatalf("%s: manifest of %s: %v", at, dir, err)
-		}
-		var ks []string
-		for _, p := range m.Parts {
-			f, err := os.Open(filepath.Join(dir, p.Path))
-			if err != nil {
-				t.Fatal(err)
-			}
-			pf, err := pq.OpenFile(f, p.Bytes)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rows := make([]pq.Row, pf.NumRows())
-			r := pq.NewReader(pf)
-			n, _ := r.ReadRows(rows)
-			r.Close()
-			f.Close()
-			for _, row := range rows[:n] {
-				ks = append(ks, string(row[0].ByteArray()))
-			}
-		}
-		return ks
-	}
-	want, got := keys(ref), keys(out)
+	want, got := datasetKeys(t, ref), datasetKeys(t, out)
 	if !slices.Equal(want, got) {
 		t.Fatalf("%s: %d rows, want %d (or they differ)", at, len(got), len(want))
 	}

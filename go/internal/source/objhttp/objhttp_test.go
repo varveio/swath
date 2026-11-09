@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
 )
@@ -112,6 +113,46 @@ func TestAdmissionFeatures(t *testing.T) {
 	for _, d := range CounterDefs("t", "-t") {
 		if strings.HasPrefix(d.Key, "slow_start.") != (d.Feature == FeatureSlowStart) {
 			t.Fatalf("%s: feature %q", d.Key, d.Feature)
+		}
+	}
+}
+
+// waitAnswer is a retryable answer naming its own wait.
+type waitAnswer time.Duration
+
+func (w waitAnswer) Error() string             { return "busy" }
+func (w waitAnswer) Throttle() bool            { return true }
+func (w waitAnswer) Retryable() bool           { return true }
+func (w waitAnswer) RetryAfter() time.Duration { return time.Duration(w) }
+
+// TestRetryAfterWait: a failure carrying the service's wait (RetryAfter)
+// holds the next attempt at least that long, past a backoff drawn from 1
+// ms; without one the backoff alone applies.
+func TestRetryAfterWait(t *testing.T) {
+	r := Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
+	for _, c := range []struct {
+		err      error
+		min, max time.Duration
+	}{
+		{waitAnswer(150 * time.Millisecond), 150 * time.Millisecond, 5 * time.Second},
+		{fmt.Errorf("wrapped: %w", waitAnswer(150*time.Millisecond)), 150 * time.Millisecond, 5 * time.Second},
+		{waitAnswer(0), 0, 100 * time.Millisecond},
+	} {
+		var n Counters
+		var times []time.Time
+		start := time.Now()
+		_, err := Do(context.Background(), r, &n, func() (int, error) {
+			times = append(times, time.Now())
+			if len(times) == 1 {
+				return 0, c.err
+			}
+			return 1, nil
+		})
+		if err != nil || len(times) != 2 {
+			t.Fatalf("%v: err %v after %d attempts", c.err, err, len(times))
+		}
+		if d := times[1].Sub(start); d < c.min || d > c.max {
+			t.Errorf("%v: second attempt after %s, want %s to %s", c.err, d, c.min, c.max)
 		}
 	}
 }

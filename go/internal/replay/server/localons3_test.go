@@ -21,7 +21,7 @@ import (
 
 // recordLocal writes files (relative path to body) under a temporary
 // tree, sets every file's and directory's modification time to mtime,
-// lists the tree with the Go lister and returns the swath-local/v1
+// lists the tree with the Go lister and returns the swath/local-entries/v1
 // dataset it wrote.
 func recordLocal(t *testing.T, files map[string]string, mtime time.Time) string {
 	t.Helper()
@@ -132,7 +132,7 @@ func TestLocalRecordingOnTheS3Route(t *testing.T) {
 		contents("top.txt", "0"),
 	}
 	for _, opts := range []store.Options{{}, {Prefetch: store.Prefetch{Off: true}}} {
-		s := serveRecording(t, dir, "swath-local/v1", opts)
+		s := serveRecording(t, dir, "swath/local-entries/v1", opts)
 		for _, c := range []struct {
 			query string
 			want  []string

@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Object is one Cloud Storage object's listed metadata (objects.list).
@@ -28,28 +29,28 @@ type Row = schema.Row[Object]
 
 // Schema is the GCS listing schema. Object names are at most 1,024 bytes
 // of UTF-8.
-var Schema = schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath/gcs-objects/v1", Key: schema.String, MaxKeyBytes: 1024},
+var Schema = schema.Bind(reader.GCSObjectsV1, schema.Schema[Object]{
+	Info: schema.Info{Name: "swath_listing"},
 	Columns: []schema.Column[Object]{
-		{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Size, true }},
-		{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},
-		{Spec: schema.Spec{Name: "etag", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
-		{Spec: schema.Spec{Name: "generation", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Generation, o.Generation != 0 }},
-		{Spec: schema.Spec{Name: "metageneration", Type: schema.Int64}, Int: func(o *Object) (int64, bool) { return o.Metageneration, o.Metageneration != 0 }},
-		{Spec: schema.Spec{Name: "storage_class", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
-		{Spec: schema.Spec{Name: "md5", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.MD5 })},
-		{Spec: schema.Spec{Name: "crc32c", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.CRC32C })},
-		{Spec: schema.Spec{Name: "content_type", Type: schema.String}, Str: nonEmpty(func(o *Object) string { return o.ContentType })},
+		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
+		{Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},
+		{Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
+		{Int: func(o *Object) (int64, bool) { return o.Generation, o.Generation != 0 }},
+		{Int: func(o *Object) (int64, bool) { return o.Metageneration, o.Metageneration != 0 }},
+		{Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
+		{Str: nonEmpty(func(o *Object) string { return o.MD5 })},
+		{Str: nonEmpty(func(o *Object) string { return o.CRC32C })},
+		{Str: nonEmpty(func(o *Object) string { return o.ContentType })},
 		// time_created is an optional column of the schema id, placed
 		// last: parts written before the lister recorded it lack it, so a
 		// reader may read it where present but not require it
-		// (docs/upgrade.md, "The downstream reader: dispatch on schema id").
-		{Spec: schema.Spec{Name: "time_created", Type: schema.TimestampMicros}, Int: func(o *Object) (int64, bool) { return o.TimeCreated, o.TimeCreated != 0 }},
+		// (docs/dataset.md, "Schema registry").
+		{Int: func(o *Object) (int64, bool) { return o.TimeCreated, o.TimeCreated != 0 }},
 	},
 	Bytes: func(o *Object) int64 { return 40 + objectHeap(o) }, // five integers of 8 bytes
 	Heap:  objectHeap,
 	Codec: objectCodec{},
-}
+})
 
 func objectHeap(o *Object) int64 {
 	return int64(len(o.ETag) + len(o.StorageClass) + len(o.MD5) + len(o.CRC32C) + len(o.ContentType))

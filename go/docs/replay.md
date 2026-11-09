@@ -26,10 +26,12 @@ kill %1
 
 `--fixture` is a sorted listing: a dataset directory this tool wrote (SeekParquet, read through the seekparquet
 module `github.com/varveio/seekparquet/go`; one whose keys repeat, an `--all-versions` listing, is refused until
-the versions routes exist), a format-2 dataset directory of an
-earlier build, a dataset's `data/` directory, a directory of sorted parts written by Java `swath --sort`, or one
-such part. A fixture that cannot
-be served sorted is refused when it opens, with the reason. A file ending
+the versions routes exist), a dataset's `data/` directory, a directory of sorted parts written by Java
+`swath --sort`, or one such part. A fixture that cannot be served sorted is refused when it opens, with the
+reason; a dataset of format 2 (written by builds from 2026-11-05 to 2026-11-08) is not served: re-list it. The
+Java-era forms are **legacy**: they are read by `internal/replay/legacy`, kept only until the Go replay has
+replaced the Java replay (#352) and the fixtures are re-listed as SeekParquet datasets, after which that reader
+is deleted (#353). A file ending
 in `.tsv` is instead a key list loaded into memory (one object per line: key, size, last-modified microseconds,
 ETag, storage class, owner id, owner display name, checksum algorithm, checksum type; fields percent-escaped,
 `\N` for null), for tests and for listings that have no Parquet form; `bench/replaydiff -dump-tsv` writes one.
@@ -40,8 +42,11 @@ ETag, storage class, owner id, owner display name, checksum algorithm, checksum 
 part in the 13-column canonical schema, or a directory of `*.parquet` parts) into a sorted SeekParquet dataset
 that `serve` can open. `--output` must be new or empty; like the lister, the command takes the output's lock and
 leaves `.swath/` with the lock file in it. Only `OBJECT` rows are written; a duplicate key, a versioned row, an
-unknown `row_type` or a key over the cap (1,024 bytes; `--key-limit` raises it up to 4,096) is refused before
-anything is written. On success it prints one line on stdout:
+unknown `row_type` or a key over the cap (1,024 bytes, the S3 limit; `--key-limit` raises it up to 4,096) is
+refused before anything is written. Azure names reach 1,024 UTF-16 units, 3,072 bytes of UTF-8, so a fixture
+for the Azure route that holds them needs `--key-limit 3072`; nothing else on that route is shorter (fields
+4,096 bytes, markers 8,192 characters; `server` `TestAzureServesLongestNames` serves 3,072-byte names and a
+3,072-byte `startFrom`). On success it prints one line on stdout:
 
 ```
 sort_fixture rows=10000 objects=10000 skipped=0 parts=1 bytes=230500 schema=swath-replay/objects/v1 wall_ms=40 output=/data/sorted
@@ -77,6 +82,7 @@ word.
 | `--serving-mode` | `sorted` | `sorted` only; `duckdb` is refused with the reason |
 | `--protocols` | `s3` | any of `s3`, `gcs` and `azure`, comma-separated (below). With `gcs` the bucket must be a valid GCS bucket name, and `storage` is refused with both `s3` and `gcs`; with `azure` it must be a valid container name |
 | `--azure-account` | `replay` | the Azure route's account path segment (3 to 24 lower-case letters and digits); refused without `azure` |
+| `--azure-hns` | off | Get Account Information reports a hierarchical-namespace account (`x-ms-is-hns-enabled: true`) instead of a flat one; refused without `azure` |
 | `--advertised-host` | `--host` | the host the Azure `ServiceEndpoint` and `native_endpoints` name; required for a wildcard bind with `azure` |
 
 The durations take `500ms`, `10s` or ISO-8601 (`PT10S`). A bad value is a usage error (exit 2) naming the
@@ -230,16 +236,23 @@ curl -H 'x-ms-version: 2026-06-06' 'http://127.0.0.1:19090/replay/replay-fixture
 
 `--protocols s3,azure` serves Azure Blob's flat `List Blobs` beside S3 from the same fixture, store, admission
 and meters: `GET /{account}/{container}?restype=container&comp=list`, where `--bucket` is the container (it must
-be a valid container name) and `--azure-account` the account. A request whose path is `/{account}/{one segment}`
-and whose query has `restype` or `comp` belongs to this route before its method is checked; one that also has
-`list-type` is a replay `400 {"error":"replay_ambiguous_request"}`; every other request stays on the S3 route,
-or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
+be a valid container name) and `--azure-account` the account, and Get Account Information (below). A request
+whose path is `/{account}/{one segment}` and whose query has `restype` or `comp`, or a Get Account Information
+request (`restype=account`) on `/{account}`, `/{account}/` or `/{account}/{one segment}/`, belongs to this route
+before its method is checked; one that also has `list-type` is a replay `400 {"error":"replay_ambiguous_request"}`;
+every other request stays on the S3 route, or, with S3 off, is a replay `404 {"error":"replay_not_found"}`. So
+with the Azure route enabled and the S3 bucket named like the account, an account-path request carrying both
+the S3 selector and the account-information selector is now that ambiguous-request `400`, while one carrying
+the list selector stays on the S3 route as before.
 
 - `x-ms-version` must be `2026-06-06` or `2026-10-06` and is echoed; anything else is `400 InvalidHeaderValue`.
   `x-ms-client-request-id` (at most 1,024 bytes, no CR or LF) is echoed. `Accept` must allow `application/xml`.
 - Parameters: `prefix`, `delimiter` (any string), `marker`, `maxresults` (1 to 2,147,483,647 ASCII digits; a page
   holds at most 5,000, the default; the value is echoed as sent), `startFrom` (inclusive), `timeout` (1 to
-  3,600), and an empty `include`. A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
+  3,600), an empty `include`, and the parameters of a shared access signature (`sv`, `ss`, `srt`, `sp`, `se`,
+  `st`, `spr`, `sig`, `sr`, `si`, `sip`, `skoid`, `sktid`, `skt`, `ske`, `sks`, `skv`, `saoid`, `suoid`, `scid`,
+  `ses`, `sdd`, `rscc`, `rscd`, `rsce`, `rscl`, `rsct`), accepted and ignored on both operations: the replay does
+  not authenticate (`server` `TestAzureSASQueries`). A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
   malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
   and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
   matrix in [`../../docs/replay-provider-conformance.md`](../../docs/replay-provider-conformance.md) records.
@@ -264,6 +277,15 @@ or, with S3 off, is a replay `404 {"error":"replay_not_found"}`.
 - The injected latency profile applies alike: a delimiter request is a structure probe, `maxresults=1` a pivot
   probe.
 
+Get Account Information, `GET` or `HEAD /{account}?restype=account&comp=properties`, is answered on every path
+the route claims for it, as Azure answers it on any resource path of the account: `/{account}`, `/{account}/`
+(the path a client joins to the `ServiceEndpoint`), and any container path, existing or not, with or without a
+trailing slash (a container SAS sends it there). It answers `200` with an empty body, no `Content-Type`,
+`x-ms-is-hns-enabled: false` (`true` under `--azure-hns`), `x-ms-account-kind: StorageV2`,
+`x-ms-sku-name: Standard_LRS` and the headers above, and reads nothing from the fixture. Its refusals are the list
+route's: `x-ms-version` and `x-ms-client-request-id` as above, other methods `405 UnsupportedHttpVerb` with
+`Allow: GET, HEAD`; the query may carry only `restype`, `comp`, `timeout` and SAS parameters.
+
 A name of more than 254 `/`-separated segments is listed, as native Azure lists it (the evidence archive's
 capture `azure-12a`; `azure` `TestRenderRefusals`).
 
@@ -273,10 +295,10 @@ The rule: a recording served on its own provider's API answers exactly as stored
 is either mapped to the equivalent value, where a real equivalent exists, or a fixed placeholder. The S3-shaped
 schemas are S3's own (`swath/canonical` is the format-1 schema, `swath/s3-objects/v1` the Go lister's S3
 datasets, `swath-replay/objects/v1` what `sort-fixture` writes from a capture; all three hold the same nine
-columns); `swath/gcs-objects/v1` is GCS's own; `swath-local/v1` (a local tree's size and modification time) has
+columns); `swath/gcs-objects/v1` is GCS's own; `swath/local-entries/v1` (a local tree's size and modification time) has
 no provider API, so every route maps or fills it.
 
-| Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath-local/v1` |
+| Route: field | S3-shaped: `swath/canonical`, `swath/s3-objects/v1`, `swath-replay/objects/v1` | `swath/gcs-objects/v1` | `swath/local-entries/v1` |
 |---|---|---|---|
 | S3: `Key` | exact | mapped from the object name (the same bytes) | mapped from the relative path |
 | S3: `LastModified` | exact, milliseconds (the epoch when null) | mapped from `time_created` (GCS `timeCreated`, which the XML API lists), milliseconds; from `last_modified` (GCS `updated`) where `time_created` is null or the part lacks the column | mapped from the modification time, milliseconds |
@@ -396,13 +418,13 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `request.latency{shape}` | from startup | the S3 route's own cost per shape (`worker_page`, `pivot_probe`, `structure_probe`), injected delay excluded |
 | `request.stage.latency{protocol,stage}` | on first use | `page`, `render`, `delay`, `write` of a page; an error answer has no write stage |
 | `fixture.list.latency`, `serving.path{mode}` | from startup | one S3 pager operation |
-| `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era or format-2 fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
+| `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
 | `index.load.latency{source=derived}`, `index.entries` | from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | from startup | how long a store read holds its reader slot, slot wait excluded |
 | `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag |
 | `delimiter.path{path}` | on first use | `rollup` or `walk` for an S3 delimiter page |
-| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup; absent over a SeekParquet dataset (the seekparquet module reports no page work: unavailable, not zero) | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks. A key cursor stays open on its group for the whole rollup and decodes whole key pages |
+| `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks; over a SeekParquet dataset, the seekparquet module's per-request counts (`ReadStats`: row groups opened, groups skipped, keys decoded, page-index seeks). A key cursor stays open on its group for the whole rollup and decodes whole key pages |
 | `handle_cache.opens`, `.evictions`, `.waits`, `.open`, `.peak`, `.limit` | from startup | every part is read through one descriptor cache: first opens and reopens after eviction, evictions, and reads that waited for a descriptor as counters; descriptors open, at most, and the limit (half the soft descriptor limit, at most 4,096) as gauges |
 | `sortfixture.build.latency`, `sortfixture.output.bytes` | from startup, zero | recorded by `sort-fixture`, never by a server |
 | `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |

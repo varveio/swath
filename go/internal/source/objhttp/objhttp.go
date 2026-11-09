@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // Class is what kind of failure an error is, for the caller's decision:
@@ -41,6 +42,7 @@ const (
 	ClassTransport    Class = "transport"      // the connection failed or was cut
 	ClassParse        Class = "parse"          // a 200 whose body did not parse
 	ClassInvalidPage  Class = "invalid_page"   // a page that breaks the listing contract (provider-detected)
+	ClassUnsupported  Class = "unsupported"    // a source or a name the tool refuses (source.ErrUnsupported): the run is refused, its journal kept
 	ClassCanceled     Class = "canceled"       // the caller's context ended
 	ClassOther        Class = "other"
 )
@@ -61,6 +63,14 @@ type Answer interface {
 	error
 	Throttle() bool  // the service asked the client to slow down
 	Retryable() bool // the request may succeed when repeated
+}
+
+// RetryAfter is a failure carrying the service's own wait before the
+// attempt is repeated (an Azure Retry-After header): Do waits that long
+// when it exceeds the backoff it drew.
+type RetryAfter interface {
+	error
+	RetryAfter() time.Duration
 }
 
 // CredentialError is a credential failure: credentials that do not load,
@@ -187,6 +197,10 @@ func Classify(err error, answer func(error) (Class, bool)) Class {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, source.ErrUnsupported):
+		// before the answer it may carry: an account whose namespace
+		// cannot be read is refused as unsupported, whatever the answer
+		return ClassUnsupported
 	case errors.As(err, &ce):
 		// before the context check: a credential failure may wrap a
 		// deadline (a token exchange's own timeout) without the caller's
@@ -257,7 +271,8 @@ func (r *Retry) Defaults() {
 
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
-// full-jitter exponential backoff between attempts and counting retries,
+// full-jitter exponential backoff between attempts (or the service's own
+// wait, RetryAfter, when that is longer) and counting retries,
 // throttles and timeouts (every throttled or timed-out attempt, the last
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
@@ -288,7 +303,12 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		}
 		c.retries.Add(1)
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
-		t := time.NewTimer(rand.N(d) + 1)
+		wait := rand.N(d) + 1
+		var ra RetryAfter
+		if errors.As(err, &ra) {
+			wait = max(wait, ra.RetryAfter())
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()

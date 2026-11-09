@@ -17,7 +17,7 @@ import (
 const maxKeyBytes = 1024
 
 // SeedFrom makes the engine start from pr instead of the delimiter seed
-// (source.Seeded; docs/internals/providers.md, "Warm start"). A prior sets
+// (source.Seeded; docs/internals/range-engine.md, "Warm start"). A prior sets
 // the initial tiles and their first estimates only; the adaptive engine
 // (owner splits, the gauge, admission, hunger) runs as on any run, so a
 // prior can make a listing slower, never wrong: every tiling of the scope

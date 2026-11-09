@@ -59,7 +59,7 @@ func TestConfigRefusals(t *testing.T) {
 	for _, extra := range [][]string{
 		{"--serving-mode", "duckdb"}, {"--serving-mode", "other"}, {"--protocols", "s3,gcs"}, {"--protocols", "azure"}, {"--protocols", "azure", "--azure-account", "Bad"},
 		{"--protocols", "azure", "--host", "0.0.0.0"},
-		{"--protocols", "s3,"}, {"--protocols", "replay"}, {"--azure-account", "replay"}, {"--advertised-host", "http://x"},
+		{"--protocols", "s3,"}, {"--protocols", "replay"}, {"--azure-account", "replay"}, {"--azure-hns"}, {"--advertised-host", "http://x"},
 		{"--max-concurrent-requests", "7"}, {"--stop-timeout", "0s"}, {"--write-timeout", "soon"},
 		{"--max-response-bytes", "300000000"},
 	} {

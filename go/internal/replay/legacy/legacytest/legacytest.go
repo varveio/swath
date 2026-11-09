@@ -2,22 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package legacytest writes small sorted fixtures for tests: Java-era
-// parts (the 13-column canonical schema and the footer sortedness stamps)
-// and format-2 datasets (a manifest and parts carrying the profile stamps),
+// parts (the 13-column canonical schema and the footer sortedness stamps),
 // with page and row-group geometry chosen by the test. The files are
-// synthetic: the writer is parquet-go, not either tool.
+// synthetic: the writer is parquet-go, not the Java tool.
 package legacytest
 
 import (
-	"crypto/md5"
-	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 
@@ -96,9 +90,6 @@ type Part struct {
 	// BoundBytes is the ColumnIndex truncation; 0 is 64, the Java writer's
 	// library default.
 	BoundBytes int
-	// Sorted records the key column ascending as every row group's sorting
-	// column, as the format-2 writer does.
-	Sorted bool
 }
 
 // Write writes part to path. Rows are written in the order given.
@@ -115,9 +106,6 @@ func Write(path string, part Part) error {
 	}
 	if part.PageBytes == 0 {
 		options[1] = parquet.PageBufferSize(1024)
-	}
-	if part.Sorted {
-		options = append(options, parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))))
 	}
 	for k, v := range part.Stamps {
 		options = append(options, parquet.KeyValueMetadata(k, v))
@@ -254,104 +242,6 @@ func cmpOr(v, fallback int) int {
 		return v
 	}
 	return fallback
-}
-
-// Format-2 names and stamps, spelled out here so that a test of the
-// profile does not take them from the code under test.
-const (
-	Format2SchemaID = "swath/s3-objects/v1"
-	format2Format   = "swath-dataset"
-)
-
-// Format2Stamps returns the footer stamps of a format-2 part.
-func Format2Stamps(schemaID string, boundBytes int) map[string]string {
-	return map[string]string{
-		"swath.profile":           format2Format,
-		"swath.profile_version":   "2",
-		"swath.schema_id":         schemaID,
-		"swath.index_bound_bytes": strconv.Itoa(boundBytes),
-	}
-}
-
-// Dataset describes a format-2 dataset.
-type Dataset struct {
-	// SchemaID is the manifest's and the footers' schema id; "" is
-	// Format2SchemaID.
-	SchemaID string
-	// Parts are written in order as data/part-NNNNN.parquet. Each part's
-	// Stamps are added to the format-2 stamps (a value of "" removes
-	// one); BoundBytes defaults to 1,024 bytes.
-	Parts []Part
-	// Unsorted leaves out the sorting-column metadata the format-2 writer
-	// records on every row group.
-	Unsorted bool
-}
-
-// ManifestPart is one part entry of a written manifest.
-type ManifestPart struct {
-	Path   string `json:"path"`
-	Rows   int64  `json:"rows"`
-	Bytes  int64  `json:"bytes"`
-	MinKey string `json:"min_key_base64,omitempty"`
-	MaxKey string `json:"max_key_base64,omitempty"`
-	MD5    string `json:"md5"`
-}
-
-// Manifest is the manifest WriteFormat2 writes: the fields a reader of the
-// format checks, and a complete coverage.
-type Manifest struct {
-	Format        string         `json:"format"`
-	FormatVersion int            `json:"format_version"`
-	SchemaID      string         `json:"schema_id"`
-	Coverage      map[string]any `json:"coverage"`
-	Parts         []ManifestPart `json:"parts"`
-}
-
-// WriteFormat2 writes d into dir (created if needed) and returns its
-// manifest. Every non-empty part records its exact first and last keys.
-func WriteFormat2(dir string, d Dataset) (Manifest, error) {
-	schemaID := d.SchemaID
-	if schemaID == "" {
-		schemaID = Format2SchemaID
-	}
-	m := Manifest{Format: format2Format, FormatVersion: 2, SchemaID: schemaID,
-		Coverage: map[string]any{"complete": true, "stop_reason": "completed"}, Parts: []ManifestPart{}}
-	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
-		return m, err
-	}
-	for i, part := range d.Parts {
-		bound := cmpOr(part.BoundBytes, 1024)
-		stamps := Format2Stamps(schemaID, bound)
-		for k, v := range part.Stamps {
-			if v == "" {
-				delete(stamps, k)
-			} else {
-				stamps[k] = v
-			}
-		}
-		part.Stamps, part.BoundBytes, part.Sorted = stamps, bound, !d.Unsorted
-		rel := fmt.Sprintf("data/part-%05d.parquet", i)
-		path := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := Write(path, part); err != nil {
-			return m, err
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return m, err
-		}
-		sum := md5.Sum(raw)
-		entry := ManifestPart{Path: rel, Rows: int64(len(part.Rows)), Bytes: int64(len(raw)), MD5: hex.EncodeToString(sum[:])}
-		if n := len(part.Rows); n > 0 {
-			entry.MinKey = base64.StdEncoding.EncodeToString([]byte(part.Rows[0].Key))
-			entry.MaxKey = base64.StdEncoding.EncodeToString([]byte(part.Rows[n-1].Key))
-		}
-		m.Parts = append(m.Parts, entry)
-	}
-	raw, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return m, err
-	}
-	return m, os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644)
 }
 
 // keyOrdered is the canonical schema with the key column's ColumnIndex

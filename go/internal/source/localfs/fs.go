@@ -55,6 +55,9 @@ type Options struct {
 	LinkTarget bool            // read symlink targets (stat tiers)
 	Skip       map[string]bool // directory keys ("a/b/") neither emitted nor walked
 	Portable   bool            // use the portable engine even where a native one exists
+	// OneFilesystem lists a directory on another device than the root
+	// (a mount point) but does not walk it, as du -x and find -xdev.
+	OneFilesystem bool
 }
 
 // Stats count what a listing saw. Per-entry problems are counted, never fatal.
@@ -78,6 +81,9 @@ type Stats struct {
 	Presized         int64    `json:"presized"`                    // large directories whose buffers were sized from st_size
 	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (opened.Run)
 	Samples          []string `json:"error_samples,omitempty"`
+	// OtherDevice counts directories listed and not walked, on another
+	// device than the root (OneFilesystem).
+	OtherDevice int64 `json:"other_device_dirs"`
 }
 
 // Errors is the sum of the error counters.
@@ -112,6 +118,7 @@ func (s *Stats) add(o *Stats) {
 	s.Unsorted += o.Unsorted
 	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
+	s.OtherDevice += o.OtherDevice
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -131,6 +138,7 @@ type Provider struct {
 	root   string
 	opt    Options
 	native bool
+	dev    int64 // the root's device (OneFilesystem)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -155,7 +163,13 @@ func New(root string, opt Options) (*Provider, error) {
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
-	return &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable}, nil
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable}
+	if opt.OneFilesystem {
+		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
 }
 
 // Root is the root directory range.
@@ -216,6 +230,17 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 			continue
 		}
 		st.Dirs++
+		if p.otherDevice(row) {
+			st.OtherDevice++
+			if !p.opt.NoDirs {
+				continue // listed with the rows after it; its subtree is not walked
+			}
+			if err := e.Rows(rows[start:i]); err != nil {
+				return err
+			}
+			start = i + 1
+			continue
+		}
 		end := i + 1
 		if p.opt.NoDirs {
 			end = i

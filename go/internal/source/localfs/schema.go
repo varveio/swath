@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/reader"
 )
 
 // Kind is a file type; its String form is the kind column value.
@@ -81,53 +82,47 @@ type Row = schema.Row[Entry]
 // Has reports whether every bit in p is present.
 func (e *Entry) Has(p Presence) bool { return e.Present&p == p }
 
-// Schema is swath-local/v1: one row per entry below the root, directories
+// Schema is swath/local-entries/v1: one row per entry below the root, directories
 // included, each with a named kind. size and last_modified match the S3
 // schema. Names are bytes (a POSIX name need not be UTF-8): key and
 // link_target are unannotated BYTE_ARRAY, written exactly as the kernel
 // returned them. Identifiers (mode, uid, gid, nlink, inode, dev) are
 // unsigned; allocated_bytes is st_blocks × 512; metadata_changed_at is ctime.
-var Schema = schema.Schema[Entry]{
-	Info: schema.Info{Name: "swath_listing", ID: "swath-local/v1", Key: schema.Binary},
+var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
+	Info: schema.Info{Name: "swath_listing"},
 	Columns: []schema.Column[Entry]{
-		int64Col("size", HasSize, func(e *Entry) int64 { return e.Size }),
-		timeCol("last_modified", HasMtime, func(e *Entry) int64 { return e.Mtime }),
-		{Spec: schema.Spec{Name: "kind", Type: schema.String, Required: true}, Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }},
-		uint32Col("mode", HasMode, func(e *Entry) uint32 { return e.Mode }),
-		uint32Col("uid", HasUID, func(e *Entry) uint32 { return e.UID }),
-		uint32Col("gid", HasGID, func(e *Entry) uint32 { return e.GID }),
-		uint32Col("nlink", HasNlink, func(e *Entry) uint32 { return e.Nlink }),
-		uint64Col("inode", HasInode, func(e *Entry) int64 { return e.Inode }),
-		uint64Col("dev", HasDev, func(e *Entry) int64 { return e.Dev }),
-		int64Col("allocated_bytes", HasBlocks, func(e *Entry) int64 { return e.Blocks }),
-		timeCol("metadata_changed_at", HasCtime, func(e *Entry) int64 { return e.Ctime }),
-		timeCol("atime", HasAtime, func(e *Entry) int64 { return e.Atime }),
-		timeCol("birth_time", HasBtime, func(e *Entry) int64 { return e.Btime }),
-		{Spec: schema.Spec{Name: "link_target", Type: schema.Binary, MaxBytes: pathMax}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
+		intCol(HasSize, func(e *Entry) int64 { return e.Size }),
+		intCol(HasMtime, func(e *Entry) int64 { return e.Mtime }),
+		{Str: func(e *Entry) (string, bool) { return e.Kind.String(), true }},
+		uint32Col(HasMode, func(e *Entry) uint32 { return e.Mode }),
+		uint32Col(HasUID, func(e *Entry) uint32 { return e.UID }),
+		uint32Col(HasGID, func(e *Entry) uint32 { return e.GID }),
+		uint32Col(HasNlink, func(e *Entry) uint32 { return e.Nlink }),
+		intCol(HasInode, func(e *Entry) int64 { return e.Inode }),
+		intCol(HasDev, func(e *Entry) int64 { return e.Dev }),
+		intCol(HasBlocks, func(e *Entry) int64 { return e.Blocks }),
+		intCol(HasCtime, func(e *Entry) int64 { return e.Ctime }),
+		intCol(HasAtime, func(e *Entry) int64 { return e.Atime }),
+		intCol(HasBtime, func(e *Entry) int64 { return e.Btime }),
+		{Spec: schema.Spec{MaxBytes: pathMax}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
 	},
-	Bytes: entryBytes,
-	Heap:  func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
-	Codec: entryCodec{},
-}
+	Bytes:     entryBytes,
+	Heap:      func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
+	Codec:     entryCodec{},
+	Container: func(e *Entry) bool { return e.Kind == KindDir },
+})
 
 // pathMax is the longest link target (Linux PATH_MAX).
 const pathMax = 4096
 
-func int64Col(name string, p Presence, get func(*Entry) int64) schema.Column[Entry] {
-	return schema.Column[Entry]{Spec: schema.Spec{Name: name, Type: schema.Int64}, Int: func(e *Entry) (int64, bool) { return get(e), e.Has(p) }}
+// intCol reads an integer or time present with p; uint32Col carries an
+// unsigned value's bits in Int, as the Uint64 columns' int64 fields do.
+func intCol(p Presence, get func(*Entry) int64) schema.Column[Entry] {
+	return schema.Column[Entry]{Int: func(e *Entry) (int64, bool) { return get(e), e.Has(p) }}
 }
 
-func timeCol(name string, p Presence, get func(*Entry) int64) schema.Column[Entry] {
-	return schema.Column[Entry]{Spec: schema.Spec{Name: name, Type: schema.TimestampMicros}, Int: func(e *Entry) (int64, bool) { return get(e), e.Has(p) }}
-}
-
-// uint32Col and uint64Col carry the unsigned value's bits in Int.
-func uint32Col(name string, p Presence, get func(*Entry) uint32) schema.Column[Entry] {
-	return schema.Column[Entry]{Spec: schema.Spec{Name: name, Type: schema.Uint32}, Int: func(e *Entry) (int64, bool) { return int64(int32(get(e))), e.Has(p) }}
-}
-
-func uint64Col(name string, p Presence, get func(*Entry) int64) schema.Column[Entry] {
-	return schema.Column[Entry]{Spec: schema.Spec{Name: name, Type: schema.Uint64}, Int: func(e *Entry) (int64, bool) { return get(e), e.Has(p) }}
+func uint32Col(p Presence, get func(*Entry) uint32) schema.Column[Entry] {
+	return schema.Column[Entry]{Int: func(e *Entry) (int64, bool) { return int64(int32(get(e))), e.Has(p) }}
 }
 
 // entryBytes is an entry's logical size: the kind name, the link target

@@ -28,16 +28,16 @@ configs() {
   echo "find-names|find $D -mindepth 1 ! -type d | wc -l"
   if have bfs; then echo "bfs-names|bfs $D -mindepth 1 ! -type d | wc -l"; fi
   if have fdfind; then echo "fd-names|fdfind -uu -t f -t l -t p -t s . $D | wc -l"; fi
-  echo "swath-names|$BIN count $D --metadata names --no-stats"
+  echo "swath-names|$BIN diag count $D --metadata names --no-stats"
   # one stat per entry
   echo "find-printf|find $D -mindepth 1 ! -type d -printf '%s %T@ %p\n' | wc -l"
   if have bfs; then echo "bfs-printf|bfs $D -mindepth 1 ! -type d -printf '%s %T@ %p\n' | wc -l"; fi
   if have fdfind; then echo "fd-stat|fdfind -uu -t f -t l -t p -t s --changed-before 2100-01-01 . $D | wc -l"; fi
   echo "python-oswalk-lstat|python3 $W $D"
-  echo "swath-stat|$BIN count $D --no-stats"
-  echo "swath-stat-w4|$BIN count $D --workers 4 --no-stats"
-  echo "swath-stat-portable|SWATH_LOCALFS_ENGINE=portable $BIN count $D --no-stats"
-  echo "swath-statx|$BIN count $D --metadata statx --no-stats"
+  echo "swath-stat|$BIN diag count $D --no-stats"
+  echo "swath-stat-w4|$BIN diag count $D --workers 4 --no-stats"
+  echo "swath-stat-portable|SWATH_LOCALFS_ENGINE=portable $BIN diag count $D --no-stats"
+  echo "swath-statx|$BIN diag count $D --metadata statx --no-stats"
   echo "swath-parquet|$BIN list $D -o $S --overwrite --no-stats > /dev/null && echo"
   # disk-usage tools: stat everything, sum sizes, print no rows
   if have gdu; then echo "gdu|gdu -n -p -s $D > /dev/null"; fi
@@ -47,7 +47,7 @@ configs() {
   if have dua; then echo "dua|dua aggregate $D > /dev/null"; fi
 }
 
-count_of() { # last line of output -> a count, from wc -l, python's print, or swath count's files=N
+count_of() { # last line of output -> a count, from wc -l, python's print, or swath diag count's files=N
   local last; last=$(tail -1 "$1")
   if [[ $last =~ files=([0-9]+) ]]; then echo "${BASH_REMATCH[1]}"; elif [[ $last =~ ^[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then echo "${BASH_REMATCH[1]}"; fi
 }

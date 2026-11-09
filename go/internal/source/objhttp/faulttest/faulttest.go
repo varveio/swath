@@ -65,7 +65,7 @@ func (w Window) holds(n uint64, t time.Duration) bool {
 // Plan is a run's faults.
 type Plan struct {
 	Seed    uint64
-	Dialect string // "s3" (default) or "gcs": the throttle answer's shape
+	Dialect string // "s3" (default), "gcs" or "azure": the throttle answer's shape
 	Windows []Window
 	// RateCap, if positive, throttles every request beyond RateCap in the
 	// trailing second (served requests only count).
@@ -133,8 +133,8 @@ func New(target string, plan Plan) (*Proxy, error) {
 	if plan.Dialect == "" {
 		plan.Dialect = "s3"
 	}
-	if plan.Dialect != "s3" && plan.Dialect != "gcs" {
-		return nil, fmt.Errorf("faulttest: dialect %q: want s3 or gcs", plan.Dialect)
+	if plan.Dialect != "s3" && plan.Dialect != "gcs" && plan.Dialect != "azure" {
+		return nil, fmt.Errorf("faulttest: dialect %q: want s3, gcs or azure", plan.Dialect)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024
@@ -318,6 +318,16 @@ func (p *Proxy) bucket(t time.Duration) *Bucket {
 }
 
 func (p *Proxy) throttle(w http.ResponseWriter) {
+	if p.plan.Dialect == "azure" {
+		// Azure Blob's: 503 ServerBusy, the code in x-ms-error-code and in
+		// a BOM-prefixed error body.
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("x-ms-error-code", "ServerBusy")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "\xef\xbb\xbf"+`<?xml version="1.0" encoding="utf-8"?><Error><Code>ServerBusy</Code>`+
+			`<Message>The server is busy.</Message></Error>`)
+		return
+	}
 	if p.plan.Dialect == "gcs" {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusTooManyRequests)

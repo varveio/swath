@@ -31,6 +31,16 @@ the bucket” once.
 Use **prefix** for a key prefix. Directory or folder language is acceptable only when
 describing a user interface or a dataset's physical output directory.
 
+### Local trees: entry, file, and directory
+
+A local directory tree is not an object store, and its words are its own. Its rows are
+**entries**: **files** (every kind that is not a directory: regular files, symbolic links,
+devices) and **directories**. Do not call a local entry an object in prose or on the
+terminal. Machine-readable names (report fields, TSV columns, JSON members) stay the same
+for every source so one script reads them all: there `objects` counts a local tree's files,
+and a field that means rows, directories included, says so (`rows_emitted`; `progress.json`'s
+`objects`). A directory's own size is not an object's: it is in no object byte count.
+
 ### Live listing, result, and snapshot
 
 swath performs a **live listing** and publishes a **listing result** or **inventory**.
@@ -44,14 +54,29 @@ consistency matters:
 `_SUCCESS` means the result was completely published; it does not add transactional
 snapshot semantics.
 
-### Managed Parquet dataset
+### swath dataset and SeekParquet dataset
 
-On first use in a beginner or workflow page, define it:
+- **swath dataset** is the product term: a committed SeekParquet dataset that carries one of
+  swath's registered schema ids and a valid `extensions.swath`. Use it in product
+  documentation, CLI output and downstream integrations. On first use in a beginner or
+  workflow page, define it:
 
-> A managed Parquet dataset is a directory of Parquet parts plus swath's manifest,
-> completion marker, run report, and temporary resume state.
+  > A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that
+  > commits them, in the SeekParquet format, with one of swath's registered schema ids
+  > and valid swath metadata ([the swath dataset profile](../go/docs/dataset.md)).
 
-After that, **managed dataset** is enough when the format is clear.
+- **SeekParquet dataset** is the format term: any dataset that satisfies the SeekParquet
+  sorted-key format, whoever wrote it. Use it when the format itself matters:
+  interoperability, generic readers, conformance and diagnostics.
+- **swath dataset profile** is swath's contract on top of the format: its schema ids, the
+  `extensions.swath` metadata and its acceptance rules. The Go port's
+  [`go/docs/dataset.md`](../go/docs/dataset.md) owns it.
+- **Parquet part** is one Parquet file the manifest lists.
+- **Legacy Java dataset** is the Java tool's format 1, with its own commit rules
+  (`_SUCCESS`, the run summary). Use the term in migration documents and legacy
+  diagnostics. The Java tool's own pages call it a **managed Parquet dataset**: a
+  directory of Parquet parts plus swath's manifest, completion marker, run report, and
+  temporary resume state.
 
 ### Supported and experimental
 

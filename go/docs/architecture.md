@@ -22,7 +22,7 @@ sort: no sorted runs staged on disk and no merge pass. What does sit on disk bef
 pipeline state: closed Parquet parts in `.swath/parts/` (claimed while their journal record is written,
 then renamed into `data/`) and, with spill, rows ahead of the frontier, read back in key order.
 
-A count (`swath count`) has no sink that needs order, so `order.Count` takes the place of the order stage
+A count (`swath du`, `swath diag count`) has no sink that needs order, so `order.Count` takes the place of the order stage
 and everything after it: workers expand the same ranges and the rows are counted and dropped as they arrive,
 with no reorder buffer, no spill and no file ([internals/ordering.md](internals/ordering.md#counting-without-order)).
 
@@ -32,7 +32,7 @@ under the mutex, splits only if workers are idle (demand), the range ranks among
 structure boundary or the pivot passes the guards and, for a bounded range, the admission gates estimate
 that the remainder and both children are worth their requests. It then emits `(cursor, pivot]` and
 `(pivot, hi]` and returns, and the children become claimable
-([internals/providers.md](internals/providers.md#range-engine-internalsourcekeyrange)).
+([internals/range-engine.md](internals/range-engine.md)).
 
 ## Packages
 
@@ -41,21 +41,25 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `cmd/swath` | the commands (`list`, `resume`, `show`, `diag list`); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run cancelled through `context.WithCancelCause` with the signal as cause (so SIGINT exits 130 and SIGTERM 143), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, journal, dataset; providers only to register them (`_` imports) |
 | `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Excluder`, `Reporter`) | schema |
-| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`) | source, schema, order, parquetout, dataset |
-| `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath-local/v1`; registers the scheme-less roots | source, schema, registry, dataset |
+| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`); the column bindings of the filters' sizes, the object bytes, the versions counts and the per-prefix totals | source, schema, order, parquetout, dataset, totals |
+| `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; registers the scheme-less roots | source, schema, registry, dataset |
 | `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits (demand, rank, admission gates), safe pivots, guards, structure probes, requeue, counters, group mode (a versions listing's repeated keys: groups.go); behind a page fetch and a provider description | source, schema, counters, faults |
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
 | `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://`. With `--all-versions` (`NewVersions`): the ListObjectVersions page fetch, its payload `Version` and schema `swath/s3-versions/v1` (grouped), its native page and continuation token | source, schema, registry, keyrange, s3/client |
+| `internal/source/azblob` | Azure Blob provider on the range engine: flat-namespace admission (Get Account Information), the List Blobs page fetch through the byte-order adapter (one per `Expand`), its row payload `Object` and schema `swath/azblob-objects/v1`; registers `az://` | source, schema, registry, keyrange, azblob/client, azblob/order |
+| `internal/source/azblob/order` | the byte-order adapter: serves the range engine's queries in byte order over List Blobs' UTF-16 order (spans cut at names at U+E000 and above, lazy splits, page-atomic chains with their own tokens, its `order_*` counters) | source, keyrange, counters, azblob/client, utf16order |
+| `internal/utf16order` | Azure's listing order (UTF-16 code units) on UTF-8 bytes: the comparator the Azure client, the byte-order adapter and the replay's Azure route share | – |
 | `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); registers `gs://` | source, schema, registry, keyrange, gcs/client |
 | `internal/source/objhttp` | what both object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client counters, route canonicalization; `objhttptest` holds the retry contract both clients pass | counters |
 | `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, the page parser | objhttp |
 | `internal/source/s3/sdkoracle` | the AWS SDK behind the provider's `API`; imported by tests only | s3/client |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`); the unordered count of a dry run (`Count`) | source, schema, dataset |
-| `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`), `Info` | – |
-| `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)) | schema, dataset |
+| `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`, `Container`: a row that is no object, a local directory), `Info`; `Bind` takes a schema id's key settings and its columns' names, types and nullability from the reader module's spec | reader (the nested module) |
+| `internal/textout` | the text sink: TSV, JSONL or the table to a file (gzip, zstd) or stdout, rows formatted by parallel formatters into one ordered stream ([internals/ordering.md](internals/ordering.md#the-waits)); `swath du`'s prefix rows (TSV, JSONL with `PrefixBase64` for a name that is not UTF-8, or the readable table) | schema, dataset, totals |
 | `internal/filter` | Java's seven row filters and the `--include` prefix narrowing | schema |
-| `internal/parquetout` | file writer, schema binding, codec, part router (`Router[P]`), encoders | schema, dataset, buildinfo |
+| `internal/totals` | `swath du`: per-prefix sums (objects, directories, bytes, unsized objects, newest time) below the source's prefix, from concurrent batches, capped at `--max-prefixes` (and `--max-inodes` for `--count-links-once`) | – |
+| `internal/parquetout` | schema binding, codec, part router (`Router[P]`), encoders over the seekparquet module's part writer | schema, dataset, buildinfo, seekparquet |
 | `internal/dataset` | layout, overwrite safety, manifest, footer stamp names, publication gate and order, the part cut rule a sink states for the segment tail (`SegmentPlan`) | faults |
 | `internal/journal` | the journal (CRC-framed records of committed parts, synchronous appends by the ordered committer), resume identity | dataset |
 | `internal/counters` | the counter table (definitions + one atomic each); summaries and docs are generated from it | – |
@@ -63,12 +67,23 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/buildinfo` | the binary's identity (tool, module version, VCS revision, the linker's `Revision` first): the report's `build`, `--version`, the resume identity's tool, the footer's `created_by`, the clients' User-Agent | – |
 
 The list clients are hand-rolled on the SDKs' authentication; what is the SDK's, what is ours and why:
-[internals/providers.md](internals/providers.md#the-list-clients-hand-rolled-on-the-sdks-auth).
+[internals/clients.md](internals/clients.md#the-list-clients-hand-rolled-on-the-sdks-auth).
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
 transitively.
+
+**Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
+inherit the lister's dependencies: `go/reader` (`github.com/varveio/swath/go/reader`: the schema ids and their
+columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that checks
+a dataset's schema, accepts it as a whole-source listing, streams and lists its current objects, and validates its
+digests at import; the SeekParquet module
+and the standard library only; [../reader/README.md](../reader/README.md)) and `go/objfile` (a dataset in an object
+store opened as files read by byte range; [../objfile/README.md](../objfile/README.md)). The lister imports
+`go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
+specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. Neither nested
+module imports the lister.
 
 **Typed rows.** A row is `schema.Row[P]`: its key and the producer's payload `P` (`fs.Entry`, `s3.Object`), so
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`

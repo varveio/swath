@@ -228,11 +228,22 @@ func TestReplacedOutputWithLiveWriters(t *testing.T) {
 		t.Fatal("the copy holds no spill directory")
 	}
 	before := fileTree(t, imp)
-	if err := os.Rename(out, moved); err != nil {
-		t.Fatal(err)
+	// The replacement happens inside Owned, under the lock the writer's
+	// check-then-write holds: Owned does not exclude a replacement between
+	// its Verify and the write (progress.go), and a tick that verified just
+	// before an unlocked rename wrote into the impostor (#318 CI). Every
+	// tick now either completes before the replacement or verifies after
+	// it, which is the identity check this test is about.
+	var renameErr error
+	if !pr.Owned(func() {
+		if renameErr = os.Rename(out, moved); renameErr == nil {
+			renameErr = os.Rename(imp, out)
+		}
+	}) {
+		t.Fatal("the run did not own its output at the replacement")
 	}
-	if err := os.Rename(imp, out); err != nil {
-		t.Fatal(err)
+	if renameErr != nil {
+		t.Fatal(renameErr)
 	}
 	err := <-done
 	time.Sleep(20 * time.Millisecond) // the writer goes on after the run
