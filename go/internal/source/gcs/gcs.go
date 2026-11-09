@@ -33,7 +33,7 @@ type pooled interface{ Transports() int }
 type Options struct {
 	Bucket          string
 	Prefix          string
-	Endpoint        string // JSON API base (replay, tests); default client.DefaultEndpoint
+	Endpoint        string // JSON API base supplied by --endpoint; default client.DefaultEndpoint
 	Anonymous       bool   // send no credentials, whatever the environment holds
 	CredentialsFile string // service-account or authorized-user JSON; else Application Default Credentials
 	UserProject     string // billed project for a requester-pays bucket

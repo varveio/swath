@@ -18,10 +18,9 @@ import (
 type sorted = keyrangetest.Sorted
 
 var (
-	newSorted        = keyrangetest.NewSorted
-	keyspaces        = keyrangetest.Keyspaces
-	hostile          = keyrangetest.Hostile
-	errBadStartAfter = keyrangetest.ErrBadStartAfter
+	newSorted = keyrangetest.NewSorted
+	keyspaces = keyrangetest.Keyspaces
+	hostile   = keyrangetest.Hostile
 )
 
 // Object is the test payload.

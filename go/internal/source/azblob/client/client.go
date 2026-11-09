@@ -62,9 +62,10 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
 	objhttp.Retry
-	// Endpoint is the blob service base URL; default DefaultEndpoint for
-	// Account. Any other endpoint (an emulator, the replay server) takes
-	// the account as its first path segment: ENDPOINT/ACCOUNT/CONTAINER.
+	// Endpoint is the blob service base URL; default
+	// https://ACCOUNT.blob.core.windows.net. An explicit endpoint (an
+	// emulator, the replay server) takes the account as its first path
+	// segment: ENDPOINT/ACCOUNT/CONTAINER.
 	Endpoint string
 	Account  string
 	// Anonymous sends no credentials, whatever is configured.

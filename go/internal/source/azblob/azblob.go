@@ -195,11 +195,10 @@ var _ source.Provider[Range, Object] = (*Provider)(nil)
 
 // New builds a provider and admits the account (admit): its namespace
 // must be positively flat, or the run is refused (source.Unsupported)
-// before any listing request: on a hierarchical-namespace account '/'
-// sorts lowest,
-// and after a byte cursor "a.z" the key "a/child" is still in range, but a
-// seek that sorts '/' lowest skips it while every page still ascends, so
-// nothing downstream could notice.
+// before any listing request: on a hierarchical-namespace account '/' sorts
+// lowest, and after a byte cursor "a.z" the key "a/child" is still in range,
+// but a seek that sorts '/' lowest skips it while every page still ascends,
+// so nothing downstream could notice.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, source.Unsupported(errors.New("azblob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))

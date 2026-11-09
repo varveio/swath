@@ -15,11 +15,12 @@
 // Redirects are never followed.
 //
 // Credentials live as long as the client: the token source is built on a
-// context that is never cancelled, whose HTTP client bounds each token
-// exchange by the request timeout, and every attempt waits for its token
-// under its own attempt deadline. Requests go unauthenticated only with
-// Anonymous; Application Default Credentials that cannot be found or
-// loaded refuse the client.
+// context that is never cancelled. Every attempt bounds its wait for a
+// token by its own deadline. Token exchanges using the supplied HTTP client
+// have the request timeout; metadata refresh uses the metadata SDK's own
+// HTTP timeout and retries, without a total refresh deadline. Requests go
+// unauthenticated only with Anonymous; Application Default Credentials that
+// cannot be found or loaded refuse the client.
 package client
 
 import (
@@ -51,8 +52,8 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 // readScope is the OAuth2 scope a listing needs.
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
-// fields asks only for what a listing reads (sent to DefaultEndpoint), and
-// the envelope's kind, which a client can require of every 200;
+// fields asks only for what a listing reads, plus the envelope's kind,
+// which a client can require of every 200;
 // versionFields adds what a generations listing reads (timeDeleted).
 const (
 	fields        = "kind,nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
@@ -237,14 +238,13 @@ var quiet = slog.New(slog.DiscardHandler)
 
 // Endpoint is the JSON API base a client built with ep sends to, and the
 // form the resume identity records: DefaultEndpoint for "", an http(s) URL
-// with a host and no user information (a password would be recorded), its path's escapes kept as given and a literal trailing
-// slash added when the escaped path has none (so "tenant%2F" is the base
-// "tenant%2F/", not a base whose last segment the generated client's
-// relative resolution would drop). One string is one destination: the
-// client sends to exactly this base. A path holding a URI-template brace,
-// literal or escaped (%7B, %7D), is refused: the generated client expands
-// the request path as a template, which panics on an empty expression
-// and drops a named one.
+// with a host and no user information (a password would be recorded), its
+// path's escapes kept as given and a literal trailing slash added when the
+// escaped path has none (so "tenant%2F" is the base "tenant%2F/", not a base
+// whose last segment the generated client's relative resolution would
+// drop). A path holding a URI-template brace, literal or escaped (%7B, %7D),
+// is refused: the generated client expands the request path as a template,
+// which panics on an empty expression and drops a named one.
 //
 // The generated client resolves the request path against the base (dot
 // segments removed: "/a/../storage/v1/" sends to "/storage/v1/...") and

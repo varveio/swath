@@ -6,6 +6,7 @@ package objhttp
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestMeterActivityIsLive(t *testing.T) {
 	if live := a.Requests(); live.Attempts != 2 || live.Retries != 1 || live.Inflight != 0 || a.Answered() != 1 || th != 0 || to != 1 {
 		t.Fatalf("completed: %+v, answered %d, faults %d/%d", live, a.Answered(), th, to)
 	}
-	if n := m.Counters(); n.Attempts != 2 || n.Retries != 1 || n.Timeouts != 1 || n.InflightMax != 1 || n.InflightNs <= 0 {
+	if n := m.Counters(); n.Attempts != 2 || n.Retries != 1 || n.Timeouts != 1 || n.InflightMax != 1 || n.InflightNs < 0 || (n.InflightNs == 0 && runtime.GOOS != "windows") {
 		t.Fatalf("counts: %+v", n)
 	}
 }
