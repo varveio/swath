@@ -12,14 +12,61 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
-	"github.com/varveio/swath/go/internal/source/s3/sdkoracle"
 )
+
+// sdkOracle is the AWS SDK's stock S3 client, with its own decoder, as the
+// S3 provider's API (s3.API). It does not ask for encoding-type=url, so
+// keys arrive raw.
+type sdkOracle struct{ c *awss3.Client }
+
+func (s *sdkOracle) ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error) {
+	str := func(v string) *string {
+		if v == "" {
+			return nil
+		}
+		return aws.String(v)
+	}
+	req := &awss3.ListObjectsV2Input{Bucket: aws.String(in.Bucket), Prefix: str(in.Prefix), StartAfter: str(in.StartAfter),
+		ContinuationToken: str(in.ContinuationToken), Delimiter: str(in.Delimiter)}
+	if in.MaxKeys > 0 {
+		req.MaxKeys = aws.Int32(int32(in.MaxKeys))
+	}
+	if in.FetchOwner {
+		req.FetchOwner = aws.Bool(true)
+	}
+	out, err := s.c.ListObjectsV2(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	pg := &client.Page{IsTruncated: aws.ToBool(out.IsTruncated), NextContinuationToken: aws.ToString(out.NextContinuationToken),
+		HasContinuation: out.NextContinuationToken != nil, KeyCount: int(aws.ToInt32(out.KeyCount)), Contents: make([]client.Object, len(out.Contents))}
+	for i, o := range out.Contents {
+		c := &pg.Contents[i]
+		c.Key, c.ETag, c.Size, c.StorageClass, c.ChecksumType = aws.ToString(o.Key), aws.ToString(o.ETag), aws.ToInt64(o.Size), string(o.StorageClass), string(o.ChecksumType)
+		if o.LastModified != nil {
+			c.Mtime = o.LastModified.UnixMicro()
+		}
+		if o.Owner != nil {
+			c.OwnerID, c.OwnerDisplayName = aws.ToString(o.Owner.ID), aws.ToString(o.Owner.DisplayName)
+		}
+		if len(o.ChecksumAlgorithm) > 0 {
+			c.ChecksumAlgorithm = string(o.ChecksumAlgorithm[0])
+		}
+	}
+	for _, p := range out.CommonPrefixes {
+		pg.CommonPrefixes = append(pg.CommonPrefixes, aws.ToString(p.Prefix))
+	}
+	return pg, nil
+}
 
 // oracleKeys mixes the shapes that stress encoding: spaces, '+', '%',
 // XML metacharacters, non-ASCII, long keys, dense numeric runs.
@@ -35,7 +82,8 @@ func oracleKeys() []string {
 }
 
 // TestDatasetsMatchSDK is the step-1 gate: datasets listed through the
-// custom client are byte-identical to datasets listed through the AWS SDK,
+// client are byte-identical to datasets listed through the AWS SDK's stock
+// client,
 // sequential and parallel, on the same fake bucket.
 func TestDatasetsMatchSDK(t *testing.T) {
 	s3test.NoCredentials(t)
@@ -49,7 +97,8 @@ func TestDatasetsMatchSDK(t *testing.T) {
 		}
 		return out
 	}
-	sdk := sdkoracle.New(srvURL, "us-east-1", true)
+	sdk := &sdkOracle{awss3.New(awss3.Options{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}, UsePathStyle: true,
+		BaseEndpoint: aws.String(srvURL)})}
 	ref := build(S3Config{Client: sdk, Policy: keyrange.Policy{Sequential: true}}, 1)
 	for name, tc := range map[string]struct {
 		cfg     S3Config
