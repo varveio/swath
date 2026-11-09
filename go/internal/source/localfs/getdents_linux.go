@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"os"
 	"runtime"
 	"slices"
@@ -49,6 +50,16 @@ type entry struct {
 	nameOff, nameLen uint32
 	keyOff, keyLen   uint32
 	typ              uint8
+}
+
+// errTooLarge: a directory whose names or keys exceed 4 GiB does not fit an
+// entry's 32-bit offsets; it is skipped and counted as a read error.
+var errTooLarge = errors.New("directory too large: its names or keys exceed 4 GiB")
+
+// fitsOffsets reports whether sc's names, and the keys buildKeys would make
+// under a prefix of plen bytes, fit an entry's 32-bit offsets.
+func fitsOffsets(plen int, sc *scratch) bool {
+	return len(sc.names) <= math.MaxUint32 && len(sc.names)+len(sc.ents)*(plen+1) <= math.MaxUint32
 }
 
 // scratch is per-goroutine reusable memory for reading a directory. keys is
@@ -112,6 +123,11 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	if err := readNames(ctx, fd, r.path, sc, st); err != nil {
 		unix.Close(fd)
 		return err
+	}
+	if !fitsOffsets(len(r.prefix), sc) {
+		unix.Close(fd)
+		st.note(&st.ReadErrors, r.path, errTooLarge)
+		return nil
 	}
 	p.resolveUnknown(fd, sc)
 	buildKeys(r.prefix, sc)

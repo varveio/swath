@@ -104,3 +104,17 @@ func TestHugeDirectorySortsInParallel(t *testing.T) {
 		})
 	}
 }
+
+// TestFitsOffsets: a directory whose keys would pass 4 GiB (1.1M eight-byte
+// names under a 3,900-byte prefix: 4.2998 GB) does not fit an entry's
+// offsets; the same names under a prefix 10 bytes shorter do.
+func TestFitsOffsets(t *testing.T) {
+	n := 1_100_000
+	sc := &scratch{ents: make([]entry, n), names: make([]byte, 8*n)}
+	if fitsOffsets(3900, sc) {
+		t.Fatal("4.2998 GB of keys fit 32-bit offsets")
+	}
+	if !fitsOffsets(3890, sc) {
+		t.Fatal("4.2889 GB of keys do not fit")
+	}
+}
