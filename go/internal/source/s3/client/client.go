@@ -82,7 +82,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.Region, http: cfg.HTTPClient, note: a.Note,
+	c := &Client{cfg: cfg, auth: a, region: a.Region, note: a.Note,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
@@ -94,11 +94,17 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	} else {
 		c.base = &url.URL{Scheme: "https", Host: awsHost(c.region, cfg.FIPS, cfg.DualStack)}
 	}
-	if c.http == nil {
+	// No redirect is followed, a supplied client's included (a copy): the
+	// route is fixed and a 3xx is an answer.
+	if cfg.HTTPClient != nil {
+		hc := *cfg.HTTPClient
+		c.http = &hc
+	} else {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024 // one keep-alive connection per worker
-		c.http = &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		c.http = &http.Client{Transport: t}
 	}
+	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return c, nil
 }
 
