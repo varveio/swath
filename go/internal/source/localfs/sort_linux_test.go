@@ -8,6 +8,7 @@ package localfs
 import (
 	"fmt"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -86,6 +87,10 @@ func TestHugeDirectorySortsInParallel(t *testing.T) {
 			t.Fatal(err)
 		}
 		unix.Close(fd)
+	}
+	if prev := runtime.GOMAXPROCS(0); prev < 2 { // one processor sorts in one run
+		runtime.GOMAXPROCS(2)
+		t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 	}
 	for _, fields := range []Fields{Names, Stat} {
 		t.Run(fields.String(), func(t *testing.T) {

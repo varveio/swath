@@ -22,7 +22,8 @@ have() { command -v "$1" > /dev/null; }
 
 # name|command: a command that prints the non-directory count last (or nothing, for the disk-usage tools)
 configs() {
-  local D=$1
+  local D; D=$(printf '%q' "$1") # a path with spaces stays one argument of bash -c
+  local W S; W=$(printf '%q' "$PYWALK"); S=$(printf '%q' "$SCR/out")
   # names only: the entry type from the directory entry, no stat
   echo "find-names|find $D -mindepth 1 ! -type d | wc -l"
   if have bfs; then echo "bfs-names|bfs $D -mindepth 1 ! -type d | wc -l"; fi
@@ -32,12 +33,12 @@ configs() {
   echo "find-printf|find $D -mindepth 1 ! -type d -printf '%s %T@ %p\n' | wc -l"
   if have bfs; then echo "bfs-printf|bfs $D -mindepth 1 ! -type d -printf '%s %T@ %p\n' | wc -l"; fi
   if have fdfind; then echo "fd-stat|fdfind -uu -t f -t l -t p -t s --changed-before 2100-01-01 . $D | wc -l"; fi
-  echo "python-oswalk-lstat|python3 $PYWALK $D"
+  echo "python-oswalk-lstat|python3 $W $D"
   echo "swath-stat|$BIN count $D --no-stats"
   echo "swath-stat-w4|$BIN count $D --workers 4 --no-stats"
   echo "swath-stat-portable|SWATH_LOCALFS_ENGINE=portable $BIN count $D --no-stats"
   echo "swath-statx|$BIN count $D --metadata statx --no-stats"
-  echo "swath-parquet|$BIN list $D -o $SCR/out --overwrite --no-stats > /dev/null && echo"
+  echo "swath-parquet|$BIN list $D -o $S --overwrite --no-stats > /dev/null && echo"
   # disk-usage tools: stat everything, sum sizes, print no rows
   if have gdu; then echo "gdu|gdu -n -p -s $D > /dev/null"; fi
   if have dust; then echo "dust|dust -d 0 $D > /dev/null"; fi
@@ -57,6 +58,7 @@ for rep in $(seq 1 "$REPS"); do
     configs "$BASE/$t" | grep -E "^($FILTER)\|" | while IFS='|' read -r name cmd; do
       if ! /usr/bin/time -f '%e %U %S %M' -o "$SCR/t" bash -c "$cmd" > "$SCR/o" 2>&1; then
         echo "FAILED: $t $name: $(tail -3 "$SCR/o")" >&2
+        continue # a failed run is not a measurement: not in raw.tsv
       fi
       read -r wall user sys rss < <(tail -1 "$SCR/t")
       count=$(count_of "$SCR/o")
