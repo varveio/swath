@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/buildinfo"
 )
 
 const okPage = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>k%20</Key><Size>1</Size></Contents></ListBucketResult>`
@@ -29,6 +31,21 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 		t.Fatal(err)
 	}
 	return c, srv
+}
+
+func TestUserAgent(t *testing.T) {
+	var agent string
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		agent = r.Header.Get("User-Agent")
+		w.Write([]byte(okPage))
+	}, Config{Anonymous: true})
+	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := buildinfo.UserAgent(); agent != want {
+		t.Fatalf("User-Agent %q, want %q", agent, want)
+	}
+	t.Logf("User-Agent: %s", agent)
 }
 
 func TestRetriesAndThrottles(t *testing.T) {

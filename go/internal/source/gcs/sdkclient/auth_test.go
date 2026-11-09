@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
@@ -29,8 +30,8 @@ func (s tokens) Token() (*oauth2.Token, error) {
 }
 
 // TestCredentialsAndHeaders: each attempt carries the shared token source's
-// bearer token and swath's User-Agent (as the hand-rolled client sends
-// them); a token the source will not issue is a credential failure before
+// bearer token and swath's product token (prepended to the SDK's own
+// User-Agent); a token the source will not issue is a credential failure before
 // any request (no attempt counted).
 func TestCredentialsAndHeaders(t *testing.T) {
 	var auth, agent string
@@ -48,9 +49,14 @@ func TestCredentialsAndHeaders(t *testing.T) {
 		if _, err := c.List(context.Background(), &client.ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		if auth != "Bearer tok" || agent != buildinfo.Tool {
+		want := buildinfo.UserAgent()
+		if sdk {
+			want += " " + googleapi.UserAgent
+		}
+		if auth != "Bearer tok" || agent != want {
 			t.Fatalf("sdk %v: Authorization %q, User-Agent %q", sdk, auth, agent)
 		}
+		t.Logf("sdk %v: User-Agent: %s", sdk, agent)
 	}
 	c, err := New(context.Background(), client.Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: tokens{errors.New("refused")}})
 	if err != nil {

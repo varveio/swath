@@ -508,7 +508,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", buildinfo.Tool)
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	tok, err := c.Token(actx)
 	if err != nil {
 		return nil, err

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -20,14 +21,16 @@ import (
 // ListVersionsResult to a versions request, okPage to the others, after
 // failing the first fail requests with a 503.
 type recorder struct {
-	fail int
-	mu   sync.Mutex
-	urls []*url.URL
+	fail   int
+	mu     sync.Mutex
+	urls   []*url.URL
+	agents []string
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.mu.Lock()
 	r.urls = append(r.urls, req.URL)
+	r.agents = append(r.agents, req.Header.Get("User-Agent"))
 	n := len(r.urls)
 	r.mu.Unlock()
 	status, body := 200, okPage
@@ -38,6 +41,36 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 		body = `<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>`
 	}
 	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+}
+
+// TestUserAgent records the finished header through Guard.Next, including
+// a retry, a continuation and a versions request.
+func TestUserAgent(t *testing.T) {
+	s3test.NoCredentials(t)
+	rec := &recorder{fail: 1}
+	c, err := New(context.Background(), client.Config{Region: "us-east-1", Anonymous: true,
+		HTTPClient: &http.Client{Transport: rec}, MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []*client.ListInput{{Bucket: "b"}, {Bucket: "b", ContinuationToken: "next"}} {
+		if _, err := c.ListObjectsV2(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.agents) != 4 {
+		t.Fatalf("%d requests, want 4", len(rec.agents))
+	}
+	for _, agent := range rec.agents {
+		if token := buildinfo.UserAgent(); !strings.HasPrefix(agent, token+" ") ||
+			!strings.Contains(agent, "aws-sdk-go-v2/") || strings.Count(agent, token) != 1 {
+			t.Errorf("User-Agent %q: want one leading product token and the SDK product", agent)
+		}
+	}
+	t.Logf("User-Agent: %s", rec.agents[0])
 }
 
 // routeOf is a request URL's route: scheme, host and escaped path.

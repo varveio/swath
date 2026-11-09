@@ -181,7 +181,7 @@ func (c *Client) attempt(ctx context.Context, in *client.ListInput) (*client.Pag
 		call.MaxResults(int64(in.MaxResults))
 	}
 	h := call.Header()
-	h.Set("User-Agent", buildinfo.Tool)
+	h.Set("User-Agent", buildinfo.UserAgent()+" "+googleapi.UserAgent)
 	tok, err := c.Token(actx)
 	if err != nil {
 		return nil, err
