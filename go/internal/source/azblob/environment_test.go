@@ -71,10 +71,10 @@ func TestFaultsRequeued(t *testing.T) {
 	}
 }
 
-// TestBinaryLinksAzidentityNotAzblob: the swath command links azcore and
-// azidentity (Entra ID tokens) and not the SDK's blob client, which is a
-// test-only oracle.
-func TestBinaryLinksAzidentityNotAzblob(t *testing.T) {
+// TestBinaryLinksAzblob: the swath command's default build links the Azure
+// SDK's blob service and container clients (the list client sends through
+// them), azcore and azidentity (Entra ID tokens).
+func TestBinaryLinksAzblob(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go list")
 	}
@@ -86,14 +86,10 @@ func TestBinaryLinksAzidentityNotAzblob(t *testing.T) {
 	}
 	deps := strings.Fields(string(out))
 	for _, want := range []string{"github.com/Azure/azure-sdk-for-go/sdk/azcore", "github.com/Azure/azure-sdk-for-go/sdk/azidentity",
-		"github.com/varveio/swath/go/internal/source/azblob"} {
+		"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service", "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container",
+		"github.com/varveio/swath/go/internal/source/azblob/client"} {
 		if !slices.Contains(deps, want) {
 			t.Errorf("cmd/swath does not link %s", want)
-		}
-	}
-	for _, dep := range deps {
-		if strings.Contains(dep, "sdk/storage/azblob") {
-			t.Fatalf("cmd/swath links %s", dep)
 		}
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -280,55 +279,6 @@ func TestCompareNames(t *testing.T) {
 	}
 }
 
-// TestEncodedNameDecoding: <Name Encoded="true"> is percent-decoded once
-// with path semantics: '+' stays '+', %2B is '+', %25 is '%' (not decoded
-// twice); control characters, U+FFFE and 4-byte scalars come through; a
-// malformed escape or bytes that are not UTF-8 are an invalid page.
-func TestEncodedNameDecoding(t *testing.T) {
-	for _, c := range []struct{ wire, want string }{
-		{"a+b", "a+b"},
-		{"a%2Bb", "a+b"},
-		{"a%2541", "a%41"},
-		{"ctl%01", "ctl\x01"},
-		{"x%EF%BF%BE", "x\ufffe"},
-		{"%F0%9F%98%80", "\U0001F600"},
-		{"probe%2Fu%2F%EF%BF%BF", "probe/u/\uffff"},
-	} {
-		got, err := decodeName(wireName{Encoded: true, Text: c.wire})
-		if err != nil || got != c.want {
-			t.Errorf("%q: %+q, %v; want %+q", c.wire, got, err, c.want)
-		}
-	}
-	for _, bad := range []string{"a%2", "a%zz", "%", "%C3", "%FF%FE"} {
-		if _, err := decodeName(wireName{Encoded: true, Text: bad}); !errors.Is(err, ErrInvalidPage) {
-			t.Errorf("%q: %v, want an invalid page", bad, err)
-		}
-	}
-	// Not encoded: the text as XML gave it, '%' and '+' literal.
-	if got, _ := decodeName(wireName{Text: "a%2B+b"}); got != "a%2B+b" {
-		t.Errorf("plain name %q", got)
-	}
-	// Through the parser, mixed with plain names and prefixes in wire order.
-	body := listHead + `<Blob><Name>a+%</Name></Blob><BlobPrefix><Name Encoded="true">b%2B%25%01/</Name></BlobPrefix>` +
-		`<Blob><Name Encoded="true">c%EF%BF%BE</Name></Blob><Blob><Name>d&amp;&#13;</Name></Blob>` + listTail
-	p, err := parse(context.Background(), []byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []Item{{Name: "a+%"}, {Name: "b+%\x01/", Prefix: true}, {Name: "c\ufffe"}, {Name: "d&\r"}}
-	if len(p.Items) != len(want) {
-		t.Fatalf("%+v", p.Items)
-	}
-	for i := range want {
-		if p.Items[i] != want[i] {
-			t.Errorf("item %d: %+v, want %+v", i, p.Items[i], want[i])
-		}
-	}
-	if _, err := parse(context.Background(), []byte(listHead+`<Blob><Name Encoded="true">a%G1</Name></Blob>`+listTail)); !errors.Is(err, ErrInvalidPage) {
-		t.Errorf("malformed escape through the parser: %v", err)
-	}
-}
-
 // TestEnvelopeRetried: a 200 whose body is not a listing envelope (an
 // <Error>, another root, no XML, nothing, an EnumerationResults without
 // Blobs or with an Error inside, content after its close) is retried like
@@ -397,11 +347,11 @@ func TestRedirectRefused(t *testing.T) {
 	}
 }
 
-// TestRequestShape: the one request the client sends: the container path
-// under the account segment of a non-default endpoint, restype and comp,
-// the other parameters only when set (spaces as %20, '+' as %2B), never
-// endBefore or include; x-ms-version pinned, a fresh
-// x-ms-client-request-id per attempt, Accept and the user agent.
+// TestRequestShape: the List Blobs request the client sends: the container
+// path under the account segment of a non-default endpoint, restype and
+// comp, the other parameters only when set (spaces as %20, '+' as %2B),
+// never endBefore or include; x-ms-version pinned, Accept and no
+// credentials when anonymous (the User-Agent is TestServiceVersionPinned's).
 func TestRequestShape(t *testing.T) {
 	var mu sync.Mutex
 	var reqs []*http.Request
@@ -436,12 +386,9 @@ func TestRequestShape(t *testing.T) {
 	if q := reqs[2].URL.RawQuery; q != "comp=list&restype=container" {
 		t.Errorf("bare request ?%s", q)
 	}
-	if reqs[0].Header.Get(headerClientRequestID) == reqs[1].Header.Get(headerClientRequestID) {
-		t.Error("a retry repeated the client request id")
-	}
 	for _, r := range reqs {
-		if r.Header.Get(headerVersion) != "2026-10-06" || r.Header.Get(headerClientRequestID) == "" || r.Header.Get(headerAccept) != "application/xml" ||
-			r.Header.Get(headerUserAgent) != buildinfo.UserAgent() || r.Header.Get(headerAuthorization) != "" || r.Header.Get(headerDate) != "" {
+		if r.Header.Get(headerVersion) != "2026-10-06" || r.Header.Get("Accept") != "application/xml" ||
+			!strings.HasPrefix(r.Header.Get(headerUserAgent), buildinfo.UserAgent()+" ") || r.Header.Get(headerAuthorization) != "" {
 			t.Errorf("headers %v", r.Header)
 		}
 	}
@@ -458,92 +405,6 @@ func TestRequestShape(t *testing.T) {
 		if _, err := New(context.Background(), bad); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
-	}
-}
-
-// TestBodyCap: a page past the body cap is asked again with maxresults
-// halved, marker and query unchanged, so the walk still lists every key
-// exactly once with bounded memory; only a single entry past the cap is a
-// parse failure. The fake serves entries of 200 KiB (a long Content-Type)
-// against a cap lowered to 1 MiB, so pages hold at most 4 entries.
-func TestBodyCap(t *testing.T) {
-	const keys, entry = 30, 200 << 10
-	ct := strings.Repeat("x", entry)
-	var mu sync.Mutex
-	var sizes []int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		n, _ := strconv.Atoi(q.Get("maxresults"))
-		from, _ := strconv.Atoi(strings.TrimPrefix(q.Get("marker"), "m"))
-		if q.Get("prefix") != "p/" || n < 0 {
-			t.Errorf("query %s", r.URL.RawQuery)
-		}
-		mu.Lock()
-		sizes = append(sizes, n)
-		mu.Unlock()
-		if q.Get("delimiter") == "huge" {
-			n = 1 // one entry past any cap
-			ct = strings.Repeat("x", 2<<20)
-		}
-		if n == 0 {
-			n = MaxPageSize
-		}
-		var b strings.Builder
-		b.WriteString(listHead)
-		to := min(from+n, keys)
-		for i := from; i < to; i++ {
-			fmt.Fprintf(&b, "<Blob><Name>p/%03d</Name><Properties><Content-Type>%s</Content-Type></Properties></Blob>", i, ct)
-		}
-		next := ""
-		if to < keys {
-			next = fmt.Sprintf("m%d", to)
-		}
-		fmt.Fprintf(&b, "</Blobs><NextMarker>%s</NextMarker></EnumerationResults>", next)
-		fmt.Fprint(w, b.String())
-	}))
-	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	c.maxBody = 1 << 20
-	seen := map[string]int{}
-	in := ListInput{Container: "c", Prefix: "p/"}
-	for pages := 0; ; pages++ {
-		if pages > keys {
-			t.Fatal("the walk does not end")
-		}
-		p, err := c.List(context.Background(), &in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, it := range p.Items {
-			seen[it.Name]++
-			if len(it.ContentType) != entry {
-				t.Fatalf("%s: content type of %d bytes", it.Name, len(it.ContentType))
-			}
-		}
-		if p.NextMarker == "" {
-			break
-		}
-		in.Marker = p.NextMarker
-	}
-	if len(seen) != keys {
-		t.Fatalf("%d keys listed, want %d", len(seen), keys)
-	}
-	for k, n := range seen {
-		if n != 1 {
-			t.Fatalf("%s listed %d times", k, n)
-		}
-	}
-	// Each page is first asked without maxresults (the server's 5,000),
-	// then halved until it fits: 0, 2500, ..., 9, 4.
-	if sizes[0] != 0 || slices.Min(sizes) != 0 || !slices.Contains(sizes, 4) || slices.Contains(sizes, 2) || c.BodyCapShrinks() == 0 {
-		t.Fatalf("maxresults sent %v, %d shrinks", sizes, c.BodyCapShrinks())
-	}
-	_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "p/", Delimiter: "huge"})
-	if Classify(err) != objhttp.ClassParse || !strings.Contains(err.Error(), "one entry") {
-		t.Fatalf("a single entry past the cap: %v", err)
-	}
-	if MaxBody != 64<<20 {
-		t.Fatalf("MaxBody %d", MaxBody)
 	}
 }
 
