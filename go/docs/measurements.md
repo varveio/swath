@@ -762,9 +762,11 @@ The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself adde
 
 ### SDK-backed clients (2026-11-09)
 
-Clients built with `-tags swath_sdkclient` ([clients.md](internals/clients.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
-measured on branches `exp/measure-preview` (S3) and `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers
-describe those runs.
+Clients built with `-tags swath_sdkclient`, measured on branches `exp/measure-preview` (S3) and
+`exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers describe those runs. Since then the SDK-backed clients
+are the only clients ([clients.md](internals/clients.md)) and the build tag, `SWATH_S3_DECODER` and the
+hand-rolled clients are gone; the numbers stand as measured, and the arms named "default" and "hand-rolled"
+below describe the clients that were replaced.
 
 **S3 decoders** (`BenchmarkDecode` in `internal/source/s3/sdkclient`: one full client call per iteration through
 the real SDK stack and `objhttp.Guard` over an in-memory `RoundTripper`; a 1,000-entry page with URL-encoded keys,

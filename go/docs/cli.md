@@ -774,7 +774,7 @@ Diagnostics:
   credentials whatever the environment holds, and it is the only way a request goes unauthenticated: a
   public bucket or container needs it. Without it, a source with no usable credentials (none configured,
   or configured and broken) stops the run with cause `auth` before any listing request; there is no
-  fallback to anonymity.
+  fallback to anonymity, and the error ends with "(a public bucket needs --anonymous)".
 - **S3 credentials:** the AWS SDK's default credential chain applies: environment, shared files and profiles
   (`--profile`), SSO, web identity, credential processes, AssumeRole, container and instance roles. Its first
   lookup is waited for up to 30 s (a web-identity token file mounted late included); a refresh that fails
@@ -1024,7 +1024,8 @@ and excludes pending batches that never reached the sink, including on a failed 
 is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,
 `throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,
 and past the per-request timeout. `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
-`aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint); both `null` on a
+`aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
+`--gcs-endpoint` spells it); both `null` on a
 custom endpoint, whose tariff is unknown. `keys_per_sec` is `rows_emitted` over `listing_ms`;
 `http_attempts_per_1k_rows` is `http_attempts` per 1,000 `rows_fetched` (`null` without a row). Latency
 percentiles and in-flight time are the provider's counters (`source.stats.counters.values` `inflight.p50_ns`,

@@ -1,7 +1,7 @@
 # Azure Blob (`internal/source/azblob`)
 
 **Client** (`internal/source/azblob/client`): List Blobs and Get Account Information, described with the list
-clients ([clients.md](../clients.md#the-list-clients-hand-rolled-on-the-sdks-auth)). Both are sent through the Azure
+clients ([clients.md](../clients.md)). Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.7.0), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
 decodes it (an `EnumerationResults` root, nothing after it, no `Error` element in it, and `Blobs` in the decoded
@@ -29,7 +29,8 @@ builds it (environment, workload identity, managed identity, the Azure CLI and D
 discovery of swath's own: a chain that will not build is a `CredentialError` at construction; one that finds
 no credential (azidentity's own error) or whose grant is refused fails the first request with class `auth`
 before it is sent, and nothing is listed; a timeout, a transport failure or a token endpoint's 5xx is retried
-per request (`TestEntraDefaultChain`). A public container needs `--anonymous`. A SAS never
+per request (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
+when no credentials were found. An endpoint with user information is refused (`TestEndpointUserinfoRefused`). A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that
@@ -112,5 +113,5 @@ are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-fl
 past the request timeout, cut to it), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
 `order_seeks`, `order_probes` (span reads that found no member), `order_overlap_rows`, `order_empty_pages` (empty
 continuing pages followed inside a span's read), `order_stack_max`, `order_buffer_rows_max`, `order_responses`,
-`order_chains_evicted` and `order_chains_max`. **Connections**: the GCS pool, one
-transport per 16 workers (1 to 8). The client's anonymous note goes to the run's warnings.
+`order_chains_evicted` and `order_chains_max`. **Connections**: the shared pool (`objhttp.Pool`), one
+transport per 16 workers (1 to 8), as GCS. The client's anonymous note goes to the run's warnings.

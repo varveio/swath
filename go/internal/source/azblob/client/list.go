@@ -57,7 +57,7 @@ package client
 // the page, as does a malformed Date header on a listing. Get Account
 // Information's x-ms-is-hns-enabled is read from the header as sent (hns:
 // exactly "true" or "false"), not from the SDK's strconv.ParseBool reading,
-// which takes "0" for flat (TestAccountInfo).
+// which takes "0" for flat (TestAccountInfoExact).
 
 import (
 	"bytes"

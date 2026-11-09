@@ -3,9 +3,9 @@
 **Client** (`internal/source/gcs/client`). Google's generated JSON API client
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
-`userProject` when set, and its own `alt=json` and `prettyPrint=false` (`TestRequests`). **Endpoint**
-(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host
-and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
+`userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
+(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
+no user information (a password would be recorded; `TestEndpointUserinfoRefused`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
 template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
 client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
 escapes are kept, so `…/tenant%2F` is the base `…/tenant%2F/`. The generated client then resolves `b/BUCKET/o`
@@ -47,9 +47,9 @@ retried like a listing failure (counted in `timeouts` for the last), a refused g
 local token endpoint; the last injects a failed ADC search, so its refusal holds on a Google Cloud host too;
 `TestComputeTokenFromSearch` serves the compute token from a fake metadata server). The token is fetched before the attempt is counted and set
 as the request's `Authorization` header (the generated client is built without authentication), so a credential
-failure is a `CredentialError` and not an attempt. The scope is `devstorage.read_only`. The binary links
-`google.golang.org/api/storage/v1`, `golang.org/x/oauth2` and `cloud.google.com/go/compute/metadata`
-(`TestBinaryLinksGeneratedStorageClient`); `TestClientPagesMatchGoogleClient` compares the client's pages, through
+failure is a `CredentialError` and not an attempt. The scope is `devstorage.read_only`. The client is Google's
+generated `google.golang.org/api/storage/v1` client, with `golang.org/x/oauth2` credentials ([clients.md](../clients.md));
+`TestClientPagesMatchGoogleClient` compares the client's pages, through
 the production fields selector too, with the generated client's own full responses. Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
 (100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Classification* (`client.Classify`, S3's
 vocabulary): `auth` (401, a `CredentialError` that will not pass; a token endpoint outage or timeout is `transport` or `timeout`, so its exhaustion is requeued), `access_denied` (403), `no_such_bucket` (404), `redirect` (any 3xx: redirects are never followed, also through a supplied HTTP client, because the resume identity freezes the endpoint; `TestGCSRedirectCannotChangeResumeSource`), `throttle` (429,
@@ -106,8 +106,8 @@ none of the name's generations); for a 1,024-byte name, whose successor `AcceptB
 sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
 removes all of the name's rows, across pages. A page whose generations of one name do not ascend is invalid.
 
-**Connections.** The built client spreads its requests round-robin over `client.PoolSize(--workers)`
-transports (one generated service on each), one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
+**Connections.** The built client spreads its requests round-robin over a pool of transports (`objhttp.Pool`,
+one generated service on each), one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
 connection only at the server's stream limit (about 100), so a single transport would carry all 64 workers on
 one connection, which caps throughput once the engine keeps many requests in flight
 (`TestTransportPoolSpreadsConnections`). A supplied `Config.HTTPClient` is used alone (a pool of 1). There is
