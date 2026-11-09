@@ -30,7 +30,7 @@ jobs:
   # steps skipped (not `skipped` as jobs), so ci-gate keeps requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
   # its own, wider detection. go_shards is the go-race matrix, from the shard table; go_xos is the
-  # go-xos matrix.
+  # go-xos matrix, from the event.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -93,16 +93,20 @@ jobs:
 
       # Always computed, for the same reason: go-xos's runners are chosen before its steps can
       # skip, and a job-level `if` would make it `skipped`, which fails ci-gate on a pull request.
-      # Without a Go change, one step-skipped leg on ubuntu-latest, so no macOS or Windows runner
-      # is queued.
+      # A pull request runs Windows only: the macOS runner queue set the pull request's wall time,
+      # so macOS runs on main and dispatch here and nightly in nightly.yml. Without a Go change, one
+      # step-skipped leg on ubuntu-latest, so no macOS or Windows runner is queued.
       - name: Go cross-OS matrix
         id: xos
         env:
           GO_CHANGED: ${{ steps.changes.outputs.go }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           if [ "$GO_CHANGED" != true ]; then
             matrix='[{"os":"off","runner":"ubuntu-latest"}]'
+          elif [ "$EVENT" = pull_request ]; then
+            matrix='[{"os":"windows-latest","runner":"windows-latest"}]'
           else
             matrix='[{"os":"macos-latest","runner":"macos-latest"},{"os":"windows-latest","runner":"windows-latest"}]'
           fi
@@ -710,8 +714,9 @@ jobs:
   # (no -race: slow on macOS, and the Windows race detector needs cgo) on macOS and Windows.
   # linux/arm64 is covered by the go-race shards. Only vet and the tests: gofmt, the shard
   # check, the heap gates, the cross-builds and the image stay in the jobs above. The legs are
-  # the changes job's go_xos: macOS and Windows on a Go change, otherwise one go-xos (off) leg on
-  # ubuntu-latest whose steps skip.
+  # the changes job's go_xos: Windows on a pull request, macOS and Windows on main and dispatch
+  # (macOS also nightly, nightly.yml go-xos-macos), and without a Go change one go-xos (off) leg
+  # on ubuntu-latest whose steps skip.
   go-xos:
     needs: changes
     name: go-xos (${{ matrix.os }})
