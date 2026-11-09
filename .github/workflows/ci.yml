@@ -419,6 +419,10 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: go mod tidy -diff
 
+      - name: Race shard table self-test
+        if: needs.changes.outputs.go == 'true'
+        run: ../scripts/ci/go-race-shards.sh --self-test
+
       - name: Race shards cover every test once
         if: needs.changes.outputs.go == 'true'
         run: ../scripts/ci/go-race-shards.sh --check
@@ -428,7 +432,7 @@ jobs:
   # shard; the step prints the exact `go test` command to rerun it locally. fail-fast is off so
   # one red shard still lets the others report. go test's -timeout is per package binary, so it
   # is set to leave the job's limit room for setup, compiling and the packages queued ahead of
-  # the last one (the whole `rest` shard takes ~6 min): a hang ends in go test's goroutine dump,
+  # the last one (the unsplit `rest` shard took ~6 min): a hang ends in go test's goroutine dump,
   # not a killed runner. -count=1: the restored build cache would otherwise replay a shard's
   # earlier results as `(cached)` instead of racing it. The -json stream is kept as the go-race-SHARD artifact (per-test
   # starts and times, passing subtests included) for flakes and rebalancing.

@@ -14,9 +14,9 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 
 | Method | Proves | Trigger | Runner | Workflow / job |
 |---|---|---|---|---|
-| Format, vet, shard check | `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-lint` |
+| Format, vet, shard check | `gofmt -l` empty, `go vet ./...`, every test in exactly one race shard, the shard table's self-test | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-lint` |
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
-| Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest)` |
+| Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
@@ -103,7 +103,7 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 
 | Job | Runs | Runner |
 |---|---|---|
-| `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --check` | ubuntu-latest |
+| `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a Go change, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes` | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows go test -c ./internal/journal`; the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
@@ -133,18 +133,29 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `listing-rest` | `-skip` the two patterns above, `./internal/listing` | ubuntu-24.04-arm |
 | `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./cmd/swath` | ubuntu-24.04-arm |
 | `cmd` | `-skip` the pattern above, `./cmd/swath` | ubuntu-24.04-arm |
+| `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest |
+| `rest-source` | `./internal/source/...` | ubuntu-latest |
 | `rest` | every package no row names (a new package lands here) | ubuntu-latest |
 
-A package split across rows has a remainder row that `-skip`s the union of its other rows' `-run`
-patterns, so the split is complete and disjoint by construction. `--check` (in `go-lint`) lists the
-packages and tests, built with `-race` as the shards build them, and fails when a row names a package that
-does not exist, a package is in no shard, a split package has no remainder row or two, a row selects no
-test, or a test is selected twice. A new package needs no edit; a new `-run` row needs its package's
-remainder to stay nonempty.
+A row either splits one package with a `-run` pattern or runs whole packages. A package split across rows
+has a remainder row that `-skip`s the union of its other rows' `-run` patterns, so the split is complete and
+disjoint by construction. A whole-package row names a comma-separated list of package paths and `./x/...`
+prefixes; `./x/...` selects `./x` and every package under `./x/`, never `./xy`. The script expands the
+selectors against one `go list -race ./...` and passes `go test` the explicit package paths; `rest` is every
+package no selector names.
+
+`--check` (in `go-lint`) lists the packages and tests, built with `-race` as the shards build them, and fails
+when two rows share a name, there is not exactly one `rest` or it is empty, a selector matches no package, a
+package is selected twice by whole-package rows (or twice within one), a whole-package row selects a split
+package, a split package has no remainder row or two, a row selects no test, or a test is selected twice.
+`--self-test`, also in `go-lint`, runs these table checks against synthetic package lists, with no Go. A new
+package needs no edit; a new `-run` row needs its package's remainder to stay nonempty.
 
 The heavy packages race on arm64 only: its weaker memory model makes it the better race target, and the same
 `-race` suite took about 30 % less time there than on amd64 (`internal/listing` 490 s against 700 s). The
-nightly `go-race-nightly` covers amd64.
+nightly `go-race-nightly` covers amd64. The three `rest*` shards stay on amd64: the arm64 gain was measured on
+`internal/listing` only, and some packages record amd64-specific results (`internal/parquetout`
+`footeronly_test.go`).
 
 ### Cross-OS
 
@@ -207,8 +218,9 @@ gh workflow run go-stress.yml --ref BRANCH -f package=./internal/listing -f run=
 
 It runs `go test -run RUN -count N -timeout 60m -json` in a 75-minute job, writes `run RUN x N on OS: P passed,
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
-`go-stress-OS-ARCH` artifact. Stress takes a package pattern and a `-run` pattern, not a race shard: to repeat
-a shard, pass its row's arguments from [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh).
+`go-stress-OS-ARCH` artifact. Stress takes one package pattern and a `-run` pattern, not a race shard and not the shard table's
+comma-separated selectors: to repeat a shard, pass its row's arguments from
+[`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh), one package or `./x/...` pattern per dispatch.
 A long test at a high count can exceed the job's limit: split the count across several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
