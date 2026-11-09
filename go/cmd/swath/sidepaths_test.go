@@ -646,7 +646,7 @@ func TestFoldsCaseProbeInside(t *testing.T) {
 	}
 }
 
-// listOrCount runs swath count for args that start with "count", else
+// listOrCount runs swath diag count for args that start with "count", else
 // swath list.
 func listOrCount(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "count" {

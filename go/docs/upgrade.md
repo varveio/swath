@@ -93,8 +93,10 @@ already.
 `--seed-from`, `swath show` and the output checks still read a committed format 2 dataset.
 
 **Replay fixtures.** `swath-replay` serves a SeekParquet dataset through the seekparquet module, a format 2
-dataset and a Java-era fixture through its own readers (`internal/replay/legacy`); the startup line's kind is
-`seekparquet`, `format-2` or `java-era`. It refuses a dataset whose keys repeat (`key.unique` false, an
+dataset and a Java-era fixture through its own legacy readers (`internal/replay/legacy`); the startup line's kind
+is `seekparquet`, `format-2` or `java-era`. The legacy readers are transitional: they go once the Go replay has
+replaced the Java replay (#352) and the fixtures are re-listed as SeekParquet datasets (#353); re-list a format 2
+or Java-era fixture you still need before then. It refuses a dataset whose keys repeat (`key.unique` false, an
 `--all-versions` listing) until the versions routes exist (#279): its routes continue after a key, never inside
 a key's group.
 

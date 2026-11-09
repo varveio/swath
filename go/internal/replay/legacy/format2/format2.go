@@ -1,8 +1,9 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package format2 is the sorted-Parquet profile of manifest datasets
-// (format 2): a directory whose manifest.json is the commit and lists the
+// Package format2 is a LEGACY profile (deleted with its parent package
+// legacy, #353): the sorted-Parquet profile of swath-dataset format 2, the
+// manifest datasets Go builds wrote between 2026-11-05 and 2026-11-08: a directory whose manifest.json is the commit and lists the
 // parts in key order with their exact key bounds. It decides whether such a
 // dataset can be served sorted and opens it with legacy.
 package format2

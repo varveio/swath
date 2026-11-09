@@ -57,6 +57,18 @@ test through one lock, so two runs never contend for the cores and skew each oth
 flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB go test -race -count=1 -p 1 -run '^TestCrashMatrix$' ./internal/listing
 ```
 
+The adapters' own tests (the contract, differential and conformance tests above) run in the default build too.
+The tag wires the SDK-backed client into the providers, so the whole provider suites (oracle, fault, resume and
+engine tests) run through it. From `go/`:
+
+```bash
+go test -race -tags swath_sdkclient ./internal/source/s3/... ./internal/source/gcs/...
+```
+
+`BenchmarkDecode` (S3 `sdkclient`) measures the scanner against the SDK decoder through the real SDK stack, and
+`SWATH_CLIENT_COST=1000000 go test -run TestListClientCost -v ./internal/source/gcs/` the GCS clients' CPU per
+object ([measurements](measurements.md#sdk-backed-clients-2026-11-09)).
+
 What a `go-race` leg runs, from `go/` (runner instructions: a whole shard belongs on a runner or `go-stress.yml`, not a development host):
 
 ```bash
@@ -354,6 +366,24 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
   engage; `TestDelimiterBoundaries` lists a folder marker, its descendants and its byte-order neighbors at
   page size one under every delimiter-sending policy. Credentials are tested against a local token endpoint
   (`internal/source/gcs/client`, `creds_test.go`).
+- **SDK-backed clients vs the hand-rolled clients** (build tag `swath_sdkclient`; see
+  [clients.md](internals/clients.md#the-sdk-backed-clients-swath_sdkclient-experiment)). Each adapter
+  (`internal/source/s3/sdkclient`, `internal/source/gcs/sdkclient`) passes `objhttptest.Contract`, the shared
+  retry and classification contract the hand-rolled clients pass. Differential tests run both clients against
+  the same fake and compare pages, error classes, retry decisions, counters and body-close counts (every
+  original body is closed once): `TestPagesMatchHandRolled` and `TestAnswersMatchHandRolled` for each provider, and S3's
+  `TestFixturesMatchHandRolled` over the live-capture fixture bodies. The GCS `TestAnswersMatchHandRolled` scripts 48 answers and
+  records the three deliberate differences (`{}` without `kind`, a negative size, a `null` item).
+  `TestScannerConformsToSDKDecoder` holds the S3 scanner's page equal to the SDK decoder's on every fake page,
+  every fixture and the benchmark body; for versions it compares entries with the SDK's `Versions` plus
+  `DeleteMarkers` as multisets, and `TestVersionsKeepWireOrder` and `TestStockSDKLosesVersionsOrder` cover
+  order (the scanner keeps wire order, the stock SDK loses it). `TestRequestsFollowRoute` requires exactly the
+  scheme, host and escaped path `Route` names on the first, retried, continuation and versions requests across
+  default, dotted-bucket, path-style, IPv4, IPv6, custom-path, FIPS, dual-stack and China endpoints, and
+  `TestIdentitySameForBothClients` requires the same resume identity from both clients (a FIPS region alias is
+  the one pinned difference). `TestCrossEnvelopeIsParseFailure` makes a versions body on a current listing, and
+  the reverse, a parse failure on both clients. `TestSDKClientBuildTag` and `TestSDKClientOnlyWithTag` require
+  the SDK packages to be among `cmd/swath`'s dependencies only with the tag.
 - **Java swath on replay** (the differential oracle): see "Replay oracle" below.
 
 ## Replay oracle

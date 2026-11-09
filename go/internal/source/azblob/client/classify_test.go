@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/utf16order"
 )
@@ -440,10 +441,11 @@ func TestRequestShape(t *testing.T) {
 	}
 	for _, r := range reqs {
 		if r.Header.Get(headerVersion) != "2026-10-06" || r.Header.Get(headerClientRequestID) == "" || r.Header.Get(headerAccept) != "application/xml" ||
-			r.Header.Get(headerUserAgent) != "swath-go" || r.Header.Get(headerAuthorization) != "" || r.Header.Get(headerDate) != "" {
+			r.Header.Get(headerUserAgent) != buildinfo.UserAgent() || r.Header.Get(headerAuthorization) != "" || r.Header.Get(headerDate) != "" {
 			t.Errorf("headers %v", r.Header)
 		}
 	}
+	t.Logf("User-Agent: %s", reqs[0].Header.Get(headerUserAgent))
 	if got := c.Route("c"); got != srv.URL+"/acct/c" {
 		t.Errorf("route %s", got)
 	}

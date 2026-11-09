@@ -568,7 +568,7 @@ Diagnostics:
   assertion is frozen for resume and shown in the report's `namespace`, `asserted`). Names at U+E000 and above, which
   Azure lists in UTF-16 order, are listed in byte order like every other provider's, through a reordering adapter
   whose cost shows in the report's `order_*` counters
-  ([internals/providers.md](internals/providers.md#azure-blob-internalsourceazblob)).
+  ([internals/providers/azblob.md](internals/providers/azblob.md)).
 - **Durations** are Go durations (`90s`, `1h30m`). A negative one is refused (exit 2) on every duration flag,
   by `swath list` and by `swath resume` before it settles anything;
   `0` turns off `--max-duration`, `--stall-timeout` and `--part-interval`'s time cut.
@@ -741,7 +741,7 @@ Diagnostics:
   The first wave also carries the scope's first data page: a complete page (the whole scope) lists a bucket of
   one page in one round trip; a truncated one is discarded, and the first tile starts at the scope's start (or
   the resumed key) as without it; a delimiter chain whose page held no folder is not
-  followed ([internals/providers.md](internals/providers.md#range-engine-internalsourcekeyrange));
+  followed ([internals/range-engine.md](internals/range-engine.md));
   `swath diag list --seed=false` starts from one
   range instead (an experiment: [measurements](measurements.md) has the seed's effect on split depth);
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
@@ -761,14 +761,14 @@ Diagnostics:
   S3 Inventory, a prefix list, another tool's segments). A prior changes only how the work is first divided: the
   splits stay adaptive, the rows are the same. It is a runtime flag: `swath resume` reads it again and may change
   or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without it. Counters
-  `seed.from.*`; the report's `invocation.prior` ([internals/providers.md](internals/providers.md)).
+  `seed.from.*`; the report's `invocation.prior` ([internals/range-engine.md](internals/range-engine.md)).
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
 - **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
   starts at `--workers`, falls by 0.7 on a throttle answer, at most once per round trip and only while 15 % or
   more of the last 4 × `--workers` answers (at least 256) are throttles, and grows back by one per second while under 7.5 % are
   or after 10 s without one (Java swath's rules, read as a fraction so that a random background of throttles
-  is not taken for congestion; [internals/providers.md](internals/providers.md)); `--limiter=false` admits
+  is not taken for congestion; [internals/providers/s3.md](internals/providers/s3.md)); `--limiter=false` admits
   every request at once: no limit applies, the `--workers` listing workers each wait on one page at a time, and
   the seed's delimiter listings and the structure probes run beside them, so more than `--workers` requests can
   be in flight. `swath diag list --limiter-slow-start` (off by default) starts the limit at 4 instead
@@ -788,7 +788,7 @@ Diagnostics:
   the chain is empty (the environment and the shared files name no source, and the machine shows no sign of
   EC2) and the lookup finds nothing; a configured source that fails stops the run with cause `auth`, and one
   that is slow or failing transiently is waited for and retried, never replaced by anonymity. Secrets are never taken from flags (they would show in `ps`). Details:
-  [internals/providers.md](internals/providers.md).
+  [internals/providers/s3.md](internals/providers/s3.md).
 - **Bearer tokens** (S3 client, Java's flags): `--bearer-token-command CMD` runs `CMD` with `/bin/sh -c`, or on
   Windows with `cmd.exe /d /s /c "CMD"` (`%ComSpec%`, so write it in cmd syntax there); its
   stdout (trimmed, one line) is a bearer token sent as `Authorization: Bearer TOKEN` on every request instead of a

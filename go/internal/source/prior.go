@@ -11,7 +11,7 @@ import (
 )
 
 // A prior is a key distribution a range-engine source starts from instead
-// of its delimiter seed (--seed-from; docs/internals/providers.md, "Warm start"):
+// of its delimiter seed (--seed-from; docs/internals/range-engine.md, "Warm start"):
 // ordered, byte-exact cut keys, each with the keys expected in the interval
 // it closes. It sets the initial tiles and their first estimates only
 // (keyrange's SeedFrom). It is source-neutral: a previous dataset, a cut

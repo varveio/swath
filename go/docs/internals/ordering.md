@@ -33,7 +33,7 @@ counts with the provider's and the router's.
 consecutive rows: the guard accepts a key equal to the previous row's, never one below it, and never one equal
 to `Options.After` (a resume continues after a complete key). `Stats.DistinctKeys` counts the keys, and `Count`
 applies the same rule per range (ranges are key-disjoint in group mode too, so their distinct counts sum). That
-no part, split or resume boundary falls inside a key is the engine's and the router's work (providers.md, "Group
+no part, split or resume boundary falls inside a key is the engine's and the router's work (range-engine.md, "Group
 mode"; parquet-output.md).
 
 **Repeated keys and durable spill.** A durable certificate `(cs, ce]` covers keys, and its bounds are fences.

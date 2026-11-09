@@ -1,10 +1,17 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package legacy reads the sorted Parquet listings the replay server
-// serves besides SeekParquet datasets: the Java tool's footer-stamped
-// parts (javaera) and the swath-dataset format 2 earlier Go builds wrote
-// (format2). It reads them the way an sstable is read: a lower bound is
+// Package legacy is the replay server's LEGACY reader: it serves the
+// sorted Parquet listings written before SeekParquet, the Java tool's
+// footer-stamped parts (javaera) and the swath-dataset format 2 that Go
+// builds wrote between 2026-11-05 and 2026-11-08 (format2). It exists only
+// so the fixture tier and the Java differential keep working through the
+// cutover; it is deleted once the Go replay has replaced the Java replay
+// (#352) and the fixtures are re-listed as SeekParquet datasets (#353). Do
+// not add formats or features here: a new sorted listing is a SeekParquet
+// dataset, read through the seekparquet module (internal/replay/store).
+//
+// It reads them the way an sstable is read: a lower bound is
 // routed to a part and row group by the actual first key of every row
 // group, the key column's ColumnIndex and OffsetIndex locate the page that
 // can hold it, and only that page onward is decoded, a bounded
@@ -31,7 +38,5 @@
 // Parquet type (a null size or time is returned as null), or that the files
 // are unchanged after Open.
 //
-// SeekParquet datasets, the format this tool writes, are read through the
-// seekparquet module instead (internal/replay/store); this package serves
-// old fixtures. It imports only the standard library and parquet-go.
+// It imports only the standard library and parquet-go.
 package legacy

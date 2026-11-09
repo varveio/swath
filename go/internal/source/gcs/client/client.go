@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -47,11 +48,12 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 // readScope is the OAuth2 scope a listing needs.
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
-// fields asks only for what a listing reads (sent to DefaultEndpoint);
+// fields asks only for what a listing reads (sent to DefaultEndpoint), and
+// the envelope's kind, which a client can require of every 200;
 // versionFields adds what a generations listing reads (timeDeleted).
 const (
-	fields        = "nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
-	versionFields = "nextPageToken,prefixes,items(name,size,updated,timeCreated,timeDeleted,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+	fields        = "kind,nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
+	versionFields = "kind,nextPageToken,prefixes,items(name,size,updated,timeCreated,timeDeleted,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
 )
 
 // Config configures a Client. Zero values take the defaults.
@@ -166,10 +168,24 @@ type ExhaustedError = objhttp.ExhaustedError
 var ErrSyntax = objhttp.ErrSyntax
 
 // Client lists Cloud Storage buckets; safe for concurrent use.
-type Client struct {
+type Client struct{ *Core }
+
+// New resolves credentials and builds the client (NewCore).
+func New(ctx context.Context, cfg Config) (*Client, error) {
+	c, err := NewCore(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{c}, nil
+}
+
+// Core is what a GCS listing client is built on, whatever sends its
+// requests: the endpoint, the transport pool, the credentials, the retry
+// policy and the counters, with the accessors the provider reads.
+type Core struct {
 	cfg    Config
 	base   *url.URL
-	http   []*http.Client // the transport pool, requests round-robin (pick)
+	http   []*http.Client // the transport pool, requests round-robin (Next)
 	next   atomic.Uint64
 	ts     *tokensource.Shared // nil: anonymous
 	source string
@@ -178,11 +194,12 @@ type Client struct {
 	counts objhttp.Counters
 }
 
-// New resolves credentials and builds the client. Without Application
-// Default Credentials (no GOOGLE_APPLICATION_CREDENTIALS, no gcloud file, not
-// on Google Cloud), requests go unauthenticated, which public buckets allow.
-// Credentials that are configured but do not load are a *CredentialError.
-func New(ctx context.Context, cfg Config) (*Client, error) {
+// NewCore resolves credentials and builds the transport pool. Without
+// Application Default Credentials (no GOOGLE_APPLICATION_CREDENTIALS, no
+// gcloud file, not on Google Cloud), requests go unauthenticated, which
+// public buckets allow. Credentials that are configured but do not load
+// are a *CredentialError.
+func NewCore(ctx context.Context, cfg Config) (*Core, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
@@ -197,8 +214,8 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
 	}
-	c := &Client{cfg: cfg, base: u, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
+	c := &Core{cfg: cfg, base: u, source: "anonymous",
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: Answer}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
 	// client: the resume identity freezes the route the requests go to (as
@@ -274,11 +291,16 @@ func PoolSize(workers int) int {
 
 // Transports is the size of the client's transport pool (1 with a supplied
 // HTTPClient): the report's transport.pool_size.
-func (c *Client) Transports() int { return len(c.http) }
+func (c *Core) Transports() int { return len(c.http) }
 
-// pick is the next transport, round-robin.
-func (c *Client) pick() *http.Client {
-	return c.http[(c.next.Add(1)-1)%uint64(len(c.http))]
+// Pool is a copy of the transport pool (a supplied HTTPClient alone): HTTP
+// clients that never follow a redirect, shared with the client and read-only.
+func (c *Core) Pool() []*http.Client { return slices.Clone(c.http) }
+
+// Next is the index in Pool of the transport the next request takes,
+// round-robin.
+func (c *Core) Next() int {
+	return int((c.next.Add(1) - 1) % uint64(len(c.http)))
 }
 
 // adcConfigured reports whether Application Default Credentials are
@@ -322,13 +344,17 @@ func onGCEMachine() bool {
 	return n == "Google" || n == "Google Compute Engine"
 }
 
-// token waits for the token source under the attempt's deadline. Waiters
+// Token waits for the token source under the attempt's deadline (ctx);
+// nil without credentials. A failure is a *CredentialError. Waiters
 // share one outstanding call (tokensource.Shared: at most one goroutine
 // calls the source at a time, however many attempts wait or give up); a
 // call that outlives the waits finishes in the background (its own HTTP
 // client is bounded by the request timeout) and later attempts reuse its
 // token.
-func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
+func (c *Core) Token(ctx context.Context) (*oauth2.Token, error) {
+	if c.ts == nil {
+		return nil, nil
+	}
 	t, err := c.ts.Token(ctx)
 	switch {
 	case err == nil:
@@ -358,22 +384,22 @@ func transientToken(err error) bool {
 }
 
 // Credentials names where the credentials came from (never the secret).
-func (c *Client) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
+func (c *Core) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
 
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
+func (c *Core) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
 // the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
+func (c *Core) Live() objhttp.Live {
 	l := c.counts.Live()
 	l.Limit = c.retry.Limiter.Limit()
 	return l
 }
 
 // Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
+func (c *Core) Counters() Counters {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()
@@ -381,7 +407,7 @@ func (c *Client) Counters() Counters {
 }
 
 // route is the URL of a bucket's objects collection.
-func (c *Client) route(bucket string) url.URL {
+func (c *Core) route(bucket string) url.URL {
 	u := *c.base
 	u.Path += "b/" + bucket + "/o"
 	u.RawPath = strings.TrimSuffix(c.base.EscapedPath(), "/") + "/b/" + url.PathEscape(bucket) + "/o"
@@ -389,26 +415,51 @@ func (c *Client) route(bucket string) url.URL {
 }
 
 // Route is the URL a bucket's listing requests go to, before the query.
-func (c *Client) Route(bucket string) string {
+func (c *Core) Route(bucket string) string {
 	u := c.route(bucket)
 	return u.String()
 }
 
 // UserProject is the billed project every request names (userProject).
-func (c *Client) UserProject() string { return c.cfg.UserProject }
+func (c *Core) UserProject() string { return c.cfg.UserProject }
+
+// Fields is the partial-response selector a listing sends (versions: a
+// generations listing's), on Google's endpoint only: emulators and the
+// replay server refuse or ignore one; "" elsewhere.
+func (c *Core) Fields(versions bool) string {
+	switch {
+	case c.base.String() != DefaultEndpoint:
+		return ""
+	case versions:
+		return versionFields
+	}
+	return fields
+}
+
+// Endpoint is the normalized JSON API base (a trailing slash).
+func (c *Core) Endpoint() string { return c.base.String() }
+
+// Timeout is the per-attempt request timeout.
+func (c *Core) Timeout() time.Duration { return c.cfg.RequestTimeout }
+
+// Do runs attempt under the client's retry policy, counted (objhttp.Do).
+func (c *Core) Do(ctx context.Context, attempt func() (*Page, error)) (*Page, error) {
+	return objhttp.Do(ctx, c.retry, &c.counts, attempt)
+}
+
+// Attempt counts a request sent (objhttp.Counters.Attempt): call it just
+// before the send, and done after the body is read.
+func (c *Core) Attempt() (done func()) { return c.counts.Attempt() }
+
+// ParseFailure counts a 200 whose body is not a valid listing.
+func (c *Core) ParseFailure() { c.counts.ParseFailure() }
 
 // requestURL is the request URL for in.
 func (c *Client) requestURL(in *ListInput) string {
 	u := c.route(in.Bucket)
 	q := url.Values{}
-	if c.base.String() == DefaultEndpoint {
-		// Partial responses on Google's endpoint only: emulators and the
-		// replay server refuse or ignore a fields selector.
-		if in.Versions {
-			q.Set("fields", versionFields)
-		} else {
-			q.Set("fields", fields)
-		}
+	if f := c.Fields(in.Versions); f != "" {
+		q.Set("fields", f)
 	}
 	q.Set("projection", "noAcl")
 	if in.Versions {
@@ -443,7 +494,7 @@ func (c *Client) requestURL(in *ListInput) string {
 // (objhttp.Do).
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
 	u := c.requestURL(in)
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) { return c.attempt(ctx, u) })
+	return c.Do(ctx, func() (*Page, error) { return c.attempt(ctx, u) })
 }
 
 // maxResponse bounds a page body: 1,000 items of 1,024-byte names with
@@ -457,16 +508,16 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", buildinfo.Tool)
-	if c.ts != nil {
-		tok, err := c.token(actx)
-		if err != nil {
-			return nil, err
-		}
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
+	tok, err := c.Token(actx)
+	if err != nil {
+		return nil, err
+	}
+	if tok != nil {
 		tok.SetAuthHeader(req)
 	}
 	defer c.counts.Attempt()()
-	resp, err := c.pick().Do(req)
+	resp, err := c.http[c.Next()].Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
@@ -476,7 +527,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		e := responseError(resp.StatusCode, body)
+		e := ResponseError(resp.StatusCode, body)
 		if loc := resp.Header.Get("Location"); e.Status/100 == 3 && e.Message == "" {
 			e.Message = "redirect to " + loc + " (not followed)"
 		}
@@ -499,7 +550,9 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	return p, nil
 }
 
-func responseError(status int, body []byte) *Error {
+// ResponseError is the answer a non-200 status and its body make: the
+// error envelope's message and first reason, when the body holds one.
+func ResponseError(status int, body []byte) *Error {
 	e := &Error{Status: status}
 	var w struct {
 		Error struct {

@@ -47,7 +47,7 @@ migration history, at the end.
 
 The rules above were first stated as Java swath's contracts (`docs/internals/contracts.md` §0 in the Java
 tree). Correspondence: I1 commit before emit; I2 one row per entry (no gap, no overlap); I3 the boundary
-belongs to the left (`(a, b]`, an S3 rule now in providers.md); I4 a split is atomic with one owner (owner-only
+belongs to the left (`(a, b]`, an S3 rule now in range-engine.md); I4 a split is atomic with one owner (owner-only
 splits, never journaled); I5 and I6 durable-prefix recovery; I7 no wait on child work; I8 shutdown order; I9 no
 infinite loop; I10 unsigned byte order; I11 bounded memory; I12 safe pivots (an S3 rule). Java's §4.1
 publication order (`_SUCCESS` last) became "the manifest is the commit". Retired as Go requirements: the

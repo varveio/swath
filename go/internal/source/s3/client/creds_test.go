@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -244,7 +247,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		if a := auth.Load().(string); !strings.Contains(a, "Credential="+key+"/") {
-			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.source, key)
+			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.Source, key)
 		}
 	}
 	t.Run("slow STS", func(t *testing.T) {
@@ -297,8 +300,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.auth.anonymous || !strings.Contains(c.Note(), "not available yet") {
-			t.Fatalf("anonymous %v, note %q", c.auth.anonymous, c.Note())
+		if c.auth.Anonymous || !strings.Contains(c.Note(), "not available yet") {
+			t.Fatalf("anonymous %v, note %q", c.auth.Anonymous, c.Note())
 		}
 		_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 		var ex *ExhaustedError
@@ -312,8 +315,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		if a := auth.Load().(string); a != "" || c.auth.source != "anonymous (no credentials found)" {
-			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.source)
+		if a := auth.Load().(string); a != "" || c.auth.Source != "anonymous (no credentials found)" {
+			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.Source)
 		}
 	})
 	t.Run("anonymous", func(t *testing.T) {
@@ -324,7 +327,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		if a := auth.Load().(string); a != "" || !c.auth.anonymous {
+		if a := auth.Load().(string); a != "" || !c.auth.Anonymous {
 			t.Fatalf("--anonymous signed: %q", a)
 		}
 	})
@@ -389,7 +392,7 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 			c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
 			if err == nil {
 				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())
+				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.Source, lerr, requests.Load())
 			}
 			if Classify(err) != objhttp.ClassAuth {
 				t.Fatalf("%v: class %s, want auth", err, Classify(err))
@@ -398,5 +401,34 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 				t.Fatalf("%d requests sent", n)
 			}
 		})
+	}
+}
+
+// appearingToken is a credentials provider whose first lookup creates the
+// token file and still fails with the file missing, as the SDK's web
+// identity provider does when the file appears while it reads: the lookup
+// before the fix returned that failure as final.
+type appearingToken struct {
+	token string
+	calls int
+}
+
+func (p *appearingToken) Retrieve(context.Context) (aws.Credentials, error) {
+	p.calls++
+	if p.calls == 1 {
+		os.WriteFile(p.token, []byte("jwt"), 0o600)
+		return aws.Credentials{}, fmt.Errorf("unable to read file at %s: %w", p.token, fs.ErrNotExist)
+	}
+	return aws.Credentials{AccessKeyID: "AKWEB", SecretAccessKey: "s", Source: "web identity"}, nil
+}
+
+// TestRetrieveWaitsForTokenAppearingDuringLookup: a token file that appears
+// during the lookup that read it as missing is looked up again, not
+// reported missing.
+func TestRetrieveWaitsForTokenAppearingDuringLookup(t *testing.T) {
+	p := &appearingToken{token: filepath.Join(t.TempDir(), "token")}
+	c, err := retrieve(context.Background(), p, p.token)
+	if err != nil || c.AccessKeyID != "AKWEB" || p.calls != 2 {
+		t.Fatalf("credentials %+v, err %v, calls %d; want AKWEB after 2 calls", c, err, p.calls)
 	}
 }

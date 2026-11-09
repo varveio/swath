@@ -48,6 +48,21 @@ type live interface{ Live() objhttp.Live }
 // service answered (source.Live).
 type answering interface{ Answered() int64 }
 
+// built is the client connect builds (newClient): the hand-rolled client
+// (client_default.go) or, with the swath_sdkclient build tag, the
+// SDK-backed one (client_sdk.go).
+type built interface {
+	API
+	VersionsAPI
+	Routed
+	counted
+	live
+	answering
+	Credentials() (source string, anonymous bool)
+	Region() string
+	Note() string
+}
+
 // Options configure a Provider.
 type Options struct {
 	Bucket    string
@@ -137,6 +152,9 @@ type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
 	Credentials string `json:"credentials,omitempty"` // where they came from
 	Region      string `json:"region,omitempty"`
+	// Client names the built client ("hand-rolled" or "sdk"); "" for a
+	// supplied one.
+	Client string `json:"client,omitempty"`
 	// MeanActive is the time-weighted mean of ranges in Expand.
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
@@ -162,6 +180,7 @@ type provider[P any] struct {
 	anonymous bool
 	creds     string
 	region    string // the resolved signing region ("" with a supplied Client)
+	kind      string // Stats.Client
 	route     string // the URL the bucket's requests go to ("" with a supplied Client that is not Routed)
 }
 
@@ -259,14 +278,14 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		if opt.BearerCommand != "" {
 			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
 		}
-		c, err := client.New(ctx, cc)
+		c, err := newClient(ctx, cc)
 		if err != nil {
 			return nil, false, fmt.Errorf("S3 client: %w", err)
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
 		}
-		p.client, p.region = c, c.Region()
+		p.client, p.region, p.kind = c, c.Region(), clientKind
 		p.creds, p.anonymous = c.Credentials()
 	}
 	if r, ok := p.client.(Routed); ok {
@@ -314,7 +333,7 @@ func (p *provider[P]) Stats() Stats {
 		c.Counters().Store(p.Set(), p.ID(0))
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, Client: p.kind, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

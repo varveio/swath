@@ -124,7 +124,7 @@ func TestSASRedacted(t *testing.T) {
 	// Recursive redaction: a SAS quoted deep inside a wrapped error.
 	u, _ := url.Parse(srv.URL + "/acct/c?comp=list")
 	inner := &url.Error{Op: "Get", URL: srv.URL + "?" + testSAS, Err: fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: "x?" + testSAS, Err: fmt.Errorf("location %q", "https://e/?sig="+sig)})}
-	if msg := c.redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
+	if msg := c.Redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
 		t.Errorf("nested errors leak: %s", msg)
 	}
 	if _, err := New(context.Background(), Config{Account: "acct", SAS: "%zz&sig=TopSecretSig"}); err == nil || strings.Contains(err.Error(), "TopSecretSig") {

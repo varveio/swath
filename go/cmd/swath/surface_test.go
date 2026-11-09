@@ -41,7 +41,7 @@ func TestHelpGroupsCoverFlags(t *testing.T) {
 }
 
 // TestMovedFlagsNameDiag: each flag moved to swath diag is refused on
-// swath list and swath count with exit 2 and a message naming swath diag,
+// swath list and swath du with exit 2 and a message naming swath diag,
 // and accepted by swath diag list.
 func TestMovedFlagsNameDiag(t *testing.T) {
 	src := localSource(t)

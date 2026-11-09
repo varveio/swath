@@ -8,8 +8,9 @@ Who reads what. Each page owns its facts; the others link to it.
   Java option against this tool) and [upgrade.md](upgrade.md) (the SeekParquet dataset, and format 2 before it, for readers).
 - **Contributor**, in reading order: [architecture.md](architecture.md),
   [internals/contracts.md](internals/contracts.md), [internals/ordering.md](internals/ordering.md) (the order
-  stage, its budget, waits and spill), [internals/providers.md](internals/providers.md) (S3, GCS, the local
-  tree and the range engine), [internals/parquet-output.md](internals/parquet-output.md),
+  stage, its budget, waits and spill), [internals/providers.md](internals/providers.md) (the provider contract,
+  registry and capabilities, with a page per provider, [internals/clients.md](internals/clients.md) for the list
+  clients and [internals/range-engine.md](internals/range-engine.md) for the range engine), [internals/parquet-output.md](internals/parquet-output.md),
   [internals/durability.md](internals/durability.md) (journal and resume),
   [internals/counters.md](internals/counters.md), [internals/dependencies.md](internals/dependencies.md),
   [testing.md](testing.md).
