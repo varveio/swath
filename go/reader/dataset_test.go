@@ -156,39 +156,67 @@ func semanticAt(t *testing.T, err error, kind Kind, column string) *SemanticErro
 }
 
 func TestAcceptWholeSource(t *testing.T) {
+	local := func(uri string) func(map[string]any) {
+		return func(e map[string]any) { e["source"] = map[string]any{"kind": "local-fs", "uri": uri} }
+	}
+	azure := func(e map[string]any) {
+		e["source"] = map[string]any{"kind": "azblob", "uri": "az://acct1/c", "container": "c"}
+	}
+	s3 := WholeSource{Kind: "s3", Container: "b"}
 	for _, tc := range []struct {
-		name      string
-		noExt     bool
-		edit      func(ext map[string]any)
-		kind      string
-		container string
-		field     string // "" accepts
+		name  string
+		noExt bool
+		id    SchemaID // "": S3ObjectsV1
+		edit  func(ext map[string]any)
+		want  WholeSource
+		field string // "" accepts
 	}{
-		{name: "whole bucket", kind: "s3", container: "b"},
+		{name: "whole bucket", want: s3},
+		{name: "whole bucket, its URI", want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}},
+		{name: "another bucket URI", want: WholeSource{Kind: "s3", Container: "b", URI: "s3://c"}, field: "source.uri"},
 		{name: "no exclusions, snapshot absent", edit: func(e map[string]any) {
 			c := e["coverage"].(map[string]any)
 			delete(c, "exclusions")
 			delete(c, "snapshot")
-		}, kind: "s3", container: "b"},
-		{name: "filesystem", edit: func(e map[string]any) { e["source"] = map[string]any{"kind": "local-fs", "uri": "/data"} }, kind: "local-fs"},
-		{name: "missing extension", noExt: true, kind: "s3", container: "b", field: "extensions.swath"},
-		{name: "source kind", kind: "gcs", container: "b", field: "source.kind"},
-		{name: "source absent", edit: func(e map[string]any) { delete(e, "source") }, kind: "s3", container: "b", field: "source.kind"},
-		{name: "container", kind: "s3", container: "other", field: "source.container"},
-		{name: "container absent", edit: func(e map[string]any) { delete(e["source"].(map[string]any), "container") }, kind: "s3", container: "b", field: "source.container"},
-		{name: "prefix scope", edit: func(e map[string]any) { e["scope"] = map[string]any{"kind": "prefix", "prefix": "logs/"} }, kind: "s3", container: "b", field: "scope.kind"},
-		{name: "scope absent", edit: func(e map[string]any) { delete(e, "scope") }, kind: "s3", container: "b", field: "scope.kind"},
-		{name: "coverage incomplete", edit: func(e map[string]any) { e["coverage"].(map[string]any)["complete"] = false }, kind: "s3", container: "b", field: "coverage.complete"},
-		{name: "coverage absent", edit: func(e map[string]any) { delete(e, "coverage") }, kind: "s3", container: "b", field: "coverage.complete"},
-		{name: "stopped", edit: func(e map[string]any) { e["coverage"].(map[string]any)["stop_reason"] = "signal" }, kind: "s3", container: "b", field: "coverage.stop_reason"},
-		{name: "stop reason absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "stop_reason") }, kind: "s3", container: "b", field: "coverage.stop_reason"},
-		{name: "skipped entries", edit: func(e map[string]any) { e["coverage"].(map[string]any)["skipped_entries"] = 3 }, kind: "s3", container: "b", field: "coverage.skipped_entries"},
-		{name: "skipped entries absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "skipped_entries") }, kind: "s3", container: "b", field: "coverage.skipped_entries"},
-		{name: "filters", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = []string{"--include *.log"} }, kind: "s3", container: "b", field: "coverage.filters"},
-		{name: "filters null", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = nil }, kind: "s3", container: "b", field: "coverage.filters"},
+		}, want: s3},
+		{name: "filesystem", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data"}},
+		{name: "filesystem, trailing separator asked", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data/"}},
+		{name: "filesystem, trailing separator recorded", id: LocalV1, edit: local("/data/"), want: WholeSource{Kind: "local-fs", URI: "/data"}},
+		{name: "another root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data2"}, field: "source.uri"},
+		{name: "a root inside", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data/sub"}, field: "source.uri"},
+		{name: "filesystem without a root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs"}, field: "source.uri"},
+		{name: "filesystem recording no root", id: LocalV1, edit: local(""), want: WholeSource{Kind: "local-fs", URI: "/"}, field: "source.uri"},
+		{name: "bucket recording no URI", edit: func(e map[string]any) { e["source"].(map[string]any)["uri"] = "" }, want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}, field: "source.uri"},
+		{name: "filesystem with a container", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", Container: "b", URI: "/data"}, field: "source.container"},
+		{name: "filesystem recording a container", id: LocalV1, edit: func(e map[string]any) {
+			e["source"] = map[string]any{"kind": "local-fs", "uri": "/data", "container": "b"}
+		}, want: WholeSource{Kind: "local-fs", URI: "/data"}, field: "source.container"},
+		{name: "azure container", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c", URI: "az://acct1/c"}},
+		{name: "azure container of another account", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c", URI: "az://acct2/c"}, field: "source.uri"},
+		{name: "azure container without its account", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c"}, field: "source.uri"},
+		{name: "schema id of another kind", edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data"}, field: "source.kind"},
+		{name: "missing extension", noExt: true, want: s3, field: "extensions.swath"},
+		{name: "source kind", want: WholeSource{Kind: "gcs", Container: "b"}, field: "source.kind"},
+		{name: "source absent", edit: func(e map[string]any) { delete(e, "source") }, want: s3, field: "source.kind"},
+		{name: "container", want: WholeSource{Kind: "s3", Container: "other"}, field: "source.container"},
+		{name: "container absent", edit: func(e map[string]any) { delete(e["source"].(map[string]any), "container") }, want: s3, field: "source.container"},
+		{name: "uri absent", edit: func(e map[string]any) { delete(e["source"].(map[string]any), "uri") }, want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}, field: "source.uri"},
+		{name: "prefix scope", edit: func(e map[string]any) { e["scope"] = map[string]any{"kind": "prefix", "prefix": "logs/"} }, want: s3, field: "scope.kind"},
+		{name: "scope absent", edit: func(e map[string]any) { delete(e, "scope") }, want: s3, field: "scope.kind"},
+		{name: "coverage incomplete", edit: func(e map[string]any) { e["coverage"].(map[string]any)["complete"] = false }, want: s3, field: "coverage.complete"},
+		{name: "coverage absent", edit: func(e map[string]any) { delete(e, "coverage") }, want: s3, field: "coverage.complete"},
+		{name: "stopped", edit: func(e map[string]any) { e["coverage"].(map[string]any)["stop_reason"] = "signal" }, want: s3, field: "coverage.stop_reason"},
+		{name: "stop reason absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "stop_reason") }, want: s3, field: "coverage.stop_reason"},
+		{name: "skipped entries", edit: func(e map[string]any) { e["coverage"].(map[string]any)["skipped_entries"] = 3 }, want: s3, field: "coverage.skipped_entries"},
+		{name: "skipped entries absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "skipped_entries") }, want: s3, field: "coverage.skipped_entries"},
+		{name: "filters", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = []string{"--include *.log"} }, want: s3, field: "coverage.filters"},
+		{name: "filters null", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = nil }, want: s3, field: "coverage.filters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := s3Spec()
+			if tc.id != "" {
+				s.id = tc.id
+			}
 			switch {
 			case tc.noExt:
 				s.ext = nil
@@ -196,7 +224,7 @@ func TestAcceptWholeSource(t *testing.T) {
 				tc.edit(s.ext)
 			}
 			d := openDir(t, writeDataset[s3Row](t, s, nil))
-			err := d.AcceptWholeSource(tc.kind, tc.container)
+			err := d.AcceptWholeSource(tc.want)
 			if tc.field == "" {
 				if err != nil {
 					t.Fatal(err)
