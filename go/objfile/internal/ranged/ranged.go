@@ -70,11 +70,15 @@ type file struct {
 
 func (f *file) Size() int64 { return f.size }
 
+// Identity is the pinned version id, or the ETag when there is none or it is
+// S3's "null": S3 keeps the version id "null" when it overwrites the object
+// of an unversioned or versioning-suspended key, so "null" does not tell two
+// contents apart and the ETag does.
 func (f *file) Identity() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.pin.Version != "" {
-		return f.pin.Version
+	if v := f.pin.Version; v != "" && v != "null" {
+		return v
 	}
 	return f.pin.ETag
 }

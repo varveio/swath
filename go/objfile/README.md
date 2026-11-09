@@ -75,8 +75,10 @@ A 412, a 404 after open, or a response naming another ETag or version is `ErrObj
 cheap guard over the reads, not a versions API: there are no options to choose a pinning mode, and no Azure
 snapshot or version-id reads.
 
-`Identity` is the S3 version id (else the ETag), the GCS generation, or the Azure ETag; an `OpenSized` file
-returns `""` until its first read.
+`Identity` is the S3 version id, the GCS generation, or the Azure ETag; an `OpenSized` file returns `""` until
+its first read. An S3 object without a version id, or with the version id `null` (written before versioning was
+enabled, or while it is suspended), is identified by its ETag instead: S3 keeps the id `null` when it overwrites
+such an object, so a replacement of the same size would otherwise keep the same `Identity`.
 
 ## What it is not
 
