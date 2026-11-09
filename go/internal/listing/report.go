@@ -8,6 +8,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // ReportVersion is the run report's version. 2: the clearer names
@@ -19,7 +20,7 @@ import (
 // the reuse.* counters, timings.listing_done_at and resources.drain (the
 // drain tail: read-ahead, segments, encoder admission after listing), and
 // for versions schemas the attempt-scoped version classification and
-// distinct keys.
+// distinct keys, and swath count's per-prefix totals (output.totals).
 const ReportVersion = 3
 
 // Report is the one run report: run.json beside a committed dataset, and
@@ -283,6 +284,10 @@ type Output struct {
 	OutputBytes int64  `json:"output_bytes"`
 	// Text is a text run's output (nil for a dataset or a dry run).
 	Text *TextOutput `json:"text,omitempty"`
+	// Totals is swath count's per-prefix totals (--depth): the depth, the
+	// prefixes and their cap, the column summed and the total (nil
+	// without them).
+	Totals *totals.Stats `json:"totals,omitempty"`
 }
 
 // TextOutput is a text run's destination and what reached it. A run that

@@ -29,6 +29,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // Config is one listing, in three groups: what to list, where the dataset
@@ -44,6 +45,10 @@ type Config struct {
 	// part of the resume identity, recorded in the manifest's
 	// coverage.filters.
 	Filter *filter.Spec
+	// Totals, if set, sums a count's rows per key prefix (swath count
+	// --depth); the report's output.totals is its account. It needs a dry
+	// run (no dataset, no text).
+	Totals *totals.Tally
 	// Attempt, if set, identifies this invocation in its report.
 	Attempt *Attempt
 	Warn    func(string) // one-time warnings for the user (nil: dropped)
@@ -277,6 +282,8 @@ func (c *Config) resolve() error {
 		return bad("replace needs an output directory")
 	case o.Text != nil && (o.Dir != "" || o.Resume):
 		return bad("text output excludes a dataset directory and resume")
+	case c.Totals != nil && !dryRun(*c):
+		return bad("per-prefix totals need a count (no dataset, no text)")
 	}
 	if l.Workers == 0 {
 		l.Workers = DefaultWorkers
@@ -653,6 +660,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	env.Sizes = sizes
 	versions := &registry.VersionCounts{}
 	env.Versions = versions
+	env.Totals = cfg.Totals
 	a.retained.Store(a.sum.Output.RowsRetained)
 	a.sum.sampler = startHistory(a.sample, historyDisk(cfg, oopt))
 	defer a.sum.sampler.finish()
@@ -664,6 +672,10 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if sizes.Measured {
 		b := sizes.Bytes.Load()
 		a.sum.Output.ObjectBytes = &b
+	}
+	if cfg.Totals != nil {
+		st := cfg.Totals.Stats()
+		a.sum.Output.Totals = &st
 	}
 	if sd, ok := src.(source.SeedTimed); ok {
 		if d, ok := sd.SeedTime(); ok {

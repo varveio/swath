@@ -4,11 +4,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // textExts are the file extensions that name a text format (before a
@@ -64,4 +67,38 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 		return &textout.Config{Format: o.format}, nil
 	}
 	return nil, fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
+}
+
+// resolveTotals decides swath count's per-prefix totals: on with --depth,
+// written to stdout in --format (auto, the default: the table on a
+// terminal, TSV otherwise). A source whose keys are bytes cannot be
+// written as JSON. --format without --depth is placement's refusal.
+func resolveTotals(f *flag.FlagSet, o *options, root string, stdoutTTY bool) error {
+	f.Visit(func(fl *flag.Flag) { o.depthGiven = o.depthGiven || fl.Name == "depth" })
+	if !o.countOnly || !o.depthGiven {
+		return nil
+	}
+	switch {
+	case o.depth < 0:
+		return fmt.Errorf("--depth %d: negative", o.depth)
+	case o.maxPrefixes < 1:
+		return fmt.Errorf("--max-prefixes %d: want at least 1", o.maxPrefixes)
+	}
+	format := o.format
+	switch format {
+	case "", "auto":
+		format = textout.TSV
+		if stdoutTTY {
+			format = textout.Table
+		}
+	case textout.TSV, textout.Table:
+	case textout.JSONL:
+		if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys {
+			return fmt.Errorf("--format jsonl: a %s source's names are bytes, which JSON cannot carry: use tsv or table", schemeName(pf.Scheme))
+		}
+	default:
+		return fmt.Errorf("--format %q: swath count --depth writes auto, table, tsv or jsonl", o.format)
+	}
+	o.totals = &totalsOut{format: format, tally: totals.New(totals.Options{Depth: o.depth, MaxPrefixes: o.maxPrefixes})}
+	return nil
 }

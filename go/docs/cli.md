@@ -4,6 +4,7 @@
 swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
 swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
 swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+swath count SOURCE --depth N [flags]    total them per key prefix down to N levels, as du
 swath resume DIR [flags]                continue the interrupted run in DIR
 swath show [--journal] DIR              show a dataset or an interrupted run
 swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
@@ -18,9 +19,10 @@ SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
 below). `swath count` only lists and counts, writing nothing (rows are counted as they arrive, never ordered,
 buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); it takes the source,
-filter, performance, limit and reporting flags, and refuses the output ones (`-o`, `--format`, `--overwrite`,
-`--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2. Each prints one
-line (`swath count`: `rows=N object_bytes=B wall=...`), or the run report (`run.json`, below) with `--report-format json`; `--report FILE` also writes that report to
+filter, performance, limit and reporting flags, and refuses the output ones (`-o`, `--format` but with
+`--depth`, `--overwrite`, `--part-size`, `--row-budget`, `--spill-budget`, `--encoders`) with exit 2; `swath list`
+refuses the count's own (`--depth`, `--max-prefixes`; **Per-prefix totals** below). Each prints one
+line (`swath count`: `rows=N object_bytes=B wall=...`; with `--depth`, the prefix rows instead), or the run report (`run.json`, below) with `--report-format json`; `--report FILE` also writes that report to
 FILE when the attempt ends, on failure too. FILE may not land on managed output (exit 2, checked before the
 source is opened, and by `swath resume` before it settles anything): the text output file, the dataset directory's own entries
 (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/` with the lock and journal) or anything below them,
@@ -78,7 +80,7 @@ Source and output:
   --overwrite
         replace a previous dataset in -o
   --format string
-        stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
+        stdout rows (swath count: --depth's prefix rows): auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   --endpoint URL
@@ -218,10 +220,13 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 $ swath count --help
 usage: swath count SOURCE [flags]
   lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they
-  arrive, never ordered, buffered or spilled; prints one line, or the run report
+  arrive, never ordered, buffered or spilled; prints one line, or the run report; with --depth,
+  each key prefix's objects, bytes and newest time instead, as du
   SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
 
 Source and output:
+  --format string
+        stdout rows (swath count: --depth's prefix rows): auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
   --endpoint URL
@@ -312,6 +317,13 @@ Limits:
   --azblob-request-timeout duration
         Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
         change it: raise it for a slow Azure endpoint or Azurite
+
+Per-prefix totals:
+  --depth N
+        swath count: also total each key prefix down to N levels (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du: rows of prefix, objects, bytes and the newest time, on stdout in --format
+  --max-prefixes N
+        swath count --depth: fail rather than hold more than N distinct prefixes (memory grows with them, never with the objects) (default 1000000)
+        change it: raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted
 
 Output and reporting:
   --report file
@@ -451,6 +463,37 @@ Diagnostics:
   rows; `--stats` prints the account on stderr) and `--report-format json` is refused (use `--report FILE`).
   Text runs keep no journal: `swath resume` refuses a text destination, and an interrupted text run is run
   again. `output.text` in the report names the format, destination, compression, rows and bytes.
+- **Per-prefix totals** (`swath count SOURCE --depth N`, every source): du for buckets and directories alike. A
+  prefix of depth k is a key up to and including its k-th `/` (`logs/2026/` is depth 2 of `logs/2026/app.log`);
+  for each prefix of depth 1 to N, and the total (the empty prefix, depth 0), the count prints the objects under
+  it, their bytes (the size column) and the newest modification time among them, a parent including its children.
+  A key with fewer than N `/` counts in the prefixes it has (`top.txt` only in the total). What is not an object
+  counts nothing: a local directory's row (`kind=DIR`) and an S3 delete marker list their prefixes (an empty
+  directory shows 0 objects) and add no object, bytes or time, so a directory's own size, which `object_bytes`
+  includes, is not in the totals, and the totals' objects are the files, links and other entries. Every version
+  of `--all-versions` is an object. The filters apply first. Rows go to stdout sorted by prefix in byte order
+  (the total first, a parent before its children), in `--format` `auto` (the table on a terminal, TSV
+  otherwise), `tsv`, `jsonl` or `table`, with text output's escaping; a local tree's names are bytes, so its
+  rows are TSV or the table, never JSON (exit 2). Fields: `Prefix`, `Objects`, `Size`, `LastModified` (empty or
+  absent when no object under the prefix has a time, as with `--metadata names`).
+
+  ```text
+  Prefix	Objects	Size	LastModified
+  	4	9	2026-01-02T04:04:05+00:00
+  a/	2	7	2026-01-02T04:04:05+00:00
+  a/b/	1	5	2026-01-02T04:04:05+00:00
+  e/	0	0	
+  ```
+
+  The table is the `aws s3 ls` line widened: the newest time to the second (UTC), the objects right-aligned in
+  10 columns, the bytes in 15, the prefix. Rows are printed once the count completes; a run that fails or stops
+  prints none. stdout carries them, so the one-line summary is not printed (`--stats` prints the account on
+  stderr) and `--report-format json` is refused (use `--report FILE`, whose `output.totals` names the depth, the
+  prefixes and the total). The count is the unordered one ([internals/ordering.md](internals/ordering.md#counting-without-order)):
+  memory grows with the distinct prefixes, never the objects, and `--max-prefixes N` (default 1,000,000, about
+  150 MB) caps them: a count that would hold more fails (exit 1, cause `prefix_limit`), naming `--depth` and
+  `--max-prefixes`. A flat listing holds one prefix whatever the depth; a bucket of millions of top-level
+  "folders" at `--depth 1` is what the cap is for.
 - **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
   matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
@@ -744,7 +787,11 @@ the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `p
 `object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
-(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`).
+(`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
+`swath count --depth` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
+`max_prefixes` (the cap), `bytes_column` (the column summed: `size`), `objects` and `bytes` (the total's),
+`not_objects` (rows counted as no object: directories, delete markers) and `unsized` (objects without a value in
+the bytes column, counted with no bytes).
 
 For versions schemas only, `versions`, `distinct_keys` and `live_objects` describe this attempt's
 rows after filtering at the order stage's handoff (swath count: validated, counted rows).

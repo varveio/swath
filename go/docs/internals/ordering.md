@@ -245,6 +245,16 @@ with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`, with
 between the children). The report says so: `features.order` false, `spill` absent,
 `max_buffered_bytes`, `peak_ahead_rows` and `frontier_stuck_max_ns` 0.
 
+`order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
+must neither keep nor change the rows: the versions counts, and `swath count --depth`'s per-prefix totals
+(`registry` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
+one entry per run of equal prefix at each level (rows of a range ascend, so consecutive rows share them), then
+merges into the shared tally under one lock, copying a prefix only when it first enters. Addition and maximum
+commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
+and concurrent batches against a brute-force sum); memory is the distinct prefixes, never the objects, capped
+by `--max-prefixes` (a merge past it fails the run, `totals.LimitError`, cause `prefix_limit`). The prefixes are
+sorted by byte once, at the end, for printing.
+
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
 provider), the progress file's `ordered` counter, and a per-range order check: each range's keys strictly
 ascending across its `Rows` calls, and after `Options.After` (`TestCountGuardsEachRange`). What it does not

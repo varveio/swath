@@ -34,6 +34,7 @@ import (
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
@@ -282,6 +283,7 @@ func commands(w io.Writer) {
   swath list SOURCE -o DIR [flags]        list SOURCE into a sorted Parquet dataset in DIR
   swath list SOURCE [-o FILE|-] [flags]   list SOURCE as text rows to a .tsv or .jsonl file (.gz, .zst) or stdout
   swath count SOURCE [flags]              count SOURCE's objects and bytes, writing nothing
+  swath count SOURCE --depth N [flags]    total them per key prefix down to N levels, as du
   swath resume DIR [flags]                continue the interrupted run in DIR
   swath show [--journal] DIR              show a dataset or an interrupted run
   swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
@@ -440,6 +442,18 @@ type options struct {
 	filter                 filter.Spec
 	partMaxRows            int64
 	seedFrom               string
+	// swath count's per-prefix totals: --depth (depthGiven: the flag was
+	// given; totals: the totals' output, resolved) and --max-prefixes.
+	depth, maxPrefixes int
+	depthGiven         bool
+	totals             *totalsOut
+}
+
+// totalsOut is where swath count --depth writes its prefix rows: stdout,
+// in format (textout's TSV, JSONL or Table).
+type totalsOut struct {
+	format string
+	tally  *totals.Tally
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -535,7 +549,7 @@ func newFlags(o *options, diag bool) *flag.FlagSet {
 // when diag.
 func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	f.StringVar(&o.out, "o", "", "output: a dataset `directory`, a .tsv or .jsonl file (optionally .gz or .zst), or - for stdout (the default)")
-	f.StringVar(&o.format, "format", "", "stdout rows: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format")
+	f.StringVar(&o.format, "format", "", "stdout rows (swath count: --depth's prefix rows): auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); a -o file's name says its format")
 	f.BoolVar(&o.overwrite, "overwrite", false, "replace a previous dataset in -o")
 	o.partSize = listing.DefaultPartSize
 	f.Var(&o.partSize, "part-size", "target `bytes` per Parquet part (64MiB, 1.5g: see Sizes in docs/cli.md)")
@@ -558,6 +572,8 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects of at most this `size`")
 	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
 	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects modified at or before this `time`")
+	f.IntVar(&o.depth, "depth", 0, "swath count: also total each key prefix down to `N` levels (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du: rows of prefix, objects, bytes and the newest time, on stdout in --format")
+	f.IntVar(&o.maxPrefixes, "max-prefixes", totals.DefaultMaxPrefixes, "swath count --depth: fail rather than hold more than `N` distinct prefixes (memory grows with them, never with the objects)")
 	f.Func("storage-class", "keep objects in these storage `classes` (STANDARD,GLACIER; repeatable)", func(v string) error {
 		for _, c := range strings.Split(v, ",") {
 			if c = strings.TrimSpace(c); c != "" {
@@ -761,17 +777,20 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err}
 	}
 	o.text = text
+	if err := resolveTotals(f, &o, root, stdoutTerminal()); err != nil {
+		return o, "", usageError{err}
+	}
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
 		return o, "", usageError{fmt.Errorf("a %s source needs -o DIR (a dataset), or swath count: its keys are bytes, which text output cannot carry", schemeName(pf.Scheme))}
 	}
 	if err := checkSidePaths(&o); err != nil {
 		return o, "", usageError{err}
 	}
+	if (text != nil && text.Path == "" || o.totals != nil) && o.reportFormat == "json" {
+		return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
+	}
 	if text != nil && text.Path == "" {
 		text.Stdout = stdout
-		if o.reportFormat == "json" {
-			return o, "", usageError{errors.New("--report-format json prints on stdout, which carries the rows: use --report FILE")}
-		}
 	}
 	return o, root, nil
 }
@@ -809,6 +828,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Attempt: att,
 		Filter:  &o.filter,
 		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
+	}
+	if o.totals != nil {
+		cfg.Totals = o.totals.tally
 	}
 	if o.term.quiet > 0 {
 		cfg.Warn = func(string) {}
@@ -929,6 +951,16 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	if o.text != nil && o.text.Path == "" {
 		return nil // stdout carries the rows; --stats prints the account on stderr
 	}
+	if t := o.totals; t != nil {
+		// The prefix rows, once the count is complete (a run that failed
+		// or stopped printed nothing above); stdout carries them, as a
+		// text run's rows, so the summary line is not printed.
+		err := textout.WriteTotals(stdout, t.format, false, t.tally.Result())
+		if err != nil && !brokenPipe(err) {
+			return err
+		}
+		return nil
+	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")
 	}
@@ -961,6 +993,7 @@ func measured(v *int64, unit float64, format string) string {
 func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
+	var le *totals.LimitError
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -978,6 +1011,8 @@ func explain(err error) error {
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):
 		return fmt.Errorf("%w (finish it with the build that started it, or start over with --overwrite)", err)
+	case errors.As(err, &le):
+		return fmt.Errorf("%w (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)", err)
 	}
 	return err
 }

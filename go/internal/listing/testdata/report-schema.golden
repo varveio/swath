@@ -72,6 +72,14 @@ output.text.formatters int
 output.text.output_wait_ns int64
 output.text.rows int64
 output.text.sink_wait_ns int64
+output.totals.bytes int64
+output.totals.bytes_column string
+output.totals.depth int
+output.totals.max_prefixes int64
+output.totals.not_objects int64
+output.totals.objects int64
+output.totals.prefixes int64
+output.totals.unsized int64
 output.versions int64
 report_version int
 requests.http_attempts int64

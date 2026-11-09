@@ -65,6 +65,10 @@ var helpGroups = []helpGroup{
 		{name: "gcs-request-timeout", when: "raise it for a slow GCS endpoint or emulator"},
 		{name: "azblob-request-timeout", when: "raise it for a slow Azure endpoint or Azurite"},
 	}},
+	{totalsGroup, []helpFlag{
+		{name: "depth"},
+		{name: "max-prefixes", when: "raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted"},
+	}},
 	{"Output and reporting", []helpFlag{
 		{name: "report"}, {name: "report-format"},
 		{name: "progress"}, {name: "no-progress"}, {name: "progress-interval"},
@@ -82,6 +86,14 @@ var helpGroups = []helpGroup{
 
 // diagnosticGroup is the heading of the flags only swath diag takes.
 const diagnosticGroup = "Diagnostics"
+
+// totalsGroup is the heading of swath count's per-prefix totals, which
+// only the count commands take (onlyCounted).
+const totalsGroup = "Per-prefix totals"
+
+// onlyCounted are the flags only swath count takes: the per-prefix totals
+// shape what a count prints, and a listing writes rows, not totals.
+var onlyCounted = []string{"depth", "max-prefixes"}
 
 // notCounted are the flags swath count refuses: it lists and counts,
 // writing nothing, so it has no output, no parts and no reorder storage.
@@ -114,10 +126,21 @@ func placement(f *flag.FlagSet, cmd command) (err error) {
 	f.Visit(func(fl *flag.Flag) {
 		switch {
 		case err != nil:
+		case cmd.count && fl.Name == "format" && given(f, "depth"):
+			// --depth's prefix rows are text on stdout: --format says how.
+		case cmd.count && fl.Name == "max-prefixes" && !given(f, "depth"):
+			err = errors.New("--max-prefixes caps --depth's prefixes: give --depth too")
+		case !cmd.count && slices.Contains(onlyCounted, fl.Name):
+			err = fmt.Errorf("%s has no meaning for swath %s, which writes rows: swath count takes it", dashed(fl.Name), cmd.name())
 		case cmd.count && slices.Contains(notCounted, fl.Name):
 			to := "swath list"
 			if diagOnly()[fl.Name] {
 				to = "swath diag list"
+			}
+			if fl.Name == "format" {
+				to += " takes it, and swath count with --depth" // the sentence ends "takes it" either way
+				err = fmt.Errorf("%s has no meaning for swath %s, which writes nothing: %s", dashed(fl.Name), cmd.name(), to)
+				break
 			}
 			err = fmt.Errorf("%s has no meaning for swath %s, which writes nothing: %s takes it", dashed(fl.Name), cmd.name(), to)
 		case !cmd.diag && diagOnly()[fl.Name]:
@@ -125,6 +148,12 @@ func placement(f *flag.FlagSet, cmd command) (err error) {
 		}
 	})
 	return err
+}
+
+// given reports whether flag name was set on the command line.
+func given(f *flag.FlagSet, name string) (set bool) {
+	f.Visit(func(fl *flag.Flag) { set = set || fl.Name == name })
+	return set
 }
 
 // usage prints a list command's help: its synopsis and its flags by group,
@@ -138,7 +167,8 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 	case cmd.count:
 		fmt.Fprintln(w, "usage: swath count SOURCE [flags]")
 		fmt.Fprintln(w, "  lists SOURCE and counts its rows and object bytes, writing nothing: rows are counted as they")
-		fmt.Fprintln(w, "  arrive, never ordered, buffered or spilled; prints one line, or the run report")
+		fmt.Fprintln(w, "  arrive, never ordered, buffered or spilled; prints one line, or the run report; with --depth,")
+		fmt.Fprintln(w, "  each key prefix's objects, bytes and newest time instead, as du")
 	default:
 		fmt.Fprintln(w, "usage: swath list SOURCE [-o DIR|FILE|-] [flags]")
 		fmt.Fprintln(w, "  -o DIR writes a sorted Parquet dataset; -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) one text")
@@ -152,7 +182,7 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 		var lines []string
 		for _, h := range g.flags {
 			fl := f.Lookup(h.name)
-			if fl == nil || cmd.count && slices.Contains(notCounted, h.name) {
+			if fl == nil || cmd.count && h.name != "format" && slices.Contains(notCounted, h.name) || !cmd.count && slices.Contains(onlyCounted, h.name) {
 				continue
 			}
 			lines = append(lines, flagHelp(fl, h))

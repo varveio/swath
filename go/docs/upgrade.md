@@ -373,6 +373,8 @@ reads version 3 by ignoring them:
   `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
   schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
   retained resume rows.
+- **Per-prefix totals** (`swath count --depth`): `output.totals` (`depth`, `prefixes`, `max_prefixes`,
+  `bytes_column`, `objects`, `bytes`, `not_objects`, `unsized`), present only on such a count.
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`

@@ -11,6 +11,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
+	"github.com/varveio/swath/go/internal/totals"
 )
 
 // A Factory opens one kind of source.
@@ -127,6 +129,9 @@ type Env struct {
 	Sizes *Sizes
 	// Versions counts the attempt's emitted version rows after filtering.
 	Versions *VersionCounts
+	// Totals, if set, sums the counted rows per key prefix (swath count
+	// --depth); it needs Count.
+	Totals *totals.Tally
 }
 
 // Sizes is the object bytes a run emitted. Measured says the schema has a
@@ -200,11 +205,19 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 			p = newSized(p, size, &env.Sizes.Bytes)
 		}
 	}
+	if env.Totals != nil && !env.Count {
+		return order.Stats{}, nil, errors.New("registry: per-prefix totals need a count")
+	}
 	if env.Count {
 		var observe order.Sink[P]
 		if observer.latest != nil || observer.deleted != nil {
 			observer.Sink = discard[P]{}
 			observe = observer
+		}
+		if env.Totals != nil {
+			if observe, err = bindTotals(env.Totals, b.s, observe); err != nil {
+				return order.Stats{}, nil, err
+			}
 		}
 		st, err := order.CountWithSink(ctx, p, env.Ordered, env.Order, observe)
 		return st, nil, err

@@ -129,6 +129,7 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 
 `swath count` holds only pages in flight and the ranges queued for a worker: it counts rows as they
 arrive and never orders, buffers or spills them (`resources.features.order` false, `max_buffered_bytes` 0, no `spill`).
+With `--depth` it also holds one entry per distinct prefix (about 150 bytes each), capped by `--max-prefixes`.
 
 Read the actual figure from the report's `resources.peak_rss_bytes` on a representative run, and size the
 host from that, not from `--row-budget`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
