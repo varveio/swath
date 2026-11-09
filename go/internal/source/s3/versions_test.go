@@ -533,3 +533,12 @@ func TestVersionsPermissionPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionsConstructorRefusals(t *testing.T) {
+	if _, err := New(context.Background(), Options{Bucket: "b", AllVersions: true}); err == nil || err.Error() != "s3: Options.AllVersions lists versions: use NewVersions" {
+		t.Fatalf("wrong constructor: %v", err)
+	}
+	if _, err := NewVersions(context.Background(), Options{Bucket: "b", Client: &recorder{}}); err == nil || !strings.Contains(err.Error(), "cannot list versions") {
+		t.Fatalf("client without VersionsAPI: %v", err)
+	}
+}

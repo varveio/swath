@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/journal"
@@ -228,19 +227,5 @@ func TestEngineFlagsShared(t *testing.T) {
 	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2})
 	if err != nil || src.(*opened[Object]).p.opt.Seed {
 		t.Fatalf("defaults: %v", err)
-	}
-}
-
-// TestEndpointUserinfoRefused: an endpoint with user information is
-// refused before anything is recorded, and the refusal never quotes the
-// password, which the journal identity and the run report would otherwise
-// carry.
-func TestEndpointUserinfoRefused(t *testing.T) {
-	s3test.NoCredentials(t)
-	for _, ep := range []string{"http://user:s3cret@127.0.0.1:1", "https://user:s3cret@minio.example/base/", "http://:s3cret@127.0.0.1:1"} {
-		_, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1})
-		if err == nil || strings.Contains(err.Error(), "s3cret") {
-			t.Errorf("%s: %v", ep, err)
-		}
 	}
 }

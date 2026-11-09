@@ -302,9 +302,12 @@ func (p *Engine[P]) ID(i int) counters.ID { return counters.ID(len(Counters) + i
 // Set is the counter set, for the provider's own counters.
 func (p *Engine[P]) Set() *counters.Set { return p.c }
 
-// Restart continues after the last published key; the provider's
-// Restart (source.Resumable, Registered) calls it.
-func (p *Engine[P]) Restart(after string) { p.opt.Resume = &Resume{After: after} }
+// Restart continues after the last published key (source.Resumable).
+// It must be called before execution.
+func (p *Engine[P]) Restart(after string) error {
+	p.opt.Resume = &Resume{After: after}
+	return nil
+}
 
 // Options returns the options in force.
 func (p *Engine[P]) Options() Options { return p.opt }

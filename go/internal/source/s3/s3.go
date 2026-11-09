@@ -5,9 +5,9 @@
 // binary (unsigned byte) order, so every page can be emitted as it arrives.
 //
 // By default ranges are key intervals (lo, hi] listed in parallel: the root
-// is (⊥, ⊤] or, with Seed, delimiter listings of the folders that tile the scope; a range
-// whose owner sees idle workers splits itself at a page boundary into
-// (cursor, pivot] and (pivot, hi] (see parallel.go). With Sequential the
+// is (⊥, ⊤] or, with Seed, delimiter listings of folders that tile the scope.
+// A range whose owner sees idle workers splits itself at a page boundary into
+// (cursor, pivot] and (pivot, hi] (see keyrange.Engine). With Sequential the
 // whole scope is one continuation-token chain: the reference oracle.
 package s3
 
@@ -62,19 +62,13 @@ type Options struct {
 	// AllVersions lists every version and delete marker
 	// (ListObjectVersions, NewVersions) instead of the current objects.
 	AllVersions bool
-	Workers     int     // parallel: the order stage's worker count (split demand)
-	Client      API     // optional; built from the options above when nil
-	Resume      *Resume // continue after a journaled run's last published key
+	Workers     int // parallel: the order stage's worker count (split demand)
+	Client      API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
 	// supplied Client has its own.
 	Admission objhttp.Admission
-}
-
-// Resume restarts a listing after the last published key.
-type Resume struct {
-	After string // the last published key: every key <= After is in the dataset
 }
 
 // ParseURL splits s3://bucket/prefix.
@@ -101,9 +95,6 @@ type Stats struct {
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
 }
-
-// Get is counter id's value.
-func (s *Stats) Get(id counters.ID) int64 { return s.Counters.Get(id) }
 
 // Provider lists one bucket (or prefix) on the range engine. It implements
 // source.Provider[Range, Object].
@@ -153,7 +144,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
-		Requeue:     requeue,
+		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
 		Counters:    clientCounters,
@@ -182,7 +173,7 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
-		Requeue:     requeue,
+		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
 		Detach:      VersionsSchema.Detach,
@@ -239,12 +230,8 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 // engineOptions is the range engine's options for p.
 func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
-	var resume *keyrange.Resume
-	if opt.Resume != nil {
-		resume = &keyrange.Resume{After: opt.Resume.After}
-	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume = opt.Prefix, opt.Workers, resume
+	eo.Prefix, eo.Workers = opt.Prefix, opt.Workers
 	eo.ClientOff = opt.Admission.Off(own)
 	return eo
 }
@@ -258,20 +245,6 @@ func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 // copied from a key the service returned (a cursor, a folder, a pivot's
 // shared prefix).
 func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
-
-// requeue: a transient failure whose client retries were exhausted is
-// asked again (keyrange.Description.Requeue).
-var requeue = objhttp.Requeue
-
-// Restart continues after a journaled run's last published key, from
-// the normal start-up: one range (after, ⊤], split as on a fresh run
-// (source.Resumable). It records the resume in the provider's options and
-// the engine's.
-func (p *provider[P]) Restart(after string) error {
-	p.opt.Resume = &Resume{After: after}
-	p.Engine.Restart(after)
-	return nil
-}
 
 // Stats returns the counters so far.
 func (p *provider[P]) Stats() Stats {
@@ -304,17 +277,19 @@ func (p *provider[P]) rows(out *client.Page) []Row {
 	rows := make([]Row, len(out.Contents))
 	for i := range out.Contents {
 		o, r := &out.Contents[i], &rows[i]
-		m := &r.Data
-		r.Key = o.Key
-		m.ETag = stripQuotes(o.ETag)
-		m.StorageClass = o.StorageClass
-		if p.opt.FetchOwner {
-			m.OwnerID, m.OwnerDisplayName = o.OwnerID, o.OwnerDisplayName
-		}
-		m.ChecksumAlgorithm, m.ChecksumType = o.ChecksumAlgorithm, o.ChecksumType
-		m.Size, m.Mtime = o.Size, o.Mtime
+		r.Key, r.Data = o.Key, object(o, p.opt.FetchOwner)
 	}
 	return rows
+}
+
+// object maps the metadata shared by current objects and non-delete versions.
+func object(o *client.Object, owner bool) Object {
+	m := Object{Size: o.Size, Mtime: o.Mtime, ETag: stripQuotes(o.ETag), StorageClass: o.StorageClass,
+		ChecksumAlgorithm: o.ChecksumAlgorithm, ChecksumType: o.ChecksumType}
+	if owner {
+		m.OwnerID, m.OwnerDisplayName = o.OwnerID, o.OwnerDisplayName
+	}
+	return m
 }
 
 // stripQuotes removes one pair of surrounding quotes, as Swath does; the

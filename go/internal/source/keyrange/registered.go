@@ -15,8 +15,8 @@ import "github.com/varveio/swath/go/internal/source"
 // would otherwise silently turn its capability off.
 //
 // The provider satisfies it, not its Engine: the request activity
-// (Answered, Requests, Faults) is the provider's client's, and the
-// provider's Restart also records the resume in its own options.
+// (Answered, Requests, Faults) is supplied by the provider's Activity;
+// Restart is promoted from its Engine.
 type Registered interface {
 	Listed() int64 // registry.Source
 	source.Live

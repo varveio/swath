@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/counters"
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -671,4 +672,14 @@ func TestInFlightChainNotEvicted(t *testing.T) {
 	if p, err := a.Fetch(context.Background(), &q); err != nil || p.Items[0].Name != keys[2] {
 		t.Fatalf("after the commit: %+v %v", p, err)
 	}
+}
+
+// Counter is the value of counter i of CounterDefs.
+func (a *Adapter) Counter(i int) int64 { return a.set.Load(a.base + counters.ID(i)) }
+
+// Len is the number of chains registered.
+func (a *Adapter) Len() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.chains)
 }

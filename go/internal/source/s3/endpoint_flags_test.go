@@ -4,9 +4,11 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -60,6 +62,35 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 	}
 	if path.Load() != "/bkt" || host.Load() != srv[len("http://"):] {
 		t.Fatalf("request to %v%v", host.Load(), path.Load())
+	}
+}
+
+func TestPathStyleFlag(t *testing.T) {
+	for _, c := range []struct {
+		args            []string
+		value, set, bad bool
+	}{
+		{nil, false, false, false},
+		{[]string{"--path-style"}, true, true, false},
+		{[]string{"--path-style=false"}, false, true, false},
+		{[]string{"--path-style=true", "--path-style=false"}, false, true, false},
+		{[]string{"--path-style=false", "--path-style"}, true, true, false},
+		{[]string{"--path-style=invalid"}, false, false, true},
+		{[]string{"--path-style", "--path-style=invalid"}, true, true, true},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		opt := factory(t).RegisterFlags(fs, false).(*flagged)
+		err := fs.Parse(c.args)
+		if (err != nil) != c.bad || opt.PathStyle != c.value || opt.pathStyleSet != c.set {
+			t.Errorf("%q: value=%v set=%v err=%v", c.args, opt.PathStyle, opt.pathStyleSet, err)
+		}
+		var help bytes.Buffer
+		fs.SetOutput(&help)
+		fs.PrintDefaults()
+		if !strings.Contains(help.String(), "  -path-style\n    \tS3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)\n") {
+			t.Fatalf("path-style help changed: %s", help.String())
+		}
 	}
 }
 

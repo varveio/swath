@@ -54,10 +54,11 @@ func TestRequests(t *testing.T) {
 	}
 	seq := keyrange.Policy{Sequential: true}
 	for _, c := range []struct {
-		name string
-		opt  Options
-		want []string // nil: the seed's shape, below
-		rows int
+		name  string
+		after string
+		opt   Options
+		want  []string // nil: the seed's shape, below
+		rows  int
 		// folder: the seed's shape only: a tile's start-after begins with
 		// it; percent lists keys in folders p%2F0/ .. p%2F4/ instead.
 		folder  string
@@ -71,7 +72,7 @@ func TestRequests(t *testing.T) {
 		{name: "prefix", opt: Options{Policy: seq, Prefix: "d/k1"}, rows: 1000, want: []string{
 			`p="d/k1" a="" d="" m=1000 t=false`,
 		}},
-		{name: "resume", opt: Options{Policy: seq, Resume: &Resume{After: "d/k0999"}}, rows: 1500, want: []string{
+		{name: "resume", opt: Options{Policy: seq}, after: "d/k0999", rows: 1500, want: []string{
 			`p="" a="d/k0999" d="" m=1000 t=false`,
 			`p="" a="" d="" m=1000 t=true`, // a continuation carries no start-after
 		}},
@@ -94,6 +95,11 @@ func TestRequests(t *testing.T) {
 			p, err := New(context.Background(), opt)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if c.after != "" {
+				if err := p.Restart(c.after); err != nil {
+					t.Fatal(err)
+				}
 			}
 			col := &collect{}
 			if _, err := order.Run[Range, Object](context.Background(), p, col, &Schema, order.Options{Workers: 1, Budget: 100 * 256}); err != nil {
