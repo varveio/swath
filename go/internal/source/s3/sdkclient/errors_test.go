@@ -74,7 +74,7 @@ func sized(n int) string {
 }
 
 // TestAnswersMatchHandRolled: for each scripted answer, the hand-rolled
-// client and the SDK-backed one (every decoder) fail with the same class,
+// client and the SDK-backed one fail with the same class,
 // the same retry decision (exhausted or not) and the same request
 // counters, and every original response body is closed once. Both are
 // supplied an HTTP client whose policy follows redirects: neither follows
@@ -157,7 +157,7 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		{"202", body(202, ""), objhttp.ClassOther},
 		{"204", body(204, ""), objhttp.ClassOther},
 	} {
-		for _, d := range decoders {
+		for _, d := range production {
 			t.Run(c.name+"/"+d.name, func(t *testing.T) {
 				srv := httptest.NewServer(c.h)
 				defer srv.Close()

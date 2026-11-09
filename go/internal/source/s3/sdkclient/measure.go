@@ -6,7 +6,9 @@ package sdkclient
 // Measurement plumbing, removed after the comparison: SWATH_S3_DECODER=sdk
 // has the SDK's deserializer decode ListObjectsV2 pages (versions stay the
 // scanner's: the SDK cannot keep their order), and page converts its
-// output, so one tagged binary can compare it with the scanner.
+// output, so one tagged binary can compare it with the scanner. It is not
+// a production path: nothing checks the envelope there, and the SDK reads
+// an empty body or another envelope as an empty final page.
 
 import (
 	"fmt"

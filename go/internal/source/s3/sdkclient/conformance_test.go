@@ -165,13 +165,13 @@ func sortedVersions(vs []client.Version) []client.Version {
 // TestCrossEnvelopeIsParseFailure: each operation requires its own
 // envelope. A ListVersionsResult answering ListObjectsV2, or a
 // ListBucketResult answering ListObjectVersions, is a parse failure,
-// retried, through both clients and both decoder paths, never an empty
+// retried, through both clients (the scanner checks it), never an empty
 // final page.
 func TestCrossEnvelopeIsParseFailure(t *testing.T) {
 	s3test.NoCredentials(t)
 	versions := versionsBody("VDV")
 	list := `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Key></Contents></ListBucketResult>`
-	for _, d := range decoders {
+	for _, d := range production {
 		cfg := testConfig(s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Has("versions") {
 				w.Write([]byte(list))

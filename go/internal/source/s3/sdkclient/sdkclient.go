@@ -11,10 +11,11 @@
 // application attempt (net/http may still replay an idempotent GET on a
 // reused connection below it, as for the hand-rolled client). swath owns
 // only what a 2xx answer means: objhttp.Guard, under an HTTP client that
-// follows no redirect, bounds the body, checks it is the operation's
-// envelope answered 200, and captures it; the SDK's deserializer is handed
-// a minimal envelope in its place, and package client's scanner decodes
-// the captured body (client.ParseList, client.ParseVersions), as Java
+// follows no redirect, bounds the body, reads a 2xx other than 200 as an
+// answer, and captures a 200's body; the SDK's deserializer is handed a
+// minimal envelope in its place, and package client's scanner decodes the
+// captured body (client.ParseList, client.ParseVersions: the operation's
+// envelope, whole, or ErrSyntax), as Java
 // swath's StreamingListObjectsV2Interceptor does. Measured through the same
 // stack over a 1,000-entry page (BenchmarkDecode), the SDK's deserializer
 // costs about 14 µs and 100,000 allocations an object page against the
@@ -28,12 +29,9 @@
 package sdkclient
 
 import (
-	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -210,13 +208,7 @@ func (c *Client) Route(bucket string) string {
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
 }
 
-// The envelopes the operations answer, and the minimal ones the SDK
-// decodes in place of a captured body.
-const (
-	listRoot     = "ListBucketResult"
-	versionsRoot = "ListVersionsResult"
-)
-
+// The minimal envelopes the SDK decodes in place of a captured body.
 var (
 	emptyList     = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`)
 	emptyVersions = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListVersionsResult>`)
@@ -236,9 +228,9 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clie
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	op := operation[client.Page]{root: listRoot, replace: emptyList, parse: client.ParseList}
+	op := operation[client.Page]{replace: emptyList, parse: client.ParseList}
 	if c.sdkDecode {
-		op = operation[client.Page]{root: listRoot}
+		op = operation[client.Page]{}
 	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*client.Page, error) {
 		return attempt(c, ctx, op, func(actx context.Context, opts ...func(*awss3.Options)) (*client.Page, error) {
@@ -269,7 +261,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *client.VersionsInpu
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	op := operation[client.VersionPage]{root: versionsRoot, replace: emptyVersions, parse: client.ParseVersions}
+	op := operation[client.VersionPage]{replace: emptyVersions, parse: client.ParseVersions}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*client.VersionPage, error) {
 		return attempt(c, ctx, op, func(actx context.Context, opts ...func(*awss3.Options)) (*client.VersionPage, error) {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
@@ -285,20 +277,15 @@ func str(s string) *string {
 	return aws.String(s)
 }
 
-// operation is how an attempt's 2xx body is checked and decoded: root is
-// the envelope it must be; with parse, the Guard captures the body, the SDK
-// decodes replace in its place and parse decodes the body; without, the
-// SDK's call result is the page.
+// operation is how an attempt's 200 body is decoded: with parse, the Guard
+// captures the body, the SDK decodes replace in its place and parse decodes
+// the body; without (measure.go), the SDK's call result is the page.
 type operation[T any] struct {
-	root    string
 	replace []byte
 	parse   func([]byte) (*T, error)
 }
 
-type (
-	tokenKey struct{}
-	rootKey  struct{}
-)
+type tokenKey struct{}
 
 // bearerHeader is the Guard's Header in bearer mode: the token attempt
 // fetched before the request was counted, carried by its context.
@@ -331,7 +318,7 @@ func attempt[T any](c *Client, ctx context.Context, op operation[T], call func(c
 			o.Credentials = aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return creds, nil })
 		})
 	}
-	cctx := context.WithValue(actx, rootKey{}, op.root)
+	cctx := actx
 	if c.auth.Bearer != nil {
 		cctx = context.WithValue(cctx, tokenKey{}, tok)
 	}
@@ -418,33 +405,15 @@ func answer(err error) (objhttp.Class, bool) {
 	return client.Classify(se), true
 }
 
-// validate is the Guard's check of a 2xx body. A 2xx other than 200 is an
-// answer, as the hand-rolled client reads it (client.ResponseError: an
+// validate is the Guard's check of a 2xx answer: one other than 200 is an
+// answer, read as the hand-rolled client reads it (client.ResponseError: an
 // <Error> body's code, else the status text; the response headers are not
-// seen here, so no request ID or region from them). A 200 must hold the
-// operation's envelope as its root element (the attempt's context names
-// it): an empty body or another root (an <Error> under 200, the other
-// listing's envelope) is ErrSyntax, retried, never read as an empty final
-// page.
-func validate(req *http.Request, status int, body []byte) error {
+// seen here, so no request ID or region from them). A 200's body is the
+// scanner's to check: it requires the operation's envelope and refuses an
+// empty or cut document (ErrSyntax, retried, never an empty final page).
+func validate(_ *http.Request, status int, body []byte) error {
 	if status != http.StatusOK {
 		return client.ResponseError(status, nil, body)
 	}
-	want, _ := req.Context().Value(rootKey{}).(string)
-	d := xml.NewDecoder(bytes.NewReader(body))
-	for {
-		tok, err := d.Token()
-		if err == io.EOF {
-			return fmt.Errorf("%w: no root element (%d bytes)", objhttp.ErrSyntax, len(body))
-		}
-		if err != nil {
-			return fmt.Errorf("%w: %v", objhttp.ErrSyntax, err)
-		}
-		if s, ok := tok.(xml.StartElement); ok {
-			if s.Name.Local != want {
-				return fmt.Errorf("%w: root element <%s>, want <%s>", objhttp.ErrSyntax, s.Name.Local, want)
-			}
-			return nil
-		}
-	}
+	return nil
 }

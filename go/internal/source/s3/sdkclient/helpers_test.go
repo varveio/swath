@@ -20,6 +20,10 @@ var decoders = []struct {
 	dec  bool
 }{{"scanner", false}, {"sdk", true}}
 
+// production is the production path alone, for the tests of what a 200
+// body must be (the measurement path checks no envelope: measure.go).
+var production = decoders[:1]
+
 // newSDK is New with the decoder path chosen (not the environment's).
 func newSDK(ctx context.Context, cfg client.Config, sdkDecode bool) (*Client, error) {
 	c, err := New(ctx, cfg)
