@@ -236,6 +236,13 @@ func TestScriptedAnswers(t *testing.T) {
 		{"200 empty body", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {}, parse(2)},
 		{"200 BOM only", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "\xef\xbb\xbf") }, parse(2)},
 		{"200 cut in an element", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, listHead+"<Blob><Na") }, parse(2)},
+		{"200 connection cut", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "100000")
+			fmt.Fprint(w, listHead)
+			w.(http.Flusher).Flush()
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			conn.Close()
+		}, outcome{Class: objhttp.ClassOther, Requeue: true, Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
 		{"200 out of order", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("", "b", "a")) }, invalid},
 		{"200 repeated marker", 2, ListInput{Marker: "m1"}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("m1", "a")) }, invalid},
 		{"200 Encoded name not UTF-8", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {

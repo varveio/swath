@@ -127,7 +127,7 @@ Source and output:
   --fetch-owner
         S3: fill owner_id and owner_display_name
   --include regex
-        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
@@ -203,7 +203,7 @@ Output and reporting:
   -q, -qq
         quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
   --color string
-        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+        color the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
@@ -262,7 +262,7 @@ Source and output:
   --fetch-owner
         S3: fill owner_id and owner_display_name
   --include regex
-        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
@@ -334,7 +334,7 @@ Output and reporting:
   -q, -qq
         quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
   --color string
-        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+        color the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
@@ -361,7 +361,7 @@ Diagnostics:
   --max-keys N
         ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
   --page-size N
-        ranges: ask the service for pages of N entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes
+        ranges: ask the service for pages of N entries (1 to 1000; provider default when unset): small pages exercise page seams, splits inside a version history and the probes
   --limiter-slow-start
         requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
   --spill-plain
@@ -424,7 +424,7 @@ Source and output:
   --fetch-owner
         S3: fill owner_id and owner_display_name
   --include regex
-        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
+        keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
@@ -482,7 +482,7 @@ Output and reporting:
   -q, -qq
         quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)
   --color string
-        colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
+        color the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it) (default auto)
 
 Diagnostics:
   --seed
@@ -498,7 +498,7 @@ Diagnostics:
   --max-keys N
         ranges: with -sequential, stop after N objects (experiments; the dataset is marked incomplete)
   --page-size N
-        ranges: ask the service for pages of N entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes
+        ranges: ask the service for pages of N entries (1 to 1000; provider default when unset): small pages exercise page seams, splits inside a version history and the probes
   --limiter-slow-start
         requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too
 ```

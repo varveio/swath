@@ -96,106 +96,118 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 		{"308 redirect refused", []answer{redirect308}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassOther, false},
 		{"denied, not retried", []answer{denied}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassAccessDenied, false},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			var n, followed, answered atomic.Int64
-			target := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { followed.Add(1); w.OK(rw) }))
-			defer target.Close()
-			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-				i := int(n.Add(1)) - 1
-				a := c.answers[min(i, len(c.answers)-1)]
-				if a != cut && a != slow {
-					answered.Add(1)
-				}
-				switch a {
-				case ok:
-					w.OK(rw)
-				case throttle:
-					w.Throttle(rw)
-				case server:
-					w.Server(rw)
-				case denied:
-					w.Denied(rw)
-				case garbled:
-					w.Garbled(rw)
-				case slow:
-					select {
-					case <-time.After(5 * time.Second):
-					case <-r.Context().Done():
+		modes := []bool{true}
+		if c.answers[0] == redirect307 || c.answers[0] == redirect308 {
+			modes = append(modes, false)
+		}
+		for _, supplied := range modes {
+			t.Run(fmt.Sprintf("%s/supplied=%v", c.name, supplied), func(t *testing.T) {
+				var n, followed, answered atomic.Int64
+				target := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { followed.Add(1); w.OK(rw) }))
+				defer target.Close()
+				srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+					i := int(n.Add(1)) - 1
+					a := c.answers[min(i, len(c.answers)-1)]
+					if a != cut && a != slow {
+						answered.Add(1)
 					}
-				case cutBody:
-					rw.Header().Set("Content-Length", "100000")
-					w.Garbled(rw)
-				case bodyDeadline:
-					w.Garbled(rw)
-					rw.(http.Flusher).Flush()
-					<-r.Context().Done()
-				case badGzip:
-					rw.Header().Set("Content-Encoding", "gzip")
-					fmt.Fprint(rw, "not gzip at all")
-				case redirect307, redirect308:
-					status := 307
-					if a == redirect308 {
-						status = 308
+					switch a {
+					case ok:
+						w.OK(rw)
+					case throttle:
+						w.Throttle(rw)
+					case server:
+						w.Server(rw)
+					case denied:
+						w.Denied(rw)
+					case garbled:
+						w.Garbled(rw)
+					case slow:
+						select {
+						case <-time.After(5 * time.Second):
+						case <-r.Context().Done():
+						}
+					case cutBody:
+						rw.Header().Set("Content-Length", "100000")
+						w.Garbled(rw)
+					case bodyDeadline:
+						w.Garbled(rw)
+						rw.(http.Flusher).Flush()
+						<-r.Context().Done()
+					case badGzip:
+						rw.Header().Set("Content-Encoding", "gzip")
+						fmt.Fprint(rw, "not gzip at all")
+					case redirect307, redirect308:
+						status := 307
+						if a == redirect308 {
+							status = 308
+						}
+						http.Redirect(rw, r, target.URL, status)
+					case cut:
+						conn, _, err := rw.(http.Hijacker).Hijack()
+						if err == nil {
+							conn.Close()
+						}
 					}
-					http.Redirect(rw, r, target.URL, status)
-				case cut:
-					conn, _, err := rw.(http.Hijacker).Hijack()
-					if err == nil {
-						conn.Close()
+				}))
+				defer srv.Close()
+				bodies := &bodyCloses{next: http.DefaultTransport}
+				var hc *http.Client
+				if supplied {
+					hc = &http.Client{Transport: bodies}
+				}
+				cl := build(Settings{Endpoint: srv.URL, Timeout: 200 * time.Millisecond, HTTPClient: hc,
+					Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
+				err := cl.List(context.Background())
+				if supplied {
+					bodies.check(t, int(answered.Load()))
+				}
+				if followed.Load() != 0 || n.Load() != c.want.Attempts {
+					t.Fatalf("%d listing requests, %d redirects followed", n.Load(), followed.Load())
+				}
+				got := cl.Counters()
+				// one attempt at a time, each in flight for some time
+				if want := min(c.want.Attempts, 1); got.InflightMax != want || mistimed(want > 0, got.InflightNs) {
+					t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
+				}
+				// every attempt is timed: ordered percentiles, a timed-out one at the top
+				if mistimed(c.want.Attempts > 0, got.P50Ns) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
+					(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
+					t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
+				}
+				got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
+				if got != c.want {
+					t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
+				}
+				if c.class == "" {
+					if err != nil {
+						t.Fatal(err)
 					}
+					return
 				}
-			}))
-			defer srv.Close()
-			bodies := &bodyCloses{next: http.DefaultTransport}
-			cl := build(Settings{Endpoint: srv.URL, Timeout: 200 * time.Millisecond, HTTPClient: &http.Client{Transport: bodies},
-				Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
-			err := cl.List(context.Background())
-			bodies.check(t, int(answered.Load()))
-			if followed.Load() != 0 || n.Load() != c.want.Attempts {
-				t.Fatalf("%d listing requests, %d redirects followed", n.Load(), followed.Load())
-			}
-			got := cl.Counters()
-			// one attempt at a time, each in flight for some time
-			if want := min(c.want.Attempts, 1); got.InflightMax != want || mistimed(want > 0, got.InflightNs) {
-				t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
-			}
-			// every attempt is timed: ordered percentiles, a timed-out one at the top
-			if mistimed(c.want.Attempts > 0, got.P50Ns) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
-				(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
-				t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
-			}
-			got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
-			if got != c.want {
-				t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
-			}
-			if c.class == "" {
-				if err != nil {
-					t.Fatal(err)
+				var f *objhttp.Failure
+				var ex *objhttp.ExhaustedError
+				if !errors.As(err, &f) {
+					t.Fatalf("error has no normalized failure: %v", err)
 				}
-				return
-			}
-			var f *objhttp.Failure
-			var ex *objhttp.ExhaustedError
-			if !errors.As(err, &f) {
-				t.Fatalf("error has no normalized failure: %v", err)
-			}
-			if f.Class != c.class || f.Transient != c.requeue ||
-				f.Throttle != (c.want.Throttles > 0) || f.Timeout != (c.want.Timeouts > 0) ||
-				errors.As(err, &ex) != c.requeue || (ex != nil && (ex.Attempts != c.attempts || ex.Err != f)) ||
-				objhttp.Requeue(err) != c.requeue || objhttp.Normalize(err) != f {
-				t.Fatalf("err %v: failure %+v exhausted %v, want %q (requeue %v)", err, f, ex != nil, c.class, c.requeue)
-			}
-			last := c.answers[len(c.answers)-1]
-			if (last == cutBody || last == bodyDeadline || last == badGzip) && (f.Status != 0 || f.Code != "") {
-				t.Fatalf("wire failure became a service answer: %+v", f)
-			}
-			if (last == redirect307 && f.Status != 307) || (last == redirect308 && f.Status != 308) {
-				t.Fatalf("redirect lost status: %+v", f)
-			}
-			if (last == throttle || last == server || last == denied) && (f.Status == 0 || f.Code == "" || (last == denied && f.Status != 403)) {
-				t.Fatalf("service answer lost its HTTP status: %+v", f)
-			}
-		})
+				if f.Class != c.class || f.Transient != c.requeue ||
+					f.Throttle != (c.want.Throttles > 0) || f.Timeout != (c.want.Timeouts > 0) ||
+					errors.As(err, &ex) != c.requeue || (ex != nil && (ex.Attempts != c.attempts || ex.Err != f)) ||
+					objhttp.Requeue(err) != c.requeue || objhttp.Normalize(err) != f {
+					t.Fatalf("err %v: failure %+v exhausted %v, want %q (requeue %v)", err, f, ex != nil, c.class, c.requeue)
+				}
+				last := c.answers[len(c.answers)-1]
+				if (last == cutBody || last == bodyDeadline || last == badGzip) && (f.Status != 0 || f.Code != "") {
+					t.Fatalf("wire failure became a service answer: %+v", f)
+				}
+				if (last == redirect307 && f.Status != 307) || (last == redirect308 && f.Status != 308) {
+					t.Fatalf("redirect lost status: %+v", f)
+				}
+				if (last == throttle || last == server || last == denied) && (f.Status == 0 || f.Code == "" || (last == denied && f.Status != 403)) {
+					t.Fatalf("service answer lost its HTTP status: %+v", f)
+				}
+			})
+		}
 	}
 	for _, deadline := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel after headers/deadline=%v", deadline), func(t *testing.T) {

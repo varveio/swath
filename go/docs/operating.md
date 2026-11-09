@@ -428,10 +428,9 @@ swath dataset profile ([dataset.md](dataset.md)); Java swath's reader does not o
 
 ### Verify a dataset
 
-`python3 verify.py DIR` independently checks S3, GCS and local datasets with DuckDB, including
-manifest part bounds, footer stamps and SHA-256 digests. The script's source-kind check rejects
-valid Azure datasets: it expects `local-fs` for the Azure schema. For Azure, use DuckDB with the
-manifest's exact part list or the [Go reader](../reader/README.md) (`ValidateDigests` and `CheckSchema`).
+`python3 verify.py DIR` independently checks S3, GCS, Azure Blob and local datasets with DuckDB,
+including manifest part bounds, footer stamps and SHA-256 digests. For Azure, it also checks the
+`azblob` source kind and every part's column types and nullability, including UTC microsecond timestamps.
 
 ## Listing every version
 

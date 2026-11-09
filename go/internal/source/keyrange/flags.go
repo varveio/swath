@@ -85,7 +85,7 @@ func Flags(f *flag.FlagSet, diag bool) *Common {
 		f.BoolVar(&p.SlowSplit, "slow-split", p.SlowSplit, "ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)")
 		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
 		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
-		f.Func("page-size", "ranges: ask the service for pages of `N` entries (1 to 1000; default 1000): small pages exercise page seams, splits inside a version history and the probes", func(v string) error {
+		f.Func("page-size", "ranges: ask the service for pages of `N` entries (1 to 1000; provider default when unset): small pages exercise page seams, splits inside a version history and the probes", func(v string) error {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 || n > PageKeys {
 				return fmt.Errorf("want 1 to %d", PageKeys)

@@ -135,8 +135,8 @@ class VerifierSchema(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("whole-row ordered sequence and multiset match reference", proc.stdout)
 
-    def test_complete_gcs_contract_in_every_part(self):
-        for schema in ("current", "generations"):
+    def test_complete_object_contract_in_every_part(self):
+        for schema in ("current", "generations", "azblob"):
             for dataset in sorted((self.base / schema).iterdir()):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)
@@ -146,9 +146,60 @@ class VerifierSchema(unittest.TestCase):
                         column = dataset.name.split("_", 1)[1].removeprefix("type_")
                         self.assertIn("FAIL   " + column + ":", output)
 
+    def test_azure_source_kind_must_match(self):
+        dataset = self.base / "azblob/valid"
+        manifest = dataset / "manifest.json"
+        original = manifest.read_text()
+        try:
+            changed = json.loads(original)
+            changed["extensions"]["swath"]["source"]["kind"] = "local-fs"
+            manifest.write_text(json.dumps(changed))
+            status, output = self.verify(dataset)
+            self.assertEqual(status, 1, output)
+            self.assertIn("FAIL source kind agrees with schema id", output)
+        finally:
+            manifest.write_text(original)
+
+    def test_azure_size_accepts_signed_int64(self):
+        import duckdb
+        from verify import check_object_schema
+        from dataset_schema import AZBLOB_CURRENT
+        source = self.base / "azblob/valid/data/part-00000.parquet"
+        with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
+            for typ in ("BIGINT", "UBIGINT", "INTEGER", "VARCHAR"):
+                with self.subTest(type=typ):
+                    part = Path(td) / (typ + ".parquet")
+                    con.execute(f"COPY (SELECT * REPLACE (CAST(size AS {typ}) AS size) "
+                                f"FROM read_parquet({sql_string(source)}) UNION ALL "
+                                f"SELECT * REPLACE (CAST(NULL AS {typ}) AS size) "
+                                f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
+                    verdicts = {}
+                    check_object_schema(con, part, AZBLOB_CURRENT,
+                                        lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
+                    self.assertEqual(verdicts["size"], typ == "BIGINT")
+
+    def test_azure_timestamps_require_utc_microseconds(self):
+        import duckdb
+        from verify import check_object_schema
+        from dataset_schema import AZBLOB_CURRENT
+        source = self.base / "azblob/valid/data/part-00000.parquet"
+        with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
+            for column in ("last_modified", "creation_time"):
+                for typ in ("TIMESTAMP", "TIMESTAMP_MS", "TIMESTAMP_NS", "TIMESTAMPTZ"):
+                    with self.subTest(column=column, type=typ):
+                        part = Path(td) / (typ + ".parquet")
+                        con.execute(f"COPY (SELECT * REPLACE (CAST({column} AS {typ}) AS {column}) "
+                                    f"FROM read_parquet({sql_string(source)}) UNION ALL "
+                                    f"SELECT * REPLACE (CAST(NULL AS {typ}) AS {column}) "
+                                    f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
+                        verdicts = {}
+                        check_object_schema(con, part, AZBLOB_CURRENT,
+                                            lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
+                        self.assertEqual(verdicts[column], typ == "TIMESTAMPTZ")
+
     def test_time_deleted_requires_utc_microseconds(self):
         import duckdb
-        from verify import check_gcs_schema
+        from verify import check_object_schema
         from dataset_schema import GCS_VERSIONS
         source = self.base / "generations/valid/data/part-00000.parquet"
         with tempfile.TemporaryDirectory() as td, duckdb.connect() as con:
@@ -160,7 +211,7 @@ class VerifierSchema(unittest.TestCase):
                                 f"SELECT * REPLACE (CAST(NULL AS {typ}) AS time_deleted) "
                                 f"FROM read_parquet({sql_string(source)})) TO {sql_string(part)} (FORMAT PARQUET)")
                     verdicts = {}
-                    check_gcs_schema(con, part, GCS_VERSIONS, lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
+                    check_object_schema(con, part, GCS_VERSIONS, lambda good, message: verdicts.update({message.split(":")[0].strip(): good}))
                     self.assertEqual(verdicts["time_deleted"], typ == "TIMESTAMPTZ")
 
 

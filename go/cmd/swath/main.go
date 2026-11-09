@@ -580,7 +580,7 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	f.DurationVar(&o.maxDuration, "max-duration", 0, "stop the run after this `duration` (exit 124; a journaled run is resumable); 0: no limit")
 	f.DurationVar(&o.stall, "stall-timeout", 10*time.Minute, "stop the run as stuck after this long without progress (exit 75; resumable); 0: never")
 	o.term.register(f)
-	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
+	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing")
 	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
 	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects (a local tree's entries, directories too) of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
 	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects or entries of at most this `size`")

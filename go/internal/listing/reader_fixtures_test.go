@@ -15,6 +15,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/schema"
+	"github.com/varveio/swath/go/internal/source/azblob"
 	"github.com/varveio/swath/go/internal/source/gcs"
 	"github.com/varveio/swath/go/internal/source/localfs"
 	"github.com/varveio/swath/go/internal/source/s3"
@@ -28,12 +29,13 @@ func TestVerifierFixtures(t *testing.T) {
 	if base == "" {
 		t.Skip("Python verifier fixtures not requested")
 	}
-	writeVerifierFixtures(t, filepath.Join(base, "current"), gcs.Schema, gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5})
-	writeVerifierFixtures(t, filepath.Join(base, "generations"), gcs.GenerationSchema,
+	writeVerifierFixtures(t, filepath.Join(base, "current"), "gcs", gcs.Schema, gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5})
+	writeVerifierFixtures(t, filepath.Join(base, "generations"), "gcs", gcs.GenerationSchema,
 		gcs.Generation{Object: gcs.Object{Size: 7, Mtime: 10, Generation: 2, TimeCreated: 5}, TimeDeleted: 20})
+	writeVerifierFixtures(t, filepath.Join(base, "azblob"), "azblob", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
 }
 
-func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Schema[P], value P) {
+func writeVerifierFixtures[P any](t *testing.T, base, kind string, original schema.Schema[P], value P) {
 	t.Helper()
 	variants := map[string]func(*schema.Schema[P]){"valid": func(*schema.Schema[P]) {}}
 	for _, col := range original.Columns {
@@ -102,7 +104,7 @@ func writeVerifierFixtures[P any](t *testing.T, base string, original schema.Sch
 		if err := os.MkdirAll(filepath.Join(dir, "data"), 0755); err != nil {
 			t.Fatal(err)
 		}
-		meta := dataset.Meta{SchemaID: original.ID, Groups: original.Groups, Source: dataset.Source{Kind: "gcs", URI: "gs://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
+		meta := dataset.Meta{SchemaID: original.ID, Groups: original.Groups, Source: dataset.Source{Kind: kind, URI: "fixture://b", Container: "b"}, Scope: dataset.Scope{Kind: "whole"},
 			Coverage: dataset.Coverage{Complete: true, StopReason: "completed", Exclusions: []string{}, Filters: []string{}}}
 		if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte("{}\n"), 0644); err != nil {
 			t.Fatal(err)

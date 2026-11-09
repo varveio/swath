@@ -410,9 +410,8 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage and the source: kind, container and URI),
   `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
   (every part's SHA-256 against its bytes).
-- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either S3 or GCS mode, or a local dataset,
-  and can compare the complete rows against an independent dataset. For Azure, use
-  [the verification alternatives](operating.md#verify-a-dataset). `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
+- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
+  and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
   schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
   test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
