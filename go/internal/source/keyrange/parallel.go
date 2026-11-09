@@ -19,7 +19,7 @@ import (
 )
 
 // Parallel core: Swath's range tiling, seed, demand-driven owner split
-// and safe pivot (docs/internals/providers.md, "Range engine").
+// and safe pivot (docs/internals/range-engine.md).
 //
 // A range is (lo, hi]: the lower bound is exclusive, so a boundary key belongs
 // to the left range. lo "" is ⊥; open marks the frontier (hi = ⊤). The

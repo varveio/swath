@@ -504,7 +504,7 @@ unchanged). (Before the megascenes fix the truncated first page was emitted and 
 
 The keyfake S3 fake (`keyfake-static`, 50 ms a page, ListObjectsV2, path-style, anonymous) on 4 shared cores,
 64 workers, `--count-only`, 3 interleaved repetitions, median; before is `go/engine` at `2cb204c2`, after adds
-the admission gates and the remainder rank ([providers](internals/providers.md#range-engine-internalsourcekeyrange)).
+the admission gates and the remainder rank ([providers](internals/range-engine.md)).
 The synthetic lists follow the shapes of the sweep's worst small lists: `mogreps` 1.04M objects flat at the
 root (`prods_op_mogreps-g_YYYYMMDD_RR_MM_TTT.nc`), `urma` 1.77M under 18,400 day folders
 (`akurma.YYYYMMDD/akurma.tHHz.<product>.grb2`), `zarr` 1.26M zarr chunks seven levels down under two top
@@ -762,7 +762,7 @@ The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself adde
 
 ### SDK-backed clients (2026-11-09)
 
-Clients built with `-tags swath_sdkclient` ([providers.md](internals/providers.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
+Clients built with `-tags swath_sdkclient` ([providers.md](internals/clients.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
 measured on branches `exp/measure-preview` (S3) and `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers
 describe those runs.
 
@@ -1165,7 +1165,7 @@ query lists `1950census/43290879-Alabama/…-0001.jpg` first, yet `start-after=1
 `start-after=` that stored key both return `KeyCount=0 IsTruncated=false`.
 
 swath trusts a page that is not truncated as the end of its range
-([providers.md](internals/providers.md#range-engine-internalsourcekeyrange)), so the campaign's MinIO fixture
+([providers.md](internals/range-engine.md)), so the campaign's MinIO fixture
 is a list without that shape.
 
 ## Drain tail: read-ahead and segments, 2026-11-07/08
