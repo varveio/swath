@@ -36,7 +36,7 @@ func admitDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []
 	if err := d.CheckSchema(context.Background()); err != nil {
 		t.Fatalf("%s: check schema: %v", s.ID, err)
 	}
-	if err := d.AcceptWholeSource(kind, ""); err != nil {
+	if err := d.AcceptWholeSource(reader.WholeSource{Kind: kind, URI: "fixture://" + filepath.Base(dir)}); err != nil {
 		t.Fatalf("%s: accept: %v", s.ID, err)
 	}
 	return d

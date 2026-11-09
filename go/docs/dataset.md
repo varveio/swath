@@ -38,6 +38,10 @@ operations (the `go/reader` names are given; other readers make the same distinc
 | Acceptance (`AcceptWholeSource`) | The listing covers the whole of the named source: the coverage rule in [The swath extension](#the-swath-extension) | the manifest only |
 | Digest validation (`ValidateDigests`, `ValidateDigestsDir`) | Every part declares a SHA-256 that its bytes match | every part's bytes |
 
+`go/reader`'s `AdmitWhole` runs digest validation, identification, validation and whole-source acceptance in that
+order on the same bytes, for a reader attaching a whole listing of current objects, and records the manifest's
+SHA-256 so that a reopen of a sealed source can be checked against it.
+
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
 but has no `version`, or an unsupported one, is refused. Acceptance and digest validation require the extension
@@ -89,9 +93,9 @@ module's. JSON readers must not depend on that order.
 |---|---|---|
 | `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
 | `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | informative |
-| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind); `--seed-from` |
-| `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | informative |
-| `source.container` | The bucket or container; absent for a filesystem | whole-source acceptance: equal to the caller's container, or absent or `null` when the caller passes `""` (a filesystem); `--seed-from` |
+| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind and to the schema id's); `--seed-from` |
+| `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | whole-source acceptance for `azblob` and `local-fs` (the source's identity), and for `s3` and `gcs` when the caller gives one |
+| `source.container` | The bucket, or the Azure container's name; absent for a filesystem | whole-source acceptance: equal to the caller's container, or, for a bucket, absent or `null` when the caller passes `""`; absent, `null` or `""` for a filesystem; `--seed-from` |
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | whole-source acceptance: `whole` |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | not needed for acceptance; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
@@ -102,7 +106,13 @@ module's. JSON readers must not depend on that order.
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative: does not refuse |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
 
-**Whole-source acceptance** requires every member listed as required for it. An absent or `null` member refuses
+**Whole-source acceptance** identifies the source as its kind does. A bucket (`s3`, `gcs`) is its name in
+`source.container`; `source.uri` is compared only when the caller gives one. An Azure container's name is unique
+only within its account, which only `source.uri` (`az://account/container`) records, so `azblob` requires both
+`source.container` and `source.uri` equal to the caller's, and a caller without a URI is refused. A filesystem has
+no container and is its root: `source.uri` must equal the caller's root, compared byte for byte except that a
+trailing separator on either side is ignored; no mount, symbolic link or case is resolved, and a caller without a
+root is refused. It requires every member listed as required for it. An absent or `null` member refuses
 the dataset, except `source.container` when the caller's container is `""`: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
 empty. `exclusions` are tolerated, so an accepted dataset is the whole source minus what was excluded by design,
 not every entry the source holds. swath publishes the complete result of the live listing it performed; it is not

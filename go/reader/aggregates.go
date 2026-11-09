@@ -119,6 +119,12 @@ func (o AggregateOptions) budget() int64 {
 // errors are returned unchanged, and a context that ends fails Aggregates
 // with its error. No aggregates are returned with an error.
 func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions) ([]PrefixAggregate, error) {
+	return d.aggregates(ctx, prefixes, opt, nil)
+}
+
+// aggregates is Aggregates, adding the statistics of its plans and scans
+// to st when it is not nil.
+func (d *Dataset) aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions, st *ReadStats) ([]PrefixAggregate, error) {
 	if err := d.usable(ctx); err != nil {
 		return nil, err
 	}
@@ -126,7 +132,7 @@ func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt Aggrega
 		return nil, err
 	}
 	if objectColumns(d.spec.ID) == nil {
-		return nil, semantic(KindSchema, "", nil, "%s holds versions, not current objects", d.spec.ID)
+		return nil, notCurrent(d.spec.ID)
 	}
 	out := make([]PrefixAggregate, len(prefixes))
 	if !opt.Counts && opt.Sums == SumsOff {
@@ -138,14 +144,14 @@ func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt Aggrega
 	for i, p := range unique {
 		spans[i] = prefixSpan(p)
 		var err error
-		if counts[i], err = d.count(ctx, spans[i]); err != nil {
+		if counts[i], err = d.count(ctx, spans[i], st); err != nil {
 			return nil, err
 		}
 	}
 	var sums []*int64
 	if opt.Sums != SumsOff {
 		var err error
-		if sums, err = d.prefixSums(ctx, spans, counts, opt); err != nil {
+		if sums, err = d.prefixSums(ctx, spans, counts, opt, st); err != nil {
 			return nil, err
 		}
 	}
@@ -165,7 +171,7 @@ func (d *Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt Aggrega
 
 // prefixSums sums the sizes of the prefixes the mode selects among those
 // with a known count: nil for any other, or whose sum overflows.
-func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int64, opt AggregateOptions) ([]*int64, error) {
+func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int64, opt AggregateOptions, st *ReadStats) ([]*int64, error) {
 	sums := make([]*int64, len(spans))
 	var candidates []int
 	for i, n := range counts {
@@ -180,7 +186,7 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 	selected := candidates
 	if opt.Sums == SumsWithinBudget {
 		var err error
-		if selected, err = d.withinBudget(ctx, spans, candidates, opt.budget()); err != nil {
+		if selected, err = d.withinBudget(ctx, spans, candidates, opt.budget(), st); err != nil {
 			return nil, err
 		}
 	}
@@ -188,7 +194,7 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 	for k, i := range selected {
 		chosen[k] = spans[i]
 	}
-	found, err := d.sumSpans(ctx, chosen, []string{"size"})
+	found, err := d.sumSpans(ctx, chosen, []string{"size"}, st)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +216,7 @@ func (d *Dataset) prefixSums(ctx context.Context, spans []keySpan, counts []*int
 // one alone, zero when its pages are all charged already. Until one is
 // selected every candidate adds at least a page, so a budget below the
 // smallest page plans none.
-func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates []int, budget int64) ([]int, error) {
+func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates []int, budget int64, st *ReadStats) ([]int, error) {
 	order := slices.Clone(candidates)
 	slices.SortFunc(order, func(a, b int) int { return bytes.Compare(spans[a].lo, spans[b].lo) })
 	var selected []int
@@ -224,7 +230,7 @@ func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates 
 		if last < 0 && budget < minPageBytes {
 			continue
 		}
-		alone, ok, err := d.projectedSize(ctx, spans[i])
+		alone, ok, err := d.projectedSize(ctx, st, spans[i])
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +239,7 @@ func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates 
 		}
 		added := alone
 		if last >= 0 {
-			both, ok, err := d.projectedSize(ctx, spans[last], spans[i])
+			both, ok, err := d.projectedSize(ctx, st, spans[last], spans[i])
 			if err != nil {
 				return nil, err
 			}
@@ -255,11 +261,12 @@ func (d *Dataset) withinBudget(ctx context.Context, spans []keySpan, candidates 
 
 // projectedSize returns the compressed bytes a scan of spans' size column
 // reads, and false when a size chunk has no OffsetIndex to prove it.
-func (d *Dataset) projectedSize(ctx context.Context, spans ...keySpan) (int64, bool, error) {
+func (d *Dataset) projectedSize(ctx context.Context, st *ReadStats, spans ...keySpan) (int64, bool, error) {
 	plan, err := d.sp.PlanRanges(ctx, ranges(spans), []string{"size"})
 	if err != nil {
 		return 0, false, err
 	}
+	addStats(st, plan.Stats())
 	n, exact := plan.ProjectedBytes()
 	return n, exact, nil
 }

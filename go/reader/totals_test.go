@@ -285,13 +285,14 @@ func editManifest(t *testing.T, dir string, edit func(*seekparquet.Manifest)) {
 	}
 }
 
-// countingSource serves a directory and records the parts it opens and
-// every read; after failAt reads it fails each with failErr, and at read
+// countingSource serves a directory and records the files it opens, how
+// many are open, and every read; after failAt reads it fails each with failErr, and at read
 // cancelAt it calls cancel.
 type countingSource struct {
 	root *os.Root
 
 	mu       sync.Mutex
+	live     int // files open
 	opens    []string
 	reads    []sourceRead
 	failAt   int
@@ -333,11 +334,26 @@ func (s *countingSource) Open(_ context.Context, path string) (seekparquet.Sourc
 	}
 	s.mu.Lock()
 	s.opens = append(s.opens, path)
+	s.live++
 	s.mu.Unlock()
 	return countingFile{File: f, size: st.Size(), path: path, src: s}, nil
 }
 
 func (f countingFile) Size() int64 { return f.size }
+
+func (f countingFile) Close() error {
+	f.src.mu.Lock()
+	f.src.live--
+	f.src.mu.Unlock()
+	return f.File.Close()
+}
+
+// open returns the number of files opened and not closed.
+func (s *countingSource) open() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.live
+}
 
 func (f countingFile) ReadAt(p []byte, off int64) (int, error) {
 	s := f.src

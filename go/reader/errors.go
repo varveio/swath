@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -18,8 +19,9 @@ const (
 	// the operation reads (a versions schema has no current objects), or
 	// extensions.swath's version is not one this module reads.
 	KindSchema Kind = "schema"
-	// KindCoverage: the manifest's extensions.swath is malformed, or does
-	// not record a listing of the whole source (AcceptWholeSource).
+	// KindCoverage: the manifest's extensions.swath is malformed, does
+	// not record a listing of the whole source (AcceptWholeSource), or has
+	// no published_at (AdmitWhole).
 	KindCoverage Kind = "coverage"
 	// KindRow: a row holds a value its schema forbids (a null in a required
 	// column), or an object a current-object reader refuses (Stream).
@@ -73,4 +75,23 @@ func (e *SemanticError) Is(target error) bool {
 
 func semantic(kind Kind, column string, row *Position, format string, args ...any) *SemanticError {
 	return &SemanticError{Kind: kind, Column: column, Row: row, Err: fmt.Errorf(format, args...)}
+}
+
+// notCurrent refuses a versions schema where current objects are read.
+func notCurrent(id SchemaID) error {
+	return semantic(KindSchema, "", nil, "%s holds versions, not current objects", id)
+}
+
+// IsRefusal reports whether err, or an error it wraps, refuses the
+// dataset as data: a *SemanticError, a *RefusalError, ErrMissingDigest or
+// ErrIdentityMismatch. Every other error is false: an *UnsupportedError
+// (a valid dataset using a feature the module does not read, inspectable
+// with errors.As), ErrClosed, ErrInvalidRequest, ErrLimitExceeded, the
+// context's, and the filesystem's and storage's. False does not mean
+// retryable. This package does not import objfile: its ErrObjectChanged
+// and ErrInvalidSnapshot are the caller's to classify.
+func IsRefusal(err error) bool {
+	var se *SemanticError
+	var re *RefusalError
+	return errors.As(err, &se) || errors.As(err, &re) || errors.Is(err, ErrMissingDigest) || errors.Is(err, ErrIdentityMismatch)
 }

@@ -4,7 +4,8 @@
 [SeekParquet](https://github.com/varveio/seekparquet) module: the schema ids and their columns, the manifest's
 `extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, a `Dataset` that
 opens a dataset, checks its schema, accepts it as a whole-source listing, streams and lists its current objects
-and totals them under paths and prefixes, and the digest validation a reader importing a dataset runs first.
+and totals them under paths and prefixes, the digest validation a reader importing a dataset runs first, and
+`AdmitWhole`, which runs every one of those checks in order for a reader attaching a whole current-object listing.
 
 The swath dataset profile this module implements (what a swath dataset is, the schema ids and their row
 contracts, `extensions.swath` and what each operation requires, key order, evolution) is defined in
@@ -53,7 +54,8 @@ func OpenDir(ctx context.Context, path string, opt Options) (*Dataset, error)
 func (*Dataset) Metadata() Metadata
 func (*Dataset) SeekParquet() *seekparquet.Dataset // borrowed: the Dataset closes it
 func (*Dataset) CheckSchema(ctx context.Context) error
-func (*Dataset) AcceptWholeSource(kind, container string) error
+type WholeSource struct { Kind, Container, URI string }
+func (*Dataset) AcceptWholeSource(want WholeSource) error
 func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
 func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; ReadStats }
 type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
@@ -62,6 +64,10 @@ func (Entry) Cursor() *Cursor
 func (*Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error)
 func (*Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error)
 func (*Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions) ([]PrefixAggregate, error)
+type PageRequest struct { ListRequest; Aggregates AggregateOptions }
+type PageEntry struct { Entry; Aggregate *PrefixAggregate } // nil for an ordinary object
+type Page struct { Entries []PageEntry; Next *Cursor }       // Next nil on the last page
+func (*Dataset) Page(ctx context.Context, req PageRequest) (Page, error)
 func (*Dataset) Close() error
 
 type SemanticError struct { Kind Kind; Column string; Row *Position; Err error }
@@ -78,6 +84,14 @@ type DigestResult struct { CheckedParts int64 }
 var ErrMissingDigest error
 func ValidateDigests(ctx context.Context, src Source, opt Options) (DigestResult, error)
 func ValidateDigestsDir(ctx context.Context, path string, opt Options) (DigestResult, error)
+
+type Identity struct { ManifestSHA256 [32]byte; PublishedAt time.Time }
+var ErrIdentityMismatch error
+func AdmitWhole(ctx context.Context, src Source, want WholeSource, opt Options) (*Dataset, Identity, error)
+func AdmitWholeDir(ctx context.Context, path string, want WholeSource, opt Options) (*Dataset, Identity, error)
+func ReopenWhole(ctx context.Context, src Source, want WholeSource, id Identity, opt Options) (*Dataset, error)
+func ReopenWholeDir(ctx context.Context, path string, want WholeSource, id Identity, opt Options) (*Dataset, error)
+func IsRefusal(err error) bool
 ```
 
 A reader of current objects opens the dataset, admits it once and streams it:
@@ -86,7 +100,7 @@ A reader of current objects opens the dataset, admits it once and streams it:
 d, err := reader.OpenDir(ctx, dir, reader.Options{}) // or reader.Open over a reader.Source (objfile)
 defer d.Close()
 err = d.CheckSchema(ctx)                 // at admission, not per read
-err = d.AcceptWholeSource("s3", "bucket") // the whole bucket, nothing skipped or filtered
+err = d.AcceptWholeSource(reader.WholeSource{Kind: "s3", Container: "bucket"}) // the whole bucket, nothing skipped or filtered
 err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
 entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000})
 // the next page: ListRequest{..., Cursor: entries[len(entries)-1].Cursor()}
@@ -97,6 +111,21 @@ A reader importing a dataset validates its digests first, then opens the same by
 ```go
 res, err := reader.ValidateDigests(ctx, src, reader.Options{}) // src pins each file to one stored object
 d, err := reader.Open(ctx, src, reader.Options{})
+```
+
+A reader attaching a whole current-object listing admits it, keeps its `Identity`, reopens it from a sealed
+source later, and browses it a page at a time with each prefix's totals:
+
+```go
+want := reader.WholeSource{Kind: "s3", Container: "bucket"}
+d, id, err := reader.AdmitWhole(ctx, src, want, reader.Options{}) // digests, schema, coverage, identity
+d, err = reader.ReopenWhole(ctx, sealed, want, id, reader.Options{}) // sealed: the objects admitted
+page, err := d.Page(ctx, reader.PageRequest{
+	ListRequest: reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000},
+	Aggregates:  reader.AggregateOptions{Counts: true, Sums: reader.SumsWithinBudget},
+})
+// the next page: PageRequest{..., Cursor: page.Next}, while page.Next != nil
+if reader.IsRefusal(err) { /* the data is refused: attach another dataset */ }
 ```
 
 A reader of anything else (versions, a key range, other columns) queries the module's dataset and decodes its
@@ -131,11 +160,18 @@ for _, r := range rows {
   false), signed ones INT(n, true) or unannotated), REQUIRED where the spec requires a value, present unless the
   spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
   column and the part. It reads nothing beyond Verify's reads.
-- **`AcceptWholeSource(kind, container)`.** The listing covers the whole of that source: `extensions.swath`
-  present, `source.kind` and `source.container` equal to the arguments (a filesystem has no container: pass
-  `""`), `scope.kind` `whole`, `coverage.complete` true, `coverage.stop_reason` `completed`,
-  `coverage.skipped_entries` 0 and `coverage.filters` present and empty. An absent member refuses. The first
-  failure is `KindCoverage` with `Column` naming the member (`coverage.filters`, say). Exclusions (what a
+- **`AcceptWholeSource(want)`.** The listing covers the whole of the source `want` names: `extensions.swath`
+  present; `source.kind` equal to `want.Kind` and to the kind of the dataset's schema id (`s3` for the S3 schemas,
+  `gcs` for Cloud Storage's, `azblob`, `local-fs`); the source identified as its kind identifies it; `scope.kind`
+  `whole`, `coverage.complete` true, `coverage.stop_reason` `completed`, `coverage.skipped_entries` 0 and
+  `coverage.filters` present and empty. A bucket (`s3`, `gcs`) is `source.container` equal to `want.Container`
+  (absent matches only `""`), and `source.uri` is compared only when `want.URI` is set. An Azure container's
+  name is unique only within its account, which `source.uri` holds (`az://account/container`): `azblob` requires
+  `source.container` and `source.uri` both equal to `want`'s, and an empty `want.URI` refuses. A filesystem has no
+  container (`want.Container` must be `""`, and `source.container` absent or `""`) and is its root:
+  `source.uri` equal to `want.URI`, which must be set, compared lexically except that a trailing separator on
+  either side is ignored (`/data/` is `/data`); nothing is resolved, mapped or case-folded. An absent member
+  refuses. The first failure is `KindCoverage` with `Column` naming the member (`source.uri`, say). Exclusions (what a
   listing leaves out by design, such as an output directory inside a listed tree) and `coverage.snapshot` (a
   listing is never a point-in-time snapshot) do not refuse.
 - **`Stream`.** Current objects only: a versions schema is refused (`KindSchema`) before any read. Every object
@@ -197,6 +233,16 @@ for _, r := range rows {
   `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
   `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates. Both calls fail first on a
   context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
+- **`Page(req)`.** `List` with one entry beyond `req.Limit`, trimmed to `Limit`; `Next` is the last returned
+  entry's `Cursor()` only when that extra entry existed, so the last page has `Next` nil and is never followed by
+  an empty one. Then one `Aggregates` call with `req.Aggregates` for exactly the common prefixes returned (a prefix
+  carrying its exact-key object included; an entry beyond the limit is never aggregated): each prefix entry's
+  `Aggregate` is its `PrefixAggregate`, whose fields are nil as `Aggregates` leaves them (not requested, not
+  known exactly, not within the sum budget), and an ordinary object's `Aggregate` is nil. The budget is
+  `AggregateOptions`', not a bound on the page's reads. A `Limit` that is not positive or is `math.MaxInt`, and
+  an invalid `AggregateOptions`, wrap `ErrInvalidRequest` before any read. Otherwise the errors are `List`'s and
+  `Aggregates`'; a context that ends between the two is its error. No entries come with an error. `Stats` is
+  reset at the start and receives the listing's and the aggregation's statistics, on failure too.
 - **`ValidateDigests`, `ValidateDigestsDir`** (at import or attach). The dataset must be swath's: it opens as
   `Open` decides (a schema id swath writes, `extensions.swath` well-formed), `extensions.swath` is present
   (`KindCoverage`), and the manifest's key column and uniqueness are the spec's (`KindSchema`), as `CheckSchema`
@@ -209,7 +255,20 @@ for _, r := range rows {
   not checked as Parquet (that is `CheckSchema`'s and the reads'). The caller validates, then opens, the same
   immutable bytes: one Source whose files are pinned to one stored object each, or a local directory that does
   not change in between.
-- **Not checked.** The parts' digests by any call but `ValidateDigests`. Rows no request decodes, and columns a
+- **`AdmitWhole`, `AdmitWholeDir`** (at attach). In order, each on the same bytes: `ValidateDigests`, `Open`,
+  `CheckSchema`, `AcceptWholeSource(want)`, a current-objects schema id (a versions schema is `KindSchema`), and
+  `published_at` present (else `KindCoverage` naming `published_at`). The first failure is returned as its step
+  returns it; the `Dataset` is closed and the caller's `Source` stays open. On success the `Dataset` is open and
+  `Identity` is the SHA-256 of the exact manifest bytes it opened and its `published_at` in UTC. The source must
+  serve the same bytes to each open (objfile pins, or a directory that does not change). There is no option to
+  skip a step.
+- **`ReopenWhole`, `ReopenWholeDir`** (reattaching). `Open`, then the acceptance after `CheckSchema` above
+  (`AcceptWholeSource(want)`, current objects, `published_at`), then `Identity` equal to the one admitted, else an
+  error wrapping `ErrIdentityMismatch` naming the member that differs. No digest is validated and no part is
+  opened: the identity proves the manifest, not the parts, so the source must be sealed to the objects admitted
+  (objfile pins restored from the admission) or be local files unchanged since. A local directory that may have
+  changed is admitted again. On a failure the `Dataset` is closed and the `Source` stays open.
+- **Not checked.** The parts' digests by any call but `ValidateDigests` (and `AdmitWhole`, through it). Rows no request decodes, and columns a
   request does not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull`
   every value.
 
@@ -244,6 +303,13 @@ member of `extensions.swath` as a pointer (a slice: nil) that is nil when absent
 manifest without the extension parses with `Swath` false. Unknown members are ignored. `AcceptWholeSource`'s errors are `KindCoverage` with `Column` naming the member of
 `extensions.swath` at fault; `CheckSchema`'s are `KindSchema` naming the column, with the part in the message.
 
+`IsRefusal(err)` partitions the errors: true when `err` wraps a `*SemanticError`, a `*RefusalError`,
+`ErrMissingDigest` or `ErrIdentityMismatch`, data that is refused as it is. It is false for everything else: an
+`*UnsupportedError` (a valid dataset using a feature the module does not read; inspect it with `errors.As`, since
+unsupported is not malformed), `ErrClosed`, `ErrInvalidRequest`, `ErrLimitExceeded`, the context's errors, and the
+filesystem's and storage's. False does not mean retryable. The reader does not import objfile, so objfile's
+`ErrObjectChanged` and `ErrInvalidSnapshot` are the caller's to classify.
+
 ## What it is not
 
 Opening, validation (`seekparquet.Validate`), cursors, range and delimiter queries, page decoding and refusal
@@ -262,7 +328,9 @@ without `time_created` and one without `md5`, and S3 versions read in pages of 1
 several parts, continuing inside key groups by `Offset`.
 
 `dataset_test.go` writes datasets with the module's writer (`seekparquet/go/local`) to test `AcceptWholeSource`
-on every member it requires, present and absent; `Open` on an unknown schema id; `CheckSchema` on key
+on every member it requires, present and absent, and on each kind's identity (bucket URIs compared only when given,
+same-named Azure containers of two accounts, filesystem roots with and without a trailing separator, a schema id
+of another kind); `Open` on an unknown schema id; `CheckSchema` on key
 uniqueness, the key column, an absent column, a column of another logical type, and a later part lacking a
 column the module accepts; `Stream`'s order and values over pages, nulls, its row checks, cancellation, `fn`'s
 error, a module refusal returned unchanged, and the refusal of a versions schema; and a part with corrupted
@@ -280,6 +348,16 @@ report is complete; the context's error is returned), and a complete report comp
 all errors. The lister's `TestReaderStreams*` tests admit and stream datasets its own
 writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 (one without a size refused), and both versions schemas admitted and refused by `Stream`.
+
+`admit_test.go` admits a three-part dataset through a Source and a directory (its `Identity` the SHA-256 of the
+manifest file and its `published_at`), refuses in order a corrupt part, a missing digest, another kind and
+container, a versions schema and a missing `published_at` with every file closed and the Source still usable,
+reopens it opening the manifest alone, refuses another manifest digest, publication time or container, and tables
+`IsRefusal`. `page_test.go` pages `list_test.go`'s keys in pages of 1, 2, 3 and 100 against the oracle with each
+prefix's totals against `Stream`'s, `Next` nil only on the last page; checks that a page whose extra entry is a
+prefix reads exactly what its listing reads, nil sums under a one-byte budget, statistics holding the
+aggregation, a cancellation at the listing's last read (the context's error, no entries, the listing's
+statistics), and invalid requests before any read.
 
 `totals_test.go` and `aggregates_test.go` port varve's `internal/swath` totals and aggregates tests, each
 naming the one it ports, over datasets of several parts cut inside prefixes, read through a `Source` that

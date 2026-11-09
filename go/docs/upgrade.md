@@ -381,7 +381,7 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
   to 9999. A local dataset's directory rows are entries whose keys end in `/`.
 - **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
-  `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage, source kind and container),
+  `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage and the source: kind, container and URI),
   `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
   (every part's SHA-256 against its bytes).
 - **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows

@@ -22,12 +22,25 @@
 // through the module's delimited listing, checking each object as Stream
 // does (Delimiter 0 is the NUL byte); a common prefix carries the object
 // at its exact key, an S3-style folder object, from the same request.
-// None of them checks the parts' digests or the rows no request decodes.
+// AcceptWholeSource identifies the source by its kind: a bucket by name,
+// an Azure container by name and account (source.uri), a filesystem by
+// its root. Page lists a page with one entry of lookahead for its Next
+// cursor and the totals (Aggregates) of the prefixes it returns. None of
+// them checks the parts' digests or the rows no request decodes.
 //
 // ValidateDigests, at import, checks that a dataset is swath's from its
 // manifest and that every part declares a SHA-256 its bytes match
 // (seekparquet.Validate at LevelDigest); a validation that is incomplete
 // is an error, never success. The caller then opens the same bytes.
+//
+// AdmitWhole is that sequence, fixed, for a reader attaching a whole
+// listing of current objects: ValidateDigests, Open, CheckSchema,
+// AcceptWholeSource, a current-objects schema and a published_at, closing
+// the Dataset on any failure, and an Identity (the SHA-256 of the manifest
+// bytes opened, and published_at). ReopenWhole reopens it from a sealed
+// source without validating digests again, and refuses another Identity
+// (ErrIdentityMismatch). IsRefusal tells the errors that refuse the data
+// from the others.
 //
 // Totals and Aggregates total the current objects under paths and
 // prefixes over the module's selection plans (seekparquet.Dataset.

@@ -5,6 +5,7 @@ package reader
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -40,9 +41,9 @@ type Metadata struct {
 
 // SourceInfo is what was listed.
 type SourceInfo struct {
-	Kind      *string `json:"kind"`      // "s3", "gcs", "local-fs"
-	URI       *string `json:"uri"`       // s3://bucket/prefix, gs://…, or the absolute root path
-	Container *string `json:"container"` // the bucket; absent for a filesystem
+	Kind      *string `json:"kind"`      // "s3", "gcs", "azblob", "local-fs"
+	URI       *string `json:"uri"`       // s3://bucket/prefix, gs://…, az://account/container/…, or the absolute root path
+	Container *string `json:"container"` // the bucket or container name; absent for a filesystem
 }
 
 // Scope is the part of the source the listing was asked for.
@@ -105,19 +106,46 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 	return out, nil
 }
 
-// AcceptWholeSource accepts the dataset as a listing of the whole of one
-// source: the container of the given kind ("s3", "gcs" or "local-fs"; a
-// filesystem has no container, so container is ""). It requires every
-// member below to be present, and fails on the first that is absent or
-// does not hold, with a SemanticError of KindCoverage whose Column names
-// the member: extensions.swath itself, source.kind and source.container
-// equal to kind and container, scope.kind "whole", coverage.complete
-// true, coverage.stop_reason "completed", coverage.skipped_entries 0 and
-// coverage.filters empty. Exclusions are what a listing leaves out by
-// design (an output directory inside a listed tree), and a listing is
-// never a point-in-time snapshot (coverage.snapshot false), so neither
-// refuses a dataset.
-func (d *Dataset) AcceptWholeSource(kind, container string) error {
+// WholeSource is the source a whole-source listing must be of: its kind
+// ("s3", "gcs", "azblob" or "local-fs"), its container (the bucket, or
+// the Azure container's name; "" for a filesystem) and its URI as swath
+// records it in source.uri (an Azure container's az://account/container,
+// a filesystem's absolute root path).
+type WholeSource struct {
+	Kind, Container, URI string
+}
+
+// sourceKinds is the source kind of each schema id swath writes.
+var sourceKinds = map[SchemaID]string{
+	S3ObjectsV1: "s3", S3VersionsV1: "s3", GCSObjectsV1: "gcs", GCSGenerationsV1: "gcs",
+	AzblobObjectsV1: "azblob", LocalV1: "local-fs",
+}
+
+// AcceptWholeSource accepts the dataset as a listing of the whole of the
+// source want names. It requires every member below to be present, and
+// fails on the first that is absent or does not hold, with a
+// SemanticError of KindCoverage whose Column names the member:
+// extensions.swath itself; source.kind equal to want.Kind, and the kind
+// of the dataset's schema id; source.container and source.uri as the
+// kind identifies a source; scope.kind "whole"; coverage.complete true;
+// coverage.stop_reason "completed"; coverage.skipped_entries 0; and
+// coverage.filters empty.
+//
+// A bucket ("s3", "gcs") is its container, equal to want.Container (a
+// container absent from the manifest matches only ""); its URI is compared
+// only when want.URI is not "". An Azure container's name is unique only
+// within its account, which source.uri holds: "azblob" requires both
+// source.container and source.uri equal to want's, and want.URI "" is
+// refused. A filesystem ("local-fs") has no container, so want.Container
+// must be "" (and the manifest's absent or ""), and is its root: source.uri
+// equal to want.URI, which must not be "", lexically, except that a
+// trailing separator on either is ignored. No path is resolved or
+// case-folded.
+//
+// Exclusions are what a listing leaves out by design (an output directory
+// inside a listed tree), and a listing is never a point-in-time snapshot
+// (coverage.snapshot false), so neither refuses a dataset.
+func (d *Dataset) AcceptWholeSource(want WholeSource) error {
 	if err := d.checkSwath(); err != nil {
 		return err
 	}
@@ -134,15 +162,10 @@ func (d *Dataset) AcceptWholeSource(kind, container string) error {
 	if m.Coverage != nil {
 		c = *m.Coverage
 	}
+	if err := acceptSource(src, want, m.SchemaID); err != nil {
+		return err
+	}
 	switch {
-	case src.Kind == nil:
-		return missing("source.kind")
-	case *src.Kind != kind:
-		return semantic(KindCoverage, "source.kind", nil, "%q, not %q", *src.Kind, kind)
-	case src.Container == nil && container != "":
-		return missing("source.container")
-	case src.Container != nil && *src.Container != container:
-		return semantic(KindCoverage, "source.container", nil, "%q, not %q", *src.Container, container)
 	case scope.Kind == nil:
 		return missing("scope.kind")
 	case *scope.Kind != "whole":
@@ -165,6 +188,52 @@ func (d *Dataset) AcceptWholeSource(kind, container string) error {
 		return semantic(KindCoverage, "coverage.filters", nil, "filtered by %q", c.Filters)
 	}
 	return nil
+}
+
+// acceptSource checks that src is the source want names, by the members
+// that identify a source of its kind.
+func acceptSource(src SourceInfo, want WholeSource, id SchemaID) error {
+	switch {
+	case src.Kind == nil:
+		return missing("source.kind")
+	case *src.Kind != want.Kind:
+		return semantic(KindCoverage, "source.kind", nil, "%q, not %q", *src.Kind, want.Kind)
+	case sourceKinds[id] != want.Kind:
+		return semantic(KindCoverage, "source.kind", nil, "%q, but %s is a listing of %q", want.Kind, id, sourceKinds[id])
+	case want.Kind == "local-fs" && want.Container != "":
+		return semantic(KindCoverage, "source.container", nil, "%q: a filesystem has no container", want.Container)
+	case src.Container == nil && want.Container != "":
+		return missing("source.container")
+	case src.Container != nil && *src.Container != want.Container:
+		return semantic(KindCoverage, "source.container", nil, "%q, not %q", *src.Container, want.Container)
+	}
+	switch want.Kind {
+	case "s3", "gcs":
+		if want.URI == "" {
+			return nil
+		}
+	case "azblob", "local-fs":
+		if want.URI == "" {
+			return semantic(KindCoverage, "source.uri", nil, "a %s source is identified by its URI, and none was given", want.Kind)
+		}
+	}
+	switch {
+	case src.URI == nil:
+		return missing("source.uri")
+	case want.Kind == "local-fs" && trimSeparator(*src.URI) == trimSeparator(want.URI):
+	case want.Kind != "local-fs" && *src.URI == want.URI:
+	default:
+		return semantic(KindCoverage, "source.uri", nil, "%q, not %q", *src.URI, want.URI)
+	}
+	return nil
+}
+
+// trimSeparator removes one trailing path separator from a root path.
+func trimSeparator(root string) string {
+	if n := len(root); n > 0 && (root[n-1] == '/' || root[n-1] == filepath.Separator) {
+		return root[:n-1]
+	}
+	return root
 }
 
 func missing(member string) error { return semantic(KindCoverage, member, nil, "absent") }
