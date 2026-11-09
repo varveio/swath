@@ -324,3 +324,73 @@ func TestGuardReadErrorIsGuardError(t *testing.T) {
 		}
 	}
 }
+
+// cutServer answers with status, a header and a body that declares 1,000
+// bytes, then closes the connection after part: a real HTTP truncation.
+func cutServer(t *testing.T, status int, part string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, bw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		fmt.Fprintf(bw, "HTTP/1.1 %d %s\r\nContent-Length: 1000\r\nX-Request-Id: req-1\r\nContent-Type: application/xml\r\n\r\n%s",
+			status, http.StatusText(status), part)
+		bw.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestGuardCutErrorBodyKeepsAnswer: a non-2xx answer whose body read fails
+// goes up as that answer (status, headers, the bounded bytes read so far),
+// never as a *GuardError; a cut 2xx body is a *GuardError around a
+// transport failure. The original body is closed once either way.
+func TestGuardCutErrorBodyKeepsAnswer(t *testing.T) {
+	const part = "<Error><Code>AccessDenied</Code>"
+	reject := func(*http.Request, int, []byte) error { return errors.New("no") }
+	for _, status := range []int{301, 403, 404, 500, 503} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			cc := &closeCounter{next: http.DefaultTransport}
+			client := &http.Client{Transport: &Guard{Next: cc, Validate: reject},
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			resp, err := client.Get(cutServer(t, status, part).URL)
+			if err != nil {
+				t.Fatalf("err %v, want the %d answer", err, status)
+			}
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != status || resp.Header.Get("X-Request-Id") != "req-1" || resp.Header.Get("Content-Type") != "application/xml" {
+				t.Errorf("status %d, header %v", resp.StatusCode, resp.Header)
+			}
+			if string(body) != part || resp.ContentLength != int64(len(part)) || resp.Header.Get("Content-Length") != fmt.Sprint(len(part)) {
+				t.Errorf("body %q, ContentLength %d, header %q", body, resp.ContentLength, resp.Header.Get("Content-Length"))
+			}
+			if n := cc.closed.Load(); n != 1 {
+				t.Errorf("original closed %d times, want 1", n)
+			}
+		})
+	}
+	t.Run("bounded", func(t *testing.T) {
+		resp, body, err := get(t, &Guard{MaxError: 10}, cutServer(t, 503, part).URL)
+		if err != nil || resp.StatusCode != 503 || string(body) != part[:10] {
+			t.Fatalf("err %v, body %q", err, body)
+		}
+	})
+	t.Run("200", func(t *testing.T) {
+		cc := &closeCounter{next: http.DefaultTransport}
+		_, _, err := get(t, &Guard{Next: cc}, cutServer(t, 200, part).URL)
+		var ge *GuardError
+		if !errors.As(err, &ge) || !Transport(Cause(err)) {
+			t.Errorf("err %v, want a GuardError around a transport failure", err)
+		}
+		if n := cc.closed.Load(); n != 1 {
+			t.Errorf("original closed %d times, want 1", n)
+		}
+	})
+}
