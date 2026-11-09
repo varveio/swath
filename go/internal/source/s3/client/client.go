@@ -346,9 +346,11 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 
 // failure maps an attempt's error to the provider's vocabulary: a Guard
 // failure is its cause (ErrSyntax, a 2xx answer other than 200, the size
-// cap, a credential error, a failed body read: a cut body is transport, a
-// read past the attempt's deadline ErrTimeout); an HTTP answer other than
-// 2xx is a *Error; a 2xx body the SDK could not decode is ErrSyntax; the
+// cap, a credential error, a failed 2xx body read: a cut body is
+// transport, a read past the attempt's deadline ErrTimeout); an HTTP
+// answer other than 2xx is a *Error, its body cut or not (the Guard hands
+// up the bytes read, and the status classifies it); a 2xx body the SDK
+// could not decode is ErrSyntax; the
 // scanner's ErrSyntax and ErrInvalidPage stand; a transport failure stays
 // one (an attempt timeout is ErrTimeout).
 func (c *Client) failure(actx, ctx context.Context, err error) error {

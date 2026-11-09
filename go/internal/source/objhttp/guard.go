@@ -24,10 +24,12 @@ const (
 //
 // A 2xx body is read up to MaxBody and handed to Validate; a longer one or a
 // rejection fails the round trip with a *GuardError. Any other status has its
-// body truncated to MaxError (silently: the SDK decodes what it gets). The
-// original body is closed on every path. Every error the Guard itself
-// returns, a failed body read included, is a *GuardError; transport errors
-// from Next pass through untouched.
+// body truncated to MaxError (silently: the SDK decodes what it gets); a
+// failed read of such a body is not a failure either: the answer goes up
+// with the bytes read before the failure, so the status still decides its
+// class. The original body is closed on every path. Every error the Guard
+// itself returns, a failed 2xx body read included, is a *GuardError;
+// transport errors from Next pass through untouched.
 type Guard struct {
 	Next     http.RoundTripper // nil: http.DefaultTransport
 	MaxBody  int64             // 2xx bodies; zero is 16 MiB
@@ -119,12 +121,16 @@ func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, size))
 	_, err = buf.ReadFrom(io.LimitReader(resp.Body, limit+1))
 	body := buf.Bytes()
-	if err != nil {
+	if err != nil && ok {
 		// Wrapped, so Cause strips the url.Error around it: a cut body
 		// (io.ErrUnexpectedEOF, a net.Error) is still a transport failure,
 		// a malformed one (gzip.ErrHeader) is not.
 		return nil, &GuardError{Err: err}
 	}
+	// A non-2xx body is diagnostic: a failed read keeps what arrived, so
+	// the answer (its status, headers and the bytes read so far) is still
+	// classified by its status. A cut 403 stays an authorization refusal,
+	// a cut 503 a throttle.
 	if int64(len(body)) > limit {
 		if ok {
 			return nil, &GuardError{Err: &TooLargeError{Limit: limit}}

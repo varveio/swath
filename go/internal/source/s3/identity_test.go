@@ -5,10 +5,12 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"reflect"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
@@ -72,13 +74,79 @@ func TestIdentityRecordsInputs(t *testing.T) {
 	if path := ident("eu-west-1", Options{Endpoint: "https://store.example", PathStyle: true}); reflect.DeepEqual(path, ident("eu-west-1", Options{Endpoint: "https://store.example"})) {
 		t.Fatalf("path-style identity: %v", path)
 	}
-	// Endpoint paths are kept byte for byte past one trailing slash: /base
-	// and /base/ send the same requests, /base// does not.
-	endpoint := func(e string) string { return ident("eu-west-1", Options{Endpoint: e, PathStyle: true})["endpoint"] }
-	if a, b, c := endpoint("http://store/base"), endpoint("http://store/base/"), endpoint("http://store/base//"); a != b || b == c || a != "http://store/base" {
-		t.Fatalf("endpoint paths: %q %q %q", a, b, c)
+	// Path-style, endpoint paths are kept byte for byte past one trailing
+	// slash: /base and /base/ send the same requests, /base// does not.
+	endpoint := func(e string, pathStyle bool) string {
+		return ident("eu-west-1", Options{Endpoint: e, PathStyle: pathStyle})["endpoint"]
+	}
+	if a, b, c := endpoint("http://store/base", true), endpoint("http://store/base/", true), endpoint("http://store/base//", true); a != b || b == c || a != "http://store/base" {
+		t.Fatalf("path-style endpoint paths: %q %q %q", a, b, c)
+	}
+	// Virtual-host, the SDK keeps the path as given (bkt.store/base and
+	// bkt.store/base/ are two request paths): no slash is folded, but for
+	// an endpoint with no path ("/" is sent either way).
+	if a, b := endpoint("https://store/base", false), endpoint("https://store/base/", false); a == b || a != "https://store/base" || b != "https://store/base/" {
+		t.Fatalf("virtual-host endpoint paths: %q %q", a, b)
+	}
+	if a, b := endpoint("https://Store", false), endpoint("https://store/", false); a != b || a != "https://store" {
+		t.Fatalf("virtual-host endpoint without a path: %q %q", a, b)
 	}
 }
+
+// TestResumeRefusesEndpointPath: a journal's identity is checked against the
+// resume's (journal.Check, as the pipeline does): virtual-host, an endpoint
+// path with and without its trailing slash names two request paths, so
+// either refuses a resume of the other; path-style, the two send the same
+// requests and resume each other. A supplied client's route is compared
+// byte for byte.
+func TestResumeRefusesEndpointPath(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	identity := func(opt Options) journal.Identity {
+		t.Helper()
+		if opt.Client == nil {
+			opt.Anonymous = true
+		}
+		src, err := open(context.Background(), registry.Request{Root: "s3://bkt/p/", Options: &opt, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := journal.Identity{Provider: "s3"}
+		for _, f := range src.(source.Identified).Identity().Fields {
+			id.Source = append(id.Source, journal.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
+		}
+		return id
+	}
+	for _, c := range []struct {
+		name        string
+		stored, now Options
+		refused     bool
+	}{
+		{"virtual-host /base, now /base/", Options{Endpoint: "https://store.example/base"}, Options{Endpoint: "https://store.example/base/"}, true},
+		{"virtual-host /base/, now /base", Options{Endpoint: "https://store.example/base/"}, Options{Endpoint: "https://store.example/base"}, true},
+		{"virtual-host, host case", Options{Endpoint: "https://store.example/base/"}, Options{Endpoint: "HTTPS://Store.Example/base/"}, false},
+		{"virtual-host, no path, now /", Options{Endpoint: "https://store.example"}, Options{Endpoint: "https://store.example/"}, false},
+		{"path-style /base, now /base/", Options{Endpoint: "https://store.example/base", PathStyle: true}, Options{Endpoint: "https://store.example/base/", PathStyle: true}, false},
+		{"the same route", Options{Client: routed{&stub{}, "https://elsewhere/x/"}}, Options{Client: routed{&stub{}, "https://elsewhere/x/"}}, false},
+		{"route without, now with a slash", Options{Client: routedSuffix{routed{&stub{}, "https://elsewhere/x/"}, ""}},
+			Options{Client: routedSuffix{routed{&stub{}, "https://elsewhere/x/"}, "/"}}, true},
+	} {
+		err := journal.Check(identity(c.stored), identity(c.now))
+		var mm *journal.MismatchError
+		if c.refused != (err != nil) || err != nil && (!errors.As(err, &mm) || mm.Field != "endpoint") {
+			t.Errorf("%s: %v, want refused %v (field endpoint)", c.name, err, c.refused)
+		}
+	}
+}
+
+// routedSuffix names its route with suffix appended.
+type routedSuffix struct {
+	routed
+	suffix string
+}
+
+func (r routedSuffix) Route(bucket string) string { return r.routed.Route(bucket) + r.suffix }
 
 // TestSuppliedClientIdentity: a supplied client that names its route is
 // identified by it (in place of the endpoint); one that does not declines resume, so two unrelated

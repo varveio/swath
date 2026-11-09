@@ -95,6 +95,12 @@ func TestRequestURLs(t *testing.T) {
 		{"custom IP endpoint", Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:9000"}, "bkt", "http://127.0.0.1:9000/bkt"},
 		{"custom IPv6 endpoint", Config{Region: "us-east-1", Endpoint: "http://[::1]:9000"}, "bkt", "http://[::1]:9000/bkt"},
 		{"custom endpoint with a path", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/"}, "bkt", "https://bkt.minio.example/s3/"},
+		// Virtual-host addressing keeps the endpoint's path as given: /s3
+		// and /s3/ are two request paths (and so may be two namespaces).
+		{"custom endpoint with a path, no slash, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3"}, "bkt",
+			"https://bkt.minio.example/s3"},
+		{"custom endpoint, no path, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example"}, "bkt", "https://bkt.minio.example/"},
+		{"custom endpoint, root path, virtual-host", Config{Region: "us-east-1", Endpoint: "https://minio.example/"}, "bkt", "https://bkt.minio.example/"},
 		{"custom endpoint with a path, path-style", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/", PathStyle: true}, "bkt",
 			"https://minio.example/s3/bkt"},
 		{"custom endpoint with a path, no slash", Config{Region: "us-east-1", Endpoint: "https://minio.example/s3", PathStyle: true}, "bkt",

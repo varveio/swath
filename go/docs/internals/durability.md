@@ -208,10 +208,12 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    environment or profile resolves, so a resume that resolves another region is refused even when the flag was
    not given), and the addressing flags (path-style, FIPS, dual-stack), compared as given, not resolved to a
    URL. A field added, dropped or changed is a typed `*journal.MismatchError`. The endpoint's canonical form is
-   `objhttp.CanonicalRoute` (shared with GCS) (scheme and host case) after one trailing slash is folded, the
-   only equivalence allowed: another endpoint, path or addressing style may serve another bucket of the same
-   name. A library caller's supplied `s3.Options.Client` must name its route (`s3.Routed`), recorded as the
-   endpoint, or the run declines resume. Workers, encoders,
+   `objhttp.CanonicalRoute` (shared with GCS) (scheme and host case), after one trailing slash is folded only
+   where the client sends the same requests without it (path-style addressing, or an endpoint with no path;
+   virtual-host addressing sends `/base` and `/base/` as given), the only equivalences allowed: another
+   endpoint, path or addressing style may serve another bucket of the same name. A library caller's supplied
+   `s3.Options.Client` must name its route (`s3.Routed`), recorded as the endpoint and compared byte for byte
+   past the scheme and host case, or the run declines resume. Workers, encoders,
    row budget and credentials may change; so may the seed for a library caller (`-seed` is not part of
    the identity), but the CLI's `swath resume` replays the recorded `--seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
