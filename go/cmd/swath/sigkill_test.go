@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	pq "github.com/parquet-go/parquet-go"
-
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
@@ -488,35 +486,4 @@ func sameRows(t *testing.T, at, ref, out string) {
 	if !slices.Equal(want, got) {
 		t.Fatalf("%s: %d rows, want %d (or they differ)", at, len(got), len(want))
 	}
-}
-
-// datasetKeys is a committed dataset's keys, part by part in manifest
-// order.
-func datasetKeys(t *testing.T, dir string) []string {
-	t.Helper()
-	var m dataset.Manifest
-	b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName))
-	if err != nil || json.Unmarshal(b, &m) != nil {
-		t.Fatalf("manifest of %s: %v", dir, err)
-	}
-	var ks []string
-	for _, p := range m.Parts {
-		f, err := os.Open(filepath.Join(dir, p.Path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		pf, err := pq.OpenFile(f, p.Bytes)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rows := make([]pq.Row, pf.NumRows())
-		r := pq.NewReader(pf)
-		n, _ := r.ReadRows(rows)
-		r.Close()
-		f.Close()
-		for _, row := range rows[:n] {
-			ks = append(ks, string(row[0].ByteArray()))
-		}
-	}
-	return ks
 }
