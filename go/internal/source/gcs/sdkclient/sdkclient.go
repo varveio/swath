@@ -152,7 +152,7 @@ func (c *Client) attempt(ctx context.Context, in *client.ListInput) (*client.Pag
 	actx, cancel := context.WithTimeout(ctx, c.Timeout())
 	defer cancel()
 	var s sent
-	call := c.svc[c.Next()].Objects.List(in.Bucket).Projection("noAcl").Context(context.WithValue(actx, sentKey{}, &s))
+	call := c.svc[c.Next()].Objects.List(in.Bucket).Projection("noAcl").Context(objhttp.WithCapture(context.WithValue(actx, sentKey{}, &s), &s.body))
 	if f := c.Fields(in.Versions); f != "" {
 		call.Fields(googleapi.Field(f))
 	}
@@ -198,7 +198,7 @@ func (c *Client) attempt(ctx context.Context, in *client.ListInput) (*client.Pag
 	if s.status != http.StatusOK {
 		// any 2xx is the generated client's success; a listing is a 200,
 		// any other status an answer (as the hand-rolled client reads it)
-		return nil, &client.Error{Status: s.status}
+		return nil, client.ResponseError(s.status, s.body.Body)
 	}
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
@@ -233,7 +233,7 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 	case s.status == http.StatusOK:
 		return c.syntax(fmt.Errorf("%w: %w", objhttp.ErrSyntax, err))
 	case s.status/100 == 2:
-		return &client.Error{Status: s.status}
+		return client.ResponseError(s.status, s.body.Body)
 	}
 	err = objhttp.Cause(err)
 	if errors.Is(err, objhttp.ErrSyntax) {
@@ -295,11 +295,12 @@ func micros(field, s string) (int64, error) {
 }
 
 // sent is what an attempt's request met on the wire: the status of the
-// response handed to the generated client (0 without one) and the query
-// it sent.
+// response handed to the generated client (0 without one), the query it
+// sent and, on a 2xx, the body (an answer's envelope when not a 200).
 type sent struct {
 	status int
 	query  string
+	body   objhttp.Capture
 }
 
 type sentKey struct{}

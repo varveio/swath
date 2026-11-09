@@ -527,7 +527,7 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		e := responseError(resp.StatusCode, body)
+		e := ResponseError(resp.StatusCode, body)
 		if loc := resp.Header.Get("Location"); e.Status/100 == 3 && e.Message == "" {
 			e.Message = "redirect to " + loc + " (not followed)"
 		}
@@ -550,7 +550,9 @@ func (c *Client) attempt(ctx context.Context, u string) (*Page, error) {
 	return p, nil
 }
 
-func responseError(status int, body []byte) *Error {
+// ResponseError is the answer a non-200 status and its body make: the
+// error envelope's message and first reason, when the body holds one.
+func ResponseError(status int, body []byte) *Error {
 	e := &Error{Status: status}
 	var w struct {
 		Error struct {

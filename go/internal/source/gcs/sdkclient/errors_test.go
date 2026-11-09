@@ -148,6 +148,8 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		{"201", body(201, `{"kind":"storage#objects"}`), objhttp.ClassOther, nil},
 		{"201 garbled", body(201, `{"kind":`), objhttp.ClassOther, nil},
 		{"204", body(204, ``), objhttp.ClassOther, nil},
+		{"201 throttle reason", jsonError(201, 201, "rateLimitExceeded"), objhttp.ClassThrottle, nil},
+		{"202 forbidden reason", jsonError(202, 202, "forbidden"), objhttp.ClassOther, nil},
 		{"202 not JSON", body(202, `accepted`), objhttp.ClassOther, nil},
 		{"malformed gzip", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Encoding", "gzip")
