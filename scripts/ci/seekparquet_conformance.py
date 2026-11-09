@@ -27,6 +27,7 @@ COLUMNS = {
     "swath/s3-versions/v1": ["size", "last_modified", "etag", "version_id", "is_latest", "is_delete_marker"],
     "swath/gcs-objects/v1": ["size", "last_modified", "etag", "generation", "md5", "time_created"],
     "swath/gcs-generations/v1": ["size", "generation", "time_deleted"],
+    "swath/azblob-objects/v1": ["size", "last_modified", "etag", "content_md5", "blob_type", "creation_time"],
     "swath-local/v1": ["size", "last_modified", "kind", "link_target"],
 }
 

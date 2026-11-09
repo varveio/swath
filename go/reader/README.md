@@ -14,7 +14,7 @@ what a reader decodes are described once.
 ## API
 
 ```go
-type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, LocalV1
+type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1
 type ColumnType uint8 // TypeString, TypeInt32, TypeInt64, TypeTimestampMicros, TypeBool, TypeUint32, TypeUint64, TypeBinary
 type ColumnSpec struct { Name string; Type ColumnType; Required, MayBeAbsent bool }
 type SchemaSpec struct { ID SchemaID; Key ColumnSpec; UniqueKeys bool; MaxKeyBytes int; Columns []ColumnSpec }
@@ -30,11 +30,12 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error)
 type Position struct { Key []byte; Offset int64 } // embedded in every row
 func (Position) Cursor() *seekparquet.Cursor
 
-type Object, S3Object, S3Version, GCSObject, GCSGeneration, LocalEntry
-func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, swath-local/v1
+type Object, S3Object, S3Version, GCSObject, GCSGeneration, AzblobObject, LocalEntry
+func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, azblob-objects/v1, swath-local/v1
 func DecodeS3Object(row seekparquet.Row) (S3Object, error)
 func DecodeS3Version(row seekparquet.Row) (S3Version, error)
 func DecodeGCSObject(row seekparquet.Row) (GCSObject, error)
+func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error)
 func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error)
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error)
 
@@ -162,8 +163,9 @@ versions, whose group can be longer than any page. An S3 delete marker's `Size` 
 generation is live when `TimeDeleted` is nil, and there is no `IsLatest` for it.
 
 `Object` is the small projection a reader of current objects needs (key, size, modification time, ETag,
-storage class), from `swath/s3-objects/v1`, `swath/gcs-objects/v1` and `swath-local/v1` (no ETag or storage
-class): a versions row is not a current object, and `DecodeObject` refuses its schema id.
+storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/gcs-objects/v1`,
+`swath/azblob-objects/v1` and `swath-local/v1` (no ETag or storage class): a versions row is not a current object,
+and `DecodeObject` refuses its schema id.
 
 ## Errors
 

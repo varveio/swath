@@ -37,6 +37,7 @@ import (
 
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
+	_ "github.com/varveio/swath/go/internal/source/azblob"
 	_ "github.com/varveio/swath/go/internal/source/gcs"
 	_ "github.com/varveio/swath/go/internal/source/localfs"
 	_ "github.com/varveio/swath/go/internal/source/s3"
@@ -285,7 +286,7 @@ func commands(w io.Writer) {
   swath show [--journal] DIR              show a dataset or an interrupted run
   swath diag list|count SOURCE [flags]    list or count with the diagnostic flags (experiments, comparisons)
   swath --version                         print the build (tool, module version, VCS revision)
-SOURCE is a local directory, s3://bucket[/prefix] or gs://bucket[/prefix].
+SOURCE is `+sourceForms()+`.
 swath COMMAND --help lists a command's flags.
 `)
 }
@@ -450,25 +451,60 @@ var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-b
 // route, the scope, the schema) is checked on resume and refuses a change,
 // such as another region resolved from a new profile.
 var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-anonymous", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
-	"bearer-token-command", "bearer-token-refresh-interval"}
+	"bearer-token-command", "bearer-token-refresh-interval", "azblob-anonymous", "azblob-sas", "azblob-request-timeout"}
 
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
 // resume must be given it again.
-var secretFlags = []string{"bearer-token-command"}
+// They and secretEnv are the registered providers' (registry.Factory.Secrets).
+var secretFlags, secretEnv = providerSecrets()
+
+// providerSecrets collects the registered providers' secret flags and the
+// environment variable that may stand in for each on resume.
+func providerSecrets() ([]string, map[string]string) {
+	var flags []string
+	env := map[string]string{}
+	for _, f := range registry.Factories() {
+		for _, s := range f.Secrets {
+			flags = append(flags, s.Flag)
+			if s.Env != "" {
+				env[s.Flag] = s.Env
+			}
+		}
+	}
+	return flags, env
+}
+
+// sourceForms is the SOURCE line of the help: the registered providers'
+// root forms (registry.Factory.Usage), by scheme, the local directory
+// first.
+func sourceForms() string {
+	var forms []string
+	for _, f := range registry.Factories() {
+		if f.Usage != "" {
+			forms = append(forms, f.Usage)
+		}
+	}
+	if n := len(forms); n > 1 {
+		return strings.Join(forms[:n-1], ", ") + " or " + forms[n-1]
+	}
+	return strings.Join(forms, "")
+}
 
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
 // redactArgv is argv with every secret flag's value replaced by redacted,
-// in both spellings (--flag VALUE and --flag=VALUE).
+// in both spellings (--flag VALUE and --flag=VALUE), and a credential in a
+// root by its provider's redaction (registry.Redact; a resume must be given
+// it again).
 func redactArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
 		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
-			out = append(out, a)
+			out = append(out, registry.Redact(a))
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
@@ -689,7 +725,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 			break
 		}
 		if root != "" {
-			return o, "", usageError{fmt.Errorf("unexpected argument %q", f.Arg(0))}
+			return o, "", usageError{fmt.Errorf("unexpected argument %q", registry.Redact(f.Arg(0)))}
 		}
 		root, rest = f.Arg(0), f.Args()[1:]
 	}
@@ -830,7 +866,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			settled = true
 		}
 	}
-	tt := startTerminal(o.term, att, root, cfg.Output.Dir)
+	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir)
 	defer tt.close()
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)

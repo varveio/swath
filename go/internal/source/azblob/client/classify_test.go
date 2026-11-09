@@ -79,46 +79,23 @@ func (f failingCredential) GetToken(context.Context, policy.TokenRequestOptions)
 	return azcore.AccessToken{}, f.err
 }
 
-// TestClassify: every failure a listing request can end in has its class,
-// through the client as a run meets it (one attempt, so nothing is
-// retried away); transient classes come back wrapped in ExhaustedError.
-// The error code decides before the status: AuthenticationFailed is a 403
-// and ServerBusy a 503.
+// TestClassify: every Azure answer a listing request can end in has its
+// class, through the client as a run meets it (one attempt, so nothing is
+// retried away): an answer worth repeating comes back wrapped in
+// ExhaustedError and counts as a throttle or a timeout where it is one.
+// The error code decides before the status: AuthenticationFailed is a 403,
+// ServerBusy a 503, OperationTimedOut a 500. Generic transport, timeout,
+// exhaustion and cancellation behaviour is objhttptest.Contract's
+// (TestRetryContract).
 func TestClassify(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch p := r.URL.Query().Get("prefix"); p {
-		case "no-auth":
-			azureError(w, 401, codeNoAuthentication)
-		case "auth-failed":
-			azureError(w, 403, codeAuthFailed)
-		case "invalid-auth":
-			azureError(w, 400, codeInvalidAuthInfo)
-		case "401":
-			azureError(w, 401, "")
-		case "authorization":
-			azureError(w, 403, codeAuthorization)
-		case "permission":
-			azureError(w, 403, codePermissionMismatch)
-		case "403":
-			azureError(w, 403, "AuthorizationSourceIPMismatch")
-		case "missing":
-			azureError(w, 404, codeContainerNotFound)
-		case "busy":
-			azureError(w, 503, codeServerBusy)
-		case "429":
-			azureError(w, 429, "")
-		case "op-timeout":
-			azureError(w, 500, codeOperationTimedOut)
-		case "408":
-			azureError(w, 408, "")
-		case "internal":
-			azureError(w, 500, codeInternalError)
-		case "502", "503", "504":
-			azureError(w, map[string]int{"502": 502, "503": 503, "504": 504}[p], "")
-		case "501":
-			azureError(w, 501, "NotImplemented")
-		case "bad-request":
-			azureError(w, 400, "InvalidQueryParameterValue")
+		p := r.URL.Query().Get("prefix")
+		if status, code, ok := strings.Cut(p, " "); ok {
+			n, _ := strconv.Atoi(status)
+			azureError(w, n, code)
+			return
+		}
+		switch p {
 		case "garbled":
 			fmt.Fprint(w, listHead+"<Blob><Name>a")
 		case "not-xml":
@@ -129,66 +106,56 @@ func TestClassify(t *testing.T) {
 			fmt.Fprint(w, listHead+"<Blob><Name>a</Name><Properties><Content-Length>x</Content-Length></Properties></Blob>"+listTail)
 		case "descending":
 			fmt.Fprint(w, page("", "b", "a"))
-		case "slow":
-			select {
-			case <-time.After(5 * time.Second):
-			case <-r.Context().Done():
-			}
 		case "redirect":
 			http.Redirect(w, r, "/acct/other", http.StatusTemporaryRedirect)
-		case "cut":
-			conn, _, _ := w.(http.Hijacker).Hijack()
-			conn.Close()
 		}
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1, RequestTimeout: 200 * time.Millisecond})
 	for _, x := range []struct {
-		prefix    string
-		want      objhttp.Class
-		exhausted bool
+		status            int
+		code              string
+		class             objhttp.Class
+		exhausted         bool // retried: the one attempt exhausts it
+		throttle, timeout bool // counted
 	}{
-		{"no-auth", objhttp.ClassAuth, false},
-		{"auth-failed", objhttp.ClassAuth, false},
-		{"invalid-auth", objhttp.ClassAuth, false},
-		{"401", objhttp.ClassAuth, false},
-		{"authorization", objhttp.ClassAccessDenied, false},
-		{"permission", objhttp.ClassAccessDenied, false},
-		{"403", objhttp.ClassAccessDenied, false},
-		{"missing", objhttp.ClassNoSuchBucket, false},
-		{"busy", objhttp.ClassThrottle, true},
-		{"429", objhttp.ClassThrottle, true},
-		{"op-timeout", objhttp.ClassTimeout, true},
-		{"408", objhttp.ClassTimeout, true},
-		{"slow", objhttp.ClassTimeout, true},
-		{"internal", objhttp.ClassServer, true},
-		{"502", objhttp.ClassServer, true},
-		{"503", objhttp.ClassServer, true},
-		{"504", objhttp.ClassServer, true},
-		{"501", objhttp.ClassServer, false}, // a 5xx Azure does not ask to retry
-		{"bad-request", objhttp.ClassOther, false},
-		{"garbled", objhttp.ClassParse, true},
-		{"not-xml", objhttp.ClassParse, true},
-		{"error-envelope", objhttp.ClassParse, true},
-		{"bad-size", objhttp.ClassParse, true},
-		{"descending", objhttp.ClassInvalidPage, false},
-		{"cut", objhttp.ClassTransport, true},
-		{"redirect", objhttp.ClassRedirect, false},
+		{401, codeNoAuthentication, objhttp.ClassAuth, false, false, false},
+		{403, codeAuthFailed, objhttp.ClassAuth, false, false, false},
+		{400, codeInvalidAuthInfo, objhttp.ClassAuth, false, false, false},
+		{401, "", objhttp.ClassAuth, false, false, false},
+		{403, codeAuthorization, objhttp.ClassAccessDenied, false, false, false},
+		{403, codePermissionMismatch, objhttp.ClassAccessDenied, false, false, false},
+		{403, "AuthorizationSourceIPMismatch", objhttp.ClassAccessDenied, false, false, false},
+		{404, codeContainerNotFound, objhttp.ClassNoSuchBucket, false, false, false},
+		{503, codeServerBusy, objhttp.ClassThrottle, true, true, false},
+		{429, "", objhttp.ClassThrottle, true, true, false},
+		{500, codeOperationTimedOut, objhttp.ClassTimeout, true, false, true},
+		{408, "", objhttp.ClassTimeout, true, false, true},
+		{500, codeInternalError, objhttp.ClassServer, true, false, false},
+		{502, "", objhttp.ClassServer, true, false, false},
+		{503, "", objhttp.ClassServer, true, false, false},
+		{504, "", objhttp.ClassServer, true, false, false},
+		{500, "", objhttp.ClassServer, false, false, false},               // a 500 Azure does not ask to retry
+		{501, "NotImplemented", objhttp.ClassServer, false, false, false}, // nor another 5xx
+		{400, "InvalidQueryParameterValue", objhttp.ClassOther, false, false, false},
 	} {
-		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: x.prefix})
+		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: fmt.Sprintf("%d %s", x.status, x.code)})
 		var ex *ExhaustedError
-		if got := Classify(err); got != x.want || errors.As(err, &ex) != x.exhausted {
-			t.Errorf("%s: class %q exhausted=%v (%v), want %q exhausted=%v", x.prefix, got, errors.As(err, &ex), err, x.want, x.exhausted)
+		n := c.Counters()
+		if got := Classify(err); got != x.class || errors.As(err, &ex) != x.exhausted || (n.Throttles == 1) != x.throttle || (n.Timeouts == 1) != x.timeout {
+			t.Errorf("%d %s: class %q exhausted=%v throttles %d timeouts %d (%v)", x.status, x.code, got, errors.As(err, &ex), n.Throttles, n.Timeouts, err)
 		}
 	}
-	// Transport: nothing listens; an account host that does not resolve.
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := ln.Addr().String()
-	ln.Close()
-	for _, ep := range []string{"http://" + addr, "http://no-such-account.invalid"} {
-		d := newTestClient(t, Config{Endpoint: ep, Anonymous: true, MaxAttempts: 1, RequestTimeout: 5 * time.Second})
-		if _, err := d.List(context.Background(), &ListInput{Container: "c"}); Classify(err) != objhttp.ClassTransport {
-			t.Errorf("%s: class %q (%v)", ep, Classify(err), err)
+	// Bodies: a 200 that is not a listing envelope is a parse failure,
+	// retried; a parsed page out of order is invalid; a redirect is never
+	// followed.
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+	for prefix, want := range map[string]objhttp.Class{"garbled": objhttp.ClassParse, "not-xml": objhttp.ClassParse,
+		"error-envelope": objhttp.ClassParse, "bad-size": objhttp.ClassParse, "descending": objhttp.ClassInvalidPage, "redirect": objhttp.ClassRedirect} {
+		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: prefix})
+		var ex *ExhaustedError
+		if got := Classify(err); got != want || errors.As(err, &ex) != (want == objhttp.ClassParse) {
+			t.Errorf("%s: class %q (%v), want %q", prefix, got, err, want)
 		}
 	}
 	// Credentials: a refused grant, and token failures that may pass.
@@ -219,40 +186,8 @@ func TestClassify(t *testing.T) {
 	if _, err := New(context.Background(), Config{Account: "acct", SharedKey: "not base64!"}); Classify(err) != objhttp.ClassAuth {
 		t.Errorf("bad key: class %q (%v)", Classify(err), err)
 	}
-	// The caller's cancellation, and a contract break.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := c.List(ctx, &ListInput{Container: "c", Prefix: "slow"}); Classify(err) != objhttp.ClassCanceled {
-		t.Errorf("canceled: class %q (%v)", Classify(err), err)
-	}
 	if got := Classify(nil); got != "" {
 		t.Errorf("nil: class %q", got)
-	}
-}
-
-// TestFailureSignals: an attempt's failure is normalized once; the
-// admission signal follows the class (a 500 OperationTimedOut is a timeout
-// signal, a 503 ServerBusy a throttle, a 500 InternalError neither) and
-// all are retried; a 500 with another code is not.
-func TestFailureSignals(t *testing.T) {
-	for _, c := range []struct {
-		status            int
-		code              string
-		class             objhttp.Class
-		retry             bool
-		throttle, timeout bool
-	}{
-		{500, codeOperationTimedOut, objhttp.ClassTimeout, true, false, true},
-		{503, codeServerBusy, objhttp.ClassThrottle, true, true, false},
-		{500, codeInternalError, objhttp.ClassServer, true, false, false},
-		{408, "", objhttp.ClassTimeout, true, false, true},
-		{429, "", objhttp.ClassThrottle, true, true, false},
-		{500, "", objhttp.ClassServer, false, false, false},
-	} {
-		f := objhttp.Normalize(&Error{Status: c.status, Code: c.code}, answer)
-		if f.Class != c.class || f.Retry != c.retry || f.Throttle != c.throttle || f.Timeout != c.timeout {
-			t.Errorf("%d %s: %+v", c.status, c.code, f)
-		}
 	}
 }
 
@@ -635,7 +570,7 @@ func TestAccountInfo(t *testing.T) {
 			t.Errorf("%s: %v, %v", container, got, err)
 		}
 	}
-	if _, err := c.AccountInfo(context.Background(), "unknown"); !errors.Is(err, errHNSUnknown) {
+	if _, err := c.AccountInfo(context.Background(), "unknown"); !errors.Is(err, ErrHNSUnknown) {
 		t.Errorf("no header: %v", err)
 	}
 	if _, err := c.AccountInfo(context.Background(), "denied"); Classify(err) != objhttp.ClassAccessDenied {

@@ -11,7 +11,8 @@ with a token-only seek is listed as one sequential chain per root; one with no s
 sorts it inside the provider. Each provider declares this in `source.Capabilities` (`Seek`: `fabricable`,
 `token_only`, `none`; `Order`: `bytes`, `other`, `none`; `RankOracle`; `RangeEngine()` is the test, and
 `keyrange.New` refuses a `Description.Listing` that fails it): S3 and GCS are fabricable and byte-ordered without a
-rank oracle (`token_only` with `--sequential`); the filesystem has no seek and no order (a directory is a
+rank oracle (`token_only` with `--sequential`); Azure Blob lists in UTF-16 code-unit order, and is declared
+byte-ordered only because its provider refuses every page or bound where the two orders could differ (below); the filesystem has no seek and no order (a directory is a
 range, read whole and sorted).
 
 ## The contract (`internal/source`)
@@ -90,14 +91,15 @@ retry and requeue that never fail a run, one failure vocabulary across providers
 answered requests, the refusal of redirects (the resume identity freezes the route), bounded bodies and the
 validation of every page.
 
-**Azure Blob** (`internal/source/azblob/client`; the provider and its flags come later). One call, List Blobs:
+**Azure Blob** (`internal/source/azblob/client`; the provider is [below](#azure-blob-internalsourceazblob)). One call, List Blobs:
 `GET {endpoint}/{container}?restype=container&comp=list` with `prefix`, `delimiter`, `startFrom`, `marker` and
 `maxresults` only when set (never `endBefore` or `include`; spaces as `%20`, as the SDK sends them),
 `x-ms-version: 2026-10-06` pinned (the replay also serves 2026-06-06; the two behave alike), a fresh
-`x-ms-client-request-id` per attempt and the swath user agent; the default endpoint is
-`https://ACCOUNT.blob.core.windows.net`, any other one takes the account as its first path segment (the replay,
-Azurite). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`; a
-refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
+`x-ms-client-request-id` per attempt and the swath user agent, to the endpoint and with the credentials the
+provider section describes ([below](#azure-blob-internalsourceazblob)). `AccountInfo` sends Get Account Information on the container path and reads `x-ms-is-hns-enabled`;
+`NamespaceInfo` sends Filesystem Get Properties (a HEAD) on the account's Data Lake host and reads
+`x-ms-namespace-enabled`, for anonymous admission (an endpoint other than `ACCOUNT.blob.core.windows.net` has
+no such host, and so has any endpoint that is not exactly `https://ACCOUNT.blob.core.windows.net`: `ErrNoDFSEndpoint`); in both a refusal or a missing header is an error, never "flat". Every body starts with a UTF-8 BOM, which is stripped
 before `encoding/xml`'s streaming decoder reads `EnumerationResults` one entry at a time, keeping `Blob` and
 `BlobPrefix` in one slice in wire order and only the listed properties. A `<Name Encoded="true">` (a name with
 U+FFFE or U+FFFF) is percent-decoded once with path semantics (`+` stays `+`); a malformed escape or invalid
@@ -118,22 +120,13 @@ only when it is `OperationTimedOut` or `InternalError`, and a `Retry-After` (sec
 the drawn backoff is waited out (`objhttp.RetryAfter`), at most the request timeout (a longer one is cut to it
 and counted in `retry_after_capped`; the attempt budget still ends the request, which the engine requeues).
 Redirects are never followed and their target is never quoted: the client's transport drops `Location` from
-every 3xx, and request errors are scrubbed of the SAS through their whole chain. Authentication, in precedence: anonymous; a SAS appended
-to every query and removed from every error (request URLs, 400 query echoes, redirect targets, messages); a
-Shared Key signature with `x-ms-date` per attempt (`TestSharedKeyMatchesSDK` compares it with the SDK's on both
-endpoint forms); Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`, its tokens
-coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a timeout
-retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the others the
-chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token is asked
-for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes the
-requests unauthenticated, with a note; a timeout, a transport failure or a token endpoint's 5xx keeps the chain and
-each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the managed identity is always kept.
-Connections are the GCS pool. `TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
+every 3xx, and request errors, 400 query echoes and messages are scrubbed of the SAS through their whole chain.
+`TestClientPagesMatchSDK` walks the replay's Azure route with the client and the
 SDK's flat and hierarchy pagers; `TestCaptures` serves the live captures of the evidence archive to the client.
 
 The SDK service clients (`service/s3`, `google.golang.org/api/storage/v1`, `sdk/storage/azblob`) are test-only
 oracles (`internal/source/s3/sdkoracle`, `TestClientPagesMatchSDK`, `TestClientPagesMatchGoogleClient`); the
-binary links none of them ([testing.md](../testing.md); `TestBinaryLinksNoAzblob`).
+binary links none of them ([testing.md](../testing.md); `TestBinaryLinksAzidentityNotAzblob`).
 
 ## S3 (`internal/source/s3`)
 
@@ -281,7 +274,9 @@ are this package's. Credentials and SigV4 come from the AWS SDK's auth modules (
 - *Error classes* (`client.Classify`, one table test covers each): `auth`, `access_denied`, `no_such_bucket`,
   `redirect`, `throttle`, `timeout`, `server`, `transport`, `parse` (a body that does not parse),
   `invalid_page` (a page that breaks the listing contract: out of order, truncated without a token or a key
-  in range), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
+  in range), `unsupported` (a source the tool refuses, `source.ErrUnsupported`: an S3 directory bucket, an Azure
+  account that is not positively flat, an Azure name at U+E000 and above; the run is `refused`, exit 2, its
+  journal kept), `canceled`, `other`. `throttle`, `timeout`, `server`, `transport` and `parse` are transient
   (retried, then requeued); the rest stop the run, and the class is the run outcome's `cause`, except an
   invalid page, a protocol violation: `cause` `protocol`, the run marked unresumable
   ([durability.md](durability.md)).
@@ -386,6 +381,87 @@ connection only at the server's stream limit (about 100), so a single transport 
 one connection, which caps throughput once the engine keeps many requests in flight
 (`TestTransportPoolSpreadsConnections`). A supplied `Config.HTTPClient` is used alone (a pool of 1). There is
 no flag; the pool follows `--workers`.
+
+## Azure Blob (`internal/source/azblob`)
+
+**Client** (`internal/source/azblob/client`): List Blobs and Get Account Information, described with the list
+clients [above](#the-list-clients-hand-rolled-on-the-sdks-auth). The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
+`--azblob-endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
+account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
+`http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--azblob-anonymous`; a SAS from
+`--azblob-sas`, else the root's query when it names a SAS parameter (`sig`, `sv`, `se`, `sp`, ...; found by
+scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
+root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
+`AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
+Key: signed in the client with `x-ms-date` per attempt, `TestSharedKeyMatchesSDK` comparing it with the SDK's on
+both endpoint forms); else Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`,
+its tokens coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a
+timeout retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the
+others the chain reads), a credential that will not work is a `CredentialError`. With nothing configured, on an Azure VM
+(its chassis asset tag) the same chain is used and its managed identity always kept. Off Azure the instance
+metadata service is never asked (a proxy refuses its address, a laptop's probe hangs): only the developer logins
+(the Azure CLI, the Azure Developer CLI) are, one token under the caller's context; when every one is absent the
+requests go unauthenticated with the client's note as a warning, as GCS goes without Application Default
+Credentials, so a public container lists without `--azblob-anonymous`; a refused grant refuses the run, and a
+timeout or a transport failure keeps the login and each request asks again. A SAS never
+reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
+as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
+(the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
+it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
+report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
+and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is refused at open,
+before any request (every name in scope would hold it).
+
+**Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
+the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
+which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
+account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
+the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
+with the configured account, no port and no path; with any other `--azblob-endpoint` there is no such host and
+this step is skipped): `x-ms-namespace-enabled` `false`
+passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
+Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,
+unless `--azblob-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
+The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
+`filesystem properties` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
+reason). The order defences cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
+byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
+still ascends. `--all-versions` is refused the same way (versions, snapshots and deleted blobs are a later lane).
+
+**Order and the staged refusal.** Azure lists in UTF-16 code-unit order, which differs from byte order only
+between names whose first differing scalars are one in U+E000..U+FFFF (lead byte EE or EF) and one at U+10000 and
+above (F0..F4) under the same prefix. Until the provider reorders such pages (a later change replaces this
+stage with a byte-order fetch adapter), `fetch` refuses: a cursor (`After`) or, when bounded, a `Through` holding
+a byte in EE..F4 before the request is sent, and any raw item of a page, blob or `BlobPrefix`, holding one before
+the engine trims or drops anything. The error is "azblob: names at U+E000 and above are not supported yet
+(container C, first name N)", `source.Unsupported`, class `unsupported`: the engine does not requeue it, it is
+not a protocol violation (Azure's order is valid), the journal is not marked unresumable, and the run is
+`refused` (exit 2) with `cause` `unsupported` and `resumable` true, so a later build can resume it. Every run
+that could lose a key passes through such a page or bound before an affected key is emitted. A structure probe
+that meets one fails as advice (no boundary from it); a seed page fails the run. Real containers hit this:
+fullwidth forms (U+FF01..) are common in Japanese names, emoji are at U+1F300 and up.
+
+**On the range engine.** `Description.Listing` is `keyrange.Listing` (with the refusal, every page taken is
+byte-ordered). `startFrom` is inclusive (`StartInclusive`); there is no end bound, so `Through` is never sent and
+the engine trims. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
+control character, not ending in `.` (Azure's name rules). `Requeue` is the client's `ExhaustedError` on a
+transient class, as for S3 and GCS; `InvalidPage` is the client's. Pages are `client.MaxPageSize` (5,000, the
+service's cap) unless `--page-size` lowers them. A page maps `Blob` items to rows and `BlobPrefix` items to
+`Prefixes`, `Truncated` when `NextMarker` is not empty, the marker its token.
+
+**Schema** `swath/azblob-objects/v1`, its columns and their caveats as [upgrade.md](../upgrade.md#the-downstream-reader-dispatch-on-schema-id)
+states them; `MaxKeyBytes` 3,072, `blob_type` dictionary-encoded, and a delta spill codec.
+
+**Identity** for resume: provider `azblob`; `source` (the root without its SAS), `endpoint` (the account's blob
+service URL as the client requests it, the account path segment kept on a custom endpoint; scheme and host case
+are the only equivalence), `account`, `container`, `flat_asserted` (`--azblob-flat`). Credentials may change, a SAS among them. A run with
+`--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
+**Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles` (503 `ServerBusy` and 429),
+`timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`
+past the request timeout, cut to it) and `body_cap_shrinks` (a page past the 64 MiB body cap, asked again with
+`maxresults` halved). **Connections**: the GCS pool, one
+transport per 16 workers (1 to 8). The client's anonymous note goes to the run's warnings.
 
 ## Range engine (`internal/source/keyrange`)
 
@@ -831,13 +907,13 @@ A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: 
 for `P`), its schema `Info`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
 against the rows ordered). Optional interfaces, each found by a type assertion:
 
-| Interface | Meaning | S3 | fs |
-|---|---|---|---|
-| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | – |
-| `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | – |
-| `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | – |
-| `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | yes |
-| `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `listing` |
+| Interface | Meaning | S3 | Azure Blob | fs |
+|---|---|---|---|---|
+| `Identified` | its part of the resume identity: named fields, each with a canonical form for comparison | source, endpoint (canonical: `NormalizeEndpoint`), region, fetch owner | source, endpoint (canonical: `CanonicalRoute`), account, container, flat_asserted | – |
+| `Resumable` | `Restart(after)` before `Root`: list only keys after the last published key | `(K, ⊤]` | `(K, ⊤]` | – |
+| `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
+| `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |
+| `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `azblob`, coverage | `listing` |
 
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
 like every run with an output. `swath resume` on it is an error.

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -120,10 +122,12 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	url := s3test.Serve(t, s3test.Handler(b))
 	slowURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 3*time.Millisecond))
 	gcs := gcstest.Bucket(t, gcstest.Keys(4000), 0)
+	az := azblobtest.Serve(t, gcstest.Keys(4000))
 	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
 	// unsplit: the first occurrences the seeded arms never reach (their
-	// ranges are a page each; the s3-unseeded arm crosses split).
-	unsplit := map[string]bool{"s3 split": true, "gcs split": true, "s3-interval split": true}
+	// ranges are a page each; the s3-unseeded and azblob-unseeded arms
+	// cross split).
+	unsplit := map[string]bool{"s3 split": true, "gcs split": true, "azblob split": true, "s3-interval split": true}
 	for _, prov := range []struct {
 		name    string
 		src     []string
@@ -137,6 +141,15 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
 		{"s3-unseeded", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"gcs", []string{"gs://bkt", "--gcs-endpoint", gcs, "--gcs-anonymous"}, []string{"--part-interval=0"}, false},
+		// Azure pages are 5,000 by default: 1,000, as the others, so the
+		// seed tiles these keys as it does theirs.
+		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+			"--azblob-anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
+		// Unseeded, as s3-unseeded: one range whose owner splits, so the
+		// split points and recovery after an owner split are crossed on the
+		// Azure route too.
+		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--azblob-endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+			"--azblob-anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
 		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {

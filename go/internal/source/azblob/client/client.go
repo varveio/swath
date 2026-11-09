@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package client is a small Azure Blob Storage client: List Blobs (flat or
-// with a delimiter) and Get Account Information only, authenticated by a
+// with a delimiter), Get Account Information and, on the account's Data
+// Lake host, Filesystem Get Properties (NamespaceInfo, which exists for
+// anonymous admission: only it tells an anonymous caller whether the
+// namespace is flat) only, authenticated by a
 // SAS, an account key signed here (Shared Key), Entra ID tokens from
 // azidentity's DefaultAzureCredential, or nothing, with counted retries and
 // typed errors from objhttp.
@@ -27,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -261,6 +265,37 @@ func (c *Client) credentials(ctx context.Context) error {
 	return nil
 }
 
+// newLoginCredential is the unconfigured discovery's chain off an Azure
+// VM: the developer logins only (the Azure CLI, the Azure Developer CLI),
+// which run a local command and never ask the instance metadata service.
+// A login whose command is not installed (exec.LookPath: az, azd; az.cmd
+// on Windows through PATHEXT) is absent and left out, so with neither the
+// chain is an exec.ErrNotFound and nothing is started: azidentity would
+// run each through a shell (cmd.exe on Windows, /bin/sh elsewhere) and
+// report a shell it cannot start as an authentication failure without a
+// response, which reads as transient (tests replace it).
+var newLoginCredential = func() (azcore.TokenCredential, error) {
+	var logins []azcore.TokenCredential
+	if _, err := exec.LookPath("az"); err == nil {
+		cli, err := azidentity.NewAzureCLICredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		logins = append(logins, cli)
+	}
+	if _, err := exec.LookPath("azd"); err == nil {
+		azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
+		if err != nil {
+			return nil, err
+		}
+		logins = append(logins, azd)
+	}
+	if len(logins) == 0 {
+		return nil, fmt.Errorf("neither the Azure CLI (az) nor the Azure Developer CLI (azd) is installed: %w", exec.ErrNotFound)
+	}
+	return azidentity.NewChainedTokenCredential(logins, nil)
+}
+
 // newDefaultCredential is azidentity's DefaultAzureCredential (tests
 // replace it to fake an empty environment on any host).
 var newDefaultCredential = func(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
@@ -283,19 +318,26 @@ func entraConfigured() bool {
 	return false
 }
 
-// entra sets up Entra ID through DefaultAzureCredential. Configured by the
-// environment, its token failures are attempts' credential errors. With
-// nothing configured it may still find a managed identity or an Azure CLI
-// login: one token is asked for under the request timeout, and when none
-// comes the requests go unauthenticated (the note says so); a refused
-// grant is a credential error.
+// entra sets up Entra ID. Configured by the environment, it is
+// DefaultAzureCredential, whose token failures are attempts' credential
+// errors. With nothing configured: on an Azure VM (its chassis asset tag)
+// the same chain, its managed identity kept even when it does not answer
+// now; elsewhere only the developer logins (newLoginCredential), never the
+// instance metadata service, which off Azure is a proxy's refusal or a
+// probe that hangs. There one token is asked for: found, it is used; when
+// every login is absent the requests go unauthenticated (the note says
+// so), as GCS goes without Application Default Credentials; a refused
+// grant is a credential error; a transient failure keeps the chain.
 func (c *Client) entra(ctx context.Context) error {
 	const source = "Entra ID (DefaultAzureCredential)"
+	configured, vm := entraConfigured(), onAzureVM()
+	if !configured && !vm {
+		return c.login(ctx)
+	}
 	cred, err := newDefaultCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
-	configured := entraConfigured()
 	switch {
 	case err != nil && configured:
 		return &CredentialError{Source: source, Err: err}
@@ -306,11 +348,25 @@ func (c *Client) entra(ctx context.Context) error {
 		c.ts, c.source = c.shared(cred), source
 		return nil
 	}
-	if onAzureVM() {
-		// An Azure VM's managed identity is the configured source even when
-		// the metadata service does not answer now (DefaultAzureCredential
-		// reports a probe timeout as unavailable): never anonymity.
-		c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	// An Azure VM's managed identity is the configured source even when
+	// the metadata service does not answer now (DefaultAzureCredential
+	// reports a probe timeout as unavailable): never anonymity.
+	c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	return nil
+}
+
+// login is the unconfigured discovery off an Azure VM: the developer
+// logins (newLoginCredential), one token asked for under the caller's
+// context and the request timeout. No login installed (exec.ErrNotFound)
+// or none logged in (azidentity's unavailable signal: "not found on
+// path", "az login") is no credential: anonymous with the note, as a
+// missing gcloud login is for GCS. Only a login that ran and had its
+// token refused refuses the run.
+func (c *Client) login(ctx context.Context) error {
+	const source = "Entra ID (Azure CLI login)"
+	cred, err := newLoginCredential()
+	if err != nil {
+		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
 		return nil
 	}
 	pctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
@@ -323,7 +379,7 @@ func (c *Client) entra(ctx context.Context) error {
 		return ctx.Err()
 	case refused(err):
 		return &CredentialError{Source: source, Err: err}
-	case unavailable(err):
+	case unavailable(err), errors.Is(err, exec.ErrNotFound):
 		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
 	default:
 		// Found but not reachable now (a timeout, a transport failure, a
@@ -562,7 +618,7 @@ func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
 func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	u := c.listURL(in)
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) {
-		_, body, err := c.attempt(ctx, &u, c.maxBody)
+		_, body, err := c.attempt(ctx, http.MethodGet, &u, c.maxBody)
 		if err != nil {
 			return nil, err
 		}
@@ -583,9 +639,9 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	})
 }
 
-// errHNSUnknown is an account-information answer without
+// ErrHNSUnknown is an account-information answer without
 // x-ms-is-hns-enabled: the namespace is unknown, never taken for flat.
-var errHNSUnknown = errors.New("account information without " + headerHNSEnabled)
+var ErrHNSUnknown = errors.New("account information without " + headerHNSEnabled)
 
 // AccountInfo sends Get Account Information on the container's path
 // (restype=account&comp=properties, which a SAS scoped to the container
@@ -596,7 +652,7 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 	u := c.route(container)
 	u.RawQuery = encodeQuery(url.Values{"restype": {"account"}, "comp": {"properties"}})
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
-		hdr, _, err := c.attempt(ctx, &u, maxErrorBody)
+		hdr, _, err := c.attempt(ctx, http.MethodGet, &u, maxErrorBody)
 		if err != nil {
 			return false, err
 		}
@@ -606,21 +662,80 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 		case "false":
 			return false, nil
 		}
-		return false, errHNSUnknown
+		return false, ErrHNSUnknown
 	})
 }
 
-// attempt sends one GET of u (the SAS appended on the wire only) and
-// returns a 200's header and body, read up to limit bytes; any other
-// answer is an *Error. Errors never carry the SAS.
-func (c *Client) attempt(ctx context.Context, u *url.URL, limit int64) (http.Header, []byte, error) {
+// ErrNamespaceUnknown is a Filesystem Get Properties answer without
+// x-ms-namespace-enabled: unknown, never taken for flat.
+var ErrNamespaceUnknown = errors.New("filesystem properties without " + headerNamespaceEnabled)
+
+// ErrNoDFSEndpoint: the client's endpoint is not an account's blob host
+// (ACCOUNT.blob.core.windows.net), so it has no Data Lake (DFS) host to
+// ask.
+var ErrNoDFSEndpoint = errors.New("no Data Lake endpoint: the blob endpoint is not ACCOUNT.blob.core.windows.net")
+
+// dfsSuffix and blobSuffix are the public cloud's Data Lake and blob host
+// suffixes.
+const blobSuffix, dfsSuffix = ".blob.core.windows.net", ".dfs.core.windows.net"
+
+// NamespaceInfo sends Filesystem Get Properties (HEAD
+// https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem) and
+// reports whether the account has a hierarchical namespace, from
+// x-ms-namespace-enabled. It exists for anonymous admission: Azure answers
+// an anonymous Get Account Information with 401, but tells an anonymous
+// caller of a public container this header (checked live on 2026-11-08).
+// The DFS host is the blob host with its blob label replaced, so only the
+// exact default endpoint, https://ACCOUNT.blob.core.windows.net without a
+// port or path, has one; any other endpoint answers ErrNoDFSEndpoint. Credentials, retries and classification are
+// AccountInfo's; a refused call or a missing header is an error, never
+// "flat".
+func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, error) {
+	if !c.defaultEndpoint() {
+		return false, ErrNoDFSEndpoint
+	}
+	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
+		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
+	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
+		hdr, _, err := c.attempt(ctx, http.MethodHead, &u, maxErrorBody)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(hdr.Get(headerNamespaceEnabled)) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return false, ErrNamespaceUnknown
+	})
+}
+
+// defaultEndpoint: the client's endpoint is exactly the account's blob
+// host, https://ACCOUNT.blob.core.windows.net with no port or path (the
+// default, or that URL given explicitly), the only form with a Data Lake
+// host beside it.
+func (c *Client) defaultEndpoint() bool {
+	if c.cfg.Endpoint == "" {
+		return true
+	}
+	u, err := url.Parse(c.cfg.Endpoint)
+	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Host, c.cfg.Account+blobSuffix) &&
+		(u.Path == "" || u.Path == "/") && u.User == nil
+}
+
+// attempt sends one request of u with method (GET or HEAD; the SAS
+// appended on the wire only) and returns a 200's header and body, read up
+// to limit bytes; any other answer is an *Error. Errors never carry the
+// SAS.
+func (c *Client) attempt(ctx context.Context, method string, u *url.URL, limit int64) (http.Header, []byte, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	wire := *u
 	if c.sas != "" {
 		wire.RawQuery += "&" + c.sas
 	}
-	req, err := http.NewRequestWithContext(actx, http.MethodGet, wire.String(), nil)
+	req, err := http.NewRequestWithContext(actx, method, wire.String(), nil)
 	if err != nil {
 		return nil, nil, c.redact(err, u)
 	}

@@ -86,6 +86,9 @@ func TestProxyFaults(t *testing.T) {
 	if code, body, _ := get(mk(Plan{Dialect: "gcs", Windows: all(Throttle, 0)})); code != 429 || !strings.Contains(body, "rateLimitExceeded") {
 		t.Fatalf("gcs throttle: %d %q", code, body)
 	}
+	if code, body, _ := get(mk(Plan{Dialect: "azure", Windows: all(Throttle, 0)})); code != 503 || !strings.Contains(body, "<Code>ServerBusy</Code>") {
+		t.Fatalf("azure throttle: %d %q", code, body)
+	}
 	if _, _, err := get(mk(Plan{Windows: all(Reset, 0)})); err == nil {
 		t.Fatal("reset: the request succeeded")
 	}

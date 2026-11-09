@@ -20,7 +20,8 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open,
+		Secrets: []registry.Secret{{Flag: "bearer-token-command"}}, Usage: "s3://bucket[/prefix]"})
 }
 
 // flagged is the S3 flag group's value: the S3 options and the range
