@@ -33,7 +33,12 @@ final class DocumentationEntryPointTest {
             "docs/usage.md",
             "docs/operating.md",
             "docs/faq.md",
-            "docs/style.md");
+            "docs/style.md",
+            "docs/go-release-copy-checklist.md",
+            "go/README.md",
+            "go/docs/README.md",
+            "go/docs/guide.md",
+            "go/docs/from-java.md");
 
     private static final Pattern MARKDOWN_LINK =
             Pattern.compile("!?\\[[^]\\n]*]\\(([^)\\s]+)(?:\\s+[^)]*)?\\)");
@@ -60,20 +65,41 @@ final class DocumentationEntryPointTest {
     }
 
     @Test
-    void releaseEntryPointsUseTheNewcomerFirstStory() throws Exception {
+    void goPreviewEntryPointsKeepReleaseScopeAndLimits() throws Exception {
         String readme = read("README.md");
+        String guide = read("go/docs/guide.md");
+
+        assertThat(readme)
+                .contains("Parallel listing and inventory for large object stores and filesystems")
+                .contains("Go on main, unreleased")
+                .contains("Java v0.3.2")
+                .contains("Build Go from source")
+                .contains("Go will replace Java at release")
+                .contains("No scan resume")
+                .contains("Listing rows require `-o DIR`")
+                .contains("Flat namespaces and current blobs only")
+                .contains("not an atomic storage snapshot")
+                .contains("historical Java evidence")
+                .contains("go/docs/guide.md")
+                .contains("https://github.com/varveio/swath/tree/v0.3.2/docs")
+                .doesNotContain("-o inventory.parquet");
+        assertThat(guide)
+                .contains("Unreleased Go implementation on main")
+                .contains("Java v0.3.2")
+                .contains("Local scans and text output cannot resume")
+                .contains("exact part list from")
+                .contains("union_by_name = true")
+                .doesNotContain("data/*.parquet");
+    }
+
+    @Test
+    void javaReleaseEntryPointsKeepTheHistoricalWorkflow() throws Exception {
         String gettingStarted = read("docs/getting-started.md");
         String fullScale = read("docs/full-scale-demo.md");
         String usage = read("docs/usage.md");
         String roadmap = read("ROADMAP.md");
         String agentGuide = read("AGENTS.md");
 
-        assertThat(readme)
-                .contains("Parallel, resumable S3 listing for very large buckets")
-                .contains("stofs_2d_glo.20230113/")
-                .contains("## See it at full scale")
-                .contains("not a point-in-time snapshot")
-                .doesNotContain("-o inventory.parquet");
         assertThat(gettingStarted)
                 .contains("small queryable Parquet inventory")
                 .contains("stofs_2d_glo.20230113/")

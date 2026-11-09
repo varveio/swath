@@ -1,7 +1,7 @@
 # swath.varve.io source
 
-This directory is the website. Edit it here, on `main`, in the same pull request as the
-behavior it describes.
+This directory is the website. Edit it here in a topic branch and pull request, alongside the behavior it describes.
+Do not push directly to `main`: that publishes the site.
 
 The site is published by `.github/workflows/site.yml`, which builds this directory into a
 GitHub Pages artifact and deploys it on every push to `main`. Nothing about the published
@@ -12,13 +12,13 @@ history to accumulate.
 
 | Path | What it is |
 | --- | --- |
-| `index.html` | The homepage. |
-| `field-guide/index.html` | The visual field guide, a single self-contained page. |
+| `index.html` | The unreleased Go preview homepage, with an explicit link to the latest Java release. |
+| `field-guide/index.html` | Historical Java v0.3.2 visual field guide; source links are pinned to the release tag. |
 | `runs/<run>/index.html` | Generated report pages. Produced by `tools/explainer` from a run's `--trace` log — change the generator or the run record, not the page. |
-| `data/channel.json` | Which swath the site documents: `{"channel": "release", "version": "X.Y.Z"}`. |
-| `data/runs/*.json` | Canonical `swath-public-run-v1` records, one per published run. Every figure the site quotes about a run comes from here. |
+| `data/channel.json` | The latest published release (not the Go preview): `{"channel": "release", "version": "X.Y.Z"}`. |
+| `data/runs/*.json` | Canonical `swath-public-run-v1` records for the historical Java captures and their quoted figures. |
 | `data/media.json` | The videos, which are **not** in git: the release they live on, and the sha256 the deploy must see. |
-| `assets/`, `card.png` | Posters and the social card. The videos land in `assets/` at deploy time. |
+| `assets/`, `card.png` | Historical Java posters and social card. The Go homepage uses a text summary rather than the Java trace card. The videos land in `assets/` at deploy time. |
 | `CNAME`, `.nojekyll` | Custom domain and the marker that keeps Pages from running Jekyll. |
 
 `README.md` is the one file the build leaves behind; everything else here is served from
@@ -37,7 +37,7 @@ media, and fragments resolve; that links into this repository name files and hea
 exist on `main`; that the public spelling and naming rules in
 [`docs/style.md`](../docs/style.md) hold across the site and the current documentation;
 that the version the homepage advertises matches `data/channel.json` and the newest
-release in the changelog; that the run figures quoted on the pages equal their records
+release in the changelog; that the historical Java run figures quoted on the pages equal their records
 under `data/runs/`; and a small set of accessibility smoke tests.
 
 The fetch step needs network access. Without it, `check-site.py` still passes: a path
@@ -46,13 +46,20 @@ files actually present.
 
 ## Releasing a new version
 
-Update `data/channel.json` and the homepage's "Documentation for swath X.Y.Z" line
-together. The channel check fails while they disagree, and fails again if either disagrees
+Update `data/channel.json` and the homepage's latest-published-release line together.
+The Go preview is unreleased on `main`; do not change the release channel merely to
+document it. Keep this distinction beside preview claims and build commands. The channel check fails while they disagree, and fails again if either disagrees
 with the newest released version in [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Publishing a new run
 
-Add its record under `data/runs/<run-id>.json` first; the pages quote the record, not the
+The Go headline measurements currently cite [`go/docs/measurements.md`](../go/docs/measurements.md)
+(the `cogslive1`/`cogslive2`/`cogslive3` observations). They were checked against that source
+when adding the copy, but are not covered by the historical Java run-fact assertions.
+Keep their revision, date, source, machine, regions, workers and output modes attached;
+review those measurements whenever changing the headline numbers.
+
+For a generated trace report or recorded capture, add its record under `data/runs/<run-id>.json` first; the pages quote the record, not the
 other way round. `swath-cli`'s `PublicRunFactsTest` guards the copies in `README.md` and
 `docs/full-scale-demo.md`, and `scripts/ci/check-site.py` guards the copies here.
 Capturing a run and regenerating its report end to end is issue #193.
