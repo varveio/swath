@@ -65,8 +65,9 @@ Running it in production (sizing, watching, resuming, reading the output): [oper
 
 ## Flags
 
-Generated from the flag set, as `--help` prints it, grouped (source and output, performance, limits, output and
-reporting; the performance and limits flags say when to change them). `TestCLIDocFlags` fails when this block
+Generated from the flag set, as `--help` prints it. Within the help sections, shared flag groups come first,
+then provider flags by scheme (local, `az`, `gs`, `s3`). Performance and limits flags say when to change them.
+`TestCLIDocFlags` fails when this block
 is stale (`UPDATE=1 go test ./cmd/swath` rewrites it), and `TestHelpGroupsCoverFlags` when a flag is in no
 group:
 
@@ -688,8 +689,9 @@ Diagnostics:
   or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
   A,B` (repeatable) keeps the listed classes (case-insensitive). They apply to every row: on a local tree,
   directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not the requests
-  made, with one exception: an `--include` anchored at the start with a literal (`^logs/2026/`) narrows the listed
-  prefix to it (the same rows, fewer requests; the report's `invocation.source` names the narrowed root). The
+  made, with one exception on S3 and GCS: an `--include` anchored at the start with a literal (`^logs/2026/`)
+  narrows the listed prefix to it (the same rows, fewer requests; `invocation.source` names the narrowed root).
+  Azure applies the filter to rows but does not narrow the listing prefix. The
   dropped rows are counted in `output.rows_filtered` (`rows_emitted` is what passed; `rows_fetched` both). The filters are part of the
   resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
   manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
@@ -712,7 +714,7 @@ Diagnostics:
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint` selects an S3-compatible store, addressed path-style by default, as Java's
   `--force-path-style` default with a custom endpoint; `--path-style=false` uses virtual-host addressing there. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
-- **Warm start:** `--seed-from PATH` (S3 and GCS) starts the range engine from a previous listing's key
+- **Warm start:** `--seed-from PATH` (S3, GCS and Azure Blob) starts the range engine from a previous listing's key
   distribution instead of the delimiter seed: no seed request, and the scope tiled into up to
   `min(1000, 4 × --workers)` ranges of about equal expected keys. PATH is either a committed dataset directory of
   the same source and scope (the manifest's bucket and prefix must be the run's; its parts' bounds, row counts and
@@ -728,29 +730,16 @@ Diagnostics:
   `seed.from.*`; the report's `invocation.prior` ([internals/range-engine.md](internals/range-engine.md)).
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
-- **Request admission.** By default (S3 and GCS) every request takes a permit from an adaptive limit that
-  starts at `--workers`, falls by 0.7 on a throttle answer, at most once per round trip and only while 15 % or
-  more of the last 4 × `--workers` answers (at least 256) are throttles, and grows back by one per second while under 7.5 % are
-  or after 10 s without one (Java swath's rules, read as a fraction so that a random background of throttles
-  is not taken for congestion; [internals/providers/s3.md](internals/providers/s3.md)); `--limiter=false` admits
-  every request at once: no limit applies, the `--workers` listing workers each wait on one page at a time, and
-  the seed's delimiter listings and the structure probes run beside them, so more than `--workers` requests can
-  be in flight. `swath diag list --limiter-slow-start` (off by default) starts the limit at 4 instead
-  and doubles it each second up to `--workers` until the first cut or timeout (Java's slow start);
-  a resume replays it from the recorded command and may add or undo it, since a resumed client starts a new
-  limiter (counters `slow_start.*`, feature `slow_start`, on only with the limiter). `--request-rate N` (S3 and GCS, default 0: none) also caps the run's
-  HTTP attempts at N per second (at least 0.001), every attempt counted (pages, probes, client retries, engine
-  requeues): a token bucket of one token, taken after the limiter's permit, so the k-th token of a burst is due
-  (k-1)/N seconds after the first, as with Java's `--request-rate`. Tokens are scheduled, not the sends: a caller
-  delayed after its token can send together with the next, so the cap holds over a window but sends are not
-  strictly spaced. A quota shared across a fleet is the use. Counters `rate.waits`, `rate.wait_ns`.
+- **Request admission.** S3, GCS and Azure Blob share `--limiter`, `--request-rate` and
+  `--request-timeout`. See [object-store requests](operating.md#object-store-requests) for defaults,
+  retry behavior and tuning, and the provider pages linked there for service-specific differences.
 - **Requester pays:** `--request-payer` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
 - **Credentials (all object stores):** `--anonymous` (one flag for S3, GCS and Azure Blob) sends no
   credentials whatever the environment holds, and it is the only way a request goes unauthenticated: a
   public bucket or container needs it. Without it, a source with no usable credentials (none configured,
   or configured and broken) stops the run with cause `auth` before any listing request; there is no
-  fallback to anonymity, and the error ends with "(a public bucket needs --anonymous)".
+  fallback to anonymity. Credential errors identify the failed credential source; their wording differs by provider.
 - **S3 credentials:** the AWS SDK's default credential chain applies: environment, shared files and profiles
   (`--profile`), SSO, web identity, credential processes, AssumeRole, container and instance roles. Its first
   lookup is waited for up to 30 s (a web-identity token file mounted late included); a refresh that fails
@@ -849,7 +838,7 @@ Diagnostics:
   | 130 | `interrupted` | SIGINT (also after the 15 s shutdown grace) | yes |
   | 143 | `terminated` | SIGTERM, a graceful stop (also after the 15 s shutdown grace) | yes |
 
-  "Resumable" holds when the output has an intact journal (S3); a filesystem run starts over. A source that
+  "Resumable" holds when the output has an intact journal (S3, GCS or Azure Blob); a filesystem run starts over. A source that
   stops early (a key limit) never exits 0 with a partial manifest unless its coverage says so.
 - **Liveness.** The command alone decides that a run cannot go on: its watchdog watches the run's progress
   in key space (rows listed, ordered, encoded, parts published, and the listing's pages: a page that held an
@@ -870,7 +859,7 @@ Diagnostics:
   minimal report without the run's statistics, its `message` naming the forced exit. The exit does not wait for
   any of that beyond 5 s after the grace (20 s after the stop in all): each line to stderr waits at most 250 ms
   and is dropped past it, so a stderr pipe nobody drains cannot hold the process (warnings are written the same
-  way), and the process exits at that bound whatever still blocks. **Forensics:** at a stall, before the run is cancelled, and at a forced
+  way), and the process exits at that bound whatever still blocks. **Forensics:** at a stall, before the run is canceled, and at a forced
   exit, every goroutine's stack and the progress counts are written whole to
   `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time) while the run owns the output,
   else, or when that write fails or blocks for 2 s, to stderr, cut at 1 MiB.
@@ -903,9 +892,9 @@ Diagnostics:
   | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
   | `rows_retained` | rows a resume kept from the interrupted run (not in `objects`) |
-  | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS) |
+  | `requests`, `retries` | HTTP attempts sent (pages, probes, client retries, engine requeues); attempts repeated (S3, GCS, Azure Blob) |
   | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
-  | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent on a custom endpoint) |
+  | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
   | `order.nodes`, `order.markers`, `order.spill_readers`, `order.spill_live_bytes`, `order.ahead_rows` | the order stage's live resources, each with a `peak_` twin (`peak_spill_live_bytes` for spill bytes); `ahead_rows` is rows listed and not yet handed on (in memory or spilled) |
   | `started_at`, `as_of`, `duration_ms` | timing |
 
@@ -915,7 +904,7 @@ Diagnostics:
 - **Terminal** (Java's stderr surface). A live progress record on stderr, from the snapshot the progress file
   is written from: the phase (`starting`, `verifying` with a resume's bytes checked, `listing`), objects listed
   (a local tree's entries: `N entries`; with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
-  elapsed time since the command began, API calls and, on a known tariff, the labelled estimate; no percentage
+  elapsed time since the command began, API calls and, on a known tariff, the labeled estimate; no percentage
   or ETA (a listing has no honest denominator), no key text. On a terminal it is redrawn in place (carriage
   return, `ESC[2K`; on Windows after enabling virtual-terminal processing, else plain lines), its trailing
   fields dropped whole to fit the width, every second; elsewhere it is appended as plain lines every 30 s.
@@ -930,7 +919,7 @@ Diagnostics:
   closed stdout reader; `--no-stats` never. The one-line summary stays on stdout. `-v` (`-vv`, `-vvv`: the same;
   Go has no finer log levels) prints a start line and shows progress as appended records; `-q` drops warnings
   and the automatic progress and statistics; `-qq` also drops the final error line (the exit code, `error.json`
-  and `--report` stand). `--color auto|always|never` colours the progress line and the statistics (headline
+  and `--report` stand). `--color auto|always|never` colors the progress line and the statistics (headline
   cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless `NO_COLOR` is set and not empty or
   `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width: `golang.org/x/term`.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
@@ -955,7 +944,7 @@ never zero.
 | `report_version` | 3 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by an anchored `--include`), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 
@@ -1008,7 +997,7 @@ is the one request count: every HTTP attempt sent (pages, probes, client retries
 and past the per-request timeout. `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint` spells it); both `null` on a
-custom endpoint, whose tariff is unknown. `keys_per_sec` is `rows_emitted` over `listing_ms`;
+custom endpoint, whose tariff is unknown, and for every Azure Blob run (no tariff estimate). `keys_per_sec` is `rows_emitted` over `listing_ms`;
 `http_attempts_per_1k_rows` is `http_attempts` per 1,000 `rows_fetched` (`null` without a row). Latency
 percentiles and in-flight time are the provider's counters (`source.stats.counters.values` `inflight.p50_ns`,
 `inflight.p90_ns`, `inflight.p99_ns`, `inflight.busy_ns`).

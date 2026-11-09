@@ -1,5 +1,10 @@
 # Filesystem (`internal/source/localfs`)
 
+A local or mounted directory supports dataset output and direct `du` summaries. A local
+`list` requires `-o DIR`; local scans do not resume. Mounted shares use the operating system's
+filesystem API. [Object-store request controls](../../operating.md#object-store-requests) do not
+apply to this provider; metadata and platform limits are described below.
+
 A range is a directory. Its entries are sorted by key, where a directory's key is `prefix/name/` and anything
 else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a directory's DIR row followed
 by its subtree, before the next sibling, is global order. A directory with more than 4096 entries is split into

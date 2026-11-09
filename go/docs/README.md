@@ -6,6 +6,9 @@ published release is Java v0.3.2. Go will replace Java at release.
 - **First run:** [guide.md](guide.md), with local summaries, object-store text listings,
   dataset output and source-specific limits.
 
+Shared object-store authentication and request controls are in [operating.md](operating.md#object-store-requests);
+provider pages linked there describe each provider's support and differences.
+
 Who reads what. Each page owns its facts; the others link to it.
 
 - **Operator** (schedules and watches runs): [operators.md](operators.md), then [operating.md](operating.md)

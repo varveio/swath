@@ -19,7 +19,7 @@ A directory (or object-store prefix) is a swath dataset when all of the followin
 
 | Layer | Identified by | Defined by |
 |---|---|---|
-| SeekParquet dataset | `manifest.json` with `format` `seekparquet`, `format_version` 0, `draft_revision` 1 (format 1 draft 1), and the `seekparquet.*` stamps in every part's footer | the SeekParquet specification |
+| SeekParquet dataset | `manifest.json` with `format` `seekparquet`, `format_version` 0, `draft_revision` 1, and the `seekparquet.*` stamps in every part's footer | the SeekParquet specification |
 | swath schema | `schema_id`: exactly one of the [registered ids](#schema-registry), compared byte for byte, never by prefix or after normalization | this page; executable as `reader.Schema` |
 | swath metadata | `extensions.swath` with `version` 1 and well-formed members | [The swath extension](#the-swath-extension) |
 
@@ -33,7 +33,7 @@ operations (the `go/reader` names are given; other readers make the same distinc
 
 | Operation | What it establishes | Reads |
 |---|---|---|
-| Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format 1 draft 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
+| Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format version 0, draft revision 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
 | Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
 | Acceptance (`AcceptWholeSource`) | The listing covers the whole of the named source: the coverage rule in [The swath extension](#the-swath-extension) | the manifest only |
 | Digest validation (`ValidateDigests`, `ValidateDigestsDir`) | Every part declares a SHA-256 that its bytes match | every part's bytes |
@@ -128,9 +128,9 @@ reports it as `KindCoverage`, while an unsupported version is reported as `KindS
 A schema id is `swath/<row-contract>/vN`: the row contract it names and that contract's version. Each id fixes the
 columns a reader may rely on: their names, physical and logical types and nullability, the key's encoding and
 uniqueness, and the meaning of a row. `reader.Schema(id)` returns the executable descriptor, and `CheckSchema` checks
-parts against it. The S3, GCS and local producers bind their schemas to these descriptors (`schema.Bind`), and
-`TestProducerSchemasGolden` pins those five. The Azure producer defines `swath/azblob-objects/v1` directly in
-`internal/source/azblob`; `CheckSchema` and the `go/reader` decoders still check it against the descriptor.
+parts against it. All producers, including Azure Blob, bind their schemas to these descriptors (`schema.Bind`).
+`TestProducerSchemasGolden` pins the five S3, GCS and local schemas; Azure's `TestSchemaBinding` checks its
+binding, accessor order and null handling.
 
 | Schema id | A row is | Key | Keys unique | Longest key |
 |---|---|---|---|---|
@@ -227,9 +227,10 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
   `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
   hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS), row by
-  row. The reader module's spec names these roles for each versions schema (`SchemaSpec.Versions`: version ID,
-  latest or deleted-at, delete marker; [../reader/README.md](../reader/README.md#version-roles)), and swath's own
-  text output, version counts and per-prefix totals read the rows through it.
+  row. The reader module describes version roles with `VersionSpec` on `SchemaSpec.Versions`: version ID,
+  latest or deleted-at, and optional delete marker ([version roles](../reader/README.md#version-roles)).
+  swath's text output, version counts and per-prefix totals read the rows through it. Typed reader decoders and
+  schema-specific SQL still bind columns by name.
 - **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
   SQL scan does not promise stored order. To keep a group's order, read the parts in manifest order and number the
   rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the

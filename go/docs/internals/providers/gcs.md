@@ -1,5 +1,20 @@
 # GCS (`internal/source/gcs`)
 
+## Support and differences
+
+`gs://bucket[/prefix]` uses the native JSON API for current objects, or live and noncurrent
+generations with `--all-versions`. Soft-deleted objects are outside its listing scope.
+[Shared object-store controls](../../operating.md#object-store-requests) cover authentication,
+request timeout, retries and admission.
+
+An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a
+reference Class A request-cost estimate; custom endpoints have none. GCS does not honor
+`Retry-After`. `--anonymous` overrides ambient and explicit credentials silently: it prints no
+ignored-credentials note. Endpoint validation rejects user information and URI-template braces
+in the path, but does not reject queries or fragments.
+
+## Provider implementation
+
 **Client** (`internal/source/gcs/client`). Google's generated JSON API client
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and

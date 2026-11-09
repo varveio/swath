@@ -72,18 +72,40 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
 - Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
   in `--x-s3` is refused, exit 2).
 
-**GCS.** `--gcs-credentials FILE` (a service-account or authorized-user JSON), else Application Default
-Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
+**GCS.** `--gcs-credentials FILE` (Google credential JSON, including service-account and authorized-user
+files), else Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
 Requests go unauthenticated only with `--anonymous` (a public bucket needs it). Credentials that cannot be
 found or loaded (no ADC anywhere, a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file) are refused
 (`auth`) before any listing request. The token scope is
 `devstorage.read_only`. Requester-pays buckets: `--gcs-user-project PROJECT` bills that project; it is part of
 the resume identity.
 
-GCS requests travel over HTTP/2, one connection per 16 workers (at most 8; `transport.pool_size` in the
-report's counters). S3 uses HTTP/1.1, one connection per request in flight.
+GCS and Azure Blob requests use HTTP/2 where supported, one pooled transport per 16 workers
+(at most 8; `transport.pool_size` in the report's counters). S3 uses HTTP/1.1, one connection per request in flight.
 
 The report's `source.stats` records `anonymous`, `credentials` (where they came from) and, for S3, `region`.
+
+## Object-store requests
+
+S3, GCS and Azure Blob share `--anonymous`, `--endpoint`, `--request-timeout`, `--limiter`
+and `--request-rate`. Without `--anonymous`, missing or unusable credentials stop the run
+with cause `auth`; swath does not fall back to unsigned requests. `--anonymous` ignores
+configured credentials. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
+no user information. Provider pages describe additional endpoint rules and credential diagnostics.
+
+A request has a 30 s timeout by default. Retryable failures get up to nine attempts with
+exponential backoff (100 ms base, 5 s maximum); after exhaustion the range engine requeues
+the page. `--stall-timeout` and `--max-duration` bound a run that cannot make progress.
+Retryable status codes and server-directed waits differ by provider.
+
+The adaptive limiter starts at `--workers` (64 by default). `--request-rate N` adds a
+cap on every HTTP attempt, retries and probes included (default 0: no cap). See
+[throttling](#throttling) for controller behavior and tuning, and
+[request admission](internals/clients.md#request-admission) for implementation details and counters.
+
+Provider support and differences: [S3](internals/providers/s3.md#support-and-differences),
+[GCS](internals/providers/gcs.md#support-and-differences),
+[Azure Blob](internals/providers/azblob.md#support-and-differences).
 
 ## Sizing a run
 
@@ -124,7 +146,7 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
   (default GOMAXPROCS, lowered to what 16 MiB each of an allowance equal to `--row-budget` carries; one
   job compresses synchronously on the order stage). A job is a 4 MiB input section (four 1 MiB windows:
-  sorted listings match between neighbouring keys, and a 1 MiB window measured the ratio and speed of
+  sorted listings match between neighboring keys, and a 1 MiB window measured the ratio and speed of
   the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
   encoder; measured at 5 to 13 MiB a job. Gzip is one stream. The report's `output.text.compressor`
   names the jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`). A file's
@@ -188,15 +210,15 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
 ## Watching a run
 
 **On a terminal.** swath draws one progress line on stderr, redrawn every second: phase, objects (with rows a
-resume recovered), live and average keys/s, parts, requests in flight, elapsed time, API calls and the cost
-estimate. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
+resume recovered), live and average keys/s, parts, requests in flight, elapsed time, API calls and a cost
+estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
 (`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
 automatic progress and the warnings off, `--no-progress` turns progress off everywhere. At the end, runs over
 1.5 s, runs that wrote parts and runs that did not complete print Java's statistics block on stderr (objects,
 time, keys/s, API calls per 1,000 objects, mean and peak in flight, throttles and retries when any, the
 estimate, files, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
 An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
-The one-line summary stays on stdout. Colour: `--color auto|always|never`, auto honouring `NO_COLOR`.
+The one-line summary stays on stdout. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
 counts, the request account (`requests`, `retries`, `inflight`, the limiter's `limit`, `cost_usd`) and the order
@@ -207,7 +229,7 @@ limiter's steps, the split counters). Both schemas are listed once, under "Progr
 [cli.md](cli.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
 
 **The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
-work-stealing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
+parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
 until the leftmost range ends, and are then replayed in order. `timings.listing_done_at` is when the provider
 finished; `listing_finished_at` when the order stage ended; `resources.drain.tail_ns` the interval between, the
 part of the run in which only the drain was left. In it idle workers read and decode spilled frames ahead of
@@ -241,10 +263,9 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 
 ## Throttling
 
-By default (S3 and GCS) every HTTP attempt (pages, probes, retries, requeues) takes a permit from an adaptive
-limit. It starts at `--workers` and is multiplied by 0.7 on a throttle answer (S3 429, 503, `SlowDown`; GCS 429
-and rate-limit reasons; floor 1), at most once per round trip and only while 15 % or more of the last
-4 × `--workers` answers (at least 256) are throttles; a background under that is tolerated (`limiter.cuts_suppressed.tolerated`).
+By default (S3, GCS and Azure Blob) every HTTP attempt (pages, probes, retries, requeues) takes a permit
+from an adaptive limit. It starts at `--workers` and is multiplied by 0.7 on a throttle answer (floor 1),
+at most once per round trip and only while 15 % or more of the last 4 × `--workers` answers (at least 256) are throttles; a background under that is tolerated (`limiter.cuts_suppressed.tolerated`).
 It grows by one per second while under 7.5 % are, or after 10 s without a throttle answer. Growth is held while
 attempt latency is above twice its baseline or three or more timeouts fell in the last 10 s.
 
@@ -255,15 +276,16 @@ attempt latency is above twice its baseline or three or more timeouts fell in th
   cut or timeout.
 - `--request-rate N` caps all HTTP attempts at N per second, after the limiter's permit; for a quota shared
   across a fleet.
-- Each request is retried up to 9 attempts (backoff 100 ms doubling to 5 s); after that the page is asked
-  again (2 s doubling to 60 s) for as long as the run lives. Retry exhaustion never fails a run; only the stall
-  watchdog does.
+- After retry exhaustion, the range engine asks for the page again (2 s doubling to 60 s) while the run
+  lives. The stall watchdog or a deadline can stop a run that keeps failing.
 
-Measured on the red team's fake ([measurements](measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
+Measured on the synthetic S3 fake ([measurements](measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
 throttle answers no longer move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
 throttling have been measured only under the earlier per-answer rule ([history](measurements.md#throttling-through-the-fault-proxy)).
 If a run crawls with `throttles` rising and the report's
-`limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), that is this rule; `--limiter=false` with `--request-rate` is the fixed-rate alternative.
+`limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), use
+`--limiter=false` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
+fit for live provider throttling; [request admission](internals/clients.md#request-admission) describes the tuning limits.
 
 ## Stopping and resuming
 
@@ -311,7 +333,8 @@ during the resume. On a static source the dataset is byte-identical to an uninte
 that must see the bucket as of the resume starts over with `--overwrite` (or resumes after removing
 `DIR/.swath/spill/durable/`, which relists everything above K). Durable spill needs a journal of version 8 or
 later (this build writes and resumes version 9 only), spill on, `--spill-budget` of at least
-16 MiB, and the range engine (S3 and GCS; not `--sequential`).
+16 MiB, and a parallel range-engine provider that declares coverage fences (S3, GCS and Azure Blob;
+not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
 billed project), `--fetch-owner`, the schema and the part size are frozen. A resume whose environment or
@@ -357,7 +380,7 @@ point it only at a dataset of the same store. It cannot be the output directory,
 own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
 changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
 `seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
-them), and `seed.from.expected_keys` against `objects` is the growth. A cut file (one sorted key per line,
+them), and `seed.from.expected_keys` against the source counter `objects` is the growth. A cut file (one sorted key per line,
 optionally a tab and a count) seeds from anything else that knows the keys, but carries no identity; prefer the
 dataset.
 
@@ -381,10 +404,12 @@ empty and `scope.kind` `whole` (fields: [dataset.md](dataset.md#the-swath-extens
 ```bash
 swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
 swath show --journal DIR  # an interrupted run: the journal as JSON lines
-duckdb -c "SELECT count(*), sum(size) FROM read_parquet('DIR/data/*.parquet')"
-duckdb -c "SELECT storage_class, count(*), sum(size) FROM read_parquet('DIR/data/*.parquet') GROUP BY 1"
-duckdb -c "SELECT key, size FROM read_parquet('DIR/data/*.parquet') WHERE starts_with(key, 'logs/2026/') ORDER BY key LIMIT 20"
+# In DuckDB, substitute the exact S3 part paths from manifest.json:
+duckdb -c "SELECT count(*), sum(size) FROM read_parquet(['DIR/data/part-00000.parquet'], union_by_name = true)"
+duckdb -c "SELECT storage_class, count(*), sum(size) FROM read_parquet(['DIR/data/part-00000.parquet'], union_by_name = true) GROUP BY 1"
 ```
+
+Use every part listed in the manifest, not a directory glob. The query above shows a one-part S3 dataset.
 
 The S3 schema is `swath/s3-objects/v1` (`key`, `size`, `last_modified`, `etag`, `storage_class`, `owner_id`,
 `owner_display_name`, `checksum_algorithm`, `checksum_type`); GCS is `swath/gcs-objects/v1` (`key`, `size`,
@@ -396,10 +421,17 @@ lists for the object. On GCS, `last_modified` also changes when only the object'
 and don't compare ETags across stores. GCS gives no `md5` for composite objects (use `crc32c`) and neither hash for objects
 encrypted with customer-managed or customer-supplied keys; when both are null, there is no listed hash to compare. Azure Blob is
 `swath/azblob-objects/v1`, its columns and caveats in [dataset.md](dataset.md#schema-registry).
-Every dataset lists current
-objects only; GCS's `generation` and `metageneration` describe the live object, not its history. `python3
-verify.py DIR` checks a dataset independently with DuckDB. A downstream reader that consumes the dataset relies
-only on the swath dataset profile ([dataset.md](dataset.md)); Java swath's reader does not open it.
+By default, object-store datasets list current objects only; `--all-versions` selects the S3 or GCS
+versions schema described below. In the default GCS mode, `generation` and `metageneration` describe
+the live object, not its history. A downstream reader relies on the
+swath dataset profile ([dataset.md](dataset.md)); Java swath's reader does not open it.
+
+### Verify a dataset
+
+`python3 verify.py DIR` independently checks S3, GCS and local datasets with DuckDB, including
+manifest part bounds, footer stamps and SHA-256 digests. The script's source-kind check rejects
+valid Azure datasets: it expects `local-fs` for the Azure schema. For Azure, use DuckDB with the
+manifest's exact part list or the [Go reader](../reader/README.md) (`ValidateDigests` and `CheckSchema`).
 
 ## Listing every version
 
@@ -456,7 +488,7 @@ and for S3 the delete-marker state, in wire order.
   resumable. The test suite runs there in CI; nothing is measured there.
 - **macOS:** the test suite runs there in CI; nothing is measured there. APFS refuses names that are not
   UTF-8, so a filesystem run never meets one.
-- **Power loss or a kernel crash:** recovery relies on the filesystem honouring `fsync` on files and directories
+- **Power loss or a kernel crash:** recovery relies on the filesystem honoring `fsync` on files and directories
   (ext4, XFS, APFS do). Process crashes are tested at every crash point; power loss is not.
 - **Live scans, not snapshots:** objects added, removed or changed during the run change what it observes. A
   committed dataset is the complete result of a live listing, exactly once per key (with `--all-versions`, once

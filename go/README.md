@@ -15,7 +15,7 @@ as a second edition. Start with the [Go guide](docs/guide.md). Documentation: [d
 an operator ([docs/operators.md](docs/operators.md)), someone coming from the Java CLI
 ([docs/from-java.md](docs/from-java.md)), a contributor ([docs/architecture.md](docs/architecture.md)) or a
 reviewer ([docs/measurements.md](docs/measurements.md)). The replay server `cmd/swath-replay`, which serves a recorded
-listing through the S3 API for tests and benchmarks: [docs/replay.md](docs/replay.md).
+listing through the S3, GCS and Azure APIs for tests and benchmarks: [docs/replay.md](docs/replay.md).
 
 ```bash
 ./build.sh -o swath                         # CGO_ENABLED=0, the revision stamped (docs/operating.md)

@@ -916,7 +916,7 @@ output to `/dev/null`):
 
 The names tier is the fastest lister measured; the stat tier ties the fastest Rust disk-usage tools and spends
 less kernel time than every full-path stat tool. The disk-usage tools only sum sizes; the walker builds a full
-row per entry. Not established: cold-cache behaviour of these tools, hard-link de-duplication, network or
+row per entry. Not established: cold-cache behavior of these tools, hard-link de-duplication, network or
 overlay filesystems.
 
 ### Against fd at equal output, huge directories, cold count (2026-11-08)

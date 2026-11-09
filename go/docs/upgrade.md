@@ -1,8 +1,7 @@
 # Upgrading to the Go tool's datasets
 
 The Java tool writes swath's format 1; this tool writes a swath dataset, a
-[SeekParquet](https://github.com/varveio/seekparquet) dataset (format 1 draft revision 1, stamped `format_version`
-0 and `draft_revision` 1) defined by the swath dataset profile in [dataset.md](dataset.md). This guide is the
+[SeekParquet](https://github.com/varveio/seekparquet) dataset (`format_version` 0, `draft_revision` 1) defined by the swath dataset profile in [dataset.md](dataset.md). This guide is the
 migration from one to the other, for two audiences:
 
 - **A user of the Java tool** moving to this one: what a format 1 dataset becomes ([Files](#files) through
@@ -411,8 +410,9 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage and the source: kind, container and URI),
   `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
   (every part's SHA-256 against its bytes).
-- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
-  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
+- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either S3 or GCS mode, or a local dataset,
+  and can compare the complete rows against an independent dataset. For Azure, use
+  [the verification alternatives](operating.md#verify-a-dataset). `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
   schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
   test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool

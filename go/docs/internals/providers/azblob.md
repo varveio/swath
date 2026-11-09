@@ -1,5 +1,22 @@
 # Azure Blob (`internal/source/azblob`)
 
+## Support and differences
+
+`az://account/container[/prefix]` lists current blobs in flat namespaces. Hierarchical
+namespaces, versions, snapshots and deleted blobs are unsupported. Namespace admission is
+required even for a public container; `--azblob-flat` only overrides an unknown result, never
+an account reported as hierarchical.
+[Shared object-store controls](../../operating.md#object-store-requests) cover authentication,
+request timeout, retries and admission.
+
+Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
+There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
+`Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
+It rejects a nonempty query or fragment in `--endpoint`; supply SAS credentials separately. `--anonymous` emits a note when it
+hides configured credentials detected by the Azure client.
+
+## Provider implementation
+
 **Client** (`internal/source/azblob/client`): List Blobs and Get Account Information, described with the list
 clients ([clients.md](../clients.md)). Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.7.0), with the SDK's retries off: swath's retry loop
