@@ -64,8 +64,8 @@ import (
 // last_modified, etag, storage_class, owner_id, owner_display_name,
 // checksum_algorithm and checksum_type, as the S3 current-object schema,
 // with a key cap of DefaultKeyLimit or Options.KeyLimit. Azure blob names
-// reach 1,024 characters, up to about 2,000 UTF-8 bytes, which a 1,024-byte
-// cap cannot hold.
+// reach 1,024 UTF-16 code units, up to 3,072 UTF-8 bytes, which a
+// 1,024-byte cap cannot hold.
 const SchemaID = "swath-replay/objects/v1"
 
 // DefaultKeyLimit is the key cap without Options.KeyLimit: the S3 limit.

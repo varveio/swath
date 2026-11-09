@@ -85,6 +85,10 @@ type Config struct {
 	// AzureAccount is the Azure route's account path segment and
 	// AdvertisedHost the host its ServiceEndpoint names (Host when empty).
 	AzureAccount, AdvertisedHost string
+	// AzureHNS makes the Azure route's Get Account Information report a
+	// hierarchical namespace (x-ms-is-hns-enabled: true) instead of a flat
+	// account.
+	AzureHNS bool
 }
 
 // Validate checks the bounds the server relies on (not the store, which is

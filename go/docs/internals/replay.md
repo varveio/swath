@@ -457,14 +457,20 @@ exists (`gcs` `ported_test.go`, `server` `TestGCSShapeCountsAndRejectionMeter` a
 ### Routing
 
 `serveOtherRoute` hands the Azure route, after the GCS check, a request whose raw path is
-`/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded), before the method
-is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that also has
+`/{account}/{one segment}` and whose query has a `restype` or `comp` name (percent-decoded), or whose raw path is
+`/{account}`, `/{account}/` or `/{account}/{one segment}/` and whose `restype` decodes to `account` (only Get
+Account Information is claimed there, so the Java replay's S3 answers on those paths stand: replaydiff
+`TestAzureS3RoutedCases`), before the method is looked at, so a POST to the Azure route is the Azure route's `405`. A claimed request that also has
 `list-type` is the replay's ambiguous `400`; an unclaimed one goes to the S3 handler, or, without S3, gets the
 replay's `404`. The Azure flow takes the same request
 slot (released before the write), `begin`/`end` store registration, response permit and response memory as S3
 (reservation `2048 + 512 × pageSize`, first chunk sized from the entries returned, the XML rendered into the
 shared `output.Output` one entry at a time), applies the latency profile as a deadline, and answers shutdown
-with `503 ServerBusy`.
+with `503 ServerBusy`. A query whose `restype` decodes to `account` is Get Account Information instead
+(`azure.ParseAccountInfo`, sharing the list route's header and query checks, by GET or HEAD on any claimed path;
+both operations accept and ignore SAS parameters): it takes the request slot but
+no response permit or response memory, reads nothing from the store, and answers an empty `200` whose
+`x-ms-is-hns-enabled` is `Config.AzureHNS`.
 
 ### Order
 
