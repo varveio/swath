@@ -169,6 +169,11 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if err != nil {
 		return order.Stats{}, nil, err
 	}
+	// The version roles, checked before any output is opened.
+	vers, err := schema.BindVersions(b.s)
+	if err != nil {
+		return order.Stats{}, nil, err
+	}
 	var sink order.Sink[P] = discard[P]{}
 	var enc parquetout.Encoder
 	if env.Router != nil {
@@ -187,15 +192,14 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if _, seg := sink.(segSink[P]); env.Ordered != nil && !seg { // segSink counts its own rows
 		sink = countSink[P]{sink, env.Ordered}
 	}
-	observer := versionSink[P]{counts: env.Versions}
-	if env.Versions != nil && b.s.Groups {
-		observer.bind(b.s)
-		if observer.latest != nil || observer.deleted != nil {
-			observer.Sink = sink
-			sink = observer
-			if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
-				sink = versionSegmenter[P]{observer, sg}
-			}
+	counted := env.Versions != nil && vers != nil
+	observer := versionSink[P]{counts: env.Versions, v: vers}
+	if counted {
+		env.Versions.Enabled, env.Versions.HasDeleteMarkers = true, vers.HasDeleteMarkers()
+		observer.Sink = sink
+		sink = observer
+		if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
+			sink = versionSegmenter[P]{observer, sg}
 		}
 	}
 	p := b.p
@@ -215,12 +219,12 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	}
 	if env.Count {
 		var observe order.Sink[P]
-		if observer.latest != nil || observer.deleted != nil {
+		if counted {
 			observer.Sink = discard[P]{}
 			observe = observer
 		}
 		if env.Totals != nil {
-			if observe, err = bindTotals(env.Totals, b.s, observe); err != nil {
+			if observe, err = bindTotals(env.Totals, b.s, vers, observe); err != nil {
 				return order.Stats{}, nil, err
 			}
 		}

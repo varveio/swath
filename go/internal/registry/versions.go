@@ -14,32 +14,19 @@ import (
 
 // VersionCounts describes only this attempt's rows handed on by order
 // (or counted), after filtering. It never includes retained resume rows.
-// Enabled and S3 are set before listing; read counters after Run returns.
+// Enabled and HasDeleteMarkers are set before listing, from the schema's
+// version roles (schema.Info.Versions); read counters after Run returns.
+// Versions counts the rows that are not delete markers, Noncurrent those
+// neither latest nor markers, Live those latest and not markers.
 type VersionCounts struct {
-	Enabled, S3                               bool
+	Enabled, HasDeleteMarkers                 bool
 	Versions, DeleteMarkers, Noncurrent, Live atomic.Int64
 }
 
 type versionSink[P any] struct {
 	order.Sink[P]
-	counts         *VersionCounts
-	latest, marker func(*P) (bool, bool)
-	deleted        func(*P) (int64, bool)
-}
-
-func (v *versionSink[P]) bind(s *schema.Schema[P]) {
-	for _, c := range s.Columns {
-		switch c.Name {
-		case "is_latest":
-			v.latest = c.Bool
-		case "is_delete_marker":
-			v.marker = c.Bool
-		case "time_deleted":
-			v.deleted = c.Int
-		}
-	}
-	v.counts.Enabled = v.latest != nil || v.deleted != nil
-	v.counts.S3 = v.marker != nil
+	counts *VersionCounts
+	v      *schema.Versions[P]
 }
 
 func (v versionSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error {
@@ -53,26 +40,15 @@ func (v versionSink[P]) count(segs [][]schema.Row[P]) {
 	for _, seg := range segs {
 		for i := range seg {
 			p := &seg[i].Data
-			marker, latest := false, false
-			if v.marker != nil {
-				marker, _ = v.marker(p)
-			}
-			if marker {
+			switch {
+			case v.v.Marker(p):
 				markers++
-			} else {
+			case v.v.Latest(p):
 				versions++
-			}
-			if v.latest != nil {
-				latest, _ = v.latest(p)
-			} else {
-				_, gone := v.deleted(p)
-				latest = !gone
-				if gone {
-					noncurrent++
-				}
-			}
-			if latest && !marker {
 				live++
+			default:
+				versions++
+				noncurrent++
 			}
 		}
 	}
