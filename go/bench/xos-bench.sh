@@ -34,9 +34,12 @@ EOF
 Darwin)
   OS=macos IMG=$T/bench.sparseimage
   hdiutil create -quiet -size 16g -fs APFS -volname bench -type SPARSE "$IMG" || exit 1
-  hdiutil attach -quiet "$IMG" || exit 1
+  # Spotlight indexes a new volume and keeps it busy (detach fails with EBUSY): indexing off, forced detach
+  hdiutil attach -quiet -nobrowse "$IMG" || exit 1
   ROOT=/Volumes/bench
-  printf '#!/bin/sh\nhdiutil detach -quiet /Volumes/bench && sudo purge && hdiutil attach -quiet %s\n' "$IMG" > "$T/remount.sh"
+  sudo mdutil -i off $ROOT >/dev/null
+  printf '#!/bin/sh\nhdiutil detach -quiet -force %s && sudo purge && hdiutil attach -quiet -nobrowse %s && sudo mdutil -i off %s >/dev/null\n' \
+    $ROOT "$IMG" $ROOT > "$T/remount.sh"
   chmod +x "$T/remount.sh"
   DROP=$T/remount.sh
   ;;
@@ -81,7 +84,9 @@ import glob, json, os, sys
 out, osn = sys.argv[1:]
 print(f"## {osn}\n")
 for p in sorted(glob.glob(f"{out}/{osn}-*.json")):
-    res = json.load(open(p))["results"]
+    res = [r for r in json.load(open(p))["results"] if "mean" in r]
+    if not res:
+        continue
     best = min(r["mean"] for r in res)
     print(f"### {os.path.basename(p)[:-5]}\n\n| mean (s) | ± | command |\n|---:|---:|---|")
     for r in res:
