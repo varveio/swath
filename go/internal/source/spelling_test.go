@@ -6,8 +6,10 @@ package source_test
 import (
 	"flag"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -126,14 +128,20 @@ func commandFlags(files []*ast.File) []string {
 	return names
 }
 
-// scan reports, as "file:line: why", every string the files spell that
-// names a provider. Each maximal constant string expression is folded
-// first: a '+' chain of literals and of the files' string constants. It
-// counts when it is a provider's scheme, or holds one as "scheme:" (a root
-// or a prefix test); holds a provider's flag typed with dashes ("--profile");
-// holds a word starting with a provider's flag namespace ("gcs-"); or is a
-// provider's flag name exactly ("profile"), except as an argument of a
-// call into os, path or path/filepath, where it is a file name.
+// scan reports, as "file:line: why", every constant string expression in
+// files that the type checker evaluates and that names a provider. Files
+// are one package, type-checked with its imports as empty placeholders and
+// its errors ignored: the package's own constants evaluate with Go's
+// scoping (shadowing, iota, implicitly repeated specs, other files), and
+// so do conversions of constant numbers or runes to strings; nothing built
+// at run time does (a variable, fmt.Sprintf's result, a function's return).
+// Each maximal constant string expression is checked once, on its value:
+// it counts when it is a provider's scheme, or holds one as "scheme:" (a
+// root or a prefix test); holds a provider's flag typed with dashes
+// ("--profile"); holds a word starting with a provider's flag namespace
+// ("gcs-"); or is a provider's flag name exactly ("profile"). The last two
+// do not count for a path element passed directly to filepath.Join or
+// path.Join (a file named metadata, a directory gcs-cache).
 func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
 	var names []string
 	for n := range sp.flags {
@@ -151,69 +159,29 @@ func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
 	flagRe := regexp.MustCompile(`(^|[^\w-])--?(` + strings.Join(names, "|") + `)($|[^\w-])`)
 	prefixRe := regexp.MustCompile(`(^|[^\w-])-{0,2}(` + quote(sp.prefixes) + `)`)
 
-	consts := map[string]ast.Expr{}
-	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			if d, ok := n.(*ast.GenDecl); ok && d.Tok == token.CONST {
-				for _, spec := range d.Specs {
-					vs := spec.(*ast.ValueSpec)
-					for i, id := range vs.Names {
-						if i < len(vs.Values) {
-							consts[id.Name] = vs.Values[i]
-						}
-					}
-				}
-			}
-			return true
-		})
-	}
-	var fold func(e ast.Expr, depth int) (string, bool)
-	fold = func(e ast.Expr, depth int) (string, bool) {
-		if depth > 16 {
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}}
+	conf := types.Config{Importer: placeholders{}, Error: func(error) {}}
+	conf.Check(files[0].Name.Name, fset, files, info) // errors are the placeholders' missing members
+	str := func(e ast.Expr) (string, bool) {
+		tv, ok := info.Types[e]
+		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
 			return "", false
 		}
-		switch e := e.(type) {
-		case *ast.BasicLit:
-			if e.Kind != token.STRING {
-				return "", false
-			}
-			v, err := strconv.Unquote(e.Value)
-			return v, err == nil
-		case *ast.ParenExpr:
-			return fold(e.X, depth+1)
-		case *ast.Ident:
-			if c, ok := consts[e.Name]; ok {
-				return fold(c, depth+1)
-			}
-		case *ast.BinaryExpr:
-			if e.Op == token.ADD {
-				x, okx := fold(e.X, depth+1)
-				y, oky := fold(e.Y, depth+1)
-				return x + y, okx && oky
-			}
-		}
-		return "", false
+		return constant.StringVal(tv.Value), true
 	}
 	var out []string
 	for _, f := range files {
-		fileNames := map[ast.Expr]bool{} // arguments of os, path and path/filepath calls
-		pathPkgs := map[string]bool{}
-		for _, imp := range f.Imports {
-			p, _ := strconv.Unquote(imp.Path.Value)
-			if p == "os" || p == "path" || p == "path/filepath" {
-				name := p[strings.LastIndex(p, "/")+1:]
-				if imp.Name != nil {
-					name = imp.Name.Name
-				}
-				pathPkgs[name] = true
-			}
-		}
+		pathElements := map[ast.Expr]bool{} // direct arguments of filepath.Join and path.Join
 		ast.Inspect(f, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok {
-				if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
-					if id, ok := sel.X.(*ast.Ident); ok && pathPkgs[id.Name] {
+			c, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Join" {
+				if id, ok := sel.X.(*ast.Ident); ok {
+					if pn, ok := info.Uses[id].(*types.PkgName); ok && (pn.Imported().Path() == "path/filepath" || pn.Imported().Path() == "path") {
 						for _, a := range c.Args {
-							fileNames[a] = true
+							pathElements[a] = true
 						}
 					}
 				}
@@ -231,7 +199,7 @@ func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
 			if _, ok := e.(*ast.Ident); ok {
 				return true // a constant is checked where it is declared
 			}
-			v, ok := fold(e, 0)
+			v, ok := str(e)
 			if !ok {
 				return true
 			}
@@ -244,23 +212,35 @@ func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
 				report("names a provider's scheme")
 			case flagRe.MatchString(v):
 				report("names a provider's flag")
+			case pathElements[e]:
 			case prefixRe.MatchString(v):
 				report("spells a provider's flag namespace")
-			case sp.flags[v] && !fileNames[e]:
+			case sp.flags[v]:
 				report("is a provider's flag name (if it is not the flag, name it through a constant of the package that owns it)")
 			}
-			return false // the maximal expression, folded, is checked once
+			return false // the maximal expression, evaluated, is checked once
 		})
 	}
 	return out
 }
 
-// TestCommandNamesNoProvider is a tripwire on spellings, not a proof: it
-// fails when cmd/swath's non-test source spells a registered provider's
-// scheme, own flag or flag namespace (scan), in a string literal or a
-// constant string expression. Values computed at run time, or spelled
-// some other way, pass it. What the command needs of a provider, it reads
-// from the registered factories (registry.Factory).
+// placeholders imports every path as an empty, complete package: the
+// files' own constants evaluate without loading their dependencies.
+type placeholders struct{}
+
+func (placeholders) Import(path string) (*types.Package, error) {
+	p := types.NewPackage(path, path[strings.LastIndex(path, "/")+1:])
+	p.MarkComplete()
+	return p, nil
+}
+
+// TestCommandNamesNoProvider is a tripwire on spellings in the command's
+// source, not a proof: it fails when a constant string expression the type
+// checker evaluates in cmd/swath's non-test files spells a registered
+// provider's scheme, own flag or flag namespace (scan). A value built at
+// run time (a variable, fmt.Sprintf's result) passes it. What the command
+// needs of a provider, it reads from the registered factories
+// (registry.Factory).
 func TestCommandNamesNoProvider(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(moduleDir(t), "cmd", "swath", "*.go"))
 	if err != nil {
@@ -293,50 +273,64 @@ func TestCommandNamesNoProvider(t *testing.T) {
 			t.Fatalf("provider flag --%s not collected", want)
 		}
 	}
-	for _, want := range []string{"azblob-", "gcs-"} {
-		if !slices.Contains(sp.prefixes, want) {
-			t.Fatalf("flag namespace %s not derived (%q)", want, sp.prefixes)
-		}
+	if len(sp.prefixes) == 0 {
+		t.Fatal("no provider flag namespace derived: a namespace needs two flags of one provider sharing a prefix that no command, group or other provider flag starts with; if no provider has one any more, drop this check")
 	}
 	for _, f := range scan(fset, parsed, sp) {
 		t.Error(f)
 	}
 }
 
-// TestScanSpellings: the tripwire on adversarial spellings, folded
-// constants among them; a provider's single-word flag name as a file name
-// passes, any other bare use does not.
+// TestScanSpellings pins scan on adversarial spellings: constants folded
+// with Go's scoping, across files and through implicit specs; a parameter
+// is no constant; a provider flag name or namespace passes only as a path
+// element given directly to filepath.Join or path.Join.
 func TestScanSpellings(t *testing.T) {
 	sp := providerSpellings([]string{"no-spill"})
 	for _, c := range []struct {
-		src     string
+		files   []string
 		flagged bool
 	}{
-		{`const scheme = "s" + "3"`, true},
-		{`const a, b = "s", "3"; const scheme = a + b`, true},
-		{`var _ = strings.HasPrefix(root, "s3:")`, true},
-		{`var _ = "gs://" + bucket`, true},
-		{`var _ = "--" + "gcs-" + name`, true},
-		{`var _ = fs.Lookup("gcs-" + "credentials")`, true},
-		{`const ns = "azblob-"`, true},
-		{`var _ = errors.New("give --profile")`, true},
-		{`var _ = []string{"profile"}`, true},
-		{`var _ = filepath.Join(dir, "metadata")`, false},
-		{`var _ = os.Remove("metadata")`, false},
-		{`var _ = m["metadata"]`, true},
-		{`var _ = errors.New("flags: bad args: x")`, false},
-		{`var _ = "--endpoint"`, false}, // a shared group's flag
-		{`var _ = "--request-timeout"`, false},
-		{`var _ = "one region"`, false},
+		{[]string{`const scheme = "s" + "3"`}, true},
+		{[]string{`const a, b = "s", "3"; const scheme = a + b`}, true},
+		{[]string{`const p = "s"; var scheme = p + "3"; func f() { const p = "x"; _ = p }`}, true}, // a local constant shadows only locally
+		{[]string{`const p = "s"; func f(p string) string { return p + "3" }`}, false},             // a parameter is no constant
+		{[]string{`const a = "s"`, `var scheme = a + "3"`}, true},                                  // across files
+		{[]string{`const (a = "s"; b); var scheme = b + "3"`}, true},                               // an implicitly repeated spec
+		{[]string{`const (x = "s" + string(rune('3' + iota)))`}, true},                             // iota, a rune conversion
+		{[]string{`var _ = strings.HasPrefix(root, "s3:")`}, true},
+		{[]string{`var _ = "gs://" + bucket`}, true},
+		{[]string{`var _ = "--" + "gcs-" + name`}, true},
+		{[]string{`var _ = fs.Lookup("gcs-" + "credentials")`}, true},
+		{[]string{`const ns = "azblob-"`}, true},
+		{[]string{`var _ = errors.New("give --profile")`}, true},
+		{[]string{`var _ = []string{"profile"}`}, true},
+		{[]string{`var _ = m["metadata"]`}, true},
+		{[]string{`var _ = fs.Lookup(filepath.Base("profile"))`}, true},
+		{[]string{`var _ = os.Getenv("profile")`}, true},
+		{[]string{`var _ = os.Remove("metadata")`}, true},
+		{[]string{`var _ = filepath.Join(dir, "--profile")`}, true},
+		{[]string{`var _ = filepath.Join(dir, "metadata")`}, false},
+		{[]string{`var _ = path.Join("a", "metadata")`}, false},
+		{[]string{`var _ = filepath.Join(dir, "gcs-cache")`}, false},
+		{[]string{`var _ = fmt.Sprintf("s%s", "3")`}, false}, // run time: out of reach
+		{[]string{`var _ = errors.New("flags: bad args: x")`}, false},
+		{[]string{`var _ = "--endpoint"`}, false}, // a shared group's flag
+		{[]string{`var _ = "--request-timeout"`}, false},
+		{[]string{`var _ = "one region"`}, false},
 	} {
 		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, "x.go", "package main\nimport (\"os\"; \"path/filepath\")\nvar _, _ = os.Args, filepath.Base\n"+c.src+"\n", 0)
-		if err != nil {
-			t.Fatalf("%s: %v", c.src, err)
+		var files []*ast.File
+		for i, src := range c.files {
+			f, err := parser.ParseFile(fset, "x"+strconv.Itoa(i)+".go", "package main\nimport (\"fmt\"; \"os\"; \"path\"; \"path/filepath\")\nvar _, _, _, _ = fmt.Sprint, os.Args, path.Base, filepath.Base\n"+src+"\n", 0)
+			if err != nil {
+				t.Fatalf("%s: %v", src, err)
+			}
+			files = append(files, f)
 		}
-		got := scan(fset, []*ast.File{f}, sp)
+		got := scan(fset, files, sp)
 		if (len(got) > 0) != c.flagged {
-			t.Errorf("%s: findings %q, want flagged %v", c.src, got, c.flagged)
+			t.Errorf("%q: findings %q, want flagged %v", c.files, got, c.flagged)
 		}
 	}
 }

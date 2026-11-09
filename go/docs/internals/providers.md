@@ -93,7 +93,7 @@ or a benchmark registers one provider with its groups on a flag set of its own (
 
 The command imports providers only for that registration and passes the options value for the root's scheme as
 `listing.Config.Source.Options`, opaque to the pipeline; it names no provider, scheme or provider flag
-(`TestImportBoundary`; `TestCommandNamesNoProvider` in `internal/source` is a tripwire on such spellings in its source, [testing.md](../testing.md)). `Open` validates the root without
+(`TestImportBoundary`; `TestCommandNamesNoProvider` in `internal/source` is a tripwire on such spellings in its source: each constant string expression the type checker evaluates there, not values built at run time, [testing.md](../testing.md)). `Open` validates the root without
 touching the output. An object store's factory also gives `KeyPrefix(root)`, the key prefix the root names
 (each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
