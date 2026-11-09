@@ -91,7 +91,9 @@ of the `keyrange` laws. CI never passes `-short`.
 - **Java change:** any path outside `go/` and `Dockerfile.replay-go*`, so a documentation or script change
   runs the Java tiers.
 
-A dispatch, or a diff with no base, sets both. Every job still runs and only skips its steps, so on a pull
+A dispatch, or a diff with no base, sets both. Every job still runs and only skips its steps (without a Go
+change, `go-race` and `go-xos` each run one `off` leg on ubuntu-latest, so no arm64, macOS or Windows runner is
+queued), so on a pull
 request `ci-gate` sees each job as `success` and treats `skipped` as a failure; off pull requests `skipped`
 passes (`docker-check` is PR-only). `ci-gate` needs `changes`, `fast-tests`,
 `integration-tests`, `docker-check`, `go-lint`, `go-race`, `go-nonrace`, `go-build`, `go-objfile`, `go-reader`,
@@ -108,7 +110,7 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes` | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows go test -c ./internal/journal`; the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the four targets | ubuntu-latest |
-| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo) | macos-latest (arm64), windows-latest (amd64) |
+| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo). Without a Go change, a single `go-xos (off)` leg on ubuntu-latest whose steps skip | macos-latest (arm64), windows-latest (amd64) |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
