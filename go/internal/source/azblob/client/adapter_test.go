@@ -493,7 +493,7 @@ func TestRedactedRefusal(t *testing.T) {
 	if !ok || ex.Attempts != 3 || Classify(err) != objhttp.ClassParse || c.Counters().ParseFailures != 3 {
 		t.Fatalf("%v: class %q, parse failures %d", err, Classify(err), c.Counters().ParseFailures)
 	}
-	if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "REDACTED") {
+	if sasLeak(err.Error()) != "" || !strings.Contains(err.Error(), "REDACTED") {
 		t.Fatalf("not redacted: %v", err)
 	}
 }

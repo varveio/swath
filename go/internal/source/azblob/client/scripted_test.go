@@ -23,9 +23,6 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// secret is testSAS's signature: it must never reach an error.
-const secret = "TopSecretSig"
-
 // echoError writes an Azure error answer that quotes the request's query
 // (SAS included, as sent and decoded) in its message, as some answers do.
 func echoError(w http.ResponseWriter, r *http.Request, status int, code string) {
@@ -45,30 +42,51 @@ func echoError(w http.ResponseWriter, r *http.Request, status int, code string) 
 	fmt.Fprint(w, "</Message></Error>")
 }
 
-// closeCount counts the response bodies its transport hands out and their
-// closes.
+// closeCount counts the response bodies its transport hands out and every
+// Close call on each of them (a second Close is counted, not absorbed).
 type closeCount struct {
-	next           http.RoundTripper
-	bodies, closes atomic.Int64
+	next   http.RoundTripper
+	mu     sync.Mutex
+	closes []*atomic.Int64 // one per body handed out, in order
 }
 
 func (c *closeCount) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := c.next.RoundTrip(req)
 	if err == nil {
-		c.bodies.Add(1)
-		resp.Body = &counted{ReadCloser: resp.Body, n: &c.closes}
+		n := new(atomic.Int64)
+		c.mu.Lock()
+		c.closes = append(c.closes, n)
+		c.mu.Unlock()
+		resp.Body = &counted{ReadCloser: resp.Body, n: n}
 	}
 	return resp, err
 }
 
+// closedOnce is "" when want bodies were handed out and each was closed
+// exactly once, else the number of Close calls on each body.
+func (c *closeCount) closedOnce(want int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	counts := make([]int64, len(c.closes))
+	bad := len(c.closes) != want
+	for i, n := range c.closes {
+		counts[i] = n.Load()
+		bad = bad || counts[i] != 1
+	}
+	if bad {
+		return fmt.Sprintf("%d bodies (want %d), closes per body %v", len(counts), want, counts)
+	}
+	return ""
+}
+
+// counted counts every Close call, then forwards it.
 type counted struct {
 	io.ReadCloser
-	once sync.Once
-	n    *atomic.Int64
+	n *atomic.Int64
 }
 
 func (c *counted) Close() error {
-	c.once.Do(func() { c.n.Add(1) })
+	c.n.Add(1)
 	return c.ReadCloser.Close()
 }
 
@@ -107,7 +125,7 @@ type outcome struct {
 // supplied HTTP client that counts bodies and closes, with a SAS whose
 // signature the answers quote) and holds it to the expected class, retry
 // decision, *Error (status, code, message, query, wait), page, counters and
-// requests; every body closed once; the signature in no error. The body cap
+// requests; every body closed exactly once; the signature in no error. The body cap
 // is a plain failure: a body at the cap is a page, one byte past it fails
 // the request without another one, the input page size unchanged.
 func TestScriptedAnswers(t *testing.T) {
@@ -267,17 +285,17 @@ func TestScriptedAnswers(t *testing.T) {
 			}
 			if err != nil {
 				got.Class, got.Requeue = Classify(err), objhttp.Requeue(Classify)(err)
-				if strings.Contains(err.Error(), secret) {
-					t.Errorf("the signature in the error: %v", err)
+				if leak := sasLeak(err.Error()); leak != "" {
+					t.Errorf("the SAS's %q in the error: %v", leak, err)
 				}
 				if e, ok := errors.AsType[*Error](err); ok {
 					got.Answer = e
 					if strings.HasPrefix(e.Message, "m ") {
-						// an echoing answer: its message kept, the signature
-						// redacted (the SDK sorts the SAS in among the
-						// parameters, so only its sig is redacted)
+						// an echoing answer: its message kept, every SAS
+						// parameter redacted wherever the SDK sorted it,
+						// the request's own parameters kept
 						scrubbed.Add(1)
-						if !strings.Contains(e.Message, "sig=REDACTED") || !strings.Contains(e.Message, "sp=rl") {
+						if sasLeak(e.Message) != "" || !strings.Contains(e.Message, "sig=REDACTED") || !strings.Contains(e.Message, "comp=list&") {
 							t.Errorf("message %q", e.Message)
 						}
 						cp := *e
@@ -291,8 +309,10 @@ func TestScriptedAnswers(t *testing.T) {
 					}
 				}
 			}
-			if b, cl := cc.bodies.Load(), cc.closes.Load(); b != cl {
-				t.Errorf("%d bodies, %d closed", b, cl)
+			// every body the transport handed out (one per request the
+			// server answered) closed exactly once
+			if msg := cc.closedOnce(n); msg != "" {
+				t.Error(msg)
 			}
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("%v\n got  %+v\n want %+v", err, got, c.want)
@@ -360,8 +380,8 @@ func TestCancelAfterHeaders(t *testing.T) {
 	if Classify(err) != objhttp.ClassCanceled || !errors.Is(err, context.Canceled) {
 		t.Errorf("%v (class %q)", err, Classify(err))
 	}
-	if b, cl := cc.bodies.Load(), cc.closes.Load(); b != 1 || cl != 1 {
-		t.Errorf("%d bodies, %d closed", b, cl)
+	if msg := cc.closedOnce(1); msg != "" {
+		t.Error(msg)
 	}
 }
 

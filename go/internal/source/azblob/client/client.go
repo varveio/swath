@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -138,6 +139,7 @@ type Client struct {
 	next   atomic.Uint64
 
 	sas    string              // without '?'; "" when none
+	sasKey *regexp.Regexp      // any parameter of the SAS in text (sasParams); nil when none
 	key    string              // the account key; "" when the credential is another
 	ts     *tokensource.Shared // nil: no bearer token
 	source string
@@ -257,6 +259,7 @@ func (c *Client) credentials(ctx context.Context) error {
 			// the parse error would quote the signature
 			return &CredentialError{Source: c.source, Err: errors.New("not a query string")}
 		}
+		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
 		c.source = "shared key"
 		// The SDK signs; the key must be base64 (its error does not quote
@@ -762,8 +765,13 @@ func (e *scrubbedNetError) Error() string   { return e.msg }
 func (e *scrubbedNetError) Timeout() bool   { return e.timeout }
 func (e *scrubbedNetError) Temporary() bool { return false }
 
-// scrub removes the SAS, and its signature as sent or decoded, from text
-// the service, a redirect or the SDK's decoder returned.
+// scrub removes the SAS from text the service, a redirect or the SDK's
+// decoder returned: the SAS as given, its signature as sent or decoded,
+// and the value of every parameter the SAS names, wherever it stands in
+// the text. The SDK sorts the SAS's parameters in among the request's and
+// re-encodes them, so the SAS is not found as one string: each parameter
+// is found by name (sasParams), its value replaced by REDACTED, and the
+// rest of the text kept.
 func (c *Client) scrub(s string) string {
 	if s == "" {
 		return s
@@ -779,8 +787,41 @@ func (c *Client) scrub(s string) string {
 			s = strings.ReplaceAll(s, x, "REDACTED")
 		}
 	}
-	return sigParam.ReplaceAllString(s, "${1}REDACTED")
+	re := c.sasKey
+	if re == nil {
+		re = sigParam
+	}
+	return re.ReplaceAllString(s, "${1}REDACTED")
 }
 
-// sigParam is a SAS signature parameter in any text, as sent or escaped.
-var sigParam = regexp.MustCompile(`(?i)((?:^|[?&;\s"'(])sig(?:=|%3D))[^&\s"'<>)]*`)
+// sasParams matches, in any text, a parameter the SAS names (and sig,
+// always) with its value: the name as given or escaped, in any case, after
+// the start of the text, a query or text separator, or an escaped '&' or
+// '?'; then '=' or its escape %3D; then the value (sasValue). That covers
+// the query as sent (in any order), decoded, and escaped once more (a
+// query quoted inside another URL).
+func sasParams(sas string) *regexp.Regexp {
+	names := map[string]bool{"sig": true}
+	if q, err := url.ParseQuery(sas); err == nil {
+		for k := range q {
+			if k != "" {
+				names[k] = true
+				names[url.QueryEscape(k)] = true
+			}
+		}
+	}
+	alts := make([]string, 0, len(names))
+	for k := range names {
+		alts = append(alts, regexp.QuoteMeta(k))
+	}
+	slices.Sort(alts) // a stable pattern
+	return regexp.MustCompile(`(?i)((?:^|[?&;\s"'(]|%26|%3F)(?:` + strings.Join(alts, "|") + `)(?:=|%3D))` + sasValue)
+}
+
+// sasValue is a parameter's value in text: anything up to '&', an escaped
+// '&' (%26), a space, a quote or a bracket.
+const sasValue = `(?:[^&%\s"'<>)]|%(?:[013-9A-Fa-f][0-9A-Fa-f]|2[0-57-9A-Fa-f]))*`
+
+// sigParam is the SAS signature parameter in any text (sasParams for a
+// client without a SAS).
+var sigParam = sasParams("")
