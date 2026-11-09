@@ -1,0 +1,78 @@
+name: localfs-bench-xos
+
+# The local walker against fd and the platform's own tools on Windows (NTFS) and macOS (APFS).
+# Runs on a push to the bench/localfs-xos branch, or by hand. Driver: go/bench/xos-bench.sh.
+# Results: the job summary and the uploaded artifact.
+on:
+  push:
+    branches: [bench/localfs-xos]
+  workflow_dispatch:
+    inputs:
+      ref_a:
+        description: swath ref A (before)
+        default: claude/stoic-ritchie-ugt91m
+      ref_b:
+        description: swath ref B (after)
+        default: claude/localfs-count-unsorted
+      trees:
+        description: gen_tree.py trees
+        default: realistic huge
+      warm_reps:
+        default: "6"
+      cold_reps:
+        default: "3"
+      os:
+        description: runners (JSON list)
+        default: '["windows-latest", "macos-latest"]'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os || '["windows-latest", "macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'claude/stoic-ritchie-ugt91m' }}", path: swath-a}
+      - uses: actions/checkout@v4
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'claude/localfs-count-unsorted' }}", path: swath-b}
+      - uses: actions/setup-go@v5
+        with: {go-version-file: swath-b/go/go.mod, cache: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: build
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for v in a b; do (cd swath-$v/go && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/bin/swath-$v$EXE" ./cmd/swath); done
+        env:
+          EXE: ${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install fd bfs hyperfine
+          pip install fdu || echo "fdu unavailable"
+      - name: tools (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y --no-progress fd hyperfine
+      - name: bench
+        run: |
+          export PATH="$PATH:/c/ProgramData/chocolatey/bin"
+          B="$RUNNER_TEMP/bin"
+          if [ "$RUNNER_OS" = Windows ]; then B=$(cygpath -m "$B"); X=.exe; else X=; fi
+          SWATH_A="$B/swath-a$X" SWATH_B="$B/swath-b$X" GEN=go/bench/gen_tree.py OUT="$RUNNER_TEMP/out" \
+            TREES="${{ inputs.trees || 'huge' }}" WARM_REPS="${{ inputs.warm_reps || '1' }}" COLD_REPS="${{ inputs.cold_reps || '1' }}" \
+            bash go/bench/xos-bench.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: localfs-bench-${{ runner.os }}
+          path: ${{ runner.temp }}/out
