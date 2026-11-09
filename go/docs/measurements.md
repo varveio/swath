@@ -844,6 +844,24 @@ this VM's inode cache (`ext4_inode_cache` 9.1M objects, 9.8 GiB; page cache 0.2 
 265–290 s of kernel time in 70–80 s of wall, CPU-bound on reclaim, and the arms are within noise of each
 other. The `huge` Parquet output is identical to the baseline's in content and order.
 
+**Names tier, and a paired re-check** (2026-11-09). A directory read that waits on the disk holds a Go processor as a
+stat does: cold, a names-tier count took 2.18 s at GOMAXPROCS 4, 1.59 s at 8 and 1.46 s at 16 on `realistic`
+(Chromium 119 with submodules, 1.93M files: 4.29 / 3.42 / 3.03 s); warm, 8 was no slower and 16 up to 8 % slower.
+A names-tier count now runs at 2 processors per CPU. The same change stops `sortEntries` reading GOMAXPROCS (which
+takes the scheduler lock) for every directory. Paired and interleaved runs (each round runs every arm in rotating
+order; the median of the per-round differences against the baseline `d9d8ee1`, with a 95 % bootstrap interval;
+the box was shared with a build, so absolute times are higher than above):
+
+| names tier unless noted | rounds | change against `d9d8ee1` |
+|---|---:|---:|
+| Chromium, cold | 4 | −21.5 % [−30.5, −3.0] (fd `-j 64`: −52.9 %) |
+| `realistic`, cold | 4 | −19.1 % [−25.0, −15.4] |
+| Chromium, warm | 15 | −6.8 % [−21.7, −1.3] |
+| `realistic`, warm | 10 | −0.5 % [−10.4, +9.9] |
+| Chromium, stat tier, warm | 10 | −3.6 % [−9.0, +1.4] |
+
+Cold names-tier counts remain about 2x behind fd `-j 64`.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
