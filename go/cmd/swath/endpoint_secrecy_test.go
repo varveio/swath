@@ -51,15 +51,15 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					}
 					dir := filepath.Join(t.TempDir(), "ds")
 					report := filepath.Join(t.TempDir(), "report.json")
-					base := []string{c.root, "--anonymous", "-o", dir, "--report", report}
+					base := append([]string{c.root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
 					args := append(slices.Clone(base), flagArgs(u.String())...)
 					var out bytes.Buffer
 					if success {
 						// Current options are clean; the recorded command may predate
 						// the refusal. Listing must sanitize its own copy as well.
-						err = runWith(context.Background(), command{}, append(slices.Clone(base), flagArgs(c.endpoint)...), &out, append([]string{"list"}, args...), false, nil)
+						err = runWith(context.Background(), command{diag: diagList}, append(slices.Clone(base), flagArgs(c.endpoint)...), &out, append([]string{"list"}, args...), false, nil)
 					} else {
-						err = run(context.Background(), args, io.Discard, false)
+						err = run(context.Background(), args, io.Discard, diagList)
 					}
 					if (err == nil) != success {
 						t.Fatalf("success=%v: %v", success, err)

@@ -56,7 +56,7 @@ func TestPublicBucketHint(t *testing.T) {
 		{"azblob", []string{"az://replay/corpus", "--azblob-endpoint", azProxy.URL}, &azRequests},
 	} {
 		out := filepath.Join(t.TempDir(), "ds")
-		err := run(context.Background(), append(c.args, "-o", out), io.Discard, false)
+		err := run(context.Background(), append(append(c.args, "-o", out), unjournaled...), io.Discard, diagList)
 		if err == nil || !strings.Contains(err.Error(), "(a public bucket needs --anonymous)") || c.requests.Load() != 0 {
 			t.Errorf("%s: %v, %d requests; want the hint and none sent", c.name, err, c.requests.Load())
 		}
@@ -66,7 +66,7 @@ func TestPublicBucketHint(t *testing.T) {
 	}
 	// The hint is right: the public container lists with --anonymous.
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), []string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(az), "--anonymous", "-o", out}, io.Discard, false); err != nil {
+	if err := run(context.Background(), append([]string{"az://replay/corpus", "--azblob-endpoint", azEndpoint(az), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
 		t.Fatalf("--anonymous: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {
