@@ -19,7 +19,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
-		Flags: flags, Shared: []source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Operational: []string{"gcs-credentials"},
 		Hints:       []source.Hint{{Flag: "gcs-credentials"}, {Flag: "gcs-user-project"}},
 		Usage:       "gs://bucket[/prefix]"})
@@ -38,10 +38,8 @@ func defaults() any { return &flagged{} }
 
 // flags registers the GCS flag group beside the shared groups' values.
 // The GCS flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared map[string]any) any {
-	store, _ := shared[source.StoreGroup.Name].(*source.Store)
-	common, _ := shared[keyrange.Group.Name].(*keyrange.Common)
-	o := &flagged{store: store, common: common}
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
 	f.StringVar(&o.UserProject, "gcs-user-project", "", "GCS: bill a requester-pays bucket's requests to this `project`")
 	return o

@@ -23,7 +23,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
-		Flags: flags, Shared: []source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
 		Operational: []string{"profile", "bearer-token-refresh-interval"},
 		Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, {Flag: "request-payer"},
@@ -68,10 +68,8 @@ func defaults() any { return &flagged{} }
 
 // flags registers the S3 flag group beside the shared groups' values; the
 // returned value is filled when the flag set is parsed.
-func flags(f *flag.FlagSet, diag bool, shared map[string]any) any {
-	store, _ := shared[source.StoreGroup.Name].(*source.Store)
-	common, _ := shared[keyrange.Group.Name].(*keyrange.Common)
-	o := &flagged{store: store, common: common}
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")

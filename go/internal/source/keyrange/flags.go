@@ -45,7 +45,7 @@ func (p Policy) Options() Options {
 
 // Group is the engine's flag group, which every provider on the engine
 // names (registry.Factory.Shared): the command registers it once.
-var Group = source.FlagGroup{
+var Group = &source.FlagGroup{
 	Name:        "keyrange",
 	Flags:       func(f *flag.FlagSet, diag bool) any { return Flags(f, diag) },
 	Operational: []string{"limiter", "limiter-slow-start", "request-rate"},

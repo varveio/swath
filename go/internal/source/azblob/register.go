@@ -23,7 +23,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", KeyPrefix: keyPrefix,
-		Flags: flags, Shared: []source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azblob-sas", Env: EnvSAS}},
 		Hints:   []source.Hint{{Flag: "azblob-sas"}, {Flag: "azblob-flat"}},
 		Usage:   "az://account/container[/prefix]"})
@@ -42,10 +42,8 @@ func defaults() any { return &flagged{} }
 
 // flags registers the Azure flag group beside the shared groups' values.
 // The flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared map[string]any) any {
-	store, _ := shared[source.StoreGroup.Name].(*source.Store)
-	common, _ := shared[keyrange.Group.Name].(*keyrange.Common)
-	o := &flagged{store: store, common: common}
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.SAS, "azblob-sas", "", "Azure Blob: shared access signature `TOKEN` (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else "+EnvSAS+"; with none, an account key in "+EnvKey+" (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none")
 	f.BoolVar(&o.Flat, "azblob-flat", false, "Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report")
 	return o

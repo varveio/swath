@@ -16,7 +16,7 @@ import (
 // otherwise.
 func TestRedactEndpointArgv(t *testing.T) {
 	if _, err := Lookup("argvtest://x"); err != nil { // registered once per process (-count)
-		Register(Factory{Scheme: "argvtest", Shared: []source.FlagGroup{source.StoreGroup}})
+		Register(Factory{Scheme: "argvtest", Shared: []*source.FlagGroup{source.StoreGroup}})
 	}
 	if len(source.StoreGroup.URLs) == 0 {
 		t.Fatal("the store group declares no URL flag")

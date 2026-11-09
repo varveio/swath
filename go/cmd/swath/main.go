@@ -35,6 +35,7 @@ import (
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
 
@@ -628,15 +629,15 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 		})
 		return names
 	}
-	shared, groupFlags := map[string]any{}, map[string][]string{}
+	shared, groupFlags := source.SharedValues{}, map[*source.FlagGroup][]string{}
 	for _, g := range registry.Groups() {
-		groupFlags[g.Name] = added(func() { shared[g.Name] = g.Flags(f, diag) })
+		groupFlags[g] = added(func() { shared[g] = g.Flags(f, diag) })
 	}
 	for _, p := range registry.Factories() {
-		named := map[string]any{}
+		named := source.SharedValues{}
 		for _, g := range p.Shared {
-			named[g.Name] = shared[g.Name]
-			for _, n := range groupFlags[g.Name] {
+			named[g] = shared[g]
+			for _, n := range groupFlags[g] {
 				o.owners[n] = append(o.owners[n], p.Scheme)
 			}
 		}

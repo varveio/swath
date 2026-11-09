@@ -65,7 +65,7 @@ factory, for one:
 
 ```go
 registry.Register(registry.Factory{Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
-	Flags: flags, Shared: []source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+	Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 	Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
 	Operational: []string{"profile", "bearer-token-refresh-interval"},
 	Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, ...},
@@ -74,7 +74,9 @@ registry.Register(registry.Factory{Scheme: "s3", KeyPrefix: keyPrefix, WithPrefi
 
 **Shared flag groups.** Flags several providers take alike are a `source.FlagGroup` the providers name in
 `Shared`: the command registers each group once (`registry.Groups`, in the order the factories by scheme first
-name them), passes its value, by group name, to every provider that names it, and records each of its flags as
+name them), passes its value to every provider that names it (`source.SharedValues`, keyed by the group's
+address, so two groups never alias by name; a provider reads it with `source.Shared[T]`, which panics on a group
+it did not name or a value of another type: a programming error, not a dropped flag), and records each of its flags as
 owned by those providers, so it is accepted for any of their roots and refused for any other (a local tree).
 A group declares its own `Operational` flags, `Hints` and `URLs` (flags whose value a recorded command line
 redacts when it carries user information, `registry.RedactArgv`) once, not per provider. Two groups exist.

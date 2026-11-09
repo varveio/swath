@@ -41,12 +41,12 @@ type Factory struct {
 	// Request.Options. diag adds the provider's diagnostic flags
 	// (comparison modes and policy toggles, for swath diag list only).
 	// shared holds the values of the groups the provider names (Shared),
-	// by group name.
-	Flags func(fs *flag.FlagSet, diag bool, shared map[string]any) any
+	// read with source.Shared.
+	Flags func(fs *flag.FlagSet, diag bool, shared source.SharedValues) any
 	// Shared are the flag groups the provider shares with others (the
 	// store's, the range engine's): the command registers each once and
 	// passes its value to every provider naming it.
-	Shared []source.FlagGroup
+	Shared []*source.FlagGroup
 	// Operational are the provider's own flags a resume may change: how
 	// requests are authenticated, which no identity holds. Secrets are
 	// operational without being listed here.
@@ -101,20 +101,21 @@ type Factory struct {
 // options value. The command instead registers each group once for every
 // provider (Groups).
 func (f Factory) RegisterFlags(fs *flag.FlagSet, diag bool) any {
-	shared := map[string]any{}
+	shared := source.SharedValues{}
 	for _, g := range f.Shared {
-		shared[g.Name] = g.Flags(fs, diag)
+		shared[g] = g.Flags(fs, diag)
 	}
 	return f.Flags(fs, diag, shared)
 }
 
 // Groups returns the flag groups the registered factories share, each
-// once, in the order the factories (by scheme) first name them.
-func Groups() []source.FlagGroup {
-	var out []source.FlagGroup
+// once (by identity), in the order the factories (by scheme) first name
+// them.
+func Groups() []*source.FlagGroup {
+	var out []*source.FlagGroup
 	for _, f := range Factories() {
 		for _, g := range f.Shared {
-			if !slices.ContainsFunc(out, func(h source.FlagGroup) bool { return h.Name == g.Name }) {
+			if !slices.Contains(out, g) {
 				out = append(out, g)
 			}
 		}
