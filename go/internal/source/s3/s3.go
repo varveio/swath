@@ -26,15 +26,16 @@ import (
 )
 
 // API is the one S3 call the provider makes. *client.Client implements
-// it; tests substitute fakes and the AWS SDK (the oracle).
+// it; tests substitute fakes and the AWS SDK's stock client (the oracle).
 type API interface {
 	ListObjectsV2(ctx context.Context, in *client.ListInput) (*client.Page, error)
 }
 
-// Routed is implemented by clients that can name the route a bucket's
-// requests go to (client.Client.Route). A supplied client that cannot is
-// listed, but the run declines resume: nothing would tell its route from
-// another's.
+// Routed is implemented by a supplied client (Options.Client) that names
+// where a bucket's requests go: its resume identity, in place of the
+// endpoint inputs the built client is identified by. A supplied client that
+// does not is listed, but the run declines resume: nothing would tell where
+// it lists from another's.
 type Routed interface{ Route(bucket string) string }
 
 // counted is implemented by clients that count their requests.
@@ -47,21 +48,6 @@ type live interface{ Live() objhttp.Live }
 // answering is implemented by clients that count the requests their
 // service answered (source.Live).
 type answering interface{ Answered() int64 }
-
-// built is the client connect builds (newClient): the hand-rolled client
-// (client_default.go) or, with the swath_sdkclient build tag, the
-// SDK-backed one (client_sdk.go).
-type built interface {
-	API
-	VersionsAPI
-	Routed
-	counted
-	live
-	answering
-	Credentials() (source string, anonymous bool)
-	Region() string
-	Note() string
-}
 
 // Options configure a Provider.
 type Options struct {
@@ -152,9 +138,6 @@ type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
 	Credentials string `json:"credentials,omitempty"` // where they came from
 	Region      string `json:"region,omitempty"`
-	// Client names the built client ("hand-rolled" or "sdk"); "" for a
-	// supplied one.
-	Client string `json:"client,omitempty"`
 	// MeanActive is the time-weighted mean of ranges in Expand.
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
@@ -180,8 +163,7 @@ type provider[P any] struct {
 	anonymous bool
 	creds     string
 	region    string // the resolved signing region ("" with a supplied Client)
-	kind      string // Stats.Client
-	route     string // the URL the bucket's requests go to ("" with a supplied Client that is not Routed)
+	route     string // a supplied Routed client's Route ("" otherwise)
 }
 
 // Range is the engine's unit of listing work.
@@ -278,17 +260,16 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		if opt.BearerCommand != "" {
 			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
 		}
-		c, err := newClient(ctx, cc)
+		c, err := client.New(ctx, cc)
 		if err != nil {
 			return nil, false, fmt.Errorf("S3 client: %w", err)
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
 		}
-		p.client, p.region, p.kind = c, c.Region(), clientKind
+		p.client, p.region = c, c.Region()
 		p.creds, p.anonymous = c.Credentials()
-	}
-	if r, ok := p.client.(Routed); ok {
+	} else if r, ok := p.client.(Routed); ok {
 		p.route = r.Route(opt.Bucket)
 	}
 	return p, own, nil
@@ -333,7 +314,7 @@ func (p *provider[P]) Stats() Stats {
 		c.Counters().Store(p.Set(), p.ID(0))
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, Client: p.kind, MeanActive: e.MeanActive, Counters: e.Counters}
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

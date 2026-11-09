@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sdkclient
+package client
 
 import (
 	"bytes"
@@ -13,8 +13,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 const benchEntries = 1000
@@ -78,52 +76,45 @@ func (c canned) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // BenchmarkDecode is one full ListObjectsV2 or ListObjectVersions call per
-// iteration through the SDK-backed client, per decoder, over an in-memory
-// 1,000-entry answer: request building, signing (anonymous), endpoint
-// resolution, the Guard's read and validation, decoding and conversion.
-// The scanner arm is production: the scanner decodes the captured body
-// while the SDK decodes an empty envelope. The sdk arm has the SDK's
-// deserializer decode current objects (versions stay the scanner's).
+// iteration through the client over an in-memory 1,000-entry answer:
+// request building, signing (anonymous), endpoint resolution, the Guard's
+// read and validation, the SDK's decoding of the minimal envelope and the
+// scanner's of the captured body.
 func BenchmarkDecode(b *testing.B) {
-	for _, d := range decoders {
-		for _, versions := range []bool{false, true} {
-			name := d.name + "/list"
-			if versions {
-				name = d.name + "/versions"
-			}
-			b.Run(name, func(b *testing.B) {
-				b.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-				cfg := testConfig("http://127.0.0.1:1")
-				cfg.HTTPClient = &http.Client{Transport: canned(benchBody(versions))}
-				c, err := newSDK(context.Background(), cfg, d.dec)
-				if err != nil {
-					b.Fatal(err)
-				}
-				ctx := context.Background()
-				b.ReportAllocs()
-				b.ResetTimer()
-				for range b.N {
-					n := 0
-					if versions {
-						pg, err := c.ListObjectVersions(ctx, &client.VersionsInput{Bucket: "bkt"})
-						if err != nil {
-							b.Fatal(err)
-						}
-						n = len(pg.Versions)
-					} else {
-						pg, err := c.ListObjectsV2(ctx, &client.ListInput{Bucket: "bkt"})
-						if err != nil {
-							b.Fatal(err)
-						}
-						n = len(pg.Contents)
-					}
-					if n != benchEntries {
-						b.Fatalf("%d entries", n)
-					}
-				}
-				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*benchEntries), "ns/object")
-			})
+	for _, versions := range []bool{false, true} {
+		name := "scanner/list"
+		if versions {
+			name = "scanner/versions"
 		}
+		b.Run(name, func(b *testing.B) {
+			b.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+			cfg := testConfig("http://127.0.0.1:1")
+			cfg.HTTPClient = &http.Client{Transport: canned(benchBody(versions))}
+			c := newTest(b, cfg)
+			ctx := context.Background()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				n := 0
+				if versions {
+					pg, err := c.ListObjectVersions(ctx, &VersionsInput{Bucket: "bkt"})
+					if err != nil {
+						b.Fatal(err)
+					}
+					n = len(pg.Versions)
+				} else {
+					pg, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "bkt"})
+					if err != nil {
+						b.Fatal(err)
+					}
+					n = len(pg.Contents)
+				}
+				if n != benchEntries {
+					b.Fatalf("%d entries", n)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*benchEntries), "ns/object")
+		})
 	}
 }
 
@@ -135,8 +126,8 @@ func BenchmarkDecodeBody(b *testing.B) {
 		name string
 		f    func() error
 	}{
-		{"scanner/list", func() error { _, err := client.ParseList(list); return err }},
-		{"scanner/versions", func() error { _, err := client.ParseVersions(vers); return err }},
+		{"scanner/list", func() error { _, err := ParseList(list); return err }},
+		{"scanner/versions", func() error { _, err := ParseVersions(vers); return err }},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -150,38 +141,25 @@ func BenchmarkDecodeBody(b *testing.B) {
 	}
 }
 
-// TestBenchBodiesAgree: the benchmark's bodies decode to the same pages
-// through every decoder and the hand-rolled client.
+// TestBenchBodiesAgree: the benchmark's bodies come back through the
+// client as the scanner decodes them, whole.
 func TestBenchBodiesAgree(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	for _, versions := range []bool{false, true} {
-		var want any
-		for _, d := range decoders {
-			cfg := testConfig("http://127.0.0.1:1")
-			cfg.HTTPClient = &http.Client{Transport: canned(benchBody(versions))}
-			hand, c := pair(t, cfg, d.dec, nil)
-			if want == nil {
-				var err error
-				if want, err = list(hand, versions); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got, err := list(c, versions)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("versions %v: %s differs from the hand-rolled client", versions, d.name)
-			}
+		cfg := testConfig("http://127.0.0.1:1")
+		cfg.HTTPClient = &http.Client{Transport: canned(benchBody(versions))}
+		c := newTest(t, cfg)
+		var got, want any
+		var err, werr error
+		if versions {
+			got, err = c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "bkt"})
+			want, werr = ParseVersions(benchBody(versions))
+		} else {
+			got, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "bkt"})
+			want, werr = ParseList(benchBody(versions))
+		}
+		if err != nil || werr != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("versions %v: the client's page differs from the scanner's (%v, %v)", versions, err, werr)
 		}
 	}
-}
-
-// list is one ListObjectVersions (versions) or ListObjectsV2 page of bucket
-// bkt.
-func list(c lister, versions bool) (any, error) {
-	if versions {
-		return c.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "bkt"})
-	}
-	return c.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "bkt"})
 }

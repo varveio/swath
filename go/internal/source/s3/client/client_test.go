@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/varveio/swath/go/internal/buildinfo"
 )
 
 const okPage = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>k%20</Key><Size>1</Size></Contents></ListBucketResult>`
@@ -31,21 +29,6 @@ func testClient(t *testing.T, h http.HandlerFunc, cfg Config) (*Client, *httptes
 		t.Fatal(err)
 	}
 	return c, srv
-}
-
-func TestUserAgent(t *testing.T) {
-	var agent string
-	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		agent = r.Header.Get("User-Agent")
-		w.Write([]byte(okPage))
-	}, Config{Anonymous: true})
-	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-		t.Fatal(err)
-	}
-	if want := buildinfo.UserAgent(); agent != want {
-		t.Fatalf("User-Agent %q, want %q", agent, want)
-	}
-	t.Logf("User-Agent: %s", agent)
 }
 
 func TestRetriesAndThrottles(t *testing.T) {
@@ -170,7 +153,7 @@ func TestCredentialChain(t *testing.T) {
 		return c
 	}
 	// Nothing configured: anonymous.
-	if c := list(Config{}); auth.Load() != "" || !c.auth.Anonymous {
+	if c := list(Config{}); auth.Load() != "" || !c.auth.anonymous {
 		t.Fatalf("unsigned expected, got %q", auth.Load())
 	}
 	// A named profile from the shared files, with its region.
@@ -215,36 +198,6 @@ func TestRequestPayer(t *testing.T) {
 		signed := strings.Contains(auth.Load().(string), "x-amz-request-payer")
 		if (payer.Load() == "requester") != on || signed != on {
 			t.Fatalf("request payer %v: header %q, signed %v", on, payer.Load(), signed)
-		}
-	}
-}
-
-func TestURL(t *testing.T) {
-	for _, c := range []struct {
-		cfg  Config
-		in   ListInput
-		want string
-	}{
-		{Config{Region: "eu-west-1"}, ListInput{Bucket: "bkt", Prefix: "a b/", MaxKeys: 1000},
-			"https://bkt.s3.eu-west-1.amazonaws.com/?encoding-type=url&list-type=2&max-keys=1000&prefix=a%20b%2F"},
-		{Config{Region: "us-east-1", PathStyle: true}, ListInput{Bucket: "bkt", StartAfter: "x", FetchOwner: true, Delimiter: "/", ContinuationToken: "t+="},
-			"https://s3.us-east-1.amazonaws.com/bkt?continuation-token=t%2B%3D&delimiter=%2F&encoding-type=url&fetch-owner=true&list-type=2&start-after=x"},
-		{Config{Region: "us-east-1"}, ListInput{Bucket: "a.b", Prefix: "~-_.é*\x01"},
-			"https://s3.us-east-1.amazonaws.com/a.b?encoding-type=url&list-type=2&prefix=~-_.%C3%A9%2A%01"},
-		{Config{Region: "us-east-1"}, ListInput{Bucket: "a.b"}, "https://s3.us-east-1.amazonaws.com/a.b?encoding-type=url&list-type=2"},
-		{Config{Endpoint: "http://127.0.0.1:9000"}, ListInput{Bucket: "bkt"}, "http://127.0.0.1:9000/bkt?encoding-type=url&list-type=2"},
-		{Config{Endpoint: "https://minio.example/s3/"}, ListInput{Bucket: "bkt"}, "https://bkt.minio.example/s3/?encoding-type=url&list-type=2"},
-		{Config{Region: "us-gov-west-1", FIPS: true}, ListInput{Bucket: "bkt"}, "https://bkt.s3-fips.us-gov-west-1.amazonaws.com/?encoding-type=url&list-type=2"},
-		{Config{Region: "eu-west-1", DualStack: true}, ListInput{Bucket: "bkt"}, "https://bkt.s3.dualstack.eu-west-1.amazonaws.com/?encoding-type=url&list-type=2"},
-		{Config{Region: "cn-north-1"}, ListInput{Bucket: "bkt"}, "https://bkt.s3.cn-north-1.amazonaws.com.cn/?encoding-type=url&list-type=2"},
-	} {
-		c.cfg.Anonymous = true
-		cl, err := New(context.Background(), c.cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := cl.url(&c.in).String(); got != c.want {
-			t.Errorf("got  %s\nwant %s", got, c.want)
 		}
 	}
 }

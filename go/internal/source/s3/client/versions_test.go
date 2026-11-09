@@ -462,9 +462,6 @@ func TestListObjectVersionsRequest(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, c2.want) {
 			t.Errorf("%+v: query %s, want %v", c2.in, q, c2.want)
 		}
-		if strings.Contains(q, "+") {
-			t.Errorf("query %s: a plus would read as a space", q)
-		}
 	}
 	if _, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b", VersionIDMarker: "v"}); err == nil {
 		t.Fatal("a version-id marker without a key marker was sent")

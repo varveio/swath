@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
@@ -176,21 +177,33 @@ func (o *opened[P]) target() string {
 	return t
 }
 
-// Identity: the bucket and prefix, the effective route and the owner
-// columns. The route is what the client builds, not what was asked: the URL
-// the bucket's requests go to (endpoint, its path bytes, path or
-// virtual-host addressing; a different endpoint, another AWS partition or
-// the other addressing style can serve a different bucket of the same
-// name) and the signing region. With neither --endpoint nor --region
-// given, both come from the environment or the profile, so a resume in an
-// environment that resolves them differently is refused. A supplied client
-// must name its route (Routed), or the run declines resume.
+// Identity: the inputs the listing was asked with, as given. The bucket
+// and prefix; the endpoint (--endpoint, "" for AWS's own), the signing
+// region and the addressing flags (path-style, FIPS, dual-stack), which
+// together decide which service, partition and bucket of a name the SDK
+// lists (another endpoint, partition or addressing style can serve a
+// different bucket of the same name); and the owner columns. The region is
+// --region, else what the environment or the profile resolves, so a resume
+// in an environment that resolves another region is refused even when the
+// flag was not given. The inputs are compared as given: nothing resolves
+// them to a URL first (a FIPS region alias is its own value). The
+// endpoint's canonical form folds the scheme and host case and one trailing
+// slash (objhttp.CanonicalRoute). A supplied client is identified by the
+// Route it names (Routed) in place of the endpoint, or the run declines
+// resume.
 func (o *opened[P]) Identity() source.Identity {
 	opt := o.p.opt
+	endpoint := opt.Endpoint
+	if opt.Client != nil {
+		endpoint = o.p.route
+	}
 	return source.Identity{Provider: "s3", Fields: []source.IdentityField{
 		{Name: "source", Value: "s3://" + opt.Bucket + "/" + opt.Prefix},
-		{Name: "route", Value: o.p.route, Canonical: objhttp.CanonicalRoute(o.p.route)},
+		{Name: "endpoint", Value: endpoint, Canonical: objhttp.CanonicalRoute(strings.TrimSuffix(endpoint, "/"))},
 		{Name: "region", Value: o.p.region},
+		{Name: "path style", Value: strconv.FormatBool(opt.PathStyle)},
+		{Name: "fips", Value: strconv.FormatBool(opt.FIPS)},
+		{Name: "dual-stack", Value: strconv.FormatBool(opt.DualStack)},
 		{Name: "fetch owner", Value: strconv.FormatBool(opt.FetchOwner)},
 	}}
 }
@@ -203,7 +216,8 @@ func (o *opened[P]) Identity() source.Identity {
 // journal, and a resume of one is refused; so does a run through a
 // supplied client that does not name its route (Routed).
 func (o *opened[P]) Capabilities() source.Capabilities {
-	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.route != "")
+	identified := o.p.opt.Client == nil || o.p.route != ""
+	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && identified)
 }
 
 // Restart continues after the last published key, from the normal
