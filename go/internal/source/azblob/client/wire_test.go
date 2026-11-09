@@ -11,9 +11,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
@@ -66,9 +69,10 @@ func (t *tee) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // wireEntries reads a listing body's entries in wire order, kinds
-// interleaved, and its marker, with encoding/xml apart from the SDK's
-// decoder: an Encoded name percent-decoded once with path semantics, as
-// Azure encodes it.
+// interleaved, every property the client keeps, and its marker, with
+// encoding/xml apart from the SDK's decoder: an Encoded name
+// percent-decoded once with path semantics, as Azure encodes it; the
+// times as HTTP dates; the rest as listed.
 func wireEntries(t *testing.T, body []byte) client.ListOutput {
 	t.Helper()
 	var w struct {
@@ -79,9 +83,29 @@ func wireEntries(t *testing.T, body []byte) client.ListOutput {
 					Encoded bool   `xml:"Encoded,attr"`
 					Text    string `xml:",chardata"`
 				} `xml:"Name"`
+				Properties struct {
+					Size         string `xml:"Content-Length"`
+					LastModified string `xml:"Last-Modified"`
+					CreationTime string `xml:"Creation-Time"`
+					ETag         string `xml:"Etag"`
+					ContentMD5   string `xml:"Content-MD5"`
+					ContentType  string `xml:"Content-Type"`
+					BlobType     string `xml:"BlobType"`
+					AccessTier   string `xml:"AccessTier"`
+				} `xml:"Properties"`
 			} `xml:",any"`
 		} `xml:"Blobs"`
 		NextMarker string `xml:"NextMarker"`
+	}
+	micros := func(s string) int64 {
+		if s == "" {
+			return 0
+		}
+		tm, err := http.ParseTime(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm.UnixMicro()
 	}
 	if err := xml.Unmarshal(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")), &w); err != nil {
 		t.Fatal(err)
@@ -95,19 +119,42 @@ func wireEntries(t *testing.T, body []byte) client.ListOutput {
 				t.Fatal(err)
 			}
 		}
-		out.Items = append(out.Items, client.Item{Name: name, Prefix: e.XMLName.Local == "BlobPrefix"})
+		it := client.Item{Name: name, Prefix: e.XMLName.Local == "BlobPrefix"}
+		if p := e.Properties; !it.Prefix {
+			if p.Size != "" {
+				var err error
+				if it.Size, err = strconv.ParseInt(p.Size, 10, 64); err != nil {
+					t.Fatal(err)
+				}
+			}
+			it.LastModified, it.CreationTime = micros(p.LastModified), micros(p.CreationTime)
+			it.ETag, it.ContentMD5, it.ContentType, it.BlobType, it.AccessTier = p.ETag, p.ContentMD5, p.ContentType, p.BlobType, p.AccessTier
+		}
+		out.Items = append(out.Items, it)
 	}
 	return out
 }
+
+// epoch is the Last-Modified of the fixture's first key (azblobtest.Serve).
+var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // TestWireOrder walks the replay's Azure route, flat and with a delimiter,
 // from startFrom seeks, at page sizes 1 to 5,000, over the hostile corpus,
 // anonymous, with a SAS and with Shared Key: every page's items are the
 // wire's, in wire order with the two kinds interleaved (the SDK returns a
 // hierarchy page's blobs and prefixes apart and merge restores them), with
-// the wire's NextMarker; one attempt per page.
+// the wire's NextMarker; one attempt per page. Every item carries the
+// properties the wire's XML holds, read apart from the SDK, and each blob
+// the size and Last-Modified the fixture gave it (its byte-order index i:
+// size i, i seconds after the epoch).
 func TestWireOrder(t *testing.T) {
-	r := azblobtest.Serve(t, corpus())
+	keys := corpus()
+	r := azblobtest.Serve(t, keys)
+	slices.Sort(keys)
+	index := make(map[string]int, len(keys))
+	for i, k := range keys {
+		index[k] = i
+	}
 	ep := strings.TrimSuffix(r.Endpoint, "/"+r.Account)
 	for _, auth := range []client.Config{{Anonymous: true}, {SAS: "sv=2026-10-06&sp=rl&sig=Fake%2BSig%3D"}, {SharedKey: "c2VjcmV0LWtleS1mb3ItdGVzdHM="}} {
 		wire := &tee{}
@@ -142,16 +189,20 @@ func TestWireOrder(t *testing.T) {
 				}
 				pages++
 				want := wireEntries(t, wire.last)
-				names := make([]client.Item, len(p.Items))
-				for i, it := range p.Items {
-					names[i] = client.Item{Name: it.Name, Prefix: it.Prefix}
+				for _, it := range p.Items {
 					items++
 					if it.Prefix {
 						prefixes++
+						continue
+					}
+					i, ok := index[it.Name]
+					if !ok || it.Size != int64(i) || it.LastModified != epoch.Add(time.Duration(i)*time.Second).UnixMicro() ||
+						it.BlobType != "BlockBlob" || it.ETag == "" {
+						t.Fatalf("%+v page %d: %+v is not the fixture's key %d", in, pages, it, i)
 					}
 				}
-				if p.NextMarker != want.NextMarker || fmt.Sprint(names) != fmt.Sprint(want.Items) {
-					t.Fatalf("%+v page %d:\n got  %+v next %q\n wire %+v next %q", in, pages, names, p.NextMarker, want.Items, want.NextMarker)
+				if p.NextMarker != want.NextMarker || fmt.Sprint(p.Items) != fmt.Sprint(want.Items) {
+					t.Fatalf("%+v page %d:\n got  %+v next %q\n wire %+v next %q", in, pages, p.Items, p.NextMarker, want.Items, want.NextMarker)
 				}
 				if p.NextMarker == "" {
 					break
