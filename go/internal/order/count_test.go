@@ -196,3 +196,22 @@ func TestCountStopsOnEmptyBatches(t *testing.T) {
 		t.Fatalf("%d empty batches accepted, after the stop %d", n, n-1)
 	}
 }
+
+// TestCountUnordered: with Unordered a range's rows may come in any order
+// and every row is a distinct key; a resume key or groups are refused.
+func TestCountUnordered(t *testing.T) {
+	p := script{root: []string{"b", "a"}, child: []string{"z", "c"}, after: []string{"x"}}
+	st, err := Count(context.Background(), p, nil, Options{Workers: 2, Unordered: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Rows != 5 || st.DistinctKeys != 5 {
+		t.Fatalf("rows %d, distinct keys %d; want 5 and 5", st.Rows, st.DistinctKeys)
+	}
+	k := "a"
+	for _, opt := range []Options{{Workers: 1, Unordered: true, After: &k}, {Workers: 1, Unordered: true, Groups: true}} {
+		if _, err := Count(context.Background(), p, nil, opt); err == nil {
+			t.Errorf("%+v: an unordered count was accepted", opt)
+		}
+	}
+}

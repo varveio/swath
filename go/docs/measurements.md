@@ -968,6 +968,32 @@ the box was shared with a build, so absolute times are higher than above):
 
 Cold names-tier counts remain about 2x behind fd `-j 64`.
 
+**A count does not sort** (2026-11-09; dev box, 4 vCPU, 7 GiB, ext4 on a 200 GB persistent disk). Each directory's
+sort is skipped in a count (`order.Options.Unordered`); paired and interleaved against #339's head `3f9c894`:
+
+| count | rounds | change |
+|---|---:|---:|
+| Chromium 119 (1.93M files), names, warm | 10 | −15.4 % [−16.8, −14.1] (0.805 → 0.679 s) |
+| Chromium 119, stat, warm | 10 | −6.5 % [−7.2, −6.0] (1.566 → 1.468 s) |
+| `realistic` (~1M entries), names, warm | 15 | −10.6 % [−13.7, −9.1] (0.396 → 0.354 s) |
+| `realistic`, stat, warm | 15 | −5.5 % [−7.0, −3.7] (0.761 → 0.717 s) |
+| `huge` (200,000 in one directory), stat, warm | 15 | −19.7 % [−21.7, −19.0] (0.152 → 0.121 s) |
+| `realistic` and Chromium, both tiers, cold | 4 | within ±1 % (`realistic` ~25.5 s, Chromium ~50 s) |
+
+Cold, this box's disk caps the walk (a persistent disk's IOPS limit: ten times the local-SSD VM's cold times
+above), so CPU saved does not show. Warm, the remaining gap to fdu (stat tier) and bfs (names tier) is in user
+space: kernel CPU and syscall counts are the same (`strace -c`), and after this change syscalls are about
+65 % of a names-tier count's CPU, the rest spread over row emission, keys and allocation at a few percent each.
+
+**NFS: READDIRPLUS hints** (2026-11-09; same box, Linux 7.0 client, loopback NFS 4.2 over an ext4 image in a
+tmpfs). A cold count of
+a 200,000-file directory made 199,722 LOOKUP RPCs (`nfsstat -c`): the Linux client fetches attributes with the
+names only on a directory's first read unless more than 8 of its entries were looked up between reads, and swath
+read the whole directory before any stat. Statting 9 entries after each full read keeps READDIRPLUS on: no
+LOOKUPs, 95 READDIRs. Paired, 6 cold rounds: 5.85 s to 2.42 s, −57.9 % [−64.3, −49.3] (fdu 2.73 s, which stats
+each batch as it reads). Local ext4, the same directory warm, 20 rounds: −6.3 % [−19.0, +1.7], no cost. The box
+was loaded by other builds during these runs; the RPC counts do not depend on load.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
