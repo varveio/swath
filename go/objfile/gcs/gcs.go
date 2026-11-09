@@ -10,9 +10,11 @@
 // objfile.ErrObjectChanged; one served from another offset fails.
 //
 // The SDK's reader requests the rest of a range by itself when a body fails
-// part way, and checks only that answer's status. The client objfile/remote
-// builds checks the range of every answer; on a client the caller builds,
-// that request is as the caller's transport leaves it.
+// part way, checks only that answer's status, and for one labelled
+// Content-Encoding: gzip skips as many bytes of it as it had read. The client
+// objfile/remote builds ends such a body instead, and objfile requests and
+// checks the rest; on a client the caller builds, such a read may return
+// wrong bytes without an error.
 package gcs
 
 import (

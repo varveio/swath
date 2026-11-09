@@ -6,6 +6,7 @@ package ranged
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,9 +17,14 @@ import (
 // Content-Range states exactly that range of an object larger than last,
 // whose Content-Length is the range's length, and whose body Go's transport
 // did not decompress, the request fails. A Getter checks the response it is
-// given; Transport also checks the requests an SDK sends on its own, such as
-// the GCS reader's request for the rest of a range after a body fails part
-// way. Responses to other requests, and error statuses, pass unchanged.
+// given; Transport also checks the requests an SDK sends on its own.
+//
+// A body that fails part way ends there instead (io.EOF), so that the SDK
+// does not request the rest itself: the GCS reader would, and for a response
+// labelled Content-Encoding: gzip it then skips as many bytes of that answer
+// as it had read, joining two parts of the object. The Object requests the
+// rest of a short body itself, checked as every request is. Responses to
+// other requests, and error statuses, pass unchanged.
 func Transport(base http.RoundTripper) http.RoundTripper { return transport{base: base} }
 
 type transport struct{ base http.RoundTripper }
@@ -36,7 +42,27 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		res.Body.Close()
 		return nil, fmt.Errorf("objfile: %s %s: %w", req.Method, req.URL.Redacted(), err)
 	}
+	res.Body = endOnFailure{res.Body}
 	return res, nil
+}
+
+// CloseIdleConnections closes the idle connections of the base transport,
+// as http.Client.CloseIdleConnections asks.
+func (t transport) CloseIdleConnections() {
+	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
+
+// endOnFailure is a body whose read failure is its end.
+type endOnFailure struct{ io.ReadCloser }
+
+func (b endOnFailure) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		err = io.EOF
+	}
+	return n, err
 }
 
 // requested parses a Range header naming one closed byte range.

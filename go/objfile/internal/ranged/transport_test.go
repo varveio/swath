@@ -80,3 +80,26 @@ type closer struct {
 }
 
 func (c closer) Close() error { *c.closed = true; return nil }
+
+type failing struct{}
+
+func (failing) Read(p []byte) (int, error) { return copy(p, "ab"), io.ErrUnexpectedEOF }
+func (failing) Close() error               { return nil }
+
+// TestTransportEndsFailedBody: a checked body that fails part way ends
+// there, so that the SDK does not request the rest itself.
+func TestTransportEndsFailedBody(t *testing.T) {
+	base := roundTripper(func(*http.Request) (*http.Response, error) {
+		h := http.Header{"Content-Range": {"bytes 0-3/10"}}
+		return &http.Response{StatusCode: 206, Header: h, ContentLength: 4, Body: failing{}}, nil
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://store/bkt/obj", nil)
+	req.Header.Set("Range", "bytes=0-3")
+	res, err := Transport(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := res.Body.Read(make([]byte, 4)); n != 2 || err != io.EOF {
+		t.Fatalf("Read = %d, %v; want 2, io.EOF", n, err)
+	}
+}

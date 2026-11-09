@@ -78,7 +78,7 @@ func TestServedRange(t *testing.T) {
 		{"shifted", fails, fails, func(w http.ResponseWriter, start, end int, _ int32) { partial(w, data, start+1, end+1) }},
 		{"cut, then the rest", exact, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
 			if attempt == 1 {
-				cut(w, data, start, end)
+				cut(w, data, start, end, 2)
 				return
 			}
 			partial(w, data, start, end)
@@ -87,10 +87,22 @@ func TestServedRange(t *testing.T) {
 		// rest: without the transport the read returns another range's bytes.
 		{"cut, then the rest shifted", wrong, fails, func(w http.ResponseWriter, start, end int, attempt int32) {
 			if attempt == 1 {
-				cut(w, data, start, end)
+				cut(w, data, start, end, 2)
 				return
 			}
 			partial(w, data, start+1, end+1)
+		}},
+		// An object stored with Content-Encoding: gzip, read as stored: the
+		// SDK requests the rest itself and skips as many bytes of that
+		// answer as it had read, so without the transport (which ends the
+		// cut body instead) the read joins two parts of the object.
+		{"gzip, cut at a quarter, then the rest", wrong, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
+			w.Header().Set("Content-Encoding", "gzip")
+			if attempt == 1 {
+				cut(w, data, start, end, 4)
+				return
+			}
+			partial(w, data, start, end)
 		}},
 	} {
 		for _, guard := range []bool{false, true} {
@@ -130,12 +142,13 @@ func TestServedRange(t *testing.T) {
 	}
 }
 
-// cut writes the first half of the range's body, then breaks the connection.
-func cut(w http.ResponseWriter, data []byte, start, end int) {
+// cut writes the first 1/part of the range's body, then breaks the
+// connection.
+func cut(w http.ResponseWriter, data []byte, start, end, part int) {
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
 	w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
 	w.WriteHeader(http.StatusPartialContent)
-	_, _ = w.Write(data[start : start+(end-start+1)/2])
+	_, _ = w.Write(data[start : start+(end-start+1)/part])
 	w.(http.Flusher).Flush()
 	panic(http.ErrAbortHandler)
 }

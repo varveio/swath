@@ -33,6 +33,7 @@ func TestParseLocation(t *testing.T) {
 		"", "bkt/ds", "S3://bkt", "s4://bkt", "file:///tmp", "s3:/bkt",
 		"s3://", "s3:///ds", "s3://Bkt", "s3://user@bkt/ds", "s3://bkt:9000/ds",
 		"s3://bkt/ds?versionId=1", "s3://bkt/ds#frag", "az://acct/ctr/ds?sig=x",
+		"az://acct/../ds", "az://acct/./ds", "az://../ctr/ds", "az://./ctr", "s3://../ds", "s3://./ds", "gs://..",
 		"s3://bkt/../ds", "s3://bkt/ds/..", "s3://bkt/a/./b", "s3://bkt//ds", "s3://bkt/ds//", "s3://bkt/a\\b",
 		"s3://bkt/a\x00b", "az://acct", "az://acct/", "az:///ctr", "az://acct/Ctr",
 	} {

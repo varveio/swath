@@ -10,11 +10,15 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
 	"cloud.google.com/go/storage"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -58,30 +62,35 @@ func Open(ctx context.Context, location string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{scope: l.String(), close: func() error { return nil }}
+	pool := http.DefaultTransport.(*http.Transport).Clone()
+	s := &Store{scope: l.String(), close: func() error { pool.CloseIdleConnections(); return nil }}
 	var o objfile.Opener
 	switch l.Scheme {
 	case "s3":
-		cfg, err := config.LoadDefaultConfig(ctx)
+		// As the SDK's own client: a redirect is the answer.
+		hc := &http.Client{Transport: pool, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(hc))
 		if err != nil {
 			return nil, err
 		}
 		client := s3sdk.NewFromConfig(cfg)
-		if ep := aws.ToString(client.Options().BaseEndpoint); ep != "" {
-			s.scope += " at " + ep
+		if err := s.at(aws.ToString(client.Options().BaseEndpoint)); err != nil {
+			return nil, err
 		}
 		o = s3.New(client, l.Container)
 	case "gs":
-		client, endpoint, err := gcsClient(ctx)
+		host := os.Getenv("STORAGE_EMULATOR_HOST")
+		if err := s.at(host); err != nil {
+			return nil, err
+		}
+		client, err := gcsClient(ctx, pool, host != "")
 		if err != nil {
 			return nil, err
 		}
-		if endpoint != "" {
-			s.scope += " at " + endpoint
-		}
-		o, s.close = gcs.New(client, l.Container), client.Close
+		o = gcs.New(client, l.Container)
+		s.close = func() error { err := client.Close(); pool.CloseIdleConnections(); return err }
 	case "az":
-		client, err := azureClient(l.Account)
+		client, err := azureClient(l.Account, &http.Client{Transport: pool})
 		if err != nil {
 			return nil, err
 		}
@@ -91,30 +100,47 @@ func Open(ctx context.Context, location string) (*Store, error) {
 	return s, nil
 }
 
-// gcsClient returns a read-only GCS client whose transport checks every
-// ranged response, including those to the requests the SDK's reader sends
-// on its own (ranged.Transport), and the emulator endpoint when there is one.
-func gcsClient(ctx context.Context) (*storage.Client, string, error) {
-	base := ranged.Transport(http.DefaultTransport)
-	if host := os.Getenv("STORAGE_EMULATOR_HOST"); host != "" {
-		client, err := storage.NewClient(ctx, option.WithHTTPClient(&http.Client{Transport: base}))
-		return client, host, err
+// at adds a custom endpoint to the Store's scope. One that carries user
+// information, a query or a fragment, where credentials go, is refused, and
+// is quoted in no error.
+func (s *Store) at(endpoint string) error {
+	if endpoint == "" {
+		return nil
 	}
-	tr, err := htransport.NewTransport(ctx, base, option.WithScopes(storage.ScopeReadOnly))
-	if err != nil {
-		return nil, "", err
+	raw := endpoint
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw // STORAGE_EMULATOR_HOST may be a bare host, as the SDK takes it
 	}
-	client, err := storage.NewClient(ctx, option.WithHTTPClient(&http.Client{Transport: tr}))
-	return client, "", err
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("remote: the endpoint the environment sets is not a URL without user information, query or fragment; build the client with its own settings instead")
+	}
+	s.scope += " at " + endpoint
+	return nil
 }
 
-// azureClient returns the client of account; a test replaces it.
-var azureClient = func(account string) (*azsdk.Client, error) {
+// gcsClient returns a read-only GCS client over pool whose transport checks
+// every ranged response (ranged.Transport); with emulator set, the SDK's
+// emulator client, without credentials.
+func gcsClient(ctx context.Context, pool http.RoundTripper, emulator bool) (*storage.Client, error) {
+	tr := ranged.Transport(pool)
+	if !emulator {
+		var err error
+		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadOnly)); err != nil {
+			return nil, err
+		}
+	}
+	return storage.NewClient(ctx, option.WithHTTPClient(&http.Client{Transport: tr}))
+}
+
+// azureClient returns the client of account over hc; a test replaces it.
+var azureClient = func(account string, hc *http.Client) (*azsdk.Client, error) {
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return nil, err
 	}
-	return azsdk.NewClient("https://"+account+".blob.core.windows.net/", cred, nil)
+	return azsdk.NewClient("https://"+account+".blob.core.windows.net/", cred,
+		&azsdk.ClientOptions{ClientOptions: azcore.ClientOptions{Transport: hc}})
 }
 
 // Open opens name, a path objfile.CheckPath accepts, under the location's
@@ -138,6 +164,6 @@ var _ interface {
 	io.Closer
 } = (*Store)(nil)
 
-// Close releases the clients the Store owns. Read the Objects it opened
-// before Close.
+// Close releases the clients the Store owns and closes their idle
+// connections. Read the Objects it opened before Close.
 func (s *Store) Close() error { return s.close() }

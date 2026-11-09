@@ -25,6 +25,10 @@ type memStore struct {
 	objects map[string]memObject
 	gen     int
 	churn   bool
+	// With gate set, Open sends on entered, then waits for gate to close
+	// before it reads the object.
+	gate    chan struct{}
+	entered chan struct{}
 	opens   atomic.Int32
 	closes  atomic.Int32
 }
@@ -45,6 +49,10 @@ func (s *memStore) put(name string, data []byte) {
 
 func (s *memStore) Open(_ context.Context, name string) (objfile.Object, error) {
 	s.opens.Add(1)
+	if s.gate != nil {
+		s.entered <- struct{}{}
+		<-s.gate
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.objects[name]
@@ -119,15 +127,16 @@ func TestPinRecordsFirstOpen(t *testing.T) {
 	}
 }
 
-// TestPinConcurrentFirstOpens: of first opens racing over an object that
-// changes under each, one records its pin and the others fail and close
-// their objects.
+// TestPinConcurrentFirstOpens: first opens that all reach the store before
+// any returns, each finding another version: one records its pin, and the
+// others fail with ErrObjectChanged and close their objects.
 func TestPinConcurrentFirstOpens(t *testing.T) {
+	const n = 16
 	s := newMemStore()
 	s.put("obj", []byte("data"))
 	s.churn = true
+	s.gate, s.entered = make(chan struct{}), make(chan struct{}, n)
 	p := objfile.Pin(s, scope)
-	const n = 16
 	var ok, changed atomic.Int32
 	var wg sync.WaitGroup
 	for range n {
@@ -143,6 +152,13 @@ func TestPinConcurrentFirstOpens(t *testing.T) {
 			}
 		})
 	}
+	for range n {
+		<-s.entered
+	}
+	if snap, _ := p.Snapshot(); !bytes.Contains(snap, []byte(`"objects":{}`)) {
+		t.Fatalf("a pin was recorded before any open returned: %s", snap)
+	}
+	close(s.gate)
 	wg.Wait()
 	if ok.Load() != 1 || changed.Load() != n-1 || s.closes.Load() != n-1 {
 		t.Fatalf("%d opened, %d changed, %d closed; want 1, %d, %d", ok.Load(), changed.Load(), s.closes.Load(), n-1, n-1)

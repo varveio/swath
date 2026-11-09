@@ -29,7 +29,7 @@ func (l Location) String() string {
 // ParseLocation parses a dataset root URI. The prefix is literal (nothing is
 // decoded) and a dataset root: a "/" is added when it lacks one, and its path
 // must be one CheckPath accepts. Bucket, account and container names are
-// lower-case letters, digits, '.', '-' and '_'. A URI with a query, a
+// lower-case letters, digits, '.', '-' and '_', other than "." and "..". A URI with a query, a
 // fragment, user information or a port is refused.
 func ParseLocation(raw string) (Location, error) {
 	fail := func(why string) (Location, error) {
@@ -63,12 +63,12 @@ func ParseLocation(raw string) (Location, error) {
 }
 
 // name reports whether s is a bucket, account or container name of the
-// characters the stores allow.
+// characters the stores allow, and not "." or "..".
 func name(s string) bool {
 	for _, r := range s {
 		if !('a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '.' || r == '-' || r == '_') {
 			return false
 		}
 	}
-	return s != ""
+	return s != "" && s != "." && s != ".."
 }

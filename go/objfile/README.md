@@ -101,11 +101,14 @@ A read returns exactly the requested bytes `[off, off+n)` of the pinned object, 
 another one. Every response is checked for the offset it starts at (its `Content-Range`, or for GCS the
 reader's `StartOffset`; a response without one starts at byte 0), the total size and its length.
 
-The GCS SDK's reader also requests the rest of a range by itself, when a body fails part way, and checks only
-that answer's status, not its range. The client `remote.Open` builds has a transport that refuses every answer
-to a range request unless it is a 206 of exactly that range, of that length, not decompressed in transit. On a
-GCS client the caller builds, that request is as the caller's transport leaves it. The S3 and Azure SDKs retry
-whole requests only, so the response objfile checks is the one served.
+The GCS SDK's reader also requests the rest of a range by itself, when a body fails part way, checks only that
+answer's status, not its range, and for an answer labelled `Content-Encoding: gzip` skips as many of its bytes
+as it had already read. The client `remote.Open` builds has a transport that refuses every answer to a range
+request unless it is a 206 of exactly that range, of that length, not decompressed in transit, and that ends a
+body failing part way where it failed, so the SDK never requests the rest: objfile does, checked as every
+request is. **On a GCS client the caller builds, a read whose body fails part way may return wrong bytes without
+an error** (another range's, or two parts of the object joined), unless the caller's transport does the same.
+The S3 and Azure SDKs retry whole requests only, so the response objfile checks is the one served.
 
 ## Pins across opens and restarts
 
@@ -126,7 +129,8 @@ wrapping `fs.ErrNotExist` before any request. The decode is strict: exactly thes
 names `CheckPath` accepts, sizes of at least 0, identities non-empty without control characters, and the scope
 the caller passes; anything else is `ErrInvalidSnapshot`. The scope names the storage namespace (provider,
 bucket or account and container, a custom endpoint, the root prefix), so a snapshot is never applied to another
-store; `remote.Store.Scope` is one, and holds no credentials.
+store; `remote.Store.Scope` is one, and holds no credentials. Restore reads version 1 only: a change to the
+format is a new version number, which an older objfile refuses, with no fallback.
 
 A snapshot proves the files that were opened, nothing more: that it holds every file a dataset needs is
 established by the reader that opened them (admission), not by objfile. `Pinned` has no `OpenSized`, whose
@@ -138,13 +142,16 @@ Object learns its identity only at its first read. Compose it outermost:
 `ParseLocation` reads a dataset root: `s3://BUCKET[/PREFIX]`, `gs://BUCKET[/PREFIX]` or
 `az://ACCOUNT/CONTAINER[/PREFIX]`. The prefix is literal (nothing is decoded) and a dataset root: it gains a
 trailing `/`, and its path must be one `CheckPath` accepts. A query, fragment, user information, port, empty
-or upper-case bucket, `.` or `..` segment is refused; `Location.String` is the canonical URI.
+or upper-case bucket, a bucket, account or container named `.` or `..`, or a `.` or `..` prefix segment is
+refused; `Location.String` is the canonical URI.
 
 `remote.Open` opens a location with each provider's default credentials, read-only: the AWS SDK's default
 configuration (which also gives the region and an `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` endpoint), Google
 Application Default Credentials with the read-only scope or the `STORAGE_EMULATOR_HOST` emulator, and Azure's
 `DefaultAzureCredential` on `ACCOUNT.blob.core.windows.net`. The `Store` is `Root(provider.New(client,
-container), prefix)` over clients it owns; `Close` releases them. It takes no options and does not bound
+container), prefix)` over clients and a connection pool it owns; `Close` releases them and closes the pool's
+idle connections. An endpoint from the environment that carries user information, a query or a fragment is
+refused, so `Scope` never holds a credential. It takes no options and does not bound
 concurrency: a program that needs a region, endpoint, anonymous access or a test transport builds the SDK client
 itself and uses `s3.New`, `gcs.New` or `azblob.New` with `Root`; one that needs a bound wraps the `Store` in
 `Limit`.
