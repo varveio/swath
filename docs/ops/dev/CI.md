@@ -168,9 +168,11 @@ logic against synthetic package lists.
 The heavy shards (`internal/listing` and `cmd/swath`, split by their crash, durable and kill
 matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
 the same suite took about 30 % less time there (`internal/listing` 490 s against 700 s). The
-`rest*` shards stay on amd64: that gain was measured on `internal/listing` only, and some packages
-record amd64-specific results (`internal/parquetout` `footeronly_test.go`). The nightly unsharded
-`go-race-nightly` run on amd64 covers the other side of each.
+`rest*` shards stay on amd64: that gain was measured on `internal/listing` only, and the Parquet
+encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `internal/parquetout`
+`footeronly_test.go` pins the bytes of both, #308), so the `rest*` shards' amd64 run and the
+`ubuntu-24.04-arm` `go-xos` leg each exercise one of them. The nightly unsharded
+`go-race-nightly` run on amd64 covers the other side of each heavy shard.
 
 In the measured history (2026-11-09, about 200 runs), a warm run took 7–8 minutes and its critical
 path was the single `go-race (rest)` shard at 5.4–8.4 minutes. That shard is now three
@@ -228,8 +230,9 @@ job, restores two caches. DEPS is one hash of the `go.mod` and `go.sum` of all t
 | build (`GOCACHE`) | `go-build-OS-ARCH-JOB-DEPS-SHA` | one job, or one race shard |
 
 Only a push to `main` saves; pull requests, and the nightly and stress jobs that use the
-composite, restore `main`'s newest without saving. Pull requests do not save because each would add a generation per job that only that pull
-request can read, and fork pull requests cannot write the cache anyway.
+composite, restore `main`'s newest without saving. Pull requests do not save because each would
+add a generation per job that only that pull request can read, and fork pull requests cannot write
+the cache anyway.
 
 The module cache's contents depend only on the dependency set, so its key names no job and no
 commit, and one copy serves every job. A saved key is never overwritten: when several `main` jobs
