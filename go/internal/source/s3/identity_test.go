@@ -196,6 +196,7 @@ func TestCappedRunCannotResume(t *testing.T) {
 // TestEngineFlagsShared: S3 takes the range engine's flag group the command
 // registered once and passed to it, and opens with the parsed policy.
 func TestEngineFlagsShared(t *testing.T) {
+	s3test.NoCredentials(t)
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
 	other := keyrange.Flags(f, true)
 	v := flags(f, true, other)
@@ -210,8 +211,11 @@ func TestEngineFlagsShared(t *testing.T) {
 	if !other.Policy.Seed || !p.opt.Seed || !p.opt.Floors || !p.opt.Anonymous || !p.Options().Floors {
 		t.Fatalf("policy not shared: %+v", p.opt.Policy)
 	}
-	// Defaults (no flags parsed) hold the engine's defaults.
-	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: defaults(), Workers: 2})
+	// Defaults (no flags parsed) hold the engine's defaults. Anonymous is set
+	// so the client builds without credentials (none are configured here).
+	o := defaults().(*flagged)
+	o.common = &keyrange.Common{Anonymous: true}
+	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2})
 	if err != nil || src.(*opened[Object]).p.opt.Seed {
 		t.Fatalf("defaults: %v", err)
 	}
