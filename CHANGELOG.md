@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: an object-store provider's registered source embeds `keyrange.Registered` (its `Listed` and the
+  optional interfaces `Live`, `Advancing`, `Requested`, `SeedTimed`, `Faulted`, `Contended`, `Resumable`,
+  `Seeded`, `Reusing`, `Fencing`), set to the provider, in place of eleven forwarding methods in each
+  `register.go`; each asserts its whole interface set, and a test opens every provider through the registry
+  and checks them. The providers' `Restart` returns an error, and their client activity (`Faults`,
+  `Requests`, `Answered`) is one `objhttp.Activity`. No behaviour changes.
 - Go port: `go/reader` reads a filesystem's entries typed: `Dataset.StreamLocal` hands on every `LocalEntry`
   (every column, nulls kept), `List` and `Page` return an entry's `Entry.Local` (a directory's prefix `d/` paired
   with its own row), and `Stream` refuses a local dataset. `Totals` and `Aggregates` total local entries of every

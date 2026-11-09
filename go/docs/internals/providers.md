@@ -81,6 +81,22 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |
 | `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `azblob`, coverage | `listing` |
 
+The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
+(`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
+(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`). A provider on the range engine has them all, and they
+are listed once, as `keyrange.Registered` (with `Listed`): its opened source embeds that interface set to the
+provider, beside the `registry.Bound` of the same provider, so the methods are promoted and nothing else of the
+provider is (not its `Root`, `Expand`, `Stats`, `Options` or counter `Set`); a provider that lacks one fails to
+compile there, where an absent method would otherwise silently turn its capability off. The provider, not its
+`Engine`, satisfies it: `Restart` also records the resume in the provider's options, and `Answered`, `Requests` and
+`Faults` are its client's, read through an `objhttp.Activity` the provider embeds, observed once the client is
+chosen (each part reads zero where a supplied client does not count it). What an object store's `register.go`
+writes is then its flags, `open` (the options, the provider, the opened struct), and the provider's own methods:
+`Locator`, `Identity`, `Capabilities` (whether this instance can resume), `Report`, `Tariff` where it has one,
+and a `var _` block asserting the opened type's whole set per row type (`registry.Source`, `keyrange.Registered`,
+`Identified`, `Capable`, `Reporter`, `Priced`). `internal/source` `TestRegisteredSources` opens each provider
+through `registry.Lookup` and checks the interfaces and capabilities.
+
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
 like every run with an output. `swath resume` on it is an error.
 
