@@ -116,6 +116,7 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	}
+	const stalled = "200 past the deadline mid-body"
 	gzipped := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Encoding", "gzip")
 		io.WriteString(w, "not gzip at all")
@@ -149,7 +150,7 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 		{"200 16 MiB", body(200, sized(maxBody)), ""},
 		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther},
 		{"200 cut mid-stream", cut, objhttp.ClassTransport},
-		{"200 past the deadline mid-body", stall, objhttp.ClassTimeout},
+		{stalled, stall, objhttp.ClassTimeout},
 		{"200 malformed gzip", gzipped, objhttp.ClassOther},
 		{"201", body(201, okPage), objhttp.ClassOther},
 		{"201 SlowDown", xmlError(201, "SlowDown"), objhttp.ClassThrottle},
@@ -161,7 +162,10 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 				srv := httptest.NewServer(c.h)
 				defer srv.Close()
 				cfg := testConfig(srv.URL)
-				cfg.MaxAttempts, cfg.RequestTimeout = 3, 200*time.Millisecond
+				cfg.MaxAttempts = 3
+				if c.name == stalled {
+					cfg.RequestTimeout = 200 * time.Millisecond // the others keep the default: 16 MiB under -race
+				}
 				hrt, srt := &closeCounter{next: http.DefaultTransport}, &closeCounter{next: http.DefaultTransport}
 				hand, err := client.New(context.Background(), withHTTP(cfg, hrt))
 				if err != nil {
