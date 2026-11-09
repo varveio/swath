@@ -235,8 +235,9 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
 | `deep-and-perf`, `osv-scan` | the Java tiers and the supply-chain scan ([docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, or their own name |
 
-Both Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module cache,
-and the build cache of `go-race (rest)` (`go-race-nightly`) or `go-nonrace` (`go-shapes`).
+The three Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
+cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos (macos-latest)` (`go-xos-macos`) or
+`go-nonrace` (`go-shapes`).
 
 There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run, and no Go dependency scan in CI.
 
