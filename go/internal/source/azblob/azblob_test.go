@@ -804,14 +804,18 @@ func TestClientCutsReported(t *testing.T) {
 }
 
 // TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, and the client's counters
-// follow the engine's.
+// client's pool, one transport per 16 workers, the client's counters
+// follow the engine's, and the report names the built client (the SDK
+// client under the swath_sdkclient build tag).
 func TestPoolSizeReported(t *testing.T) {
 	r := azblobtest.Serve(t, azblobtest.Keys())
 	for workers, want := range map[int]int64{1: 1, 40: 3} {
 		_, st := list(t, replayOptions(r), workers)
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
 			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
+		}
+		if st.Client != clientKind {
+			t.Fatalf("client %q, want %q", st.Client, clientKind)
 		}
 	}
 }
