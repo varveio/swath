@@ -13,13 +13,15 @@ type Kind string
 
 const (
 	// KindSchema: a part's columns are not those its schema id defines (a
-	// column absent, or of another type), or the schema id is not one a
-	// decoder reads.
+	// column absent, or of another type), the manifest's key is not the
+	// schema id's, the schema id is not one swath writes, or it is not one
+	// the operation reads (a versions schema has no current objects).
 	KindSchema Kind = "schema"
-	// KindCoverage: the manifest's extensions.swath is malformed.
+	// KindCoverage: the manifest's extensions.swath is malformed, or does
+	// not record a listing of the whole source (AcceptWholeSource).
 	KindCoverage Kind = "coverage"
 	// KindRow: a row holds a value its schema forbids (a null in a required
-	// column).
+	// column), or an object a current-object reader refuses (Stream).
 	KindRow Kind = "row"
 )
 
@@ -28,7 +30,9 @@ const (
 // ErrCoverage and ErrRow by Kind.
 type SemanticError struct {
 	Kind Kind
-	// Column names the column at fault, "" when none does.
+	// Column names the column at fault (KindSchema, KindRow), or the
+	// member of extensions.swath at fault (KindCoverage: "source.kind",
+	// "coverage.filters"), "" when none does.
 	Column string
 	// Row is the row at fault (KindRow, and KindSchema found decoding a
 	// row), nil otherwise.
