@@ -194,3 +194,46 @@ func BenchmarkScan(b *testing.B) {
 		})
 	}
 }
+
+// TestScanContextEnded: a scan whose context ends never succeeds: one
+// cancelled by fn on the last batch, after which no read checks it, and
+// one cancelled before it starts, over a dataset with no rows, whose plan
+// and split read nothing.
+func TestScanContextEnded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	one := openDir(t, writeDataset(t, s3Spec(), s3Rows(1)))
+	err := one.Scan(ctx, ScanRequest{Workers: 1}, func([]Object) error {
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled by fn: %v", err)
+	}
+	empty := openDir(t, writeDataset[s3Row](t, s3Spec(), nil))
+	if err := empty.Scan(ctx, ScanRequest{}, func([]Object) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled before an empty scan: %v", err)
+	}
+}
+
+// TestScanPlanFailureStats: a Source failure while planning is returned
+// unchanged, and, as documented, the failed plan's own reads are not in
+// Stats, which holds no other work.
+func TestScanPlanFailureStats(t *testing.T) {
+	d, src := openSource(t, scanDir(t, 3000, 200))
+	failure := errors.New("failing read")
+	src.mu.Lock()
+	src.failAt, src.failErr = len(src.reads)+1, failure
+	src.mu.Unlock()
+	st := ReadStats{PartsOpened: 7}
+	err := d.Scan(context.Background(), ScanRequest{Workers: 4, Stats: &st}, func([]Object) error {
+		t.Fatal("fn called")
+		return nil
+	})
+	if !errors.Is(err, failure) || st != (ReadStats{}) {
+		t.Fatalf("plan failure: %v, stats %+v", err, st)
+	}
+	if _, reads := src.taken(); len(reads) == 0 {
+		t.Fatal("planning read nothing")
+	}
+}

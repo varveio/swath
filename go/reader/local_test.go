@@ -242,3 +242,20 @@ func TestLocalTotals(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalKindChecked: a kind the schema does not define fails
+// StreamLocal and List with KindRow naming kind and the row.
+func TestLocalKindChecked(t *testing.T) {
+	ext := swathExtension()
+	ext["source"] = map[string]any{"kind": "local-fs", "uri": "/data"}
+	rows := []localRow{{Key: []byte("a"), Kind: "FILE"}, {Key: []byte("b/"), Kind: "DIRR"}}
+	d := openDir(t, writeDataset(t, spec{id: LocalV1, key: s3Spec().key, ext: ext}, rows))
+	err := d.StreamLocal(context.Background(), func(LocalEntry) error { return nil })
+	if se := semanticAt(t, err, KindRow, "kind"); string(se.Row.Key) != "b/" {
+		t.Fatalf("stream: %v", se)
+	}
+	got, err := d.List(context.Background(), ListRequest{Delimiter: '/', Limit: 10})
+	if se := semanticAt(t, err, KindRow, "kind"); string(se.Row.Key) != "b/" || got != nil {
+		t.Fatalf("list: %v, %+v", se, got)
+	}
+}

@@ -199,8 +199,9 @@ for _, r := range rows {
 - **`StreamLocal`.** `swath/local-entries/v1` only (any other schema id is `KindSchema`, before any read). Every
   entry as `Stream` reads objects, projecting every column of the schema, each `LocalEntry` owning its key.
   Nulls are kept: under `--metadata names` the stat columns, `Size` and `LastModified` included, are nil, and a
-  target is nil but for a symlink listed with targets. A size, when present, must be at least 0 and a
-  modification time, when present, in the years 1 to 9999 (`KindRow`). Its errors are `Stream`'s.
+  target is nil but for a symlink listed with targets. `Kind` must be one of the schema's eight values
+  (`UNKNOWN` included), a size, when present, at least 0 and a modification time, when present, in the years 1
+  to 9999 (`KindRow`). Its errors are `Stream`'s.
 - **`Scan(req)`.** Current objects only, refused as `Stream` refuses, before any read; `Stats` reset first. One
   plan of `Prefix`'s rows (`seekparquet.Dataset.PlanRanges`, projecting the columns `Object` holds, which checks
   every part holding them), divided into at most `Workers` shards (`RangePlan.Split`: consecutive rows cut at row
@@ -211,8 +212,11 @@ for _, r := range rows {
   reused once `fn` returns: `fn` must not keep it (an `Object` copied out of it owns its memory). The first
   error cancels the other shards and is returned: `fn`'s and the module's unchanged, a row's `KindRow`, the
   context's (checked before each batch). Batches already handed on stay handed on; a failed scan is no result.
-  `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too; `Scan` does not add to
-  `StreamStats`.
+  `Stats` sums the plan's, the split's and every shard scan's `ReadStats`, on failure too, with Page's exception:
+  a plan (`PlanRanges`) or split (`Split`) that fails returns no statistics, so its own reads are missing, while
+  every completed plan, split and shard scan is counted. The context is checked before planning, before each
+  batch and after the shards end: a scan whose context ended never succeeds, even one that read nothing. `Scan`
+  does not add to `StreamStats`.
 - **`List(req)`.** Current objects only, as `Stream`: a versions schema is refused (`KindSchema`) before any
   read. One request of the module's delimited listing (`seekparquet.Dataset.List`), which routes it, skips each
   common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
@@ -384,10 +388,13 @@ UTF-8, a symlink with its target, a FIFO) over two parts, with every stat column
 writes it: `StreamLocal` decodes every column and null; `Stream` and `Scan` refuse the entries and `StreamLocal`
 objects, before any read; `Page` lists it by `/` in pages of 1, 2 and 100, each directory paired with its row and
 each prefix's totals nil-summed under `names`; `Totals` match the `StreamLocal` oracle, a directory counted once
-with its own row and entry bytes nil, never 0, without sizes. `scan_test.go` checks `Scan` against `Stream` for
+with its own row and entry bytes nil, never 0, without sizes; a kind the schema does not define fails
+`StreamLocal` and `List` (`KindRow`). `scan_test.go` checks `Scan` against `Stream` for
 0, 1, 2, 7 and 64 workers and several prefixes (each object once, each batch ascending), its statistics against
 a plan, split and shard scans made by hand, a failing row, `fn`'s error stopping each shard at its first batch,
-cancellation and a versions refusal before any read; `BenchmarkScan` tallies 300,000 objects with one worker and
+cancellation (by `fn` on the last batch, and before a scan of an empty dataset: never a success), a Source
+failure while planning (returned unchanged, the failed plan's reads absent from `Stats`) and a versions refusal
+before any read; `BenchmarkScan` tallies 300,000 objects with one worker and
 `GOMAXPROCS`. `TestAzblobTotals` totals an Azure dataset against `Stream` (an exact blob's access tier as its
 storage class) and its prefixes' aggregates.
 

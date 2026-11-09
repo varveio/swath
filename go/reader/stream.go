@@ -6,6 +6,7 @@ package reader
 import (
 	"bytes"
 	"context"
+	"slices"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
@@ -70,9 +71,10 @@ func (d *Dataset) Stream(ctx context.Context, fn func(Object) error) error {
 // the schema (LocalEntry), owning its memory, so fn may keep or change it.
 // Any other schema id is refused with a SemanticError of KindSchema before
 // any read. Nulls are kept: an entry listed without its stat (--metadata
-// names) has a nil Size and LastModified. A size, when present, must be at
-// least 0 and a modification time, when present, in the years 1 to 9999,
-// else the stream ends with a SemanticError of KindRow. Its errors,
+// names) has a nil Size and LastModified. Its kind must be one of the
+// schema's (UNKNOWN included), a size, when present, at least 0 and a
+// modification time, when present, in the years 1 to 9999, else the
+// stream ends with a SemanticError of KindRow. Its errors,
 // statistics and checks are otherwise Stream's.
 func (d *Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) error {
 	if d.spec.ID != LocalV1 {
@@ -144,9 +146,16 @@ func decodeObject(id SchemaID, r seekparquet.Row) (Object, error) {
 	return o, err
 }
 
-// decodeLocal decodes and checks a filesystem entry, its Key the row's.
+// localKinds are the values of swath/local-entries/v1's kind column.
+var localKinds = []string{"FILE", "DIR", "SYMLINK", "FIFO", "SOCKET", "CHAR_DEVICE", "BLOCK_DEVICE", "UNKNOWN"}
+
+// decodeLocal decodes and checks a filesystem entry, its Key the row's: a
+// kind of the schema's, and a size and time as checkObject checks them.
 func decodeLocal(r seekparquet.Row) (LocalEntry, error) {
 	e, err := DecodeLocalEntry(r)
+	if err == nil && !slices.Contains(localKinds, e.Kind) {
+		err = semantic(KindRow, "kind", &e.Position, "%q is not a kind of %s", e.Kind, LocalV1)
+	}
 	if err == nil {
 		err = checkObject(&Object{Position: e.Position, Size: e.Size, LastModified: e.LastModified}, true)
 	}

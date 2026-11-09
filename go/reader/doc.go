@@ -21,11 +21,12 @@
 // modification time; StreamLocal hands on a filesystem's entries
 // (LocalEntry), nulls kept; Scan hands on the current objects under a
 // prefix in batches, from shards of the plan read concurrently
-// (seekparquet.RangePlan.Split). List lists objects or entries by
-// delimiter a page at a time, through the module's delimited listing,
-// checking each as Stream does (Delimiter 0 is the NUL byte); a common
-// prefix carries the row at its exact key, an S3-style folder object or a
-// filesystem's directory row, from the same request.
+// (seekparquet.RangePlan.Split); like Page's, its statistics on failure
+// omit the reads of a plan or split that failed. List lists objects or
+// entries by delimiter a page at a time, through the module's delimited
+// listing, checking each as Stream does (Delimiter 0 is the NUL byte);
+// a common prefix carries the row at its exact key, an S3-style folder
+// object or a filesystem's directory row, from the same request.
 // AcceptWholeSource identifies the source by its kind: a bucket by name,
 // an Azure container by name and account (source.uri), a filesystem by
 // its root. Page lists a page with one entry of lookahead for its Next

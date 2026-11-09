@@ -19,7 +19,8 @@ type ScanRequest struct {
 	Workers int
 	// Stats, when not nil, receives the scan's read statistics: reset when
 	// the request starts, and set whether it succeeds or fails, with the
-	// work of every shard up to where it stopped.
+	// work of every shard up to where it stopped. A plan or a split that
+	// fails returns no statistics, so its own reads are missing.
 	Stats *ReadStats
 }
 
@@ -41,14 +42,19 @@ type ScanRequest struct {
 // them, before any read. The first error stops every shard and is
 // returned: fn's, unchanged; a row that breaks Stream's checks (a
 // SemanticError of KindRow); the module's and the Source's errors,
-// unchanged; or the context's. Objects already handed to fn stay handed:
-// a failed scan is no result. Scan does not add to StreamStats.
+// unchanged; or the context's, checked before planning, before each batch
+// and after the shards end, so a scan whose context ends is never a
+// success. Objects already handed to fn stay handed: a failed scan is no
+// result. Scan does not add to StreamStats.
 func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Object) error) error {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}
 	}
 	columns, err := d.currentColumns()
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	plan, err := d.sp.PlanRanges(ctx, []seekparquet.Range{prefixSpan(req.Prefix).rng()}, columns)
@@ -60,6 +66,7 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	if err != nil {
 		return err
 	}
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var first error
@@ -77,6 +84,9 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	wg.Wait()
 	for _, st := range stats {
 		addStats(req.Stats, st)
+	}
+	if first == nil {
+		return parent.Err()
 	}
 	return first
 }
