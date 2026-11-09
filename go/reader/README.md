@@ -170,8 +170,8 @@ for _, r := range rows {
   `source.container` and `source.uri` both equal to `want`'s, and an empty `want.URI` refuses. A filesystem has no
   container (`want.Container` must be `""`, and `source.container` absent or `""`) and is its root:
   `source.uri` equal to `want.URI`, which must be set, compared lexically except that a trailing separator on
-  either side is ignored (`/data/` is `/data`); nothing is resolved, mapped or case-folded. An absent member
-  refuses. The first failure is `KindCoverage` with `Column` naming the member (`source.uri`, say). Exclusions (what a
+  either side is ignored (`/data/` is `/data`); nothing is resolved, mapped or case-folded. Wherever `source.uri`
+  is compared, a recorded `""` refuses: it identifies no source. An absent member refuses. The first failure is `KindCoverage` with `Column` naming the member (`source.uri`, say). Exclusions (what a
   listing leaves out by design, such as an output directory inside a listed tree) and `coverage.snapshot` (a
   listing is never a point-in-time snapshot) do not refuse.
 - **`Stream`.** Current objects only: a versions schema is refused (`KindSchema`) before any read. Every object
@@ -242,7 +242,9 @@ for _, r := range rows {
   `AggregateOptions`', not a bound on the page's reads. A `Limit` that is not positive or is `math.MaxInt`, and
   an invalid `AggregateOptions`, wrap `ErrInvalidRequest` before any read. Otherwise the errors are `List`'s and
   `Aggregates`'; a context that ends between the two is its error. No entries come with an error. `Stats` is
-  reset at the start and receives the listing's and the aggregation's statistics, on failure too.
+  reset at the start and receives the listing's and the aggregation's statistics, on failure too, except that
+  an aggregation plan (`seekparquet.Dataset.PlanRanges`) that fails while planning returns no statistics: its own
+  planning reads are missing, while the listing's and every completed plan's and scan's are counted.
 - **`ValidateDigests`, `ValidateDigestsDir`** (at import or attach). The dataset must be swath's: it opens as
   `Open` decides (a schema id swath writes, `extensions.swath` well-formed), `extensions.swath` is present
   (`KindCoverage`), and the manifest's key column and uniqueness are the spec's (`KindSchema`), as `CheckSchema`
@@ -329,8 +331,8 @@ several parts, continuing inside key groups by `Offset`.
 
 `dataset_test.go` writes datasets with the module's writer (`seekparquet/go/local`) to test `AcceptWholeSource`
 on every member it requires, present and absent, and on each kind's identity (bucket URIs compared only when given,
-same-named Azure containers of two accounts, filesystem roots with and without a trailing separator, a schema id
-of another kind); `Open` on an unknown schema id; `CheckSchema` on key
+same-named Azure containers of two accounts, filesystem roots with and without a trailing separator, an empty
+recorded URI, a schema id of another kind); `Open` on an unknown schema id; `CheckSchema` on key
 uniqueness, the key column, an absent column, a column of another logical type, and a later part lacking a
 column the module accepts; `Stream`'s order and values over pages, nulls, its row checks, cancellation, `fn`'s
 error, a module refusal returned unchanged, and the refusal of a versions schema; and a part with corrupted
@@ -350,8 +352,8 @@ writer wrote: S3 objects over three parts, GCS objects with and without `time_cr
 (one without a size refused), and both versions schemas admitted and refused by `Stream`.
 
 `admit_test.go` admits a three-part dataset through a Source and a directory (its `Identity` the SHA-256 of the
-manifest file and its `published_at`), refuses in order a corrupt part, a missing digest, another kind and
-container, a versions schema and a missing `published_at` with every file closed and the Source still usable,
+manifest file and its `published_at`) and a dataset of no parts, refuses in order a corrupt part, a missing
+digest, a later part lacking a column (after every part was opened), another kind and container, a versions schema and a missing `published_at` with every file closed and the Source still usable,
 reopens it opening the manifest alone, refuses another manifest digest, publication time or container, and tables
 `IsRefusal`. `page_test.go` pages `list_test.go`'s keys in pages of 1, 2, 3 and 100 against the oracle with each
 prefix's totals against `Stream`'s, `Next` nil only on the last page; checks that a page whose extra entry is a

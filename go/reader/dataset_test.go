@@ -185,6 +185,8 @@ func TestAcceptWholeSource(t *testing.T) {
 		{name: "another root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data2"}, field: "source.uri"},
 		{name: "a root inside", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data/sub"}, field: "source.uri"},
 		{name: "filesystem without a root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs"}, field: "source.uri"},
+		{name: "filesystem recording no root", id: LocalV1, edit: local(""), want: WholeSource{Kind: "local-fs", URI: "/"}, field: "source.uri"},
+		{name: "bucket recording no URI", edit: func(e map[string]any) { e["source"].(map[string]any)["uri"] = "" }, want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}, field: "source.uri"},
 		{name: "filesystem with a container", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", Container: "b", URI: "/data"}, field: "source.container"},
 		{name: "filesystem recording a container", id: LocalV1, edit: func(e map[string]any) {
 			e["source"] = map[string]any{"kind": "local-fs", "uri": "/data", "container": "b"}

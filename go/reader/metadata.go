@@ -138,7 +138,7 @@ var sourceKinds = map[SchemaID]string{
 // source.container and source.uri equal to want's, and want.URI "" is
 // refused. A filesystem ("local-fs") has no container, so want.Container
 // must be "" (and the manifest's absent or ""), and is its root: source.uri
-// equal to want.URI, which must not be "", lexically, except that a
+// equal to want.URI, neither of them "", lexically, except that a
 // trailing separator on either is ignored. No path is resolved or
 // case-folded.
 //
@@ -220,6 +220,8 @@ func acceptSource(src SourceInfo, want WholeSource, id SchemaID) error {
 	switch {
 	case src.URI == nil:
 		return missing("source.uri")
+	case *src.URI == "":
+		return semantic(KindCoverage, "source.uri", nil, "empty: the manifest does not identify its source")
 	case want.Kind == "local-fs" && trimSeparator(*src.URI) == trimSeparator(want.URI):
 	case want.Kind != "local-fs" && *src.URI == want.URI:
 	default:

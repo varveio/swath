@@ -12,7 +12,7 @@ import (
 // PageRequest is one page of a delimited listing (ListRequest) with the
 // recursive totals of its common prefixes (AggregateOptions, as
 // Aggregates takes them). Stats, when set, receives the statistics of the
-// listing and of the aggregation.
+// listing and of the aggregation (see Page for a failure).
 type PageRequest struct {
 	ListRequest
 	Aggregates AggregateOptions
@@ -49,7 +49,10 @@ type Page struct {
 // aggregation fails the page with its error. No entries are returned with
 // an error. req.Stats, when set, is reset when the request starts and
 // receives what the listing and the aggregation read, whether it
-// succeeds or fails.
+// succeeds or fails, with one exception: a selection plan of the
+// aggregation that fails while planning returns no statistics, so its
+// own planning reads are not in req.Stats (the listing's, and every plan
+// that completed, are).
 func (d *Dataset) Page(ctx context.Context, req PageRequest) (Page, error) {
 	st := req.Stats
 	if st != nil {

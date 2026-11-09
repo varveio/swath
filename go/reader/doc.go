@@ -25,8 +25,9 @@
 // AcceptWholeSource identifies the source by its kind: a bucket by name,
 // an Azure container by name and account (source.uri), a filesystem by
 // its root. Page lists a page with one entry of lookahead for its Next
-// cursor and the totals (Aggregates) of the prefixes it returns. None of
-// them checks the parts' digests or the rows no request decodes.
+// cursor and the totals (Aggregates) of the prefixes it returns; its
+// statistics, on failure, omit the planning reads of a plan that failed.
+// None of them checks the parts' digests or the rows no request decodes.
 //
 // ValidateDigests, at import, checks that a dataset is swath's from its
 // manifest and that every part declares a SHA-256 its bytes match

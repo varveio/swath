@@ -92,7 +92,7 @@ module's. JSON readers must not depend on that order.
 | Member | Meaning | Required by |
 |---|---|---|
 | `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
-| `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | informative |
+| `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | `go/reader`'s `AdmitWhole` and `ReopenWhole` (part of the dataset's identity); whole-source acceptance alone (`AcceptWholeSource`) does not require it |
 | `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind and to the schema id's); `--seed-from` |
 | `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | whole-source acceptance for `azblob` and `local-fs` (the source's identity), and for `s3` and `gcs` when the caller gives one |
 | `source.container` | The bucket, or the Azure container's name; absent for a filesystem | whole-source acceptance: equal to the caller's container, or, for a bucket, absent or `null` when the caller passes `""`; absent, `null` or `""` for a filesystem; `--seed-from` |
@@ -112,7 +112,8 @@ only within its account, which only `source.uri` (`az://account/container`) reco
 `source.container` and `source.uri` equal to the caller's, and a caller without a URI is refused. A filesystem has
 no container and is its root: `source.uri` must equal the caller's root, compared byte for byte except that a
 trailing separator on either side is ignored; no mount, symbolic link or case is resolved, and a caller without a
-root is refused. It requires every member listed as required for it. An absent or `null` member refuses
+root is refused. Wherever `source.uri` is compared, an empty one in the manifest is refused: it identifies no
+source. It requires every member listed as required for it. An absent or `null` member refuses
 the dataset, except `source.container` when the caller's container is `""`: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
 empty. `exclusions` are tolerated, so an accepted dataset is the whole source minus what was excluded by design,
 not every entry the source holds. swath publishes the complete result of the live listing it performed; it is not
