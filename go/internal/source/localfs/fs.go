@@ -62,23 +62,25 @@ type Options struct {
 
 // Stats count what a listing saw. Per-entry problems are counted, never fatal.
 type Stats struct {
-	Files          int64    `json:"files"` // non-directory rows
-	Dirs           int64    `json:"dirs"`  // directories below the root
-	Bytes          int64    `json:"bytes"` // sum of size over non-directory rows
-	DirsRead       int64    `json:"dirs_read"`
-	OpenErrors     int64    `json:"open_errors"`
-	ReadErrors     int64    `json:"read_errors"`
-	StatErrors     int64    `json:"stat_errors"`
-	Vanished       int64    `json:"vanished"` // gone between listing and stat
-	Changed        int64    `json:"changed"`  // type changed between listing and stat; dropped
-	ReadlinkErrors int64    `json:"readlink_errors"`
-	Skipped        int64    `json:"skipped_dirs"`
-	Unsafe         int64    `json:"unsafe_dirs"`           // a directory replaced by a symlink before open
-	Chunks         int64    `json:"chunks"`                // large-directory chunks statted in parallel
-	ParallelSorts  int64    `json:"parallel_sorts"`        // large directories whose entries were sorted in parallel runs
-	Presized       int64    `json:"presized"`              // large directories whose buffers were sized from st_size
-	CountProcs     int64    `json:"count_procs,omitempty"` // GOMAXPROCS a count ran with, when raised (opened.Run)
-	Samples        []string `json:"error_samples,omitempty"`
+	Files            int64    `json:"files"` // non-directory rows
+	Dirs             int64    `json:"dirs"`  // directories below the root
+	Bytes            int64    `json:"bytes"` // sum of size over non-directory rows
+	DirsRead         int64    `json:"dirs_read"`
+	OpenErrors       int64    `json:"open_errors"`
+	ReadErrors       int64    `json:"read_errors"`
+	StatErrors       int64    `json:"stat_errors"`
+	Vanished         int64    `json:"vanished"` // gone between listing and stat
+	Changed          int64    `json:"changed"`  // type changed between listing and stat; dropped
+	ReadlinkErrors   int64    `json:"readlink_errors"`
+	Skipped          int64    `json:"skipped_dirs"`
+	Unsafe           int64    `json:"unsafe_dirs"`                 // a directory replaced by a symlink before open
+	Chunks           int64    `json:"chunks"`                      // large-directory chunks statted in parallel
+	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
+	ReaddirplusHints int64    `json:"readdirplus_hints,omitempty"` // full directory reads followed by a few stats, so an NFS client fetches attributes with the next (readNames)
+	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (opened.Run)
+	Presized         int64    `json:"presized"`                    // large directories whose buffers were sized from st_size
+	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (opened.Run)
+	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
 	OtherDevice int64 `json:"other_device_dirs"`
@@ -113,6 +115,8 @@ func (s *Stats) add(o *Stats) {
 	s.Unsafe += o.Unsafe
 	s.Chunks += o.Chunks
 	s.ParallelSorts += o.ParallelSorts
+	s.Unsorted += o.Unsorted
+	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice
 	for _, x := range o.Samples {
@@ -135,8 +139,11 @@ type Provider struct {
 	opt    Options
 	native bool
 	dev    int64 // the root's device (OneFilesystem)
-	mu     sync.Mutex
-	stats  Stats
+	// unsorted: a count, whose rows nothing orders; a directory's entries
+	// are not sorted (order.Options.Unordered). Set before listing starts.
+	unsorted bool
+	mu       sync.Mutex
+	stats    Stats
 }
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)

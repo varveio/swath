@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/order"
+	"github.com/varveio/swath/go/internal/registry"
 )
 
 type collect struct {
@@ -164,6 +165,10 @@ func TestListingEqualsSortedOracle(t *testing.T) {
 						}
 						if !portable && nativeEngine && fields != Names && st.Chunks == 0 {
 							t.Error("5000-entry directory was not chunked")
+						}
+						// The 5000-entry directory takes more than one read: a stat tier hints between them.
+						if !portable && nativeEngine && (st.ReaddirplusHints > 0) != (fields != Names) {
+							t.Errorf("readdirplus_hints %d at the %s tier", st.ReaddirplusHints, fields)
 						}
 						checkRows(t, rows, fields, portable)
 					})
@@ -322,4 +327,53 @@ func (f *failAfter) Write(_ context.Context, segs [][]Row) error {
 		return errors.New("sink failed")
 	}
 	return nil
+}
+
+// TestUnsortedCountEqualsSortedListing: a count does not sort a
+// directory's entries (opened.Run sets unsorted and order's Unordered), yet
+// it sees the same keys, sizes and counts as a sorted listing, at every
+// tier and with a chunked directory.
+func TestUnsortedCountEqualsSortedListing(t *testing.T) {
+	root := buildTree(t)
+	for _, portable := range []bool{false, true} {
+		for _, fields := range []Fields{Names, Stat, Statx} {
+			if fields == Statx && (portable || !nativeEngine) {
+				continue
+			}
+			t.Run(fmt.Sprintf("portable=%v/%s", portable, fields), func(t *testing.T) {
+				opt := Options{Fields: fields, LinkTarget: true, Portable: portable}
+				sorted, want := list(t, root, opt, 4, 7)
+				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: 4})
+				if err != nil {
+					t.Fatal(err)
+				}
+				p := src.(*opened).p
+				st, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 4}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := p.Stats()
+				if st.Rows != int64(len(sorted)) || got.Files != want.Files || got.Dirs != want.Dirs || got.Bytes != want.Bytes {
+					t.Fatalf("count: rows %d files %d dirs %d bytes %d; listing: rows %d files %d dirs %d bytes %d",
+						st.Rows, got.Files, got.Dirs, got.Bytes, len(sorted), want.Files, want.Dirs, want.Bytes)
+				}
+				if p.native && got.Unsorted != got.DirsRead {
+					t.Fatalf("unsorted_dirs %d, want every directory read (%d)", got.Unsorted, got.DirsRead)
+				}
+				// The same keys, through a sink on the provider the run left unsorted.
+				c := &collect{}
+				if _, err := order.CountWithSink[Range, Entry](context.Background(), p, nil, order.Options{Workers: 4, Unordered: true}, c); err != nil {
+					t.Fatal(err)
+				}
+				keys := make([]string, len(c.rows))
+				for i := range c.rows {
+					keys[i] = c.rows[i].Key
+				}
+				slices.Sort(keys)
+				if !slices.Equal(keys, oracle(t, root, true)) {
+					t.Fatalf("count saw %d keys, want the listing's %d", len(keys), len(sorted))
+				}
+			})
+		}
+	}
 }
