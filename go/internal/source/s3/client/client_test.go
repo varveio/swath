@@ -153,7 +153,7 @@ func TestCredentialChain(t *testing.T) {
 		return c
 	}
 	// Nothing configured: anonymous.
-	if c := list(Config{}); auth.Load() != "" || !c.auth.anonymous {
+	if c := list(Config{}); auth.Load() != "" || !c.auth.Anonymous {
 		t.Fatalf("unsigned expected, got %q", auth.Load())
 	}
 	// A named profile from the shared files, with its region.

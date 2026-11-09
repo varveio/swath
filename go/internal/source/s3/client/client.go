@@ -56,7 +56,7 @@ type Counters = objhttp.Counts
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
 	cfg    Config
-	auth   *auth
+	auth   *Auth
 	region string
 	base   *url.URL
 	http   *http.Client
@@ -79,11 +79,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	a, err := loadAuth(ctx, cfg)
+	a, err := LoadAuth(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.region, http: cfg.HTTPClient, note: joinNotes(anonymousNote(cfg), a.note),
+	c := &Client{cfg: cfg, auth: a, region: a.Region, http: cfg.HTTPClient, note: a.Note,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	if cfg.Endpoint != "" {
@@ -105,7 +105,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 
 // Credentials returns the resolved credentials' source (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) {
-	return c.auth.source, c.auth.anonymous
+	return c.auth.Source, c.auth.Anonymous
 }
 
 // Note is a one-time warning for the user, or "".
