@@ -361,8 +361,8 @@ count` measures its listing); `--seed=false` and `--limiter-slow-start` moved to
 list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 3.** Version 3 only adds fields; nothing of version 2 changes, and a version 2 reader
-reads version 3 by ignoring them:
+**Run report: version 3.** Version 3 adds fields, and a version 2 reader reads version 3 by ignoring them; one
+meaning is narrowed, a local tree's `output.object_bytes` (the last item):
 
 - **Durable spill:** `resources.spill.durable` (the durable spill's account, and on a resume what it accepted,
   rejected and replayed), `resources.spill.durable_off`, and the counters `reuse.ranges`, `reuse.gaps` and
@@ -376,7 +376,11 @@ reads version 3 by ignoring them:
   retained resume rows.
 - **Per-prefix totals** (`swath du`): `output.totals` (`depth`, `prefixes`, `max_prefixes`, `bytes_column`,
   `objects`, `bytes`, `dirs`, `not_objects`, `unsized`, `links_once`, `linked_rows`, `inodes`, `max_inodes`),
-  present only on a `swath du` run. The local provider's counters add `other_device_dirs`
+  present only on a `swath du` run.
+- **`output.object_bytes` of a local tree** is the apparent bytes of the files the run accepted (after the
+  filters): a directory's own size is no longer summed (it is no object's). On an unfiltered complete run it equals
+  the local counters' `bytes`, and `swath du`'s total of the same run without `--allocated` or
+  `--count-links-once`. Object stores are unchanged. The local provider's counters add `other_device_dirs`
   (`--one-filesystem`).
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader

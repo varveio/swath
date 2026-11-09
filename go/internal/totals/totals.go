@@ -118,9 +118,9 @@ type Prefix struct {
 	Prefix  string
 	Objects int64
 	Dirs    int64 // directories below the prefix (a local tree's)
-	Bytes   int64 // the sized objects' bytes: the total only when Unsized is 0
+	Bytes   int64 // the bytes of the objects that had a size: the whole size when Unsized is 0
 	// Unsized is the objects under the prefix with no value in the bytes
-	// column (the names metadata tier): Bytes is then a lower bound.
+	// column (the names metadata tier): Bytes leaves them out.
 	Unsized int64
 	Newest  int64 // epoch microseconds; valid with HasNewest
 	// HasNewest is false when no object under the prefix has a time (no

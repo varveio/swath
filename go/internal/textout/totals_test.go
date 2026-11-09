@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/totals"
 )
@@ -32,8 +33,8 @@ func TestIEC(t *testing.T) {
 }
 
 // TestTotalsJSONL: every line is JSON; a prefix that is not UTF-8 is
-// PrefixBase64 alone, its exact bytes; an unknown size and a missing time
-// are absent, not zero.
+// PrefixBase64 alone, its exact bytes; Size is the sized objects' bytes and
+// a local tree's Unsized the others; a missing time is absent.
 func TestTotalsJSONL(t *testing.T) {
 	rows := []totals.Prefix{
 		{Prefix: "", Objects: 3, Bytes: 7, Newest: 1, HasNewest: true},
@@ -41,7 +42,7 @@ func TestTotalsJSONL(t *testing.T) {
 		{Prefix: "bad\xff/", Objects: 1, Unsized: 1},
 	}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, JSONL, TotalsLayout{}, rows); err != nil {
+	if err := WriteTotals(&b, JSONL, TotalsLayout{Local: true}, rows); err != nil {
 		t.Fatal(err)
 	}
 	var got []map[string]any
@@ -56,7 +57,43 @@ func TestTotalsJSONL(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 	raw, err := base64.StdEncoding.DecodeString(got[2][FieldPrefixBase64].(string))
-	if err != nil || string(raw) != rows[2].Prefix || got[2][FieldPrefix] != nil || got[2][FieldSize] != nil {
+	if err != nil || string(raw) != rows[2].Prefix || got[2][FieldPrefix] != nil || got[2][FieldSize] != 0.0 || got[2][FieldUnsized] != 1.0 {
 		t.Fatalf("%v (%v)", got[2], err)
+	}
+}
+
+// TestTotalsPartlySized: a prefix with some files sized and some not keeps
+// the known bytes in TSV and JSONL beside Unsized; the table, for reading,
+// shows its size as unknown.
+func TestTotalsPartlySized(t *testing.T) {
+	rows := []totals.Prefix{{Objects: 2, Bytes: 7, Unsized: 1}}
+	for format, want := range map[string]string{
+		TSV:   "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t2\t0\t7\t1\t\n",
+		JSONL: `{"Prefix":"","Objects":2,"Dirs":0,"Size":7,"Unsized":1}` + "\n",
+		Table: "Size  Files  Dirs  LastModified (local)  Prefix\n   -      2     0                        (total)\n",
+	} {
+		var b bytes.Buffer
+		if err := WriteTotals(&b, format, TotalsLayout{Local: true}, rows); err != nil || b.String() != want {
+			t.Errorf("%s: %v\n%q\nwant %q", format, err, b.String(), want)
+		}
+	}
+}
+
+// TestTotalsTableLocalTime: the table's times are in the reader's zone (the
+// layout's), under a heading that says so; TSV's stay UTC.
+func TestTotalsTableLocalTime(t *testing.T) {
+	rows := []totals.Prefix{{Objects: 1, Bytes: 1, Newest: 0, HasNewest: true}}
+	var b bytes.Buffer
+	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil {
+		t.Fatal(err)
+	}
+	want := "Size  Objects  LastModified (local)  Prefix\n" +
+		" 1 B        1  1970-01-01 02:00:00   (total)\n"
+	if b.String() != want {
+		t.Fatalf("%q\nwant %q", b.String(), want)
+	}
+	b.Reset()
+	if err := WriteTotals(&b, TSV, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil || !strings.HasSuffix(b.String(), "\t1970-01-01T00:00:00+00:00\n") {
+		t.Fatalf("%v %q", err, b.String())
 	}
 }

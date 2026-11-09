@@ -168,7 +168,7 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 		fmt.Fprintln(w, "  they exist to run an experiment or a comparison, not to operate the tool")
 	case cmd.du:
 		fmt.Fprintln(w, "usage: swath du SOURCE [-d N] [flags]")
-		fmt.Fprintln(w, "  totals SOURCE's objects, bytes and newest time, and with -d N each key prefix's down to N levels")
+		fmt.Fprintln(w, "  totals SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels")
 		fmt.Fprintln(w, "  below SOURCE, a parent including its children, as du: on stdout as a table on a terminal, TSV")
 		fmt.Fprintln(w, "  otherwise, or --format jsonl. Bytes are the objects' sizes as listed, not storage or billing")
 	default:

@@ -60,12 +60,12 @@ func TestDu(t *testing.T) {
 		t.Fatal(err)
 	}
 	const newest, older = "2026-01-02T04:04:05+00:00", "2026-01-02T03:04:05+00:00"
-	want := "Prefix\tObjects\tDirs\tSize\tLastModified\n" +
-		"\t4\t4\t9\t" + newest + "\n" +
-		"a/\t2\t1\t7\t" + newest + "\n" +
-		"a/b/\t1\t0\t5\t" + newest + "\n" +
-		"c/\t1\t0\t1\t" + older + "\n" +
-		"e/\t0\t0\t0\t\n"
+	want := "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n" +
+		"\t4\t4\t9\t0\t" + newest + "\n" +
+		"a/\t2\t1\t7\t0\t" + newest + "\n" +
+		"a/b/\t1\t0\t5\t0\t" + newest + "\n" +
+		"c/\t1\t0\t1\t0\t" + older + "\n" +
+		"e/\t0\t0\t0\t0\t\n"
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
 	}
@@ -77,42 +77,64 @@ func TestDu(t *testing.T) {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
 	// The table: a heading, sizes in binary units, the newest time to the
-	// second, the prefix last and the total named; -d is --depth.
+	// second in local time, the prefix last and the total named; -d is
+	// --depth.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "-d", "1", "--format=table", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	local := func(s string) string {
+		at, _ := time.Parse(time.RFC3339, s)
+		return at.In(time.Local).Format(time.DateTime)
+	}
 	wantTable := "" +
-		"Size  Files  Dirs  LastModified (UTC)   Prefix\n" +
-		" 9 B      4     4  2026-01-02 04:04:05  (total)\n" +
-		" 7 B      2     1  2026-01-02 04:04:05  a/\n" +
-		" 1 B      1     0  2026-01-02 03:04:05  c/\n" +
-		" 0 B      0     0                       e/\n"
+		"Size  Files  Dirs  LastModified (local)  Prefix\n" +
+		" 9 B      4     4  " + local(newest) + "   (total)\n" +
+		" 7 B      2     1  " + local(newest) + "   a/\n" +
+		" 1 B      1     0  " + local(older) + "   c/\n" +
+		" 0 B      0     0                        e/\n"
 	if out.String() != wantTable {
 		t.Fatalf("table\n%s\nwant\n%s", out.String(), wantTable)
 	}
 	// Without -d, the total alone; swath diag count keeps its one line.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv"}, &out); err != nil ||
-		out.String() != "Prefix\tObjects\tDirs\tSize\tLastModified\n\t4\t4\t9\t"+newest+"\n" {
+		out.String() != "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t4\t4\t9\t0\t"+newest+"\n" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	out.Reset()
 	if err := runCount(context.Background(), []string{root, "--no-stats"}, &out); err != nil || !strings.HasPrefix(out.String(), "files=4 dirs=4 ") ||
-		!strings.Contains(out.String(), "rows=8 object_bytes=") { // object_bytes holds the directories' sizes too
+		!strings.Contains(out.String(), "rows=8 object_bytes=9 ") { // the files' bytes: a directory's own size is no object's
 		t.Fatalf("%v %q", err, out.String())
 	}
 }
 
-// TestDuUnsized: without sizes (the names metadata tier) a prefix's size is
-// unknown, not zero: empty in TSV, absent in JSONL, "-" in the table; an
-// empty directory still has 0 bytes.
+// TestObjectBytesLeaveOutDirs: a dataset run's object_bytes is the apparent
+// bytes of the files it accepted after the filters: a directory's own size
+// is no object's.
+func TestObjectBytesLeaveOutDirs(t *testing.T) {
+	root, _ := depthTree(t)
+	report := filepath.Join(t.TempDir(), "r.json")
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "^c/", "--no-stats", "--report", report}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	var r listing.Report
+	readJSON(t, report, &r)
+	if b := r.Output.ObjectBytes; b == nil || *b != 8 || r.Output.RowsEmitted != 6 { // a/b/f, a/g, x; a/, a/b/, e/
+		t.Fatalf("object_bytes %v, rows %d", b, r.Output.RowsEmitted)
+	}
+}
+
+// TestDuUnsized: without sizes (the names metadata tier) the files a
+// prefix's Size leaves out are its Unsized, as rclone size's sizeless; the
+// table shows such a size as "-", unknown; an empty directory has 0 bytes.
 func TestDuUnsized(t *testing.T) {
 	root, _ := depthTree(t)
 	for format, want := range map[string]string{
-		"tsv":   "Prefix\tObjects\tDirs\tSize\tLastModified\n\t4\t4\t\t\na/\t2\t1\t\t\nc/\t1\t0\t\t\ne/\t0\t0\t0\t\n",
-		"jsonl": `{"Prefix":"","Objects":4,"Dirs":4}` + "\n" + `{"Prefix":"a/","Objects":2,"Dirs":1}` + "\n" + `{"Prefix":"c/","Objects":1,"Dirs":0}` + "\n" + `{"Prefix":"e/","Objects":0,"Dirs":0,"Size":0}` + "\n",
-		"table": "Size  Files  Dirs  LastModified (UTC)   Prefix\n   -      4     4                       (total)\n   -      2     1                       a/\n   -      1     0                       c/\n 0 B      0     0                       e/\n",
+		"tsv":   "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t4\t4\t0\t4\t\na/\t2\t1\t0\t2\t\nc/\t1\t0\t0\t1\t\ne/\t0\t0\t0\t0\t\n",
+		"jsonl": `{"Prefix":"","Objects":4,"Dirs":4,"Size":0,"Unsized":4}` + "\n" + `{"Prefix":"a/","Objects":2,"Dirs":1,"Size":0,"Unsized":2}` + "\n" + `{"Prefix":"c/","Objects":1,"Dirs":0,"Size":0,"Unsized":1}` + "\n" + `{"Prefix":"e/","Objects":0,"Dirs":0,"Size":0,"Unsized":0}` + "\n",
+		"table": "Size  Files  Dirs  LastModified (local)  Prefix\n   -      4     4                        (total)\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -141,7 +163,7 @@ func TestDuJSONL(t *testing.T) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.Contains(out.String(), "  Objects  LastModified (UTC)") {
+	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.Contains(out.String(), "  Objects  LastModified (local)") {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }

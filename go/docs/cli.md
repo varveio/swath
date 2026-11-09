@@ -137,13 +137,13 @@ Source and output:
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
   --max-size size
-        keep objects of at most this size
+        keep objects or entries of at most this size
   --modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
   --modified-until time
-        keep objects modified at or before this time
+        keep objects or entries modified at or before this time
   --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   --seed-from path
@@ -224,7 +224,7 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath du --help
 usage: swath du SOURCE [-d N] [flags]
-  totals SOURCE's objects, bytes and newest time, and with -d N each key prefix's down to N levels
+  totals SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels
   below SOURCE, a parent including its children, as du: on stdout as a table on a terminal, TSV
   otherwise, or --format jsonl. Bytes are the objects' sizes as listed, not storage or billing
   SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]
@@ -285,13 +285,13 @@ Source and output:
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
   --max-size size
-        keep objects of at most this size
+        keep objects or entries of at most this size
   --modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
   --modified-until time
-        keep objects modified at or before this time
+        keep objects or entries modified at or before this time
   --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   --seed-from path
@@ -461,13 +461,13 @@ Source and output:
   --exclude regex
         drop keys in which this regex (Go RE2 syntax) matches anywhere
   --min-size size
-        keep objects of at least this size (1k, 256mb, 1.5GiB: binary units)
+        keep objects (a local tree's entries, directories too) of at least this size (1k, 256mb, 1.5GiB: binary units)
   --max-size size
-        keep objects of at most this size
+        keep objects or entries of at most this size
   --modified-since time
-        keep objects modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
+        keep objects (a local tree's entries, directories too) modified at or after this time (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)
   --modified-until time
-        keep objects modified at or before this time
+        keep objects or entries modified at or before this time
   --storage-class classes
         keep objects in these storage classes (STANDARD,GLACIER; repeatable)
   --seed-from path
@@ -629,30 +629,34 @@ Diagnostics:
   than N `/` counts in the prefixes it has (`top.txt` only in the total). A local directory's row lists its own
   prefix (an empty directory shows 0) and counts in its parents' `Dirs`, never as an object, and its time is not
   the newest's; an S3 delete marker lists its prefixes (they count toward `--max-prefixes`) and adds no object,
-  bytes or time. A directory's own size, which the run report's `object_bytes` includes, is not in the totals, so
-  the totals' objects and bytes are the files, links and other entries. With `--all-versions` every version is an
-  object. The filters apply first. The bytes are the objects' sizes as listed: not storage consumed, compression,
-  replicas or a bill.
+  bytes or time. A directory's own size is no object's (nor is it in the run report's `object_bytes`), so the
+  totals' objects and bytes are the files, links and other entries. With `--all-versions` every version is an
+  object. The filters apply first, to every row, directories included (**Filters** below): `--min-size 1M` keeps
+  the large files and drops the directories, whose own size is small, so `Dirs` counts only the directories that
+  pass and a directory left with nothing is no row. The bytes are the objects' sizes as listed: not storage
+  consumed, compression, replicas or a bill.
 
   Rows go to stdout sorted by prefix in byte order, the total first and a parent before its children, in
   `--format` `auto` (the table on a terminal, TSV otherwise), `table`, `tsv` or `jsonl`. The table is for reading:
-  a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below 1 KiB), local objects
-  called `Files`, the newest time to the second in UTC, and the prefix last, as `du` prints its paths, the total
-  named `(total)`:
+  a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below 1 KiB), a local
+  tree's files counted as `Files`, the newest time to the second in the reader's local time (as `ls -l` and `du --time`; `TZ`
+  chooses it), and the prefix last, as `du` prints its paths, the total named `(total)`:
 
   ```text
-      Size  Files  Dirs  LastModified (UTC)   Prefix
-  5.88 MiB    681    97  2026-11-09 11:03:32  (total)
-   695 KiB     73    11  2026-11-09 00:44:49  bench/
-   429 KiB     48     2  2026-11-09 11:03:32  cmd/
+      Size  Files  Dirs  LastModified (local)  Prefix
+  5.88 MiB    681    97  2026-11-09 13:03:32   (total)
+   695 KiB     73    11  2026-11-09 02:44:49   bench/
+   429 KiB     48     2  2026-11-09 13:03:32   cmd/
   ```
 
-  TSV and JSONL are for programs and are the same for every source: exact bytes and microsecond times (`+00:00`),
-  fields `Prefix`, `Objects`, `Dirs` (local trees only), `Size` (`AllocatedSize` with `--allocated`) and
-  `LastModified`. The total's `Prefix` is SOURCE's prefix (empty for a whole bucket or a local tree). A size is
-  unknown, not zero, when an object under the prefix had none (`--metadata names`): empty in TSV, absent in JSONL,
-  `-` in the table. A time is missing when no object under the prefix had one: empty in TSV and in the table,
-  absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
+  TSV and JSONL are for programs and are the same for every source of a kind: exact bytes and microsecond UTC
+  times (`+00:00`), fields `Prefix`, `Objects`, `Dirs` (local trees), `Size` (`AllocatedSize` with
+  `--allocated`), `Unsized` (local trees) and `LastModified`. They say objects for a local tree's files too, so a
+  script reads every source with the same names; only the table says `Files`. The total's `Prefix` is SOURCE's
+  prefix (empty for a whole bucket or a local tree). `Size` is the bytes of the objects that had a size, and
+  `Unsized` counts the files that had none (`--metadata names` reads no sizes), as `rclone size --json`'s
+  `sizeless`: a size with `Unsized` above 0 leaves those files out, and the table shows it as `-`. A time is
+  missing when no object under the prefix had one: empty in TSV and in the table, absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
   JSONL a prefix that is not UTF-8 (a local name's bytes, which a JSON string cannot carry exactly) is
   `PrefixBase64`, its exact bytes in standard base64, instead of `Prefix`:
 
@@ -667,8 +671,8 @@ Diagnostics:
 
   ```text
   $ swath du /data -d 2 --format jsonl
-  {"Prefix":"","Objects":4,"Dirs":4,"Size":9,"LastModified":"2026-01-02T04:04:05+00:00"}
-  {"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"LastModified":"2026-11-09T11:38:25+00:00"}
+  {"Prefix":"","Objects":4,"Dirs":4,"Size":9,"Unsized":0,"LastModified":"2026-01-02T04:04:05+00:00"}
+  {"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"Unsized":0,"LastModified":"2026-11-09T11:38:25+00:00"}
   ```
 
   Rows are written once the count completes, before the run's end is stamped and its outcome settled, so the
@@ -708,7 +712,8 @@ Diagnostics:
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
   `--modified-until` keep modification times within the inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00`
   or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
-  A,B` (repeatable) keeps the listed classes (case-insensitive). They reduce the rows written, not the requests
+  A,B` (repeatable) keeps the listed classes (case-insensitive). They apply to every row: on a local tree,
+  directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not the requests
   made, with one exception: an `--include` anchored at the start with a literal (`^logs/2026/`) narrows the listed
   prefix to it (the same rows, fewer requests; the report's `invocation.source` names the narrowed root). The
   dropped rows are counted in `output.rows_filtered` (`rows_emitted` is what passed; `rows_fetched` both). The filters are part of the
@@ -909,7 +914,7 @@ Diagnostics:
 
   | Field | Meaning |
   |---|---|
-  | `objects` | rows listed so far |
+  | `objects` | rows listed so far (a local tree's entries, directories included) |
   | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
   | `parts` | parts published |
   | `verified_bytes` | a resume's bytes of retained parts checked so far |
@@ -932,7 +937,7 @@ Diagnostics:
   values unless given again.
 - **Terminal** (Java's stderr surface). A live progress record on stderr, from the snapshot the progress file
   is written from: the phase (`starting`, `verifying` with a resume's bytes checked, `listing`), objects listed
-  (with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
+  (a local tree's entries: `N entries`; with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
   elapsed time since the command began, API calls and, on a known tariff, the labelled estimate; no percentage
   or ETA (a listing has no honest denominator), no key text. On a terminal it is redrawn in place (carriage
   return, `ESC[2K`; on Windows after enabling virtual-terminal processing, else plain lines), its trailing
@@ -941,7 +946,7 @@ Diagnostics:
   `--no-progress` suppresses it, `--progress-interval D` (at least 1 s) sets the cadence and implies it.
   Warnings written while the line is drawn erase it and repaint it after. At the end, `--stats` prints Java's
   block on stderr: a disposition (`INCOMPLETE (class)` with `resume: swath resume DIR` for a resumable stop; a
-  refused run prints only this line), `N objects in T · K keys/s` (with the whole invocation's time when it is
+  refused run prints only this line), `N objects in T · K keys/s` (`N entries` for a local tree; with the whole invocation's time when it is
   over a second longer), `N API calls · R per 1k objects · in flight avg A · peak P`, throttles, retries and
   entry errors when any, the estimate, and `files · bytes written · peak RSS`. Without `--stats` it is printed
   for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
@@ -993,13 +998,13 @@ succeeded, `rows_fetched` = `rows_filtered` + `rows_emitted`; a run that stopped
 the frontier that it never emitted. `rows_retained` is kept from an interrupted run, `rows_durable` in parts
 that stay in the output (the committed dataset's, or after a failure the journaled parts'), `rows_committed` in
 the committed dataset (`rows_retained` + `rows_emitted`). `parts_written` and `parts_retained` count parts.
-`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
+`object_bytes` sums the sizes of the objects the order stage accepted (the size column; absent for a schema without one; a local directory's own size is no object's, so a local tree's is the apparent bytes of the files accepted after the filters): on a committed run exactly those of `rows_emitted`, on a run that stopped also those accepted and never handed on;
 `output_bytes` is the dataset's part bytes. `text` is a text run's: `format`, `destination`, `compression`,
 `rows`, `bytes` (delivered, compressed), `sink_wait_ns`, `output_wait_ns`, `formatters`, and `compressor`
 (`bytes_in`, `bytes_out`, `jobs`, `jobs_reason`: `cores`, `row_budget`, `encoders`, `gzip`). `totals` is a
 `swath du` run's (absent otherwise): `depth`, `prefixes` (the rows printed, the total included),
 `max_prefixes` (the cap), `bytes_column` (the column summed: `size`, or `allocated_bytes` with `--allocated`),
-`objects`, `bytes` and `dirs` (the total's), `not_objects` (rows counted as no object: directories, delete
+`objects`, `bytes` and `dirs` (the total's; `objects` excludes directories), `not_objects` (rows counted as no object: directories, delete
 markers), `unsized` (objects without a value in the bytes column: the sizes are then unknown), `links_once`
 (`--count-links-once`), `linked_rows` (rows with more than one hard link), `inodes` (the distinct inodes among
 them, each counted once) and `max_inodes` (their cap).

@@ -16,7 +16,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/localfs"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record
@@ -263,10 +262,21 @@ func frame(parts []string, width int, p palette) string {
 	return b.String()
 }
 
+// rowNoun is what the terminal calls a source's rows: a local tree's are
+// entries (its files, directories and other kinds), an object store's
+// objects.
+func rowNoun(local bool) string {
+	if local {
+		return "entries"
+	}
+	return "objects"
+}
+
 // progressParts is one record's fields, most important first: the phase,
-// its counters, then elapsed time, API calls and the estimate. No
-// percentage or ETA: a listing has no honest denominator. No key text.
-func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64) []string {
+// its counters (rows called noun), then elapsed time, API calls and the
+// estimate. No percentage or ETA: a listing has no honest denominator. No
+// key text.
+func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, noun string) []string {
 	phase := "listing"
 	switch {
 	case s.StartedAt.IsZero():
@@ -278,7 +288,7 @@ func progressParts(s listing.ProgressSnapshot, session time.Duration, live float
 	if phase == "verifying" {
 		parts = append(parts, byteText(s.Verified)+" verified")
 	} else {
-		objects := count(s.Objects) + " objects"
+		objects := count(s.Objects) + " " + noun
 		if s.Retained > 0 {
 			objects += " (+" + count(s.Retained) + " recovered)"
 		}
@@ -306,6 +316,7 @@ type display struct {
 	pal      palette
 	interval time.Duration
 	started  time.Time // the invocation's start: the elapsed time shown
+	noun     string    // the rows' name (rowNoun)
 
 	samples chan listing.ProgressSnapshot
 	stopped chan struct{}
@@ -352,8 +363,8 @@ func progressInterval(t termOptions, redraw bool) time.Duration {
 	return max(d, time.Second)
 }
 
-func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time) *display {
-	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started,
+func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun string) *display {
+	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun,
 		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
 	d.done.Add(1)
 	go d.loop()
@@ -404,7 +415,7 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 		live = float64(s.Objects) * 1000 / float64(s.DurationMs)
 	}
 	d.last, d.prevObj, d.prevAt = now, s.Objects, now
-	parts := progressParts(s, now.Sub(d.started), max(live, 0))
+	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun)
 	if d.redraw {
 		d.out.frame(frame(parts, d.width(), d.pal))
 	} else {
@@ -507,7 +518,7 @@ var resumableStops = map[string]bool{"interrupted": true, "terminated": true, "d
 // disposition for a run that did not complete, the headline (objects,
 // time, keys/s), the request economy, faults when any, the estimate, and
 // the output.
-func statsLines(r *listing.Report, brokenPipe bool) []string {
+func statsLines(r *listing.Report, brokenPipe bool, noun string) []string {
 	var lines []string
 	o := r.Outcome
 	switch {
@@ -533,11 +544,7 @@ func statsLines(r *listing.Report, brokenPipe bool) []string {
 	} else if r.Timings.ListingMs > 0 {
 		kps = float64(r.Output.RowsEmitted) * 1000 / float64(r.Timings.ListingMs)
 	}
-	noun := " objects in "
-	if r.Invocation.SchemaID == localfs.Schema.ID {
-		noun = " entries in " // a local tree's rows are its files and directories
-	}
-	head := count(r.Output.RowsEmitted) + noun + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
+	head := count(r.Output.RowsEmitted) + " " + noun + " in " + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
 	if session-run > time.Second {
 		head += sep + elapsed(session) + " total"
 	}
@@ -611,13 +618,14 @@ type termUI struct {
 	disp  *display
 	prev  io.Writer // errOut before the run
 	coord *stderrCoord
+	noun  string // the rows' name (rowNoun)
 }
 
 // startTerminal resolves the terminal preferences for a run and starts its
 // progress display; -v prints a start line.
-func startTerminal(t termOptions, att *listing.Attempt, src, out string) *termUI {
+func startTerminal(t termOptions, att *listing.Attempt, src, out, noun string) *termUI {
 	tty, width := stderrTerminal()
-	tt := &termUI{opt: t, pal: palette(colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut}
+	tt := &termUI{opt: t, pal: palette(colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun}
 	if t.verbose > 0 && t.quiet == 0 {
 		dest := out
 		if dest == "" {
@@ -637,7 +645,7 @@ func startTerminal(t termOptions, att *listing.Attempt, src, out string) *termUI
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started)
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun)
 	return tt
 }
 
@@ -646,7 +654,7 @@ func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
 	if tt == nil || !showStats(tt.opt, r, brokenPipe) {
 		return
 	}
-	lines := statsLines(r, brokenPipe)
+	lines := statsLines(r, brokenPipe, tt.noun)
 	writeStats(errOut, lines, tt.pal, brokenPipe || r.Outcome.ExitCode != exitCompleted || r.Outcome.Class == "incomplete")
 }
 

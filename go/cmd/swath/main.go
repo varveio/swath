@@ -459,7 +459,7 @@ type totalsOut struct {
 
 // write writes the tally's rows to w.
 func (t *totalsOut) write(w io.Writer) error {
-	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Dirs: t.tally.Dirs()}
+	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs()}
 	return textout.WriteTotals(w, t.format, l, t.tally.Result())
 }
 
@@ -575,10 +575,10 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	o.term.register(f)
 	f.StringVar(&o.filter.Include, "include", "", "keep keys in which this `regex` (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix")
 	f.StringVar(&o.filter.Exclude, "exclude", "", "drop keys in which this `regex` (Go RE2 syntax) matches anywhere")
-	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
-	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects of at most this `size`")
-	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
-	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects modified at or before this `time`")
+	f.StringVar(&o.filter.MinSize, "min-size", "", "keep objects (a local tree's entries, directories too) of at least this `size` (1k, 256mb, 1.5GiB: binary units)")
+	f.StringVar(&o.filter.MaxSize, "max-size", "", "keep objects or entries of at most this `size`")
+	f.StringVar(&o.filter.Since, "modified-since", "", "keep objects (a local tree's entries, directories too) modified at or after this `time` (2026-01-01, 2026-01-01T12:00:00, an offset or Z; UTC without one)")
+	f.StringVar(&o.filter.Until, "modified-until", "", "keep objects or entries modified at or before this `time`")
 	depthUsage := "also total each key prefix down to `N` levels below SOURCE (a prefix ends at a '/'; 0: the total alone), each including what is below it, as du"
 	f.IntVar(&o.depth, "depth", 0, depthUsage)
 	f.IntVar(&o.depth, "d", 0, depthUsage)
@@ -917,7 +917,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			settled = true
 		}
 	}
-	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir)
+	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir, rowNoun(pf.Scheme == "")) // the empty scheme is a local path
 	defer tt.close()
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)

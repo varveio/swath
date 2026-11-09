@@ -199,17 +199,17 @@ func TestDuMatchesLstat(t *testing.T) {
 						t.Fatal(err)
 					}
 					lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-					if lines[0] != "Prefix\tObjects\tDirs\t"+size+"\tLastModified" || len(lines)-1 != len(want) {
+					if lines[0] != "Prefix\tObjects\tDirs\t"+size+"\tUnsized\tLastModified" || len(lines)-1 != len(want) {
 						t.Fatalf("%d rows for %d prefixes:\n%s", len(lines)-1, len(want), out.String())
 					}
 					prev := ""
 					for i, l := range lines[1:] {
 						f := strings.Split(l, "\t")
-						if len(f) != 5 {
+						if len(f) != 6 || f[4] != "0" {
 							t.Fatalf("row %q", l)
 						}
 						n := func(s string) int64 { v, _ := strconv.ParseInt(s, 10, 64); return v }
-						check(f[0], n(f[1]), n(f[2]), n(f[3]), f[4], &prev, i == 0)
+						check(f[0], n(f[1]), n(f[2]), n(f[3]), f[5], &prev, i == 0)
 					}
 					// JSONL: the same rows, each line JSON; the prefix as
 					// text when it is UTF-8, else its exact bytes in base64.
@@ -235,6 +235,9 @@ func TestDuMatchesLstat(t *testing.T) {
 							prefix = string(raw)
 						}
 						modified, _ := r["LastModified"].(string)
+						if r["Unsized"] != 0.0 {
+							t.Fatalf("%q: Unsized", l)
+						}
 						check(prefix, int64(r["Objects"].(float64)), int64(r["Dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
 						rows++
 					}
@@ -293,7 +296,7 @@ func TestDuLocalRefusals(t *testing.T) {
 	// listing stopped there.
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--allocated", "--one-filesystem", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "Prefix\tObjects\tDirs\tAllocatedSize\tLastModified\n\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
+		!strings.HasPrefix(out.String(), "Prefix\tObjects\tDirs\tAllocatedSize\tUnsized\tLastModified\n\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
@@ -336,7 +339,7 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out.String(), "Prefix\tObjects\tDirs\tSize\tLastModified\n\t1\t1\t2\t") ||
+	if !strings.HasPrefix(out.String(), "Prefix\tObjects\tDirs\tSize\tUnsized\tLastModified\n\t1\t1\t2\t0\t") ||
 		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read") {
 		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
 	}
