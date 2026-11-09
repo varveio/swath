@@ -28,7 +28,8 @@
 // must hold one non-empty key per row of the page, strictly ascending, inside
 // the page's ColumnIndex bounds, and after every key decoded before it in the
 // same read. Page bounds are used conservatively: a bound at least as long
-// as the writer's recorded truncation length may be a truncation, so a page
+// as the profile's threshold (PartSource.BoundBytes; javaera.BoundBytes, as
+// the Java writer records no truncation length) may be a truncation, so a page
 // is skipped only when a key at or after the target provably cannot be on
 // it. A violation found while reading wraps ErrCorrupt; keys out of order
 // inside one row group are a *DisorderError (reason row_group_disorder).

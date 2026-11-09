@@ -124,8 +124,8 @@ in the interval it closes, and the scope they were taken under. Two sources fill
   reads the footer and those two index sections, never a data page, through `seekparquet.InspectKeyPages`, which
   checks its footer and stamps first) gives cuts a thousand times finer. The
   reader offers 4,096 cuts of about equal rows (four candidates per tile at the most tiles a run starts with),
-  reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a key over
-  the 1,024-byte index bound) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes
+  reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a footer or
+  stamp the module refuses) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes
   the last cut;
 - *a cut file*: one key per line, ascending bytewise without repeats, optionally a tab and the expected count;
   every line has a count or none does (uncounted cuts weigh one each). Its cuts are held for the run and

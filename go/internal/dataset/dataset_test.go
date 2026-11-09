@@ -191,6 +191,39 @@ func TestOverwriteInterruptedUnjournaled(t *testing.T) {
 	}
 }
 
+// TestOverwriteRefusesFormat2: --overwrite replaces a current SeekParquet
+// dataset of the run's schema, but refuses a format 2 dataset of builds from
+// 2026-11-05 to 2026-11-08 of the same schema id, even beside a journal, and
+// leaves it as it was.
+func TestOverwriteRefusesFormat2(t *testing.T) {
+	const schemaID = "swath/s3-objects/v1"
+	current := t.TempDir()
+	touch(t, filepath.Join(current, DataDir, PartName(0)))
+	os.WriteFile(filepath.Join(current, ManifestName), []byte(`{"format":"`+seekparquet.Format+`","format_version":0,"draft_revision":1,"schema_id":"`+schemaID+`"}`), 0o644)
+	if _, err := Usable(current, "", schemaID, true); err != nil {
+		t.Fatalf("current dataset: %v", err)
+	}
+	old := t.TempDir()
+	manifest := []byte(`{"format":"swath-dataset","format_version":2,"schema_id":"` + schemaID + `","coverage":{"complete":true},"parts":[]}`)
+	part := filepath.Join(old, DataDir, PartName(0))
+	touch(t, part)
+	touch(t, filepath.Join(old, JournalDir, "journal"))
+	if err := os.WriteFile(filepath.Join(old, ManifestName), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Prepare(old, "", schemaID, true); !errors.Is(err, ErrNotDataset) {
+		t.Fatalf("format 2 dataset: %v, want ErrNotDataset", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(old, ManifestName)); err != nil || !bytes.Equal(b, manifest) {
+		t.Fatalf("manifest changed: %q, %v", b, err)
+	}
+	for _, kept := range []string{part, filepath.Join(old, JournalDir, "journal")} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("%s: %v", kept, err)
+		}
+	}
+}
+
 // TestManaged: a directory is this tool's by its lock, its journal or a
 // manifest that parses as this tool's (format and the swath extension's
 // coverage); an unrelated data/ beside a _SUCCESS, another tool's manifest

@@ -63,8 +63,8 @@ or 1,024 bytes on a code point boundary and records neither).
 - `RollupRead` returns the entries a one-key-at-a-time walk over `Read` would: each common prefix costs one
   routing hop and at most one page-index landing past it, and a row group whose first key and the next
   group's first key share a common prefix is skipped without a read.
-- A `Reader` is safe for concurrent use; parsed footers and page indexes are shared and loaded once. Both
-  profiles read parts through a `FileCache`: every open, the first included, waits for a slot under the
+- A `Reader` is safe for concurrent use; parsed footers and page indexes are shared and loaded once. The
+  profile reads parts through a `FileCache`: every open, the first included, waits for a slot under the
   cache's bound (`DefaultMaxOpenFiles`: half the soft descriptor limit, at most 4,096), an idle descriptor
   is closed (least recently used first) when another part needs one, and an evicted part is reopened by
   path and must be the same file (`os.SameFile`). Opens are non-blocking on unix and anything but a

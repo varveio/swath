@@ -144,14 +144,16 @@ Every part's key/value metadata repeats the manifest's version and key declarati
 | `swath.sort.format_version` | `seekparquet.format_version` = `0`, `seekparquet.draft_revision` = `1` |
 | `swath.sort.file_index` | removed: the manifest orders the parts |
 | `swath.sort.file_final` | removed: completeness is the manifest's |
-| `swath.sort.index_bound_bytes` | removed: no column index bound is shortened |
 | – | `seekparquet.schema_id` |
 | – | `seekparquet.key_column` = `key`, `seekparquet.key_unique` = `true` or `false` (as the manifest's `key`) |
 
 **Bounds.** Every column's ColumnIndex bounds are exact: each page's minimum and maximum (the key's: its first
-and last key), as Parquet and SeekParquet (RG-5) require. Format 1 truncated bounds longer than its
-`swath.sort.index_bound_bytes`, so its readers treated page bounds as conservative; a SeekParquet reader need
-not. Statistics in the column chunk metadata are exact, as they were.
+and last key), as Parquet and SeekParquet (RG-5) require. The Java writer truncated key bounds and recorded
+neither length it used: 1,024 bytes in served fixtures, the library default of 64 in older ones, cut on a code
+point boundary, so a truncated bound can be as short as 61 bytes. Its readers therefore treat page bounds as
+conservative; `swath-replay` treats every Java-era key bound of 61 bytes or more as possibly truncated
+(`javaera.BoundBytes`). A SeekParquet reader need not. Statistics in the column chunk metadata are exact, as
+they were.
 
 **Replay fixtures.** `swath-replay` serves a SeekParquet dataset through the seekparquet module and a Java-era
 fixture (format 1 sorted parts) through its own legacy reader (`internal/replay/legacy`); the startup line's
