@@ -339,7 +339,7 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	buf.Reset()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(buf, io.LimitReader(resp.Body, 64<<10))
-		return nil, responseError(resp, buf.Bytes())
+		return nil, ResponseError(resp.StatusCode, resp.Header, buf.Bytes())
 	}
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxResponse+1)); err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
@@ -360,8 +360,12 @@ func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, par
 	return page, nil
 }
 
-func responseError(resp *http.Response, body []byte) *Error {
-	e := &Error{Status: resp.StatusCode, RequestID: resp.Header.Get("X-Amz-Request-Id")}
+// ResponseError is the *Error of an answer other than 200: its status, the
+// code, message and request ID an <Error> body names (else the status text
+// without spaces as the code, and the X-Amz-Request-Id header), and for a
+// redirect the bucket's region (X-Amz-Bucket-Region). header may be nil.
+func ResponseError(status int, header http.Header, body []byte) *Error {
+	e := &Error{Status: status, RequestID: header.Get("X-Amz-Request-Id")}
 	if code, msg, id, ok := parseError(body); ok {
 		e.Code, e.Message = code, msg
 		if id != "" {
@@ -369,10 +373,10 @@ func responseError(resp *http.Response, body []byte) *Error {
 		}
 	}
 	if e.Code == "" {
-		e.Code = strings.ReplaceAll(http.StatusText(resp.StatusCode), " ", "")
+		e.Code = strings.ReplaceAll(http.StatusText(status), " ", "")
 	}
-	if resp.StatusCode == http.StatusMovedPermanently || e.Code == "AuthorizationHeaderMalformed" || e.Code == "PermanentRedirect" {
-		e.Region = resp.Header.Get("X-Amz-Bucket-Region")
+	if status == http.StatusMovedPermanently || e.Code == "AuthorizationHeaderMalformed" || e.Code == "PermanentRedirect" {
+		e.Region = header.Get("X-Amz-Bucket-Region")
 	}
 	return e
 }
