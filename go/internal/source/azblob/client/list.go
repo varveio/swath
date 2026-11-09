@@ -232,7 +232,13 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 	u := s.safeURL(c, container)
 	if re, ok := errors.AsType[*azcore.ResponseError](err); ok && re.RawResponse != nil {
 		body, _ := runtime.Payload(re.RawResponse)
-		return c.responseError(re.RawResponse, re.ErrorCode, body, u)
+		code := re.ErrorCode
+		if re.RawResponse.Header.Get(headerErrorCode) == "" {
+			if decoded := errorCode(body); decoded != "" {
+				code = decoded
+			}
+		}
+		return c.responseError(re.RawResponse, code, body, u)
 	}
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)

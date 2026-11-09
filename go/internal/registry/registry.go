@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -325,6 +326,48 @@ func Redact(root string) string {
 		return f.Redact(root)
 	}
 	return root
+}
+
+// RedactArgv copies a command line for reports and journals: registered
+// secret flags, endpoint userinfo and credentials in source roots are
+// redacted. Both --flag VALUE and --flag=VALUE are accepted.
+func RedactArgv(argv []string) []string {
+	secrets := map[string]bool{}
+	for _, f := range Factories() {
+		for _, s := range f.Secrets {
+			secrets[s.Flag] = true
+		}
+	}
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		name, value, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if a == "--" || !strings.HasPrefix(a, "-") {
+			out = append(out, Redact(a))
+			continue
+		}
+		hide := secrets[name]
+		switch name {
+		case "endpoint", "gcs-endpoint", "azblob-endpoint":
+			if !eq && i+1 < len(argv) {
+				value = argv[i+1]
+			}
+			u, err := url.Parse(value)
+			// A malformed URL may carry userinfo too; its parse error
+			// quotes it, so do not retain it for diagnostics.
+			hide = err != nil || u.User != nil
+		}
+		if !hide {
+			out = append(out, Redact(a))
+			continue
+		}
+		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
+		out = append(out, dashes+name+"=[redacted]")
+		if !eq && i+1 < len(argv) {
+			i++
+		}
+	}
+	return out
 }
 
 // Factories returns the registered factories, by scheme.

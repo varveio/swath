@@ -317,7 +317,7 @@ func (p *Provider) admit(ctx context.Context) error {
 			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
 				hns, err, how = h, nil, "filesystem properties"
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
-				err = fmt.Errorf("%v; filesystem properties: %v", err, nerr)
+				err = fmt.Errorf("%w; filesystem properties: %w", err, nerr)
 			}
 		}
 	}

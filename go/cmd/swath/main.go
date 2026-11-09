@@ -522,27 +522,8 @@ func sourceForms() string {
 // redacted replaces a secret flag's value in a recorded command line.
 const redacted = "[redacted]"
 
-// redactArgv is argv with every secret flag's value replaced by redacted,
-// in both spellings (--flag VALUE and --flag=VALUE), and a credential in a
-// root by its provider's redaction (registry.Redact; a resume must be given
-// it again).
-func redactArgv(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if a == "--" || !strings.HasPrefix(a, "-") || !slices.Contains(secretFlags, name) {
-			out = append(out, registry.Redact(a))
-			continue
-		}
-		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
-		out = append(out, dashes+name+"="+redacted)
-		if !eq && i+1 < len(argv) {
-			i++ // the value
-		}
-	}
-	return out
-}
+// redactArgv is the recorded form shared with listing.Run.
+func redactArgv(argv []string) []string { return registry.RedactArgv(argv) }
 
 // resumeFlags are the flags swath resume accepts.
 var resumeFlags = append(slices.Clone(runtimeFlags), operationalFlags...)
@@ -845,8 +826,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	silentErrors.Store(o.term.quiet >= 2)
 	argv := recorded
 	if argv == nil {
-		argv = redactArgv(append(strings.Fields(cmd.name()), args...))
+		argv = append(strings.Fields(cmd.name()), args...)
 	}
+	argv = redactArgv(argv)
 	pf, err := registry.Lookup(root)
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})

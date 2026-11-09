@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/journal"
@@ -296,4 +297,42 @@ func TestGCSCredentialRotationResumes(t *testing.T) {
 		t.Fatal("the resume did not sign with the rotated credential")
 	}
 	sameDataset(t, "rotation", ref, out)
+}
+
+// Listing also accepts Config from callers other than the CLI. Raw recorded
+// arguments must not reach its reports or the journal, even on success.
+func TestRecordedEndpointUserinfo(t *testing.T) {
+	ep := gcsBucket(t, 2)
+	cfg := gcsConfig(ep, filepath.Join(t.TempDir(), "ds"), false)
+	cfg.Argv = []string{"list", "gs://bkt",
+		"--endpoint", "http://private-user:private-password@s3.example/",
+		"--endpoint=http://private-user:private-password@s3.example/",
+		"--gcs-endpoint", "http://private-user:private-password@gcs.example/",
+		"--gcs-endpoint=http://private-user:private-password@gcs.example/",
+		"--azblob-endpoint", "http://private-user:private-password@azure.example/",
+		"--azblob-endpoint=http://private-user:private-password@azure.example/"}
+	original := strings.Join(cfg.Argv, " ")
+	rep, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(rep.Invocation.Argv, " "), "private-") {
+		t.Fatalf("raw arguments in successful invocation: %q", rep.Invocation.Argv)
+	}
+	if strings.Join(cfg.Argv, " ") != original {
+		t.Fatal("listing changed the caller's arguments")
+	}
+	paths := []string{filepath.Join(cfg.Output.Dir, dataset.ReportName)}
+	if !cfg.Output.NoJournal {
+		paths = append(paths, journal.Path(cfg.Output.Dir))
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "private-") {
+			t.Fatalf("raw arguments in %s", path)
+		}
+	}
 }

@@ -281,7 +281,7 @@ func Endpoint(ep string) (string, error) {
 	case err != nil:
 		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
 	case u.User != nil:
-		return "", fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+		return "", errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
 	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
 		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
 	}

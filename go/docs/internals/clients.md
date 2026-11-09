@@ -53,10 +53,14 @@ clients are described in [providers.md](providers.md) and the page of each provi
   transport opens a second connection only at the server's stream limit; the transports share one TLS session
   cache. A supplied HTTP client is used alone. Each provider installs its own Guard and SDK client on every pooled
   transport; the report's `transport.pool_size` is the pool's size.
-- **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction, so no password
-  reaches the journal identity or the report (`TestEndpointUserinfoRefused`). The SAS is scrubbed by parameter name
-  from every error, 400 query echoes and SDK decoder errors included (`TestSASRedacted`, `TestScrubSASParameters`,
-  `TestRedactedRefusal`). The SDKs' own logs, which quote request headers or URLs, are off: S3 and GCS give their
+- **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction without quoting
+  it (`TestEndpointUserinfoRefused`). `registry.RedactArgv`, shared by the command and listing, replaces the value
+  of `--endpoint`, `--gcs-endpoint` or `--azblob-endpoint` with `[redacted]` when it carries user information or
+  cannot be parsed, in either argument spelling. Valid endpoints without user information are retained for
+  resume. This covers failure reports, successful reports and journal arguments, including recorded arguments
+  supplied to listing (`TestEndpointUserinfoReports`, `TestRecordedEndpointUserinfo`, `TestRedactEndpointArgv`).
+  The SAS is scrubbed by parameter name from every error's code and message, 400 query echoes and SDK decoder
+  errors included (`TestSASRedacted`, `TestScrubSASParameters`, `TestRedactedRefusal`). The SDKs' own logs, which quote request headers or URLs, are off: S3 and GCS give their
   clients a logger that discards everything (`TestSDKLogsNothing`), and the command turns azcore's off at startup
   (`TestAzureSDKLogSuppressed`).
 - **Identity and admission.** The resume identity is the inputs the listing was asked with (bucket or container,
@@ -135,9 +139,13 @@ fails the page, as does a malformed `Date` header on a listing.
 `NamespaceInfo`, for anonymous admission, is swath's own HEAD (Filesystem Get Properties) on the account's Data Lake
 host, which azblob does not have, reading `x-ms-namespace-enabled`; an endpoint other than
 `https://ACCOUNT.blob.core.windows.net` has no such host, and with Shared Key it is not asked (`ErrNoDFSEndpoint`).
-In both a refusal or a missing header is an error, never "flat". The error code of a non-2xx answer is azcore's
-`ResponseError.ErrorCode` (`x-ms-error-code`, else the body's `<Code>`); swath reads only the message from the
-bounded error body, scrubbed of the SAS (`NamespaceInfo`'s HEAD has no body: its code is the header's).
+In both a refusal or a missing header is an error, never "flat". If both checks fail, admission wraps both
+causes, preserving credential refusal and the command's `--anonymous` hint (`TestPublicBucketHint`). The error
+code of a non-2xx answer is `x-ms-error-code` when present; otherwise swath decodes the bounded XML body's
+`Code`, including CDATA and XML character/entity references, falling back to azcore's `ResponseError.ErrorCode`
+(which also accepts JSON). The header always takes precedence (`TestScriptedAnswers`). Both the code and the
+XML message are scrubbed of the SAS by parameter name before storage; the stored code is then capped at 64 KiB
+(`TestSASRedacted`). `NamespaceInfo`'s HEAD has no body: its code is the header's.
 `AuthenticationFailed` arrives as a 403 and `ServerBusy` as a 503, so
 the code decides before the status, and a 500 is retried only when it is `OperationTimedOut` or `InternalError`.
 

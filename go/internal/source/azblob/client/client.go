@@ -238,7 +238,7 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 	case err != nil:
 		return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
 	case u.User != nil:
-		return nil, fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+		return nil, errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
 	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "":
 		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", endpoint)
 	}
@@ -567,12 +567,16 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 }
 
 // responseError is a non-200 answer as an *Error: the code given (azcore's
-// ResponseError.ErrorCode: x-ms-error-code, else the body's), the message
-// read from the bounded body and scrubbed, a redirect's target withheld, a
-// 400's query (without the SAS), the Retry-After wait.
+// ResponseError.ErrorCode, with XML character decoding restored), the
+// message read from the bounded body, both scrubbed of the SAS, a
+// redirect's target withheld, a 400's query (without the SAS), the
+// Retry-After wait.
 func (c *Client) responseError(resp *http.Response, code string, body []byte, u *url.URL) *Error {
-	e := &Error{Status: resp.StatusCode, Code: code, Message: errorMessage(body),
+	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: errorMessage(body),
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
+	if len(e.Code) > maxErrorBody {
+		e.Code = e.Code[:maxErrorBody]
+	}
 	if e.Wait > c.cfg.RequestTimeout {
 		// A wait past the attempt deadline the caller set holds a worker
 		// while the engine sees no progress: it is cut to that deadline and

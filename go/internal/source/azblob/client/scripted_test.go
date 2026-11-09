@@ -178,6 +178,19 @@ func TestScriptedAnswers(t *testing.T) {
 			w.WriteHeader(500)
 			fmt.Fprint(w, "\xef\xbb\xbf<?xml version=\"1.0\"?><Error><Code>InternalError</Code><Message>x</Message></Error>")
 		}, outcome{Class: objhttp.ClassOther, Requeue: true, Answer: &Error{Status: 500, Code: "InternalError", Message: "x"}, Counts: [5]int64{3, 2, 0, 0, 0}, Requests: 3}},
+		{"500 headerless CDATA code", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(500)
+			fmt.Fprint(w, "<Error><Code><![CDATA[InternalError]]></Code><Message>x</Message></Error>")
+		}, outcome{Class: objhttp.ClassOther, Requeue: true, Answer: &Error{Status: 500, Code: "InternalError", Message: "x"}, Counts: [5]int64{3, 2, 0, 0, 0}, Requests: 3}},
+		{"500 headerless entities code", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(500)
+			fmt.Fprint(w, "<Error><Code>Internal&#69;rror</Code><Message>x</Message></Error>")
+		}, outcome{Class: objhttp.ClassOther, Requeue: true, Answer: &Error{Status: 500, Code: "InternalError", Message: "x"}, Counts: [5]int64{3, 2, 0, 0, 0}, Requests: 3}},
+		{"500 code header precedes CDATA body", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(headerErrorCode, "Unknown")
+			w.WriteHeader(500)
+			fmt.Fprint(w, "<Error><Code><![CDATA[InternalError]]></Code><Message>x</Message></Error>")
+		}, outcome{Class: objhttp.ClassOther, Answer: &Error{Status: 500, Code: "Unknown", Message: "x"}, Counts: [5]int64{1}, Requests: 1}},
 		{"403", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 403, "AuthorizationFailure") },
 			outcome{Class: objhttp.ClassAccessDenied, Answer: echo(403, "AuthorizationFailure", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"401 with a challenge, not re-sent", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {

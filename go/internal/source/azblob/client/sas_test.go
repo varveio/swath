@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -118,6 +119,21 @@ func TestSASRedacted(t *testing.T) {
 			w.Header().Set(headerErrorCode, codeAuthFailed)
 			w.WriteHeader(403)
 			fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>AuthenticationFailed</Code><Message>Signature %s did not match</Message></Error>", url.QueryEscape(sig))
+		case "json-code":
+			// No x-ms-error-code: azcore reads JSON too. Values differ from
+			// the configured SAS, so each parameter must be scrubbed by name.
+			w.WriteHeader(403)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "sig=UnexpectedSecret&se=other-expiry&sp=other-permissions&ss=other-service&srt=other-resource&sv=other-version"}})
+		case "long-code":
+			w.Header().Set(headerErrorCode, strings.Repeat("x", maxErrorBody+1))
+			w.WriteHeader(403)
+		case "xml-cdata-code", "xml-entity-code":
+			w.WriteHeader(403)
+			code := "<![CDATA[sig=UnexpectedSecret&se=other-expiry]]>"
+			if r.URL.Query().Get("prefix") == "xml-entity-code" {
+				code = "sig&#61;UnexpectedSecret&amp;se=other-expiry"
+			}
+			fmt.Fprintf(w, "<Error><Code>%s</Code></Error>", code)
 		case "redirect":
 			http.Redirect(w, r, "http://elsewhere.example/?"+r.URL.RawQuery, http.StatusMovedPermanently)
 		case "bad-location":
@@ -140,13 +156,28 @@ func TestSASRedacted(t *testing.T) {
 	for _, x := range []struct {
 		c      *Client
 		prefix string
-	}{{c, "400"}, {c, "400-escaped"}, {c, "400-decoded"}, {c, "403"}, {c, "redirect"}, {c, "bad-location"}, {c, "slow"}, {down, "refused"}} {
+	}{{c, "400"}, {c, "400-escaped"}, {c, "400-decoded"}, {c, "403"}, {c, "json-code"}, {c, "long-code"}, {c, "xml-cdata-code"}, {c, "xml-entity-code"}, {c, "redirect"}, {c, "bad-location"}, {c, "slow"}, {down, "refused"}} {
 		_, err := x.c.List(context.Background(), &ListInput{Container: "c", Prefix: x.prefix})
 		if err == nil {
 			t.Fatalf("%s: no error", x.prefix)
 		}
 		if msg := err.Error(); sasLeak(msg) != "" || strings.Contains(msg, "elsewhere") {
 			t.Errorf("%s: the SAS (%q) or a redirect target leaks: %s", x.prefix, sasLeak(msg), msg)
+		}
+		if strings.HasSuffix(x.prefix, "code") {
+			e, ok := errors.AsType[*Error](err)
+			if !ok {
+				t.Fatalf("%s: no Azure answer: %v", x.prefix, err)
+			}
+			if e.Code == "" || len(e.Code) > maxErrorBody || strings.Contains(e.Code, "UnexpectedSecret") || strings.Contains(e.Code, "other-") {
+				t.Errorf("%s: code is empty, unbounded or leaks SAS parameters (length %d): %.200s", x.prefix, len(e.Code), e.Code)
+			}
+			if f := objhttp.Normalize(err); f == nil || f.Code != e.Code {
+				t.Errorf("%s: normalized code differs from the scrubbed answer: %+v", x.prefix, f)
+			}
+			if x.prefix == "json-code" && e.Code != "sig=REDACTED&se=REDACTED&sp=REDACTED&ss=REDACTED&srt=REDACTED&sv=REDACTED" {
+				t.Errorf("%s: code not scrubbed by parameter name: %s", x.prefix, e.Code)
+			}
 		}
 		if e, ok := errors.AsType[*Error](err); ok && strings.HasPrefix(x.prefix, "400") {
 			q, _ := url.ParseQuery(e.Query)

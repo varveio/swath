@@ -52,12 +52,16 @@ func TestPublicBucketHint(t *testing.T) {
 		requests *atomic.Int64
 	}{
 		{"s3", []string{"s3://bkt", "--endpoint", s3.URL}, &s3Requests},
+		{"azblob normal endpoint", []string{"az://replay/corpus"}, &azRequests},
 		{"azblob", []string{"az://replay/corpus", "--azblob-endpoint", azProxy.URL}, &azRequests},
 	} {
 		out := filepath.Join(t.TempDir(), "ds")
 		err := run(context.Background(), append(c.args, "-o", out), io.Discard, false)
 		if err == nil || !strings.Contains(err.Error(), "(a public bucket needs --anonymous)") || c.requests.Load() != 0 {
 			t.Errorf("%s: %v, %d requests; want the hint and none sent", c.name, err, c.requests.Load())
+		}
+		if c.name == "azblob normal endpoint" && (err == nil || !strings.Contains(err.Error(), "filesystem properties:")) {
+			t.Errorf("normal endpoint did not preserve both refused namespace checks: %v", err)
 		}
 	}
 	// The hint is right: the public container lists with --anonymous.

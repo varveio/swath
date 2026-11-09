@@ -37,8 +37,7 @@ func (p *ListOutput) Validate(sent string) error {
 }
 
 // errorMessage reads an <Error> document's Message (the BOM stripped) from
-// the bounded body; empty when the body is not one. The code is azcore's
-// (ResponseError.ErrorCode).
+// the bounded body; empty when the body is not one.
 func errorMessage(body []byte) string {
 	var w struct {
 		Message string `xml:"Message"`
@@ -47,4 +46,17 @@ func errorMessage(body []byte) string {
 		return ""
 	}
 	return w.Message
+}
+
+// errorCode preserves XML character decoding for headerless answers:
+// azcore's regular expression does not read CDATA or entity references.
+// The Guard has already bounded body to maxErrorBody.
+func errorCode(body []byte) string {
+	var w struct {
+		Code string `xml:"Code"`
+	}
+	if xml.Unmarshal(bytes.TrimPrefix(body, bom), &w) != nil {
+		return ""
+	}
+	return w.Code
 }
