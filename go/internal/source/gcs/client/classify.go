@@ -15,9 +15,11 @@ var ErrInvalidPage = objhttp.ErrInvalidPage
 
 // Classify returns the class of err (objhttp's vocabulary, with the JSON
 // API's answers mapped by status and reason).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err, answer) }
+func Classify(err error) objhttp.Class { return objhttp.Classify(err, Answer) }
 
-func answer(err error) (objhttp.Class, bool) {
+// Answer maps an *Error to its class (objhttp.Retry.Answer); ok is false
+// when err holds none.
+func Answer(err error) (objhttp.Class, bool) {
 	var se *Error
 	if !errors.As(err, &se) {
 		return "", false

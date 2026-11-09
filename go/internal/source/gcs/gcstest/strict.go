@@ -31,7 +31,8 @@ import (
 // nonempty pages are cut short at varying lengths; cap lowers the page
 // size limit; shortIf cuts the selected requests' pages to one entry.
 // Every object carries the full metadata resource, sizes and generations
-// as strings, as on the wire.
+// as strings, as on the wire, and every response carries the envelope's
+// kind (storage#objects) unless a fields selector leaves it out.
 type Strict struct {
 	keys  []string
 	Empty int64
@@ -170,7 +171,7 @@ func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		token = pos.after
 	}
-	resp := map[string]any{}
+	resp := map[string]any{"kind": "storage#objects"}
 	if f.Empty > 0 && serial%f.Empty == 0 {
 		// An empty page that still makes progress: a new token that
 		// continues from the request's own position.
