@@ -811,6 +811,39 @@ less kernel time than every full-path stat tool. The disk-usage tools only sum s
 row per entry. Not established: cold-cache behaviour of these tools, hard-link de-duplication, network or
 overlay filesystems.
 
+### Against fd at equal output, huge directories, cold count (2026-11-08)
+
+**Synthetic, local.** 4-vCPU, 15 GiB VM, ext4 on virtio; trees from `bench/gen_tree.py` and FTZZ 4.0.0
+(`ftzz -n 10M -r 100 -d 5 --files-exact`: 10,000,000 files in 131,492 directories); hyperfine, fd 9.0.0,
+bfs 3.1.2. Absolute times on this VM drift between sessions; compare within a table only.
+
+**fd at equal output.** With fd's paths sent to `/dev/null` (not counted through a pipe, which our first pass
+did and which made the walker look 2x faster), warm, the two are even: `wide`, names 262 ms (fd 297, `-j 16`
+232), stat 728 ms (fd 861, `-j 16` 694); `ftzz-10m`, names 2.39 s (fd 3.15, `-j 16` 2.44, bfs 3.88, find
+4.13). Both make one `getdents64` per buffer and one stat per entry (`strace -c`); fd stats by absolute path,
+the walker relative to the directory fd. Warm, about 83 % of the walker's CPU is `fstatat` in the kernel.
+
+**This change** (`localfs`: pointer-free entries, prefix-skipping and parallel sort, presized buffers; a
+stat-tier count at 4 processors per CPU):
+
+| | before (`d9d8ee1`) | after | fd |
+|---|---:|---:|---:|
+| `huge` (200,000 files in one directory), warm, `count`, 15 runs | 324–332 ms | **189 ms** | 264 ms (`-j 16`: 162) |
+| `huge`, warm, `list -o` (sorted Parquet), 15 runs | 488 ms | **309 ms** | – |
+| `realistic`, cold (`drop_caches` before each), `count`, 3 runs | 3.89 s | **2.92 s** | 4.39 s (`-j 64`: 2.83) |
+| `wide`, warm, `count`, 20 runs | 642 ms | 590 ms | – |
+| `deep`, warm, `count`, 20 runs | 285 ms | 293 ms | – |
+| `realistic`, warm, `count`, 20 runs | 1.51 s | 1.53 s | – |
+| `ftzz-10m`, `count`, 2 runs | 77.0 ± 14.1 s | 71.4 ± 4.5 s | `-j 64`: 79.4 ± 12.3 s |
+
+Before the change the huge directory's read and sort ran on one goroutine ahead of its stats (profile: sort
+~100 ms, slice growth ~70 ms of 325). Cold, the walker used about 2.8 of 4 CPUs at any `--workers` (16, 64 and
+256 all 3.7–3.8 s) and fd `-j 64` about 3.8: a stat waiting on the disk holds its Go processor, and GOMAXPROCS
+8 gave 3.17 s, 16 gave 3.07 s. The warm rows of ordinary trees are within noise. The 10M tree does not fit
+this VM's inode cache (`ext4_inode_cache` 9.1M objects, 9.8 GiB; page cache 0.2 GiB): every tool spends
+265–290 s of kernel time in 70–80 s of wall, CPU-bound on reclaim, and the arms are within noise of each
+other. The `huge` Parquet output is identical to the baseline's in content and order.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
