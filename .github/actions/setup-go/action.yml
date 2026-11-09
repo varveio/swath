@@ -1,14 +1,14 @@
-name: Set up Go with a per-job build cache
+name: Set up Go with a shared module cache and a per-job build cache
 description: >
-  Go at the version go/go.mod names, with the module and build caches restored from this job's
-  newest cache and saved under this commit's key on pushes to main. The key is per job (the
-  `key` input) and per SHA, so parallel jobs never overwrite one another's caches with partial
-  ones and each main commit saves a whole cache; a pull request restores main's newest and saves
-  nothing. setup-go's own cache (one key per go.sum for every job) is off.
+  Go at the version go/go.mod names, with two caches. The module cache (GOMODCACHE) is one entry
+  per runner OS and architecture and dependency set, shared by every job. The build cache
+  (GOCACHE) is per job (the `key` input) and per commit, restored from the job's newest. A push
+  to main saves both when the job ends; any other event restores only. setup-go's own cache is
+  off.
 
 inputs:
   key:
-    description: The job's cache name (its job id, and its matrix value where it has one)
+    description: The job's build-cache name (its job id, and its matrix value where it has one)
     required: true
 
 runs:
@@ -20,35 +20,70 @@ runs:
         go-version-file: go/go.mod
         cache: false
 
+    # deps fingerprints the dependency set of all three modules (go, go/objfile, go/reader): the
+    # module cache holds all of them, and a changed manifest can select other versions without
+    # changing a sum file.
     - name: Locate the Go caches
       id: paths
       shell: bash
       run: |
         echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "deps=${{ hashFiles('go/go.mod', 'go/go.sum', 'go/objfile/go.mod', 'go/objfile/go.sum', 'go/reader/go.mod', 'go/reader/go.sum') }}" >> "$GITHUB_OUTPUT"
 
-    # On a push to main: restore, and save this commit's cache when the job ends (the action's
-    # post step). Elsewhere: restore only.
-    - name: Restore the Go caches (saved at the end of the job)
+    # The module cache's key names no job and no commit, and a key once saved is never
+    # overwritten. Several main-push jobs may save it at once: the first upload wins and the
+    # others log a warning, which does not fail them. On a push to main the post step saves it
+    # when the job ends, unless the key was an exact hit.
+    - name: Restore the Go module cache (saved at the end of the job)
+      id: modcache-main
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
-        path: |
-          ${{ steps.paths.outputs.gocache }}
-          ${{ steps.paths.outputs.gomodcache }}
-        key: go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-${{ github.sha }}
+        path: ${{ steps.paths.outputs.gomodcache }}
+        key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.deps }}
         restore-keys: |
-          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-
-          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+          go-mod-${{ runner.os }}-${{ runner.arch }}-
 
-    - name: Restore the Go caches
+    - name: Restore the Go module cache
       if: github.event_name != 'push' || github.ref != 'refs/heads/main'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
-        path: |
-          ${{ steps.paths.outputs.gocache }}
-          ${{ steps.paths.outputs.gomodcache }}
-        key: go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-${{ github.sha }}
+        path: ${{ steps.paths.outputs.gomodcache }}
+        key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.deps }}
         restore-keys: |
-          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ hashFiles('go/go.sum') }}-
-          go-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+          go-mod-${{ runner.os }}-${{ runner.arch }}-
+
+    # Jobs build different module graphs (go/reader has no cloud SDK), so the job that saves a new
+    # module key first would otherwise freeze only what it happened to need. Every module's
+    # dependencies are downloaded before any job may save. The directories are absolute because
+    # the callers' working directories differ.
+    - name: Download every Go module's dependencies (new module-cache key on main)
+      if: steps.modcache-main.outcome == 'success' && steps.modcache-main.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        for dir in go go/objfile go/reader; do
+          (cd "$GITHUB_WORKSPACE/$dir" && go mod download)
+        done
+
+    - name: Restore the Go build cache (saved at the end of the job)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id: buildcache-main
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      with:
+        path: ${{ steps.paths.outputs.gocache }}
+        key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
+        restore-keys: |
+          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-
+          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
+
+    - name: Restore the Go build cache
+      if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      with:
+        path: ${{ steps.paths.outputs.gocache }}
+        key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
+        restore-keys: |
+          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-
+          go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-
