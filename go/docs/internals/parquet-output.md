@@ -164,9 +164,11 @@ writer accepts repeated keys and refuses a descending one; pages and row groups 
 
 Order is checked at three places, each before the step it protects:
 
-- **Every row**, in the order stage (`order.Run`'s stream-wide guard): keys strictly ascending across the
-  whole run, and after the last published key on a resume. No sink, Parquet or other, receives a descending
-  or repeated key, even from a provider that breaks its ordering contract at a range boundary.
+- **Every row**, in the order stage (`order.Run`'s stream-wide guard). Keys are strictly ascending across the
+  whole run for a schema with unique keys, and nondecreasing for a versions schema, whose keys repeat on
+  consecutive rows. On a resume, every key is strictly after the last published key (an exclusive boundary).
+  No sink, Parquet or other, receives a descending key, or a repeated key under a unique schema, even from a
+  provider that breaks its ordering contract at a range boundary.
 - **Every part, before it is journaled.** A journaled run publishes parts early, so the router checks each
   part against the part before it (the resumed seam included) before `Publish` claims, records or renames
   it: nonempty, and its first key after the previous part's last. The journal's `Append` checks the same
@@ -230,8 +232,9 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
-producer defines its schema beside its code, from the descriptor `go/reader` registers for its id
-(`reader.Schema`), and `TestProducerSchemasGolden` pins what each producer writes. The Parquet node is built
+producer defines its schema beside its code. The S3, GCS and local producers bind it to the descriptor
+`go/reader` registers for its id (`schema.Bind`, `reader.Schema`), and `TestProducerSchemasGolden` pins those
+five. The Azure producer defines `swath/azblob-objects/v1` directly (`internal/source/azblob/schema.go`). The Parquet node is built
 from that list; `TestFooterMatchesSchema` checks the footer against a test schema with one column of every type.
 The Parquet schema name is `swath_listing` for every schema. The schema ids, their grammar
 (`swath/<row-contract>/vN`) and their row contracts (columns, types, nullability, key encoding) are in
@@ -240,6 +243,7 @@ The Parquet schema name is `swath_listing` for every schema. The schema ids, the
 How the writer meets the key contract: `key` is a required BYTE_ARRAY with the STRING annotation only where the
 producer guarantees UTF-8 (the object stores' keys). Filesystem keys and link targets are unannotated, written
 exactly as the kernel returned them, never skipped, replaced or normalized. Manifest bounds are written in
-base64 (`min_key_base64`, `max_key_base64`); readers compare the decoded bytes (`dataset.Key`). ETags lose one
-pair of surrounding quotes. A key ending in `/` is an object like any other: delimiter prefixes are derived by
-readers, never stored.
+base64 (`min_key_base64`, `max_key_base64`); readers compare the decoded bytes (`dataset.Key`). S3 ETags lose one
+pair of surrounding quotes; Azure ETags are kept as listed. In the object-store schemas a key ending in `/` is an
+object like any other: delimiter prefixes are derived by readers, never stored. In `swath/local-entries/v1` a
+key ending in `/` is a directory.

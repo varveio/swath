@@ -33,10 +33,15 @@ operations (the `go/reader` names are given; other readers make the same distinc
 
 | Operation | What it establishes | Reads |
 |---|---|---|
-| Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format 1 draft 1, `extensions.swath.version` is 1 and its members have the right JSON types, and the schema id is registered | the manifest only |
+| Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format 1 draft 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
 | Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
 | Acceptance (`AcceptWholeSource`) | The listing covers the whole of the named source: the coverage rule in [The swath extension](#the-swath-extension) | the manifest only |
 | Digest validation (`ValidateDigests`, `ValidateDigestsDir`) | Every part declares a SHA-256 that its bytes match | every part's bytes |
+
+`Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
+(`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
+but has no `version`, or an unsupported one, is refused. Acceptance and digest validation require the extension
+to be present.
 
 The manifest is the authority for which parts belong to the dataset and for its commit: a directory without
 `manifest.json` holds no dataset, and one with it holds exactly the parts it lists, in key order. A part on its
@@ -82,12 +87,13 @@ module's. JSON readers must not depend on that order.
 
 | Member | Meaning | Required by |
 |---|---|---|
-| `version` | The version of this extension's contract: `1`. Written first | every swath read: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
+| `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
 | `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | informative |
-| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance; `--seed-from` |
+| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind); `--seed-from` |
 | `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | informative |
-| `source.container` | The bucket or container; absent for a filesystem | whole-source acceptance (equal to the caller's); `--seed-from` |
-| `scope.kind`, `scope.prefix` | `whole` (the bucket, container or tree) or `prefix`, with the prefix | whole-source acceptance: `whole`; `--seed-from` checks the prefix |
+| `source.container` | The bucket or container; absent for a filesystem | whole-source acceptance: equal to the caller's container, or absent or `null` when the caller passes `""` (a filesystem); `--seed-from` |
+| `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | whole-source acceptance: `whole` |
+| `scope.prefix` | The prefix, with `prefix`; omitted when empty | not needed for acceptance; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
 | `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | whole-source acceptance: `completed` |
 | `coverage.skipped_entries` | Entries the listing could not read | whole-source acceptance: `0` |
@@ -97,7 +103,7 @@ module's. JSON readers must not depend on that order.
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
 
 **Whole-source acceptance** requires every member listed as required for it. An absent or `null` member refuses
-the dataset: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
+the dataset, except `source.container` when the caller's container is `""`: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
 empty. `exclusions` are tolerated, so an accepted dataset is the whole source minus what was excluded by design,
 not every entry the source holds. swath publishes the complete result of the live listing it performed; it is not
 a point-in-time snapshot of a source that changes during the run.
@@ -110,8 +116,10 @@ reports it as `KindCoverage`, while an unsupported version is reported as `KindS
 
 A schema id is `swath/<row-contract>/vN`: the row contract it names and that contract's version. Each id fixes the
 columns a reader may rely on: their names, physical and logical types and nullability, the key's encoding and
-uniqueness, and the meaning of a row. `reader.Schema(id)` returns the executable descriptor. The writers write
-from those descriptors, and `CheckSchema` checks parts against them.
+uniqueness, and the meaning of a row. `reader.Schema(id)` returns the executable descriptor, and `CheckSchema` checks
+parts against it. The S3, GCS and local producers bind their schemas to these descriptors (`schema.Bind`), and
+`TestProducerSchemasGolden` pins those five. The Azure producer defines `swath/azblob-objects/v1` directly in
+`internal/source/azblob`; `CheckSchema` and the `go/reader` decoders still check it against the descriptor.
 
 | Schema id | A row is | Key | Keys unique | Longest key |
 |---|---|---|---|---|
@@ -168,7 +176,7 @@ content hash: compare content with `content_md5`, and never compare ETags across
 | `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`) |
 | `metadata_changed_at`, `atime` | timestamp | `st_ctime`, `st_atime` |
 | `birth_time` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); Windows `CreationTime` |
-| `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`) |
+| `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
 
 Under `--metadata names` (no stat) the stat columns are null.
 
@@ -190,18 +198,25 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   puts names with characters at U+10000 and above before those at U+E000 to U+FFFF. swath's adapter reorders
   them, so an Azure dataset is in byte order like every other one, not in the service's listing order.
 - **Versions rows are consecutive per key.** In `swath/s3-versions/v1` and `swath/gcs-generations/v1` a key
-  repeats once per version, on consecutive rows, and a key's group never spans two parts. Within a group the order
-  is the service's: S3 newest first, with versions and delete markers interleaved; GCS by generation, ascending. No
-  column rebuilds that order. On S3 the first row of a group has `is_latest` true, and a key whose first row is a
-  delete marker is deleted. On GCS the last row is the newest generation, live only when `time_deleted` is null;
-  a name may have no live generation. The current objects are `is_latest AND NOT is_delete_marker` (S3) or
-  `time_deleted IS NULL` (GCS).
+  repeats once per version, on consecutive rows, and a key's group never spans two parts. On S3 the order within
+  a group is the service's: newest first, with versions and delete markers interleaved. No column rebuilds it,
+  since two entries can share `last_modified`. On GCS rows order by key and then by numeric `generation`, strictly
+  ascending; the lister refuses a page that breaks this. The `is_latest`, `is_delete_marker` and `time_deleted`
+  values are the service's, per row. In an unfiltered, complete listing, the first row of an S3 group is the one
+  with `is_latest` true, and a key whose first row is a delete marker is deleted. On GCS the last row is the newest
+  generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
+  `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
+  hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS), row by
+  row.
 - **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
   SQL scan does not promise stored order. To keep a group's order, read the parts in manifest order and number the
   rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the
-  manifest, then the row number). A continuation inside a group is `(key, offset)`, where the offset counts rows
-  from the start of the key's group. A key-only continuation skips the group's remaining versions. An offset is
-  valid only for the same immutable dataset and is not a durable version id.
+  manifest, then the row number). A row's offset is its zero-based position in its group of equal keys. A row
+  cursor `(key, offset)` continues after that row, at offset + 1 of the same key, then at the next key
+  ([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md)). A cursor is
+  always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key `k`". To skip every row
+  of `k`, use an exclusive key bound (`seekparquet.Range` with `Start` = `k` and `StartExclusive`), which skips the group's
+  remaining versions. An offset is valid only for the same immutable dataset and is not a durable version id.
 - **Null is unknown, not zero.** A null `size` or time is not 0 or the epoch. SQL `SUM` and `MAX` skip nulls,
   so a total over a column with nulls is a lower bound. Count the nulls beside it, as `swath du` reports `unsized`.
   `go/reader`'s totals report nil, never 0, for a value they cannot state exactly.

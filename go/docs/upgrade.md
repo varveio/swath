@@ -71,7 +71,8 @@ by field, from format 1:
 `parts[].sha256` is the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which
 the format's validators check at the digest level. MD5 is not written anywhere. Development builds before
 `extensions.swath.version` existed wrote manifests without it (some with the parts' MD5s under
-`extensions.swath.part_md5`); no reader reads them, so re-list into a new directory.
+`extensions.swath.part_md5`). swath's metadata readers (`go/reader`, `swath show`, `--seed-from`) refuse them. A
+generic SeekParquet reader still opens them, because it ignores the extension. Re-list them into a new directory.
 
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
 JSON; readers decode them and compare bytes ([dataset.md](dataset.md#keys-and-order)).
@@ -135,9 +136,15 @@ a key's group.
 
 ## Versions
 
-Format 1 had one version string. Four identifiers now move independently: the SeekParquet format and draft,
-the schema id, `extensions.swath.version`, and the writer recipe. Their policy is in
-[dataset.md](dataset.md#evolution). The private journal has its own version too. This build reads journal
+Format 1 had one version string. Five identifiers now move independently:
+- the SeekParquet format and draft;
+- the schema id, which versions the row contract (columns, key, a row's meaning);
+- `extensions.swath.version`, which versions the extension's own contract (its members and what admission
+  requires), not the rows;
+- the writer recipe;
+- the private journal version.
+
+The policy for each is in [dataset.md](dataset.md#evolution). This build reads journal
 version 9, which records each part's SHA-256 where versions 7 and 8 recorded its MD5, so it refuses those journals
 before recovery touches anything, and they refuse version 9. Finish an interrupted run of an older build with
 that build, or start it over with `--overwrite`. The writer recipe (`parquetout.Recipe`, `swath-go/parquet-r3`

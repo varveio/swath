@@ -411,9 +411,11 @@ objects alone is the default mode, which is cheaper.
 **Order.** Keys ascend; a key's rows are consecutive, in the service's order within the key: S3 newest first,
 versions and delete markers interleaved; GCS by generation, ascending. S3 can list two entries of a key with the
 same `last_modified` (to the second), so that time does not rebuild S3's order: the file order does.
-On S3, the first row of a key's group has `is_latest`: it is the latest entry, and a delete marker means
-the object is deleted. On GCS, the last row of a name's group is the newest generation; it is live only
-if `time_deleted` is null. A GCS name may have no live generation.
+In an unfiltered, complete listing, the first row of an S3 key's group is the one with `is_latest`, and a
+delete marker there means the object is deleted. On GCS, the last row of a name's group is the newest
+generation; it is live only if `time_deleted` is null, and a GCS name may have no live generation. A filter can
+remove a key's latest version, so in a filtered dataset read `is_latest` and `time_deleted` per row instead of
+by position.
 
 **Parts never split a key.** A part's size target, `--part-rotation-max-rows` and `--part-interval` cut at the
 next key, so a part can pass them by one key's history; parts stay key-disjoint, and a resume never lists half a

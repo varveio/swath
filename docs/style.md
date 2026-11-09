@@ -62,7 +62,8 @@ snapshot semantics.
   workflow page, define it:
 
   > A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that
-  > commits them, in the SeekParquet format.
+  > commits them, in the SeekParquet format, with one of swath's registered schema ids
+  > and valid swath metadata ([the swath dataset profile](../go/docs/dataset.md)).
 
 - **SeekParquet dataset** is the format term: any dataset that satisfies the SeekParquet
   sorted-key format, whoever wrote it. Use it when the format itself matters:
