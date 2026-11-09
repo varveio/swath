@@ -21,7 +21,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
-| Cross-OS default tier, Windows | `go vet` and the whole suite without `-race`; [platform skips](#cross-os) | PR, main, dispatch; Go change | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest)` |
+| Cross-OS default tier, Windows and linux/arm64 | `go vet` and the whole suite without `-race`; [platform skips](#cross-os) | PR, main, dispatch; Go change | windows-latest (amd64), ubuntu-24.04-arm | `ci.yml` `go-xos (windows-latest)`, `go-xos (ubuntu-24.04-arm)` |
 | Cross-OS default tier, macOS | the same on macOS; not on pull requests ([cross-OS](#cross-os)) | main, dispatch; Go change. Nightly; dispatch `jobs=all` or `go-xos-macos` | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
 | Builds and the Go replay image | static builds for 4 targets, the version stamp, the journal's Windows test compile, the image for 2 architectures and its two smokes | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on fixtures the Java replay writes | PR, main, dispatch; its own, wider change detection | ubuntu-latest | `ci.yml` `go-fixtures` |
@@ -111,7 +111,7 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes` | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows go test -c ./internal/journal`; the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the four targets | ubuntu-latest |
-| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo). The `changes` job picks the legs: Windows on a pull request, macOS and Windows on main and dispatch; without a Go change, a single `go-xos (off)` leg whose steps skip | windows-latest (amd64); macos-latest (arm64) off pull requests |
+| `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo). The `changes` job picks the legs: Windows and linux/arm64 on every Go change, macOS on main and dispatch; without a Go change, a single `go-xos (off)` leg whose steps skip | windows-latest (amd64), ubuntu-24.04-arm; macos-latest (arm64) off pull requests |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
@@ -122,7 +122,7 @@ restores `main`'s newest without saving. The DuckDB downloads (`integration-test
 container smoke) retry five times, and the SeekParquet conformance step's `pip install` ten.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 per push and on
-amd64 nightly, and run without `-race` on macOS and Windows.
+amd64 nightly, and run without `-race` on Windows, linux/arm64 and (off pull requests) macOS.
 
 ### Race shards
 
@@ -162,11 +162,19 @@ nightly `go-race-nightly` covers amd64. The three `rest*` shards stay on amd64: 
 
 ### Cross-OS
 
-`go-xos` runs the default tier on Windows for every Go change, and on macOS for a Go change on `main` or a
-dispatch, not on a pull request: the macOS runner queue set the pull request's wall time, and a job-level
-condition cannot drop one leg of a matrix, so the `changes` job emits the legs. `nightly.yml` `go-xos-macos`
-runs the same tier on macOS every night. The trade-off: a change that breaks only on macOS passes its pull
-request and fails on its merge to `main`. Where a platform cannot run a case the test skips with
+`go-xos` runs the default tier on Windows and linux/arm64 for every Go change, and on macOS for a Go change on
+`main` or a dispatch, not on a pull request: the macOS runner queue set the pull request's wall time, and a
+job-level condition cannot drop one leg of a matrix, so the `changes` job emits the legs. `nightly.yml`
+`go-xos-macos` runs the same tier on macOS every night. The trade-off: a change that breaks only on macOS
+passes its pull request and fails on its merge to `main`.
+
+The linux/arm64 leg keeps arm64 before merge. The `go-race` arm64 shards cover only `internal/listing` and
+`cmd/swath`, and the one product-relevant finding the macOS leg made (`TestFooterOnlyChange`, #308) was
+parquet-go's arm64 encoder path, not Darwin. The leg runs the rest of the tree on arm64 at Linux prices, with no
+runner queue. What only macOS covers is Darwin itself: APFS's refusal of names that are not UTF-8 (below), and
+the crash, durable and kill matrices on Darwin's filesystem and signals, without `-race`.
+
+Where a platform cannot run a case the test skips with
 the platform behavior as its reason, never silently:
 
 - **Windows** refuses journaled output and `swath resume` (`listing.ErrUnenforced`, no directory sync; #295
