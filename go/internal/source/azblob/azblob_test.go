@@ -840,3 +840,18 @@ func TestPoolSizeReported(t *testing.T) {
 		}
 	}
 }
+
+// TestEndpointUserinfoRefused: an endpoint with user information is
+// refused before anything is recorded, and the refusal never quotes the
+// password, which the journal identity and the run report would otherwise
+// carry.
+func TestEndpointUserinfoRefused(t *testing.T) {
+	r := azblobtest.Serve(t, []string{"a"})
+	live := strings.Replace(base(r), "http://", "http://user:s3cret@", 1) // would list, and record the password
+	for _, ep := range []string{live, "https://user:s3cret@azurite.example/", "http://:s3cret@h"} {
+		_, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1, Warn: func(string) {}})
+		if err == nil || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("%s: %v", ep, err)
+		}
+	}
+}

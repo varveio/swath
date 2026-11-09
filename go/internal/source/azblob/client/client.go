@@ -234,7 +234,12 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 		return &url.URL{Scheme: "https", Host: account + ".blob.core.windows.net", Path: "/"}, nil
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
+	switch {
+	case err != nil:
+		return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
+	case u.User != nil:
+		return nil, fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "":
 		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", endpoint)
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + account + "/"

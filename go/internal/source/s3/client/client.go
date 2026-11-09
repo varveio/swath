@@ -107,7 +107,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	var base *string
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		switch {
+		case err != nil:
+			return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
+		case u.User != nil:
+			return nil, fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+		case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
 			return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", cfg.Endpoint)
 		}
 		base, fips, dualStack = aws.String(cfg.Endpoint), false, false

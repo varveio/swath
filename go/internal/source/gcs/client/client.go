@@ -264,7 +264,7 @@ var quiet = slog.New(slog.DiscardHandler)
 
 // Endpoint is the JSON API base a client built with ep sends to, and the
 // form the resume identity records: DefaultEndpoint for "", an http(s) URL
-// with a host, its path's escapes kept as given and a literal trailing
+// with a host and no user information (a password would be recorded), its path's escapes kept as given and a literal trailing
 // slash added when the escaped path has none (so "tenant%2F" is the base
 // "tenant%2F/", not a base whose last segment the generated client's
 // relative resolution would drop). One string is one destination: the
@@ -285,7 +285,12 @@ func Endpoint(ep string) (string, error) {
 		ep = DefaultEndpoint
 	}
 	u, err := url.Parse(ep)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	switch {
+	case err != nil:
+		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
+	case u.User != nil:
+		return "", fmt.Errorf("endpoint %s: user information in the URL is refused (the endpoint is recorded with the run)", u.Redacted())
+	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
 		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
 	}
 	if strings.ContainsAny(u.Path, "{}") {
