@@ -119,10 +119,10 @@ prior, so the engine can start from it instead of the seed: the root tiles the s
 nothing itself, no delimiter request is sent (`seed.requests` 0, the `seed` feature off, `seed_from` on). The prior
 (`source.Prior`, in `internal/source` so the pipeline fills it without importing a provider package; `source.Seeded` takes it) is source-neutral: ordered byte-exact cut keys, each with an optional count of the keys expected
 in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/listing/prior.go`):
-- *a committed dataset directory* (SeekParquet, or an earlier build's format 2): the manifest's parts give exact bounds and row counts; the key
+- *a committed dataset directory* (SeekParquet): the manifest's parts give exact bounds and row counts; the key
   column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
-  reads the footer and those two index sections, never a data page: a SeekParquet part through
-  `seekparquet.InspectKeyPages`, which checks its footer and stamps first; a format 2 part by its footer) gives cuts a thousand times finer. The
+  reads the footer and those two index sections, never a data page, through `seekparquet.InspectKeyPages`, which
+  checks its footer and stamps first) gives cuts a thousand times finer. The
   reader offers 4,096 cuts of about equal rows (four candidates per tile at the most tiles a run starts with),
   reading the index only of parts a cut falls in; a part whose index cannot be read (another writer, a key over
   the 1,024-byte index bound) is cut at its own last key (`seed.from.index_failed`). The dataset's last key closes

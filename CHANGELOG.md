@@ -8,6 +8,10 @@ Notable changes per release. The full human summary for the current release is i
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
   accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.
+- Go port: datasets in swath-dataset format 2 (`"format": "swath-dataset"`, `format_version` 2), which builds
+  from `main` wrote between 2026-11-05 and 2026-11-08, are no longer read: `swath show`, `--seed-from` and
+  `swath-replay` refuse them, and `--overwrite` does not take their directory for this tool's output. Re-list
+  them as SeekParquet datasets. Java-era fixtures are still served by `swath-replay`.
 
 ## 0.3.2 — 2026-09-03
 

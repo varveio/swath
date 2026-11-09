@@ -18,7 +18,7 @@ and why.
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances, the maximum and percentile windows) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`, which opens it lazily and then calls `Dataset.Verify`, so a long-lived replay fails at startup on any bad part rather than on its first touch; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
-| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts), `format2` (swath-dataset format 2) and `legacytest` (writes both for tests); formerly the public `go/sortedparquet` | – |
+| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts) and `legacytest` (writes them for tests); formerly the public `go/sortedparquet` | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
 | `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |

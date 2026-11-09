@@ -193,9 +193,8 @@ func TestOverwriteInterruptedUnjournaled(t *testing.T) {
 
 // TestManaged: a directory is this tool's by its lock, its journal or a
 // manifest that parses as this tool's (format and the swath extension's
-// coverage, or format 2's top-level coverage); an unrelated
-// data/ beside a _SUCCESS, or another tool's manifest with a schema id, is
-// not.
+// coverage); an unrelated data/ beside a _SUCCESS, another tool's manifest
+// with a schema id, or an earlier build's format 2 manifest, is not.
 func TestManaged(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -214,8 +213,7 @@ func TestManaged(t *testing.T) {
 		{"another format with coverage", map[string]string{ManifestName: `{"format":"other","coverage":{}}`}, false},
 		{"not JSON", map[string]string{ManifestName: `{`}, false},
 		{"our manifest", map[string]string{ManifestName: `{"format":"` + seekparquet.Format + `","extensions":{"swath":{"coverage":{"complete":true}}}}`}, true},
-		{"an earlier build's format 2 manifest", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","coverage":{"complete":true}}`}, true},
-		{"format 2 without coverage", map[string]string{ManifestName: `{"format":"` + LegacyFormat + `","extensions":{"swath":{"coverage":{}}}}`}, false},
+		{"an earlier build's format 2 manifest", map[string]string{ManifestName: `{"format":"swath-dataset","format_version":2,"coverage":{"complete":true}}`}, false},
 		{"a lock", map[string]string{Workspace + "/" + LockName: ""}, true},
 		{"a journal", map[string]string{JournalDir + "/journal": ""}, true},
 	} {
@@ -238,8 +236,7 @@ func TestManaged(t *testing.T) {
 // TestManifestShape: a published manifest has only SeekParquet's
 // top-level members, part members and key declaration, with swath's own
 // under extensions.swath (the parts' MD5 digests included), and reads back
-// as it was written; a format 2 manifest of an earlier build reads with
-// its fields in the same places.
+// as it was written; a format 2 manifest of an earlier build is refused.
 func TestManifestShape(t *testing.T) {
 	for _, groups := range []bool{false, true} {
 		out := t.TempDir()
@@ -297,10 +294,7 @@ func TestManifestShape(t *testing.T) {
 		"source":{"kind":"s3","uri":"s3://b/","container":"b"},"scope":{"kind":"whole"},"coverage":{"complete":true,"stop_reason":"completed"},
 		"parts":[{"path":"data/part-00000.parquet","rows":1,"bytes":5,"min_key_base64":"YQ==","max_key_base64":"YQ==","md5":"ab"}]}`
 	var m Manifest
-	if err := json.Unmarshal([]byte(legacy), &m); err != nil {
-		t.Fatal(err)
-	}
-	if m.Current() || !m.Readable() || m.SchemaID != "x/v1" || !m.Coverage.Complete || m.Parts[0].MinKey != "a" || !m.Key.Unique {
+	if err := json.Unmarshal([]byte(legacy), &m); err == nil {
 		t.Fatalf("format 2 read as %+v", m)
 	}
 	// An earlier build's SeekParquet manifest: MD5 digests under the

@@ -28,8 +28,8 @@ import (
 // group (issue #279).
 var ErrRepeatedKeys = errors.New("replay does not serve datasets with repeated keys yet")
 
-// reader is a fixture's sorted reader: the legacy core over a Java-era or
-// format 2 fixture (*legacy.Reader), or seekReader over a SeekParquet
+// reader is a fixture's sorted reader: the legacy core over a Java-era
+// fixture (*legacy.Reader), or seekReader over a SeekParquet
 // dataset. Both take the legacy core's requests and return its rows.
 type reader interface {
 	Read(ctx context.Context, rng legacy.Range, stats *legacy.Stats) ([]legacy.Row, error)

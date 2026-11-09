@@ -20,7 +20,7 @@ import (
 // Prior is a set of cut keys taken under one scope.
 type Prior struct {
 	// Source names where the cuts came from, for the run report: "dataset"
-	// (a committed format-2 dataset's parts and key page index) or "cuts"
+	// (a committed dataset's parts and key page index) or "cuts"
 	// (a cut file).
 	Source string
 	// Scope is the prefix the cuts were taken under; it must be the run's.
