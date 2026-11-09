@@ -67,7 +67,8 @@ var errTooLarge = errors.New("directory too large: its names or keys exceed 4 Gi
 // fitsOffsets reports whether sc's names, and the keys buildKeys would make
 // under a prefix of plen bytes, fit an entry's 32-bit offsets.
 func fitsOffsets(plen int, sc *scratch) bool {
-	return len(sc.names) <= math.MaxUint32 && len(sc.names)+len(sc.ents)*(plen+1) <= math.MaxUint32
+	names := uint64(len(sc.names))
+	return names <= math.MaxUint32 && names+uint64(len(sc.ents))*uint64(plen+1) <= math.MaxUint32
 }
 
 // scratch is per-goroutine reusable memory for reading a directory. keys is
@@ -238,7 +239,9 @@ func presize(fd int, sc *scratch) bool {
 		return false
 	}
 	sc.ents = slices.Grow(sc.ents, est-len(sc.ents))
-	sc.names = slices.Grow(sc.names, est*avg-len(sc.names))
+	if more := est*avg - len(sc.names); more > 0 { // avg is rounded down: the names may already exceed it
+		sc.names = slices.Grow(sc.names, more)
+	}
 	return true
 }
 
