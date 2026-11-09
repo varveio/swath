@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -15,53 +16,71 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// recorder answers every request with okPage, without a network, and
-// keeps the URLs.
+// recorder answers without a network and keeps each request's URL: a
+// ListVersionsResult to a versions request, okPage to the others, after
+// failing the first fail requests with a 503.
 type recorder struct {
+	fail int
 	mu   sync.Mutex
-	urls []string
+	urls []*url.URL
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.mu.Lock()
-	r.urls = append(r.urls, req.URL.String())
+	r.urls = append(r.urls, req.URL)
+	n := len(r.urls)
 	r.mu.Unlock()
-	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(okPage)), Request: req}, nil
+	status, body := 200, okPage
+	switch {
+	case n <= r.fail:
+		status, body = 503, `<Error><Code>SlowDown</Code></Error>`
+	case req.URL.Query().Has("versions"):
+		body = `<ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>`
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 }
 
+// routeOf is a request URL's route: scheme, host and escaped path.
+func routeOf(u *url.URL) string { return u.Scheme + "://" + u.Host + u.EscapedPath() }
+
 // routeCases are the endpoint forms the provider supports (package client's
-// TestURL), with the route of each.
+// TestURL), with the route of each: both clients', but for hand, the
+// hand-rolled client's where it differs (a finding, not hidden here).
 var routeCases = []struct {
 	name   string
 	cfg    client.Config
 	bucket string
-	route  string // both clients' Route
+	route  string
+	hand   string
 }{
-	{"default endpoint", client.Config{Region: "eu-west-1"}, "bkt",
-		"https://bkt.s3.eu-west-1.amazonaws.com/"},
-	{"dotted bucket", client.Config{Region: "us-east-1"}, "a.b",
-		"https://s3.us-east-1.amazonaws.com/a.b"},
-	{"path-style", client.Config{Region: "us-east-1", PathStyle: true}, "bkt",
-		"https://s3.us-east-1.amazonaws.com/bkt"},
-	{"custom IP endpoint", client.Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:9000"}, "bkt",
-		"http://127.0.0.1:9000/bkt"},
+	{"default endpoint", client.Config{Region: "eu-west-1"}, "bkt", "https://bkt.s3.eu-west-1.amazonaws.com/", ""},
+	{"dotted bucket", client.Config{Region: "us-east-1"}, "a.b", "https://s3.us-east-1.amazonaws.com/a.b", ""},
+	{"path-style", client.Config{Region: "us-east-1", PathStyle: true}, "bkt", "https://s3.us-east-1.amazonaws.com/bkt", ""},
+	{"custom IP endpoint", client.Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:9000"}, "bkt", "http://127.0.0.1:9000/bkt", ""},
+	{"custom IPv6 endpoint", client.Config{Region: "us-east-1", Endpoint: "http://[::1]:9000"}, "bkt", "http://[::1]:9000/bkt", ""},
 	{"custom endpoint with a path", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/"}, "bkt",
-		"https://bkt.minio.example/s3/"},
+		"https://bkt.minio.example/s3/", ""},
 	{"custom endpoint with a path, path-style", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/", PathStyle: true}, "bkt",
-		"https://minio.example/s3/bkt"},
-	{"FIPS", client.Config{Region: "us-gov-west-1", FIPS: true}, "bkt",
-		"https://bkt.s3-fips.us-gov-west-1.amazonaws.com/"},
-	{"dual-stack", client.Config{Region: "eu-west-1", DualStack: true}, "bkt",
-		"https://bkt.s3.dualstack.eu-west-1.amazonaws.com/"},
+		"https://minio.example/s3/bkt", ""},
+	{"custom endpoint with an escaped path", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/a%20b/", PathStyle: true}, "bkt",
+		"https://minio.example/a%20b/bkt", ""},
+	{"custom endpoint with dot segments", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/x/../y/", PathStyle: true}, "bkt",
+		"https://minio.example/x/../y/bkt", ""},
+	{"FIPS", client.Config{Region: "us-gov-west-1", FIPS: true}, "bkt", "https://bkt.s3-fips.us-gov-west-1.amazonaws.com/", ""},
+	{"dual-stack", client.Config{Region: "eu-west-1", DualStack: true}, "bkt", "https://bkt.s3.dualstack.eu-west-1.amazonaws.com/", ""},
 	{"FIPS and dual-stack", client.Config{Region: "us-east-1", FIPS: true, DualStack: true}, "bkt",
-		"https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/"},
-	{"cn-north-1", client.Config{Region: "cn-north-1"}, "bkt",
-		"https://bkt.s3.cn-north-1.amazonaws.com.cn/"},
+		"https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/", ""},
+	{"cn-north-1", client.Config{Region: "cn-north-1"}, "bkt", "https://bkt.s3.cn-north-1.amazonaws.com.cn/", ""},
+	{"FIPS alias fips-us-east-1", client.Config{Region: "fips-us-east-1"}, "bkt",
+		"https://bkt.s3-fips.us-east-1.amazonaws.com/", "https://bkt.s3.fips-us-east-1.amazonaws.com/"},
+	{"FIPS alias us-east-1-fips", client.Config{Region: "us-east-1-fips"}, "bkt",
+		"https://bkt.s3-fips.us-east-1.amazonaws.com/", "https://bkt.s3.us-east-1-fips.amazonaws.com/"},
 }
 
 // TestRouteAgainstHandRolled: both clients name the same route for every
-// endpoint form (a journal's route identity); the table holds both, so a
-// change in either fails here.
+// endpoint form (a journal's route identity) but the FIPS region aliases,
+// which the hand-rolled client takes for regions (a finding); the table
+// holds both, so a change in either fails here.
 func TestRouteAgainstHandRolled(t *testing.T) {
 	s3test.NoCredentials(t)
 	for _, c := range routeCases {
@@ -74,58 +93,69 @@ func TestRouteAgainstHandRolled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if h, s := hand.Route(c.bucket), sdk.Route(c.bucket); h != c.route || s != c.route {
-			t.Errorf("%s: hand-rolled %s, sdk %s, want %s", c.name, h, s, c.route)
+		want := c.hand
+		if want == "" {
+			want = c.route
+		}
+		if h, s := hand.Route(c.bucket), sdk.Route(c.bucket); h != want || s != c.route {
+			t.Errorf("%s: hand-rolled %s (want %s), sdk %s (want %s)", c.name, h, want, s, c.route)
 		}
 	}
 }
 
-// TestFirstRequestFollowsRoute: the first request's URL starts with Route,
-// for every endpoint form and for both listings.
-func TestFirstRequestFollowsRoute(t *testing.T) {
+// TestRequestsFollowRoute: every request a client sends goes to its Route
+// exactly (scheme, host and escaped path; the query aside): the first
+// page, a continuation, a retried attempt and a versions page, for every
+// endpoint form, through both clients. The requests are recorded under
+// the Guard.
+func TestRequestsFollowRoute(t *testing.T) {
 	s3test.NoCredentials(t)
 	for _, c := range routeCases {
-		for _, versions := range []bool{false, true} {
-			rec := &recorder{}
-			c.cfg.Anonymous, c.cfg.HTTPClient, c.cfg.MaxAttempts = true, &http.Client{Transport: rec}, 1
-			sdk, err := New(context.Background(), c.cfg)
+		for _, who := range []string{"hand-rolled", "sdk"} {
+			rec := &recorder{fail: 1}
+			cfg := c.cfg
+			cfg.Anonymous, cfg.HTTPClient, cfg.MaxAttempts = true, &http.Client{Transport: rec}, 2
+			var cl interface {
+				lister
+				Route(string) string
+			}
+			var err error
+			if who == "sdk" {
+				cl, err = New(context.Background(), cfg)
+			} else {
+				cl, err = client.New(context.Background(), cfg)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if versions {
-				_, err = sdk.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: c.bucket})
-			} else {
-				_, err = sdk.ListObjectsV2(context.Background(), &client.ListInput{Bucket: c.bucket, Prefix: "p/"})
+			ctx := context.Background()
+			for _, call := range []func() error{
+				func() error { // a 503, then the first page: the retried attempt
+					_, err := cl.ListObjectsV2(ctx, &client.ListInput{Bucket: c.bucket, Prefix: "p/", StartAfter: "p/a b"})
+					return err
+				},
+				func() error {
+					_, err := cl.ListObjectsV2(ctx, &client.ListInput{Bucket: c.bucket, ContinuationToken: "1/tok+=="})
+					return err
+				},
+				func() error {
+					_, err := cl.ListObjectVersions(ctx, &client.VersionsInput{Bucket: c.bucket, KeyMarker: "k%", VersionIDMarker: "null"})
+					return err
+				},
+			} {
+				if err := call(); err != nil {
+					t.Fatalf("%s/%s: %v", c.name, who, err)
+				}
 			}
-			if versions && err == nil || !versions && err != nil {
-				// okPage is no ListVersionsResult: the versions call fails
-				// after its request, which is what is checked here.
-				t.Fatalf("%s: %v", c.name, err)
+			r := cl.Route(c.bucket)
+			if len(rec.urls) != 4 {
+				t.Fatalf("%s/%s: %d requests", c.name, who, len(rec.urls))
 			}
-			if r := sdk.Route(c.bucket); len(rec.urls) == 0 || !strings.HasPrefix(rec.urls[0], r) {
-				t.Fatalf("%s: first request %v, route %s", c.name, rec.urls, r)
+			for i, u := range rec.urls {
+				if routeOf(u) != r {
+					t.Errorf("%s/%s: request %d to %s, route %s", c.name, who, i, u, r)
+				}
 			}
-		}
-	}
-}
-
-// TestFIPSRegionAliases: a FIPS region alias is its region with FIPS on,
-// for Route as for the requests (the SDK resolves it inside each
-// operation), and the signing region is the region.
-func TestFIPSRegionAliases(t *testing.T) {
-	s3test.NoCredentials(t)
-	for _, region := range []string{"fips-us-east-1", "us-east-1-fips"} {
-		rec := &recorder{}
-		c, err := New(context.Background(), client.Config{Region: region, Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: rec}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := c.ListObjectsV2(context.Background(), &client.ListInput{Bucket: "bkt"}); err != nil {
-			t.Fatal(err)
-		}
-		r := c.Route("bkt")
-		if r != "https://bkt.s3-fips.us-east-1.amazonaws.com/" || c.Region() != "us-east-1" || !strings.HasPrefix(rec.urls[0], r) {
-			t.Fatalf("%s: route %s, region %s, first request %s", region, r, c.Region(), rec.urls[0])
 		}
 	}
 }
