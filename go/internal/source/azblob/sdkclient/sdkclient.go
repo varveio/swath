@@ -196,9 +196,9 @@ func (c *Client) list(ctx context.Context, in *client.ListInput) (*client.ListOu
 }
 
 // AccountInfo sends Get Account Information on the container's path and
-// reports whether the account has a hierarchical namespace; an answer
-// without x-ms-is-hns-enabled, or one the SDK cannot read, is
-// client.ErrHNSUnknown, never flat.
+// reports whether the account has a hierarchical namespace, from the 200's
+// x-ms-is-hns-enabled as sent (client.HNS: exactly "true" or "false";
+// anything else is client.ErrHNSUnknown, never flat).
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
 	return objhttp.Do(ctx, c.Retry(), c.Counts(), func() (bool, error) {
 		s := &sent{}
@@ -208,17 +208,15 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 		}
 		defer cancel()
 		done := c.Counts().Attempt()
-		r, err := c.svc[c.Next()].NewContainerClient(container).GetAccountInfo(actx, nil)
+		_, err = c.svc[c.Next()].NewContainerClient(container).GetAccountInfo(actx, nil)
 		done()
 		switch {
-		case err != nil && s.refused(err):
-			return false, fmt.Errorf("%w: %v", client.ErrHNSUnknown, c.Redact(err, s.safeURL(c, container)))
-		case err != nil:
-			return false, c.failure(actx, ctx, s, err, container)
-		case r.IsHierarchicalNamespaceEnabled == nil:
-			return false, client.ErrHNSUnknown
+		case s.refused(err) || err == nil:
+			// the header as sent, not the SDK's strconv.ParseBool reading
+			// of it ("1" and "0" are not Azure's answers)
+			return client.HNS(s.header)
 		}
-		return *r.IsHierarchicalNamespaceEnabled, nil
+		return false, c.failure(actx, ctx, s, err, container)
 	})
 }
 
@@ -413,6 +411,7 @@ type sent struct {
 	startFrom string
 	url       *url.URL
 	ok        bool
+	header    http.Header // the 200's
 }
 
 // refused reports err as the SDK's refusal of a 200 the Guard passed (its
@@ -474,7 +473,7 @@ func (r record) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	resp, err := r.next.RoundTrip(req)
 	if s != nil && err == nil && resp.StatusCode == http.StatusOK {
-		s.ok = true
+		s.ok, s.header = true, resp.Header
 	}
 	return resp, err
 }

@@ -724,14 +724,21 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 		if err != nil {
 			return false, err
 		}
-		switch strings.ToLower(hdr.Get(headerHNSEnabled)) {
-		case "true":
-			return true, nil
-		case "false":
-			return false, nil
-		}
-		return false, ErrHNSUnknown
+		return HNS(hdr)
 	})
+}
+
+// HNS reads an account-information answer's x-ms-is-hns-enabled exactly as
+// Azure sends it: "true" is a hierarchical namespace, "false" a flat one,
+// anything else (absent, another spelling) ErrHNSUnknown, never flat.
+func HNS(h http.Header) (bool, error) {
+	switch h.Get(headerHNSEnabled) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+	return false, ErrHNSUnknown
 }
 
 // ErrNamespaceUnknown is a Filesystem Get Properties answer without

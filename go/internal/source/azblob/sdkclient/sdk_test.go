@@ -272,10 +272,10 @@ func TestSDKDecoding(t *testing.T) {
 	}
 }
 
-// TestAccountInfo: both clients read x-ms-is-hns-enabled the same way for
-// Azure's values and a missing header (unknown, never flat); the SDK reads
-// other spellings as strconv.ParseBool does, and a value it cannot read is
-// unknown too.
+// TestAccountInfo: both clients read x-ms-is-hns-enabled exactly:
+// "true" and "false" are the answer, any other value (another spelling,
+// "1", "0") or none is unknown, never flat, whatever the SDK's ParseBool
+// would make of it.
 func TestAccountInfo(t *testing.T) {
 	type answer struct {
 		hns     bool
@@ -287,13 +287,13 @@ func TestAccountInfo(t *testing.T) {
 	}{
 		{"true", answer{hns: true}, answer{hns: true}},
 		{"false", answer{}, answer{}},
-		{"True", answer{hns: true}, answer{hns: true}},
-		{"FALSE", answer{}, answer{}},
+		{"True", answer{unknown: true}, answer{unknown: true}},
+		{"FALSE", answer{unknown: true}, answer{unknown: true}},
 		{"", answer{unknown: true}, answer{unknown: true}},
 		{"yes", answer{unknown: true}, answer{unknown: true}},
-		{"1", answer{unknown: true}, answer{hns: true}},
-		{"0", answer{unknown: true}, answer{}},
-		{"tRuE", answer{hns: true}, answer{unknown: true}},
+		{"1", answer{unknown: true}, answer{unknown: true}},
+		{"0", answer{unknown: true}, answer{unknown: true}},
+		{"tRuE", answer{unknown: true}, answer{unknown: true}},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.RawQuery != "comp=properties&restype=account" || r.URL.Path != "/acct/c" {
