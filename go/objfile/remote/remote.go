@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
 	"google.golang.org/api/option"
+	"google.golang.org/api/option/internaloption"
 	htransport "google.golang.org/api/transport/http"
 
 	"github.com/varveio/swath/go/objfile"
@@ -56,7 +57,9 @@ type Store struct {
 //     blob.core.windows.net endpoint.
 //
 // Open makes no request; a missing bucket or a refused credential fails the
-// first Open of the Store.
+// first Open of the Store. The Store outlives ctx: each request, credential
+// refreshes included, runs under the context of the Open or read that makes
+// it, so a Store opened with one request's context may serve later ones.
 func Open(ctx context.Context, location string) (*Store, error) {
 	l, err := objfile.ParseLocation(location)
 	if err != nil {
@@ -122,16 +125,25 @@ func (s *Store) at(endpoint string) error {
 // gcsClient returns a read-only GCS client over pool whose transport checks
 // every ranged response (ranged.Transport); with emulator set, the SDK's
 // emulator client, without credentials.
+//
+// The credentials are the new auth library's (cloud.google.com/go/auth),
+// which fetches each token with the context of the request that needs it.
+// The older path, with user credentials, keeps the context the transport was
+// built with for every refresh, so a Store opened with a request's context
+// would fail to refresh its token once that request ended.
 func gcsClient(ctx context.Context, pool http.RoundTripper, emulator bool) (*storage.Client, error) {
 	tr := ranged.Transport(pool)
 	if !emulator {
 		var err error
-		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadOnly)); err != nil {
+		if tr, err = htransport.NewTransport(ctx, tr, option.WithScopes(storage.ScopeReadOnly), internaloption.EnableNewAuthLibrary()); err != nil {
 			return nil, err
 		}
 	}
-	return storage.NewClient(ctx, option.WithHTTPClient(&http.Client{Transport: tr}))
+	return storage.NewClient(ctx, append([]option.ClientOption{option.WithHTTPClient(&http.Client{Transport: tr})}, gcsEndpoint...)...)
 }
+
+// gcsEndpoint is the GCS client's endpoint option; a test sets it.
+var gcsEndpoint []option.ClientOption
 
 // azureClient returns the client of account over hc; a test replaces it.
 var azureClient = func(account string, hc *http.Client) (*azsdk.Client, error) {

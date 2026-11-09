@@ -6,6 +6,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	azsdk "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"google.golang.org/api/option"
 
 	"github.com/varveio/swath/go/objfile"
 )
@@ -249,5 +252,114 @@ func TestOpenRefusesCredentialEndpoint(t *testing.T) {
 			t.Errorf("%s: the error quotes the credential: %v", c.env, err)
 		}
 		t.Setenv(c.env, "")
+	}
+}
+
+// TestOpenGCSCredentialsOutliveContext: the GCS credentials fetch each token
+// with the context of the request that needs it, not the one the Store was
+// opened with. With user credentials (application-default login), a Store
+// opened with a context then cancelled still refreshes its token and reads;
+// cancelling a read during its token exchange cancels the exchange.
+func TestOpenGCSCredentialsOutliveContext(t *testing.T) {
+	isolate(t)
+	st := &store{}
+	srv := serve(t, st)
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		st.ServeHTTP(w, r)
+	})
+
+	// User credentials exchange their refresh token at Google's fixed token
+	// endpoint, over http.DefaultTransport; the test's transport dials that
+	// endpoint's address to tokens.
+	var exchanges atomic.Int32
+	var block atomic.Bool
+	arrived, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
+	tokens := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm() // the server sees the client go only after the body is read
+		if r.URL.Path != "/token" || r.Form.Get("refresh_token") != "refresh" {
+			http.Error(w, "bad token request", http.StatusBadRequest)
+			return
+		}
+		exchanges.Add(1)
+		if block.Load() {
+			arrived <- struct{}{}
+			<-r.Context().Done()
+			cancelled <- struct{}{}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Expired a second later: a request after that refreshes it before
+		// it is sent (the library refreshes a token close to expiry in the
+		// background, an expired one in the request).
+		_, _ = w.Write([]byte(`{"access_token":"tok","token_type":"Bearer","expires_in":1}`))
+	}))
+	t.Cleanup(tokens.Close)
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == "oauth2.googleapis.com:443" {
+			addr = tokens.Listener.Addr().String()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	defer func(d http.RoundTripper) { http.DefaultTransport = d }(http.DefaultTransport)
+	http.DefaultTransport = tr
+
+	file := t.TempDir() + "/adc.json"
+	if err := os.WriteFile(file, []byte(`{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"refresh"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", file)
+	defer func(o []option.ClientOption) { gcsEndpoint = o }(gcsEndpoint)
+	gcsEndpoint = []option.ClientOption{option.WithEndpoint(srv.URL + "/storage/v1/")}
+
+	openCtx, cancelOpen := context.WithCancel(context.Background())
+	s, err := Open(openCtx, "gs://bkt/ds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cancelOpen()
+
+	for i := range 2 {
+		if i > 0 {
+			time.Sleep(1100 * time.Millisecond)
+		}
+		f, err := s.Open(context.Background(), "obj")
+		if err != nil {
+			t.Fatalf("Open %d after the opening context ended: %v", i, err)
+		}
+		got := make([]byte, 1000)
+		if _, err := f.ReadAt(got, 100); err != nil || !bytes.Equal(got, data[100:1100]) {
+			t.Fatalf("ReadAt %d after the opening context ended: %v", i, err)
+		}
+	}
+	if n := exchanges.Load(); n < 2 {
+		t.Fatalf("%d token exchanges, want a refresh after the first", n)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	block.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := s.Open(ctx, "obj"); done <- err }()
+	select {
+	case <-arrived:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no token exchange")
+	}
+	cancel()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		tokens.CloseClientConnections() // so the cleanup does not wait on the handler
+		t.Fatal("cancelling the request did not cancel its token exchange")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("Open = %v, want context.Canceled", err)
 	}
 }

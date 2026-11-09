@@ -40,7 +40,9 @@
 // the Dataset on any failure, and an Identity (the SHA-256 of the manifest
 // bytes opened, and published_at). ReopenWhole reopens it from a sealed
 // source without validating digests again, and refuses another Identity
-// (ErrIdentityMismatch). IsRefusal tells the errors that refuse the data
+// (ErrIdentityMismatch). It opens no part, so a count across a part not yet
+// checked is unknown (nil); a browsing caller runs CheckSchema after
+// ReopenWhole to make the first page's counts exact. IsRefusal tells the errors that refuse the data
 // from the others.
 //
 // Totals and Aggregates total the current objects under paths and
