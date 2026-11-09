@@ -17,7 +17,10 @@ import (
 // Enabled and HasDeleteMarkers are set before listing, from the schema's
 // version roles (schema.Info.Versions); read counters after Run returns.
 // Versions counts the rows that are not delete markers, Noncurrent those
-// neither latest nor markers, Live those latest and not markers.
+// neither latest nor markers, Live those latest and not markers. Every
+// counter is counted for every versions schema, but the report shows
+// DeleteMarkers only for a schema with delete markers and Noncurrent only
+// for one without (listing's report).
 type VersionCounts struct {
 	Enabled, HasDeleteMarkers                 bool
 	Versions, DeleteMarkers, Noncurrent, Live atomic.Int64

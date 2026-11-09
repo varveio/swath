@@ -150,11 +150,20 @@ type Sizes struct {
 type Bound[P any] struct {
 	p source.Provider[any, P]
 	s *schema.Schema[P]
+	// v is s's version roles (schema.BindVersions), nil for none.
+	v *schema.Versions[P]
 }
 
-// Bind erases p's range type and binds it to its row schema.
+// Bind erases p's range type and binds it to its row schema and its
+// version roles. It panics on roles that do not define the rows
+// (schema.BindVersions), as schema.Bind does: a producer's bug, found when
+// the source is opened, before any output exists.
 func Bind[R, P any](p source.Provider[R, P], s *schema.Schema[P]) Bound[P] {
-	return Bound[P]{source.Erase[R, P](p), s}
+	v, err := schema.BindVersions(s)
+	if err != nil {
+		panic(err.Error())
+	}
+	return Bound[P]{source.Erase[R, P](p), s, v}
 }
 
 // Schema is the bound schema's description.
@@ -169,11 +178,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if err != nil {
 		return order.Stats{}, nil, err
 	}
-	// The version roles, checked before any output is opened.
-	vers, err := schema.BindVersions(b.s)
-	if err != nil {
-		return order.Stats{}, nil, err
-	}
+	vers := b.v
 	var sink order.Sink[P] = discard[P]{}
 	var enc parquetout.Encoder
 	if env.Router != nil {

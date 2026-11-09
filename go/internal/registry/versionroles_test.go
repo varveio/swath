@@ -175,8 +175,8 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 }
 
 // TestVersionRolesMalformed: a declaration that does not define the rows'
-// roles fails the run before the text output writes anything, and the
-// counts stay disabled.
+// roles is refused when the source is bound (registry.Bind panics, as
+// schema.Bind does), before any run can open an output.
 func TestVersionRolesMalformed(t *testing.T) {
 	for _, roles := range []reader.VersionSpec{
 		{ID: "label", Latest: "head", DeletedAt: "retired"},
@@ -184,28 +184,14 @@ func TestVersionRolesMalformed(t *testing.T) {
 		{ID: "head", Latest: "tomb"},
 		{ID: "label", DeletedAt: "size"},
 	} {
-		for _, count := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%+v/count=%v", roles, count), func(t *testing.T) {
-				var buf bytes.Buffer
-				o, err := textout.Open(textout.Config{Format: textout.TSV, Stdout: &buf})
-				if err != nil {
-					t.Fatal(err)
+		t.Run(fmt.Sprintf("%+v", roles), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "test/version-roles: version roles") {
+					t.Fatalf("recovered %v", r)
 				}
-				env := registry.Env{Order: order.Options{Workers: 1}, Text: o, Versions: &registry.VersionCounts{}}
-				if count {
-					env.Text, env.Count = nil, true
-				}
-				_, _, err = roleSource(t, roleSchema(roles), nil).Run(context.Background(), env)
-				if err == nil || !strings.Contains(err.Error(), "test/version-roles: version roles") {
-					t.Fatalf("err %v", err)
-				}
-				if err := o.Commit(); err != nil { // flushes a header, had the sink been opened
-					t.Fatal(err)
-				}
-				if buf.Len() != 0 || env.Versions.Enabled {
-					t.Fatalf("output %q, counts enabled %v", buf.String(), env.Versions.Enabled)
-				}
-			})
-		}
+			}()
+			roleSource(t, roleSchema(roles), nil)
+			t.Fatal("bound")
+		})
 	}
 }
