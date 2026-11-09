@@ -802,7 +802,50 @@ OpenTelemetry. The cost is inherent to the generated client: `google.golang.org/
 gRPC through `google.golang.org/api/internal/settings.go`, however the service is constructed. These sizes
 are of a later tree than the table above, so they do not compare with it.
 
-Whole-process CPU, wall time and peak RSS per build: see the measurement pass (pending)
+**Whole-process comparison (2026-11-09, commit 915e0c0 of `exp/measure-preview`, 4 vCPU, 975,077 keys shaped like the
+`realistic` tree, medians; the fake server's CPU is not included).** Three S3 arms: the default build; the tagged build
+with the scanner decoding (production); the tagged build with the SDK decoding current-object pages
+(`SWATH_S3_DECODER=sdk`, measurement only). "Client CPU" is the share of profile samples with a frame in the client or
+SDK packages or `net/http`.
+
+Sequential `swath diag list --sequential` against `bench/s3fake` (976 pages):
+
+| S3 arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | parsing µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 3.81 | 3.15 | 3.23 | 65 | 1.06 | 0.62 |
+| tagged, scanner, `-o` | 3.83 | 3.72 | 3.81 | 71 | 1.27 | 0.52 |
+| tagged, SDK decoder, `-o` | 8.78 | 8.79 | 9.01 | 69 | 7.09 | 6.49 (`encoding/xml` 5.68) |
+| default, `count` | 4.13 | 3.18 | 3.26 | 27 | 1.11 | 0.75 |
+| tagged, scanner, `count` | 4.52 | 4.21 | 4.31 | 35 | 1.34 | 0.65 |
+| tagged, SDK decoder, `count` | 9.63 | 10.47 | 10.74 | 34 | 7.81 | 7.10 (`encoding/xml` 6.05) |
+
+Sequential GCS against `scalefake` at zero latency:
+
+| GCS arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | `encoding/json` µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 5.81 | 6.05 | 6.20 | 59 | 3.12 | 2.67 |
+| tagged (generated client), `-o` | 5.83 | 6.59 | 6.76 | 68 | 4.75 | 3.85 |
+| default, `count` | 5.57 | 5.20 | 5.33 | 24 | 3.87 | 3.27 |
+| tagged, `count` | 6.89 | 7.49 | 7.68 | 34 | 4.65 | 3.58 |
+
+Parallel `swath count`, 64 workers, `scalefake` at 20 ms latency (3 runs; no retries or throttles):
+
+| arm | wall s median (min to max) | process CPU s | µs CPU/object | peak RSS MiB |
+|---|---|---:|---:|---:|
+| S3 default | 1.06 (0.92 to 1.41) | 1.53 | 1.57 | 85 |
+| S3 tagged, scanner | 1.40 (1.16 to 1.71) | 2.53 | 2.60 | 92 |
+| S3 tagged, SDK decoder | 3.58 (3.43 to 7.04) | 11.56 | 11.85 | 90 |
+| GCS default | 2.09 (2.00 to 2.15) | 4.91 | 5.04 | 58 |
+| GCS tagged | 2.24 (2.11 to 2.37) | 5.58 | 5.72 | 95 |
+
+At 20 ms latency and 64 workers the SDK decoder makes the S3 listing CPU-bound on 4 cores: 11.6 CPU-seconds cannot
+fit in the 1 s the network allows, so wall time triples. The scanner through the SDK costs about 0.6 to 1.0 µs more
+process CPU per object than the hand-rolled client (the SDK's request machinery, about 0.6 µs of AWS frames, plus
+`net/http` and GC), and its wall-time range overlaps the default's. The generated GCS client adds 0.5 to 2.3 µs per
+object and 0.15 s of wall time here. Every arm produced byte-identical Parquet output. Stripped binaries at this
+commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 bytes, +205 packages and +25 modules.
+S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
+and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
 ## Local filesystem walker
 
