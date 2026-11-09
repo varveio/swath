@@ -296,6 +296,11 @@ earlier one: `swath resume` replays the recorded command with this build's flags
 longer has is refused (exit 2, the flag parser's unknown-flag error); finish such a run with the build that
 started it, or start over. The last renames before 0.4 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04);
 the list below is the earlier history of the unreleased builds.
+- S3 journals written by an earlier build do not resume. The S3 resume identity now records the listing's inputs
+  as given (the endpoint, empty for AWS's own, the region, path-style, FIPS and dual-stack) in place of the
+  endpoint URL the earlier client resolved (`route`), so `swath resume` of such a run is refused before any part
+  is touched (`cannot resume: endpoint was (not recorded)`), whatever the region or endpoint; the interrupted
+  dataset is left as it was. Finish the run with the build that started it, or start it over with `--overwrite`.
 - `--workers` defaults to 64 whatever the CPU count (it was `min(64, max(4, 3*GOMAXPROCS))`).
 - A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
   and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it
