@@ -2,9 +2,9 @@
 
 `github.com/varveio/swath/go/reader` is what a reader of swath datasets needs to know about swath on top of the
 [SeekParquet](https://github.com/varveio/seekparquet) module: the schema ids and their columns, the manifest's
-`extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, and a `Dataset` that
-opens a dataset, checks its schema, accepts it as a whole-source listing, streams its current objects and totals
-them under paths and prefixes.
+`extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, a `Dataset` that
+opens a dataset, checks its schema, accepts it as a whole-source listing, streams and lists its current objects
+and totals them under paths and prefixes, and the digest validation a reader importing a dataset runs first.
 
 It is a nested Go module. It depends on the SeekParquet module (and through it parquet-go) and the standard
 library only: no cloud SDK, and not the swath lister (`github.com/varveio/swath/go`), which imports it instead.
@@ -27,8 +27,12 @@ type Metadata struct { Manifest seekparquet.Metadata; SchemaID SchemaID; Swath b
 	PublishedAt *time.Time; Source *SourceInfo; Scope *Scope; Coverage *Coverage }
 func ParseMetadata(m seekparquet.Metadata) (Metadata, error)
 
+// The module's types and errors, as aliases (the module's own types: errors.Is and errors.As match either name).
+type Source, SourceFile, ContextBinder, Options, Limits, ReadStats, Cursor, RefusalError, UnsupportedError = seekparquet.…
+var ErrClosed, ErrInvalidRequest, ErrLimitExceeded = seekparquet.…
+
 type Position struct { Key []byte; Offset int64 } // embedded in every row
-func (Position) Cursor() *seekparquet.Cursor
+func (Position) Cursor() *Cursor
 
 type Object, S3Object, S3Version, GCSObject, GCSGeneration, AzblobObject, LocalEntry
 func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) // s3-objects/v1, gcs-objects/v1, azblob-objects/v1, swath-local/v1
@@ -39,14 +43,18 @@ func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error)
 func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error)
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error)
 
-func Open(ctx context.Context, src seekparquet.Source, opt seekparquet.Options) (*Dataset, error)
-func OpenDir(ctx context.Context, path string, opt seekparquet.Options) (*Dataset, error)
+func Open(ctx context.Context, src Source, opt Options) (*Dataset, error)
+func OpenDir(ctx context.Context, path string, opt Options) (*Dataset, error)
 func (*Dataset) Metadata() Metadata
 func (*Dataset) SeekParquet() *seekparquet.Dataset // borrowed: the Dataset closes it
 func (*Dataset) CheckSchema(ctx context.Context) error
 func (*Dataset) AcceptWholeSource(kind, container string) error
 func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
-func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; seekparquet.ReadStats }
+func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; ReadStats }
+type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
+type Entry struct { Object *Object; CommonPrefix []byte } // exactly one set
+func (Entry) Cursor() *Cursor
+func (*Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error)
 func (*Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error)
 func (*Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions) ([]PrefixAggregate, error)
 func (*Dataset) Close() error
@@ -60,20 +68,34 @@ type SumMode int // SumsOff, SumsWithinBudget, SumsAlways
 const DefaultSumBudget = 4 << 20
 type AggregateOptions struct { Counts bool; Sums SumMode; SumBudgetBytes int64 }
 type PrefixAggregate struct { Count, Bytes *int64 } // nil: not requested or not known exactly
+
+type DigestResult struct { CheckedParts int64 }
+var ErrMissingDigest error
+func ValidateDigests(ctx context.Context, src Source, opt Options) (DigestResult, error)
+func ValidateDigestsDir(ctx context.Context, path string, opt Options) (DigestResult, error)
 ```
 
 A reader of current objects opens the dataset, admits it once and streams it:
 
 ```go
-d, err := reader.OpenDir(ctx, dir, seekparquet.Options{}) // or reader.Open over a seekparquet.Source (objfile)
+d, err := reader.OpenDir(ctx, dir, reader.Options{}) // or reader.Open over a reader.Source (objfile)
 defer d.Close()
 err = d.CheckSchema(ctx)                 // at admission, not per read
 err = d.AcceptWholeSource("s3", "bucket") // the whole bucket, nothing skipped or filtered
 err = d.Stream(ctx, func(o reader.Object) error { /* ... */ return nil })
+entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimiter: '/', Limit: 1000})
+// the next page: ListRequest{..., Cursor: entries[len(entries)-1].Cursor()}
 ```
 
-A reader of anything else (versions, a key range, a listing by delimiter) queries the module's dataset and
-decodes its rows, projecting `SchemaSpec.ColumnNames()`:
+A reader importing a dataset validates its digests first, then opens the same bytes:
+
+```go
+res, err := reader.ValidateDigests(ctx, src, reader.Options{}) // src pins each file to one stored object
+d, err := reader.Open(ctx, src, reader.Options{})
+```
+
+A reader of anything else (versions, a key range, other columns) queries the module's dataset and decodes its
+rows, projecting `SchemaSpec.ColumnNames()`:
 
 ```go
 spec, ok := reader.Schema(d.Metadata().SchemaID) // S3VersionsV1, say
@@ -117,6 +139,21 @@ for _, r := range rows {
   (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
   Each `Object` owns its key, a copy, so `fn` may keep or change it. `StreamStats` sums every Stream's
   requests, objects handed to `fn` (counted before the call) and `ReadStats`.
+- **`List(req)`.** Current objects only, as `Stream`: a versions schema is refused (`KindSchema`) before any
+  read. One request of the module's delimited listing (`seekparquet.Dataset.List`), which routes it, skips each
+  common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
+  up to and including the first one; `Delimiter` 0 is the NUL byte, a delimiter like any other, not "no
+  rollup"), projecting the columns `Object` holds. Entries are in ascending byte order,
+  at most `Limit`; each is an `Object` or a `CommonPrefix`, owning its bytes. `Entry.Cursor` is the
+  continuation after the entry: the row cursor (key and offset) after an object, the prefix cursor after a common
+  prefix, so the next page starts after every key that rolls up to it; repeating the request with each page's
+  last cursor lists every entry once; a cursor before `Prefix`'s keys lists from the first of them, one after
+  them lists nothing. Each object is checked as `Stream` checks it; a row that fails is the
+  `KindRow` error and no entries. The module's errors are returned unchanged: `*RefusalError`, `ErrClosed`
+  after `Close`, `ErrInvalidRequest` (a `Limit` that is not positive, a malformed cursor), the Source's and the
+  context's. `Stats`, when set, is reset when the request starts (a refusal before any read leaves it zero) and receives
+  the request's `ReadStats`, whether it succeeds or fails; `List` does
+  not add to `StreamStats`.
 - **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
   a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
   other path only the object whose key equals it. Paths may repeat, nest and overlap; each total is independent.
@@ -146,9 +183,21 @@ for _, r := range rows {
   `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
   `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates. Both calls fail first on a
   context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
-- **Not checked.** The parts' SHA-256 digests: `seekparquet.Validate` (or `ValidateDir`) at `LevelDigest`
-  compares them, and every part swath writes declares one. Rows no request decodes, and columns a request does
-  not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull` every value.
+- **`ValidateDigests`, `ValidateDigestsDir`** (at import or attach). The dataset must be swath's: it opens as
+  `Open` decides (a schema id swath writes, `extensions.swath` well-formed), `extensions.swath` is present
+  (`KindCoverage`), and the manifest's key column and uniqueness are the spec's (`KindSchema`), as `CheckSchema`
+  checks them; no part is opened for this. Every part must declare a SHA-256 (else an error wrapping
+  `ErrMissingDigest` naming the part, before any part is read; every part swath writes declares one). Then
+  `seekparquet.Validate` (`ValidateDir`) at `LevelDigest` hashes every part's bytes. A mismatch or a missing part
+  is the module's `*RefusalError`, unchanged (the module reports it in a failed report with no error); an
+  incomplete level (a storage error, a limit) is an error wrapping its cause, and an ended context the context's
+  error, even when the module's report is complete (it does not check the context after the last read): success means every part's digest was compared (`CheckedParts`, 0 for an empty dataset). The parts are
+  not checked as Parquet (that is `CheckSchema`'s and the reads'). The caller validates, then opens, the same
+  immutable bytes: one Source whose files are pinned to one stored object each, or a local directory that does
+  not change in between.
+- **Not checked.** The parts' digests by any call but `ValidateDigests`. Rows no request decodes, and columns a
+  request does not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull`
+  every value.
 
 ## Rows
 
@@ -183,7 +232,8 @@ error. A manifest without the extension parses with `Swath` false. Unknown membe
 ## What it is not
 
 Opening, validation (`seekparquet.Validate`), cursors, range and delimiter queries, page decoding and refusal
-codes are the SeekParquet module's; storage is objfile's or the caller's. There is no publication, no provider
+codes are the SeekParquet module's (this package adds swath's checks around them and names the module's types by
+alias); storage is objfile's or the caller's. There is no publication, no provider
 client, and no grouping of versions and no streaming or totals of them yet.
 
 ## Tests
@@ -201,7 +251,18 @@ on every member it requires, present and absent; `Open` on an unknown schema id;
 uniqueness, the key column, an absent column, a column of another logical type, and a later part lacking a
 column the module accepts; `Stream`'s order and values over pages, nulls, its row checks, cancellation, `fn`'s
 error, a module refusal returned unchanged, and the refusal of a versions schema; and a part with corrupted
-bytes caught by digest validation. The lister's `TestReaderStreams*` tests admit and stream datasets its own
+bytes caught by digest validation.
+
+`list_test.go` lists keys holding `a`, `a/`, `a/b`, `a/b0` and `ab/x` over three parts against an oracle, by
+several prefixes, in pages of 1, 2, 3 and 100 entries continuing after objects and prefixes; checks an entry's
+values, that changing a returned key or prefix changes neither its cursor nor the next page, cursors before and
+after a prefix's keys, a NUL delimiter, the refusal of a versions schema before any read (statistics reset), a row check failing the listing with its statistics kept, a missing part's
+refusal returned unchanged, and cancellation, a limit of 0 and a closed `Dataset`. `digest_test.go` validates a
+good dataset (directory and Source), an empty one, a corrupted part (the module's failed report with no error
+returned as its refusal), a part without a SHA-256, datasets swath did not write (refused reading the manifest
+alone), a storage error and a cancellation at the second part, a cancellation during the last read (the module's
+report is complete; the context's error is returned), and a complete report comparing fewer digests than parts,
+all errors. The lister's `TestReaderStreams*` tests admit and stream datasets its own
 writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 (one without a size refused), and both versions schemas admitted and refused by `Stream`.
 

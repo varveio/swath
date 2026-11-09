@@ -5,8 +5,10 @@
 // swath on top of the SeekParquet module (github.com/varveio/seekparquet/go):
 // the schema ids and their columns (the descriptors swath's producers write
 // from), the manifest's extensions.swath (Metadata), the rows of each
-// schema as typed values decoded from a seekparquet.Row, and a Dataset
-// that admits and streams a dataset.
+// schema as typed values decoded from a seekparquet.Row, a Dataset that
+// admits, streams and lists a dataset, and digest validation. The
+// module's types and errors a reader names (Source, Options, Cursor,
+// RefusalError, ErrClosed, ...) are aliases of the module's own.
 //
 // Open and OpenDir open a dataset through the module, which reads its
 // manifest and no part, parse its metadata and resolve its schema id.
@@ -15,8 +17,15 @@
 // and every part's columns against the spec. AcceptWholeSource accepts the
 // dataset as a complete, unfiltered listing of the whole of one source.
 // Stream hands on every current object, checking each one's size and
-// modification time. None of them checks the parts' digests, which
-// seekparquet.Validate does at LevelDigest, or the rows no request decodes.
+// modification time; List lists them by delimiter a page at a time,
+// through the module's delimited listing, checking each object as Stream
+// does (Delimiter 0 is the NUL byte). None of them checks the parts' digests or the rows no request
+// decodes.
+//
+// ValidateDigests, at import, checks that a dataset is swath's from its
+// manifest and that every part declares a SHA-256 its bytes match
+// (seekparquet.Validate at LevelDigest); a validation that is incomplete
+// is an error, never success. The caller then opens the same bytes.
 //
 // Totals and Aggregates total the current objects under paths and
 // prefixes over the module's selection plans (seekparquet.Dataset.
@@ -31,6 +40,6 @@
 //
 // The module opens, validates and queries the dataset; this package adds
 // swath's meaning. It does not import the lister and needs no cloud SDK: a
-// reader of a dataset in an object store passes a seekparquet.Source (the
+// reader of a dataset in an object store passes a Source (the
 // objfile module's, or its own).
 package reader
