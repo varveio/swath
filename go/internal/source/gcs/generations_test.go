@@ -16,6 +16,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // TestGenerationSchema: the generations schema is gcs-objects/v1's columns
@@ -216,7 +217,7 @@ func TestGenerationsRejectDescendingPageSeam(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
-	if !errors.Is(err, client.ErrInvalidPage) {
+	if !errors.Is(err, objhttp.ErrInvalidPage) {
 		t.Fatalf("descending generation seam accepted: rows=%d err=%v", st.Rows, err)
 	}
 }
@@ -255,7 +256,7 @@ func TestGenerationsSeamsAndEmptyPages(t *testing.T) {
 				}
 				st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
 				if generation <= 2 {
-					if !errors.Is(err, client.ErrInvalidPage) {
+					if !errors.Is(err, objhttp.ErrInvalidPage) {
 						t.Fatalf("rows=%d err=%v", st.Rows, err)
 					}
 				} else if err != nil || st.Rows != 2 || st.DistinctKeys != 1 {
@@ -327,7 +328,7 @@ func TestFetchGenerationsWithinPageOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.fetchGenerations(context.Background(), &keyrange.Query{}); !errors.Is(err, client.ErrInvalidPage) {
+		if _, err := p.fetchGenerations(context.Background(), &keyrange.Query{}); !errors.Is(err, objhttp.ErrInvalidPage) {
 			t.Fatal(err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/reader"
 )
 
@@ -162,7 +163,7 @@ func (p *provider[P]) fetchGenerations(ctx context.Context, q *keyrange.Query) (
 			Generation: o.Generation, Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5,
 			CRC32C: o.CRC32C, ContentType: o.ContentType}, TimeDeleted: o.TimeDeleted}
 		if i > 0 && r.Key == rows[i-1].Key && r.Data.Generation <= rows[i-1].Data.Generation {
-			return nil, fmt.Errorf("%w: generation %d of %q after %d", client.ErrInvalidPage, r.Data.Generation, r.Key, rows[i-1].Data.Generation)
+			return nil, fmt.Errorf("%w: generation %d of %q after %d", objhttp.ErrInvalidPage, r.Data.Generation, r.Key, rows[i-1].Data.Generation)
 		}
 	}
 	return &keyrange.Page[Generation]{Rows: rows, Prefixes: out.Prefixes, Truncated: out.NextPageToken != "",

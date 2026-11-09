@@ -97,7 +97,7 @@ func (c *Client) services(bodyCap int64) error {
 	if c.key != "" {
 		var err error
 		if cred, err = service.NewSharedKeyCredential(c.cfg.Account, c.key); err != nil {
-			return &CredentialError{Source: c.source, Err: err}
+			return &objhttp.CredentialError{Source: c.source, Err: err}
 		}
 	}
 	for _, hc := range c.http {
@@ -127,7 +127,7 @@ func (c *Client) services(bodyCap int64) error {
 }
 
 // List sends one List Blobs request, retrying retryable failures
-// (objhttp.Do), and validates the page (ErrInvalidPage). A page past the
+// (objhttp.Do), and validates the page (objhttp.ErrInvalidPage). A page past the
 // body cap is ErrBodyCap, not retried.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) { return c.list(ctx, in) })
@@ -210,7 +210,7 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 
 // begin starts an attempt: its deadline, and with Entra ID its token,
 // waited for before the attempt is counted (a failure is a
-// *CredentialError, not an attempt).
+// *objhttp.CredentialError, not an attempt).
 func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.CancelFunc, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	if c.ts != nil {
@@ -251,14 +251,14 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 }
 
 // refusal is the error of a 200 the SDK's decoder (or a header it reads)
-// refused, or whose page did not convert: ErrInvalidPage when the page
+// refused, or whose page did not convert: objhttp.ErrInvalidPage when the page
 // broke the listing contract, else objhttp.ErrSyntax (a parse failure,
 // counted and retried by objhttp.Do). Its text is scrubbed of the SAS: the SDK's errors
 // quote what they could not read (a Date header, a name).
 func (c *Client) refusal(err error) error {
 	sentinel := objhttp.ErrSyntax
-	if errors.Is(err, ErrInvalidPage) {
-		sentinel = ErrInvalidPage
+	if errors.Is(err, objhttp.ErrInvalidPage) {
+		sentinel = objhttp.ErrInvalidPage
 	}
 	msg := err.Error()
 	if s := c.scrub(msg); s != msg || !errors.Is(err, sentinel) {
@@ -321,7 +321,7 @@ func merge(seg *container.BlobHierarchyListSegment, next *string) (*ListOutput, 
 			continue
 		}
 		if !utf8.ValidString(p) {
-			return nil, fmt.Errorf("%w: prefix %q is not UTF-8", ErrInvalidPage, p)
+			return nil, fmt.Errorf("%w: prefix %q is not UTF-8", objhttp.ErrInvalidPage, p)
 		}
 		out.Items, prefixes = append(out.Items, Item{Name: p, Prefix: true}), prefixes[1:]
 	}
@@ -335,7 +335,7 @@ func item(b *container.BlobItem) (Item, error) {
 	}
 	it := Item{Name: *b.Name}
 	if !utf8.ValidString(it.Name) {
-		return Item{}, fmt.Errorf("%w: name %q is not UTF-8", ErrInvalidPage, it.Name)
+		return Item{}, fmt.Errorf("%w: name %q is not UTF-8", objhttp.ErrInvalidPage, it.Name)
 	}
 	p := b.Properties
 	if p == nil {

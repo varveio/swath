@@ -252,7 +252,7 @@ func versionRows(out *client.VersionPage, owner bool) []VersionRow {
 func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *keyrange.Query) (*keyrange.Page[Version], error) {
 	in, err := versionsInput(p.opt.Bucket, q)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", client.ErrInvalidPage, err)
+		return nil, fmt.Errorf("%w: %w", objhttp.ErrInvalidPage, err)
 	}
 	// ListObjectVersions always returns owners (no fetch-owner
 	// parameter); --fetch-owner decides whether they are kept.
@@ -266,7 +266,7 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		return nil, err
 	}
 	if out.IsTruncated && out.NextKeyMarker == in.KeyMarker && out.NextVersionIDMarker == in.VersionIDMarker {
-		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", client.ErrInvalidPage)
+		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", objhttp.ErrInvalidPage)
 	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
 }

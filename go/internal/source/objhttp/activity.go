@@ -3,7 +3,10 @@
 
 package objhttp
 
-import "github.com/varveio/swath/go/internal/source"
+import (
+	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source"
+)
 
 // Activity is a listing client's request activity as the pipeline reads
 // it live (source.Faulted, source.Requested, source.Live). A provider
@@ -12,7 +15,7 @@ import "github.com/varveio/swath/go/internal/source"
 // and each part it does not count reads zero.
 type Activity struct {
 	counted  interface{ Counters() Counts }
-	live     interface{ Live() Live }
+	live     interface{ Live() source.Requests }
 	answered interface{ Answered() int64 }
 }
 
@@ -21,9 +24,16 @@ type Activity struct {
 func Observe(client any) Activity {
 	var a Activity
 	a.counted, _ = client.(interface{ Counters() Counts })
-	a.live, _ = client.(interface{ Live() Live })
+	a.live, _ = client.(interface{ Live() source.Requests })
 	a.answered, _ = client.(interface{ Answered() int64 })
 	return a
+}
+
+// Store writes the client's counters into set at first when available.
+func (a Activity) Store(set *counters.Set, first counters.ID) {
+	if a.counted != nil {
+		a.counted.Counters().Store(set, first)
+	}
 }
 
 // Faults are the throttle answers and attempt timeouts so far
@@ -41,9 +51,7 @@ func (a Activity) Requests() source.Requests {
 	if a.live == nil {
 		return source.Requests{}
 	}
-	l := a.live.Live()
-	return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
-		InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
+	return a.live.Live()
 }
 
 // Answered is the requests the service answered usably (source.Live).

@@ -18,11 +18,10 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
-	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
 		Operational: []string{"profile", "bearer-token-refresh-interval"},
@@ -245,17 +244,6 @@ var (
 	_ source.Reporter     = (*opened[Version])(nil)
 	_ source.Priced       = (*opened[Version])(nil)
 )
-
-// classify names the class of an S3 failure (client.Classify) for the
-// run's outcome.
-func classify(err error) string {
-	switch c := client.Classify(err); c {
-	case objhttp.ClassOther:
-		return ""
-	default:
-		return string(c)
-	}
-}
 
 // keyPrefix is the key prefix a root names (registry.Factory.KeyPrefix).
 func keyPrefix(root string) (string, error) {

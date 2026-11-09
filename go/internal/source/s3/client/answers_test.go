@@ -124,21 +124,21 @@ func TestAnswers(t *testing.T) {
 	// The counters of an answer given once (not retried) and of one
 	// retried to exhaustion (3 attempts), with the retried answer's own
 	// counter.
-	once := Counters{Attempts: 1}
-	exhausted := func(n Counters) Counters { n.Attempts, n.Retries = 3, 2; return n }
-	throttled, parse, timedOut := exhausted(Counters{Throttles: 3}), exhausted(Counters{ParseFailures: 3}), exhausted(Counters{Timeouts: 3})
+	once := objhttp.Counts{Attempts: 1}
+	exhausted := func(n objhttp.Counts) objhttp.Counts { n.Attempts, n.Retries = 3, 2; return n }
+	throttled, parse, timedOut := exhausted(objhttp.Counts{Throttles: 3}), exhausted(objhttp.Counts{ParseFailures: 3}), exhausted(objhttp.Counts{Timeouts: 3})
 	for _, c := range []struct {
 		name   string
 		h      http.HandlerFunc
 		class  objhttp.Class // "" for success
-		counts Counters
+		counts objhttp.Counts
 		answer *Error // the *Error returned, if any (Message aside)
 	}{
 		{"429 SlowDown", xmlError(429, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 429, Code: "SlowDown", RequestID: "RID"}},
 		{"503 SlowDown", xmlError(503, "SlowDown"), objhttp.ClassThrottle, throttled, &Error{Status: 503, Code: "SlowDown", RequestID: "RID"}},
 		{"503 no body", body(503, ""), objhttp.ClassThrottle, throttled, &Error{Status: 503, Code: "ServiceUnavailable"}},
-		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalError", RequestID: "RID"}},
-		{"500 html", body(500, "<html>oops"), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
+		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassOther, exhausted(objhttp.Counts{}), &Error{Status: 500, Code: "InternalError", RequestID: "RID"}},
+		{"500 html", body(500, "<html>oops"), objhttp.ClassOther, exhausted(objhttp.Counts{}), &Error{Status: 500, Code: "InternalServerError"}},
 		{"400 RequestTimeout", xmlError(400, "RequestTimeout"), objhttp.ClassTimeout, timedOut, &Error{Status: 400, Code: "RequestTimeout", RequestID: "RID"}},
 		{"408", body(408, ""), objhttp.ClassTimeout, timedOut, &Error{Status: 408, Code: "RequestTimeout"}}, // the code from the status text
 		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "AccessDenied", RequestID: "RID"}},
@@ -149,7 +149,7 @@ func TestAnswers(t *testing.T) {
 			&Error{Status: 301, Code: "PermanentRedirect", Region: "eu-west-2", RequestID: "RID"}},
 		{"307", redirect(307), objhttp.ClassOther, once, &Error{Status: 307, Code: "TemporaryRedirect"}},
 		{"308", redirect(308), objhttp.ClassOther, once, &Error{Status: 308, Code: "PermanentRedirect"}}, // the code from the status text
-		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassOther, exhausted(Counters{}), &Error{Status: 500, Code: "InternalServerError"}},
+		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassOther, exhausted(objhttp.Counts{}), &Error{Status: 500, Code: "InternalServerError"}},
 		// A real truncation (the connection closed mid-body): the status,
 		// headers and bytes read so far still make the answer.
 		{"403 connection cut mid-body", cutError(403, "AccessDenied"), objhttp.ClassAccessDenied, once, &Error{Status: 403, Code: "Forbidden", RequestID: "HID"}},
@@ -163,7 +163,7 @@ func TestAnswers(t *testing.T) {
 		{"200 cut mid-element", body(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Ke`), objhttp.ClassParse, parse, nil},
 		{"200 16 MiB", body(200, sized(maxBody)), "", once, nil},
 		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther, once, nil},
-		{"200 cut mid-stream", cut, objhttp.ClassOther, exhausted(Counters{}), nil},
+		{"200 cut mid-stream", cut, objhttp.ClassOther, exhausted(objhttp.Counts{}), nil},
 		{stalled, stall, objhttp.ClassTimeout, timedOut, nil},
 		{"200 malformed gzip", gzipped, objhttp.ClassOther, once, nil},
 		{"201", body(201, okPage), objhttp.ClassOther, once, &Error{Status: 201, Code: "Created"}},
@@ -183,7 +183,7 @@ func TestAnswers(t *testing.T) {
 			cl := newTest(t, withHTTP(cfg, rt))
 			_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 			var ex *objhttp.ExhaustedError
-			if got := Classify(err); got != c.class || errors.As(err, &ex) != (c.counts.Attempts > 1) || requests(cl.Counters()) != c.counts {
+			if got := objhttp.Classify(err); got != c.class || errors.As(err, &ex) != (c.counts.Attempts > 1) || requests(cl.Counters()) != c.counts {
 				t.Fatalf("class %q (%v), counters %+v; want %q, %+v", got, err, requests(cl.Counters()), c.class, c.counts)
 			}
 			var se *Error
@@ -230,8 +230,8 @@ func TestCutThrottleFeedsLimiter(t *testing.T) {
 	rt := &closeCounter{next: http.DefaultTransport}
 	cl := newTest(t, withHTTP(cfg, rt))
 	_, err := cl.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	if Classify(err) != objhttp.ClassThrottle {
-		t.Fatalf("%v (%q)", err, Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassThrottle {
+		t.Fatalf("%v (%q)", err, objhttp.Classify(err))
 	}
 	n := cl.Counters()
 	l := n.Limiter
@@ -269,13 +269,13 @@ func TestCancelAfterHeaders(t *testing.T) {
 	_, err := c.ListObjectsV2(ctx, &ListInput{Bucket: "b"})
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) || c.Counters().Attempts != 1 {
-		t.Fatalf("%v (%q) %+v", err, Classify(err), c.Counters())
+		t.Fatalf("%v (%q) %+v", err, objhttp.Classify(err), c.Counters())
 	}
 	rt.closedOnce(t)
 }
 
 // TestBearerTokenFailureIsNotAnAttempt: a bearer token command that fails
-// is a CredentialError (auth) before any request is sent or counted; one
+// is a objhttp.CredentialError (auth) before any request is sent or counted; one
 // that works sends "Authorization: Bearer".
 func TestBearerTokenFailureIsNotAnAttempt(t *testing.T) {
 	s3test.NoCredentials(t)
@@ -296,8 +296,8 @@ func TestBearerTokenFailureIsNotAnAttempt(t *testing.T) {
 	}
 	_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 	var ce *objhttp.CredentialError
-	if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 || sent.Load() != 0 {
-		t.Fatalf("%v (%q), %+v, %d sent", err, Classify(err), c.Counters(), sent.Load())
+	if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 || sent.Load() != 0 {
+		t.Fatalf("%v (%q), %+v, %d sent", err, objhttp.Classify(err), c.Counters(), sent.Load())
 	}
 	cfg.Bearer = NewBearerToken("echo tok", 0)
 	if c, err = New(context.Background(), cfg); err != nil {

@@ -144,7 +144,7 @@ func mayHoldError(body []byte) bool {
 // failure is the error an attempt that did not get a page returns: the
 // service's answer as an *Error (by the HTTP status sent, which a
 // googleapi.Error's body-supplied code may contradict; another 2xx too), a
-// 200 body the generated decoder refused as ErrSyntax, the Guard's own failures
+// 200 body the generated decoder refused as objhttp.ErrSyntax, the Guard's own failures
 // resolved by objhttp.Normalize, an attempt timeout as objhttp.ErrTimeout.
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error) error {
 	var ge *googleapi.Error

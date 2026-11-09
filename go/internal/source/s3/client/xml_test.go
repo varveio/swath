@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // refTime records LastModified as encoding/xml would hand it to a time.Time.
@@ -169,7 +171,7 @@ func TestParseRejects(t *testing.T) {
 		`<ListBucketResult><Contents><Size>x</Size></Contents></ListBucketResult>`,
 		`<ListBucketResult><Contents>`,
 	} {
-		if _, err := parse([]byte(s)); !errors.Is(err, ErrSyntax) {
+		if _, err := parse([]byte(s)); !errors.Is(err, objhttp.ErrSyntax) {
 			t.Errorf("%q: %v, want a syntax error", s, err)
 		}
 	}

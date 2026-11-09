@@ -48,8 +48,6 @@ type namespaced interface {
 	NamespaceInfo(ctx context.Context, container string) (hns bool, err error)
 }
 
-type counted interface{ Counters() client.Counters }
-
 // pooled is implemented by clients that spread requests over a transport
 // pool (client.Client).
 type pooled interface{ Transports() int }
@@ -238,7 +236,7 @@ func (p *Provider) description() keyrange.Description[Object] {
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
 		Requeue:     requeue,
-		InvalidPage: client.ErrInvalidPage,
+		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
 		Counters:    slices.Concat(client.CounterDefs, order.CounterDefs),
 	}
@@ -338,7 +336,7 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		cfg := client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Account: opt.Account, Anonymous: opt.Anonymous,
+		cfg := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Account: opt.Account, Anonymous: opt.Anonymous,
 			SAS: opt.SAS, RequestTimeout: opt.Timeout, Workers: opt.Workers}
 		if cfg.SAS == "" {
 			cfg.SAS = os.Getenv(EnvSAS)
@@ -420,9 +418,7 @@ func (p *Provider) Restart(after string) error {
 
 // Stats snapshots the counters.
 func (p *Provider) Stats() Stats {
-	if c, ok := p.client.(counted); ok {
-		c.Counters().Store(p.Set(), p.ID(0))
-	}
+	p.Activity.Store(p.Set(), p.ID(0))
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
 	}

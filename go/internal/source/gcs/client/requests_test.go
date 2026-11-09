@@ -255,7 +255,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Bucket: "b"})
-	if Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 {
+	if objhttp.Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 {
 		t.Fatalf("err %v, counters %+v", err, c.Counters())
 	}
 	if source, anonymous := c.Credentials(); source != "application default credentials" || anonymous {

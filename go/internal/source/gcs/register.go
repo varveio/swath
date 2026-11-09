@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
 		Operational: []string{"gcs-credentials"},
 		Hints:       []source.Hint{{Flag: "gcs-credentials"}, {Flag: "gcs-user-project"}},
@@ -163,17 +163,6 @@ var (
 	_ source.Reporter     = (*opened[Generation])(nil)
 	_ source.Priced       = (*opened[Generation])(nil)
 )
-
-// classify names the class of a GCS failure (client.Classify) for the
-// run's outcome.
-func classify(err error) string {
-	switch c := client.Classify(err); c {
-	case objhttp.ClassOther:
-		return ""
-	default:
-		return string(c)
-	}
-}
 
 // keyPrefix is the key prefix a root names (registry.Factory.KeyPrefix).
 func keyPrefix(root string) (string, error) {

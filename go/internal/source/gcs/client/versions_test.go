@@ -71,7 +71,7 @@ func parse(t *testing.T, body []byte) (*Page, error) {
 	t.Helper()
 	s := newServer(t)
 	s.body = body
-	c, err := New(context.Background(), Config{Endpoint: s.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 1})
+	c, err := New(context.Background(), Config{Endpoint: s.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestVersionsCaptureParses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.file, err)
 		}
-		if _, err := parse(t, capture(t, c.file, false)); Classify(err) != objhttp.ClassParse {
+		if _, err := parse(t, capture(t, c.file, false)); objhttp.Classify(err) != objhttp.ClassParse {
 			t.Fatalf("%s without kind: %v", c.file, err)
 		}
 		if len(p.Items) != c.items || len(p.Prefixes) != c.prefixes || p.NextPageToken == "" {
@@ -245,7 +245,7 @@ func TestTimeDeleted(t *testing.T) {
 		`{"kind":"storage#objects","items":[{"name":"a","timeDeleted":"2026-02-19"}]}`,
 		`{"kind":"storage#objects","items":[{"name":"a","timeDeleted":12}]}`,
 	} {
-		if _, err := parse(t, []byte(in)); !errors.Is(err, ErrSyntax) {
+		if _, err := parse(t, []byte(in)); !errors.Is(err, objhttp.ErrSyntax) {
 			t.Fatalf("%s: %v", in, err)
 		}
 	}

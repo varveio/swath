@@ -148,11 +148,11 @@ func TestSASRedacted(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, SAS: testSAS, MaxAttempts: 1, RequestTimeout: 100 * time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}, RequestTimeout: 100 * time.Millisecond})
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	addr := ln.Addr().String()
 	ln.Close()
-	down := newTestClient(t, Config{Endpoint: "http://" + addr, SAS: testSAS, MaxAttempts: 1})
+	down := newTestClient(t, Config{Endpoint: "http://" + addr, SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}})
 	for _, x := range []struct {
 		c      *Client
 		prefix string

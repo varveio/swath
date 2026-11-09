@@ -15,13 +15,12 @@ import (
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", KeyPrefix: keyPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azblob-sas", Env: EnvSAS}},
 		Hints:   []source.Hint{{Flag: "azblob-sas"}, {Flag: "azblob-flat"}},
@@ -148,17 +147,6 @@ var (
 	_ source.Capable      = (*opened)(nil)
 	_ source.Reporter     = (*opened)(nil)
 )
-
-// classify names the class of an Azure failure (client.Classify) for the
-// run's outcome.
-func classify(err error) string {
-	switch c := client.Classify(err); c {
-	case objhttp.ClassOther:
-		return ""
-	default:
-		return string(c)
-	}
-}
 
 // keyPrefix is the name prefix a root names (registry.Factory.KeyPrefix).
 func keyPrefix(root string) (string, error) {

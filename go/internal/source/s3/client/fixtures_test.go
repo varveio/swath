@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -62,8 +63,8 @@ func TestValidateFailuresAreInvalidPage(t *testing.T) {
 	} {
 		c := newTest(t, testConfig(s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))))
 		_, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
-		if !errors.Is(err, ErrInvalidPage) || c.Counters().Attempts != 1 {
-			t.Fatalf("%v (%q), %+v", err, Classify(err), c.Counters())
+		if !errors.Is(err, objhttp.ErrInvalidPage) || c.Counters().Attempts != 1 {
+			t.Fatalf("%v (%q), %+v", err, objhttp.Classify(err), c.Counters())
 		}
 	}
 }

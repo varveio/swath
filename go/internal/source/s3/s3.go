@@ -38,9 +38,6 @@ type API interface {
 // it lists from another's.
 type Routed interface{ Route(bucket string) string }
 
-// counted is implemented by clients that count their requests.
-type counted interface{ Counters() client.Counters }
-
 // Options configure a Provider.
 type Options struct {
 	Bucket    string
@@ -157,7 +154,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
 		Requeue:     requeue,
-		InvalidPage: client.ErrInvalidPage,
+		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
 		Counters:    clientCounters,
 	}, p.fetch)
@@ -186,7 +183,7 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
 		Requeue:     requeue,
-		InvalidPage: client.ErrInvalidPage,
+		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
 		Detach:      VersionsSchema.Detach,
 		Size:        func(v *Version) int64 { return v.Size },
@@ -216,7 +213,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		cc := client.Config{Limiter: lim, Rate: rate,
+		cc := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate},
 			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
 			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
 		}
@@ -278,9 +275,7 @@ func (p *provider[P]) Restart(after string) error {
 
 // Stats returns the counters so far.
 func (p *provider[P]) Stats() Stats {
-	if c, ok := p.client.(counted); ok {
-		c.Counters().Store(p.Set(), p.ID(0))
-	}
+	p.Activity.Store(p.Set(), p.ID(0))
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}
 }

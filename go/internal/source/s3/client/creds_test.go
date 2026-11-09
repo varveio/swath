@@ -168,7 +168,7 @@ func TestCredentialOutageRecovers(t *testing.T) {
 	}
 	time.Sleep(2500 * time.Millisecond) // the first credentials expire; the refresh meets the outage
 	if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
-		t.Fatalf("after the outage: %v (class %s, %d STS calls)", err, Classify(err), n.Load())
+		t.Fatalf("after the outage: %v (class %s, %d STS calls)", err, objhttp.Classify(err), n.Load())
 	}
 	if c.Counters().Retries == 0 || n.Load() < 8 {
 		t.Fatalf("retries %d, STS calls %d: the outage was not met", c.Counters().Retries, n.Load())
@@ -176,9 +176,9 @@ func TestCredentialOutageRecovers(t *testing.T) {
 	refuse.Store(true)
 	time.Sleep(2500 * time.Millisecond)
 	_, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-	var ex *ExhaustedError
-	if Classify(err) != objhttp.ClassAuth || errors.As(err, &ex) {
-		t.Fatalf("refused token: %v (class %s), want auth, not retried", err, Classify(err))
+	var ex *objhttp.ExhaustedError
+	if objhttp.Classify(err) != objhttp.ClassAuth || errors.As(err, &ex) {
+		t.Fatalf("refused token: %v (class %s), want auth, not retried", err, objhttp.Classify(err))
 	}
 }
 
@@ -266,8 +266,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		webIdentitySTS(t, 0, 400, "InvalidIdentityToken")
 		_, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:1", PathStyle: true})
 		var ce *objhttp.CredentialError
-		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || !strings.Contains(err.Error(), "web identity") {
-			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, Classify(err))
+		if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth || !strings.Contains(err.Error(), "web identity") {
+			t.Fatalf("refused token: %v (class %s), want an auth failure naming web identity", err, objhttp.Classify(err))
 		}
 	})
 	// refused is the outcome of a client the first lookup could not
@@ -279,8 +279,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		t.Cleanup(srv.Close)
 		_, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
 		var ce *objhttp.CredentialError
-		if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
-			t.Fatalf("%v (class %s), %d requests: want an auth failure and none sent", err, Classify(err), sent.Load())
+		if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth || sent.Load() != 0 {
+			t.Fatalf("%v (class %s), %d requests: want an auth failure and none sent", err, objhttp.Classify(err), sent.Load())
 		}
 	}
 	t.Run("STS down", func(t *testing.T) {
@@ -330,8 +330,8 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())
 			}
-			if Classify(err) != objhttp.ClassAuth {
-				t.Fatalf("%v: class %s, want auth", err, Classify(err))
+			if objhttp.Classify(err) != objhttp.ClassAuth {
+				t.Fatalf("%v: class %s, want auth", err, objhttp.Classify(err))
 			}
 			if n := requests.Load(); n != 0 {
 				t.Fatalf("%d requests sent", n)

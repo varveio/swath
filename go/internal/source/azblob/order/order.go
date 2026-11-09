@@ -32,6 +32,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/utf16order"
 )
 
@@ -121,7 +122,7 @@ var (
 )
 
 func invariant(format string, args ...any) error {
-	return source.Violation(fmt.Errorf("%w (%w): %s", ErrInvariant, client.ErrInvalidPage, fmt.Sprintf(format, args...)))
+	return source.Violation(fmt.Errorf("%w (%w): %s", ErrInvariant, objhttp.ErrInvalidPage, fmt.Sprintf(format, args...)))
 }
 
 // Page is one page in byte order: blobs and, with a delimiter, BlobPrefix

@@ -16,7 +16,47 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source"
 )
+
+func TestLabel(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"other", errors.New("construction failed"), ""},
+		{"canceled", context.Canceled, ""},
+		{"invalid page", ErrInvalidPage, ""},
+		{"credentials", &CredentialError{Err: errors.New("refused")}, "auth"},
+		{"timeout", ErrTimeout, "timeout"},
+		{"parse", ErrSyntax, "parse"},
+		{"unsupported", source.ErrUnsupported, "unsupported"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Label(c.err); got != c.want {
+				t.Fatalf("Label(%v) = %q, want %q", c.err, got, c.want)
+			}
+		})
+	}
+	for _, class := range []Class{ClassAuth, ClassAccessDenied, ClassThrottle, ClassTimeout, ClassParse, ClassUnsupported, ClassOther} {
+		t.Run("stored/"+string(class), func(t *testing.T) {
+			// A stored label survives wrapping and exhaustion even when
+			// the original cause would classify differently.
+			f := &Failure{Class: class, Cause: ErrSyntax}
+			want := string(class)
+			if class == ClassOther {
+				want = ""
+			}
+			for _, err := range []error{f, fmt.Errorf("list: %w", f), &ExhaustedError{Attempts: 3, Err: f}} {
+				if got := Label(err); got != want {
+					t.Errorf("Label(%v) = %q, want %q", err, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestCanonicalRoute(t *testing.T) {
 	for in, want := range map[string]string{
@@ -59,7 +99,7 @@ func TestCredentialDeadlineIsRequeued(t *testing.T) {
 // definition with a distinct key, and Store writes each from its own
 // field: Counts filled with distinct values land at distinct IDs.
 func TestCounterTable(t *testing.T) {
-	defs := CounterDefs("throttle", "-timeout")
+	defs := CounterDefs("throttle")
 	seen := map[string]bool{}
 	for id, d := range defs {
 		if d.Key == "" || seen[d.Key] {
@@ -114,7 +154,7 @@ func TestAdmissionFeatures(t *testing.T) {
 			t.Fatalf("%+v own %v: off %v, want %v", c.a, c.own, got, c.off)
 		}
 	}
-	for _, d := range CounterDefs("t", "-t") {
+	for _, d := range CounterDefs("t") {
 		if strings.HasPrefix(d.Key, "slow_start.") != (d.Feature == FeatureSlowStart) {
 			t.Fatalf("%s: feature %q", d.Key, d.Feature)
 		}

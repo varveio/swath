@@ -54,7 +54,7 @@ func TestNamespaceInfo(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	ctx := context.Background()
 	for _, sas := range []string{"", "sv=1&sig=S"} {
-		c, err := New(ctx, Config{Account: "acct", Anonymous: sas == "", SAS: sas, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+		c, err := New(ctx, Config{Account: "acct", Anonymous: sas == "", SAS: sas, Retry: objhttp.Retry{MaxAttempts: 1}, HTTPClient: &http.Client{Transport: toFake{u}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestNamespaceInfo(t *testing.T) {
 		}
 	}
 	// Shared Key: not asked (the request is not signed), no request sent.
-	k, err := New(ctx, Config{Account: "acct", SharedKey: testKey, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+	k, err := New(ctx, Config{Account: "acct", SharedKey: testKey, Retry: objhttp.Retry{MaxAttempts: 1}, HTTPClient: &http.Client{Transport: toFake{u}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestNamespaceInfo(t *testing.T) {
 	if _, err := k.NamespaceInfo(ctx, "cont"); !errors.Is(err, ErrNoDFSEndpoint) || len(seen) != n {
 		t.Fatalf("Shared Key: %v, %d requests", err, len(seen)-n)
 	}
-	c, _ := New(ctx, Config{Account: "acct", Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+	c, _ := New(ctx, Config{Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}, HTTPClient: &http.Client{Transport: toFake{u}}})
 	mu.Lock()
 	answer = ""
 	mu.Unlock()
@@ -96,8 +96,8 @@ func TestNamespaceInfo(t *testing.T) {
 	mu.Lock()
 	answer = "401"
 	mu.Unlock()
-	if _, err := c.NamespaceInfo(ctx, "cont"); Classify(err) != objhttp.ClassAuth {
-		t.Fatalf("401: %v (%s)", err, Classify(err))
+	if _, err := c.NamespaceInfo(ctx, "cont"); objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("401: %v (%s)", err, objhttp.Classify(err))
 	}
 	mu.Lock()
 	answer = "false"
@@ -110,7 +110,7 @@ func TestNamespaceInfo(t *testing.T) {
 		"http://acct.blob.core.windows.net":        false,
 		"https://ACCT.blob.core.windows.net/":      true,
 	} {
-		other, err := New(ctx, Config{Account: "acct", Endpoint: ep, Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+		other, err := New(ctx, Config{Account: "acct", Endpoint: ep, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}, HTTPClient: &http.Client{Transport: toFake{u}}})
 		if err != nil {
 			t.Fatal(err)
 		}

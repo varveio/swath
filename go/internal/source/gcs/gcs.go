@@ -25,8 +25,6 @@ type API interface {
 	List(ctx context.Context, in *client.ListInput) (*client.Page, error)
 }
 
-type counted interface{ Counters() client.Counters }
-
 // pooled is implemented by clients that spread requests over a transport
 // pool (client.Client).
 type pooled interface{ Transports() int }
@@ -119,7 +117,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		StartInclusive: true,
 		AcceptBound:    AcceptBound,
 		Requeue:        requeue,
-		InvalidPage:    client.ErrInvalidPage,
+		InvalidPage:    objhttp.ErrInvalidPage,
 		Size:           func(o *Object) int64 { return o.Size },
 		Counters:       clientCounters,
 	}, p.fetch)
@@ -148,7 +146,7 @@ func NewGenerations(ctx context.Context, opt Options) (*GenerationsProvider, err
 		InclusiveStart: func(after string) bool { _, ok := ExclusiveStart(after); return !ok },
 		AcceptBound:    AcceptBound,
 		Requeue:        requeue,
-		InvalidPage:    client.ErrInvalidPage,
+		InvalidPage:    objhttp.ErrInvalidPage,
 		Groups:         GenerationSchema.Groups,
 		GroupOrdinal:   func(g *Generation) int64 { return g.Generation },
 		Detach:         GenerationSchema.Detach,
@@ -171,7 +169,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+		c, err := client.New(ctx, client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
 		if err != nil {
 			return nil, false, fmt.Errorf("GCS client: %w", err)
@@ -238,9 +236,7 @@ func (p *provider[P]) Restart(after string) error {
 
 // Stats snapshots the counters.
 func (p *provider[P]) Stats() Stats {
-	if c, ok := p.client.(counted); ok {
-		c.Counters().Store(p.Set(), p.ID(0))
-	}
+	p.Activity.Store(p.Set(), p.ID(0))
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}

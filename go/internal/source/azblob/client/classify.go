@@ -14,11 +14,6 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// ErrInvalidPage marks a page that parsed but breaks the listing contract
-// (names out of order, a repeated marker, an Encoded name that does not
-// decode); the range engine wraps it.
-var ErrInvalidPage = objhttp.ErrInvalidPage
-
 // The error codes the classification names (x-ms-error-code).
 const (
 	codeNoAuthentication   = "NoAuthenticationInformation"
@@ -95,23 +90,6 @@ func retryAfter(v string, now time.Time) time.Duration {
 	}
 	return 0
 }
-
-// Counters are what the client did.
-type Counters = objhttp.Counts
-
-// CredentialError is a credential failure (objhttp.CredentialError): a
-// configured credential that does not load, or a token Entra ID would not
-// issue; transient ones are retried.
-type CredentialError = objhttp.CredentialError
-
-// ExhaustedError is a transient failure that outlived its attempts.
-type ExhaustedError = objhttp.ExhaustedError
-
-// ErrSyntax marks a 200 whose body did not parse (objhttp.ErrSyntax).
-var ErrSyntax = objhttp.ErrSyntax
-
-// Classify returns the stored report label (or normalizes a construction error).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
 
 // Failure keeps Azure's code-sensitive 500 policy. A generic 500 (or 501)
 // is terminal even though other providers retry it.

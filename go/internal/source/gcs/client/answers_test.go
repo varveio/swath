@@ -222,8 +222,8 @@ func TestAnswers(t *testing.T) {
 			defer srv.Close()
 			target.Store(0)
 			cl := &closes{}
-			cli, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 3, BaseBackoff: time.Microsecond,
-				MaxBackoff: time.Microsecond, RequestTimeout: 5 * time.Second, HTTPClient: &http.Client{Transport: cl}})
+			cli, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond},
+				RequestTimeout: 5 * time.Second, HTTPClient: &http.Client{Transport: cl}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -232,7 +232,7 @@ func TestAnswers(t *testing.T) {
 			if target.Load() != 0 {
 				t.Errorf("a redirect was followed")
 			}
-			if cls := Classify(err); cls != c.class {
+			if cls := objhttp.Classify(err); cls != c.class {
 				t.Fatalf("class %q, want %q (err %v)", cls, c.class, err)
 			}
 			if !reflect.DeepEqual(p, c.page) {
@@ -248,13 +248,13 @@ func TestAnswers(t *testing.T) {
 				}
 				return 0
 			}
-			want := Counters{Attempts: attempts, Retries: attempts - 1, Throttles: per(objhttp.ClassThrottle),
+			want := objhttp.Counts{Attempts: attempts, Retries: attempts - 1, Throttles: per(objhttp.ClassThrottle),
 				Timeouts: per(objhttp.ClassTimeout), ParseFailures: per(objhttp.ClassParse)}
 			if n := cli.Counters(); n.Attempts != want.Attempts || n.Retries != want.Retries || n.Throttles != want.Throttles ||
 				n.Timeouts != want.Timeouts || n.ParseFailures != want.ParseFailures {
 				t.Errorf("counters %+v, want %+v", n, want)
 			}
-			var exhausted *ExhaustedError
+			var exhausted *objhttp.ExhaustedError
 			if errors.As(err, &exhausted) != c.retry {
 				t.Errorf("retry %v, error %v", c.retry, err)
 			}
@@ -291,7 +291,7 @@ func TestCanceledAfterHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 	cl := &closes{}
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 3, RequestTimeout: 5 * time.Second,
+	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3}, RequestTimeout: 5 * time.Second,
 		HTTPClient: &http.Client{Transport: cl}})
 	if err != nil {
 		t.Fatal(err)
@@ -317,8 +317,7 @@ func TestErrorPageThenValidPage(t *testing.T) {
 		io.WriteString(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1"}]}`)
 	}))
 	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 3,
-		BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,14 +339,13 @@ func TestDeadlineDuringBody(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 2, RequestTimeout: 100 * time.Millisecond,
-		BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond}, RequestTimeout: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Bucket: "b"})
 	got := c.Counters()
-	if Classify(err) != objhttp.ClassTimeout || got.Attempts != 2 || got.Retries != 1 || got.Timeouts != 2 || got.ParseFailures != 0 {
-		t.Fatalf("err %v (class %q), counters %+v", err, Classify(err), got)
+	if objhttp.Classify(err) != objhttp.ClassTimeout || got.Attempts != 2 || got.Retries != 1 || got.Timeouts != 2 || got.ParseFailures != 0 {
+		t.Fatalf("err %v (class %q), counters %+v", err, objhttp.Classify(err), got)
 	}
 }

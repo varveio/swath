@@ -360,8 +360,8 @@ func TestSynthesizedPivotListed(t *testing.T) {
 func TestAdmission(t *testing.T) {
 	hns := azblobtest.Serve(t, []string{"a", "b"}, azblobtest.HNS())
 	_, err := New(context.Background(), Options{Account: hns.Account, Container: hns.Container, Endpoint: base(hns), Anonymous: true, Workers: 1})
-	if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" || !strings.Contains(err.Error(), "hierarchical namespace") {
-		t.Fatalf("HNS: %v (class %q)", err, classify(err))
+	if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" || !strings.Contains(err.Error(), "hierarchical namespace") {
+		t.Fatalf("HNS: %v (class %q)", err, objhttp.Label(err))
 	}
 	var lists atomic.Int64
 	for status, code := range map[int]string{403: "AuthorizationFailure", 401: "NoAuthenticationInformation"} {
@@ -374,8 +374,8 @@ func TestAdmission(t *testing.T) {
 		}))
 		_, err := New(context.Background(), Options{Account: "acct", Container: "c", Endpoint: srv.URL, Anonymous: true, Workers: 1})
 		srv.Close()
-		if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" || !strings.Contains(err.Error(), "account acct: cannot establish") {
-			t.Fatalf("%d: %v (class %q)", status, err, classify(err))
+		if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" || !strings.Contains(err.Error(), "account acct: cannot establish") {
+			t.Fatalf("%d: %v (class %q)", status, err, objhttp.Label(err))
 		}
 	}
 	if lists.Load() != 0 {
@@ -392,7 +392,7 @@ func TestAdmission(t *testing.T) {
 	}
 	c = &pages{}
 	_, err = New(context.Background(), Options{Account: "acct", Container: "c", Client: c, AllVersions: true})
-	if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "--all-versions") || classify(err) != "unsupported" {
+	if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "--all-versions") || objhttp.Label(err) != "unsupported" {
 		t.Fatalf("all versions: %v", err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: c, AllVersions: true}, Workers: 1})
@@ -469,7 +469,7 @@ func TestAdmissionFallback(t *testing.T) {
 	} {
 		asked := 0
 		hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": c.blob, "acct.dfs.core.windows.net": dfs(c.dfsStatus, c.dfsEnabled, &asked)}}
-		cl, err := client.New(context.Background(), client.Config{Account: "acct", Anonymous: true, HTTPClient: hc, MaxAttempts: 1})
+		cl, err := client.New(context.Background(), client.Config{Account: "acct", Anonymous: true, HTTPClient: hc, Retry: objhttp.Retry{MaxAttempts: 1}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -478,7 +478,7 @@ func TestAdmissionFallback(t *testing.T) {
 			Warn: func(s string) { warned = append(warned, s) }})
 		switch {
 		case c.admitted == "":
-			if !errors.Is(err, source.ErrUnsupported) || classify(err) != "unsupported" ||
+			if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" ||
 				strings.Contains(err.Error(), "hierarchical namespace") != c.hierarchical {
 				t.Fatalf("%s: %v, want a refusal (hierarchical %v)", c.name, err, c.hierarchical)
 			}
@@ -744,8 +744,8 @@ func TestEngineFlagsShared(t *testing.T) {
 func TestInvalidPageClass(t *testing.T) {
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "b"}, {Name: "a"}}}}}
 	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: c, Policy: keyrange.Policy{Sequential: true}}, 1)
-	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
-		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, objhttp.Label(err))
 	}
 }
 
@@ -875,7 +875,7 @@ func TestAdmissionFallbackPolicy(t *testing.T) {
 		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
 		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
 		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
-		{errors.Join(client.ErrInvalidPage, &client.Error{Status: 403}), false},
+		{errors.Join(objhttp.ErrInvalidPage, &client.Error{Status: 403}), false},
 		{errors.Join(objhttp.ErrSyntax, &client.Error{Status: 401}), false},
 	} {
 		if got := fallback(c.err); got != c.want {

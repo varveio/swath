@@ -17,7 +17,7 @@
 // waiters sharing one outstanding call (tokensource.Shared). Requests go
 // unauthenticated only with Anonymous; a credential that is configured but
 // will not load, or a DefaultAzureCredential chain that finds none, is a
-// *CredentialError, never anonymity.
+// *objhttp.CredentialError, never anonymity.
 package client
 
 import (
@@ -42,6 +42,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -64,6 +65,7 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
+	objhttp.Retry
 	// Endpoint is the blob service base URL; default DefaultEndpoint for
 	// Account. Any other endpoint (an emulator, the replay server) takes
 	// the account as its first path segment: ENDPOINT/ACCOUNT/CONTAINER.
@@ -77,17 +79,10 @@ type Config struct {
 	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey      string
 	RequestTimeout time.Duration // per attempt; default 30 s
-	MaxAttempts    int           // default 9
-	BaseBackoff    time.Duration // default 100 ms
-	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
-	// Limiter, if set, admits every attempt (objhttp.Limiter).
-	Limiter *objhttp.Limiter
-	// Rate, if set, caps attempts per second (objhttp.Rate).
-	Rate *objhttp.Rate
 }
 
 // ListInput is one List Blobs request. StartFrom is inclusive; Marker is
@@ -188,7 +183,7 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		return nil, err
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	if !accountName.MatchString(cfg.Account) {
 		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", cfg.Account)
@@ -198,7 +193,7 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, base: base,
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
+		retry: cfg.Retry}
 	c.retry.Defaults()
 	// Redirects are answers, never followed (objhttp.Pool). The Location
 	// header is removed before net/http sees it (noLocation): a malformed
@@ -259,7 +254,7 @@ func (c *Client) credentials(entra entraSource) error {
 		c.source = "shared access signature"
 		if _, err := url.ParseQuery(c.sas); err != nil || c.sas == "" {
 			// the parse error would quote the signature
-			return &CredentialError{Source: c.source, Err: errors.New("not a query string")}
+			return &objhttp.CredentialError{Source: c.source, Err: errors.New("not a query string")}
 		}
 		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
@@ -292,7 +287,7 @@ func (c *Client) entra(entra entraSource) error {
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
 	if err != nil {
-		return &CredentialError{Source: source, Err: err}
+		return &objhttp.CredentialError{Source: source, Err: err}
 	}
 	c.ts, c.source = c.shared(cred), source
 	return nil
@@ -355,10 +350,10 @@ func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 	case err == nil:
 		return t, nil
 	case ctx.Err() != nil:
-		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
+		return nil, &objhttp.CredentialError{Source: c.source, Transient: true, Timeout: true,
 			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
 	}
-	return nil, &CredentialError{Source: c.source, Transient: transientToken(err),
+	return nil, &objhttp.CredentialError{Source: c.source, Transient: transientToken(err),
 		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 }
 
@@ -403,10 +398,10 @@ func (c *Client) pick() int { return int((c.next.Add(1) - 1) % uint64(len(c.http
 func (c *Client) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
-// the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
+// the progress sampler (source.Requests).
+func (c *Client) Live() source.Requests {
 	l := c.counts.Live()
-	l.Limit = c.retry.Limiter.Limit()
+	l.Limit = int64(c.retry.Limiter.Limit())
 	return l
 }
 
@@ -415,7 +410,7 @@ func (c *Client) Live() objhttp.Live {
 func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
 
 // Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
+func (c *Client) Counters() objhttp.Counts {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()

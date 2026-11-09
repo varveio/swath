@@ -15,7 +15,7 @@
 // body, reads a 2xx other than 200 as an answer, and captures a 200's body;
 // the SDK's deserializer is handed a minimal envelope in its place, and
 // this package's scanner decodes the captured body (parseList,
-// parseVersions: the operation's envelope, whole, or ErrSyntax), as Java
+// parseVersions: the operation's envelope, whole, or objhttp.ErrSyntax), as Java
 // swath's StreamingListObjectsV2Interceptor does. Measured through the same
 // stack over a 1,000-entry page, the SDK's deserializer cost about 14 µs
 // per object and 100,000 allocations per page against the scanner's 1.8 µs
@@ -50,12 +50,14 @@ import (
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
+	objhttp.Retry
 	Region         string        // else the SDK's resolution (AWS_REGION, profile), else us-east-1
 	Endpoint       string        // custom endpoint URL (S3-compatible stores, tests)
 	PathStyle      bool          // https://host/bucket instead of https://bucket.host/
@@ -65,21 +67,11 @@ type Config struct {
 	Anonymous      bool          // never sign
 	RequestPayer   bool          // send x-amz-request-payer: requester (signed): the caller pays for a requester-pays bucket
 	RequestTimeout time.Duration // per attempt, headers and body; default 30 s
-	MaxAttempts    int           // default 9
-	BaseBackoff    time.Duration // default 100 ms
-	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
-	// Limiter, if set, admits every attempt (objhttp.Limiter).
-	Limiter *objhttp.Limiter
-	// Rate, if set, caps attempts per second (objhttp.Rate).
-	Rate *objhttp.Rate
 	// Bearer, if set, authenticates every request with its token
 	// ("Authorization: Bearer") instead of SigV4; no credential is looked up.
 	Bearer *tokensource.Shared
 }
-
-// Counters are what the client did, for the run summary.
-type Counters = objhttp.Counts
 
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
@@ -97,7 +89,7 @@ type Client struct {
 // they are not used.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	a, err := loadAuth(ctx, cfg)
 	if err != nil {
@@ -118,8 +110,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		base, fips, dualStack = aws.String(cfg.Endpoint), false, false
 	}
 	c := &Client{cfg: cfg, auth: a,
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff,
-			Limiter: cfg.Limiter, Rate: cfg.Rate},
+		retry: cfg.Retry,
 	}
 	c.retry.Defaults()
 
@@ -211,15 +202,15 @@ func (c *Client) Region() string { return c.auth.region }
 func (c *Client) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
-// the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
+// the progress sampler (source.Requests).
+func (c *Client) Live() source.Requests {
 	l := c.counts.Live()
-	l.Limit = c.retry.Limiter.Limit()
+	l.Limit = int64(c.retry.Limiter.Limit())
 	return l
 }
 
 // Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
+func (c *Client) Counters() objhttp.Counts {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()
@@ -258,7 +249,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 // ListObjectsV2's path: the same signing, admission, retries and
 // classification. A 200 that is not a ListVersionsResult is a parse
 // failure (retried); a truncated page without a NextKeyMarker is an
-// invalid page (ErrInvalidPage, not retried).
+// invalid page (objhttp.ErrInvalidPage, not retried).
 func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*VersionPage, error) {
 	if in.VersionIDMarker != "" && in.KeyMarker == "" {
 		return nil, errors.New("ListObjectVersions: a version-id marker without a key marker")
@@ -347,13 +338,13 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 }
 
 // failure maps an attempt's error to safe provider diagnostics. A Guard
-// failure keeps its marker for objhttp.Normalize to recover the cause (ErrSyntax, a 2xx answer other than 200, the size
+// failure keeps its marker for objhttp.Normalize to recover the cause (objhttp.ErrSyntax, a 2xx answer other than 200, the size
 // cap, a credential error, a failed 2xx body read: a cut body is
 // transport, a read past the attempt's deadline ErrTimeout); an HTTP
 // answer other than 2xx is a *Error, its body cut or not (the Guard hands
 // up the bytes read, and the status classifies it); a 2xx body the SDK
-// could not decode is ErrSyntax; the
-// scanner's ErrSyntax and ErrInvalidPage stand; a transport failure stays
+// could not decode is objhttp.ErrSyntax; the
+// scanner's objhttp.ErrSyntax and objhttp.ErrInvalidPage stand; a transport failure stays
 // one (an attempt timeout is ErrTimeout).
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError
@@ -409,7 +400,7 @@ func statusCode(status int) string { return strings.ReplaceAll(http.StatusText(s
 // status text as the code (the response headers are not seen here, so no
 // request ID or region from them). A 200's body is the scanner's to check:
 // it requires the operation's envelope and refuses an empty or cut
-// document (ErrSyntax, retried, never an empty final page).
+// document (objhttp.ErrSyntax, retried, never an empty final page).
 func validate(_ *http.Request, status int, body []byte) error {
 	if status == http.StatusOK {
 		return nil

@@ -146,7 +146,7 @@ func TestScriptedAnswers(t *testing.T) {
 	parse := func(attempts int64) outcome {
 		return outcome{Class: objhttp.ClassParse, Requeue: true, Err: objhttp.ErrSyntax, Counts: [5]int64{attempts, attempts - 1, 0, 0, attempts}, Requests: attempts}
 	}
-	invalid := outcome{Class: objhttp.ClassOther, Err: ErrInvalidPage, Counts: [5]int64{1}, Requests: 1}
+	invalid := outcome{Class: objhttp.ClassOther, Err: objhttp.ErrInvalidPage, Counts: [5]int64{1}, Requests: 1}
 	cases := []struct {
 		name     string
 		attempts int
@@ -297,8 +297,8 @@ func TestScriptedAnswers(t *testing.T) {
 			if c.cap > 0 {
 				b.bodyCap = c.cap
 			}
-			cl, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, MaxAttempts: c.attempts, RequestTimeout: 2 * time.Second,
-				BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, HTTPClient: &http.Client{Transport: cc}}, b)
+			cl, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, RequestTimeout: 2 * time.Second,
+				HTTPClient: &http.Client{Transport: cc}}, b)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -313,7 +313,7 @@ func TestScriptedAnswers(t *testing.T) {
 				t.Errorf("inflight max %d", n0.InflightMax)
 			}
 			if err != nil {
-				got.Class, got.Requeue = Classify(err), objhttp.Requeue(err)
+				got.Class, got.Requeue = objhttp.Classify(err), objhttp.Requeue(err)
 				if leak := sasLeak(err.Error()); leak != "" {
 					t.Errorf("the SAS's %q in the error: %v", leak, err)
 				}
@@ -332,7 +332,7 @@ func TestScriptedAnswers(t *testing.T) {
 						got.Answer = &cp
 					}
 				}
-				for _, s := range []error{objhttp.ErrSyntax, ErrInvalidPage, ErrBodyCap} {
+				for _, s := range []error{objhttp.ErrSyntax, objhttp.ErrInvalidPage, ErrBodyCap} {
 					if errors.Is(err, s) {
 						got.Err = s
 					}
@@ -399,15 +399,15 @@ func TestCancelAfterHeaders(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cc := &closeCount{next: http.DefaultTransport}
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, MaxAttempts: 3, HTTPClient: &http.Client{Transport: cc}})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3}, HTTPClient: &http.Client{Transport: cc}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cc.next = headersThen(http.DefaultTransport, cancel)
 	_, err = c.List(ctx, &ListInput{Container: "c"})
-	if Classify(err) != objhttp.ClassOther || !errors.Is(err, context.Canceled) {
-		t.Errorf("%v (class %q)", err, Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassOther || !errors.Is(err, context.Canceled) {
+		t.Errorf("%v (class %q)", err, objhttp.Classify(err))
 	}
 	if msg := cc.closedOnce(1); msg != "" {
 		t.Error(msg)

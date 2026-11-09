@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/utf16order"
 )
 
@@ -27,11 +28,11 @@ const MaxPageSize = 5000
 func (p *ListOutput) Validate(sent string) error {
 	for i := 1; i < len(p.Items); i++ {
 		if a, b := p.Items[i-1].Name, p.Items[i].Name; utf16order.Compare(a, b) >= 0 {
-			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", ErrInvalidPage, b, a)
+			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", objhttp.ErrInvalidPage, b, a)
 		}
 	}
 	if p.NextMarker != "" && p.NextMarker == sent {
-		return fmt.Errorf("%w: NextMarker repeats the marker sent", ErrInvalidPage)
+		return fmt.Errorf("%w: NextMarker repeats the marker sent", objhttp.ErrInvalidPage)
 	}
 	return nil
 }

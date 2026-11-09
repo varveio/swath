@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // TestInvalidSuccessEnvelopeIsRetried: a 200 whose body is `null`, another
@@ -34,8 +36,7 @@ func TestInvalidSuccessEnvelopeIsRetried(t *testing.T) {
 		fmt.Fprint(w, `{"kind":"storage#objects","items":[{"name":"a","size":"1","updated":"2026-01-01T00:00:00Z"}]}`)
 	}))
 	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, MaxAttempts: 9,
-		BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 9, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}

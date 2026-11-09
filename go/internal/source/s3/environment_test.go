@@ -164,7 +164,7 @@ func TestAttemptsAreRequestEconomics(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ep := s3test.Serve(t, clockTicked(fakeHandler(t, keys, c.fail)))
 			cl, err := client.New(context.Background(), client.Config{Endpoint: ep, PathStyle: true, Anonymous: true, Region: "us-east-1",
-				MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+				Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
 			if err != nil {
 				t.Fatal(err)
 			}

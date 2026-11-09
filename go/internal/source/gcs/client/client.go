@@ -40,6 +40,7 @@ import (
 	"google.golang.org/api/option"
 	storage "google.golang.org/api/storage/v1"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -60,6 +61,7 @@ const (
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
+	objhttp.Retry
 	Endpoint string // JSON API base; default DefaultEndpoint
 	// Anonymous sends no credentials, whatever the environment holds.
 	Anonymous bool
@@ -69,17 +71,10 @@ type Config struct {
 	CredentialsFile string
 	UserProject     string        // billed project for a requester-pays bucket
 	RequestTimeout  time.Duration // per attempt; default 30 s
-	MaxAttempts     int           // default 9
-	BaseBackoff     time.Duration // default 100 ms
-	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
-	// Limiter, if set, admits every attempt (objhttp.Limiter).
-	Limiter *objhttp.Limiter
-	// Rate, if set, caps attempts per second (objhttp.Rate).
-	Rate *objhttp.Rate
 }
 
 // ListInput is one objects.list request. StartOffset is inclusive and
@@ -145,20 +140,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Counters are what the client did.
-type Counters = objhttp.Counts
-
-// CredentialError is a credential failure (objhttp.CredentialError):
-// configured credentials that do not load, or a token the token endpoint
-// would not issue; transient ones are retried.
-type CredentialError = objhttp.CredentialError
-
-// ExhaustedError is a transient failure that outlived its attempts.
-type ExhaustedError = objhttp.ExhaustedError
-
-// ErrSyntax marks a 200 whose body did not parse (objhttp.ErrSyntax).
-var ErrSyntax = objhttp.ErrSyntax
-
 // Client lists Cloud Storage buckets; safe for concurrent use.
 type Client struct {
 	cfg      Config
@@ -175,7 +156,7 @@ type Client struct {
 // New resolves credentials and builds the client. Requests go
 // unauthenticated only with cfg.Anonymous (a public bucket); otherwise
 // credentials that cannot be found or loaded (the client library's
-// Application Default Credentials search) are a *CredentialError, and
+// Application Default Credentials search) are a *objhttp.CredentialError, and
 // nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
@@ -200,14 +181,14 @@ func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Creden
 // given.
 func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []*http.Client) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	ep, err := Endpoint(cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
+		retry: cfg.Retry}
 	c.retry.Defaults()
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline, and its HTTP client bounds each token
@@ -220,18 +201,18 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		c.source = "file " + cfg.CredentialsFile
 		b, err := os.ReadFile(cfg.CredentialsFile)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
 		creds, err := google.CredentialsFromJSON(life, b, readScope)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	default:
 		c.source = "application default credentials"
 		creds, err := finder.find(life, readScope)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource, 0)
 	}
@@ -305,7 +286,7 @@ func (c *Client) pick() int {
 }
 
 // token waits for the token source under the attempt's deadline (ctx);
-// nil without credentials. A failure is a *CredentialError. Waiters
+// nil without credentials. A failure is a *objhttp.CredentialError. Waiters
 // share one outstanding call (tokensource.Shared: at most one goroutine
 // calls the source at a time, however many attempts wait or give up); a
 // call that outlives the waits finishes in the background (its own HTTP
@@ -320,10 +301,10 @@ func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 	case err == nil:
 		return t, nil
 	case ctx.Err() != nil:
-		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
+		return nil, &objhttp.CredentialError{Source: c.source, Transient: true, Timeout: true,
 			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
 	}
-	return nil, &CredentialError{Source: c.source, Transient: transientToken(err),
+	return nil, &objhttp.CredentialError{Source: c.source, Transient: transientToken(err),
 		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 }
 
@@ -351,15 +332,15 @@ func (c *Client) Credentials() (source string, anonymous bool) { return c.source
 func (c *Client) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
-// the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
+// the progress sampler (source.Requests).
+func (c *Client) Live() source.Requests {
 	l := c.counts.Live()
-	l.Limit = c.retry.Limiter.Limit()
+	l.Limit = int64(c.retry.Limiter.Limit())
 	return l
 }
 
 // Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
+func (c *Client) Counters() objhttp.Counts {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()

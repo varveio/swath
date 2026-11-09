@@ -274,7 +274,7 @@ func TestCaptures(t *testing.T) {
 		}
 		served++
 		srv := captureServer(t, c.id, c.steps)
-		cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, MaxAttempts: 1})
+		cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -350,14 +350,14 @@ func checkErrorAnswer(t *testing.T, id string, ex captureExchange, in *ListInput
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { writeCaptured(w, ex) }))
 	defer srv.Close()
-	cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, MaxAttempts: 1})
+	cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = cl.List(context.Background(), in)
 	var e *Error
-	if !errors.As(err, &e) || Classify(err) != captureClass(ex.Response.Status, code) {
-		t.Errorf("%s: %d %q: class %q (%v)", id, ex.Response.Status, code, Classify(err), err)
+	if !errors.As(err, &e) || objhttp.Classify(err) != captureClass(ex.Response.Status, code) {
+		t.Errorf("%s: %d %q: class %q (%v)", id, ex.Response.Status, code, objhttp.Classify(err), err)
 		return
 	}
 	if code == "" {

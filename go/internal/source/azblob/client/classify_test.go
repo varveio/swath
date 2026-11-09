@@ -82,7 +82,7 @@ func (f failingCredential) GetToken(context.Context, policy.TokenRequestOptions)
 // TestClassify: every Azure answer a listing request can end in has its
 // class, through the client as a run meets it (one attempt, so nothing is
 // retried away): an answer worth repeating comes back wrapped in
-// ExhaustedError and counts as a throttle or a timeout where it is one.
+// objhttp.ExhaustedError and counts as a throttle or a timeout where it is one.
 // The error code decides before the status: AuthenticationFailed is a 403,
 // ServerBusy a 503, OperationTimedOut a 500. Generic transport, timeout,
 // exhaustion and cancellation behaviour is objhttptest.Contract's
@@ -122,15 +122,15 @@ func TestClassify(t *testing.T) {
 		{501, "NotImplemented", objhttp.ClassOther, false, false, false}, // nor another 5xx
 		{400, "InvalidQueryParameterValue", objhttp.ClassOther, false, false, false},
 	} {
-		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: fmt.Sprintf("%d %s", x.status, x.code)})
 		var f *objhttp.Failure
 		if !errors.As(err, &f) || f.Status != x.status || f.Code != x.code || f.Transient != x.exhausted || f.Throttle != x.throttle || f.Timeout != x.timeout {
 			t.Fatalf("%d %s: normalized failure %+v (%v)", x.status, x.code, f, err)
 		}
-		var ex *ExhaustedError
+		var ex *objhttp.ExhaustedError
 		n := c.Counters()
-		if got := Classify(err); got != x.class || errors.As(err, &ex) != x.exhausted || (n.Throttles == 1) != x.throttle || (n.Timeouts == 1) != x.timeout {
+		if got := objhttp.Classify(err); got != x.class || errors.As(err, &ex) != x.exhausted || (n.Throttles == 1) != x.throttle || (n.Timeouts == 1) != x.timeout {
 			t.Errorf("%d %s: class %q exhausted=%v throttles %d timeouts %d (%v)", x.status, x.code, got, errors.As(err, &ex), n.Throttles, n.Timeouts, err)
 		}
 	}
@@ -150,19 +150,19 @@ func TestClassify(t *testing.T) {
 		{"token exchange timeout", fmt.Errorf("msal: %w", context.DeadlineExceeded), objhttp.ClassTimeout},
 		{"credential unavailable", errors.New("EnvironmentCredential: missing environment variable AZURE_TENANT_ID"), objhttp.ClassAuth},
 	} {
-		e := newEntraClient(t, Config{Endpoint: srv.URL, MaxAttempts: 1}, failingCredential{x.err})
+		e := newEntraClient(t, Config{Endpoint: srv.URL, Retry: objhttp.Retry{MaxAttempts: 1}}, failingCredential{x.err})
 		_, err := e.List(context.Background(), &ListInput{Container: "c"})
-		var ce *CredentialError
-		var ex *ExhaustedError
-		if Classify(err) != x.class || !errors.As(err, &ce) || errors.As(err, &ex) != (x.class != objhttp.ClassAuth) {
-			t.Errorf("%s: class %q exhausted=%v (%v), want %q", x.name, Classify(err), errors.As(err, &ex), err, x.class)
+		var ce *objhttp.CredentialError
+		var ex *objhttp.ExhaustedError
+		if objhttp.Classify(err) != x.class || !errors.As(err, &ce) || errors.As(err, &ex) != (x.class != objhttp.ClassAuth) {
+			t.Errorf("%s: class %q exhausted=%v (%v), want %q", x.name, objhttp.Classify(err), errors.As(err, &ex), err, x.class)
 		}
 	}
 	// A shared key that is not base64 refuses the client.
-	if _, err := New(context.Background(), Config{Account: "acct", SharedKey: "not base64!"}); Classify(err) != objhttp.ClassAuth {
-		t.Errorf("bad key: class %q (%v)", Classify(err), err)
+	if _, err := New(context.Background(), Config{Account: "acct", SharedKey: "not base64!"}); objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Errorf("bad key: class %q (%v)", objhttp.Classify(err), err)
 	}
-	if got := Classify(nil); got != "" {
+	if got := objhttp.Classify(nil); got != "" {
 		t.Errorf("nil: class %q", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestRetryAfter(t *testing.T) {
 		fmt.Fprint(w, page("", "a"))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}})
 	start := time.Now()
 	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestInvalidPage(t *testing.T) {
 		fmt.Fprint(w, body.Load().(string))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 2, BaseBackoff: time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond}})
 	full := page("m2", "a", "b")
 	for _, x := range []struct {
 		name, body, marker string
@@ -229,10 +229,10 @@ func TestInvalidPage(t *testing.T) {
 	} {
 		body.Store(x.body)
 		p, err := c.List(context.Background(), &ListInput{Container: "c", Marker: x.marker})
-		if got := Classify(err); got != x.class {
+		if got := objhttp.Classify(err); got != x.class {
 			t.Errorf("%s: class %q (%v), page %+v", x.name, got, err, p)
 		}
-		if x.class == objhttp.ClassOther && !errors.Is(err, ErrInvalidPage) {
+		if x.class == objhttp.ClassOther && !errors.Is(err, objhttp.ErrInvalidPage) {
 			t.Errorf("%s: %v does not wrap ErrInvalidPage", x.name, err)
 		}
 	}
@@ -258,7 +258,7 @@ func TestEnvelopeRetried(t *testing.T) {
 		fmt.Fprint(w, page("", "a"))
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: len(bad) + 1, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: len(bad) + 1, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
 	p, err := c.List(context.Background(), &ListInput{Container: "c"})
 	if err != nil || len(p.Items) != 1 || p.Items[0].Name != "a" {
 		t.Fatalf("page %+v, err %v", p, err)
@@ -333,13 +333,12 @@ func TestRetryAfterCapped(t *testing.T) {
 			w.Header().Set(headerRetryAfter, v)
 			azureError(w, 503, codeServerBusy)
 		}))
-		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 3, RequestTimeout: 200 * time.Millisecond,
-			BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, RequestTimeout: 200 * time.Millisecond})
 		start := time.Now()
 		_, err := c.List(context.Background(), &ListInput{Container: "c"})
 		d := time.Since(start)
 		srv.Close()
-		var ex *ExhaustedError
+		var ex *objhttp.ExhaustedError
 		if !errors.As(err, &ex) || ex.Attempts != 3 || !objhttp.Requeue(err) {
 			t.Errorf("%s: %v, want three attempts exhausted and requeued", v, err)
 		}

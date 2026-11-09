@@ -143,7 +143,7 @@ func referenceVersions(body []byte) (*VersionPage, error) {
 		}
 	}
 	if pg.IsTruncated && pg.NextKeyMarker == "" {
-		return nil, ErrInvalidPage
+		return nil, objhttp.ErrInvalidPage
 	}
 	return pg, nil
 }
@@ -351,7 +351,7 @@ func TestParseVersionsInvalidPage(t *testing.T) {
 		`<ListVersionsResult><IsTruncated>true</IsTruncated><CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes></ListVersionsResult>`,
 	} {
 		_, err := parseVersions([]byte(doc))
-		if !errors.Is(err, ErrInvalidPage) || errors.Is(err, ErrSyntax) || Classify(err) != objhttp.ClassOther {
+		if !errors.Is(err, objhttp.ErrInvalidPage) || errors.Is(err, objhttp.ErrSyntax) || objhttp.Classify(err) != objhttp.ClassOther {
 			t.Errorf("%q: %v, want an invalid page", doc, err)
 		}
 	}
@@ -373,7 +373,7 @@ func TestParseVersionsRejects(t *testing.T) {
 		`<ListVersionsResult><DeleteMarker><Key>k</Key></Version></ListVersionsResult>`,
 		`<ListVersionsResult><Version>`,
 	} {
-		if _, err := parseVersions([]byte(s)); !errors.Is(err, ErrSyntax) {
+		if _, err := parseVersions([]byte(s)); !errors.Is(err, objhttp.ErrSyntax) {
 			t.Errorf("%q: %v, want a syntax error", s, err)
 		}
 	}
@@ -471,7 +471,7 @@ func TestListObjectVersionsFailures(t *testing.T) {
 		w.Write([]byte(`<ListVersionsResult><IsTruncated>true</IsTruncated><Version><Key>k</Key></Version></ListVersionsResult>`))
 	}, Config{Anonymous: true})
 	_, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
-	if !errors.Is(err, ErrInvalidPage) || n.Load() != 1 || c.Counters().ParseFailures != 0 {
+	if !errors.Is(err, objhttp.ErrInvalidPage) || n.Load() != 1 || c.Counters().ParseFailures != 0 {
 		t.Fatalf("%v after %d attempts (%+v)", err, n.Load(), c.Counters())
 	}
 
@@ -481,7 +481,7 @@ func TestListObjectVersionsFailures(t *testing.T) {
 	}, Config{Anonymous: true})
 	_, err = c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
 	var se *Error
-	if !errors.As(err, &se) || se.Code != "AccessDenied" || Classify(err) != objhttp.ClassAccessDenied {
+	if !errors.As(err, &se) || se.Code != "AccessDenied" || objhttp.Classify(err) != objhttp.ClassAccessDenied {
 		t.Fatal(err)
 	}
 }
@@ -489,7 +489,7 @@ func TestListObjectVersionsFailures(t *testing.T) {
 func TestParseVersionsMissingVersionMarker(t *testing.T) {
 	for _, kind := range []string{"Version", "DeleteMarker"} {
 		body := "<ListVersionsResult><IsTruncated>true</IsTruncated><NextKeyMarker>k</NextKeyMarker><" + kind + "><Key>k</Key><VersionId>null</VersionId></" + kind + "></ListVersionsResult>"
-		if _, err := parseVersions([]byte(body)); !errors.Is(err, ErrInvalidPage) {
+		if _, err := parseVersions([]byte(body)); !errors.Is(err, objhttp.ErrInvalidPage) {
 			t.Fatalf("%s: %v", kind, err)
 		}
 	}

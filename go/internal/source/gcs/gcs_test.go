@@ -524,8 +524,8 @@ func TestBrokenADCRefused(t *testing.T) {
 	}
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", f)
 	_, err := New(context.Background(), Options{Bucket: "b"})
-	if err == nil || classify(err) != "auth" {
-		t.Fatalf("err %v class %q, want auth", err, classify(err))
+	if err == nil || objhttp.Label(err) != "auth" {
+		t.Fatalf("err %v class %q, want auth", err, objhttp.Label(err))
 	}
 }
 
@@ -547,8 +547,8 @@ func TestInvalidPageClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || client.Classify(err) == objhttp.ClassParse {
-		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || objhttp.Classify(err) == objhttp.ClassParse {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, objhttp.Label(err))
 	}
 }
 

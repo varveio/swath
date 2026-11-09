@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // memory answers every request with body from memory: no network, so a
@@ -52,7 +54,7 @@ func BenchmarkList(b *testing.B) {
 		if shape == "hierarchy" {
 			in.Delimiter = "/"
 		}
-		cfg := Config{Endpoint: "http://127.0.0.1:1", Account: "acct", Anonymous: true, MaxAttempts: 1,
+		cfg := Config{Endpoint: "http://127.0.0.1:1", Account: "acct", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1},
 			HTTPClient: &http.Client{Transport: memory{body}}}
 		c, err := New(context.Background(), cfg)
 		if err != nil {

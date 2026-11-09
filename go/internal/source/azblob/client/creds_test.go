@@ -225,13 +225,13 @@ func TestEntraSlowRefreshBounded(t *testing.T) {
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("List took %s with a 150 ms request timeout", d)
 	}
-	var ex *ExhaustedError
-	var ce *CredentialError
+	var ex *objhttp.ExhaustedError
+	var ce *objhttp.CredentialError
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
-		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout", Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
+		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout", objhttp.Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 {
 		t.Fatalf("counters %+v, want two timeouts (one retried) and no HTTP attempt", n)
@@ -254,10 +254,10 @@ func TestEntraRefusedGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Container: "c"})
-	var ce *CredentialError
-	var ex *ExhaustedError
-	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) || Classify(err) != objhttp.ClassAuth {
-		t.Fatalf("err %v (class %q), want a non-transient credential error", err, Classify(err))
+	var ce *objhttp.CredentialError
+	var ex *objhttp.ExhaustedError
+	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) || objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("err %v (class %q), want a non-transient credential error", err, objhttp.Classify(err))
 	}
 	if n := es.tokens.Load(); n != 1 || len(es.seen()) != 0 {
 		t.Fatalf("%d token requests, %d listing requests; want 1 and 0", n, len(es.seen()))
@@ -281,9 +281,9 @@ func TestEntraConfiguredButBroken(t *testing.T) {
 		t.Fatal("anonymous with a configured credential")
 	}
 	_, err = c.List(context.Background(), &ListInput{Container: "c"})
-	var ce *CredentialError
-	if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || len(es.seen()) != 0 {
-		t.Fatalf("err %v (class %q), %d listing requests", err, Classify(err), len(es.seen()))
+	var ce *objhttp.CredentialError
+	if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth || len(es.seen()) != 0 {
+		t.Fatalf("err %v (class %q), %d listing requests", err, objhttp.Classify(err), len(es.seen()))
 	}
 }
 
@@ -370,10 +370,10 @@ func TestEntraDefaultChain(t *testing.T) {
 				fmt.Fprint(w, page(""))
 			}))
 			defer srv.Close()
-			c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, b)
-			var ce *CredentialError
+			c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Retry: objhttp.Retry{MaxAttempts: 1}}, b)
+			var ce *objhttp.CredentialError
 			if x.fails {
-				if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth {
+				if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth {
 					t.Fatalf("err %v, want a credential error", err)
 				}
 				return
@@ -391,8 +391,8 @@ func TestEntraDefaultChain(t *testing.T) {
 				}
 				return
 			}
-			if !errors.As(err, &ce) || Classify(err) != x.class || listed.Load() != 0 {
-				t.Fatalf("first request: %v (class %q, %d listing requests), want a %s credential error and none sent", err, Classify(err), listed.Load(), x.class)
+			if !errors.As(err, &ce) || objhttp.Classify(err) != x.class || listed.Load() != 0 {
+				t.Fatalf("first request: %v (class %q, %d listing requests), want a %s credential error and none sent", err, objhttp.Classify(err), listed.Load(), x.class)
 			}
 		})
 	}

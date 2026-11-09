@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -48,7 +49,7 @@ func TestUserAgent(t *testing.T) {
 	s3test.NoCredentials(t)
 	rec := &recorder{fail: 1}
 	c, err := New(context.Background(), Config{Region: "us-east-1", Anonymous: true,
-		HTTPClient: &http.Client{Transport: rec}, MaxAttempts: 2})
+		HTTPClient: &http.Client{Transport: rec}, Retry: objhttp.Retry{MaxAttempts: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
