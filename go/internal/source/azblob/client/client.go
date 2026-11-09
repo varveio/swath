@@ -264,6 +264,22 @@ func (c *Client) credentials(ctx context.Context) error {
 	return nil
 }
 
+// newLoginCredential is the unconfigured discovery's chain off an Azure
+// VM: the developer logins only (the Azure CLI, the Azure Developer CLI),
+// which run a local command and never ask the instance metadata service
+// (tests replace it).
+var newLoginCredential = func() (azcore.TokenCredential, error) {
+	cli, err := azidentity.NewAzureCLICredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	azd, err := azidentity.NewAzureDeveloperCLICredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	return azidentity.NewChainedTokenCredential([]azcore.TokenCredential{cli, azd}, nil)
+}
+
 // newDefaultCredential is azidentity's DefaultAzureCredential (tests
 // replace it to fake an empty environment on any host).
 var newDefaultCredential = func(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
@@ -286,19 +302,26 @@ func entraConfigured() bool {
 	return false
 }
 
-// entra sets up Entra ID through DefaultAzureCredential. Configured by the
-// environment, its token failures are attempts' credential errors. With
-// nothing configured it may still find a managed identity or an Azure CLI
-// login: one token is asked for under the request timeout, and when none
-// comes the requests go unauthenticated (the note says so); a refused
-// grant is a credential error.
+// entra sets up Entra ID. Configured by the environment, it is
+// DefaultAzureCredential, whose token failures are attempts' credential
+// errors. With nothing configured: on an Azure VM (its chassis asset tag)
+// the same chain, its managed identity kept even when it does not answer
+// now; elsewhere only the developer logins (newLoginCredential), never the
+// instance metadata service, which off Azure is a proxy's refusal or a
+// probe that hangs. There one token is asked for: found, it is used; when
+// every login is absent the requests go unauthenticated (the note says
+// so), as GCS goes without Application Default Credentials; a refused
+// grant is a credential error; a transient failure keeps the chain.
 func (c *Client) entra(ctx context.Context) error {
 	const source = "Entra ID (DefaultAzureCredential)"
+	configured, vm := entraConfigured(), onAzureVM()
+	if !configured && !vm {
+		return c.login(ctx)
+	}
 	cred, err := newDefaultCredential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
-	configured := entraConfigured()
 	switch {
 	case err != nil && configured:
 		return &CredentialError{Source: source, Err: err}
@@ -309,11 +332,21 @@ func (c *Client) entra(ctx context.Context) error {
 		c.ts, c.source = c.shared(cred), source
 		return nil
 	}
-	if onAzureVM() {
-		// An Azure VM's managed identity is the configured source even when
-		// the metadata service does not answer now (DefaultAzureCredential
-		// reports a probe timeout as unavailable): never anonymity.
-		c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	// An Azure VM's managed identity is the configured source even when
+	// the metadata service does not answer now (DefaultAzureCredential
+	// reports a probe timeout as unavailable): never anonymity.
+	c.ts, c.source = c.shared(cred), source+" on an Azure VM"
+	return nil
+}
+
+// login is the unconfigured discovery off an Azure VM: the developer
+// logins (newLoginCredential), one token asked for under the caller's
+// context and the request timeout.
+func (c *Client) login(ctx context.Context) error {
+	const source = "Entra ID (Azure CLI login)"
+	cred, err := newLoginCredential()
+	if err != nil {
+		c.source, c.note = "anonymous", "no Azure credentials found ("+err.Error()+"): listing unauthenticated"
 		return nil
 	}
 	pctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)

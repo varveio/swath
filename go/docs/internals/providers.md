@@ -397,11 +397,13 @@ Key: signed in the client with `x-ms-date` per attempt, `TestSharedKeyMatchesSDK
 both endpoint forms); else Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`,
 its tokens coalesced by `tokensource.Shared` and its failures classified as GCS's (no answer, 5xx, 408, 429 or a
 timeout retried; a refused grant stops the request). Configured by the environment (`AZURE_CLIENT_ID` and the
-others the chain reads), a credential that will not work is a `CredentialError`. With nothing configured one token
-is asked for at `New` under the caller's context: only azidentity's absence signal (every source unavailable) makes
-the requests unauthenticated, with the client's note as a warning; a timeout, a transport failure or a token
-endpoint's 5xx keeps the chain and each request asks again, as GCS does; on an Azure VM (its chassis asset tag) the
-managed identity is always kept. A SAS never
+others the chain reads), a credential that will not work is a `CredentialError`. With nothing configured, on an Azure VM
+(its chassis asset tag) the same chain is used and its managed identity always kept. Off Azure the instance
+metadata service is never asked (a proxy refuses its address, a laptop's probe hangs): only the developer logins
+(the Azure CLI, the Azure Developer CLI) are, one token under the caller's context; when every one is absent the
+requests go unauthenticated with the client's note as a warning, as GCS goes without Application Default
+Credentials, so a public container lists without `--azblob-anonymous`; a refused grant refuses the run, and a
+timeout or a transport failure keeps the login and each request asks again. A SAS never
 reaches a recorded file: `--azblob-sas` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azblob-sas` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). The root is redacted where the command parses
