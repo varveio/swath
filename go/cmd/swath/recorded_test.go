@@ -31,20 +31,31 @@ func TestResumeRefusesRemovedFlag(t *testing.T) {
 	captureStderr(t)
 	url := slowBucket(t)
 	ctx := context.Background()
-	for _, removed := range []string{"--probe", "--seed-descent=false", "--memory=1MiB", "--gcs-endpoint=http://127.0.0.1:1/storage/v1/", "--azblob-request-timeout=5s"} {
-		t.Run(removed, func(t *testing.T) {
+	for _, c := range []struct {
+		removed string
+		late    bool // recorded after "-- SOURCE", where the parse goes on
+	}{
+		{"--probe", false}, {"--seed-descent=false", false}, {"--memory=1MiB", false},
+		{"--gcs-endpoint=http://127.0.0.1:1/storage/v1/", false}, {"--azblob-request-timeout=5s", false},
+		{"--azblob-request-timeout=5s", true},
+	} {
+		removed := c.removed
+		t.Run(removed+map[bool]string{true: "/after-source"}[c.late], func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "ds")
 			args := []string{"s3://bkt", "--endpoint", url, "--anonymous", "--workers", "2", "--part-size", "4KiB", "-o", dir}
 			// The command an earlier build recorded: the same run with a
 			// flag since removed.
 			recorded := append([]string{"diag", "list", removed}, args...)
+			if c.late {
+				recorded = append(append([]string{"diag", "list", "--"}, args...), removed)
+			}
 			err := runWith(ctx, command{diag: true}, append(args, "--max-duration", "200ms"), io.Discard, recorded, false, nil)
 			if c := exitCode(t, err); c != exitDeadline {
 				t.Fatalf("first attempt: exit %d", c)
 			}
 			err = resume(ctx, []string{dir}, io.Discard)
 			var u usageError
-			if !errors.As(err, &u) || !strings.Contains(err.Error(), strings.TrimLeft(strings.SplitN(removed, "=", 2)[0], "-")) {
+			if !errors.As(err, &u) || !strings.Contains(err.Error(), strings.SplitN(removed, "=", 2)[0]+", which this build does not take") {
 				t.Fatalf("resume: %v, want a usage refusal naming %s", err, removed)
 			}
 			if dataset.Committed(dir) || !dataset.Resumable(dir) {

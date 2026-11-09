@@ -159,13 +159,15 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 
 // unknownFlag is the first flag in args that f does not define ("" if
 // none): a recorded command from a build whose flags were since renamed or
-// removed. The value of a flag given as a separate argument is skipped, as
-// the parse would.
+// removed. It walks args as parseList parses them: the value of a flag
+// given as a separate argument is skipped, and "--" ends the flags only
+// until the argument after it (SOURCE), after which flags parse again.
 func unknownFlag(f *flag.FlagSet, args []string) string {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
-			return ""
+			i++ // SOURCE, whatever it looks like
+			continue
 		}
 		if len(a) < 2 || a[0] != '-' {
 			continue
