@@ -196,11 +196,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
+      # Restores the shared module cache and ci.yml's amd64 race build cache (go-race-rest); saves
+      # nothing off a push to main.
       - name: Set up Go (version from go/go.mod)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-race-rest
 
       # -timeout is per package binary and leaves the job's limit room for the packages queued
       # ahead of the last (the unsharded run took ~13 min), so a hang ends in a goroutine dump.
@@ -270,11 +271,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
+      # Restores the shared module cache and ci.yml's non-race build cache (go-nonrace); saves
+      # nothing off a push to main.
       - name: Set up Go (version from go/go.mod)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
+          key: go-nonrace
 
       - name: Shape suite against the baseline
         run: go run ./bench/shapes -out "$RUNNER_TEMP/shapes.json" -scratch "$RUNNER_TEMP/shapes" -baseline bench/baselines/shapes.json
