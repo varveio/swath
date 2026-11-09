@@ -162,8 +162,10 @@ it into the `go-race` matrix (`--matrix`), each leg asks it for its `go test` ar
 a shard cannot be added in one place and forgotten in the other. A row either splits one package by
 `-run` pattern (with one remainder row that `-skip`s the rest) or runs whole packages by path and
 `./x/...` prefix; `rest` is every package no row names, so a new package lands somewhere without
-an edit. `--check` proves every test runs in exactly one shard, and `--self-test` checks the table
-logic against synthetic package lists.
+an edit. `--check` proves every package is in exactly one shard and, for a split package, that every
+test is selected by exactly one of its rows; whole-package rows are checked for packages, not tests,
+so a row whose packages have no tests passes and runs nothing. `--self-test` checks the table logic
+against synthetic package lists without Go.
 
 The heavy shards (`internal/listing` and `cmd/swath`, split by their crash, durable and kill
 matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
@@ -238,8 +240,9 @@ The module cache's contents depend only on the dependency set, so its key names 
 commit, and one copy serves every job. A saved key is never overwritten: when several `main` jobs
 try to save the same new key, the first wins and the others log a warning. Because the jobs build
 different module graphs (`go/reader` has no cloud SDK), a `main` job that misses the module key
-downloads every module's dependencies before it may save, so the first job to finish cannot
-freeze a partial cache.
+downloads every module's whole dependency graph (`go mod download all`, which includes the test
+imports of dependencies that `go mod tidy -diff` loads) before it may save, so the first job to
+finish cannot freeze a partial cache.
 
 The build cache differs per job (race or not, target OS and architecture, nested module), so it
 stays per job. It is keyed per commit so that parallel jobs never overwrite one another and each
