@@ -31,8 +31,20 @@ type ListRequest struct {
 	Stats *ReadStats
 }
 
-// Entry is one listing entry: exactly one of Object and CommonPrefix is
-// set. Both own their bytes.
+// Entry is one listing entry: an object (Object set, CommonPrefix nil) or
+// a common prefix (CommonPrefix set). A common prefix also has Object set
+// when the object stored at the prefix's exact key is the first the
+// listing reached under it (an S3-style "a/" folder object): the prefix
+// and that object, from one request. Both own their bytes.
+//
+// The pairing is exact whenever the listing reaches the prefix's first
+// key: without a cursor, and after any cursor an earlier page returned. A
+// prefix cursor resumes after every key under its prefix, so the next
+// prefix starts at its first key; a row cursor is an object's key, which
+// never rolls up to a prefix of the same listing. Only a cursor made up
+// inside a prefix's keys (a row cursor, or a prefix cursor for a deeper
+// prefix) skips the object at its exact key, and that prefix is then
+// returned without it.
 type Entry struct {
 	Object       *Object
 	CommonPrefix []byte
@@ -40,9 +52,10 @@ type Entry struct {
 
 // Cursor returns the cursor after this entry, owning its bytes: after an
 // object, its key and offset; after a common prefix, the prefix, so the
-// listing continues after every key that rolls up to it.
+// listing continues after every key that rolls up to it, the object at
+// its exact key included.
 func (e Entry) Cursor() *Cursor {
-	if e.Object != nil {
+	if e.CommonPrefix == nil {
 		return e.Object.Cursor()
 	}
 	return &Cursor{Prefix: bytes.Clone(e.CommonPrefix)}
@@ -53,15 +66,17 @@ func (e Entry) Cursor() *Cursor {
 // module's delimited listing (seekparquet.Dataset.List), which routes it,
 // skips each common prefix's keys and rolls them up, projecting the
 // columns Object holds. Repeating the request with the Cursor of each
-// page's last entry returns every entry once.
+// page's last entry returns every entry once. A common prefix carries the
+// object at its exact key (Entry) from the module's exact row
+// (seekparquet.Entry.Exact), without another request.
 //
 // A versions schema is refused with a SemanticError of KindSchema before
-// any read, as Stream refuses it. Each object is decoded and checked as
-// Stream checks it: a row that breaks a check fails the listing with the
-// SemanticError naming the column and the row, and no entries. The
-// module's errors are returned unchanged: a *RefusalError, ErrClosed after
-// Close, an error wrapping ErrInvalidRequest (a Limit that is not
-// positive, a malformed Cursor), the Source's, and the context's.
+// any read, as Stream refuses it. Each object, a prefix's included, is
+// decoded and checked as Stream checks it: a row that breaks a check fails
+// the listing with the SemanticError naming the column and the row, and no
+// entries. The module's errors are returned unchanged: a *RefusalError,
+// ErrClosed after Close, an error wrapping ErrInvalidRequest (a Limit that
+// is not positive, a malformed Cursor), the Source's, and the context's.
 func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}
@@ -77,11 +92,14 @@ func (d *Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error) {
 	}
 	out := make([]Entry, len(got))
 	for i, e := range got {
-		if e.Row == nil {
+		row := e.Row
+		if row == nil {
 			out[i].CommonPrefix = bytes.Clone(e.CommonPrefix)
-			continue
+			if row = e.Exact; row == nil {
+				continue
+			}
 		}
-		o, err := DecodeObject(d.spec.ID, *e.Row)
+		o, err := DecodeObject(d.spec.ID, *row)
 		if err == nil {
 			err = checkObject(&o)
 		}

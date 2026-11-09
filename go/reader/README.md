@@ -57,7 +57,7 @@ func (*Dataset) AcceptWholeSource(kind, container string) error
 func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
 func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; ReadStats }
 type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
-type Entry struct { Object *Object; CommonPrefix []byte } // exactly one set
+type Entry struct { Object *Object; CommonPrefix []byte } // an object, a prefix, or a prefix with its exact-key object
 func (Entry) Cursor() *Cursor
 func (*Dataset) List(ctx context.Context, req ListRequest) ([]Entry, error)
 func (*Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error)
@@ -152,9 +152,15 @@ for _, r := range rows {
   common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
   up to and including the first one; `Delimiter` 0 is the NUL byte, a delimiter like any other, not "no
   rollup"), projecting the columns `Object` holds. Entries are in ascending byte order,
-  at most `Limit`; each is an `Object` or a `CommonPrefix`, owning its bytes. `Entry.Cursor` is the
-  continuation after the entry: the row cursor (key and offset) after an object, the prefix cursor after a common
-  prefix, so the next page starts after every key that rolls up to it; repeating the request with each page's
+  at most `Limit`; each is an `Object` or a `CommonPrefix`, owning its bytes. A `CommonPrefix` also has `Object`
+  set to the object stored at the prefix's exact key (an S3-style `a/` folder object under its children), from
+  the module's exact row (`seekparquet.Entry.Exact`, spec LIST-8) in the same request, when that object is the
+  first key the listing reached under the prefix. That holds without a cursor and after every cursor a page
+  returned: a prefix cursor resumes after all of its prefix's keys, and an object's row cursor never lies inside
+  a prefix of the same listing. Only a cursor made up inside a prefix's keys (a row cursor, or a prefix cursor
+  for a deeper prefix such as `a/b/` under `a/`) skips the object, and the prefix then comes without it. `Entry.Cursor` is the continuation after the entry: the row cursor (key and offset)
+  after an object, the prefix cursor after a common prefix (its exact-key object included), so the next page
+  starts after every key that rolls up to it; repeating the request with each page's
   last cursor lists every entry once; a cursor before `Prefix`'s keys lists from the first of them, one after
   them lists nothing. Each object is checked as `Stream` checks it; a row that fails is the
   `KindRow` error and no entries. The module's errors are returned unchanged: `*RefusalError`, `ErrClosed`
