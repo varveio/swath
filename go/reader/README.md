@@ -3,7 +3,8 @@
 `github.com/varveio/swath/go/reader` is what a reader of swath datasets needs to know about swath on top of the
 [SeekParquet](https://github.com/varveio/seekparquet) module: the schema ids and their columns, the manifest's
 `extensions.swath`, each schema's rows as typed values decoded from a `seekparquet.Row`, and a `Dataset` that
-opens a dataset, checks its schema, accepts it as a whole-source listing and streams its current objects.
+opens a dataset, checks its schema, accepts it as a whole-source listing, streams its current objects and totals
+them under paths and prefixes.
 
 It is a nested Go module. It depends on the SeekParquet module (and through it parquet-go) and the standard
 library only: no cloud SDK, and not the swath lister (`github.com/varveio/swath/go`), which imports it instead.
@@ -46,11 +47,19 @@ func (*Dataset) CheckSchema(ctx context.Context) error
 func (*Dataset) AcceptWholeSource(kind, container string) error
 func (*Dataset) Stream(ctx context.Context, fn func(Object) error) error
 func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; seekparquet.ReadStats }
+func (*Dataset) Totals(ctx context.Context, paths []string) ([]PathTotals, error)
+func (*Dataset) Aggregates(ctx context.Context, prefixes [][]byte, opt AggregateOptions) ([]PrefixAggregate, error)
 func (*Dataset) Close() error
 
 type SemanticError struct { Kind Kind; Column string; Row *Position; Err error }
 const KindSchema, KindCoverage, KindRow Kind = "schema", "coverage", "row"
 var ErrSchema, ErrCoverage, ErrRow *SemanticError // errors.Is targets, by kind
+
+type PathTotals struct { Count, Bytes int64; NewestModified *time.Time; Exact *Object }
+type SumMode int // SumsOff, SumsWithinBudget, SumsAlways
+const DefaultSumBudget = 4 << 20
+type AggregateOptions struct { Counts bool; Sums SumMode; SumBudgetBytes int64 }
+type PrefixAggregate struct { Count, Bytes *int64 } // nil: not requested or not known exactly
 ```
 
 A reader of current objects opens the dataset, admits it once and streams it:
@@ -108,6 +117,35 @@ for _, r := range rows {
   (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
   Each `Object` owns its key, a copy, so `fn` may keep or change it. `StreamStats` sums every Stream's
   requests, objects handed to `fn` (counted before the call) and `ReadStats`.
+- **`Totals(paths)`.** Current objects only, as `Stream`. A path is taken verbatim: `""` selects every object,
+  a path ending in `/` every object whose key begins with it (an object whose key is the path included), any
+  other path only the object whose key equals it. Paths may repeat, nest and overlap; each total is independent.
+  The rows of all paths are planned at once (`seekparquet.Dataset.PlanRanges`, projecting `size` and
+  `last_modified`), which checks every part holding them, and scanned once, so a row several paths select is
+  decoded once. `Count` is the plan's count of the path's range, exact once its parts are checked; `Bytes` the
+  sum of the sizes; `NewestModified` the latest time, nil when the path selects nothing or any selected object
+  has no time; `Exact` the object whose key is the path (never for `""`), with its ETag and storage class read by
+  a plan of those objects alone. Each object is checked as `Stream` checks it (`KindRow`), and sizes whose sum
+  overflows an int64 fail with `KindRow` naming `size` and no row. Totals is exact or fails: the module's
+  refusals and the Source's errors unchanged, the context's error, no totals.
+- **`Aggregates(prefixes, opt)`.** Current objects only. A prefix covers every object whose key begins with it,
+  the one whose key is the prefix included; prefixes may repeat, nest and overlap. Nothing is read unless
+  `Counts` or `Sums` is set. A count plans the prefix's range without columns, decoding the key pages at its
+  ends and no value page, and opening no part between them: it is nil when a part holding the rows has not
+  been checked by an earlier read (`CheckSchema`, `Stream`, a sum), since its row count is then the manifest's
+  alone. Only a prefix with a known count is summed (a count of 0 sums to 0 without a read); a sum plans the
+  rows projecting `size` and scans them once. `SumsAlways` sums every such prefix. `SumsWithinBudget` takes
+  them in ascending key order and sums one when the compressed size-page bytes it adds to those already
+  selected (`RangePlan.ProjectedBytes`: the pages holding the rows and each chunk's dictionary, an extent
+  shared with a prefix already selected counted once) fit what remains of `SumBudgetBytes` (0:
+  `DefaultSumBudget`); a prefix inside one already selected adds nothing. Footers, key pages and page indexes
+  read to plan are not charged; a prefix whose pages are all charged already adds nothing, a budget below the
+  smallest possible page plans nothing, and a prefix whose size chunk has no OffsetIndex, so that its cost
+  cannot be proven, is not summed under a budget.
+  `Bytes` is nil for a prefix not summed and for a sum that overflows an int64; `Count` is reported only with
+  `Counts`. A budget with another mode, a negative budget or an unknown mode wraps
+  `seekparquet.ErrInvalidRequest`, before any read. A failure returns no aggregates. Both calls fail first on a
+  context already ended (its error) or a closed `Dataset` (`seekparquet.ErrClosed`), whatever the request.
 - **Not checked.** The parts' SHA-256 digests: `seekparquet.Validate` (or `ValidateDir`) at `LevelDigest`
   compares them, and every part swath writes declares one. Rows no request decodes, and columns a request does
   not project (CHECK-4); `seekparquet.Validate` at `LevelProfile` decodes every key, at `LevelFull` every value.
@@ -146,7 +184,7 @@ error. A manifest without the extension parses with `Swath` false. Unknown membe
 
 Opening, validation (`seekparquet.Validate`), cursors, range and delimiter queries, page decoding and refusal
 codes are the SeekParquet module's; storage is objfile's or the caller's. There is no publication, no provider
-client, no grouping of versions and no streaming of them yet, and no totals or aggregates (plan step 8d).
+client, and no grouping of versions and no streaming or totals of them yet.
 
 ## Tests
 
@@ -166,3 +204,15 @@ error, a module refusal returned unchanged, and the refusal of a versions schema
 bytes caught by digest validation. The lister's `TestReaderStreams*` tests admit and stream datasets its own
 writer wrote: S3 objects over three parts, GCS objects with and without `time_created`, filesystem entries
 (one without a size refused), and both versions schemas admitted and refused by `Stream`.
+
+`totals_test.go` and `aggregates_test.go` port varve's `internal/swath` totals and aggregates tests, each
+naming the one it ports, over datasets of several parts cut inside prefixes, read through a `Source` that
+records every open and read: `TestTotalsMatchStream` is the oracle, totals of root, nested, overlapping, exact,
+repeated and absent paths equal to those computed from a full `Stream`; the selection of `a`, `a/`, `a/b` and
+`ab/x`; missing times; overflow; Source failures and cancellation returned unchanged; nested paths reading
+exactly root's size and time pages; the aggregates oracle on fresh and checked datasets; counts reading no value
+page and opening no part between a prefix's ends, and nil across an unchecked part with a false manifest row
+count; sums publishing nothing on failure; budgets read within, a budget of exactly the prefixes' projected bytes
+summing them all (shared pages and dictionaries charged once), and a one-byte budget reading nothing beyond the
+counts. varve's tests of its own page-index parsing are the module's now; `TestTotalsIgnoreManifestBoundExcludingKey`
+shows the module's refusal of a part beyond its manifest bound returned unchanged.
