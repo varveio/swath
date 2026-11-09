@@ -12,6 +12,7 @@ T=${RUNNER_TEMP:?}/xos; mkdir -p "$T"
 case "$(uname -s)" in
 MINGW*|MSYS*|CYGWIN*)
   OS=windows VHD=$(cygpath -w "$T/bench.vhdx")
+  export MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 # Git Bash would rewrite /s, /c and /L as paths
   dp() { printf '%s\n' "$@" > "$T/dp.txt"; diskpart /s "$(cygpath -w "$T/dp.txt")" > "$T/dp.log" || { cat "$T/dp.log"; return 1; }; }
   dp "create vdisk file=\"$VHD\" maximum=16000 type=expandable" "select vdisk file=\"$VHD\"" "attach vdisk" \
      "create partition primary" "format fs=ntfs quick label=bench" "assign letter=V" || exit 1
@@ -66,7 +67,7 @@ for tree in $TREES; do
   for mode in warm cold; do
     if [ $mode = warm ]; then H=(-w 1 -r ${WARM_REPS:-6}); else H=(-r ${COLD_REPS:-3} --prepare "$DROP"); fi
     for tier in names stat; do
-      declare -n arms=$tier
+      if [ $tier = names ]; then arms=("${names[@]}"); else arms=("${stat[@]}"); fi # bash 3.2 on macOS: no declare -n
       # -i: robocopy exits 1 when it would copy files
       hyperfine -N -i "${H[@]}" --output=null --export-json "$OUT/$OS-$tree-$mode-$tier.json" "${arms[@]}" \
         > "$OUT/$OS-$tree-$mode-$tier.log" 2>&1 || { echo "FAILED $OS $tree $mode $tier"; tail -5 "$OUT/$OS-$tree-$mode-$tier.log"; }
