@@ -86,29 +86,13 @@ func (f failingCredential) GetToken(context.Context, policy.TokenRequestOptions)
 // The error code decides before the status: AuthenticationFailed is a 403,
 // ServerBusy a 503, OperationTimedOut a 500. Generic transport, timeout,
 // exhaustion and cancellation behaviour is objhttptest.Contract's
-// (TestRetryContract).
+// (TestRetryContract); the 200 bodies that are not pages, and redirects,
+// are TestScriptedAnswers'.
 func TestClassify(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Query().Get("prefix")
-		if status, code, ok := strings.Cut(p, " "); ok {
-			n, _ := strconv.Atoi(status)
-			azureError(w, n, code)
-			return
-		}
-		switch p {
-		case "garbled":
-			fmt.Fprint(w, listHead+"<Blob><Name>a")
-		case "not-xml":
-			fmt.Fprint(w, "\xef\xbb\xbfnull")
-		case "error-envelope":
-			fmt.Fprint(w, "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>InternalError</Code></Error>")
-		case "bad-size":
-			fmt.Fprint(w, listHead+"<Blob><Name>a</Name><Properties><Content-Length>x</Content-Length></Properties></Blob>"+listTail)
-		case "descending":
-			fmt.Fprint(w, page("", "b", "a"))
-		case "redirect":
-			http.Redirect(w, r, "/acct/other", http.StatusTemporaryRedirect)
-		}
+		status, code, _ := strings.Cut(r.URL.Query().Get("prefix"), " ")
+		n, _ := strconv.Atoi(status)
+		azureError(w, n, code)
 	}))
 	defer srv.Close()
 	for _, x := range []struct {
@@ -148,18 +132,6 @@ func TestClassify(t *testing.T) {
 		n := c.Counters()
 		if got := Classify(err); got != x.class || errors.As(err, &ex) != x.exhausted || (n.Throttles == 1) != x.throttle || (n.Timeouts == 1) != x.timeout {
 			t.Errorf("%d %s: class %q exhausted=%v throttles %d timeouts %d (%v)", x.status, x.code, got, errors.As(err, &ex), n.Throttles, n.Timeouts, err)
-		}
-	}
-	// Bodies: a 200 that is not a listing envelope is a parse failure,
-	// retried; a parsed page out of order is invalid; a redirect is never
-	// followed.
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	for prefix, want := range map[string]objhttp.Class{"garbled": objhttp.ClassParse, "not-xml": objhttp.ClassParse,
-		"error-envelope": objhttp.ClassParse, "bad-size": objhttp.ClassParse, "descending": objhttp.ClassOther, "redirect": objhttp.ClassOther} {
-		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: prefix})
-		var ex *ExhaustedError
-		if got := Classify(err); got != want || errors.As(err, &ex) != (want == objhttp.ClassParse) {
-			t.Errorf("%s: class %q (%v), want %q", prefix, got, err, want)
 		}
 	}
 	// Credentials: a refused grant, and token failures that may pass.
@@ -232,10 +204,11 @@ func TestRetryAfter(t *testing.T) {
 
 // TestInvalidPage: a parsed page that breaks the contract is an invalid
 // page, not retried: names that do not ascend in UTF-16 order (byte order
-// is not enough: U+E000 after U+1F600 ascends), a repeated name, a marker
-// equal to the one sent. A truncated body (Azure has no truncation flag:
-// an absent marker is the end) never reads as a shorter final page: it is
-// a parse failure, retried.
+// is not enough: U+E000 after U+1F600 ascends), a repeated name. A body
+// cut at an element boundary (Azure has no truncation flag: an absent
+// marker is the end) never reads as a shorter final page: it is a parse
+// failure, retried. A descending page, a marker equal to the one sent and
+// a cut inside an entry are TestScriptedAnswers'.
 func TestInvalidPage(t *testing.T) {
 	var body atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -248,12 +221,9 @@ func TestInvalidPage(t *testing.T) {
 		name, body, marker string
 		class              objhttp.Class
 	}{
-		{"descending", page("", "b", "a"), "", objhttp.ClassOther},
 		{"repeated name", page("", "a", "a"), "", objhttp.ClassOther},
 		{"byte order only", page("", "u\ue000", "u\U0001F600"), "", objhttp.ClassOther},
-		{"repeated marker", page("m1", "a"), "m1", objhttp.ClassOther},
 		{"truncated body", full[:len(full)-len("</EnumerationResults>")], "", objhttp.ClassParse},
-		{"cut in an entry", full[:len(listHead)+20], "", objhttp.ClassParse},
 		{"UTF-16 order", page("", "u\U0001F600", "u\ue000", "u\ufffd"), "", ""},
 		{"a new marker", page("m2", "a"), "m1", ""},
 	} {
@@ -268,24 +238,13 @@ func TestInvalidPage(t *testing.T) {
 	}
 }
 
-// TestEnvelopeRetried: a 200 whose body is not a listing envelope (an
-// <Error>, another root, no XML, nothing, an EnumerationResults without
-// Blobs or with an Error inside, content after its close) is retried like
-// a garbled body, counted as a parse failure, until a real page comes; an
-// empty listing (an empty Blobs) is a legitimate final page.
+// TestEnvelopeRetried: a 200 whose body is not a listing envelope
+// (another root, an EnumerationResults without Blobs) is retried like a
+// garbled body, counted as a parse failure, until a real page comes; an
+// empty listing (an empty Blobs) is a legitimate final page. The other bad
+// envelopes are TestSDKDecoding's and TestScriptedAnswers'.
 func TestEnvelopeRetried(t *testing.T) {
-	bad := []string{"", "\xef\xbb\xbf", "null", "\xef\xbb\xbf<?xml version=\"1.0\"?><Error><Code>InternalError</Code></Error>",
-		"<Other/>", "\xef\xbb\xbf<?xml version=\"1.0\"?>",
-		// the right root, but not a listing: no Blobs, an Error inside,
-		// corruption after the close
-		"\xef\xbb\xbf<EnumerationResults/>",
-		"\xef\xbb\xbf<EnumerationResults><NextMarker /></EnumerationResults>",
-		"\xef\xbb\xbf<EnumerationResults><Error><Code>InternalError</Code></Error></EnumerationResults>",
-		listHead + "</Blobs><Error><Code>InternalError</Code></Error><NextMarker /></EnumerationResults>",
-		listHead + "<Error><Code>InternalError</Code></Error>" + listTail,
-		page("") + "<Blobs>",
-		page("") + "garbage",
-		page("") + "<EnumerationResults><Blobs/></EnumerationResults>"}
+	bad := []string{"<Other/>", "\xef\xbb\xbf<EnumerationResults><NextMarker /></EnumerationResults>"}
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("prefix") == "empty" {
@@ -310,29 +269,6 @@ func TestEnvelopeRetried(t *testing.T) {
 	p, err = c.List(context.Background(), &ListInput{Container: "c", Prefix: "empty"})
 	if err != nil || len(p.Items) != 0 || p.NextMarker != "" {
 		t.Fatalf("empty listing: %+v, %v", p, err)
-	}
-}
-
-// TestRedirectRefused: a 3xx is a redirect failure, never followed, also
-// through a supplied HTTP client that would follow it; its message never
-// quotes the target, which may carry the SAS.
-func TestRedirectRefused(t *testing.T) {
-	var n atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n.Add(1)
-		http.Redirect(w, r, "https://elsewhere.example/acct/c?"+r.URL.RawQuery, http.StatusFound)
-	}))
-	defer srv.Close()
-	for name, hc := range map[string]*http.Client{"built": nil, "supplied": {}} {
-		n.Store(0)
-		c := newTestClient(t, Config{Endpoint: srv.URL, SAS: "?sv=2026-10-06&sp=rl&sig=S3cr3t%2Bsig", HTTPClient: hc})
-		_, err := c.List(context.Background(), &ListInput{Container: "c"})
-		if Classify(err) != objhttp.ClassOther || n.Load() != 1 {
-			t.Errorf("%s: class %q after %d requests (%v)", name, Classify(err), n.Load(), err)
-		}
-		if strings.Contains(err.Error(), "elsewhere.example") || strings.Contains(err.Error(), "S3cr3t") {
-			t.Errorf("%s: %v", name, err)
-		}
 	}
 }
 

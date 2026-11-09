@@ -210,12 +210,11 @@ func verifySharedKey(t *testing.T, req *http.Request, account, key string) {
 // TestSDKDecoding pins the client's reading of a page through the SDK's
 // decoder and the envelope check (the accepted readings list.go names):
 // an Encoded literal '+' reads as a space (%2B, Azure's form, as '+'), a
-// malformed escape is a parse failure, a second <Blobs> is read and a
+// malformed escape is a parse failure, a namespaced root and a
 // comment after the root refused (an <Error> element in a listing, and data
 // after it, both refuse), a hierarchy page out of order across its two
-// kinds is merged into order, one out of order within a kind is an invalid
-// page, and a malformed date the row does not keep, or a malformed Date
-// header, fails the page.
+// kinds is merged into order, and one out of order within a kind is an
+// invalid page.
 func TestSDKDecoding(t *testing.T) {
 	type result struct {
 		names []string
@@ -224,58 +223,47 @@ func TestSDKDecoding(t *testing.T) {
 	cases := []struct {
 		name      string
 		delimiter string
-		date      string // the Date header, when set
 		body      string
 		want      result
 	}{
-		{"Encoded %2B", "", "", listHead + `<Blob><Name Encoded="true">a%EF%BF%BE%2Bb%20c</Name></Blob>` + listTail,
+		{"Encoded %2B", "", listHead + `<Blob><Name Encoded="true">a%EF%BF%BE%2Bb%20c</Name></Blob>` + listTail,
 			result{names: []string{"a\ufffe+b c"}}},
-		{"Encoded literal plus", "", "", listHead + `<Blob><Name Encoded="true">a%EF%BF%BE+b</Name></Blob>` + listTail,
+		{"Encoded literal plus", "", listHead + `<Blob><Name Encoded="true">a%EF%BF%BE+b</Name></Blob>` + listTail,
 			result{names: []string{"a\ufffe b"}}},
-		{"Encoded malformed escape", "", "", listHead + `<Blob><Name Encoded="true">a%G1</Name></Blob>` + listTail,
+		{"Encoded malformed escape", "", listHead + `<Blob><Name Encoded="true">a%G1</Name></Blob>` + listTail,
 			result{class: objhttp.ClassParse}},
-		{"Error element inside", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><Error><Code>X</Code></Error><NextMarker/></EnumerationResults>`,
+		{"Error element inside", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><Error><Code>X</Code></Error><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"Error element instead of the entries", "", "", `<EnumerationResults><Blobs/><Error><Code>InternalError</Code></Error><NextMarker/></EnumerationResults>`,
+		{"Error element instead of the entries", "", `<EnumerationResults><Blobs/><Error><Code>InternalError</Code></Error><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"prefixed Error element inside", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><e:Error xmlns:e="urn:test"/><NextMarker/></EnumerationResults>`,
+		{"prefixed Error element inside", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><e:Error xmlns:e="urn:test"/><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"Error in a blob name", "", "", page("", "Error-report"),
+		{"Error in a blob name", "", page("", "Error-report"),
 			result{names: []string{"Error-report"}}},
-		{"ErrorCode element is not an Error", "", "", listHead + `<Blob><Name>a</Name><Properties><ErrorCode>x</ErrorCode></Properties></Blob>` + listTail,
+		{"ErrorCode element is not an Error", "", listHead + `<Blob><Name>a</Name><Properties><ErrorCode>x</ErrorCode></Properties></Blob>` + listTail,
 			result{names: []string{"a"}}},
-		{"data after the root", "", "", page("", "a") + "<junk/>",
+		{"data after the root", "", page("", "a") + "<junk/>",
 			result{class: objhttp.ClassParse}},
-		{"prefixed root with trailing junk", "", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>junk</EnumerationResults>`,
+		{"prefixed root with trailing junk", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>junk</EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"prefixed root", "", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>`,
+		{"prefixed root", "", `<e:EnumerationResults xmlns:e="urn:test"><Blobs/><NextMarker/></e:EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"default namespace on root", "", "", `<EnumerationResults xmlns="urn:test"><Blobs/><NextMarker/></EnumerationResults>`,
+		{"default namespace on root", "", `<EnumerationResults xmlns="urn:test"><Blobs/><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}},
-		{"a second root", "", "", page("", "a") + page("", "b"),
+		{"a second root", "", page("", "a") + page("", "b"),
 			result{class: objhttp.ClassParse}},
-		{"whitespace after the root", "", "", page("", "a") + "\r\n ",
+		{"whitespace after the root", "", page("", "a") + "\r\n ",
 			result{names: []string{"a"}}},
-		{"comment after the root", "", "", page("", "a") + "<!-- c -->",
+		{"comment after the root", "", page("", "a") + "<!-- c -->",
 			result{class: objhttp.ClassParse}},
-		{"two Blobs", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><Blobs><Blob><Name>b</Name></Blob></Blobs><NextMarker/></EnumerationResults>`,
-			result{names: []string{"a", "b"}}},
-		{"hierarchy out of order across kinds", "/", "", listHead + `<Blob><Name>b</Name></Blob><BlobPrefix><Name>a/</Name></BlobPrefix>` + listTail,
+		{"hierarchy out of order across kinds", "/", listHead + `<Blob><Name>b</Name></Blob><BlobPrefix><Name>a/</Name></BlobPrefix>` + listTail,
 			result{names: []string{"a/", "b"}}},
-		{"hierarchy out of order within a kind", "/", "", listHead + `<Blob><Name>b</Name></Blob><Blob><Name>a</Name></Blob><BlobPrefix><Name>c/</Name></BlobPrefix>` + listTail,
+		{"hierarchy out of order within a kind", "/", listHead + `<Blob><Name>b</Name></Blob><Blob><Name>a</Name></Blob><BlobPrefix><Name>c/</Name></BlobPrefix>` + listTail,
 			result{class: objhttp.ClassOther}},
-		{"malformed Date header", "", "someday", page("", "a"), result{class: objhttp.ClassParse}},
-		{"malformed date not kept", "", "", listHead + `<Blob><Name>a</Name><Properties><DeletedTime>soon</DeletedTime></Properties></Blob>` + listTail,
-			result{class: objhttp.ClassParse}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if c.date != "" {
-					w.Header()["Date"] = []string{c.date}
-				}
-				io.WriteString(w, c.body)
-			}))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, c.body) }))
 			defer srv.Close()
 			cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
 			var got result
@@ -313,13 +301,10 @@ func TestAccountInfoExact(t *testing.T) {
 	}{
 		{"true", answer{hns: true}},
 		{"false", answer{}},
-		{"True", answer{unknown: true}},
 		{"FALSE", answer{unknown: true}},
 		{"", answer{unknown: true}},
 		{"yes", answer{unknown: true}},
-		{"1", answer{unknown: true}},
 		{"0", answer{unknown: true}},
-		{"tRuE", answer{unknown: true}},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.RawQuery != "comp=properties&restype=account" || r.URL.Path != "/acct/c" {

@@ -52,9 +52,10 @@ package client
 // reads as a space; Azure sends '+' as %2B, as every Encoded name in the
 // October 2026 captures escapes every reserved byte) and a malformed escape
 // is a parse failure, not an invalid page; a root with a namespace is
-// refused; a second <Blobs> is not refused, and a comment after the root
-// is; any malformed date property, not only the three a row keeps, fails
-// the page, as does a malformed Date header on a listing. Get Account
+// refused, and so is a comment after the root. A malformed Date header on
+// a listing fails the page (TestRedactedRefusal). The decoder also reads a
+// second <Blobs> and fails a page on any malformed date property; swath
+// depends on neither. Get Account
 // Information's x-ms-is-hns-enabled is read from the header as sent (hns:
 // exactly "true" or "false"), not from the SDK's strconv.ParseBool reading,
 // which takes "0" for flat (TestAccountInfoExact).
