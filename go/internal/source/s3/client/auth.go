@@ -43,17 +43,19 @@ const (
 	credentialWait  = 30 * time.Second
 )
 
-type auth struct {
-	creds     aws.CredentialsProvider // nil: anonymous
-	source    string
-	region    string
-	signer    *v4.Signer
-	anonymous bool
-	bearer    *tokensource.Shared // --bearer-token-command: sent instead of a signature
-	note      string              // a configured source not yet available at start
+// Auth is the resolved region and credentials a client signs with.
+type Auth struct {
+	Credentials aws.CredentialsProvider // nil: anonymous or bearer; cached by the SDK until expiry
+	Source      string                  // where the credentials come from (never the secret)
+	Region      string                  // the signing region
+	Anonymous   bool
+	Bearer      *tokensource.Shared // --bearer-token-command: sent instead of a signature
+	Note        string              // a one-time warning for the user, or ""
+
+	signer *v4.Signer
 }
 
-// loadAuth resolves the region and credentials. With -anonymous no
+// LoadAuth resolves the region and credentials. With -anonymous no
 // credentials are looked up. Otherwise the default chain runs once. Only an
 // empty chain (no source configured anywhere: no environment keys, profile,
 // web identity, credential process, SSO, role or container endpoint, and no
@@ -63,7 +65,7 @@ type auth struct {
 // token service's 5xx or throttle, a cut connection, past its wait) keeps
 // the source, and each request's signing retries it (then the range is
 // requeued), as a refresh failure mid-run would.
-func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
+func LoadAuth(ctx context.Context, cfg Config) (*Auth, error) {
 	// The SDK's own log lines (an IMDS fallback warning on every host
 	// without instance metadata) are not for swath's users.
 	opts := []func(*config.LoadOptions) error{config.WithLogger(logging.Nop{})}
@@ -92,17 +94,17 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		// configuration names credentials it cannot give (class auth).
 		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: err}
 	}
-	a := &auth{region: cfg.Region, signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
-	if a.region == "" {
-		a.region = ac.Region // the environment's or the profile's, else us-east-1
+	a := &Auth{Region: cfg.Region, Note: anonymousNote(cfg), signer: v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true })}
+	if a.Region == "" {
+		a.Region = ac.Region // the environment's or the profile's, else us-east-1
 	}
 	if cfg.Bearer != nil {
 		// The token replaces the credential chain: nothing else is looked up.
-		a.bearer, a.source = cfg.Bearer, "bearer token command"
+		a.Bearer, a.Source = cfg.Bearer, "bearer token command"
 		return a, nil
 	}
 	if cfg.Anonymous || ac.Credentials == nil {
-		a.anonymous, a.source = true, "anonymous"
+		a.Anonymous, a.Source = true, "anonymous"
 		return a, nil
 	}
 	src, tokenFile := configuredSource(ac)
@@ -122,12 +124,12 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		// the credentials.
 		return nil, context.Cause(ctx)
 	case err == nil:
-		a.creds, a.source = ac.Credentials, c.Source
+		a.Credentials, a.Source = ac.Credentials, c.Source
 	case src == "":
-		a.anonymous, a.source = true, "anonymous (no credentials found)"
+		a.Anonymous, a.Source = true, "anonymous (no credentials found)"
 	case transientRefresh(err):
-		a.creds, a.source = ac.Credentials, src
-		a.note = fmt.Sprintf("credentials (%s) not available yet: %v; requests retry them", src, err)
+		a.Credentials, a.Source = ac.Credentials, src
+		a.Note = joinNotes(a.Note, fmt.Sprintf("credentials (%s) not available yet: %v; requests retry them", src, err))
 	default:
 		return nil, &objhttp.CredentialError{Source: src, Err: err}
 	}
@@ -263,27 +265,43 @@ func anonymousNote(cfg Config) string {
 	return ""
 }
 
-// sign signs a GET with SigV4 and an unsigned payload.
-func (a *auth) sign(ctx context.Context, req *http.Request, now time.Time) error {
-	if a.bearer != nil {
-		tok, err := a.bearer.Token(ctx)
+// Ready fetches what a request needs before it is sent: the bearer token
+// (token), or the credentials (cached by the SDK until expiry; the zero
+// value when anonymous). A failure is a *objhttp.CredentialError: a request
+// is never sent without them.
+func (a *Auth) Ready(ctx context.Context) (token string, creds aws.Credentials, err error) {
+	switch {
+	case a.Bearer != nil:
+		tok, err := a.Bearer.Token(ctx)
 		if err != nil {
-			// Fail closed: a request is never sent without its token.
-			return &objhttp.CredentialError{Source: "--bearer-token-command", Err: err}
+			return "", creds, &objhttp.CredentialError{Source: "--bearer-token-command", Err: err}
 		}
-		req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
-		return nil
+		return tok.AccessToken, creds, nil
+	case a.Anonymous:
+		return "", creds, nil
 	}
-	if a.anonymous {
-		return nil
-	}
-	c, err := a.creds.Retrieve(ctx) // cached by the SDK until expiry
+	creds, err = a.Credentials.Retrieve(ctx)
 	if err != nil {
-		return &objhttp.CredentialError{Source: a.source, Transient: transientRefresh(err),
+		return "", creds, &objhttp.CredentialError{Source: a.Source, Transient: transientRefresh(err),
 			Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 	}
+	return "", creds, nil
+}
+
+// sign signs a GET with SigV4 and an unsigned payload.
+func (a *Auth) sign(ctx context.Context, req *http.Request, now time.Time) error {
+	tok, c, err := a.Ready(ctx)
+	switch {
+	case err != nil:
+		return err
+	case a.Bearer != nil:
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return nil
+	case a.Anonymous:
+		return nil
+	}
 	req.Header.Set("X-Amz-Content-Sha256", unsignedPayload)
-	return a.signer.SignHTTP(ctx, c, req, unsignedPayload, "s3", a.region, now)
+	return a.signer.SignHTTP(ctx, c, req, unsignedPayload, "s3", a.Region, now)
 }
 
 // transientRefresh: a credential service's (STS, IMDS, SSO, container

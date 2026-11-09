@@ -163,7 +163,7 @@ func TestFailureSignals(t *testing.T) {
 		{429, objhttp.ClassThrottle, true, false},
 		{503, objhttp.ClassServer, false, false},
 	} {
-		f := objhttp.Normalize(&Error{Status: c.status}, answer)
+		f := objhttp.Normalize(&Error{Status: c.status}, Answer)
 		if f.Class != c.class || !f.Retry || f.Throttle != c.throttle || f.Timeout != c.timeout {
 			t.Fatalf("%d: %+v", c.status, f)
 		}

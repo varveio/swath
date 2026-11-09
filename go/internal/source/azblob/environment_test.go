@@ -79,7 +79,8 @@ func TestBinaryLinksAzidentityNotAzblob(t *testing.T) {
 		t.Skip("runs go list")
 	}
 	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	out, err := exec.Command(gobin, "list", "-deps", "../../../cmd/swath").CombinedOutput()
+	// -tags= on the command line: the default build, whatever GOFLAGS says.
+	out, err := exec.Command(gobin, "list", "-deps", "-tags=", "../../../cmd/swath").CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}

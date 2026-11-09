@@ -517,6 +517,34 @@ func TestAdmissionFallback(t *testing.T) {
 	}
 }
 
+// TestAdmitSharedKeyUnknown: with Shared Key, an account-information
+// answer whose x-ms-is-hns-enabled is not exactly "true" or "false" ("0",
+// which strconv.ParseBool would read as flat) is unknown: refused unless
+// --azblob-flat asserts it (no Data Lake host is asked: the endpoint has
+// none, and the SDK client does not ask one with Shared Key).
+func TestAdmitSharedKeyUnknown(t *testing.T) {
+	t.Setenv(EnvKey, "c2VjcmV0LWtleS1mb3ItdGVzdHM=")
+	t.Setenv(EnvSAS, "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "SharedKey acct:") || r.URL.Query().Get("restype") != "account" {
+			t.Errorf("request %s ?%s Authorization %q", r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("x-ms-is-hns-enabled", "0")
+	}))
+	t.Cleanup(srv.Close)
+	for _, flat := range []bool{false, true} {
+		p, err := New(context.Background(), Options{Account: "acct", Container: "c", Endpoint: srv.URL, Flat: flat, Workers: 1, Warn: func(string) {}})
+		switch {
+		case !flat && !errors.Is(err, source.ErrUnsupported):
+			t.Fatalf("not asserted: %v, want a refusal", err)
+		case flat && err != nil:
+			t.Fatalf("asserted: %v", err)
+		case flat && p.namespace != "asserted":
+			t.Fatalf("asserted: namespace %q", p.namespace)
+		}
+	}
+}
+
 // TestBoundPolicy: a startFrom is a valid Azure name: at most 1,024 UTF-16
 // code units, no control character, no trailing dot.
 func TestBoundPolicy(t *testing.T) {
@@ -804,14 +832,18 @@ func TestClientCutsReported(t *testing.T) {
 }
 
 // TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, and the client's counters
-// follow the engine's.
+// client's pool, one transport per 16 workers, the client's counters
+// follow the engine's, and the report names the built client (the SDK
+// client under the swath_sdkclient build tag).
 func TestPoolSizeReported(t *testing.T) {
 	r := azblobtest.Serve(t, azblobtest.Keys())
 	for workers, want := range map[int]int64{1: 1, 40: 3} {
 		_, st := list(t, replayOptions(r), workers)
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
 			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
+		}
+		if st.Client != clientKind {
+			t.Fatalf("client %q, want %q", st.Client, clientKind)
 		}
 	}
 }

@@ -48,6 +48,18 @@ type Routed interface {
 	UserProject() string
 }
 
+// built is the client connect builds (newClient: client.New, or the SDK
+// client under the swath_sdkclient build tag).
+type built interface {
+	API
+	Routed
+	counted
+	pooled
+	live
+	answering
+	Credentials() (source string, anonymous bool)
+}
+
 // Options configure a listing.
 type Options struct {
 	Bucket          string
@@ -120,6 +132,7 @@ func (p *provider[P]) Answered() int64 {
 type Stats struct {
 	Anonymous   bool              `json:"anonymous"`
 	Credentials string            `json:"credentials,omitempty"`
+	Client      string            `json:"client,omitempty"` // the built client: "hand-rolled" or "sdk"; "" for a supplied one
 	MeanActive  float64           `json:"mean_active"`
 	Counters    counters.Snapshot `json:"counters"`
 }
@@ -219,7 +232,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+		c, err := newClient(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
 		if err != nil {
 			return nil, false, fmt.Errorf("GCS client: %w", err)
@@ -291,7 +304,11 @@ func (p *provider[P]) Stats() Stats {
 		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
+	if p.opt.Client == nil {
+		st.Client = clientKind
+	}
+	return st
 }
 
 func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {

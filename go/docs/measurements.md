@@ -760,6 +760,110 @@ Google's generated client 3.1 µs and 10,132. Reproduce:
 The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself added 0.7 MB. Cross-builds:
 [`../build.sh`](../build.sh).
 
+### SDK-backed clients (2026-11-09)
+
+Clients built with `-tags swath_sdkclient` ([providers.md](internals/providers.md#the-sdk-backed-clients-swath_sdkclient-experiment)),
+measured on branches `exp/measure-preview` (S3) and `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers
+describe those runs.
+
+**S3 decoders** (`BenchmarkDecode` in `internal/source/s3/sdkclient`: one full client call per iteration through
+the real SDK stack and `objhttp.Guard` over an in-memory `RoundTripper`; a 1,000-entry page with URL-encoded keys,
+owners and checksums; `-benchtime=2000x -count=3`; the range is the lowest to highest of the three):
+
+| Decoder | List µs/object | List allocations/page | Versions µs/object | Versions allocations/page |
+|---|---:|---:|---:|---:|
+| scanner (production) | 1.66 to 1.92 | 392 | 1.93 to 2.11 | 392 |
+| SDK decoder (`SWATH_S3_DECODER=sdk`) | 14.6 to 16.4 | 102,464 | not applicable (versions always use the scanner) | |
+| scanner, body only | 1.14 to 1.21 | 3 | 1.12 to 1.28 | 3 |
+| `encoding/xml` walk (deleted) | 12.5 to 15.1 | 80,497 | 11.7 to 12.3 | 85,187 |
+
+A decoder on `encoding/xml` allocates per token and lands near the SDK's cost; a `RawToken` variant reached
+8.5 to 9.3 µs per object.
+
+**GCS** (`TestListClientCost`, 200,000 objects, `GOMAXPROCS=4`; a baseline that only reads the bodies is
+subtracted):
+
+| | Hand-rolled | Generated client, direct | `sdkclient` |
+|---|---:|---:|---:|
+| Client CPU over baseline, list loop | 2.37 µs/object | 2.96 | 3.11 |
+| Allocations per page over baseline | 5,065 | 10,142 | 10,149 |
+| Bytes per page over baseline | 1.03 MiB | 1.36 MiB | 1.65 MiB |
+
+**Azure** (`BenchmarkList` in `internal/source/azblob/sdkclient`: one full `List` call per iteration, request,
+bounded read, decoding, conversion and page validation, over an in-memory 5,000-entry page, the SDK client's Guard
+in place; `-benchtime=500x -count=3` on a shared 4-CPU box, so the ratios are the result, not the absolute numbers;
+a hierarchy page is half blobs and half prefixes):
+
+| Page | Client | ns/object | Allocations/page | Bytes/page |
+|---|---|---:|---:|---:|
+| flat | hand-rolled | 16,700 to 17,900 | 710,127 | 36.2 MB |
+| flat | `sdkclient` | 21,500 to 22,400 | 865,260 | 46.1 MB |
+| hierarchy | hand-rolled | 9,800 to 9,950 | 397,632 | 20.9 MB |
+| hierarchy | `sdkclient` | 12,300 to 13,300 | 485,276 | 25.0 MB |
+
+Both clients decode with `encoding/xml`, so the SDK client costs 1.2 to 1.3 times the hand-rolled client per object
+and 22 % more allocations; the envelope check is within noise. Stripped binaries on branch `exp/azblob-sdkclient`
+(Azure only tagged): default 24,301,730 bytes, tagged 24,445,090, +143 KB and 15 packages (azcore and azidentity
+are already linked in the default build; it links no `azblob` package at all).
+
+**Binary size** (linux/amd64, `CGO_ENABLED=0 -trimpath -ldflags='-s -w'`, branch `exp/gcs-sdkclient`; GCS only
+is tagged here):
+
+| Build | Bytes |
+|---|---:|
+| default | 21,426,338 |
+| `-tags swath_sdkclient` | 30,474,402 |
+
+The tagged build is 9.0 MB larger and links 188 more packages, 64 of them under `google.golang.org/grpc` and 30
+OpenTelemetry. The cost is inherent to the generated client: `google.golang.org/api/storage/v1` itself depends on
+gRPC through `google.golang.org/api/internal/settings.go`, however the service is constructed. These sizes
+are of a later tree than the table above, so they do not compare with it.
+
+**Whole-process comparison (2026-11-09, commit 915e0c0 of `exp/measure-preview`, 4 vCPU, 975,077 keys shaped like the
+`realistic` tree, medians; the fake server's CPU is not included).** Three S3 arms: the default build; the tagged build
+with the scanner decoding (production); the tagged build with the SDK decoding current-object pages
+(`SWATH_S3_DECODER=sdk`, measurement only). "Client CPU" is the share of profile samples with a frame in the client or
+SDK packages or `net/http`.
+
+Sequential `swath diag list --sequential` against `bench/s3fake` (976 pages):
+
+| S3 arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | parsing µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 3.81 | 3.15 | 3.23 | 65 | 1.06 | 0.62 |
+| tagged, scanner, `-o` | 3.83 | 3.72 | 3.81 | 71 | 1.27 | 0.52 |
+| tagged, SDK decoder, `-o` | 8.78 | 8.79 | 9.01 | 69 | 7.09 | 6.49 (`encoding/xml` 5.68) |
+| default, `count` | 4.13 | 3.18 | 3.26 | 27 | 1.11 | 0.75 |
+| tagged, scanner, `count` | 4.52 | 4.21 | 4.31 | 35 | 1.34 | 0.65 |
+| tagged, SDK decoder, `count` | 9.63 | 10.47 | 10.74 | 34 | 7.81 | 7.10 (`encoding/xml` 6.05) |
+
+Sequential GCS against `scalefake` at zero latency:
+
+| GCS arm | wall s | process CPU s | µs CPU/object | peak RSS MiB | client CPU µs/object | `encoding/json` µs/object |
+|---|---:|---:|---:|---:|---:|---:|
+| default, `-o` | 5.81 | 6.05 | 6.20 | 59 | 3.12 | 2.67 |
+| tagged (generated client), `-o` | 5.83 | 6.59 | 6.76 | 68 | 4.75 | 3.85 |
+| default, `count` | 5.57 | 5.20 | 5.33 | 24 | 3.87 | 3.27 |
+| tagged, `count` | 6.89 | 7.49 | 7.68 | 34 | 4.65 | 3.58 |
+
+Parallel `swath count`, 64 workers, `scalefake` at 20 ms latency (3 runs; no retries or throttles):
+
+| arm | wall s median (min to max) | process CPU s | µs CPU/object | peak RSS MiB |
+|---|---|---:|---:|---:|
+| S3 default | 1.06 (0.92 to 1.41) | 1.53 | 1.57 | 85 |
+| S3 tagged, scanner | 1.40 (1.16 to 1.71) | 2.53 | 2.60 | 92 |
+| S3 tagged, SDK decoder | 3.58 (3.43 to 7.04) | 11.56 | 11.85 | 90 |
+| GCS default | 2.09 (2.00 to 2.15) | 4.91 | 5.04 | 58 |
+| GCS tagged | 2.24 (2.11 to 2.37) | 5.58 | 5.72 | 95 |
+
+At 20 ms latency and 64 workers the SDK decoder makes the S3 listing CPU-bound on 4 cores: 11.6 CPU-seconds cannot
+fit in the 1 s the network allows, so wall time triples. The scanner through the SDK costs about 0.6 to 1.0 µs more
+process CPU per object than the hand-rolled client (the SDK's request machinery, about 0.6 µs of AWS frames, plus
+`net/http` and GC), and its wall-time range overlaps the default's. The generated GCS client adds 0.5 to 2.3 µs per
+object and 0.15 s of wall time here. Every arm produced byte-identical Parquet output. Stripped binaries at this
+commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 bytes, +205 packages and +25 modules.
+S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
+and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
+
 ## Local filesystem walker
 
 Trees are synthetic (`bench/gen_tree.py`, seed 20261105): `realistic` is 971,927 non-directory entries and

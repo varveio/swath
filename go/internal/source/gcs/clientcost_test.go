@@ -24,6 +24,7 @@ import (
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/go/internal/source/gcs/sdkclient"
 )
 
 // sdkAPI is the API over Google's generated JSON client (test only): the
@@ -68,7 +69,8 @@ func processCPU() time.Duration {
 }
 
 // TestListClientCost measures the hand-rolled objects.list client against
-// Google's generated JSON client on the same in-process fake bucket
+// Google's generated JSON client, called directly ("sdk") and through
+// sdkclient (guarded, strictly mapped), on the same in-process fake bucket
 // (gcstest, full responses): process CPU per listed object and allocations
 // per page, listing every page in sequence ("list loop") and through the
 // range engine at one worker ("engine"). A baseline that only reads each
@@ -96,7 +98,11 @@ func TestListClientCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	apis := map[string]API{"ours": ours, "sdk": sdkAPI{svc}}
+	sdkc, err := sdkclient.New(ctx, client.Config{Endpoint: ep, Anonymous: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apis := map[string]API{"ours": ours, "sdk": sdkAPI{svc}, "sdkclient": sdkc}
 	loop := func(api API) (objects, pages int) {
 		in := client.ListInput{Bucket: "bkt"}
 		for {
@@ -176,8 +182,10 @@ func TestListClientCost(t *testing.T) {
 		{"baseline (read bodies)", baseline},
 		{"ours, list loop", func() (int, int) { return loop(apis["ours"]) }},
 		{"sdk, list loop", func() (int, int) { return loop(apis["sdk"]) }},
+		{"sdkclient, list loop", func() (int, int) { return loop(apis["sdkclient"]) }},
 		{"ours, engine", func() (int, int) { return engine(apis["ours"]) }},
 		{"sdk, engine", func() (int, int) { return engine(apis["sdk"]) }},
+		{"sdkclient, engine", func() (int, int) { return engine(apis["sdkclient"]) }},
 	}
 	got := map[string][]sample{}
 	for range 3 {

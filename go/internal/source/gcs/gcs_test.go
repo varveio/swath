@@ -526,6 +526,9 @@ func TestPoolSizeReported(t *testing.T) {
 		if !slices.Equal(got, keys) {
 			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
 		}
+		if st.Client != clientKind {
+			t.Fatalf("client %q, want %q", st.Client, clientKind)
+		}
 		if n := st.Counters.Value("transport.pool_size"); n != want {
 			t.Fatalf("%d workers: transport.pool_size %d, want %d", workers, n, want)
 		}

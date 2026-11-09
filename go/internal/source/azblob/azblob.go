@@ -76,6 +76,21 @@ type Routed interface {
 	Route(container string) string
 }
 
+// built is the client connect builds (newClient: client.New, or the SDK
+// client under the swath_sdkclient build tag).
+type built interface {
+	API
+	namespaced
+	Routed
+	counted
+	pooled
+	capped
+	live
+	answering
+	Credentials() (source string, anonymous bool)
+	Note() string
+}
+
 // The environment variables of the Azure CLI that carry a credential: a
 // SAS (when neither --azblob-sas nor the root gives one) and an account
 // key (Shared Key).
@@ -218,7 +233,10 @@ type Stats struct {
 	Credentials string `json:"credentials,omitempty"`
 	// Namespace is how admission found the namespace flat: "account
 	// information", "filesystem properties" or "asserted" (--azblob-flat).
-	Namespace  string            `json:"namespace"`
+	Namespace string `json:"namespace"`
+	// Client is the built client: "hand-rolled" or "sdk"; "" for a
+	// supplied one.
+	Client     string            `json:"client,omitempty"`
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
 }
@@ -367,7 +385,7 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 			cfg.SAS = os.Getenv(EnvSAS)
 		}
 		cfg.SharedKey = os.Getenv(EnvKey)
-		c, err := client.New(ctx, cfg)
+		c, err := newClient(ctx, cfg)
 		if err != nil {
 			return nil, false, fmt.Errorf("Azure client: %w", err)
 		}
@@ -449,7 +467,11 @@ func (p *Provider) Stats() Stats {
 		p.Set().Set(p.ID(client.CBodyCapShrinks), c.BodyCapShrinks())
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
+	if p.opt.Client == nil {
+		st.Client = clientKind
+	}
+	return st
 }
 
 // fetch lists one page in byte order through the Expand's adapter and
