@@ -196,7 +196,7 @@ func TestSlowRefreshBounded(t *testing.T) {
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(Classify)(err) {
+	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
 		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout, not a stop", Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 || n.InflightMax != 0 {

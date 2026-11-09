@@ -79,19 +79,27 @@ func TestClassify(t *testing.T) {
 	}{
 		{"throttle", objhttp.ClassThrottle, true},
 		{"user-throttle", objhttp.ClassThrottle, true},
-		{"server", objhttp.ClassServer, true},
+		{"server", objhttp.ClassOther, true},
 		{"request-timeout", objhttp.ClassTimeout, true},
 		{"auth", objhttp.ClassAuth, false},
 		{"denied", objhttp.ClassAccessDenied, false},
-		{"missing", objhttp.ClassNoSuchBucket, false},
+		{"missing", objhttp.ClassOther, false},
 		{"bad-request", objhttp.ClassOther, false},
 		{"parse", objhttp.ClassParse, true},
 		{"garbled", objhttp.ClassParse, true},
 		{"slow", objhttp.ClassTimeout, true},
-		{"cut", objhttp.ClassTransport, true},
-		{"redirect", objhttp.ClassRedirect, false},
+		{"cut", objhttp.ClassOther, true},
+		{"redirect", objhttp.ClassOther, false},
 	} {
 		_, err := c.List(context.Background(), &ListInput{Bucket: "b", Prefix: x.prefix})
+		var f *objhttp.Failure
+		var se *Error
+		if !errors.As(err, &f) || f.Transient != x.exhausted {
+			t.Fatalf("%s: normalized failure %+v (%v)", x.prefix, f, err)
+		}
+		if errors.As(err, &se) && (f.Status != se.Status || f.Code != se.Reason) {
+			t.Fatalf("%s: failure lost status/reason: %+v (%v)", x.prefix, f, se)
+		}
 		var ex *ExhaustedError
 		if got := Classify(err); got != x.want || errors.As(err, &ex) != x.exhausted {
 			t.Errorf("%s: class %q exhausted=%v (%v), want %q exhausted=%v", x.prefix, got, errors.As(err, &ex), err, x.want, x.exhausted)
@@ -102,7 +110,7 @@ func TestClassify(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	d, _ := New(context.Background(), Config{Endpoint: "http://" + addr + "/storage/v1/", Anonymous: true, MaxAttempts: 1})
-	if _, err := d.List(context.Background(), &ListInput{Bucket: "b"}); Classify(err) != objhttp.ClassTransport {
+	if _, err := d.List(context.Background(), &ListInput{Bucket: "b"}); Classify(err) != objhttp.ClassOther {
 		t.Errorf("refused connection: class %q (%v)", Classify(err), err)
 	}
 	// Credentials: a refused grant, and a token source that fails in transit.
@@ -125,7 +133,7 @@ func TestClassify(t *testing.T) {
 		var ex *ExhaustedError
 		want := objhttp.ClassAuth // a refusal stops the run; an outage of the token endpoint is transient
 		if x.exhausted {
-			want = objhttp.ClassTransport
+			want = objhttp.ClassOther
 		}
 		if x.class != "" {
 			want = x.class
@@ -138,10 +146,10 @@ func TestClassify(t *testing.T) {
 	// The caller's cancellation, and contract breaks the engine reports.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.List(ctx, &ListInput{Bucket: "b", Prefix: "slow"}); Classify(err) != objhttp.ClassCanceled {
+	if _, err := c.List(ctx, &ListInput{Bucket: "b", Prefix: "slow"}); !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled: class %q (%v)", Classify(err), err)
 	}
-	if got := Classify(fmt.Errorf("%w: out of order", ErrInvalidPage)); got != objhttp.ClassInvalidPage {
+	if got := Classify(fmt.Errorf("%w: out of order", ErrInvalidPage)); got != objhttp.ClassOther {
 		t.Errorf("invalid page: class %q", got)
 	}
 	if got := Classify(nil); got != "" {
@@ -161,10 +169,10 @@ func TestFailureSignals(t *testing.T) {
 	}{
 		{408, objhttp.ClassTimeout, false, true},
 		{429, objhttp.ClassThrottle, true, false},
-		{503, objhttp.ClassServer, false, false},
+		{503, objhttp.ClassOther, false, false},
 	} {
-		f := objhttp.Normalize(&Error{Status: c.status}, Answer)
-		if f.Class != c.class || !f.Retry || f.Throttle != c.throttle || f.Timeout != c.timeout {
+		f := objhttp.Normalize(&Error{Status: c.status})
+		if f.Class != c.class || !f.Transient || f.Throttle != c.throttle || f.Timeout != c.timeout {
 			t.Fatalf("%d: %+v", c.status, f)
 		}
 	}

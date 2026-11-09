@@ -342,11 +342,28 @@ func (p *Provider) admit(ctx context.Context) error {
 // fallback: Get Account Information was refused or answered without the
 // header, so the Data Lake host may tell.
 func fallback(err error) bool {
-	switch client.Classify(err) {
-	case objhttp.ClassAuth, objhttp.ClassAccessDenied:
+	if errors.Is(err, client.ErrHNSUnknown) {
 		return true
 	}
-	return errors.Is(err, client.ErrHNSUnknown)
+	if errors.Is(err, source.ErrUnsupported) {
+		return false
+	}
+	f := objhttp.Normalize(err)
+	if f == nil {
+		return false
+	}
+	var ce *objhttp.CredentialError
+	if errors.As(f, &ce) {
+		return !ce.Transient
+	}
+	switch f.Code {
+	case "NoAuthenticationInformation", "AuthenticationFailed", "InvalidAuthenticationInfo",
+		"AuthorizationFailure", "AuthorizationPermissionMismatch":
+		return true
+	case "ContainerNotFound", "ServerBusy", "OperationTimedOut", "InternalError":
+		return false
+	}
+	return f.Status == 401 || f.Status == 403
 }
 
 // connect builds the client unless Options.Client supplies one (own).
@@ -425,7 +442,7 @@ func AcceptBound(s string) bool {
 	return units <= maxNameUnits
 }
 
-var requeue = objhttp.Requeue(client.Classify)
+var requeue = objhttp.Requeue
 
 // Restart continues after a journaled run's last published key.
 func (p *Provider) Restart(after string) {

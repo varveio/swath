@@ -225,7 +225,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 // failure is the error of an attempt that got no page: the service's answer
 // as an *Error (from the bounded answer the Guard handed over; a non-200
 // 2xx too), a body past the cap as ErrBodyCap (terminal), the Guard's own
-// failures unwrapped (objhttp.Cause), an attempt timeout as
+// failures resolved by objhttp.Normalize, an attempt timeout as
 // objhttp.ErrTimeout. The SAS is never in it.
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error, container string) error {
 	u := s.safeURL(c, container)
@@ -233,12 +233,10 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 		body, _ := runtime.Payload(re.RawResponse)
 		return c.responseError(re.RawResponse, body, u)
 	}
-	err = objhttp.Cause(err)
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)
 	}
 	if errors.Is(err, objhttp.ErrSyntax) {
-		c.counts.ParseFailure()
 		return err
 	}
 	return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
@@ -247,14 +245,12 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 // refusal is the error of a 200 the SDK's decoder (or a header it reads)
 // refused, or whose page did not convert: ErrInvalidPage when the page
 // broke the listing contract, else objhttp.ErrSyntax (a parse failure,
-// counted and retried). Its text is scrubbed of the SAS: the SDK's errors
+// counted and retried by objhttp.Do). Its text is scrubbed of the SAS: the SDK's errors
 // quote what they could not read (a Date header, a name).
 func (c *Client) refusal(err error) error {
 	sentinel := objhttp.ErrSyntax
 	if errors.Is(err, ErrInvalidPage) {
 		sentinel = ErrInvalidPage
-	} else {
-		c.counts.ParseFailure()
 	}
 	msg := err.Error()
 	if s := c.scrub(msg); s != msg || !errors.Is(err, sentinel) {

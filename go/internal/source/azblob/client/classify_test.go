@@ -126,21 +126,25 @@ func TestClassify(t *testing.T) {
 		{403, codeAuthorization, objhttp.ClassAccessDenied, false, false, false},
 		{403, codePermissionMismatch, objhttp.ClassAccessDenied, false, false, false},
 		{403, "AuthorizationSourceIPMismatch", objhttp.ClassAccessDenied, false, false, false},
-		{404, codeContainerNotFound, objhttp.ClassNoSuchBucket, false, false, false},
+		{404, codeContainerNotFound, objhttp.ClassOther, false, false, false},
 		{503, codeServerBusy, objhttp.ClassThrottle, true, true, false},
 		{429, "", objhttp.ClassThrottle, true, true, false},
 		{500, codeOperationTimedOut, objhttp.ClassTimeout, true, false, true},
 		{408, "", objhttp.ClassTimeout, true, false, true},
-		{500, codeInternalError, objhttp.ClassServer, true, false, false},
-		{502, "", objhttp.ClassServer, true, false, false},
-		{503, "", objhttp.ClassServer, true, false, false},
-		{504, "", objhttp.ClassServer, true, false, false},
-		{500, "", objhttp.ClassServer, false, false, false},               // a 500 Azure does not ask to retry
-		{501, "NotImplemented", objhttp.ClassServer, false, false, false}, // nor another 5xx
+		{500, codeInternalError, objhttp.ClassOther, true, false, false},
+		{502, "", objhttp.ClassOther, true, false, false},
+		{503, "", objhttp.ClassOther, true, false, false},
+		{504, "", objhttp.ClassOther, true, false, false},
+		{500, "", objhttp.ClassOther, false, false, false},               // a 500 Azure does not ask to retry
+		{501, "NotImplemented", objhttp.ClassOther, false, false, false}, // nor another 5xx
 		{400, "InvalidQueryParameterValue", objhttp.ClassOther, false, false, false},
 	} {
 		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
 		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: fmt.Sprintf("%d %s", x.status, x.code)})
+		var f *objhttp.Failure
+		if !errors.As(err, &f) || f.Status != x.status || f.Code != x.code || f.Transient != x.exhausted || f.Throttle != x.throttle || f.Timeout != x.timeout {
+			t.Fatalf("%d %s: normalized failure %+v (%v)", x.status, x.code, f, err)
+		}
 		var ex *ExhaustedError
 		n := c.Counters()
 		if got := Classify(err); got != x.class || errors.As(err, &ex) != x.exhausted || (n.Throttles == 1) != x.throttle || (n.Timeouts == 1) != x.timeout {
@@ -152,7 +156,7 @@ func TestClassify(t *testing.T) {
 	// followed.
 	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
 	for prefix, want := range map[string]objhttp.Class{"garbled": objhttp.ClassParse, "not-xml": objhttp.ClassParse,
-		"error-envelope": objhttp.ClassParse, "bad-size": objhttp.ClassParse, "descending": objhttp.ClassInvalidPage, "redirect": objhttp.ClassRedirect} {
+		"error-envelope": objhttp.ClassParse, "bad-size": objhttp.ClassParse, "descending": objhttp.ClassOther, "redirect": objhttp.ClassOther} {
 		_, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: prefix})
 		var ex *ExhaustedError
 		if got := Classify(err); got != want || errors.As(err, &ex) != (want == objhttp.ClassParse) {
@@ -168,10 +172,10 @@ func TestClassify(t *testing.T) {
 	}{
 		{"refused grant", &azidentity.AuthenticationFailedError{RawResponse: resp(400)}, objhttp.ClassAuth},
 		{"unauthorized client", &azidentity.AuthenticationFailedError{RawResponse: resp(401)}, objhttp.ClassAuth},
-		{"token endpoint 503", &azidentity.AuthenticationFailedError{RawResponse: resp(503)}, objhttp.ClassTransport},
-		{"token endpoint 429", &azidentity.AuthenticationFailedError{RawResponse: resp(429)}, objhttp.ClassTransport},
-		{"no answer", &azidentity.AuthenticationFailedError{}, objhttp.ClassTransport},
-		{"token endpoint unreachable", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, objhttp.ClassTransport},
+		{"token endpoint 503", &azidentity.AuthenticationFailedError{RawResponse: resp(503)}, objhttp.ClassOther},
+		{"token endpoint 429", &azidentity.AuthenticationFailedError{RawResponse: resp(429)}, objhttp.ClassOther},
+		{"no answer", &azidentity.AuthenticationFailedError{}, objhttp.ClassOther},
+		{"token endpoint unreachable", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, objhttp.ClassOther},
 		{"token exchange timeout", fmt.Errorf("msal: %w", context.DeadlineExceeded), objhttp.ClassTimeout},
 		{"credential unavailable", errors.New("EnvironmentCredential: missing environment variable AZURE_TENANT_ID"), objhttp.ClassAuth},
 	} {
@@ -245,10 +249,10 @@ func TestInvalidPage(t *testing.T) {
 		name, body, marker string
 		class              objhttp.Class
 	}{
-		{"descending", page("", "b", "a"), "", objhttp.ClassInvalidPage},
-		{"repeated name", page("", "a", "a"), "", objhttp.ClassInvalidPage},
-		{"byte order only", page("", "u\ue000", "u\U0001F600"), "", objhttp.ClassInvalidPage},
-		{"repeated marker", page("m1", "a"), "m1", objhttp.ClassInvalidPage},
+		{"descending", page("", "b", "a"), "", objhttp.ClassOther},
+		{"repeated name", page("", "a", "a"), "", objhttp.ClassOther},
+		{"byte order only", page("", "u\ue000", "u\U0001F600"), "", objhttp.ClassOther},
+		{"repeated marker", page("m1", "a"), "m1", objhttp.ClassOther},
 		{"truncated body", full[:len(full)-len("</EnumerationResults>")], "", objhttp.ClassParse},
 		{"cut in an entry", full[:len(listHead)+20], "", objhttp.ClassParse},
 		{"UTF-16 order", page("", "u\U0001F600", "u\ue000", "u\ufffd"), "", ""},
@@ -259,7 +263,7 @@ func TestInvalidPage(t *testing.T) {
 		if got := Classify(err); got != x.class {
 			t.Errorf("%s: class %q (%v), page %+v", x.name, got, err, p)
 		}
-		if x.class == objhttp.ClassInvalidPage && !errors.Is(err, ErrInvalidPage) {
+		if x.class == objhttp.ClassOther && !errors.Is(err, ErrInvalidPage) {
 			t.Errorf("%s: %v does not wrap ErrInvalidPage", x.name, err)
 		}
 	}
@@ -338,7 +342,7 @@ func TestRedirectRefused(t *testing.T) {
 		n.Store(0)
 		c := newTestClient(t, Config{Endpoint: srv.URL, SAS: "?sv=2026-10-06&sp=rl&sig=S3cr3t%2Bsig", HTTPClient: hc})
 		_, err := c.List(context.Background(), &ListInput{Container: "c"})
-		if Classify(err) != objhttp.ClassRedirect || n.Load() != 1 {
+		if Classify(err) != objhttp.ClassOther || n.Load() != 1 {
 			t.Errorf("%s: class %q after %d requests (%v)", name, Classify(err), n.Load(), err)
 		}
 		if strings.Contains(err.Error(), "elsewhere.example") || strings.Contains(err.Error(), "S3cr3t") {
@@ -459,7 +463,7 @@ func TestRetryAfterCapped(t *testing.T) {
 		d := time.Since(start)
 		srv.Close()
 		var ex *ExhaustedError
-		if !errors.As(err, &ex) || ex.Attempts != 3 || !objhttp.Requeue(Classify)(err) {
+		if !errors.As(err, &ex) || ex.Attempts != 3 || !objhttp.Requeue(err) {
 			t.Errorf("%s: %v, want three attempts exhausted and requeued", v, err)
 		}
 		if d < 400*time.Millisecond || d > 3*time.Second {

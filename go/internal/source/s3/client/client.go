@@ -114,7 +114,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	c := &Client{cfg: cfg, auth: a,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff,
-			Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer},
+			Limiter: cfg.Limiter, Rate: cfg.Rate},
 	}
 	c.retry.Defaults()
 
@@ -336,16 +336,13 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 	}
 	if err != nil {
 		err = c.failure(actx, ctx, err)
-		if errors.Is(err, objhttp.ErrSyntax) {
-			c.counts.ParseFailure()
-		}
 		return nil, err
 	}
 	return v, nil
 }
 
-// failure maps an attempt's error to the provider's vocabulary: a Guard
-// failure is its cause (ErrSyntax, a 2xx answer other than 200, the size
+// failure maps an attempt's error to safe provider diagnostics. A Guard
+// failure keeps its marker for objhttp.Normalize to recover the cause (ErrSyntax, a 2xx answer other than 200, the size
 // cap, a credential error, a failed 2xx body read: a cut body is
 // transport, a read past the attempt's deadline ErrTimeout); an HTTP
 // answer other than 2xx is a *Error, its body cut or not (the Guard hands
@@ -356,7 +353,7 @@ func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError
 	if errors.As(err, &ge) {
-		return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, ge.Err)
+		return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, ge)
 	}
 	var re *awshttp.ResponseError
 	if errors.As(err, &re) && re.HTTPStatusCode() != 0 { // 0: no answer (the SDK wraps a send failure too)

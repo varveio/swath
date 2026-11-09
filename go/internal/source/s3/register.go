@@ -273,7 +273,7 @@ var (
 // run's outcome.
 func classify(err error) string {
 	switch c := client.Classify(err); c {
-	case objhttp.ClassOther, objhttp.ClassCanceled:
+	case objhttp.ClassOther:
 		return ""
 	default:
 		return string(c)

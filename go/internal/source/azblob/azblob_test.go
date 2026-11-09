@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -739,8 +740,8 @@ func TestEngineFlagsShared(t *testing.T) {
 func TestInvalidPageClass(t *testing.T) {
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "b"}, {Name: "a"}}}}}
 	_, _, err := run(t, Options{Account: "acct", Container: "c", Client: c, Policy: keyrange.Policy{Sequential: true}}, 1)
-	if classify(err) != "invalid_page" || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
-		t.Fatalf("err %v class %q, want invalid_page", err, classify(err))
+	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || errors.Is(err, source.ErrUnsupported) {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
 	}
 }
 
@@ -837,6 +838,44 @@ func TestPoolSizeReported(t *testing.T) {
 		_, st := list(t, replayOptions(r), workers)
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
 			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
+		}
+	}
+}
+
+// TestAdmissionFallbackPolicy pins code-before-status decisions: changing
+// them can skip the DFS proof, or admit an account without the right proof.
+func TestAdmissionFallbackPolicy(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		code   string
+		want   bool
+	}{
+		{401, "", true}, {403, "", true}, {500, "", false},
+		{400, "AuthenticationFailed", true}, {500, "AuthorizationFailure", true},
+		{403, "NoAuthenticationInformation", true}, {403, "InvalidAuthenticationInfo", true},
+		{403, "AuthorizationPermissionMismatch", true}, {403, "ContainerNotFound", false},
+		{401, "ServerBusy", false}, {403, "OperationTimedOut", false}, {401, "InternalError", false},
+	} {
+		err := &client.Error{Status: c.status, Code: c.code}
+		for _, wrapped := range []error{err, objhttp.Normalize(err), fmt.Errorf("account: %w", objhttp.Normalize(err))} {
+			if got := fallback(wrapped); got != c.want {
+				t.Errorf("%v: fallback %v, want %v", wrapped, got, c.want)
+			}
+		}
+	}
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{client.ErrHNSUnknown, true},
+		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
+		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
+		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
+		{errors.Join(client.ErrInvalidPage, &client.Error{Status: 403}), false},
+		{errors.Join(objhttp.ErrSyntax, &client.Error{Status: 401}), false},
+	} {
+		if got := fallback(c.err); got != c.want {
+			t.Errorf("%v: fallback %v, want %v", c.err, got, c.want)
 		}
 	}
 }

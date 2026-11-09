@@ -161,8 +161,9 @@ func TestSASRedacted(t *testing.T) {
 			}
 		}
 		if strings.Contains(x.prefix, "redirect") || x.prefix == "bad-location" {
-			if Classify(err) != objhttp.ClassRedirect {
-				t.Errorf("%s: class %q (%v)", x.prefix, Classify(err), err)
+			var f *objhttp.Failure
+			if !errors.As(err, &f) || f.Status/100 != 3 || f.Transient {
+				t.Errorf("%s: redirect failure %+v (%v)", x.prefix, f, err)
 			}
 		}
 		if _, err := x.c.AccountInfo(context.Background(), x.prefix); err != nil && sasLeak(err.Error()) != "" {

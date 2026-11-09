@@ -121,7 +121,7 @@ func TestGuardValidateRejection(t *testing.T) {
 	if got := Cause(err); got != cause || Transport(got) {
 		t.Errorf("Cause %v, want the validate error, not a transport failure", got)
 	}
-	if c := Classify(Cause(err), genericAnswer); c != ClassParse {
+	if c := Classify(err); c != ClassParse {
 		t.Errorf("Classify %q, want %q", c, ClassParse)
 	}
 	if Cause(cause) != cause || Cause(nil) != nil {

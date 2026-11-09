@@ -260,7 +260,7 @@ func ExclusiveStart(name string) (string, bool) {
 // maxName is the longest object name, in bytes.
 const maxName = 1024
 
-var requeue = objhttp.Requeue(client.Classify)
+var requeue = objhttp.Requeue
 
 // Restart continues after a journaled run's last published key.
 func (p *provider[P]) Restart(after string) {

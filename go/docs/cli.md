@@ -1020,6 +1020,12 @@ rows after filtering at the order stage's handoff (swath du, swath diag count: v
 and raw overfetch are excluded. `distinct_keys` comes from `order.Stats.DistinctKeys`
 and excludes pending batches that never reached the sink, including on a failed run.
 
+Object-store failure diagnostics retain `auth` (unusable credentials), `access_denied` (a listing
+permission refusal), `throttle`, `timeout`, `parse` and `unsupported`. These labels describe the failure;
+retry and engine requeue use its stored transient signal. Other service errors retain their HTTP status
+and provider code or reason in the message without a separate report label. Invalid pages remain protocol
+violations; caller cancellation keeps its stop disposition.
+
 **Requests** (`requests`, `cost`, `efficiency`; absent for a source that makes no requests). `http_attempts`
 is the one request count: every HTTP attempt sent (pages, probes, client retries, engine requeues); `retries`,
 `throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,

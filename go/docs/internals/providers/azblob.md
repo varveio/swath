@@ -96,7 +96,7 @@ do it) is the client's invalid page, a protocol violation.
 **On the range engine.** `Description.Listing` is `keyrange.Listing`: the adapter's pages are byte-ordered,
 start after `After` (exclusive; `StartInclusive` is false) and end at `Through`, which is never sent. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
 control character, not ending in `.` (Azure's name rules). `Requeue` is the client's `ExhaustedError` on a
-transient class, as for S3 and GCS; `InvalidPage` is the client's. Pages are `client.MaxPageSize` (5,000, the
+stored transient failure signal, as for S3 and GCS; `InvalidPage` is the client's. Pages are `client.MaxPageSize` (5,000, the
 service's cap) unless `--page-size` lowers them. An adapter page maps `Blob` items to rows and `BlobPrefix` items
 to `Prefixes`, with the adapter's `Truncated` and token.
 

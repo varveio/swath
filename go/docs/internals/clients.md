@@ -49,16 +49,13 @@ UTF-8 is an invalid page, as are names that do not ascend strictly in UTF-16 cod
 lead bytes F0..F4 before EE..EF, compared in the client) and a `NextMarker` equal to the marker sent; an empty or
 absent `NextMarker` is the end (Azure has no truncation flag). A 200 must be a listing envelope:
 `EnumerationResults` holding a `Blobs` element (empty for an empty page) and no `Error` element, with nothing
-after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is fixed at 64 MiB, the
-memory one in-flight response may hold (bodies are read whole, outside the engine's memory budget): a page past it
-is asked again with `maxresults` halved, marker and query unchanged, down to 1 (`body_cap_shrinks`), so memory stays
-bounded and a valid page is never refused; only a single entry past the cap is a `parse` failure. Classification takes `x-ms-error-code`
-first, the body's `<Code>` when the header is absent, then the status, because `AuthenticationFailed` arrives as a
-403 and `ServerBusy` as a 503: `auth` (`NoAuthenticationInformation`, `AuthenticationFailed`,
-`InvalidAuthenticationInfo`, 401), `access_denied` (`AuthorizationFailure`, `AuthorizationPermissionMismatch`,
-another 403), `no_such_bucket` (`ContainerNotFound`), `throttle` (`ServerBusy`, 429), `timeout`
-(`OperationTimedOut`, 408), `server` (`InternalError`, another 5xx); retried are 408, 429, 502, 503, 504 and a 500
-only when it is `OperationTimedOut` or `InternalError`, and a `Retry-After` (seconds or an HTTP date) longer than
+after its close; anything else is a `parse` failure, retried, never an empty final page. The body cap is fixed
+at 64 MiB, the memory one in-flight response may hold (bodies are read whole, outside the engine's memory
+budget). A page past the cap is a terminal refusal; the requested page size stays unchanged.
+Normalization keeps the HTTP status and provider code with transient, throttle and timeout signals:
+`ServerBusy` and 429 throttle, `OperationTimedOut` and 408 signal timeouts; retried are 408, 429, 502, 503,
+504 and a 500 only when it is `OperationTimedOut` or `InternalError`. Report labels are diagnostics,
+independent of retry decisions, and a `Retry-After` (seconds or an HTTP date) longer than
 the drawn backoff is waited out (`objhttp.RetryAfter`), at most the request timeout (a longer one is cut to it
 and counted in `retry_after_capped`; the attempt budget still ends the request, which the engine requeues).
 Redirects are never followed and their target is never quoted: the client's transport drops `Location` from
@@ -91,11 +88,14 @@ SDK call is one attempt.
 
 - *One retry owner.* `objhttp.Do` retries, backs off, honors `Retry-After` and admits requests through the
   limiter, as for the hand-rolled clients. The SDK never retries.
-- *The failure vocabulary and attempt accounting.* Every failure maps to the classes of the hand-rolled client
-  (throttle, timeout, server, redirect, auth, access denied, no such bucket, parse, other), and an attempt is
-  counted from just before the SDK call until it returns. Credentials and bearer tokens are fetched before the
-  attempt is counted, so a credential failure is a `*objhttp.CredentialError` and not an attempt (for Azure, a
-  `*client.CredentialError`).
+- *Normalized errors and attempt accounting.* `objhttp.Normalize` computes one `*objhttp.Failure`,
+  reachable through `errors.As`: transient/throttle/timeout signals, HTTP status, provider code or reason,
+  and a cause that has passed the provider's redaction boundary. Admission, counters, retry, reporting
+  and engine requeue consume that value; exhaustion wraps it. `errors.Is` still reaches cancellation and
+  invalid-page sentinels. Diagnostic labels are `auth`, `access_denied`, `throttle`, `timeout`, `parse`
+  and `unsupported`; other errors keep their status/code without a report label. Credentials and bearer
+  tokens are fetched before the attempt is counted, so a credential failure is a
+  `*objhttp.CredentialError`, with no listing attempt counted.
 - *Redirects refused, and route identity.* The HTTP client follows no redirect. `Route` is the URL the SDK's
   endpoint resolver names (S3) or the generated client sends (GCS), and the resume identity freezes it. S3 tests
   that every request, retried and continuation requests included, goes to exactly `Route`. A GCS endpoint whose
@@ -103,7 +103,7 @@ SDK call is one attempt.
   client is built, with a message to use the hand-rolled client. The Azure clients are built on the hand-rolled
   client's account root (`Core.Base`), so `Route` is the same URL in both builds.
 - *`objhttp.Guard`.* An `http.RoundTripper` below the SDK, shared by the three clients. It reads a success body
-  up to 16 MiB (Azure: 64 MiB, the hand-rolled client's cap, with the same `maxresults` halving above it) and an
+  up to 16 MiB (Azure: 64 MiB) and an
   error body up to 64 KiB (longer success bodies fail the round trip; longer error bodies are truncated), closes
   the original body on every path, and validates every 2xx before the SDK decodes it. A Guard failure surfaces
   through `objhttp.Cause`, so the `url.Error` the HTTP client wraps around it is never read as a transport

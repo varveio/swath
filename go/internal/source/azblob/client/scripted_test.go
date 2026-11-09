@@ -137,7 +137,7 @@ func TestScriptedAnswers(t *testing.T) {
 	parse := func(attempts int64) outcome {
 		return outcome{Class: objhttp.ClassParse, Requeue: true, Err: objhttp.ErrSyntax, Counts: [5]int64{attempts, attempts - 1, 0, 0, attempts}, Requests: attempts}
 	}
-	invalid := outcome{Class: objhttp.ClassInvalidPage, Err: ErrInvalidPage, Counts: [5]int64{1}, Requests: 1}
+	invalid := outcome{Class: objhttp.ClassOther, Err: ErrInvalidPage, Counts: [5]int64{1}, Requests: 1}
 	cases := []struct {
 		name     string
 		attempts int
@@ -159,16 +159,16 @@ func TestScriptedAnswers(t *testing.T) {
 			echoError(w, r, 503, "ServerBusy")
 		}, outcome{Class: objhttp.ClassThrottle, Requeue: true, Answer: echo(503, "ServerBusy", 2*time.Second), Counts: [5]int64{2, 1, 2, 0, 0}, Capped: 2, Requests: 2}},
 		{"500 InternalError exhausted", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 500, "InternalError") },
-			outcome{Class: objhttp.ClassServer, Requeue: true, Answer: echo(500, "InternalError", 0), Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
+			outcome{Class: objhttp.ClassOther, Requeue: true, Answer: echo(500, "InternalError", 0), Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
 		{"500 OperationTimedOut exhausted", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			echoError(w, r, 500, "OperationTimedOut")
 		}, outcome{Class: objhttp.ClassTimeout, Requeue: true, Answer: echo(500, "OperationTimedOut", 0), Counts: [5]int64{2, 1, 0, 2, 0}, Requests: 2}},
 		{"500 other code not retried", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 500, "Unknown") },
-			outcome{Class: objhttp.ClassServer, Answer: echo(500, "Unknown", 0), Counts: [5]int64{1}, Requests: 1}},
+			outcome{Class: objhttp.ClassOther, Answer: echo(500, "Unknown", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"500 without a code header", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(500)
 			fmt.Fprint(w, "\xef\xbb\xbf<?xml version=\"1.0\"?><Error><Code>InternalError</Code><Message>x</Message></Error>")
-		}, outcome{Class: objhttp.ClassServer, Requeue: true, Answer: &Error{Status: 500, Code: "InternalError", Message: "x"}, Counts: [5]int64{3, 2, 0, 0, 0}, Requests: 3}},
+		}, outcome{Class: objhttp.ClassOther, Requeue: true, Answer: &Error{Status: 500, Code: "InternalError", Message: "x"}, Counts: [5]int64{3, 2, 0, 0, 0}, Requests: 3}},
 		{"403", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 403, "AuthorizationFailure") },
 			outcome{Class: objhttp.ClassAccessDenied, Answer: echo(403, "AuthorizationFailure", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"401 with a challenge, not re-sent", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
@@ -176,7 +176,7 @@ func TestScriptedAnswers(t *testing.T) {
 			echoError(w, r, 401, "InvalidAuthenticationInfo")
 		}, outcome{Class: objhttp.ClassAuth, Answer: echo(401, "InvalidAuthenticationInfo", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"404", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 404, "ContainerNotFound") },
-			outcome{Class: objhttp.ClassNoSuchBucket, Answer: echo(404, "ContainerNotFound", 0), Counts: [5]int64{1}, Requests: 1}},
+			outcome{Class: objhttp.ClassOther, Answer: echo(404, "ContainerNotFound", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"400 names the query", 3, ListInput{Prefix: "p q+", StartFrom: "s", Marker: "m"}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			echoError(w, r, 400, "InvalidQueryParameterValue")
 		}, outcome{Class: objhttp.ClassOther, Answer: &Error{Status: 400, Code: "InvalidQueryParameterValue", Message: "m (echo)",
@@ -188,14 +188,14 @@ func TestScriptedAnswers(t *testing.T) {
 			}
 			fmt.Fprint(w, page("", "a"))
 		}, outcome{Page: blobs("", "a"), Counts: [5]int64{2, 1, 0, 1, 0}, Requests: 2}},
-		{"301 not followed", 3, ListInput{}, 0, redirect(301), outcome{Class: objhttp.ClassRedirect, Answer: redirected(301), Counts: [5]int64{1}, Requests: 1}},
-		{"302 not followed", 3, ListInput{}, 0, redirect(302), outcome{Class: objhttp.ClassRedirect, Answer: redirected(302), Counts: [5]int64{1}, Requests: 1}},
-		{"307 not followed", 3, ListInput{}, 0, redirect(307), outcome{Class: objhttp.ClassRedirect, Answer: redirected(307), Counts: [5]int64{1}, Requests: 1}},
-		{"308 not followed", 3, ListInput{}, 0, redirect(308), outcome{Class: objhttp.ClassRedirect, Answer: redirected(308), Counts: [5]int64{1}, Requests: 1}},
+		{"301 not followed", 3, ListInput{}, 0, redirect(301), outcome{Class: objhttp.ClassOther, Answer: redirected(301), Counts: [5]int64{1}, Requests: 1}},
+		{"302 not followed", 3, ListInput{}, 0, redirect(302), outcome{Class: objhttp.ClassOther, Answer: redirected(302), Counts: [5]int64{1}, Requests: 1}},
+		{"307 not followed", 3, ListInput{}, 0, redirect(307), outcome{Class: objhttp.ClassOther, Answer: redirected(307), Counts: [5]int64{1}, Requests: 1}},
+		{"308 not followed", 3, ListInput{}, 0, redirect(308), outcome{Class: objhttp.ClassOther, Answer: redirected(308), Counts: [5]int64{1}, Requests: 1}},
 		{"308 malformed Location", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Location", "http://[::1%zz/?"+r.URL.RawQuery)
 			w.WriteHeader(308)
-		}, outcome{Class: objhttp.ClassRedirect, Answer: redirected(308), Counts: [5]int64{1}, Requests: 1}},
+		}, outcome{Class: objhttp.ClassOther, Answer: redirected(308), Counts: [5]int64{1}, Requests: 1}},
 		{"200 error envelope", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, "\xef\xbb\xbf<?xml version=\"1.0\"?><Error><Code>InternalError</Code><Message>x</Message></Error>")
 		}, parse(2)},
@@ -214,7 +214,7 @@ func TestScriptedAnswers(t *testing.T) {
 			w.(http.Flusher).Flush()
 			conn, _, _ := w.(http.Hijacker).Hijack()
 			conn.Close()
-		}, outcome{Class: objhttp.ClassTransport, Requeue: true, Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
+		}, outcome{Class: objhttp.ClassOther, Requeue: true, Counts: [5]int64{2, 1, 0, 0, 0}, Requests: 2}},
 		{"200 out of order", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("", "b", "a")) }, invalid},
 		{"200 repeated marker", 2, ListInput{Marker: "m1"}, 0, func(n int, w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("m1", "a")) }, invalid},
 		{"200 Encoded name not UTF-8", 2, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
@@ -284,7 +284,7 @@ func TestScriptedAnswers(t *testing.T) {
 				t.Errorf("inflight max %d", n0.InflightMax)
 			}
 			if err != nil {
-				got.Class, got.Requeue = Classify(err), objhttp.Requeue(Classify)(err)
+				got.Class, got.Requeue = Classify(err), objhttp.Requeue(err)
 				if leak := sasLeak(err.Error()); leak != "" {
 					t.Errorf("the SAS's %q in the error: %v", leak, err)
 				}
@@ -377,7 +377,7 @@ func TestCancelAfterHeaders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cc.next = headersThen(http.DefaultTransport, cancel)
 	_, err = c.List(ctx, &ListInput{Container: "c"})
-	if Classify(err) != objhttp.ClassCanceled || !errors.Is(err, context.Canceled) {
+	if Classify(err) != objhttp.ClassOther || !errors.Is(err, context.Canceled) {
 		t.Errorf("%v (class %q)", err, Classify(err))
 	}
 	if msg := cc.closedOnce(1); msg != "" {

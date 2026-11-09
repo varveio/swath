@@ -148,14 +148,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Throttle reports a rate-limit answer.
-func (e *Error) Throttle() bool {
-	return e.Status == 429 || e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded"
-}
-
-// Retryable reports an answer worth repeating.
-func (e *Error) Retryable() bool { return e.Throttle() || e.Status >= 500 || e.Status == 408 }
-
 // Counters are what the client did.
 type Counters = objhttp.Counts
 
@@ -198,7 +190,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: Answer}}
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
 	// client: the resume identity freezes the endpoint the requests go to

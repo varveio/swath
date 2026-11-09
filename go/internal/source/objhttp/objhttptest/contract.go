@@ -55,10 +55,10 @@ const (
 
 // Contract runs the shared retry and classification cases against a
 // client: which failures are retried and counted (retries, throttles,
-// timeouts, parse failures), exhaustion with its attempt count and class,
+// timeouts, parse failures), exhaustion with its attempt count and stored signals,
 // requeue eligibility, failures that are not retried, and cancellation in
 // a backoff.
-func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(error) objhttp.Class) {
+func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 	for _, c := range []struct {
 		name     string
 		answers  []answer // per attempt; the last repeats
@@ -72,11 +72,11 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 		{"garbled body, then a page", []answer{garbled, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1, ParseFailures: 1}, "", false},
 		{"timeout, then a page", []answer{slow, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 1}, "", false},
 		{"cut connection, then a page", []answer{cut, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1}, "", false},
-		{"5xx exhausted", []answer{server}, 3, objhttp.Counts{Attempts: 3, Retries: 2}, objhttp.ClassServer, true},
+		{"5xx exhausted", []answer{server}, 3, objhttp.Counts{Attempts: 3, Retries: 2}, objhttp.ClassOther, true},
 		// the exhausted call's last throttle or timeout is counted too
 		{"throttle exhausted", []answer{throttle}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Throttles: 2}, objhttp.ClassThrottle, true},
 		{"timeout exhausted", []answer{slow}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 2}, objhttp.ClassTimeout, true},
-		{"cut exhausted", []answer{cut}, 2, objhttp.Counts{Attempts: 2, Retries: 1}, objhttp.ClassTransport, true},
+		{"cut exhausted", []answer{cut}, 2, objhttp.Counts{Attempts: 2, Retries: 1}, objhttp.ClassOther, true},
 		{"garbled exhausted", []answer{garbled}, 2, objhttp.Counts{Attempts: 2, Retries: 1, ParseFailures: 2}, objhttp.ClassParse, true},
 		{"denied, not retried", []answer{denied}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassAccessDenied, false},
 	} {
@@ -132,10 +132,20 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 				}
 				return
 			}
+			var f *objhttp.Failure
 			var ex *objhttp.ExhaustedError
-			if classify(err) != c.class || errors.As(err, &ex) != c.class.Transient() ||
-				(ex != nil && ex.Attempts != c.attempts) || objhttp.Requeue(classify)(err) != c.requeue {
-				t.Fatalf("err %v: class %q exhausted %v, want %q (requeue %v)", err, classify(err), ex != nil, c.class, c.requeue)
+			if !errors.As(err, &f) {
+				t.Fatalf("error has no normalized failure: %v", err)
+			}
+			if f.Class != c.class || f.Transient != c.requeue ||
+				f.Throttle != (c.want.Throttles > 0) || f.Timeout != (c.want.Timeouts > 0) ||
+				errors.As(err, &ex) != c.requeue || (ex != nil && (ex.Attempts != c.attempts || ex.Err != f)) ||
+				objhttp.Requeue(err) != c.requeue || objhttp.Normalize(err) != f {
+				t.Fatalf("err %v: failure %+v exhausted %v, want %q (requeue %v)", err, f, ex != nil, c.class, c.requeue)
+			}
+			last := c.answers[len(c.answers)-1]
+			if (last == throttle || last == server || last == denied) && (f.Status == 0 || f.Code == "" || (last == denied && f.Status != 403)) {
+				t.Fatalf("service answer lost its HTTP status: %+v", f)
 			}
 		})
 	}
@@ -179,8 +189,8 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client, classify func(e
 		defer cancel()
 		start := time.Now()
 		err := cl.List(ctx)
-		if time.Since(start) > 2*time.Second || classify(err) != objhttp.ClassCanceled || objhttp.Requeue(classify)(err) {
-			t.Fatalf("err %v class %q after %s", err, classify(err), time.Since(start))
+		if time.Since(start) > 2*time.Second || !errors.Is(err, context.DeadlineExceeded) || objhttp.Requeue(err) {
+			t.Fatalf("err %v class %q after %s", err, objhttp.Classify(err), time.Since(start))
 		}
 	})
 }

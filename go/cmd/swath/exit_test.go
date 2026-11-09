@@ -103,12 +103,12 @@ func TestExitCodes(t *testing.T) {
 	if c := code(exec.Command(bin, "list").Run()); c != exitUsage {
 		t.Fatalf("usage: exit %d", c)
 	}
-	// 1: fatal, with the provider's cause.
+	// 1: fatal; an unlabeled service refusal retains its status and code.
 	fatal := filepath.Join(t.TempDir(), "fatal")
 	if c := code(exec.Command(bin, s3args("nobucket", fatal)...).Run()); c != exitFatal {
 		t.Fatalf("fatal: exit %d", c)
 	}
-	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "no_such_bucket" {
+	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "" || !strings.Contains(o.Message, "404") || !strings.Contains(o.Message, "NoSuchBucket") {
 		t.Fatalf("fatal: %+v", o)
 	}
 	// 1: a committed dataset with partial coverage (a key limit) never exits 0.

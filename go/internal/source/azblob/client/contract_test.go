@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
 )
 
@@ -37,5 +36,5 @@ func TestRetryContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		return contractClient{c}
-	}, func(err error) objhttp.Class { return Classify(err) })
+	})
 }

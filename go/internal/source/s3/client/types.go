@@ -110,27 +110,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Throttle reports whether the server asked the client to slow down.
-func (e *Error) Throttle() bool {
-	switch e.Code {
-	case "SlowDown", "Throttling", "ThrottlingException", "RequestLimitExceeded", "TooManyRequestsException", "RequestThrottled":
-		return true
-	}
-	return e.Status == 429 || e.Status == 503
-}
-
-// Retryable reports whether the request may succeed when repeated.
-func (e *Error) Retryable() bool {
-	if e.Throttle() || e.Status >= 500 {
-		return true
-	}
-	switch e.Code {
-	case "RequestTimeout", "InternalError", "ServiceUnavailable":
-		return true
-	}
-	return false
-}
-
 // Validate checks the continuation contract, including supplied clients.
 // A key-only marker is valid at a prefix boundary; at the last version's
 // key it would skip the rest of that key's history.

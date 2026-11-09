@@ -58,9 +58,8 @@ type TooLargeError struct{ Limit int64 }
 func (e *TooLargeError) Error() string { return fmt.Sprintf("response larger than %d bytes", e.Limit) }
 
 // Cause returns the cause of the *GuardError err holds (through its Unwrap
-// chain), or err unchanged when it holds none. An adapter calls it before
-// Classify so the url.Error around the failure is not mistaken for a
-// transport failure.
+// chain), or err unchanged when it holds none. Normalize uses it so the
+// url.Error around the failure is not mistaken for a transport failure.
 func Cause(err error) error {
 	var ge *GuardError
 	if errors.As(err, &ge) {

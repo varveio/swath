@@ -4,8 +4,12 @@
 package objhttp
 
 import (
+	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,20 +37,20 @@ func TestCanonicalRoute(t *testing.T) {
 // still live) classifies as timeout or transport, not canceled, and its
 // exhaustion is requeued; a refused credential stays auth.
 func TestCredentialDeadlineIsRequeued(t *testing.T) {
-	none := func(error) (Class, bool) { return "", false }
-	class := func(err error) Class { return Classify(err, none) }
 	for _, c := range []struct {
-		err  error
-		want Class
+		err                error
+		transient, timeout bool
+		class              Class
 	}{
-		{&CredentialError{Transient: true, Err: fmt.Errorf("token: %w", context.DeadlineExceeded)}, ClassTransport},
-		{&CredentialError{Transient: true, Timeout: true, Err: fmt.Errorf("wait: %w", context.DeadlineExceeded)}, ClassTimeout},
-		{&CredentialError{Err: fmt.Errorf("invalid_grant: %w", context.DeadlineExceeded)}, ClassAuth},
-		{fmt.Errorf("list: %w", context.Canceled), ClassCanceled},
+		{&CredentialError{Transient: true, Err: fmt.Errorf("token: %w", context.DeadlineExceeded)}, true, false, ClassOther},
+		{&CredentialError{Transient: true, Timeout: true, Err: fmt.Errorf("wait: %w", context.DeadlineExceeded)}, true, true, ClassTimeout},
+		{&CredentialError{Err: fmt.Errorf("invalid_grant: %w", context.DeadlineExceeded)}, false, false, ClassAuth},
+		{fmt.Errorf("list: %w", context.Canceled), false, false, ClassOther},
 	} {
-		ex := &ExhaustedError{Attempts: 9, Err: c.err}
-		if got := class(ex); got != c.want || Requeue(class)(ex) != c.want.Transient() {
-			t.Errorf("%v: class %q requeue %v, want %q", c.err, got, Requeue(class)(ex), c.want)
+		f := Normalize(c.err)
+		ex := &ExhaustedError{Attempts: 9, Err: f}
+		if f.Transient != c.transient || f.Timeout != c.timeout || f.Class != c.class || Requeue(ex) != c.transient || Normalize(ex) != f {
+			t.Errorf("%v: failure %+v requeue %v", c.err, f, Requeue(ex))
 		}
 	}
 }
@@ -121,8 +125,7 @@ func TestAdmissionFeatures(t *testing.T) {
 type waitAnswer time.Duration
 
 func (w waitAnswer) Error() string             { return "busy" }
-func (w waitAnswer) Throttle() bool            { return true }
-func (w waitAnswer) Retryable() bool           { return true }
+func (w waitAnswer) Failure() Failure          { return Failure{Transient: true, Throttle: true} }
 func (w waitAnswer) RetryAfter() time.Duration { return time.Duration(w) }
 
 // TestRetryAfterWait: a failure carrying the service's wait (RetryAfter)
@@ -154,5 +157,90 @@ func TestRetryAfterWait(t *testing.T) {
 		if d := times[1].Sub(start); d < c.min || d > c.max {
 			t.Errorf("%v: second attempt after %s, want %s to %s", c.err, d, c.min, c.max)
 		}
+	}
+}
+
+// observedAnswer catches repeated provider classification even when the
+// resulting signals would otherwise look identical to the caller.
+type observedAnswer struct{ calls int }
+
+func (a *observedAnswer) Error() string { return "safe throttle answer" }
+func (a *observedAnswer) Failure() Failure {
+	a.calls++
+	return Failure{Transient: true, Throttle: true, Status: 429, Code: "busy"}
+}
+
+// TestNormalizedFailureShared: admission, accounting, exhaustion, report
+// and requeue must share the attempt's value, without consulting it again.
+func TestNormalizedFailureShared(t *testing.T) {
+	a := new(observedAnswer)
+	l := NewLimiter(8)
+	var counts Counters
+	_, err := Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &counts, func() (int, error) { return 0, a })
+	var f *Failure
+	var ex *ExhaustedError
+	if !errors.As(err, &f) || !errors.As(err, &ex) || ex.Err != f || Normalize(err) != f || Normalize(f) != f ||
+		!Requeue(err) || Classify(err) != ClassThrottle || f.Status != 429 || f.Code != "busy" || !errors.Is(err, a) {
+		t.Fatalf("normalized exhaustion: %v, failure %+v", err, f)
+	}
+	if a.calls != 1 || counts.Load().Throttles != 1 || l.Counts().Tolerated != 1 {
+		t.Fatalf("classification calls %d, counts %+v, limiter %+v", a.calls, counts.Load(), l.Counts())
+	}
+	if Requeue(&ExhaustedError{Attempts: 1, Err: a}) {
+		t.Fatal("a raw error has no stored requeue decision")
+	}
+}
+
+// TestNormalizePrecedence: SDK/URL wrappers cannot turn a terminal guard
+// rejection or an invalid page into a retry, or conceal a parse failure.
+func TestNormalizePrecedence(t *testing.T) {
+	guard := func(err error) error {
+		return fmt.Errorf("SDK wrapper: %w", &url.Error{Op: "Get", URL: "redacted", Err: &GuardError{Err: err}})
+	}
+	for _, c := range []struct {
+		name                         string
+		err                          error
+		transient, throttle, timeout bool
+		is                           error
+	}{
+		{"invalid before parse and deadline", errors.Join(ErrInvalidPage, ErrSyntax, ErrTimeout), false, false, false, ErrInvalidPage},
+		{"parse before nested deadline", errors.Join(ErrSyntax, context.DeadlineExceeded), true, false, false, ErrSyntax},
+		{"parse before attempt deadline", errors.Join(ErrSyntax, ErrTimeout), true, false, false, ErrSyntax},
+		{"credentials before invalid", &CredentialError{Err: errors.Join(ErrInvalidPage, ErrSyntax)}, false, false, false, ErrInvalidPage},
+		{"credential timeout before nested deadline", &CredentialError{Transient: true, Timeout: true, Err: context.DeadlineExceeded}, true, false, true, context.DeadlineExceeded},
+		{"wrapped guard cap", guard(&TooLargeError{Limit: 10}), false, false, false, nil},
+		{"wrapped guard gzip", guard(gzip.ErrHeader), false, false, false, gzip.ErrHeader},
+		{"wrapped guard parse", guard(ErrSyntax), true, false, false, ErrSyntax},
+		{"wrapped guard invalid", guard(ErrInvalidPage), false, false, false, ErrInvalidPage},
+		{"guard cap before deadline", errors.Join(ErrTimeout, guard(&TooLargeError{Limit: 10})), false, false, false, nil},
+		{"guard gzip before deadline", errors.Join(ErrTimeout, guard(gzip.ErrHeader)), false, false, false, gzip.ErrHeader},
+		{"guard cut body", guard(io.ErrUnexpectedEOF), true, false, false, io.ErrUnexpectedEOF},
+		{"guard cut body deadline", errors.Join(ErrTimeout, guard(io.ErrUnexpectedEOF)), true, false, true, io.ErrUnexpectedEOF},
+		{"attempt deadline", errors.Join(ErrTimeout, context.DeadlineExceeded), true, false, true, ErrTimeout},
+		{"caller cancellation", fmt.Errorf("list: %w", context.Canceled), false, false, false, context.Canceled},
+		{"caller deadline", context.DeadlineExceeded, false, false, false, context.DeadlineExceeded},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := Normalize(c.err)
+			if f.Transient != c.transient || f.Throttle != c.throttle || f.Timeout != c.timeout || (c.is != nil && !errors.Is(f, c.is)) {
+				t.Fatalf("failure %+v from %v", f, c.err)
+			}
+		})
+	}
+}
+
+// TestCallerCancellationPrecedesCredentialFailure: a canceled caller must
+// not report or feed back the credential service's simultaneous timeout.
+func TestCallerCancellationPrecedesCredentialFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var counts Counters
+	_, err := Do(ctx, Retry{MaxAttempts: 3, Limiter: NewLimiter(8)}, &counts, func() (int, error) {
+		cancel()
+		return 0, &CredentialError{Transient: true, Timeout: true, Err: context.DeadlineExceeded}
+	})
+	var f *Failure
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &f) || f.Transient || f.Timeout || Requeue(err) || counts.Load().Timeouts != 0 {
+		t.Fatalf("canceled caller: %v (%+v), counts %+v", err, f, counts.Load())
 	}
 }

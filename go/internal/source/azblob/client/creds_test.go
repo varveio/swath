@@ -202,7 +202,7 @@ func TestEntraSlowRefreshBounded(t *testing.T) {
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(Classify)(err) {
+	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
 		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout", Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 {
@@ -326,7 +326,7 @@ func TestEntraDefaultChain(t *testing.T) {
 		{name: "found", cred: &countingCredential{}},
 		{name: "absent", class: objhttp.ClassAuth},
 		{name: "refused", cred: &countingCredential{err: refusedErr}, class: objhttp.ClassAuth},
-		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, class: objhttp.ClassTransport},
+		{name: "token endpoint 503", cred: &countingCredential{err: &azidentity.AuthenticationFailedError{RawResponse: &http.Response{StatusCode: 503}}}, class: objhttp.ClassOther},
 		{name: "does not build", buildErr: errors.New("invalid AZURE_TOKEN_CREDENTIALS"), fails: true},
 	} {
 		t.Run(x.name, func(t *testing.T) {

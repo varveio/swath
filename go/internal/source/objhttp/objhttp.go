@@ -27,47 +27,27 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 )
 
-// Class is what kind of failure an error is, for the caller's decision:
-// retry the request later or stop the run. It is the run outcome's cause.
+// Class is a documented diagnostic label for the run report. Control
+// decisions use Failure's signals, independently of this label.
 type Class string
 
 const (
-	ClassAuth         Class = "auth"           // credentials missing, unusable, refused or not issued
-	ClassAccessDenied Class = "access_denied"  // the principal may not list this bucket
-	ClassNoSuchBucket Class = "no_such_bucket" // the bucket does not exist (or not at this endpoint)
-	ClassRedirect     Class = "redirect"       // the bucket is in another region or endpoint
-	ClassThrottle     Class = "throttle"       // the service asked the client to slow down
-	ClassTimeout      Class = "timeout"        // an attempt exceeded the request timeout
-	ClassServer       Class = "server"         // another 5xx
-	ClassTransport    Class = "transport"      // the connection failed or was cut
-	ClassParse        Class = "parse"          // a 200 whose body did not parse
-	ClassInvalidPage  Class = "invalid_page"   // a page that breaks the listing contract (provider-detected)
-	ClassUnsupported  Class = "unsupported"    // a source or a name the tool refuses (source.ErrUnsupported): the run is refused, its journal kept
-	ClassCanceled     Class = "canceled"       // the caller's context ended
-	ClassOther        Class = "other"
+	ClassAuth         Class = "auth"
+	ClassAccessDenied Class = "access_denied"
+	ClassThrottle     Class = "throttle"
+	ClassTimeout      Class = "timeout"
+	ClassParse        Class = "parse"
+	ClassUnsupported  Class = "unsupported"
+	ClassOther        Class = "other" // no provider label in the run report
 )
 
-// Transient reports whether a request that failed this way may succeed
-// later: the caller retries it after a backoff and never fails the run on
-// it (liveness is the command's watchdog's decision).
-func (c Class) Transient() bool {
-	switch c {
-	case ClassThrottle, ClassTimeout, ClassServer, ClassTransport, ClassParse:
-		return true
-	}
-	return false
-}
-
-// Answer is a service's error answer, as a client parsed it.
+// Answer supplies a provider's signals and safe diagnostic metadata.
 type Answer interface {
 	error
-	Throttle() bool  // the service asked the client to slow down
-	Retryable() bool // the request may succeed when repeated
+	Failure() Failure
 }
 
-// RetryAfter is a failure carrying the service's own wait before the
-// attempt is repeated (an Azure Retry-After header): Do waits that long
-// when it exceeds the backoff it drew.
+// RetryAfter carries the service's wait before another attempt.
 type RetryAfter interface {
 	error
 	RetryAfter() time.Duration
@@ -117,7 +97,7 @@ var (
 // (actx) ran out of its own time and the caller's (ctx) did not.
 func Timeout(actx, ctx context.Context, limit time.Duration, err error) error {
 	if ctx.Err() == nil && errors.Is(actx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w after %s: %v", ErrTimeout, limit, err)
+		return fmt.Errorf("%w after %s: %w", ErrTimeout, limit, err)
 	}
 	return err
 }
@@ -134,110 +114,107 @@ func Transport(err error) bool {
 		errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "connection reset")
 }
 
-// Failure is a failed attempt normalized once, for every decision taken on
-// it: whether the client repeats it, its cause (the outcome's class), and
-// the admission signal the limiter takes from it.
+// Failure is the one normalized error shared by admission, accounting,
+// retry, reporting and requeue. Cause has already passed the provider's
+// redaction boundary; an unsanitized SDK error must not be retained here.
 type Failure struct {
-	Class    Class
-	Retry    bool // the client repeats the attempt (after a backoff)
-	Throttle bool // the service asked the client to slow down
-	Timeout  bool // the attempt, or its credential, ran out of time
+	Transient bool // the attempt may succeed when repeated
+	Throttle  bool // the service asked the client to slow down
+	Timeout   bool // an attempt or credential deadline
+	Status    int
+	Code      string // provider code or reason
+	Class     Class  // diagnostic only
+	Cause     error
+	Wait      time.Duration // service Retry-After, already bounded by the provider
 }
 
-// Normalize is err's Failure, with answer the client's mapping of its own
-// service answers (nil: a generic one from the Answer interface). The
-// admission signal follows the class, so an answer a client maps to a
-// timeout (a GCS 408, an S3 RequestTimeout) slows the limiter's growth as
-// an attempt past the request timeout does.
-func Normalize(err error, answer func(error) (Class, bool)) Failure {
-	if answer == nil {
-		answer = genericAnswer
+func (f *Failure) Error() string { return f.Cause.Error() }
+func (f *Failure) Unwrap() error { return f.Cause }
+
+// Normalize computes a failed attempt's decisions once. Already normalized
+// errors (including exhausted calls) return the same value. Caller
+// cancellation is resolved by Do before credential-internal deadlines;
+// credentials, invalid pages and parse failures precede Guard causes and
+// attempt deadlines. Guard wrappers never become transport signals merely
+// because http.Client's url.Error implements net.Error.
+func Normalize(err error) *Failure {
+	if err == nil {
+		return nil
 	}
-	c := Classify(err, answer)
-	return Failure{Class: c, Retry: retryable(err), Throttle: c == ClassThrottle, Timeout: c == ClassTimeout}
-}
-
-// genericAnswer maps an Answer by its own predicates.
-func genericAnswer(err error) (Class, bool) {
-	var a Answer
-	switch {
-	case !errors.As(err, &a):
-		return "", false
-	case a.Throttle():
-		return ClassThrottle, true
-	case a.Retryable():
-		return ClassServer, true
+	if f, ok := err.(*Failure); ok {
+		return f
 	}
-	return ClassOther, true
-}
-
-// retryable reports whether the client repeats a failed attempt.
-func retryable(err error) bool {
+	// A refusal may wrap an already normalized admission failure.
+	if errors.Is(err, source.ErrUnsupported) {
+		return &Failure{Class: ClassUnsupported, Cause: err}
+	}
+	var f *Failure
+	if errors.As(err, &f) {
+		return f
+	}
+	cause := Cause(err)
+	guarded := cause != err
+	deadline := errors.Is(err, ErrTimeout)
+	f = &Failure{Class: ClassOther, Cause: cause}
 	var ce *CredentialError
 	var a Answer
+	var cap *TooLargeError
 	switch {
-	case errors.As(err, &ce):
-		return ce.Transient
-	case errors.As(err, &a):
-		return a.Retryable()
-	case errors.Is(err, ErrTimeout), errors.Is(err, ErrSyntax):
-		return true
-	}
-	return Transport(err)
-}
-
-// Classify returns err's class: a credential failure (auth; one that may
-// pass, such as a token endpoint's outage, is timeout or transport, so that
-// its exhaustion is requeued like any other and never fails a run), the
-// caller's cancellation, a contract break, then the service's answer (answer, the
-// client's mapping of its own Answer type; ok false when err holds none),
-// a parse failure, an attempt timeout, a transport failure, other.
-func Classify(err error, answer func(error) (Class, bool)) Class {
-	var ce *CredentialError
-	switch {
-	case err == nil:
-		return ""
-	case errors.Is(err, source.ErrUnsupported):
-		// before the answer it may carry: an account whose namespace
-		// cannot be read is refused as unsupported, whatever the answer
-		return ClassUnsupported
-	case errors.As(err, &ce):
-		// before the context check: a credential failure may wrap a
-		// deadline (a token exchange's own timeout) without the caller's
-		// context having ended (Do returns the caller's cancellation bare)
-		switch {
-		case !ce.Transient:
-			return ClassAuth
-		case ce.Timeout:
-			return ClassTimeout
+	case errors.As(cause, &ce):
+		f.Transient, f.Timeout = ce.Transient, ce.Timeout
+		if !ce.Transient {
+			f.Class = ClassAuth
 		}
-		return ClassTransport
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return ClassCanceled
-	case errors.Is(err, ErrInvalidPage):
-		return ClassInvalidPage
+	case errors.Is(cause, ErrInvalidPage):
+		return f
+	case errors.Is(cause, ErrSyntax):
+		f.Transient, f.Class = true, ClassParse
+	case errors.Is(cause, context.Canceled), !deadline && errors.Is(cause, context.DeadlineExceeded):
+		return f
+	case errors.As(cause, &cap):
+		return f
+	case errors.As(cause, &a):
+		*f = a.Failure()
+		f.Cause = cause
+	case guarded:
+		// A rejected envelope/cap is terminal. A failed body read can
+		// still be a transport fault, using only the Guard's cause.
+		f.Transient = Transport(cause)
+		f.Timeout = f.Transient && deadline
+	case deadline:
+		f.Transient, f.Timeout = true, true
+	case Transport(cause):
+		f.Transient = true
 	}
-	if c, ok := answer(err); ok {
-		return c
+	if f.Throttle {
+		f.Class = ClassThrottle
+	} else if f.Timeout {
+		f.Class = ClassTimeout
+	} else if f.Class == "" {
+		f.Class = ClassOther
 	}
-	switch {
-	case errors.Is(err, ErrSyntax):
-		return ClassParse
-	case errors.Is(err, ErrTimeout):
-		return ClassTimeout
-	case Transport(err):
-		return ClassTransport
+	var ra RetryAfter
+	if errors.As(cause, &ra) {
+		f.Wait = ra.RetryAfter()
 	}
-	return ClassOther
+	return f
 }
 
-// Requeue reports a transient failure whose client retries were exhausted:
-// the range engine asks the page again (keyrange.Description.Requeue).
-func Requeue(class func(error) Class) func(error) bool {
-	return func(err error) bool {
-		var ex *ExhaustedError
-		return errors.As(err, &ex) && class(err).Transient()
+// Classify reads the diagnostic label, reusing the stored normalization.
+// It also accepts raw construction errors, before there is a retry loop.
+func Classify(err error) Class {
+	if f := Normalize(err); f != nil {
+		return f.Class
 	}
+	return ""
+}
+
+// Requeue reads the exhausted attempt's stored decision. A diagnostic
+// label (or a raw error merely wrapped as exhausted) cannot authorize it.
+func Requeue(err error) bool {
+	var ex *ExhaustedError
+	var f *Failure
+	return errors.As(err, &ex) && errors.As(ex.Err, &f) && f.Transient
 }
 
 // Retry is a client's retry policy and admission. Zero values take the
@@ -251,9 +228,6 @@ type Retry struct {
 	// Rate, if set, caps attempts per second (Rate): each takes a token
 	// after its permit.
 	Rate *Rate
-	// Answer is the client's mapping of its service answers to classes
-	// (Normalize; nil: the generic one).
-	Answer func(error) (Class, bool)
 }
 
 // Defaults fills the zero values.
@@ -280,39 +254,44 @@ func (r *Retry) Defaults() {
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, admitted, err := admit(ctx, r, attempt)
-		if err == nil {
+		v, admitted, f := admit(ctx, r, attempt)
+		if f == nil {
 			c.answered.Add(1)
 			return v, nil
 		}
-		if ctx.Err() != nil || !admitted {
-			return zero, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			if f.Cause == err {
+				return zero, f
+			}
+			return zero, Normalize(err)
 		}
-		f := Normalize(err, r.Answer)
+		if !admitted {
+			return zero, f
+		}
 		if f.Throttle {
 			c.throttles.Add(1)
 		}
 		if f.Timeout {
 			c.timeouts.Add(1)
 		}
-		if !f.Retry || n >= r.MaxAttempts {
-			if f.Retry {
-				err = &ExhaustedError{Attempts: n, Err: err}
+		if f.Class == ClassParse {
+			c.parseFailures.Add(1)
+		}
+		if !f.Transient || n >= r.MaxAttempts {
+			if f.Transient {
+				return zero, &ExhaustedError{Attempts: n, Err: f}
 			}
-			return zero, err
+			return zero, f
 		}
 		c.retries.Add(1)
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
 		wait := rand.N(d) + 1
-		var ra RetryAfter
-		if errors.As(err, &ra) {
-			wait = max(wait, ra.RetryAfter())
-		}
+		wait = max(wait, f.Wait)
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return zero, ctx.Err()
+			return zero, Normalize(ctx.Err())
 		case <-t.C:
 		}
 	}
@@ -321,39 +300,39 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 // admit runs one attempt under l's admission (none when l is nil), then
 // rt's cap (none when nil); admitted is false when the caller's context
 // ended while it waited.
-func admit[T any](ctx context.Context, r Retry, attempt func() (T, error)) (v T, admitted bool, err error) {
+func admit[T any](ctx context.Context, r Retry, attempt func() (T, error)) (v T, admitted bool, f *Failure) {
 	l, rt := r.Limiter, r.Rate
-	if l == nil {
-		if err := rt.Wait(ctx); err != nil {
-			return v, false, err
+	if l != nil {
+		if err := l.Acquire(ctx); err != nil {
+			return v, false, Normalize(err)
 		}
-		v, err = attempt()
-		return v, true, err
-	}
-	if err := l.Acquire(ctx); err != nil {
-		return v, false, err
 	}
 	if err := rt.Wait(ctx); err != nil {
-		l.Release(Ignored, 0)
-		return v, false, err
+		if l != nil {
+			l.Release(Ignored, 0)
+		}
+		return v, false, Normalize(err)
 	}
 	t0 := time.Now() // after the waits: admission is not latency
-	// The permit goes back however the attempt ends, a panic included
-	// (as Ignored: no signal); a recovered caller keeps a working limiter.
+	// Return the permit on panic too, without an outcome signal.
 	o := Ignored
-	defer func() { l.Release(o, time.Since(t0)) }()
-	v, err = attempt()
-	if err == nil {
-		o = Success
-		return v, true, nil
+	if l != nil {
+		defer func() { l.Release(o, time.Since(t0)) }()
 	}
-	switch f := Normalize(err, r.Answer); {
+	v, err := attempt()
+	if ctx.Err() != nil {
+		return v, true, Normalize(ctx.Err())
+	}
+	f = Normalize(err)
+	switch {
+	case f == nil:
+		o = Success
 	case f.Throttle:
 		o = Throttled
 	case f.Timeout:
 		o = TimedOut
 	}
-	return v, true, err
+	return v, true, f
 }
 
 // Counts are what a client did, for the run summary.
@@ -503,9 +482,6 @@ func (c *Counters) Live() Live {
 	return Live{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Timeouts: c.timeouts.Load(), Inflight: c.inflight.Load(),
 		InflightMax: c.inflightMax.Load(), InflightNs: c.inflightNs.Load()}
 }
-
-// ParseFailure counts a 200 whose body did not parse.
-func (c *Counters) ParseFailure() { c.parseFailures.Add(1) }
 
 // Load returns the counts so far.
 func (c *Counters) Load() Counts {
