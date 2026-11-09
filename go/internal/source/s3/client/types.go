@@ -1,12 +1,6 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package client is a small S3 client for the listing calls swath makes,
-// ListObjectsV2 and ListObjectVersions: SigV4 signing (UNSIGNED-PAYLOAD), credentials from the
-// environment and the shared AWS files, anonymous access, counted retries
-// with jittered exponential backoff, and a response parser that allocates
-// per page rather than per object. It replaces the AWS SDK in the binary;
-// the SDK remains a test-only oracle.
 package client
 
 import "fmt"

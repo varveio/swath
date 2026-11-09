@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sdkclient
+package client
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -49,37 +48,29 @@ func serveVersions(t *testing.T, body string) string {
 }
 
 // TestVersionsKeepWireOrder: a <Version>, <DeleteMarker>, <Version> run of
-// one key with equal timestamps comes back in wire order through every
-// decoder, as through the hand-rolled client: the "null" version ID
-// verbatim, the key, NextKeyMarker and the echoed Prefix and KeyMarker
-// decoded once ('+' a space), the NextVersionIdMarker verbatim.
+// one key with equal timestamps comes back in wire order: the "null"
+// version ID verbatim, the key, NextKeyMarker and the echoed Prefix and
+// KeyMarker decoded once ('+' a space), the NextVersionIdMarker verbatim.
 func TestVersionsKeepWireOrder(t *testing.T) {
 	s3test.NoCredentials(t)
-	url := serveVersions(t, versionsBody("VDV"))
-	for _, d := range decoders {
-		hand, sdk := pair(t, testConfig(url), d.dec, nil)
-		want, err := hand.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"})
-		if err != nil {
-			t.Fatal(err)
+	c := newTest(t, testConfig(serveVersions(t, versionsBody("VDV"))))
+	got, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, err := ParseVersions([]byte(versionsBody("VDV"))); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("client %+v\nscanner %+v (%v)", got, want, err)
+	}
+	var kinds string
+	for _, v := range got.Versions {
+		if v.Key != "a+b c/%" || v.Mtime != got.Versions[0].Mtime {
+			t.Fatalf("%+v", v)
 		}
-		got, err := sdk.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s:\n        sdk %+v\nhand-rolled %+v", d.name, got, want)
-		}
-		var kinds string
-		for _, v := range got.Versions {
-			if v.Key != "a+b c/%" || v.Mtime != got.Versions[0].Mtime {
-				t.Fatalf("%s: %+v", d.name, v)
-			}
-			kinds += map[bool]string{false: "V", true: "D"}[v.DeleteMarker]
-		}
-		if kinds != "VDV" || got.Versions[0].VersionID != "null" || got.Versions[2].ETag != `"ev2"` ||
-			got.NextKeyMarker != "a+b c/%" || got.NextVersionIDMarker != "v+2%2F" || got.Prefix != "a+b c" || got.KeyMarker != "a%" {
-			t.Fatalf("%s: %s %+v", d.name, kinds, got)
-		}
+		kinds += map[bool]string{false: "V", true: "D"}[v.DeleteMarker]
+	}
+	if kinds != "VDV" || got.Versions[0].VersionID != "null" || got.Versions[2].ETag != `"ev2"` ||
+		got.NextKeyMarker != "a+b c/%" || got.NextVersionIDMarker != "v+2%2F" || got.Prefix != "a+b c" || got.KeyMarker != "a%" {
+		t.Fatalf("%s %+v", kinds, got)
 	}
 }
 
@@ -89,18 +80,16 @@ func TestVersionsKeepWireOrder(t *testing.T) {
 // no merge of it can give back the order S3 sent.
 func TestStockSDKLosesVersionsOrder(t *testing.T) {
 	s3test.NoCredentials(t)
-	stock := func(kinds string) *awss3.ListObjectVersionsOutput {
+	decode := func(kinds string) *awss3.ListObjectVersionsOutput {
 		t.Helper()
 		body := versionsBody(kinds)
-		c := awss3.New(awss3.Options{Region: "us-east-1", Credentials: aws.AnonymousCredentials{}, UsePathStyle: true,
-			BaseEndpoint: aws.String(serveVersions(t, body)), Retryer: aws.NopRetryer{}})
-		out, err := c.ListObjectVersions(context.Background(), &awss3.ListObjectVersionsInput{Bucket: aws.String("b")})
+		out, err := stock(serveVersions(t, body)).ListObjectVersions(context.Background(), &awss3.ListObjectVersionsInput{Bucket: aws.String("b")})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return out
 	}
-	vdv, vvd := stock("VDV"), stock("VVD")
+	vdv, vvd := decode("VDV"), decode("VVD")
 	if len(vdv.Versions) != 2 || len(vdv.DeleteMarkers) != 1 {
 		t.Fatalf("stock VDV: %d versions, %d delete markers", len(vdv.Versions), len(vdv.DeleteMarkers))
 	}
@@ -119,13 +108,9 @@ func TestStockSDKLosesVersionsOrder(t *testing.T) {
 	if !reflect.DeepEqual(shape(vdv), shape(vvd)) {
 		t.Fatalf("the stock outputs differ:\n%v\n%v", shape(vdv), shape(vvd))
 	}
-	for _, d := range decoders {
-		_, sdkVDV := pair(t, testConfig(serveVersions(t, versionsBody("VDV"))), d.dec, nil)
-		_, sdkVVD := pair(t, testConfig(serveVersions(t, versionsBody("VVD"))), d.dec, nil)
-		a, _ := sdkVDV.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"})
-		b, _ := sdkVVD.ListObjectVersions(context.Background(), &client.VersionsInput{Bucket: "b"})
-		if a == nil || b == nil || !a.Versions[1].DeleteMarker || !b.Versions[2].DeleteMarker {
-			t.Fatalf("%s: the adapter lost the order: %+v %+v", d.name, a, b)
-		}
+	a, _ := newTest(t, testConfig(serveVersions(t, versionsBody("VDV")))).ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
+	b, _ := newTest(t, testConfig(serveVersions(t, versionsBody("VVD")))).ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
+	if a == nil || b == nil || !a.Versions[1].DeleteMarker || !b.Versions[2].DeleteMarker {
+		t.Fatalf("the client lost the order: %+v %+v", a, b)
 	}
 }

@@ -1,23 +1,52 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
+// Package client is the S3 client for the listing calls swath makes,
+// ListObjectsV2 and ListObjectVersions, over the AWS SDK's service client
+// (service/s3), with the provider's wire types (ListInput, Page,
+// VersionPage).
+//
+// The SDK owns the request: serialization, endpoint resolution, signing,
+// transport and the decoding of error answers. Its retryer is
+// aws.NopRetryer: objhttp.Do is the one retry owner, and an attempt is an
+// application attempt (net/http may still replay an idempotent GET on a
+// reused connection below it). swath owns only what a 2xx answer means:
+// objhttp.Guard, under an HTTP client that follows no redirect, bounds the
+// body, reads a 2xx other than 200 as an answer, and captures a 200's body;
+// the SDK's deserializer is handed a minimal envelope in its place, and
+// this package's scanner decodes the captured body (ParseList,
+// ParseVersions: the operation's envelope, whole, or ErrSyntax), as Java
+// swath's StreamingListObjectsV2Interceptor does. Measured through the same
+// stack over a 1,000-entry page, the SDK's deserializer cost about 14 µs
+// per object and 100,000 allocations per page against the scanner's 1.8 µs
+// per object and 410 per page; an encoding/xml token walk cost about 12 µs
+// per object. The scanner also keeps <Version> and <DeleteMarker> entries
+// in wire order, which the SDK's two lists cannot give back
+// (TestStockSDKLosesVersionsOrder), and accepts XML forms the SDK's
+// deserializer refuses (CDATA within text, spaces around numbers:
+// xml_test.go); TestScannerConformsToSDKDecoder holds it to the SDK's
+// decoder. Credentials are this package's resolution (loadAuth, auth.go),
+// fetched before each attempt is counted.
 package client
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/aws/smithy-go/encoding/httpbinding"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/logging"
+	smithymiddleware "github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
@@ -30,8 +59,8 @@ type Config struct {
 	Region         string        // else the SDK's resolution (AWS_REGION, profile), else us-east-1
 	Endpoint       string        // custom endpoint URL (S3-compatible stores, tests)
 	PathStyle      bool          // https://host/bucket instead of https://bucket.host/
-	FIPS           bool          // s3-fips.REGION.amazonaws.com
-	DualStack      bool          // s3.dualstack.REGION.amazonaws.com (IPv6)
+	FIPS           bool          // s3-fips.REGION.amazonaws.com (AWS endpoints only)
+	DualStack      bool          // s3.dualstack.REGION.amazonaws.com (IPv6; AWS endpoints only)
 	Profile        string        // shared config profile (else AWS_PROFILE, else default)
 	Anonymous      bool          // never sign
 	RequestPayer   bool          // send x-amz-request-payer: requester (signed): the caller pays for a requester-pays bucket
@@ -40,7 +69,6 @@ type Config struct {
 	BaseBackoff    time.Duration // default 100 ms
 	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
-	Now            func() time.Time // signing clock; default time.Now
 	// Limiter, if set, admits every attempt (objhttp.Limiter).
 	Limiter *objhttp.Limiter
 	// Rate, if set, caps attempts per second (objhttp.Rate).
@@ -56,68 +84,122 @@ type Counters = objhttp.Counts
 // Client lists S3 buckets. It is safe for concurrent use.
 type Client struct {
 	cfg    Config
-	auth   *Auth
-	region string
-	base   *url.URL
-	http   *http.Client
-	note   string
-
+	auth   *auth
+	sdk    *awss3.Client
 	retry  objhttp.Retry
 	counts objhttp.Counters
-
-	buffers sync.Pool // *bytes.Buffer
 }
 
-// New resolves the region and credentials and builds the client; ctx bounds
-// the configuration load and the first credential lookup, not later
-// refreshes (each request's own context bounds those).
+// New resolves the region and credentials (loadAuth) and builds the SDK
+// client; ctx bounds the configuration load and the first credential
+// lookup, not later refreshes (each request's own context bounds those).
+// FIPS and dual-stack select among AWS endpoints: with a custom endpoint
+// they are not used.
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	if cfg.Now == nil {
-		cfg.Now = time.Now
-	}
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 30 * time.Second
 	}
-	a, err := LoadAuth(ctx, cfg)
+	a, err := loadAuth(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, auth: a, region: a.Region, note: a.Note,
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
-	c.retry.Defaults()
+	fips, dualStack := cfg.FIPS, cfg.DualStack
+	var base *string
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", cfg.Endpoint)
 		}
-		c.base = &url.URL{Scheme: u.Scheme, Host: u.Host, Path: strings.TrimSuffix(u.Path, "/")}
-	} else {
-		c.base = &url.URL{Scheme: "https", Host: awsHost(c.region, cfg.FIPS, cfg.DualStack)}
+		base, fips, dualStack = aws.String(cfg.Endpoint), false, false
 	}
-	// No redirect is followed, a supplied client's included (a copy): the
-	// route is fixed and a 3xx is an answer.
+	c := &Client{cfg: cfg, auth: a,
+		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff,
+			Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer},
+	}
+	c.retry.Defaults()
+
+	guard := &objhttp.Guard{Validate: validate}
+	if a.bearer != nil {
+		guard.Header = bearerHeader
+	}
+	// No redirect is followed, a supplied client's included (a copy): a 3xx
+	// is an answer. A plain *http.Client is used as given: the SDK wraps
+	// only its own BuildableClient (service/s3 api_client.go
+	// resolveHTTPClient).
+	var hc http.Client
 	if cfg.HTTPClient != nil {
-		hc := *cfg.HTTPClient
-		c.http = &hc
+		hc = *cfg.HTTPClient
+		guard.Next = hc.Transport
 	} else {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.MaxIdleConns, t.MaxIdleConnsPerHost = 0, 1024 // one keep-alive connection per worker
-		c.http = &http.Client{Transport: t}
+		guard.Next = t
 	}
-	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc.Transport = guard
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	c.sdk = awss3.New(awss3.Options{
+		Region:       a.region,
+		Credentials:  aws.AnonymousCredentials{}, // a signed attempt supplies its own (attempt)
+		HTTPClient:   &hc,
+		Retryer:      aws.NopRetryer{},
+		BaseEndpoint: base,
+		UsePathStyle: cfg.PathStyle,
+		EndpointOptions: awss3.EndpointResolverOptions{
+			UseFIPSEndpoint:      endpointState[aws.FIPSEndpointState](fips, aws.FIPSEndpointStateEnabled, aws.FIPSEndpointStateDisabled),
+			UseDualStackEndpoint: endpointState[aws.DualStackEndpointState](dualStack, aws.DualStackEndpointStateEnabled, aws.DualStackEndpointStateDisabled),
+		},
+		Logger:                      logging.Nop{},
+		DisableS3ExpressSessionAuth: aws.Bool(true), // directory buckets are refused before any request
+		RequestChecksumCalculation:  aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation:  aws.ResponseChecksumValidationWhenRequired,
+		APIOptions:                  []func(*smithymiddleware.Stack) error{prependUserAgent, allowGzip},
+	})
 	return c, nil
+}
+
+// prependUserAgent runs after the SDK builds its header: its AddUserAgent
+// helpers append products, and AddUserAgentKey also replaces the slash.
+func prependUserAgent(stack *smithymiddleware.Stack) error {
+	token := buildinfo.UserAgent()
+	return stack.Build.Insert(smithymiddleware.BuildMiddlewareFunc("SwathUserAgent", func(ctx context.Context, in smithymiddleware.BuildInput, next smithymiddleware.BuildHandler) (
+		smithymiddleware.BuildOutput, smithymiddleware.Metadata, error,
+	) {
+		req, ok := in.Request.(*smithyhttp.Request)
+		if !ok {
+			return smithymiddleware.BuildOutput{}, smithymiddleware.Metadata{}, fmt.Errorf("User-Agent: unexpected request %T", in.Request)
+		}
+		req.Header.Set("User-Agent", token+" "+req.Header.Get("User-Agent"))
+		return next.HandleBuild(ctx, in)
+	}), (&awsmiddleware.RequestUserAgent{}).ID(), smithymiddleware.After)
+}
+
+func endpointState[S any](on bool, enabled, disabled S) S {
+	if on {
+		return enabled
+	}
+	return disabled
+}
+
+// allowGzip removes the SDK's "Accept-Encoding: identity", so net/http
+// asks for gzip and decompresses: a body that does not decompress is a
+// read failure (class other), not a garbled document.
+func allowGzip(stack *smithymiddleware.Stack) error {
+	_, err := stack.Finalize.Remove("DisableAcceptEncodingGzip")
+	return err
 }
 
 // Credentials returns the resolved credentials' source (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) {
-	return c.auth.Source, c.auth.Anonymous
+	return c.auth.source, c.auth.anonymous
 }
 
 // Note is a one-time warning for the user, or "".
-func (c *Client) Note() string { return c.note }
+func (c *Client) Note() string { return c.auth.note }
 
-// Region is the signing region.
-func (c *Client) Region() string { return c.region }
+// Region is the signing region: as given, else as the environment or the
+// profile resolves it, else us-east-1.
+func (c *Client) Region() string { return c.auth.region }
 
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
@@ -139,17 +221,36 @@ func (c *Client) Counters() Counters {
 	return n
 }
 
+// The minimal envelopes the SDK decodes in place of a captured body.
+var (
+	emptyList     = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`)
+	emptyVersions = []byte(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListVersionsResult>`)
+)
+
 // ListObjectsV2 sends one ListObjectsV2 request, retrying retryable
 // failures with full-jitter exponential backoff (objhttp.Do).
 func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error) {
-	u := c.url(in)
+	req := &awss3.ListObjectsV2Input{Bucket: aws.String(in.Bucket), EncodingType: types.EncodingTypeUrl,
+		Prefix: str(in.Prefix), StartAfter: str(in.StartAfter), ContinuationToken: str(in.ContinuationToken), Delimiter: str(in.Delimiter)}
+	if in.MaxKeys > 0 {
+		req.MaxKeys = aws.Int32(int32(in.MaxKeys))
+	}
+	if in.FetchOwner {
+		req.FetchOwner = aws.Bool(true)
+	}
+	if c.cfg.RequestPayer {
+		req.RequestPayer = types.RequestPayerRequester
+	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*Page, error) {
-		return attempt(c, ctx, u, "ListObjectsV2", (*parser).parseList)
+		return attempt(c, ctx, emptyList, ParseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
+			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
+			return err
+		})
 	})
 }
 
-// ListObjectVersions sends one ListObjectVersions request (GET /?versions)
-// on ListObjectsV2's path: the same signing, admission, retries and
+// ListObjectVersions sends one ListObjectVersions request on
+// ListObjectsV2's path: the same signing, admission, retries and
 // classification. A 200 that is not a ListVersionsResult is a parse
 // failure (retried); a truncated page without a NextKeyMarker is an
 // invalid page (ErrInvalidPage, not retried).
@@ -157,233 +258,164 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if in.VersionIDMarker != "" && in.KeyMarker == "" {
 		return nil, errors.New("ListObjectVersions: a version-id marker without a key marker")
 	}
-	u := c.versionsURL(in)
+	req := &awss3.ListObjectVersionsInput{Bucket: aws.String(in.Bucket), EncodingType: types.EncodingTypeUrl,
+		Prefix: str(in.Prefix), Delimiter: str(in.Delimiter), KeyMarker: str(in.KeyMarker)}
+	if in.KeyMarker != "" {
+		req.VersionIdMarker = str(in.VersionIDMarker)
+	}
+	if in.MaxKeys > 0 {
+		req.MaxKeys = aws.Int32(int32(in.MaxKeys))
+	}
+	if c.cfg.RequestPayer {
+		req.RequestPayer = types.RequestPayerRequester
+	}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (*VersionPage, error) {
-		return attempt(c, ctx, u, "ListObjectVersions", (*parser).parseVersions)
+		return attempt(c, ctx, emptyVersions, ParseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
+			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
+			return err
+		})
 	})
 }
 
-// A ListObjectsV2 page of 1,000 keys of 1,024 bytes with owners and
-// checksums stays under 4 MiB (a ListObjectVersions page, with a version
-// ID per entry, a little more); a larger body is refused, not buffered.
-const (
-	maxResponse = 16 << 20
-	maxPooled   = 4 << 20
-)
-
-// route is the URL a bucket's requests go to, before the query: the bucket
-// in the path (path-style, a bucket that is not virtual-hostable, an IP
-// host) or in the host (virtual-host style).
-func (c *Client) route(bucket string) url.URL {
-	u := *c.base
-	if c.cfg.PathStyle || !virtualHostable(bucket) || net.ParseIP(hostname(u.Host)) != nil {
-		u.Path += "/" + bucket
-	} else {
-		u.Host = bucket + "." + u.Host
-		u.Path += "/"
+func str(s string) *string {
+	if s == "" {
+		return nil
 	}
-	return u
+	return aws.String(s)
 }
 
-// Route is the URL a bucket's listing requests go to, before the query:
-// it fixes the endpoint, its path bytes and the addressing style.
-func (c *Client) Route(bucket string) string {
-	u := c.route(bucket)
-	return u.String()
+type tokenKey struct{}
+
+// bearerHeader is the Guard's Header in bearer mode: the token attempt
+// fetched before the request was counted, carried by its context.
+func bearerHeader(req *http.Request) error {
+	tok, ok := req.Context().Value(tokenKey{}).(string)
+	if !ok {
+		return &objhttp.CredentialError{Source: "--bearer-token-command", Err: errors.New("no token for the request")}
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return nil
 }
 
-// url builds the request URL with the canonical query string (sorted keys,
-// SigV4 encoding), so the signature covers exactly what is sent.
-func (c *Client) url(in *ListInput) *url.URL {
-	u := c.route(in.Bucket)
-	var q query
-	if in.ContinuationToken != "" {
-		q.add("continuation-token", in.ContinuationToken)
-	}
-	if in.Delimiter != "" {
-		q.add("delimiter", in.Delimiter)
-	}
-	q.add("encoding-type", "url")
-	if in.FetchOwner {
-		q.add("fetch-owner", "true")
-	}
-	q.add("list-type", "2")
-	if in.MaxKeys > 0 {
-		q.add("max-keys", strconv.Itoa(in.MaxKeys))
-	}
-	if in.Prefix != "" {
-		q.add("prefix", in.Prefix)
-	}
-	if in.StartAfter != "" {
-		q.add("start-after", in.StartAfter)
-	}
-	u.RawQuery = q.String()
-	return &u
-}
-
-// versionsURL is url's ListObjectVersions form, its keys sorted the same
-// way.
-func (c *Client) versionsURL(in *VersionsInput) *url.URL {
-	u := c.route(in.Bucket)
-	var q query
-	if in.Delimiter != "" {
-		q.add("delimiter", in.Delimiter)
-	}
-	q.add("encoding-type", "url")
-	if in.KeyMarker != "" {
-		q.add("key-marker", in.KeyMarker)
-	}
-	if in.MaxKeys > 0 {
-		q.add("max-keys", strconv.Itoa(in.MaxKeys))
-	}
-	if in.Prefix != "" {
-		q.add("prefix", in.Prefix)
-	}
-	if in.KeyMarker != "" && in.VersionIDMarker != "" {
-		q.add("version-id-marker", in.VersionIDMarker)
-	}
-	q.add("versions", "")
-	u.RawQuery = q.String()
-	return &u
-}
-
-// query builds a canonical query string: the caller adds the keys in
-// sorted order.
-type query struct{ strings.Builder }
-
-func (q *query) add(k, v string) {
-	if q.Len() > 0 {
-		q.WriteByte('&')
-	}
-	q.WriteString(k)
-	q.WriteByte('=')
-	// SigV4's URI encoding: everything but A-Z a-z 0-9 - _ . ~ is
-	// percent-encoded with upper-case hex, "/" included.
-	q.WriteString(httpbinding.EscapePath(v, true))
-}
-
-// awsHost is the regional S3 endpoint host: FIPS and dual-stack variants,
-// and the amazonaws.com.cn partition for China regions. Access points and
-// other partitions are not supported yet; S3 Express directory buckets are
-// refused before any request (s3.New).
-func awsHost(region string, fips, dualStack bool) string {
-	h := "s3"
-	if fips {
-		h += "-fips"
-	}
-	if dualStack {
-		h += ".dualstack"
-	}
-	domain := "amazonaws.com"
-	if strings.HasPrefix(region, "cn-") {
-		domain = "amazonaws.com.cn"
-	}
-	return h + "." + region + "." + domain
-}
-
-func hostname(hostport string) string {
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		return h
-	}
-	return hostport
-}
-
-// virtualHostable: a DNS label that also works under the wildcard TLS
-// certificate (no dots).
-func virtualHostable(b string) bool {
-	if len(b) < 3 || len(b) > 63 {
-		return false
-	}
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-' && i > 0 && i < len(b)-1) {
-			return false
-		}
-	}
-	return true
-}
-
-// attempt sends one request for u and parses a 200's body with parse
-// (call names the operation in errors).
-func attempt[T any](c *Client, ctx context.Context, u *url.URL, call string, parse func(*parser, []byte) (*T, error)) (*T, error) {
+// attempt runs one SDK call under the request timeout. What the request
+// needs (the credentials, a bearer token) is fetched first, once: a failure
+// there is a *objhttp.CredentialError and not an attempt, and the call
+// signs with what was fetched (no second lookup inside the counted call).
+// The attempt is counted from just before the call until it returns (the
+// Guard has read and checked the body by then). The Guard captures a 200's
+// body and hands the SDK replace in its place; parse decodes the captured
+// body.
+func attempt[T any](c *Client, ctx context.Context, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(actx, http.MethodGet, u.String(), nil)
+	tok, creds, err := c.auth.ready(actx)
 	if err != nil {
 		return nil, err
 	}
-	req.Host = u.Host
-	req.Header.Set("User-Agent", buildinfo.UserAgent())
-	if c.cfg.RequestPayer {
-		req.Header.Set("X-Amz-Request-Payer", "requester") // before signing: it is a signed header
+	var opts []func(*awss3.Options)
+	if c.auth.credentials != nil {
+		opts = append(opts, func(o *awss3.Options) {
+			o.Credentials = aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return creds, nil })
+		})
 	}
-	if err := c.auth.sign(actx, req, c.cfg.Now()); err != nil {
-		return nil, err
+	cctx := actx
+	if c.auth.bearer != nil {
+		cctx = context.WithValue(cctx, tokenKey{}, tok)
 	}
-	defer c.counts.Attempt()()
-	resp, err := c.http.Do(req)
+	capture := &objhttp.Capture{Replace: replace}
+	cctx = objhttp.WithCapture(cctx, capture)
+	done := c.counts.Attempt()
+	err = call(cctx, opts...)
+	done()
+	if err == nil {
+		err = faults.At("response-read")
+	}
+	var v *T
+	if err == nil {
+		v, err = parse(capture.Body)
+	}
 	if err != nil {
-		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
-	}
-	defer resp.Body.Close()
-	buf, _ := c.buffers.Get().(*bytes.Buffer)
-	if buf == nil {
-		buf = new(bytes.Buffer)
-	}
-	defer func() {
-		if buf.Cap() <= maxPooled { // do not keep an outsized buffer
-			buf.Reset()
-			c.buffers.Put(buf)
-		}
-	}()
-	buf.Reset()
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(buf, io.LimitReader(resp.Body, 64<<10))
-		return nil, ResponseError(resp.StatusCode, resp.Header, buf.Bytes())
-	}
-	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxResponse+1)); err != nil {
-		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
-	}
-	if buf.Len() > maxResponse {
-		return nil, fmt.Errorf("%s response larger than %d bytes", call, maxResponse)
-	}
-	if err := faults.At("response-read"); err != nil {
-		return nil, err
-	}
-	page, err := pooled(buf.Bytes(), parse)
-	if err != nil {
-		if errors.Is(err, ErrSyntax) {
+		err = c.failure(actx, ctx, err)
+		if errors.Is(err, objhttp.ErrSyntax) {
 			c.counts.ParseFailure()
 		}
-		return nil, fmt.Errorf("%s response (%d bytes): %w", call, buf.Len(), err)
+		return nil, err
 	}
-	return page, nil
+	return v, nil
 }
 
-// ResponseError is the *Error of an answer other than 200: its status, the
-// code, message and request ID an <Error> body names (else the status text
-// without spaces as the code, and the X-Amz-Request-Id header), and for a
-// redirect the bucket's region (X-Amz-Bucket-Region). header may be nil.
-func ResponseError(status int, header http.Header, body []byte) *Error {
-	e := &Error{Status: status, RequestID: header.Get("X-Amz-Request-Id")}
-	if code, msg, id, ok := parseError(body); ok {
-		e.Code, e.Message = code, msg
-		if id != "" {
-			e.RequestID = id
+// failure maps an attempt's error to the provider's vocabulary: a Guard
+// failure is its cause (ErrSyntax, a 2xx answer other than 200, the size
+// cap, a credential error, a failed body read: a cut body is transport, a
+// read past the attempt's deadline ErrTimeout); an HTTP answer other than
+// 2xx is a *Error; a 2xx body the SDK could not decode is ErrSyntax; the
+// scanner's ErrSyntax and ErrInvalidPage stand; a transport failure stays
+// one (an attempt timeout is ErrTimeout).
+func (c *Client) failure(actx, ctx context.Context, err error) error {
+	var ge *objhttp.GuardError
+	if errors.As(err, &ge) {
+		return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, ge.Err)
+	}
+	var re *awshttp.ResponseError
+	if errors.As(err, &re) && re.HTTPStatusCode() != 0 { // 0: no answer (the SDK wraps a send failure too)
+		if s := re.HTTPStatusCode(); s < 200 || s > 299 {
+			return responseError(re, err)
 		}
+		var de *smithy.DeserializationError
+		if errors.As(err, &de) {
+			return fmt.Errorf("%w: %v", objhttp.ErrSyntax, de)
+		}
+		return err
+	}
+	if errors.Is(err, objhttp.ErrSyntax) || errors.Is(err, objhttp.ErrInvalidPage) {
+		return err
+	}
+	return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, err)
+}
+
+// responseError is an HTTP answer's *Error: the status, the SDK's decoded
+// code and message (the status text without spaces when the body named no
+// code), the request ID and, for a redirect, the bucket's region
+// (X-Amz-Bucket-Region).
+func responseError(re *awshttp.ResponseError, err error) *Error {
+	status := re.HTTPStatusCode()
+	e := &Error{Status: status, RequestID: re.RequestID}
+	if e.RequestID == "" {
+		e.RequestID = re.Response.Header.Get("X-Amz-Request-Id")
+	}
+	var ae smithy.APIError
+	if errors.As(err, &ae) && ae.ErrorCode() != "UnknownError" { // the SDK's name for a body without a code
+		e.Code, e.Message = ae.ErrorCode(), ae.ErrorMessage()
 	}
 	if e.Code == "" {
-		e.Code = strings.ReplaceAll(http.StatusText(status), " ", "")
+		e.Code = statusCode(status)
 	}
 	if status == http.StatusMovedPermanently || e.Code == "AuthorizationHeaderMalformed" || e.Code == "PermanentRedirect" {
-		e.Region = header.Get("X-Amz-Bucket-Region")
+		e.Region = re.Response.Header.Get("X-Amz-Bucket-Region")
 	}
 	return e
 }
 
-func joinNotes(a, b string) string {
-	if a == "" || b == "" {
-		return a + b
+// statusCode is the code of an answer whose body names none: the status
+// text without spaces.
+func statusCode(status int) string { return strings.ReplaceAll(http.StatusText(status), " ", "") }
+
+// validate is the Guard's check of a 2xx answer. One other than 200 is an
+// answer: the code, message and request ID an <Error> body names, else the
+// status text as the code (the response headers are not seen here, so no
+// request ID or region from them). A 200's body is the scanner's to check:
+// it requires the operation's envelope and refuses an empty or cut
+// document (ErrSyntax, retried, never an empty final page).
+func validate(_ *http.Request, status int, body []byte) error {
+	if status == http.StatusOK {
+		return nil
 	}
-	return a + "; " + b
+	e := &Error{Status: status}
+	if code, msg, id, ok := parseError(body); ok {
+		e.Code, e.Message, e.RequestID = code, msg, id
+	}
+	if e.Code == "" {
+		e.Code = statusCode(status)
+	}
+	return e
 }

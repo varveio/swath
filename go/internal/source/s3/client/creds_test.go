@@ -247,7 +247,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		if a := auth.Load().(string); !strings.Contains(a, "Credential="+key+"/") {
-			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.Source, key)
+			t.Fatalf("authorization %q (source %q), want key %s", a, c.auth.source, key)
 		}
 	}
 	t.Run("slow STS", func(t *testing.T) {
@@ -300,8 +300,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.auth.Anonymous || !strings.Contains(c.Note(), "not available yet") {
-			t.Fatalf("anonymous %v, note %q", c.auth.Anonymous, c.Note())
+		if c.auth.anonymous || !strings.Contains(c.Note(), "not available yet") {
+			t.Fatalf("anonymous %v, note %q", c.auth.anonymous, c.Note())
 		}
 		_, err = c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 		var ex *ExhaustedError
@@ -315,8 +315,8 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		if a := auth.Load().(string); a != "" || c.auth.Source != "anonymous (no credentials found)" {
-			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.Source)
+		if a := auth.Load().(string); a != "" || c.auth.source != "anonymous (no credentials found)" {
+			t.Fatalf("empty chain: authorization %q, source %q", a, c.auth.source)
 		}
 	})
 	t.Run("anonymous", func(t *testing.T) {
@@ -327,7 +327,7 @@ func TestCredentialsFailClosed(t *testing.T) {
 		if _, err := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"}); err != nil {
 			t.Fatal(err)
 		}
-		if a := auth.Load().(string); a != "" || !c.auth.Anonymous {
+		if a := auth.Load().(string); a != "" || !c.auth.anonymous {
 			t.Fatalf("--anonymous signed: %q", a)
 		}
 	})
@@ -392,7 +392,7 @@ func TestPartialCredentialsRefuse(t *testing.T) {
 			c, err := New(context.Background(), Config{Region: "us-east-1", Endpoint: srv.URL, PathStyle: true})
 			if err == nil {
 				_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
-				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.Source, lerr, requests.Load())
+				t.Fatalf("not refused: source %q, list %v, %d requests", c.auth.source, lerr, requests.Load())
 			}
 			if Classify(err) != objhttp.ClassAuth {
 				t.Fatalf("%v: class %s, want auth", err, Classify(err))
