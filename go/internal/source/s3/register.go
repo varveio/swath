@@ -22,14 +22,21 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open,
-		Secrets: []registry.Secret{{Flag: "bearer-token-command"}}, Usage: "s3://bucket[/prefix]"})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
+		Operational: []string{"profile", "bearer-token-refresh-interval"},
+		Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, {Flag: "request-payer"},
+			{Flag: "bearer-token-command"}, {Flag: "bearer-token-refresh-interval"}, {Flag: "fips"}, {Flag: "dualstack"}, {Flag: "fetch-owner"}},
+		Usage: "s3://bucket[/prefix]"})
 }
 
-// flagged is the S3 flag group's value: the S3 options and the range
-// engine's policy and HTTP admission, whose flags every engine provider shares.
+// flagged is the S3 flag group's value: the S3 options, the store group's
+// values and the range engine's policy and HTTP admission, whose flags
+// every engine provider shares.
 type flagged struct {
 	Options
+	store        *source.Store
 	common       *keyrange.Common
 	pathStyleSet bool // --path-style given (else on with a custom endpoint, as Java's)
 	refreshSet   bool // --bearer-token-refresh-interval given
@@ -57,21 +64,15 @@ func (b boolFunc) Set(s string) error {
 	return nil
 }
 
-// sharedFlags registers the range engine's flag group (keyrange.Flags).
-func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
-
 func defaults() any { return &flagged{} }
 
-// flags registers the S3 flag group and the shared engine flags; the
+// flags registers the S3 flag group beside the shared groups' values; the
 // returned value is filled when the flag set is parsed.
-func flags(f *flag.FlagSet, diag bool, shared any) any {
-	common, _ := shared.(*keyrange.Common)
-	o := &flagged{common: common}
-	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store (path-style addressing unless --path-style=false)")
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")
-	f.DurationVar(&o.Timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
 	f.Var(boolFunc{&o.PathStyle, &o.pathStyleSet}, "path-style", "S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)")
 	f.StringVar(&o.BearerCommand, "bearer-token-command", "", "S3: shell `command` whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again")
 	f.Func("bearer-token-refresh-interval", "S3: run --bearer-token-command again after this `duration` (default 45m)", func(v string) error {
@@ -97,8 +98,11 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
+		if o.store != nil {
+			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+		}
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
+			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
 		if !o.pathStyleSet && opt.Endpoint != "" {
 			opt.PathStyle = true // Java's default for a custom endpoint
@@ -257,4 +261,13 @@ func classify(err error) string {
 func keyPrefix(root string) (string, error) {
 	_, prefix, err := ParseURL(root)
 	return prefix, err
+}
+
+// withPrefix is root naming prefix instead (registry.Factory.WithPrefix).
+func withPrefix(root, prefix string) string {
+	bucket, _, err := ParseURL(root)
+	if err != nil {
+		return root
+	}
+	return "s3://" + bucket + "/" + prefix
 }

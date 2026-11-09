@@ -136,8 +136,11 @@ Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, de
 struct embedding `registry.Bind(provider, &schema)` and, for a provider on the range engine, `keyrange.Registered`
 set to the same provider (its `Listed` and the engine's optional interfaces, promoted), with the provider's own
 `Locator`, `Identity`, `Capabilities`, `Report` and, on its own service, `Tariff` (see
-[internals/providers.md](internals/providers.md)). The command imports the package for that registration only;
-`listing` does the rest.
+[internals/providers.md](internals/providers.md)). The factory also declares the provider's flags (its own, and
+the shared groups it names: the store's `--endpoint`, `--request-timeout`, `--anonymous`, the range engine's),
+which of them a resume may change, its secrets, its help entries and its root form; the command derives its flag
+set, help, resume rules and redaction from the registered factories and names no provider. The command imports
+the package for that registration only; `listing` does the rest.
 
 ## Memory
 

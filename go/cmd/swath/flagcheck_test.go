@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,8 @@ func TestNegativeDurationsRefused(t *testing.T) {
 		{src, "--progress-interval=-1s"},
 		{src, "--part-interval=-1s"},
 		{"s3://bucket", "--request-timeout=-1s"},
-		{"gs://bucket", "--gcs-request-timeout=-1s"},
+		{"gs://bucket", "--request-timeout=-1s"},
+		{"az://acct/c", "--request-timeout=-1s"},
 	} {
 		var buf bytes.Buffer
 		err := run(context.Background(), args, &buf, false)
@@ -42,16 +44,19 @@ func TestNegativeDurationsRefused(t *testing.T) {
 
 // TestForeignProviderFlagsRefused (R10): a flag of a provider other than
 // the root's is refused with exit 2, not ignored; the root's own flags and
-// the shared engine flags of the object stores are accepted.
+// the shared groups' flags (the store's, the engine's) are accepted for
+// every object store, and refused for a local root.
 func TestForeignProviderFlagsRefused(t *testing.T) {
 	src := t.TempDir()
 	for _, tc := range []struct {
 		args []string
 		flag string
 	}{
-		{[]string{"gs://bucket", "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
-		{[]string{"gs://bucket", "--request-timeout", "5s"}, "--request-timeout"},
-		{[]string{"s3://bucket", "--gcs-endpoint", "http://127.0.0.1:1"}, "--gcs-endpoint"},
+		{[]string{"gs://bucket", "--region", "eu-west-1"}, "--region"},
+		{[]string{"az://acct/c", "--path-style"}, "--path-style"},
+		{[]string{"s3://bucket", "--gcs-user-project", "p"}, "--gcs-user-project"},
+		{[]string{src, "--endpoint", "http://127.0.0.1:1"}, "--endpoint"},
+		{[]string{src, "--request-timeout", "5s"}, "--request-timeout"},
 		{[]string{"s3://bucket", "--gcs-credentials", "f.json"}, "--gcs-credentials"},
 		{[]string{"gs://bucket", "--azblob-sas", "sv=1&sig=x"}, "--azblob-sas"},
 		{[]string{src, "--anonymous"}, "--anonymous"},
@@ -67,9 +72,14 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	// The flag set knows each provider flag's owners.
 	var o options
 	newFlags(&o, false)
-	for name, want := range map[string]string{"anonymous": "az,gs,s3", "profile": "s3", "gcs-credentials": "gs", "azblob-sas": "az", "request-rate": "az,gs,s3"} {
+	for name, want := range map[string]string{"anonymous": "az,gs,s3", "endpoint": "az,gs,s3", "request-timeout": "az,gs,s3", "profile": "s3", "gcs-credentials": "gs", "azblob-sas": "az", "request-rate": "az,gs,s3"} {
 		if got := strings.Join(o.owners[name], ","); got != want {
 			t.Errorf("owners of --%s: %q, want %q", name, got, want)
+		}
+	}
+	for _, root := range []string{"s3://bucket", "gs://bucket", "az://acct/c"} {
+		if _, _, err := parseList([]string{root, "--endpoint", "http://127.0.0.1:1", "--request-timeout", "5s", "--anonymous", "--request-rate", "10"}, io.Discard, command{}); err != nil {
+			t.Errorf("%s with the shared flags: %v", root, err)
 		}
 	}
 	if _, ok := o.owners["workers"]; ok {

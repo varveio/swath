@@ -4,7 +4,7 @@
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
 `userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
-(`--gcs-endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
+(the shared `--endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
 no user information (a password would be recorded; `TestEndpointUserinfoRefused`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
 template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
 client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
@@ -38,7 +38,7 @@ authorized-user JSON; otherwise Application Default Credentials, found by the cl
 (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud). Credentials that
 cannot be found or do not load refuse the run before any listing request (`client.CredentialError`, class
 `auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
-never cancelled, whose HTTP client bounds each token exchange by `--gcs-request-timeout`, and each attempt
+never cancelled, whose HTTP client bounds each token exchange by `--request-timeout`, and each attempt
 waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
 time: `tokensource.Shared`, the coalescer S3's bearer tokens use, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
 transport failure or timeout is

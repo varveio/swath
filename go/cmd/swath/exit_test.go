@@ -187,7 +187,7 @@ func TestGCSOutageThenResume(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	args := func(out string) []string {
-		return []string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return []string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--stall-timeout", "1s", "-o", out}
 	}
 	ctx := context.Background()
@@ -241,7 +241,7 @@ func TestDiskFullExits74(t *testing.T) {
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()
@@ -362,7 +362,7 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		served.Store(0)
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
-		err := run(ctx, append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--anonymous", "--limiter", "--workers", "1", "--seed=false",
+		err := run(ctx, append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--limiter", "--workers", "1", "--seed=false",
 			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, unjournaled...), &out, true)
 		if m == "healthy" {
 			if err != nil {
@@ -392,7 +392,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	dir := filepath.Join(t.TempDir(), "ds")
 	ctx := context.Background()
-	err := run(ctx, []string{"gs://bkt", "--gcs-endpoint", ep, "--anonymous", "--sequential", "--max-keys", "10",
+	err := run(ctx, []string{"gs://bkt", "--endpoint", ep, "--anonymous", "--sequential", "--max-keys", "10",
 		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
 	if c := exitCode(t, err); c != exitFatal {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
@@ -457,7 +457,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--gcs-endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()

@@ -76,7 +76,7 @@ func (s *rowlessService) set(m string) {
 }
 
 func (s *rowlessService) args(dir string, extra ...string) []string {
-	return append(append([]string{"gs://bkt", "--gcs-endpoint", s.url, "--anonymous", "--workers", "1", "--part-size", "4KiB",
+	return append(append([]string{"gs://bkt", "--endpoint", s.url, "--anonymous", "--workers", "1", "--part-size", "4KiB",
 		"--row-budget", "512KiB", "-o", dir}, unjournaled...), extra...)
 }
 

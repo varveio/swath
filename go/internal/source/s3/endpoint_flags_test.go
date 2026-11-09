@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/registry"
-	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -32,7 +31,7 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 	opened := func(args ...string) *opened[Object] {
 		t.Helper()
 		f := flag.NewFlagSet("t", flag.ContinueOnError)
-		o := flags(f, false, keyrange.Flags(f, false))
+		o := factory(t).RegisterFlags(f, false)
 		if err := f.Parse(append(args, "--anonymous")); err != nil {
 			t.Fatal(err)
 		}

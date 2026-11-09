@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -18,30 +17,30 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Usage: "gs://bucket[/prefix]"})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Operational: []string{"gcs-credentials"},
+		Hints:       []source.Hint{{Flag: "gcs-credentials"}, {Flag: "gcs-user-project"}},
+		Usage:       "gs://bucket[/prefix]"})
 }
 
-// flagged is the GCS flag group's value: the GCS options and the range
-// engine's policy and HTTP admission, whose flags every engine provider shares.
+// flagged is the GCS flag group's value: the GCS options, the store
+// group's values and the range engine's policy and HTTP admission, whose
+// flags every engine provider shares.
 type flagged struct {
 	Options
+	store  *source.Store
 	common *keyrange.Common
 }
 
-// sharedFlags registers the range engine's flag group (keyrange.Flags).
-func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
-
 func defaults() any { return &flagged{} }
 
-// flags registers the GCS flag group and the shared engine flags. The GCS
-// flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared any) any {
-	common, _ := shared.(*keyrange.Common)
-	o := &flagged{common: common}
-	f.StringVar(&o.Endpoint, "gcs-endpoint", "", "GCS: JSON API base `URL` (default "+client.DefaultEndpoint+")")
+// flags registers the GCS flag group beside the shared groups' values.
+// The GCS flags are prefixed: one flag set serves every provider.
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
 	f.StringVar(&o.UserProject, "gcs-user-project", "", "GCS: bill a requester-pays bucket's requests to this `project`")
-	f.DurationVar(&o.Timeout, "gcs-request-timeout", 30*time.Second, "GCS: per-request timeout; a request that exceeds it is retried")
 	return o
 }
 
@@ -54,8 +53,11 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
+		if o.store != nil {
+			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+		}
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
+			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
 	case *Options: // a library caller
 		opt = *o
@@ -177,4 +179,13 @@ func classify(err error) string {
 func keyPrefix(root string) (string, error) {
 	_, prefix, err := ParseURL(root)
 	return prefix, err
+}
+
+// withPrefix is root naming prefix instead (registry.Factory.WithPrefix).
+func withPrefix(root, prefix string) string {
+	bucket, _, err := ParseURL(root)
+	if err != nil {
+		return root
+	}
+	return "gs://" + bucket + "/" + prefix
 }

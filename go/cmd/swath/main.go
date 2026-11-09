@@ -35,6 +35,7 @@ import (
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 	"github.com/varveio/swath/go/internal/totals"
 
@@ -477,9 +478,27 @@ var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-b
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the
 // route, the scope, the schema) is checked on resume and refuses a change,
-// such as another region resolved from a new profile.
-var operationalFlags = []string{"profile", "anonymous", "request-timeout", "gcs-credentials", "gcs-request-timeout", "limiter", "limiter-slow-start", "request-rate",
-	"bearer-token-command", "bearer-token-refresh-interval", "azblob-sas", "azblob-request-timeout"}
+// such as another region resolved from a new profile. They are the shared
+// flag groups' and the providers' (source.FlagGroup.Operational,
+// registry.Factory.Operational), secrets included.
+var operationalFlags = providerOperational()
+
+// providerOperational collects the operational flags of the shared flag
+// groups, then of each provider: its secrets, then its other operational
+// flags.
+func providerOperational() []string {
+	var flags []string
+	for _, g := range registry.Groups() {
+		flags = append(flags, g.Operational...)
+	}
+	for _, f := range registry.Factories() {
+		for _, s := range f.Secrets {
+			flags = append(flags, s.Flag)
+		}
+		flags = append(flags, f.Operational...)
+	}
+	return flags
+}
 
 // secretFlags hold a secret, or a command that prints one: their value is
 // never recorded (journal, reports, the goroutine dump's outcome), and a
@@ -592,13 +611,12 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 		f.BoolVar(&o.noSpill, "no-spill", false, "wait on the reorder budget instead of spilling rows ahead of the frontier to disk")
 		f.Var(&o.spillReserve, "spill-reserve", "free `bytes` spill leaves on its filesystem (0: derived, one part per encoder and at least 1 GiB)")
 	}
-	// Each provider owns its flag group; a group several share (the range
-	// engine's) is registered once and passed to each of them.
-	// owners records which providers each provider flag applies to (the
-	// flags a registration adds), so a flag given for another provider is
-	// refused rather than ignored (foreignFlags).
+	// Each provider owns its flag group; a group several share (the
+	// store's, the range engine's) is registered once and passed to each
+	// of them. owners records which providers each provider flag applies
+	// to (the flags a registration adds), so a flag given for another
+	// provider is refused rather than ignored (foreignFlags).
 	o.sources, o.owners = map[string]any{}, map[string][]string{}
-	shared, groupFlags := map[string]any{}, map[string][]string{}
 	added := func(register func()) []string {
 		before := map[string]bool{}
 		f.VisitAll(func(fl *flag.Flag) { before[fl.Name] = true })
@@ -611,19 +629,19 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 		})
 		return names
 	}
+	shared, groupFlags := source.SharedValues{}, map[*source.FlagGroup][]string{}
+	for _, g := range registry.Groups() {
+		groupFlags[g] = added(func() { shared[g] = g.Flags(f, diag) })
+	}
 	for _, p := range registry.Factories() {
-		var g any
-		if p.Shared != "" {
-			var ok bool
-			if g, ok = shared[p.Shared]; !ok {
-				groupFlags[p.Shared] = added(func() { g = p.SharedFlags(f, diag) })
-				shared[p.Shared] = g
-			}
-			for _, n := range groupFlags[p.Shared] {
+		named := source.SharedValues{}
+		for _, g := range p.Shared {
+			named[g] = shared[g]
+			for _, n := range groupFlags[g] {
 				o.owners[n] = append(o.owners[n], p.Scheme)
 			}
 		}
-		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, g) }) {
+		for _, n := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, named) }) {
 			o.owners[n] = append(o.owners[n], p.Scheme)
 		}
 	}
@@ -653,8 +671,9 @@ func nonNegativeDurations(f *flag.FlagSet) (err error) {
 }
 
 // foreignFlags refuses a provider flag given explicitly for a root of
-// another provider (gs://... --profile: S3's flag, which GCS would
-// ignore; GCS's is --gcs-credentials). A root no provider takes is left to
+// another provider (one provider's credential flag with another's root,
+// which that provider would ignore), and a shared group's flag for a
+// provider that names no such group. A root no provider takes is left to
 // the lookup's own refusal.
 func foreignFlags(f *flag.FlagSet, owners map[string][]string, root string) (err error) {
 	pf, lerr := registry.Lookup(root)
@@ -791,7 +810,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err}
 	}
 	o.text = text
-	if err := resolveTotals(f, &o, root, stdoutTerminal()); err != nil {
+	if err := resolveTotals(&o, root, stdoutTerminal()); err != nil {
 		return o, "", usageError{err}
 	}
 	if pf, err := registry.Lookup(root); err == nil && pf.BinaryKeys && text != nil {
@@ -1123,14 +1142,19 @@ func (s *size) Set(v string) error {
 // narrowRoot is an object-store root narrowed to the prefix an anchored
 // --include implies (filter.Spec.NarrowPrefix): the same rows, fewer
 // requests. A resume replays the same command, so it narrows the same way.
+// Only a provider that can name another prefix (registry.Factory.WithPrefix)
+// narrows.
 func narrowRoot(root string, f *filter.Spec) string {
-	scheme, rest, ok := strings.Cut(root, "://")
-	if !ok || (scheme != "s3" && scheme != "gs") {
+	pf, err := registry.Lookup(root)
+	if err != nil || pf.WithPrefix == nil || pf.KeyPrefix == nil {
 		return root
 	}
-	bucket, prefix, _ := strings.Cut(rest, "/")
+	prefix, err := pf.KeyPrefix(root)
+	if err != nil {
+		return root
+	}
 	if n := f.NarrowPrefix(prefix); n != prefix {
-		return scheme + "://" + bucket + "/" + n
+		return pf.WithPrefix(root, n)
 	}
 	return root
 }

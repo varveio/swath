@@ -5,6 +5,11 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: the flags every object store has are one shared group, the same for S3, GCS and Azure Blob:
+  `--endpoint`, `--request-timeout` (default 30s) and `--anonymous`. `--gcs-endpoint`, `--azblob-endpoint`,
+  `--gcs-request-timeout` and `--azblob-request-timeout` are removed; a resume of a run that recorded one is
+  refused naming the flag. A provider declares its operational flags and help entries on its
+  `registry.Factory`, and the command derives its flag lists, help and redaction from the registered factories.
 - Go port: an object-store provider's registered source embeds `keyrange.Registered` (its `Listed` and the
   optional interfaces `Live`, `Advancing`, `Requested`, `SeedTimed`, `Faulted`, `Contended`, `Resumable`,
   `Seeded`, `Reusing`, `Fencing`), set to the provider, in place of eleven forwarding methods in each

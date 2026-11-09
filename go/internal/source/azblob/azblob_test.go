@@ -39,7 +39,7 @@ func highByte(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool { return r >= 0xE000 })
 }
 
-// base is the replay's endpoint for --azblob-endpoint: without the
+// base is the replay's endpoint for --endpoint: without the
 // account path segment, which the client adds from the root.
 func base(r *azblobtest.Replay) string { return strings.TrimSuffix(r.Endpoint, "/"+r.Account) }
 
@@ -714,14 +714,18 @@ func TestRedactedSASResume(t *testing.T) {
 	}
 }
 
-// TestEngineFlagsShared: the provider takes the range engine's flag group
-// the command registered once, and its own prefixed flags.
+// TestEngineFlagsShared: the provider takes the store's and the range
+// engine's flag groups the command registered once, and its own prefixed
+// flags.
 func TestEngineFlagsShared(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a"})
+	pf, err := registry.Lookup("az://replay/corpus")
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
-	other := keyrange.Flags(f, true)
-	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-anonymous", "-azblob-endpoint", base(r), "-azblob-request-timeout", "7s"}); err != nil {
+	v := pf.RegisterFlags(f, true)
+	if err := f.Parse([]string{"-seed", "-structure", "-page-size", "7", "-anonymous", "-endpoint", base(r), "-request-timeout", "7s", "-azblob-flat"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: v, Workers: 2})
@@ -729,7 +733,7 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened).p
-	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Timeout.Seconds() != 7 || p.Options().PageSize != 7 {
+	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Timeout.Seconds() != 7 || p.Options().PageSize != 7 || !p.opt.Flat {
 		t.Fatalf("flags not applied: %+v", p.opt)
 	}
 }

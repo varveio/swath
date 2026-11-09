@@ -35,19 +35,25 @@ type Factory struct {
 	// Scheme is the root's URL scheme ("s3" for s3://bucket/prefix). The
 	// factory with the empty scheme takes roots without one (local paths).
 	Scheme string
-	// Flags registers the provider's flags on fs and returns its options
-	// value, which the flags fill when fs is parsed. The value is opaque to
-	// everything but the provider: it travels in Request.Options. diag adds
-	// the provider's diagnostic flags (comparison modes and policy toggles,
-	// for swath diag list only). shared is the value of the provider's
-	// shared flag group (Shared), nil without one.
-	Flags func(fs *flag.FlagSet, diag bool, shared any) any
-	// Shared, if set, names a flag group several providers share (the range
-	// engine's), which SharedFlags registers: the command registers each
-	// named group once, from the first provider naming it, and passes its
-	// value to every such provider's Flags.
-	Shared      string
-	SharedFlags func(fs *flag.FlagSet, diag bool) any
+	// Flags registers the provider's own flags on fs and returns its
+	// options value, which the flags fill when fs is parsed. The value is
+	// opaque to everything but the provider: it travels in
+	// Request.Options. diag adds the provider's diagnostic flags
+	// (comparison modes and policy toggles, for swath diag list only).
+	// shared holds the values of the groups the provider names (Shared),
+	// read with source.Shared.
+	Flags func(fs *flag.FlagSet, diag bool, shared source.SharedValues) any
+	// Shared are the flag groups the provider shares with others (the
+	// store's, the range engine's): the command registers each once and
+	// passes its value to every provider naming it.
+	Shared []*source.FlagGroup
+	// Operational are the provider's own flags a resume may change: how
+	// requests are authenticated, which no identity holds. Secrets are
+	// operational without being listed here.
+	Operational []string
+	// Hints are every flag the provider registers itself, in help order
+	// (source.Hint).
+	Hints []source.Hint
 	// Defaults returns the options value used when none was given.
 	Defaults func() any
 	// Open validates the root and returns a source ready to list. It must
@@ -81,6 +87,40 @@ type Factory struct {
 	// Usage is the root form for the command's help ("s3://bucket[/prefix]";
 	// "a local directory" for local paths).
 	Usage string
+	// CheckTotals, if set, refuses per-prefix totals (swath du) that the
+	// provider's options value cannot give, before the source is opened.
+	CheckTotals func(options any, t totals.Options) error
+	// WithPrefix, if set, returns root naming the key prefix prefix
+	// instead of its own (KeyPrefix): an anchored --include narrows the
+	// listed prefix through it. Without it the root is listed as given.
+	WithPrefix func(root, prefix string) string
+}
+
+// RegisterFlags registers f's flags and its shared groups' on fs, a flag
+// set of this provider alone (a test's, a benchmark's), and returns its
+// options value. The command instead registers each group once for every
+// provider (Groups).
+func (f Factory) RegisterFlags(fs *flag.FlagSet, diag bool) any {
+	shared := source.SharedValues{}
+	for _, g := range f.Shared {
+		shared[g] = g.Flags(fs, diag)
+	}
+	return f.Flags(fs, diag, shared)
+}
+
+// Groups returns the flag groups the registered factories share, each
+// once (by identity), in the order the factories (by scheme) first name
+// them.
+func Groups() []*source.FlagGroup {
+	var out []*source.FlagGroup
+	for _, f := range Factories() {
+		for _, g := range f.Shared {
+			if !slices.Contains(out, g) {
+				out = append(out, g)
+			}
+		}
+	}
+	return out
 }
 
 // Secret is a provider flag whose value is never recorded (Flag, without
@@ -329,13 +369,19 @@ func Redact(root string) string {
 }
 
 // RedactArgv copies a command line for reports and journals: registered
-// secret flags, endpoint userinfo and credentials in source roots are
-// redacted. Both --flag VALUE and --flag=VALUE are accepted.
+// secret flags, the userinfo of URL flags (source.FlagGroup.URLs) and
+// credentials in source roots are redacted. Both --flag VALUE and
+// --flag=VALUE are accepted.
 func RedactArgv(argv []string) []string {
-	secrets := map[string]bool{}
+	secrets, urls := map[string]bool{}, map[string]bool{}
 	for _, f := range Factories() {
 		for _, s := range f.Secrets {
 			secrets[s.Flag] = true
+		}
+	}
+	for _, g := range Groups() {
+		for _, u := range g.URLs {
+			urls[u] = true
 		}
 	}
 	out := make([]string, 0, len(argv))
@@ -347,8 +393,7 @@ func RedactArgv(argv []string) []string {
 			continue
 		}
 		hide := secrets[name]
-		switch name {
-		case "endpoint", "gcs-endpoint", "azblob-endpoint":
+		if urls[name] {
 			if !eq && i+1 < len(argv) {
 				value = argv[i+1]
 			}

@@ -55,7 +55,8 @@ clients are described in [providers.md](providers.md) and the page of each provi
   transport; the report's `transport.pool_size` is the pool's size.
 - **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction without quoting
   it (`TestEndpointUserinfoRefused`). `registry.RedactArgv`, shared by the command and listing, replaces the value
-  of `--endpoint`, `--gcs-endpoint` or `--azblob-endpoint` with `[redacted]` when it carries user information or
+  of every URL flag the shared flag groups declare (`source.FlagGroup.URLs`: the store group's `--endpoint`,
+  which every object store takes) with `[redacted]` when it carries user information or
   cannot be parsed, in either argument spelling. Valid endpoints without user information are retained for
   resume. This covers failure reports, successful reports and journal arguments, including recorded arguments
   supplied to listing (`TestEndpointUserinfoReports`, `TestRecordedEndpointUserinfo`, `TestRedactEndpointArgv`).
