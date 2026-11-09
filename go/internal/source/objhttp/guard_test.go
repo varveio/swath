@@ -295,3 +295,29 @@ func mustReq(t *testing.T, u string) *http.Request {
 	}
 	return req
 }
+
+// TestGuardReadErrorIsGuardError: a failed body read is a *GuardError, so
+// Cause strips the url.Error (a net.Error) around it: a cut body is still
+// a transport failure, any other read failure is not.
+func TestGuardReadErrorIsGuardError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gzip" {
+			w.Header().Set("Content-Encoding", "gzip")
+			io.WriteString(w, "not gzip at all")
+			return
+		}
+		w.Header().Set("Content-Length", "100")
+		io.WriteString(w, "short")
+	}))
+	defer srv.Close()
+	for path, transport := range map[string]bool{"/cut": true, "/gzip": false} {
+		_, err := (&http.Client{Transport: &Guard{}}).Get(srv.URL + path)
+		var ge *GuardError
+		if !errors.As(err, &ge) {
+			t.Fatalf("%s: err %v is not a GuardError", path, err)
+		}
+		if got := Transport(Cause(err)); got != transport {
+			t.Errorf("%s: Transport(Cause(%v)) = %v, want %v", path, err, got, transport)
+		}
+	}
+}
