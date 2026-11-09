@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -270,7 +271,8 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	for _, hc := range c.http {
 		g := *hc // keeps the pool's no-redirect policy
 		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
-		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication())
+		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
+			option.WithLogger(quiet))
 		if err != nil {
 			return nil, err
 		}
@@ -278,6 +280,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	return c, nil
 }
+
+// quiet is the generated client's logger: it emits nothing. The default
+// one, switched on by GOOGLE_SDK_GO_LOGGING_LEVEL, writes every request's
+// headers to stderr unredacted, the Authorization header this client sets
+// included, and every response body.
+var quiet = slog.New(slog.DiscardHandler)
 
 // connWorkers is the workers per pooled transport (one HTTP/2 connection
 // each, below the server's stream limit); maxConns caps the pool.
