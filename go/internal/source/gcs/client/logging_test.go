@@ -51,7 +51,7 @@ func TestSDKLogsNothing(t *testing.T) {
 	}()
 	stderr := os.Stderr
 	os.Stderr = w
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: secretTokens{}})
+	c, err := withTokens(Config{Endpoint: srv.URL + "/storage/v1/"}, secretTokens{})
 	if err == nil {
 		_, err = c.List(context.Background(), &ListInput{Bucket: "b"})
 	}

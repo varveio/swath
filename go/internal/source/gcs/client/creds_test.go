@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -282,12 +281,7 @@ func TestADCConfiguredButBroken(t *testing.T) {
 	// Anonymous. The search is injected, so the outcome does not depend on
 	// the host running the test.
 	t.Run("nothing found", func(t *testing.T) {
-		old := findCredentials
-		t.Cleanup(func() { findCredentials = old })
-		findCredentials = func(context.Context, ...string) (*google.Credentials, error) {
-			return nil, errors.New("google: could not find default credentials")
-		}
-		_, err := New(context.Background(), Config{})
+		_, err := newClient(context.Background(), Config{}, found{err: errors.New("google: could not find default credentials")}, objhttp.Pool(0, nil, nil))
 		var ce *CredentialError
 		if !errors.As(err, &ce) || ce.Transient {
 			t.Fatalf("err %v, want a credential error (auth)", err)
@@ -314,7 +308,7 @@ func (s *slowTokens) Token() (*oauth2.Token, error) {
 // call, so the source is never called concurrently.
 func TestTokenWaitersCoalesce(t *testing.T) {
 	ts := &slowTokens{}
-	c, err := New(context.Background(), Config{Endpoint: "http://127.0.0.1:1/storage/v1/", TokenSource: ts})
+	c, err := withTokens(Config{Endpoint: "http://127.0.0.1:1/storage/v1/"}, ts)
 	if err != nil {
 		t.Fatal(err)
 	}

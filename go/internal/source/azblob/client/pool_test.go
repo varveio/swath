@@ -12,10 +12,12 @@ import (
 	"testing"
 )
 
+// TestPoolSize: a built client has one transport per 16 workers, at least
+// 1, at most 8.
 func TestPoolSize(t *testing.T) {
 	for workers, want := range map[int]int{-1: 1, 0: 1, 1: 1, 16: 1, 17: 2, 64: 4, 128: 8, 129: 8, 1024: 8} {
-		if got := PoolSize(workers); got != want {
-			t.Errorf("PoolSize(%d) = %d, want %d", workers, got, want)
+		if got := newTestClient(t, Config{Anonymous: true, Workers: workers}).Transports(); got != want {
+			t.Errorf("%d workers: %d transports, want %d", workers, got, want)
 		}
 	}
 }
@@ -44,9 +46,6 @@ func TestTransportPoolSpreadsConnections(t *testing.T) {
 			hc.Transport.(noLocation).next.(*http.Transport).TLSClientConfig.RootCAs = roots
 		}
 		n := c.Transports()
-		if n != PoolSize(workers) {
-			t.Fatalf("%d workers: %d transports, want %d", workers, n, PoolSize(workers))
-		}
 		list := func() {
 			if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 				t.Error(err)

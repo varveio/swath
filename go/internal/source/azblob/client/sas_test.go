@@ -66,7 +66,7 @@ func TestSASOnEveryRequest(t *testing.T) {
 	for _, sas := range []string{testSAS, "?" + testSAS} {
 		queries = nil
 		// The SAS precedes a shared key and a token credential.
-		c := newTestClient(t, Config{Endpoint: srv.URL, SAS: sas, SharedKey: "a2V5", Credential: failingCredential{}})
+		c := newEntraClient(t, Config{Endpoint: srv.URL, SAS: sas, SharedKey: "a2V5"}, failingCredential{})
 		if _, err := c.List(context.Background(), &ListInput{Container: "c", Prefix: "p"}); err != nil {
 			t.Fatal(err)
 		}

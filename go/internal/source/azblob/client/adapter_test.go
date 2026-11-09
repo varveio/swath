@@ -460,7 +460,7 @@ func TestBearer(t *testing.T) {
 		}
 		fmt.Fprint(w, page(""))
 	})
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Credential: fakeToken{tok: "tok"}, MaxAttempts: 3})
+	c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 3}, withEntra(fakeToken{tok: "tok"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestBearer(t *testing.T) {
 	if Classify(err) != objhttp.ClassAuth || len(cp.reqs) != n+1 {
 		t.Fatalf("challenge: %v (class %q), %d requests", err, Classify(err), len(cp.reqs)-n)
 	}
-	bad, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Credential: fakeToken{err: errors.New("refused")}, MaxAttempts: 1})
+	bad, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, withEntra(fakeToken{err: errors.New("refused")}))
 	if err != nil {
 		t.Fatal(err)
 	}

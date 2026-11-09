@@ -9,12 +9,20 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
+// TestPoolSize: a built client has one transport (and one generated
+// service) per 16 workers, at least 1, at most 8.
 func TestPoolSize(t *testing.T) {
 	for workers, want := range map[int]int{-1: 1, 0: 1, 1: 1, 16: 1, 17: 2, 64: 4, 128: 8, 129: 8, 1024: 8} {
-		if got := PoolSize(workers); got != want {
-			t.Errorf("PoolSize(%d) = %d, want %d", workers, got, want)
+		c, err := New(context.Background(), Config{Anonymous: true, Workers: workers})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Transports(); got != want || len(c.svc) != want {
+			t.Errorf("%d workers: %d transports, want %d", workers, got, want)
 		}
 	}
 }
@@ -39,17 +47,18 @@ func TestTransportPoolSpreadsConnections(t *testing.T) {
 		}))
 		srv.EnableHTTP2 = true
 		srv.StartTLS()
-		c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Workers: workers})
+		pool := objhttp.Pool(workers, nil, nil)
+		roots := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+		for _, hc := range pool {
+			hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots
+		}
+		c, err := newClient(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Workers: workers}, librarySearch{}, pool)
 		if err != nil {
 			t.Fatal(err)
 		}
-		roots := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-		for _, hc := range c.http {
-			hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots
-		}
 		n := c.Transports()
-		if n != PoolSize(workers) || len(c.svc) != n {
-			t.Fatalf("%d workers: %d transports, %d services, want %d", workers, n, len(c.svc), PoolSize(workers))
+		if n != len(pool) {
+			t.Fatalf("%d workers: %d services, want %d", workers, n, len(pool))
 		}
 		list := func() {
 			if _, err := c.List(context.Background(), &ListInput{Bucket: "b"}); err != nil {

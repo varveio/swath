@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
@@ -201,6 +202,24 @@ func TestEmptyListingCarriesKind(t *testing.T) {
 	}
 }
 
+// found is a credential search that finds ts, or fails with err.
+type found struct {
+	ts  oauth2.TokenSource
+	err error
+}
+
+func (f found) find(context.Context, ...string) (*google.Credentials, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &google.Credentials{TokenSource: f.ts}, nil
+}
+
+// withTokens builds a client whose credential search finds ts.
+func withTokens(cfg Config, ts oauth2.TokenSource) (*Client, error) {
+	return newClient(context.Background(), cfg, found{ts: ts}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+}
+
 type tokens struct{ err error }
 
 func (s tokens) Token() (*oauth2.Token, error) {
@@ -210,8 +229,8 @@ func (s tokens) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: "tok", TokenType: "bearer", Expiry: time.Now().Add(time.Hour)}, nil
 }
 
-// TestCredentialsAndHeaders: each attempt carries the shared token source's
-// bearer token and swath's product token (prepended to the generated
+// TestCredentialsAndHeaders: each attempt carries the credentials' shared
+// token source's bearer token and swath's product token (prepended to the generated
 // client's own User-Agent); a token the source will not issue is a
 // credential failure before any request (no attempt counted).
 func TestCredentialsAndHeaders(t *testing.T) {
@@ -221,7 +240,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 		io.WriteString(w, `{"kind":"storage#objects"}`)
 	}))
 	defer srv.Close()
-	c, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: tokens{}})
+	c, err := withTokens(Config{Endpoint: srv.URL + "/storage/v1/"}, tokens{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +250,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 	if want := buildinfo.UserAgent() + " " + googleapi.UserAgent; auth != "Bearer tok" || agent != want {
 		t.Fatalf("Authorization %q, User-Agent %q", auth, agent)
 	}
-	c, err = New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: tokens{errors.New("refused")}})
+	c, err = withTokens(Config{Endpoint: srv.URL + "/storage/v1/"}, tokens{errors.New("refused")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +258,7 @@ func TestCredentialsAndHeaders(t *testing.T) {
 	if Classify(err) != objhttp.ClassAuth || c.Counters().Attempts != 0 {
 		t.Fatalf("err %v, counters %+v", err, c.Counters())
 	}
-	if source, anonymous := c.Credentials(); source != "token source" || anonymous {
+	if source, anonymous := c.Credentials(); source != "application default credentials" || anonymous {
 		t.Fatalf("credentials %q %v", source, anonymous)
 	}
 }

@@ -90,13 +90,6 @@ func (c *counted) Close() error {
 	return c.ReadCloser.Close()
 }
 
-// setBodyCap lowers the success body cap of every pooled Guard.
-func setBodyCap(c *Client, n int64) {
-	for _, g := range c.guards {
-		g.MaxBody = n
-	}
-}
-
 // blobs is the page page(next, names...) decodes to.
 func blobs(next string, names ...string) *ListOutput {
 	out := &ListOutput{Items: []Item{}, NextMarker: next}
@@ -265,13 +258,14 @@ func TestScriptedAnswers(t *testing.T) {
 				c.handler(k, w, r)
 			}))
 			cc := &closeCount{next: http.DefaultTransport}
-			cl, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, MaxAttempts: c.attempts, RequestTimeout: 2 * time.Second,
-				BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, HTTPClient: &http.Client{Transport: cc}})
+			b := build{bodyCap: MaxBody, entra: defaultChain{}}
+			if c.cap > 0 {
+				b.bodyCap = c.cap
+			}
+			cl, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, MaxAttempts: c.attempts, RequestTimeout: 2 * time.Second,
+				BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, HTTPClient: &http.Client{Transport: cc}}, b)
 			if err != nil {
 				t.Fatal(err)
-			}
-			if c.cap > 0 {
-				setBodyCap(cl, c.cap)
 			}
 			in := c.in
 			in.Container = "c"

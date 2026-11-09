@@ -174,7 +174,7 @@ func TestClassify(t *testing.T) {
 		{"token exchange timeout", fmt.Errorf("msal: %w", context.DeadlineExceeded), objhttp.ClassTimeout},
 		{"credential unavailable", errors.New("EnvironmentCredential: missing environment variable AZURE_TENANT_ID"), objhttp.ClassAuth},
 	} {
-		e := newTestClient(t, Config{Endpoint: srv.URL, Credential: failingCredential{x.err}, MaxAttempts: 1})
+		e := newEntraClient(t, Config{Endpoint: srv.URL, MaxAttempts: 1}, failingCredential{x.err})
 		_, err := e.List(context.Background(), &ListInput{Container: "c"})
 		var ce *CredentialError
 		var ex *ExhaustedError

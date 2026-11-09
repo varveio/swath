@@ -120,7 +120,7 @@ func TestClassify(t *testing.T) {
 		{"metadata server 404", &metadata.Error{Code: 404, Message: "no service account"}, false, ""},
 		{"token exchange timeout", fmt.Errorf("oauth2: %w", context.DeadlineExceeded), true, objhttp.ClassTimeout},
 	} {
-		e, _ := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", TokenSource: failingTokens{x.err}, MaxAttempts: 1})
+		e, _ := withTokens(Config{Endpoint: srv.URL + "/storage/v1/", MaxAttempts: 1}, failingTokens{x.err})
 		_, err := e.List(context.Background(), &ListInput{Bucket: "b"})
 		var ex *ExhaustedError
 		want := objhttp.ClassAuth // a refusal stops the run; an outage of the token endpoint is transient
