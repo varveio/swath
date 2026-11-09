@@ -101,6 +101,22 @@ func blobs(next string, names ...string) *ListOutput {
 	return out
 }
 
+// cutError writes the status line, x-ms-error-code, a Content-Length of
+// 1,000 and the start of an <Error> body naming code, then closes the
+// connection: a real HTTP truncation of an error answer.
+func cutError(status int, code string) func(int, http.ResponseWriter, *http.Request) {
+	return func(_ int, w http.ResponseWriter, _ *http.Request) {
+		conn, bw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		fmt.Fprintf(bw, "HTTP/1.1 %d %s\r\nx-ms-error-code: %s\r\nContent-Type: application/xml\r\nContent-Length: 1000\r\n\r\n"+
+			"\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>%s</Code><Mess", status, http.StatusText(status), code, code)
+		bw.Flush()
+	}
+}
+
 // outcome is what one List did.
 type outcome struct {
 	Class   objhttp.Class
@@ -170,6 +186,12 @@ func TestScriptedAnswers(t *testing.T) {
 		}, outcome{Class: objhttp.ClassAuth, Answer: echo(401, "InvalidAuthenticationInfo", 0), Counts: [5]int64{1}, Requests: 1}},
 		{"404", 3, ListInput{}, 0, func(n int, w http.ResponseWriter, r *http.Request) { echoError(w, r, 404, "ContainerNotFound") },
 			outcome{Class: objhttp.ClassNoSuchBucket, Answer: echo(404, "ContainerNotFound", 0), Counts: [5]int64{1}, Requests: 1}},
+		// The Guard keeps a cut error answer's status, headers and the bytes
+		// read: x-ms-error-code decides, as for the complete answer.
+		{"403 AuthenticationFailed connection cut mid-body", 3, ListInput{}, 0, cutError(403, "AuthenticationFailed"),
+			outcome{Class: objhttp.ClassAuth, Answer: &Error{Status: 403, Code: "AuthenticationFailed"}, Counts: [5]int64{1}, Requests: 1}},
+		{"503 ServerBusy connection cut mid-body", 3, ListInput{}, 0, cutError(503, "ServerBusy"),
+			outcome{Class: objhttp.ClassThrottle, Requeue: true, Answer: &Error{Status: 503, Code: "ServerBusy"}, Counts: [5]int64{3, 2, 3, 0, 0}, Requests: 3}},
 		{"400 names the query", 3, ListInput{Prefix: "p q+", StartFrom: "s", Marker: "m"}, 0, func(n int, w http.ResponseWriter, r *http.Request) {
 			echoError(w, r, 400, "InvalidQueryParameterValue")
 		}, outcome{Class: objhttp.ClassOther, Answer: &Error{Status: 400, Code: "InvalidQueryParameterValue", Message: "m (echo)",
