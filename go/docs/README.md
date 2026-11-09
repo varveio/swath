@@ -16,7 +16,8 @@ Who reads what. Each page owns its facts; the others link to it.
 - **The replay server** (`cmd/swath-replay`: a recorded listing served through the S3, GCS and Azure APIs for
   tests and benchmarks): [replay.md](replay.md).
 - **Reading a dataset in Go** (`go/reader`, a nested module: the schema ids and their columns, the manifest's
-  `extensions.swath`, typed rows decoded from SeekParquet rows): [../reader/README.md](../reader/README.md).
+  `extensions.swath`, typed rows decoded from SeekParquet rows, and opening, schema checks, whole-source
+  acceptance and current-object streaming): [../reader/README.md](../reader/README.md).
 - **Reading a dataset from an object store** (`go/objfile`, a nested module: an object opened as a file read by
   byte range, one version pinned, over S3, GCS or Azure): [../objfile/README.md](../objfile/README.md).
 - **Reviewer:** [internals/contracts.md](internals/contracts.md) (what is promised and which test holds it),

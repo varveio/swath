@@ -30,9 +30,10 @@ func (p Position) Cursor() *seekparquet.Cursor {
 	return &seekparquet.Cursor{Key: bytes.Clone(p.Key), Offset: p.Offset}
 }
 
-// Object is a current object as a reader of any object store's current
-// objects sees it: an S3, Cloud Storage or Azure Blob row (DecodeObject;
-// an Azure blob's StorageClass is its access tier).
+// Object is a current object, or a filesystem entry, as a reader of any
+// source's current objects sees it: an S3, Cloud Storage, Azure Blob or
+// filesystem row (DecodeObject). An Azure blob's StorageClass is its
+// access tier; ETag and StorageClass are nil for a filesystem entry.
 type Object struct {
 	Position
 	Size         *int64
@@ -127,21 +128,19 @@ type LocalEntry struct {
 // column is one of KindRow.
 
 // DecodeObject decodes a current object of swath/s3-objects/v1,
-// swath/gcs-objects/v1 or swath/azblob-objects/v1, the schema id of the
-// row's dataset. Every other id is a KindSchema error: a versions row is
-// not a current object.
+// swath/gcs-objects/v1 or swath/azblob-objects/v1, or an entry of
+// swath-local/v1, the schema id of the row's dataset. Every other id is a
+// KindSchema error: a versions row is not a current object.
 func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
-	class := "storage_class"
-	switch id {
-	case S3ObjectsV1, GCSObjectsV1:
-	case AzblobObjectsV1:
-		class = "access_tier"
-	default:
+	columns := objectColumns(id)
+	if columns == nil {
 		return Object{}, semantic(KindSchema, "", nil, "schema id %q holds no current objects", id)
 	}
 	d := decoder{spec: schemas[id], row: &row}
-	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
-		ETag: d.string("etag"), StorageClass: d.string(class)}
+	o := Object{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified")}
+	if len(columns) > 2 {
+		o.ETag, o.StorageClass = d.string("etag"), d.string(columns[3])
+	}
 	return o, d.err
 }
 
@@ -152,6 +151,21 @@ func DecodeAzblobObject(row seekparquet.Row) (AzblobObject, error) {
 		ETag: d.string("etag"), ContentMD5: d.string("content_md5"), ContentType: d.string("content_type"),
 		BlobType: d.string("blob_type"), AccessTier: d.string("access_tier"), CreationTime: d.time("creation_time")}
 	return o, d.err
+}
+
+// objectColumns returns the columns DecodeObject reads for a schema id,
+// nil for one that holds no current objects; the fourth, where there is
+// one, is the storage class.
+func objectColumns(id SchemaID) []string {
+	switch id {
+	case S3ObjectsV1, GCSObjectsV1:
+		return []string{"size", "last_modified", "etag", "storage_class"}
+	case AzblobObjectsV1:
+		return []string{"size", "last_modified", "etag", "access_tier"} // the tier is its storage class
+	case LocalV1:
+		return []string{"size", "last_modified"}
+	}
+	return nil
 }
 
 // DecodeS3Object decodes a swath/s3-objects/v1 row.

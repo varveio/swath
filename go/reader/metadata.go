@@ -83,3 +83,67 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage = true, x.PublishedAt, x.Source, x.Scope, x.Coverage
 	return out, nil
 }
+
+// AcceptWholeSource accepts the dataset as a listing of the whole of one
+// source: the container of the given kind ("s3", "gcs" or "local-fs"; a
+// filesystem has no container, so container is ""). It requires every
+// member below to be present, and fails on the first that is absent or
+// does not hold, with a SemanticError of KindCoverage whose Column names
+// the member: extensions.swath itself, source.kind and source.container
+// equal to kind and container, scope.kind "whole", coverage.complete
+// true, coverage.stop_reason "completed", coverage.skipped_entries 0 and
+// coverage.filters empty. Exclusions are what a listing leaves out by
+// design (an output directory inside a listed tree), and a listing is
+// never a point-in-time snapshot (coverage.snapshot false), so neither
+// refuses a dataset.
+func (d *Dataset) AcceptWholeSource(kind, container string) error {
+	m := d.meta
+	if !m.Swath {
+		return semantic(KindCoverage, "extensions."+Extension, nil, "absent: the manifest is not a swath listing's")
+	}
+	var src SourceInfo
+	if m.Source != nil {
+		src = *m.Source
+	}
+	var scope Scope
+	if m.Scope != nil {
+		scope = *m.Scope
+	}
+	var c Coverage
+	if m.Coverage != nil {
+		c = *m.Coverage
+	}
+	switch {
+	case src.Kind == nil:
+		return missing("source.kind")
+	case *src.Kind != kind:
+		return semantic(KindCoverage, "source.kind", nil, "%q, not %q", *src.Kind, kind)
+	case src.Container == nil && container != "":
+		return missing("source.container")
+	case src.Container != nil && *src.Container != container:
+		return semantic(KindCoverage, "source.container", nil, "%q, not %q", *src.Container, container)
+	case scope.Kind == nil:
+		return missing("scope.kind")
+	case *scope.Kind != "whole":
+		return semantic(KindCoverage, "scope.kind", nil, "%q: the listing covers part of the source", *scope.Kind)
+	case c.Complete == nil:
+		return missing("coverage.complete")
+	case !*c.Complete:
+		return semantic(KindCoverage, "coverage.complete", nil, "false: the listing did not reach the end of its scope")
+	case c.StopReason == nil:
+		return missing("coverage.stop_reason")
+	case *c.StopReason != "completed":
+		return semantic(KindCoverage, "coverage.stop_reason", nil, "%q", *c.StopReason)
+	case c.SkippedEntries == nil:
+		return missing("coverage.skipped_entries")
+	case *c.SkippedEntries != 0:
+		return semantic(KindCoverage, "coverage.skipped_entries", nil, "%d entries skipped", *c.SkippedEntries)
+	case c.Filters == nil:
+		return missing("coverage.filters")
+	case len(c.Filters) > 0:
+		return semantic(KindCoverage, "coverage.filters", nil, "filtered by %q", c.Filters)
+	}
+	return nil
+}
+
+func missing(member string) error { return semantic(KindCoverage, member, nil, "absent") }

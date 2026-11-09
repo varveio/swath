@@ -75,8 +75,9 @@ transitively.
 
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
 inherit the lister's dependencies: `go/reader` (`github.com/varveio/swath/go/reader`: the schema ids and their
-columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows; the SeekParquet module and
-the standard library only; [../reader/README.md](../reader/README.md)) and `go/objfile` (a dataset in an object
+columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that checks
+a dataset's schema, accepts it as a whole-source listing and streams its current objects; the SeekParquet module
+and the standard library only; [../reader/README.md](../reader/README.md)) and `go/objfile` (a dataset in an object
 store opened as files read by byte range; [../objfile/README.md](../objfile/README.md)). The lister imports
 `go/reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
 specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. Neither nested
