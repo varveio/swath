@@ -83,8 +83,8 @@ before choosing columns.
 | --- | --- | --- |
 | Local and mounted filesystem | A directory path; the OS mount and its permissions | Files and directories; direct summaries or dataset output. No local scan resume. Not a native NFS or SMB client. |
 | Amazon S3 | `s3://bucket/prefix/`; AWS credential chain, `--profile`, or `--anonymous` | General-purpose buckets. `--all-versions` includes versions and delete markers. No directory buckets. |
-| Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials`, or `--gcs-anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
-| Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--azblob-anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
+| Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
+| Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
 
 Authentication and request billing: [operating reference](operating.md#credentials).
 Azure credential precedence and namespace checks: [Azure provider](internals/providers/azblob.md).
