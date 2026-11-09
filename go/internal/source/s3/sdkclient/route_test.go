@@ -30,40 +30,38 @@ func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // routeCases are the endpoint forms the provider supports (package client's
-// TestURL), with the hand-rolled client's Route for each.
+// TestURL), with the route of each.
 var routeCases = []struct {
 	name   string
 	cfg    client.Config
 	bucket string
-	hand   string // client.Client.Route
-	sdk    string // Client.Route: the SDK's endpoint resolver
+	route  string // both clients' Route
 }{
 	{"default endpoint", client.Config{Region: "eu-west-1"}, "bkt",
-		"https://bkt.s3.eu-west-1.amazonaws.com/", "https://bkt.s3.eu-west-1.amazonaws.com"},
+		"https://bkt.s3.eu-west-1.amazonaws.com/"},
 	{"dotted bucket", client.Config{Region: "us-east-1"}, "a.b",
-		"https://s3.us-east-1.amazonaws.com/a.b", "https://s3.us-east-1.amazonaws.com/a.b"},
+		"https://s3.us-east-1.amazonaws.com/a.b"},
 	{"path-style", client.Config{Region: "us-east-1", PathStyle: true}, "bkt",
-		"https://s3.us-east-1.amazonaws.com/bkt", "https://s3.us-east-1.amazonaws.com/bkt"},
+		"https://s3.us-east-1.amazonaws.com/bkt"},
 	{"custom IP endpoint", client.Config{Region: "us-east-1", Endpoint: "http://127.0.0.1:9000"}, "bkt",
-		"http://127.0.0.1:9000/bkt", "http://127.0.0.1:9000/bkt"},
+		"http://127.0.0.1:9000/bkt"},
 	{"custom endpoint with a path", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/"}, "bkt",
-		"https://bkt.minio.example/s3/", "https://bkt.minio.example/s3/"},
+		"https://bkt.minio.example/s3/"},
 	{"custom endpoint with a path, path-style", client.Config{Region: "us-east-1", Endpoint: "https://minio.example/s3/", PathStyle: true}, "bkt",
-		"https://minio.example/s3/bkt", "https://minio.example/s3/bkt"},
+		"https://minio.example/s3/bkt"},
 	{"FIPS", client.Config{Region: "us-gov-west-1", FIPS: true}, "bkt",
-		"https://bkt.s3-fips.us-gov-west-1.amazonaws.com/", "https://bkt.s3-fips.us-gov-west-1.amazonaws.com"},
+		"https://bkt.s3-fips.us-gov-west-1.amazonaws.com/"},
 	{"dual-stack", client.Config{Region: "eu-west-1", DualStack: true}, "bkt",
-		"https://bkt.s3.dualstack.eu-west-1.amazonaws.com/", "https://bkt.s3.dualstack.eu-west-1.amazonaws.com"},
+		"https://bkt.s3.dualstack.eu-west-1.amazonaws.com/"},
 	{"FIPS and dual-stack", client.Config{Region: "us-east-1", FIPS: true, DualStack: true}, "bkt",
-		"https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/", "https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com"},
+		"https://bkt.s3-fips.dualstack.us-east-1.amazonaws.com/"},
 	{"cn-north-1", client.Config{Region: "cn-north-1"}, "bkt",
-		"https://bkt.s3.cn-north-1.amazonaws.com.cn/", "https://bkt.s3.cn-north-1.amazonaws.com.cn"},
+		"https://bkt.s3.cn-north-1.amazonaws.com.cn/"},
 }
 
-// TestRouteAgainstHandRolled records both clients' routes for the endpoint
-// forms. They are not made equal here: a difference changes a journal's
-// route identity, a decision for the resume contract. The table holds both
-// as they are; the test fails when either changes.
+// TestRouteAgainstHandRolled: both clients name the same route for every
+// endpoint form (a journal's route identity); the table holds both, so a
+// change in either fails here.
 func TestRouteAgainstHandRolled(t *testing.T) {
 	s3test.NoCredentials(t)
 	for _, c := range routeCases {
@@ -76,10 +74,8 @@ func TestRouteAgainstHandRolled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if h, s := hand.Route(c.bucket), sdk.Route(c.bucket); h != c.hand || s != c.sdk {
-			t.Errorf("%s: hand-rolled %s (want %s), sdk %s (want %s)", c.name, h, c.hand, s, c.sdk)
-		} else if h != s {
-			t.Logf("%s: hand-rolled %s, sdk %s", c.name, h, s)
+		if h, s := hand.Route(c.bucket), sdk.Route(c.bucket); h != c.route || s != c.route {
+			t.Errorf("%s: hand-rolled %s, sdk %s, want %s", c.name, h, s, c.route)
 		}
 	}
 }

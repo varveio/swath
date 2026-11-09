@@ -180,6 +180,9 @@ func (c *Client) Route(bucket string) string {
 		return ""
 	}
 	u := ep.URI
+	if u.Path == "" {
+		u.Path = "/" // the path a virtual-hosted request is sent to
+	}
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
 }
 
