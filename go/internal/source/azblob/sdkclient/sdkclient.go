@@ -45,11 +45,14 @@
 // Encoded name is percent-decoded with query semantics (a literal '+' reads
 // as a space; Azure sends '+' as %2B, as every Encoded name in the October
 // 2026 captures escapes every reserved byte) and a malformed escape is a
-// parse failure, not an invalid page; an <Error> element inside a 200
-// listing, data after its root and a second <Blobs> are not refused; any
+// parse failure, not an invalid page; a second <Blobs> is not refused, and
+// a comment after the root is (the hand-rolled parser allows it); any
 // malformed date property, not only the three a row keeps, fails the page,
-// as does a malformed Date header; x-ms-is-hns-enabled reads as
-// strconv.ParseBool does.
+// as does a malformed Date header on a listing. Get Account Information's
+// x-ms-is-hns-enabled is read from the header as sent (client.HNS, shared
+// with the hand-rolled client: exactly "true" or "false"), not from the
+// SDK's strconv.ParseBool reading, which takes "0" for flat
+// (TestAccountInfo).
 package sdkclient
 
 import (
@@ -378,8 +381,15 @@ func deref(s *string) string {
 // bom starts every body Azure sends.
 var bom = []byte("\xef\xbb\xbf")
 
-// envelope is the Guard's check of a listing's 200 (comp=list): its root
-// element is EnumerationResults. Any other answer is the SDK's to read.
+// envelope is the Guard's check of a listing's 200 (comp=list), what the
+// SDK's decoder does not check: the root element is EnumerationResults,
+// nothing but whitespace follows its end, and no <Error> element is in it
+// (the SDK would read such a body as a page, an empty final one when the
+// error replaces the entries). XML text cannot hold a literal '<', so a
+// body with one "</EnumerationResults" ending in it has nothing after its
+// root, and one without "<Error" has no Error element: the token walk runs
+// only for a body that holds "<Error" (an ErrorCode element, say). Any
+// other answer is the SDK's to read.
 func envelope(req *http.Request, status int, body []byte) error {
 	if status != http.StatusOK || req.URL.Query().Get("comp") != "list" {
 		return nil
@@ -397,7 +407,26 @@ func envelope(req *http.Request, status int, body []byte) error {
 			if s.Name.Local != "EnumerationResults" {
 				return fmt.Errorf("%w: a 200 whose body is <%s>, not <EnumerationResults> (%d bytes)", objhttp.ErrSyntax, s.Name.Local, len(body))
 			}
+			break
+		}
+	}
+	const end = "</EnumerationResults>"
+	if bytes.Count(body, []byte("</EnumerationResults")) != 1 || !bytes.HasSuffix(bytes.TrimRight(body, " \t\r\n"), []byte(end)) {
+		return fmt.Errorf("%w: a 200 listing with content after %s, or without it (%d bytes)", objhttp.ErrSyntax, end, len(body))
+	}
+	if !bytes.Contains(body, []byte("<Error")) {
+		return nil
+	}
+	for {
+		tok, err := d.RawToken()
+		if err == io.EOF {
 			return nil
+		}
+		if err != nil {
+			return nil // the SDK's decoder refuses it
+		}
+		if s, ok := tok.(xml.StartElement); ok && s.Name.Local == "Error" {
+			return fmt.Errorf("%w: a 200 listing holding an <Error> element (%d bytes)", objhttp.ErrSyntax, len(body))
 		}
 	}
 }

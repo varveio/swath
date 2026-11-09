@@ -208,8 +208,9 @@ func verifySharedKey(t *testing.T, req *http.Request, account, key string) {
 // hand-rolled parser's (the accepted differences the package comment
 // names), from the same body: an Encoded literal '+' reads as a space
 // (%2B, Azure's form, as '+' in both), a malformed escape is a parse
-// failure, an <Error> element inside a listing, data after it and a second
-// <Blobs> are read, a hierarchy page out of order across its two kinds is
+// failure, a second <Blobs> is read and a comment after the root refused
+// (an <Error> element in a listing, and data after it, both refuse), a
+// hierarchy page out of order across its two kinds is
 // merged into order, and a malformed date the row does not keep, or a
 // malformed Date header, fails the page.
 func TestSDKDecoding(t *testing.T) {
@@ -231,9 +232,19 @@ func TestSDKDecoding(t *testing.T) {
 		{"Encoded malformed escape", "", "", listHead + `<Blob><Name Encoded="true">a%G1</Name></Blob>` + listTail,
 			result{class: objhttp.ClassInvalidPage}, result{class: objhttp.ClassParse}},
 		{"Error element inside", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><Error><Code>X</Code></Error><NextMarker/></EnumerationResults>`,
-			result{class: objhttp.ClassParse}, result{names: []string{"a"}}},
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"Error element instead of the entries", "", "", `<EnumerationResults><Blobs/><Error><Code>InternalError</Code></Error><NextMarker/></EnumerationResults>`,
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"ErrorCode element is not an Error", "", "", listHead + `<Blob><Name>a</Name><Properties><ErrorCode>x</ErrorCode></Properties></Blob>` + listTail,
+			result{names: []string{"a"}}, result{names: []string{"a"}}},
 		{"data after the root", "", "", page("", "a") + "<junk/>",
-			result{class: objhttp.ClassParse}, result{names: []string{"a"}}},
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"a second root", "", "", page("", "a") + page("", "b"),
+			result{class: objhttp.ClassParse}, result{class: objhttp.ClassParse}},
+		{"whitespace after the root", "", "", page("", "a") + "\r\n ",
+			result{names: []string{"a"}}, result{names: []string{"a"}}},
+		{"comment after the root", "", "", page("", "a") + "<!-- c -->",
+			result{names: []string{"a"}}, result{class: objhttp.ClassParse}},
 		{"two Blobs", "", "", listHead + `<Blob><Name>a</Name></Blob></Blobs><Blobs><Blob><Name>b</Name></Blob></Blobs><NextMarker/></EnumerationResults>`,
 			result{class: objhttp.ClassParse}, result{names: []string{"a", "b"}}},
 		{"hierarchy out of order across kinds", "/", "", listHead + `<Blob><Name>b</Name></Blob><BlobPrefix><Name>a/</Name></BlobPrefix>` + listTail,
