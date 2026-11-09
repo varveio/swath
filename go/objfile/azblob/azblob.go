@@ -74,12 +74,8 @@ func getter(b *blob.Client) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		res := ranged.Response{
-			Body:   out.Body,
-			Pin:    ranged.Pin{ETag: string(deref(out.ETag))},
-			Total:  ranged.Total(deref(out.ContentRange)),
-			Length: -1,
-		}
+		res := ranged.Response{Body: out.Body, Pin: ranged.Pin{ETag: string(deref(out.ETag))}, Length: -1}
+		res.Start, res.Total = ranged.Stated(deref(out.ContentRange))
 		if out.ContentLength != nil {
 			res.Length = *out.ContentLength
 		}

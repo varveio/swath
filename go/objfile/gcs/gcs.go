@@ -7,7 +7,12 @@
 // first read. Every later read is a range reader of that generation, of the
 // stored bytes (no decompressive transcoding). A read of a generation that no
 // longer exists, or one finding another size, fails with
-// objfile.ErrObjectChanged.
+// objfile.ErrObjectChanged; one served from another offset fails.
+//
+// The SDK's reader requests the rest of a range by itself when a body fails
+// part way, and checks only that answer's status. The client objfile/remote
+// builds checks the range of every answer; on a client the caller builds,
+// that request is as the caller's transport leaves it.
 package gcs
 
 import (
@@ -70,7 +75,7 @@ func (o opener) getter(name string) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		res := ranged.Response{Body: r, Total: r.Attrs.Size, Length: r.Remain()}
+		res := ranged.Response{Body: r, Start: r.Attrs.StartOffset, Total: r.Attrs.Size, Length: r.Remain()}
 		if r.Attrs.Generation > 0 {
 			res.Pin.Version = strconv.FormatInt(r.Attrs.Generation, 10)
 		}

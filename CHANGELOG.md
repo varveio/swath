@@ -5,6 +5,12 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
+  JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
+  parses dataset roots (`ParseLocation`: `s3://`, `gs://`, `az://ACCOUNT/CONTAINER`) and opens one with each
+  provider's default credentials (`objfile/remote.Open`). Every ranged read now checks the offset the store served,
+  and the GCS client `remote.Open` builds also checks the requests the SDK's reader sends on its own: a read returns
+  exactly the requested bytes or fails.
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
   accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.

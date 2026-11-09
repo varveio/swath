@@ -76,12 +76,9 @@ func (o opener) getter(name string) ranged.Getter {
 			}
 			return ranged.Response{}, err
 		}
-		return ranged.Response{
-			Body:   out.Body,
-			Pin:    pinOf(out.ETag, out.VersionId),
-			Total:  ranged.Total(aws.ToString(out.ContentRange)),
-			Length: lengthOf(out.ContentLength),
-		}, nil
+		res := ranged.Response{Body: out.Body, Pin: pinOf(out.ETag, out.VersionId), Length: lengthOf(out.ContentLength)}
+		res.Start, res.Total = ranged.Stated(aws.ToString(out.ContentRange))
+		return res, nil
 	}
 }
 
