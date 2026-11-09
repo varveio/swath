@@ -711,7 +711,7 @@ Diagnostics:
   name in byte order, so the result does not depend on which name a worker reached first, while each name still
   adds its time. Only those inodes are remembered, and `--max-inodes N` (default 1,000,000) caps them (exit 1,
   cause `inode_limit`). Both read each entry's stat: `--metadata names` is refused (exit 2), and a platform whose
-  engine does not read the values (the portable engine off Linux) fails the run at the first entry without them.
+  engine does not read the values (the portable engine on Windows) fails the run at the first entry without them.
 - **`--one-filesystem`** (local sources, `swath list`, `swath du` and `swath diag count`): a directory on another device than the
   root (a mount point) is listed, its row kept, but not walked, as `du -x` and `find -xdev`. The listing says so:
   the provider's counter `other_device_dirs`, and a dataset's `coverage.filters` holds `one_filesystem`, so a

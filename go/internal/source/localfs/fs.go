@@ -285,8 +285,8 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		return nil
 	}
 	st.DirsRead++
+	defer f.Close() // statEntry stats relative to it on darwin
 	ents, err := f.ReadDir(-1)
-	f.Close()
 	if err != nil {
 		st.note(&st.ReadErrors, r.path, err)
 	}
@@ -301,8 +301,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		if p.opt.Fields == Names {
 			row.Data.Kind = kindOf(d.Type())
 		} else {
-			fi, err := d.Info()
-			if err != nil {
+			if err := statEntry(f, d, &row.Data); err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
 					st.note(&st.Vanished, path, err)
 				} else {
@@ -310,7 +309,6 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 				}
 				continue
 			}
-			fromFileInfo(&row.Data, fi)
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := os.Readlink(path); err == nil {
 					row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink

@@ -175,7 +175,7 @@ content hash: compare content with `content_md5`, and never compare ETags across
 | `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`) |
 | `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`) |
 | `metadata_changed_at`, `atime` | timestamp | `st_ctime`, `st_atime` |
-| `birth_time` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); Windows `CreationTime` |
+| `birth_time` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); macOS `st_birthtime` (stat tier); Windows `CreationTime` |
 | `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
 
 Under `--metadata names` (no stat) the stat columns are null.

@@ -7,8 +7,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
-  `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir` + `Lstat`, re-checking that an opened child directory is
-  the one that was listed.
+  `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
+  that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
+  directory (every stat column and `birth_time`; `os.DirEntry.Info` is an `lstat` of the full path, which
+  resolves the path again per entry and was slower), on Windows the directory enumeration's own size, times and attributes
+  (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`), elsewhere `Lstat`.
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
@@ -43,7 +46,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed unless `--one-filesystem` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
-  portable engine off Linux), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
+  portable engine on Windows), and `emit` keeps a DIR row whose `dev` differs but hands on no child range for it
   (counter `other_device_dirs`); `Report` adds `one_filesystem` to the coverage's filters, so a dataset says it
   stops at the root's filesystem.
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
