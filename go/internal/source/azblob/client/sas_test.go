@@ -53,7 +53,7 @@ func TestSASOnEveryRequest(t *testing.T) {
 	var queries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.RawQuery)
-		if r.Header.Get(headerAuthorization) != "" || r.Header.Get(headerDate) != "" {
+		if r.Header.Get(headerAuthorization) != "" || r.Header.Get("x-ms-date") != "" {
 			t.Errorf("headers %v", r.Header)
 		}
 		if r.URL.Query().Get("comp") == "properties" {

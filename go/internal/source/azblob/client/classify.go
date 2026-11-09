@@ -39,7 +39,6 @@ const (
 	headerHNSEnabled       = "x-ms-is-hns-enabled"
 	headerNamespaceEnabled = "x-ms-namespace-enabled"
 	headerVersion          = "x-ms-version"
-	headerDate             = "x-ms-date"
 	headerAuthorization    = "Authorization"
 	headerUserAgent        = "User-Agent"
 	headerLocation         = "Location"
