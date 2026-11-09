@@ -30,7 +30,8 @@ jobs:
   # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
   # requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
-  # its own, wider detection. go_shards is the go-race matrix, from the shard table.
+  # its own, wider detection. go_shards is the go-race matrix, from the shard table; go_xos is the
+  # go-xos matrix, from the event.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -38,6 +39,7 @@ jobs:
       java: ${{ steps.changes.outputs.java }}
       go: ${{ steps.changes.outputs.go }}
       go_shards: ${{ steps.shards.outputs.matrix }}
+      go_xos: ${{ steps.xos.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
@@ -89,6 +91,29 @@ jobs:
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "go-race shards: $matrix"
+
+      # Always computed, for the same reason: go-xos's runners are chosen before its steps can
+      # skip, and a job-level `if` would make it `skipped`, which fails ci-gate on a pull request.
+      # A pull request runs Windows and linux/arm64: the macOS runner queue set the pull request's
+      # wall time, so macOS runs on main and dispatch here and nightly in nightly.yml. Without a Go
+      # change, one step-skipped leg on ubuntu-latest, so no macOS, Windows or arm64 runner is
+      # queued.
+      - name: Go cross-OS matrix
+        id: xos
+        env:
+          GO_CHANGED: ${{ steps.changes.outputs.go }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$GO_CHANGED" != true ]; then
+            matrix='[{"os":"off","runner":"ubuntu-latest"}]'
+          elif [ "$EVENT" = pull_request ]; then
+            matrix='[{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+          else
+            matrix='[{"os":"macos-latest","runner":"macos-latest"},{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "go-xos legs: $matrix"
 
   # Fast gate: unit / property / concurrency tiers only (no Docker). First to report on
   # every PR. Integration (Testcontainers/LocalStack) tiers are excluded here via
@@ -420,6 +445,10 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: go mod tidy -diff
 
+      - name: Race shard table self-test
+        if: needs.changes.outputs.go == 'true'
+        run: ../scripts/ci/go-race-shards.sh --self-test
+
       - name: Race shards cover every test once
         if: needs.changes.outputs.go == 'true'
         run: ../scripts/ci/go-race-shards.sh --check
@@ -429,7 +458,7 @@ jobs:
   # shard; the step prints the exact `go test` command to rerun it locally. fail-fast is off so
   # one red shard still lets the others report. go test's -timeout is per package binary, so it
   # is set to leave the job's limit room for setup, compiling and the packages queued ahead of
-  # the last one (the whole `rest` shard takes ~6 min): a hang ends in go test's goroutine dump,
+  # the last one (the unsplit `rest` shard took ~6 min): a hang ends in go test's goroutine dump,
   # not a killed runner. -count=1: the restored build cache would otherwise replay a shard's
   # earlier results as `(cached)` instead of racing it. The -json stream is kept as the go-race-SHARD artifact (per-test
   # starts and times, passing subtests included) for flakes and rebalancing.
@@ -683,18 +712,28 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
-  # The Go default tier on the other operating systems the port ships for: plain `go test`
-  # (no -race: slow on macOS, and the Windows race detector needs cgo) on macOS and Windows.
-  # linux/arm64 is covered by the go-race shards. Only vet and the tests: gofmt, the shard
-  # check, the heap gates, the cross-builds and the image stay in the jobs above. Always runs;
-  # its steps work only on a Go-relevant change (the changes job).
+  # The Go default tier on the other platforms the port ships for: plain `go test` (no -race:
+  # slow on macOS, and the Windows race detector needs cgo) on Windows, linux/arm64 and macOS.
+  # Only vet and the tests: gofmt, the shard check, the heap gates, the cross-builds and the
+  # image stay in the jobs above. The legs are the changes job's go_xos: Windows and linux/arm64
+  # on every Go change, macOS on main and dispatch only (and nightly, nightly.yml go-xos-macos),
+  # and without a Go change one go-xos (off) leg on ubuntu-latest whose steps skip.
+  #
+  # The linux/arm64 leg is what keeps arm64 before merge: the go-race arm64 shards cover only
+  # internal/listing and cmd/swath, and the one product-relevant macOS finding so far
+  # (TestFooterOnlyChange, #308) was parquet-go's arm64 encoder path, not Darwin. It runs the
+  # rest of the tree on arm64 at Linux prices with no runner queue. What only the macOS leg
+  # covers is Darwin itself: APFS's refusal of names that are not UTF-8, and the crash, durable
+  # and kill matrices on Darwin's filesystem and signals, run there without -race
+  # (go/docs/testing.md, cross-OS).
   go-xos:
     needs: changes
+    name: go-xos (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include: ${{ fromJSON(needs.changes.outputs.go_xos) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
       run:
