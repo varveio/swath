@@ -11,7 +11,8 @@
 // RefusalError, ErrClosed, ...) are aliases of the module's own.
 //
 // Open and OpenDir open a dataset through the module, which reads its
-// manifest and no part, parse its metadata and resolve its schema id.
+// manifest and no part, parse its metadata (extensions.swath, whose
+// version must be MetadataVersion) and resolve its schema id.
 // CheckSchema, at admission, checks the manifest's key against the schema
 // id's spec, every part through the module (seekparquet.Dataset.Verify),
 // and every part's columns against the spec. AcceptWholeSource accepts the

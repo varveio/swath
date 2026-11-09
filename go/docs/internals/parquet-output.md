@@ -232,6 +232,8 @@ Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with 
 accessor of the payload `P` and an encoding preference: `Delta` writes DELTA_BYTE_ARRAY, used for `etag`). Each
 producer defines its schema beside its code. The Parquet node is built from that list; `TestFooterMatchesSchema`
 checks the footer against a test schema with one column of every type. There is no message string any more.
+A schema id is `swath/<row-contract>/vN`: the row contract it names (`s3-objects`, `gcs-generations`,
+`local-entries`) and its version, which changes when an existing column, the key or a row's meaning changes.
 
 **`s3.Schema`** (`swath/s3-objects/v1`) is the current-object schema, nine columns: `key`, `size`,
 `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name` (null unless `-fetch-owner`),
@@ -245,7 +247,7 @@ targets are unannotated BYTE_ARRAY, written exactly as the kernel returned them,
 normalised. Manifest bounds are written in base64 (`min_key_base64`, `max_key_base64`) so every key survives
 JSON; readers compare the decoded bytes (`dataset.Key`).
 
-**`fs.Schema`** (`swath-local/v1`) has one row per entry below the root, directories included, each with a
+**`fs.Schema`** (`swath/local-entries/v1`) has one row per entry below the root, directories included, each with a
 named `kind`. `size` and `last_modified` match the S3 schema; `key` is binary. Identifiers are unsigned. v1 renamed
 `blocks` to `allocated_bytes` and `ctime` to `metadata_changed_at`, and made the identifiers unsigned:
 

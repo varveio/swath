@@ -63,6 +63,7 @@ goes under `extensions`, by namespace. swath's is `extensions.swath`:
   "key": {"column": "key", "unique": true},
   "extensions": {
     "swath": {
+      "version": 1,
       "published_at": "2026-11-08T18:00:00.123456Z",
       "source": {"kind": "s3", "uri": "s3://bucket/logs/", "container": "bucket"},
       "scope": {"kind": "prefix", "prefix": "logs/"},
@@ -86,6 +87,7 @@ JSON readers do not depend on it.
 | `version` ("1") | `format`, `format_version`, `draft_revision` |
 | `schemaId` | `schema_id` |
 | – (the key column is `key`) | `key`: `{"column": "key", "unique": true}`; `unique` is false for the versions schemas (`--all-versions`), whose keys repeat on consecutive rows and never across parts |
+| – | `extensions.swath.version`: `1`, the version of the extension's own contract; a reader refuses any other value, or none ("unsupported swath metadata version") |
 | `creationTimestamp` (epoch ms) | `extensions.swath.published_at` (RFC 3339, UTC) |
 | `sourceKind`, `sourceRoot`, `sourceBucket` | `extensions.swath.source.kind`, `.uri`, `.container` |
 | – (inferred from the run summary's `config.target`) | `extensions.swath.scope.kind` (`whole` or `prefix`), `.prefix` |
@@ -95,9 +97,9 @@ JSON readers do not depend on it.
 | `fileFormat`, `sorted`, `sortKey`, `fileSchema`, `totalRows` | removed (the format implies the first four; sum `rows` for the total) |
 
 `parts[].sha256` is the part's SHA-256 in lowercase hexadecimal, SeekParquet's own part member (PART-5), which
-the format's validators check at the digest level. Builds before journal version 9 wrote the parts' MD5s under
-`extensions.swath.part_md5` and no `sha256`; their datasets stay readable (`swath show`, `--seed-from`), and
-the extension member is ignored. MD5 is no longer written anywhere.
+the format's validators check at the digest level. MD5 is not written anywhere. Development builds before
+`extensions.swath.version` existed wrote manifests without it (some with the parts' MD5s under
+`extensions.swath.part_md5`); no reader reads them, so re-list into a new directory.
 
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
 JSON. A reader decodes them and compares bytes (unsigned), never the base64 text. For the S3 schema the
@@ -125,7 +127,7 @@ that needs swath's coverage refuses it.
 | `is_delete_marker` | always false | removed |
 | `row_type` | always `OBJECT` | removed |
 
-The local schema becomes `swath-local/v1`: `key` and `link_target` are unannotated BYTE_ARRAY (names are
+The local schema becomes `swath/local-entries/v1`: `key` and `link_target` are unannotated BYTE_ARRAY (names are
 bytes; a name that is not UTF-8 is listed exactly, where format 1 skipped it), `blocks` is renamed `allocated_bytes`, `ctime` is renamed
 `metadata_changed_at`, and `mode`, `uid`, `gid`, `nlink` (`INT(32,false)`), `inode` and `dev`
 (`INT(64,false)`) are unsigned.

@@ -20,8 +20,8 @@ import (
 
 // A dataset is a SeekParquet dataset (the seekparquet module's Format,
 // FormatVersion and DraftRevision, its footer stamps and its manifest),
-// keyed by KeyColumn. swath's own metadata (what was listed, how much of
-// it, the parts' digests) is the manifest's Extension.
+// keyed by KeyColumn. swath's own metadata (its version, what was listed,
+// how much of it) is the manifest's Extension.
 const (
 	KeyColumn = "key"
 	Extension = "swath"

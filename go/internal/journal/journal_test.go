@@ -28,7 +28,7 @@ func TestCheck(t *testing.T) {
 		{"same", func(*Identity) {}, ""},
 		{"tool", func(i *Identity) { i.Tool = "swath" }, "tool"},
 		{"format", func(i *Identity) { i.Format = 2 }, "format"},
-		{"schema", func(i *Identity) { i.SchemaID = "swath-local/v0" }, "schema"},
+		{"schema", func(i *Identity) { i.SchemaID = "swath/local-entries/v0" }, "schema"},
 		{"provider", func(i *Identity) { i.Provider = "gcs" }, "provider"},
 		{"source", func(i *Identity) { i.Source = src("http://h:9000", ""); i.Source[0].Value = "s3://c/" }, "source"},
 		{"writer", func(i *Identity) { i.Writer = "w2" }, "writer"},

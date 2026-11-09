@@ -82,7 +82,7 @@ type Row = schema.Row[Entry]
 // Has reports whether every bit in p is present.
 func (e *Entry) Has(p Presence) bool { return e.Present&p == p }
 
-// Schema is swath-local/v1: one row per entry below the root, directories
+// Schema is swath/local-entries/v1: one row per entry below the root, directories
 // included, each with a named kind. size and last_modified match the S3
 // schema. Names are bytes (a POSIX name need not be UTF-8): key and
 // link_target are unannotated BYTE_ARRAY, written exactly as the kernel

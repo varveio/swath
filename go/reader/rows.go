@@ -101,7 +101,7 @@ type AzblobObject struct {
 	CreationTime *time.Time
 }
 
-// LocalEntry is a swath-local/v1 row: one filesystem entry below the root.
+// LocalEntry is a swath/local-entries/v1 row: one filesystem entry below the root.
 // Key is the path's bytes, which need not be UTF-8.
 type LocalEntry struct {
 	Position
@@ -129,7 +129,7 @@ type LocalEntry struct {
 
 // DecodeObject decodes a current object of swath/s3-objects/v1,
 // swath/gcs-objects/v1 or swath/azblob-objects/v1, or an entry of
-// swath-local/v1, the schema id of the row's dataset. Every other id is a
+// swath/local-entries/v1, the schema id of the row's dataset. Every other id is a
 // KindSchema error: a versions row is not a current object.
 func DecodeObject(id SchemaID, row seekparquet.Row) (Object, error) {
 	columns := objectColumns(id)
@@ -197,7 +197,7 @@ func DecodeGCSGeneration(row seekparquet.Row) (GCSGeneration, error) {
 	return g, d.err
 }
 
-// DecodeLocalEntry decodes a swath-local/v1 row.
+// DecodeLocalEntry decodes a swath/local-entries/v1 row.
 func DecodeLocalEntry(row seekparquet.Row) (LocalEntry, error) {
 	d := decoder{spec: schemas[LocalV1], row: &row}
 	e := LocalEntry{Position: d.position(), Size: d.int64("size"), LastModified: d.time("last_modified"),
