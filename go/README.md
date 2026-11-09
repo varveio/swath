@@ -1,10 +1,17 @@
-# swath (Go port)
+# swath (Go implementation)
+
+Parallel listing and inventory for large object stores and filesystems.
+
+> **Unreleased on main.** The latest published release is the S3-focused
+> [Java v0.3.2](https://github.com/varveio/swath/releases/tag/v0.3.2). Build this
+> implementation from source. Go will replace Java at release; Java has not been removed.
 
 This directory is the Go port of swath: module `github.com/varveio/swath/go`, command `go/cmd/swath`, CLI name
 `swath`. It lists a local directory tree, an S3 bucket, a GCS bucket or an Azure Blob container (flat namespace) in parallel and writes a globally key-sorted Parquet
 dataset in swath's sorted-dataset layout (`data/part-NNNNN.parquet` and `manifest.json`, the commit; a swath dataset, which is a [SeekParquet](https://github.com/varveio/seekparquet) dataset: [docs/dataset.md](docs/dataset.md)), as a
-pure-Go (`CGO_ENABLED=0`) static binary. The Java distribution keeps its own `swath` launcher (`swath-cli`);
-the two are separate tools. Documentation: [docs/README.md](docs/README.md) says which page to read first, for
+pure-Go (`CGO_ENABLED=0`) static binary. It also provides direct `du` summaries and object-store text listings. The Java release
+currently has a different launcher and output contract; it is being replaced, not maintained
+as a second edition. Start with the [Go guide](docs/guide.md). Documentation: [docs/README.md](docs/README.md) says which page to read first, for
 an operator ([docs/operators.md](docs/operators.md)), someone coming from the Java CLI
 ([docs/from-java.md](docs/from-java.md)), a contributor ([docs/architecture.md](docs/architecture.md)) or a
 reviewer ([docs/measurements.md](docs/measurements.md)). The replay server `cmd/swath-replay`, which serves a recorded

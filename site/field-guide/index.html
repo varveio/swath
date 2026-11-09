@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>swath — a field guide to parallel S3 listing</title>
-<meta name="description" content="How swath divides an S3 keyspace it cannot see: bounded structural seeding, work stealing that corrects it mid-sweep, and resumable managed Parquet output.">
+<title>swath — historical Java v0.3.2 field guide to parallel S3 listing</title>
+<meta name="description" content="Historical Java v0.3.2 guide. How swath divides an S3 keyspace it cannot see: bounded structural seeding, work stealing that corrects it mid-sweep, and resumable managed Parquet output.">
 
 <!-- Publication URLs — this is the one place to change them.
      Live site: https://swath.varve.io (GitHub Pages, gh-pages branch of varveio/swath) -->
@@ -13,7 +13,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="swath">
 <meta property="og:title" content="How swath maps an S3 bucket it cannot see">
-<meta property="og:description" content="513 initial ranges. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
+<meta property="og:description" content="Historical Java guide, not the Go preview. 513 initial ranges. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to resumable managed Parquet.">
 <meta property="og:url" content="https://swath.varve.io/field-guide/">
 <meta property="og:image" content="https://swath.varve.io/card.png">
 <meta property="og:image:width" content="1200">
@@ -749,6 +749,7 @@
 <div class="wrap">
 
   <header class="mast">
+    <p class="whatis"><strong>Historical Java v0.3.2 field guide.</strong> This page describes the Java engine, not the unreleased Go implementation. Recorded runs retain their original versions and provenance below; they are not Go benchmarks. For local filesystems, native GCS, Azure, and current Go workflows, see the <a href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Go preview guide</a> or <a href="../">homepage</a>.</p>
     <div class="eyebrow"><a href="https://varve.io">Varve</a> · <a href="https://swath.varve.io" class="mono">swath</a> · field guide to the engine</div>
     <h1 class="hero-q">How do you divide 39.7 million S3 objects among 128 listing workers when you cannot see how their keys are distributed?</h1>
     <p class="prov-note" style="margin-top:-0.4rem;">
@@ -857,7 +858,7 @@
       <span class="lbl">Want to run it before reading the internals?</span>
       <p>
         Run the small anonymous NOAA example in
-        <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>. It needs Docker but no
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/getting-started.md">Getting started</a>. It needs Docker but no
         AWS account, and it finishes in seconds — the full-bucket run further down this page is
         a different proposition, worth tens of thousands of LIST requests.
       </p>
@@ -1310,7 +1311,7 @@
         in one atomic transaction, so the very first durable state is already a valid
         tiling of the keyspace.
       </p>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#8-seeding-the-hybrid"><span class="mono">docs/internals/algorithms.md §8</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/algorithms.md#8-seeding-the-hybrid"><span class="mono">docs/internals/algorithms.md §8</span></a></p>
     </div>
   </section>
 
@@ -1368,7 +1369,7 @@
         </svg>
       </div>
       <figcaption><b>Plate 6</b> A steal, at the level you need to follow the argument. The thief picks the victim with the largest estimated remaining work, places a pivot from observed mass, and spends exactly one request to find out whether it guessed somewhere real.</figcaption>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#3-stealing--demand-driven-rebalancing"><span class="mono">algorithms.md §3</span></a> · invariants I2–I4 in <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/algorithms.md#3-stealing--demand-driven-rebalancing"><span class="mono">algorithms.md §3</span></a> · invariants I2–I4 in <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/contracts.md"><span class="mono">contracts.md</span></a></p>
     </figure>
 
     <div class="col">
@@ -1380,7 +1381,7 @@
         owner places a pivot far ahead of its cursor and commits the split at page-commit
         time, gated to fire only while live work has fallen below the worker count. The
         mechanism is global; the trigger is local and demand-driven — design law L2 in
-        <a href="https://github.com/varveio/swath/blob/main/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/overview.md"><span class="mono">docs/internals/overview.md</span></a>.
       </p>
       <p>
         This fourth trigger did most of the work in the recorded run below: 2,204 of 2,399
@@ -1635,7 +1636,7 @@
         TSV/JSONL directory datasets or a managed Parquet dataset. Durable resume is a
         managed-Parquet feature, and globally sorted Parquet is an opt-in finalization path on
         top of it. The full decision table lives in
-        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#choose-an-output">docs/usage.md</a>; the short version:
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/usage.md#choose-an-output">docs/usage.md</a>; the short version:
       </p>
     </div>
 
@@ -1675,7 +1676,7 @@
         operational settings the CLI documents as free or restorable may be restored or
         re-supplied. <code>--restart</code> discards an unfinished checkpoint instead.
         The full rules are in
-        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#checkpoint-and-resume">docs/usage.md</a>.
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/usage.md#checkpoint-and-resume">docs/usage.md</a>.
       </p>
     </div>
 
@@ -1714,7 +1715,7 @@
       </p>
       <p>
         Each invariant carries a number (<em class="term">I1–I12</em>) in the repository’s
-        <a href="https://github.com/varveio/swath/blob/main/docs/internals/contracts.md"><span class="mono">contracts.md</span></a>, and the
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/contracts.md"><span class="mono">contracts.md</span></a>, and the
         contribution rules require that a high-risk unit’s adversarial test — the
         one trying to break no-gap/no-overlap, or resume-after-crash — is authored
         or reviewed independently of the code’s author. The test that wants the code
@@ -1751,7 +1752,7 @@
         code path, so the invariants are exercised by every run and every test, not
         only the checkpointed ones.
       </p>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md"><span class="mono">docs/swath-replay.md</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/swath-replay.md"><span class="mono">docs/swath-replay.md</span></a></p>
     </div>
   </section>
 
@@ -1782,7 +1783,7 @@
         bounded channel drained by one output-stage consumer, so output backpressure can
         serialize a large fleet before batches reach the background writers. A swath 0.3.1
         compressed-TSV run on a 1.07-billion-object bucket exposed this bottleneck; see
-        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#find-the-limiting-stage">the performance guide</a>
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/performance.md#find-the-limiting-stage">the performance guide</a>
         for diagnosis and <a href="https://github.com/varveio/swath/issues/206">issue #206</a>
         for the dated evidence.
       </p>
@@ -1806,7 +1807,7 @@
         outside the bucket's region. For a bill, take
         <span class="mono">cost.api_calls</span> from the run's JSON report and multiply by your
         provider's current LIST price — do not treat any price printed in a guide as evergreen.
-        <a href="https://github.com/varveio/swath/blob/main/docs/operating.md#request-cost">Request cost</a> has the formula.
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/operating.md#request-cost">Request cost</a> has the formula.
       </p>
     </div>
 
@@ -1908,7 +1909,7 @@
     <div class="cta" style="margin-top:1.6rem;">
       <a class="primary" href="https://swath.varve.io/runs/noaa-gestofs-pds/">Open the full trace report</a>
       <a href="https://github.com/varveio/swath">View the source</a>
-      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Get started</a>
+      <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/getting-started.md">Get started</a>
       <a href="#dives">Read the deep dives</a>
     </div>
 
@@ -2093,9 +2094,9 @@
       </figcaption>
       <p class="src">
         Detail and current constants:
-        <a href="https://github.com/varveio/swath/blob/main/docs/usage.md#sorted-output"><span class="mono">docs/usage.md#sorted-output</span></a> ·
-        <a href="https://github.com/varveio/swath/blob/main/docs/performance.md#the-sorted-merge"><span class="mono">docs/performance.md</span></a> ·
-        <a href="https://github.com/varveio/swath/blob/main/docs/internals/architecture.md"><span class="mono">docs/internals/architecture.md</span></a>
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/usage.md#sorted-output"><span class="mono">docs/usage.md#sorted-output</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/performance.md#the-sorted-merge"><span class="mono">docs/performance.md</span></a> ·
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/architecture.md"><span class="mono">docs/internals/architecture.md</span></a>
       </p>
     </figure>
   
@@ -2124,7 +2125,7 @@
         does cut <span class="mono">T</span> harder, but only when timeouts are high
         <em>and</em> the run has stopped making progress. The current multipliers, windows,
         and gate thresholds are in
-        <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd">algorithms.md §5</a>.
+        <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/algorithms.md#5-adaptive-concurrency-aimd">algorithms.md §5</a>.
       </p>
       <p>
         The subtlety is what feeds it. The AWS SDK's own retry is turned
@@ -2184,7 +2185,7 @@
         </svg>
       </div>
       <figcaption><b>Plate 9</b> AIMD on the concurrency target, simplified to its two load-bearing moves. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
-      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/internals/algorithms.md#5-adaptive-concurrency-aimd"><span class="mono">docs/internals/algorithms.md §5</span></a></p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/internals/algorithms.md#5-adaptive-concurrency-aimd"><span class="mono">docs/internals/algorithms.md §5</span></a></p>
     </figure>
   
     </details>
@@ -2302,7 +2303,7 @@
           </tr>
           <tr>
             <td class="k"><b>swath-replay</b></td>
-            <td>The replay toolkit: serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes. A contributor tool, not part of the <span class="mono">swath</span> CLI and not needed for a normal listing. Its wire behavior is conformance-tested; its diagnostics and launcher settings are a deliberately unstable development surface. <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay.md">docs/swath-replay.md</a></td>
+            <td>The replay toolkit: serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes. A contributor tool, not part of the <span class="mono">swath</span> CLI and not needed for a normal listing. Its wire behavior is conformance-tested; its diagnostics and launcher settings are a deliberately unstable development surface. <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/swath-replay.md">docs/swath-replay.md</a></td>
             <td class="k">separate release + container image</td>
           </tr>
           <tr>

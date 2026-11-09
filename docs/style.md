@@ -91,8 +91,10 @@ Use these labels consistently:
 - **Planned:** not implemented. Planned controls must not be presented as selectable
   current behavior.
 
-S3 general-purpose buckets are supported. GCS through its XML API is experimental
-S3-compatible access, not a native GCS backend.
+Name the implementation and release when the support differs. The Java v0.3.2 release
+supports S3 general-purpose buckets; its GCS XML access is experimental. Unreleased Go
+also has native GCS, local/mounted filesystem and Azure Blob flat-namespace providers.
+Use the Go CLI and provider docs for their exact limits.
 
 ## Evidence and performance claims
 
@@ -121,12 +123,19 @@ When provenance is incomplete, say so rather than inferring it.
 ## Information ownership
 
 Give each detailed fact one canonical owner. Other pages may summarize it in one or two
-sentences and link to that owner.
+sentences and link to that owner. The root `docs/` usage and engine owners below are for
+Java; Go has separate owners because its implementation and dataset contract differ.
 
 | Fact | Owner |
 | --- | --- |
-| Product promise and fit | root `README.md` |
-| First successful workflow | `docs/getting-started.md` |
+| Product promise, fit and release status | root `README.md` |
+| Go first successful workflow | `go/docs/guide.md` |
+| Go flags and output behavior | `go/docs/cli.md` and installed Go CLI help |
+| Go operations and recovery | `go/docs/operating.md` |
+| Go schemas and dataset layout | `go/docs/dataset.md` |
+| Go engine and providers | `go/docs/internals/` |
+| Go dated measurements | `go/docs/measurements.md` |
+| Java first successful workflow | `docs/getting-started.md` |
 | Output and resume choices | `docs/usage.md` |
 | Credentials, IAM, endpoints, and cost | `docs/operating.md` |
 | Supported flag names | `docs/cli.md` |

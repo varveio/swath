@@ -1,4 +1,10 @@
-# Documentation
+# Java documentation
+
+These root `docs/` usage and engine pages describe the Java implementation. The latest
+published Java release is [v0.3.2](https://github.com/varveio/swath/tree/v0.3.2/docs).
+For the unreleased multi-backend Go implementation, start with the
+[Go guide](../go/docs/guide.md) and [Go documentation index](../go/docs/README.md).
+Go will replace Java at release; the Java code has not been removed yet.
 
 Choose the path that matches the job in front of you. You do not need the internals to
 use swath.

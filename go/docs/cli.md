@@ -58,7 +58,8 @@ the swath schema id and the swath metadata version; then key, source, scope, cov
 they exist to run an experiment or a comparison, not to operate the tool, and `swath list` and `swath du` refuse
 each of them with exit 2 and a message naming `swath diag`. Each flag has one name; an unknown flag is a usage error
 (exit 2). From the Java 0.3 releases, and renames since the unreleased builds of `main`: [upgrade.md](upgrade.md#changes-from-03-to-04). Flags take one or two dashes. The
-Java distribution keeps its own `swath` launcher; the two are separate tools.
+Java v0.3.2 distribution has its own launcher and different output contract. This unreleased Go
+implementation will replace Java at release; the Java code has not been removed yet.
 Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
 Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
 

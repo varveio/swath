@@ -5,10 +5,14 @@ resume it, and read what it produced. Flags and exit codes in full: [cli.md](cli
 does: [internals/durability.md](internals/durability.md), [internals/ordering.md](internals/ordering.md),
 [internals/providers.md](internals/providers.md).
 
-swath lists metadata only. It sends S3 `ListObjectsV2` or GCS `objects.list` requests and never reads, writes or
-deletes objects.
+swath lists metadata from local or mounted filesystems, S3, GCS and Azure Blob Storage.
+It does not read or modify source file/object contents. Object stores use their listing APIs;
+versioned S3 listing uses `ListObjectVersions` instead of `ListObjectsV2`.
 
 ## Install and verify
+
+**Go on main is unreleased.** Java v0.3.2 is the latest published release and has a different
+CLI and dataset contract. Build Go from source for this guide; Go will replace Java at release.
 
 One static binary, pure Go (`CGO_ENABLED=0`), no runtime to install. Build it with Go 1.26 (the `go` directive
 in `go.mod`):
@@ -38,7 +42,10 @@ revision with any run you may need to investigate.
 
 ## Credentials
 
-Secrets are never taken from flags. What fails closed: a credential source that is configured but does not
+Use the provider's supported credential sources; do not put secrets in shell history.
+Azure also accepts a SAS flag or source query and redacts it from records; see the
+[Azure credential and namespace reference](internals/providers/azblob.md).
+What fails closed: a credential source that is configured but does not
 load stops the run with cause `auth` (exit 1) before any listing request. swath never falls back to
 unsigned requests in that case.
 

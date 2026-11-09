@@ -4,19 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>swath — parallel, resumable S3 listing for very large buckets</title>
-<meta name="description" content="List very large S3 buckets in parallel without knowing the key distribution in advance. Stream object metadata or write crash-resumable Parquet for direct querying.">
+<title>swath — parallel listing and inventory for large object stores and filesystems</title>
+<meta name="description" content="Parallel listing, size summaries, and sorted Parquet inventories for local and mounted filesystems, S3, GCS, and Azure Blob Storage. Unreleased Go preview.">
 
 <link rel="canonical" href="https://swath.varve.io/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="swath">
-<meta property="og:title" content="swath — parallel, resumable S3 listing for very large buckets">
-<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. An open-source lister that discovers the imbalance mid-run and splits until every worker can help.">
+<meta property="og:title" content="swath — parallel listing and inventory for large object stores and filesystems">
+<meta property="og:description" content="Parallel listing and inventory for large object stores and filesystems. Unreleased Go preview; the latest published release is Java v0.3.2.">
 <meta property="og:url" content="https://swath.varve.io/">
-<meta property="og:image" content="https://swath.varve.io/card.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
+<!-- The existing social image illustrates a historical Java trace, not Go. -->
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23F7F3E8'/%3E%3Crect x='8' y='18' width='6' height='28' fill='%23087361' opacity='.45'/%3E%3Crect x='17' y='18' width='26' height='28' fill='%23C46628'/%3E%3Crect x='46' y='18' width='3' height='28' fill='%23087361' opacity='.45'/%3E%3Crect x='52' y='18' width='4' height='28' fill='%23087361' opacity='.45'/%3E%3C/svg%3E">
 
 <style>
@@ -81,6 +79,12 @@
   }
   .page { width: min(100% - 3rem, 74rem); margin: 0 auto; }
   .mono { font-family: var(--mono); }
+  .benefit, .guide-sketch { min-width: 0; }
+  pre { overflow-x: auto; font-size: 0.78rem; line-height: 1.65; }
+  code { font-family: var(--mono); overflow-wrap: anywhere; }
+  .measurement { padding: 0.7rem; font-size: 0.9rem; }
+  .measurement h2 { font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.2; }
+  .version-line { margin-top: 2rem; }
 
   .skip-link {
     position: absolute;
@@ -464,45 +468,113 @@
   <header class="topbar">
     <a class="brand" href="https://varve.io"><b>VARVE</b> / OPEN SOURCE</a>
     <nav aria-label="Primary">
-      <a href="https://github.com/varveio/swath/blob/main/docs/getting-started.md">Getting started</a>
-      <a href="field-guide/">How it works</a>
-      <a href="https://github.com/varveio/swath/blob/main/docs/README.md">Docs</a>
+      <a href="#quickstart">Get started</a>
+      <a href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Guide</a>
+      <a href="https://github.com/varveio/swath/blob/main/go/docs/README.md">Docs</a>
       <a href="https://github.com/varveio/swath">GitHub ↗</a>
     </nav>
   </header>
-
   <main id="main">
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">S3 object listing</p>
+        <p class="eyebrow">Go preview · unreleased on main</p>
         <h1>swath</h1>
-        <p class="tagline">List very large S3 buckets in parallel, even when you don't know how their keys are distributed.</p>
-        <p class="lede">
-          swath divides S3's ordered keyspace across workers and rebalances it as the
-          listing runs. Stream object metadata as a table, TSV, or JSONL, or write a
-          crash-resumable Parquet dataset for direct querying. Object contents are never
-          read. A live listing is not a point-in-time snapshot of a bucket that changes
-          during the run.
-        </p>
-
+        <p class="tagline">Parallel listing and inventory for large object stores and filesystems.</p>
+        <p class="lede">swath is an open-source command-line tool that lists files and objects in local and mounted filesystems, S3, GCS, and Azure Blob Storage (flat namespace). It can summarize sizes by directory or prefix (<code>du</code>) and write sorted Parquet inventories.</p>
+        <p class="fit-note"><strong>This page describes the unreleased Go implementation on main.</strong> The latest published release is Java v0.3.2; its downloads do not provide the Go commands below.</p>
         <div class="cta">
-          <a class="button primary" href="field-guide/">See how swath works →</a>
-          <a class="button" href="https://github.com/varveio/swath#quickstart">Quickstart</a>
+          <a class="button primary" href="#quickstart">Build and try locally →</a>
+          <a class="button" href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Read the Go guide</a>
         </div>
-
         <div class="fit-grid" aria-label="When to use swath">
-          <div class="fit">
-            <span class="k">Use swath when</span>
-            <p>You need an on-demand listing of a very large bucket, no sufficiently current inventory is available, and serial pagination is too slow.</p>
-          </div>
-          <div class="fit inventory">
-            <span class="k">Use existing metadata when</span>
-            <p>A current S3 Inventory or S3 Metadata table already has the fields you need. Querying it is normally cheaper than a live scan.</p>
-          </div>
+          <div class="fit"><span class="k">Live listing</span><p>Use swath when you need a current listing or inventory of a large tree, bucket, or container.</p></div>
+          <div class="fit inventory"><span class="k">Existing inventory</span><p>If an existing inventory has the fields and freshness you need, querying it usually avoids the cost of another scan.</p></div>
         </div>
-        <p class="fit-note">For a small prefix or a one-off task, the AWS CLI or an SDK paginator is usually simpler.</p>
+        <p class="fit-note">A live listing is not a point-in-time snapshot of a source that changes during the run. Cloud listings make billable API requests.</p>
       </div>
+      <aside class="hero-media" aria-labelledby="measurement-title">
+        <div class="media-top"><span>Measured 2026-11-07</span><span>Go build bf5e6d52</span></div>
+        <div class="measurement">
+          <p class="section-label">One billion-object S3 bucket</p>
+          <h2 id="measurement-title">1,088,794,418 objects</h2>
+          <p><strong>177 seconds</strong> for a count-only listing.</p>
+          <p><strong>846 seconds</strong> for a separate sorted Parquet inventory run.</p>
+          <p>Both used 1,024 workers on one 32-vCPU <code>n4-highcpu-32</code> VM with a 400 GB disk in GCP <code>us-east1</code>, listing <code>sentinel-cogs</code> anonymously in AWS <code>us-west-2</code>.</p>
+          <p>These are individual runs on one S3 bucket, not a throughput promise for other sources or machines. The count-only run did not write an inventory.</p>
+          <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/measurements.md">Commands, configuration, and measurements →</a>
+        </div>
+      </aside>
+    </section>
 
+    <section class="workflow" id="quickstart" aria-labelledby="quickstart-title">
+      <div class="workflow-copy">
+        <p class="section-label">Start with a local directory</p>
+        <h2 id="quickstart-title">Build the Go preview.</h2>
+        <p>These commands build unreleased code from main, not the Java v0.3.2 release. You need Git and Go 1.26 or later; the module selects its Go toolchain.</p>
+        <p><code>du</code> reports apparent file sizes by default. Local <code>--allocated</code> and <code>--count-links-once</code> options select allocated bytes and count hard-linked files once where platform metadata supports them. Mounted filesystems work through their local paths.</p>
+        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Go guide →</a>
+      </div>
+      <div class="guide-sketch">
+        <pre><code>git clone https://github.com/varveio/swath.git
+cd swath/go
+./build.sh -o swath
+./swath du . -d 2</code></pre>
+        <p class="fit-note">Write a local inventory to a new output directory outside the tree being listed:</p>
+        <pre><code>./swath list . -o /tmp/swath-local-inventory
+./swath show /tmp/swath-local-inventory</code></pre>
+        <p class="fit-note">Local <code>list</code> requires dataset output. <code>show</code> summarizes a dataset or interrupted run; it is not a query engine.</p>
+      </div>
+    </section>
+
+    <section class="benefits" aria-label="Listing workflows">
+      <article class="benefit">
+        <h2>List cloud metadata</h2>
+        <p>For cloud sources, <code>list</code> without an output path prints a table on a terminal or TSV when piped. It reads metadata, not object contents.</p>
+        <pre><code>./swath list s3://bucket/prefix/
+./swath list gs://bucket/prefix/
+./swath list az://account/container/prefix/</code></pre>
+        <p><a href="https://github.com/varveio/swath/blob/main/go/docs/operating.md">Provider scope and credentials</a></p>
+      </article>
+      <article class="benefit">
+        <h2>Summarize sizes</h2>
+        <p>Use <code>du</code> to see totals by directory or prefix without writing an inventory.</p>
+        <pre><code>./swath du /path/to/tree -d 2
+./swath du s3://bucket/prefix/ -d 1</code></pre>
+        <p>S3 supports versions and delete markers; GCS supports generations. Azure supports current blobs in flat-namespace accounts, not HNS or version listings.</p>
+      </article>
+      <article class="benefit">
+        <h2>Write an inventory</h2>
+        <p>A swath dataset is sorted Parquet parts committed by a manifest, in the SeekParquet format. Read it with DuckDB or other Parquet tools.</p>
+        <pre><code>./swath list s3://bucket/prefix/ \
+  -o /tmp/swath-cloud-inventory
+./swath show /tmp/swath-cloud-inventory</code></pre>
+        <p><a href="https://github.com/varveio/swath/blob/main/go/docs/dataset.md">Dataset format and reading</a></p>
+      </article>
+    </section>
+
+    <section class="workflow" aria-labelledby="resume-title">
+      <div class="workflow-copy">
+        <p class="section-label">Interrupted inventories</p>
+        <h2 id="resume-title">Resume a cloud dataset.</h2>
+        <p>Eligible journaled S3, GCS, and Azure dataset runs can resume after interruption. Local scans and text output cannot resume. Windows refuses durable journal and resume operations.</p>
+        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/operators.md">Output and recovery details →</a>
+      </div>
+      <div class="guide-sketch">
+        <pre><code>./swath resume /tmp/swath-cloud-inventory</code></pre>
+        <p class="fit-note">Resume uses the recorded source and settings. Supply required credentials again. A committed dataset with complete coverage has nothing left to resume.</p>
+      </div>
+    </section>
+
+    <section class="benefit" aria-labelledby="historical-title">
+      <p class="section-label">Published Java release</p>
+      <h2 id="historical-title">Java v0.3.2 documentation</h2>
+      <p>The <a href="field-guide/">historical Java field guide</a> explains the Java engine and its recorded S3 runs. Its architecture, commands, and measurements do not describe the Go preview.</p>
+      <p><a href="https://github.com/varveio/swath/releases/tag/v0.3.2">Java v0.3.2 downloads</a> · <a href="https://github.com/varveio/swath/blob/v0.3.2/docs/getting-started.md">Java getting started</a></p>
+      <p class="version-line">Documentation for swath 0.3.2.</p>
+      <details class="transcript">
+        <summary>Historical Java recordings (not Go benchmarks)</summary>
+        <div class="transcript-body">
+          <p>These recordings predate the Go preview. The trace capture's version is unknown; the CLI demo identifies Java 0.2.1. Neither is evidence of Go behavior or a v0.3.2 benchmark.</p>
       <figure class="hero-media">
         <div class="media-top"><span>36-second visualization</span><span>39.7M objects · 68.6s trace event span</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/poster.png"
@@ -540,63 +612,7 @@
             ways.</p>
           </div>
         </details>
-      </figure>
-    </section>
-
-    <a class="guide-feature" href="field-guide/">
-      <div class="guide-copy">
-        <p class="section-label">How it works · visual field guide</p>
-        <h2>A step-by-step explanation of how swath works</h2>
-        <p class="summary">
-          The guide starts with why a normal S3 listing is serial, then shows how swath
-          assigns key ranges without knowing where the objects are. It walks through safe
-          splitting, work stealing, checkpoints, and the cases where swath is not the
-          right tool.
-        </p>
-        <span class="text-link">Read the field guide →</span>
-      </div>
-      <div class="guide-sketch" aria-hidden="true">
-        <p class="sketch-label"><span>Initial key ranges</span><span>equal guesses</span></p>
-        <div class="range-row initial">
-          <span></span><span></span><span></span><span></span><span></span><span></span>
-          <span></span><span></span><span></span><span></span><span></span><span></span>
-        </div>
-        <p class="sketch-label"><span>Objects found</span><span>one range: 68%</span></p>
-        <div class="range-row measured"><span></span><span></span></div>
-        <p class="sketch-label"><span>Busy range after splits</span><span>work redistributed</span></p>
-        <div class="range-row split">
-          <span></span><span></span><span></span><span></span><span></span><span></span>
-        </div>
-      </div>
-    </a>
-
-    <section class="benefits" aria-label="Why swath">
-      <article class="benefit">
-        <h2>No partitioning setup</h2>
-        <p>Use the same command for flat, deeply prefixed, or skewed keys. swath divides the ordered keyspace while it lists, without a preliminary crawl or hand-written prefix rules.</p>
-      </article>
-      <article class="benefit">
-        <h2>Checkpoint and resume</h2>
-        <p>Managed Parquet output records committed progress. An interrupted listing resumes from its output directory instead of starting over.</p>
-      </article>
-      <article class="benefit">
-        <h2>Stream or query</h2>
-        <p>Write a table, TSV, JSONL, or Parquet. Query Parquet parts directly with DuckDB; object bodies are not downloaded.</p>
-      </article>
-    </section>
-
-    <section class="workflow">
-      <div class="workflow-copy">
-        <p class="section-label">Command-line workflow</p>
-        <h2>List, resume,<br>and query</h2>
-        <p>
-          This demo interrupts a listing, resumes it from the output directory, and
-          queries the resulting Parquet files directly with DuckDB.
-        </p>
-        <a class="text-link" href="https://github.com/varveio/swath#quickstart">Open the quickstart →</a>
-      </div>
-
-      <figure class="workflow-media">
+      </figure>      <figure class="workflow-media">
         <div class="media-top"><span>36-second CLI demo</span><span>list / resume / DuckDB</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/swath-cli-demo-poster.png"
           src="assets/swath-cli-demo.mp4" aria-label="Terminal demo of listing, resuming, and querying with swath 0.2.1">
@@ -637,32 +653,14 @@ swath $ swath list s3://noaa-gestofs-pds/ \
           </div>
         </details>
       </figure>
+        </div>
+      </details>
     </section>
-
   </main>
-
-  <!-- This line must track the release this site is published for; update it in the same
-       change as any release that moves the documented version forward. -->
-  <p class="version-line">Documentation for swath 0.3.2.</p>
-
+  <p class="version-line">Latest published release: Java swath 0.3.2. Go preview: unreleased on main.</p>
   <footer>
-    <p>
-      swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
-      general-purpose S3 buckets are supported, and GCS through its XML API is experimental.
-      <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
-      native additional backends are roadmap. Flags and output schemas may still change.
-    </p>
-    <div class="colophon">
-      <svg viewBox="0 0 64 64" aria-hidden="true">
-        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
-          <path d="M8 15 L32 28 L56 15"/>
-          <path d="M13 24 L32 35 L51 24"/>
-          <path d="M18 33 L32 42 L46 33"/>
-          <path d="M23 42 L32 49 L41 42"/>
-        </g>
-      </svg>
-      <span>Built at <a href="https://varve.io">Varve</a>—a system of record for object storage.</span>
-    </div>
+    <p>swath is pre-1.0. Go commands and output schemas may change before release. <a href="https://github.com/varveio/swath/blob/main/go/docs/README.md">Go documentation</a> · <a href="https://github.com/varveio/swath">Source</a></p>
+    <div class="colophon"><span>Built at <a href="https://varve.io">Varve</a>.</span></div>
   </footer>
 </div>
 </body>
