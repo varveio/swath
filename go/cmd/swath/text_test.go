@@ -72,7 +72,7 @@ func TestTextOutput(t *testing.T) {
 	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "not resumable") {
 		t.Fatalf("resume of a text file: %v", err)
 	}
-	if err := run(context.Background(), []string{t.TempDir()}, &out, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "swath count") {
+	if err := run(context.Background(), []string{t.TempDir()}, &out, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "or swath du") {
 		t.Fatalf("local source as text: %v", err)
 	}
 	var u usageError

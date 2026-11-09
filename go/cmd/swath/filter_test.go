@@ -67,7 +67,7 @@ func TestFiltersThroughTheCommand(t *testing.T) {
 		t.Fatalf("rows %+v of %d", r.Output, len(keys))
 	}
 	r0 := r.Output.RowsEmitted
-	if err := runCount(context.Background(), append(src, "--include", "^d01/", "--report", report), io.Discard, false); err != nil {
+	if err := runCount(context.Background(), append(src, "--include", "^d01/", "--report", report), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	readJSON(t, report, &r)

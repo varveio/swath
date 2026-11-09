@@ -27,7 +27,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - present and zero: the policy was on and never fired.
 
 The report's `resources` follow the same rule: `features.spill` is false and the `spill` object absent with
-`swath diag list --no-spill` or `swath count`, `features.order` is false for `swath count` (rows counted, not
+`swath diag list --no-spill` or a count, `features.order` is false for `swath du` and `swath diag count` (rows counted, not
 ordered), and `encoder_wait_ns` is absent without output. `spill.durable` (the durable spill's account: captures, seals,
 abandons by reason, retirements, retained bytes, and on a resume `resume` with what it accepted, rejected and
 replayed; [ordering.md](ordering.md#durable-spill)) is absent when durable spill was off, and
@@ -98,7 +98,7 @@ A text run's sink (run summary, `output.text`):
 | `compressor.bytes_in`, `compressor.bytes_out` | bytes | formatted rows into the compressor, compressed bytes delivered (absent uncompressed) |
 | `compressor.jobs`, `compressor.jobs_reason` | jobs, name | zstd jobs compressed at once and why: `cores` (GOMAXPROCS), `row_budget` (16 MiB each of an allowance equal to the row budget carries fewer), `encoders` (asked), `gzip` (one stream) |
 
-A count (`swath count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
+A count (`swath du`, `swath diag count`) does not order (`features.order` false): `max_buffered_bytes`, `peak_ahead_rows`
 and `frontier_stuck_max_ns` are 0 and `spill` is absent.
 
 Discarded speculative work is `overfetch_keys` and `child_empty.*` below.

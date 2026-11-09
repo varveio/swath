@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Redact: RedactRoot,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "az", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azblob-sas", Env: EnvSAS}}, Usage: "az://account/container[/prefix]"})
 }
 
@@ -191,4 +191,10 @@ func classify(err error) string {
 	default:
 		return string(c)
 	}
+}
+
+// keyPrefix is the name prefix a root names (registry.Factory.KeyPrefix).
+func keyPrefix(root string) (string, error) {
+	_, _, prefix, _, err := ParseURL(root)
+	return prefix, err
 }

@@ -106,9 +106,10 @@ var Schema = schema.Bind(reader.LocalV1, schema.Schema[Entry]{
 		intCol(HasBtime, func(e *Entry) int64 { return e.Btime }),
 		{Spec: schema.Spec{MaxBytes: pathMax}, Str: func(e *Entry) (string, bool) { return e.LinkTarget, e.Has(HasLink) }},
 	},
-	Bytes: entryBytes,
-	Heap:  func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
-	Codec: entryCodec{},
+	Bytes:     entryBytes,
+	Heap:      func(e *Entry) int64 { return int64(len(e.LinkTarget)) },
+	Codec:     entryCodec{},
+	Container: func(e *Entry) bool { return e.Kind == KindDir },
 })
 
 // pathMax is the longest link target (Linux PATH_MAX).

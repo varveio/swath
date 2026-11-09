@@ -71,14 +71,14 @@ func TestBearerToken(t *testing.T) {
 	}
 	// A failing command: no request goes out, the run fails closed.
 	bad := []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "echo nope >&2; exit 4", "--report", report}
-	err = runCount(context.Background(), bad, io.Discard, false)
+	err = runCount(context.Background(), bad, io.Discard)
 	if exitCode(t, err) != exitFatal || !strings.Contains(err.Error(), "exited 4: nope") {
 		t.Fatalf("failing command: %v", err)
 	}
 	if raw, _ := os.ReadFile(report); !bytes.Contains(raw, []byte(`"cause": "auth"`)) {
 		t.Fatalf("failing command report: %s", raw)
 	}
-	if err := runCount(context.Background(), []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "x", "--anonymous"}, io.Discard, false); exitCode(t, err) != exitUsage {
+	if err := runCount(context.Background(), []string{"s3://bkt", "--endpoint", srv.URL, "--bearer-token-command", "x", "--anonymous"}, io.Discard); exitCode(t, err) != exitUsage {
 		t.Fatalf("--anonymous with a token: %v", err)
 	}
 }

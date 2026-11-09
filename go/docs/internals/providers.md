@@ -63,7 +63,10 @@ registered with `diag` only): the command registers each named group once and
 passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
 names it. The command imports providers only for that
 registration and passes the options value for the root's scheme as `listing.Config.Source.Options`, opaque to the
-pipeline. `Open` validates the root without touching the output.
+pipeline. `Open` validates the root without touching the output. An object store's factory also gives
+`KeyPrefix(root)`, the key prefix the root names (each provider's `ParseURL`): `swath du` counts its depth from it
+up to its last `/` (`logs/2026/0` from `logs/2026/`), taken from the root as given, before an `--include` narrows
+it; without one (local paths) keys are relative to the root.
 
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router

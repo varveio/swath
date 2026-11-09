@@ -234,7 +234,7 @@ each, admitted apart from the budget) and nothing it holds is charged to the bud
 
 ## Counting without order
 
-A count (`swath count`: no dataset, no text) consumes no row in order, so the pipeline runs `order.Count`
+A count (`swath du`, `swath diag count`: no dataset, no text) consumes no row in order, so the pipeline runs `order.Count`
 instead of `Run` (`registry.Env.Count`). Workers pop ranges from a LIFO stack and push a range's children when
 its `Expand` returns, as in `Run`; rows are counted as they arrive and dropped. There is no tree, no budget,
 no drainer and no spill: memory is the pages in flight and the ranges queued for a worker, and the run
@@ -244,6 +244,17 @@ handed over then is disposed, never expanded, so a range emitting only children 
 with `--no-dirs`) stops at its next child (`TestCountStopsAChildOnlyRange`, with and without empty `Rows` batches
 between the children). The report says so: `features.order` false, `spill` absent,
 `max_buffered_bytes`, `peak_ahead_rows` and `frontier_stuck_max_ns` 0.
+
+`order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
+must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
+(`registry` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
+one entry per run of equal prefix at each level (rows of a range ascend, so consecutive rows share them), then
+merges into the shared tally under one lock, copying a prefix only when it first enters. Addition and maximum
+commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
+and concurrent batches against a brute-force sum); memory is the distinct prefixes, never the objects, capped
+by `--max-prefixes` (a merge past it fails the run, `totals.LimitError`, cause `prefix_limit`). The prefixes are
+sorted by byte once, at the end, and written through `listing.Config.Deliver` after the count completes and
+before the run's end is stamped, so a failed write or a stop during it fails the run.
 
 It keeps conservation (rows received equal rows counted, then the pipeline's `reconcile` against the
 provider), the progress file's `ordered` counter, and a per-range order check: each range's keys strictly
