@@ -31,8 +31,10 @@ type Object interface {
 	io.ReaderAt
 	// Size returns the object's length in bytes, as it was when opened.
 	Size() int64
-	// Identity names the pinned version: the S3 version id or else the
-	// ETag, the GCS generation, or the Azure ETag. An Object from OpenSized
+	// Identity names the pinned version: the S3 version id, or the ETag
+	// when the object has none or has the version id "null" (which S3
+	// keeps across an overwrite), the GCS generation, or the Azure ETag.
+	// An Object from OpenSized
 	// pins on its first read and returns "" before it. A cache can key
 	// bytes by name and Identity.
 	Identity() string

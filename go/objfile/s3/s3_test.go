@@ -211,7 +211,45 @@ func TestNullVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := make([]byte, 10)
-	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) || file.Identity() != "null" {
+	if _, err := file.ReadAt(p, 0); err != nil || !bytes.Equal(p, old) || file.Identity() != `"a"` {
 		t.Fatalf("ReadAt of the null version: %v, same bytes %v, Identity %q", err, bytes.Equal(p, old), file.Identity())
+	}
+}
+
+// TestNullVersionIdentity: overwriting an object at version "null" (a
+// versioning-suspended bucket) keeps the version id "null", so Identity is the
+// ETag, and a replacement of the same size has another Identity. An object
+// with a real version id is identified by it.
+func TestNullVersionIdentity(t *testing.T) {
+	var data []byte
+	var etag, version string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if m := r.Header.Get("If-Match"); m != "" && m != etag {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("x-amz-version-id", version)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	}))
+	t.Cleanup(srv.Close)
+	client := awss3.New(awss3.Options{BaseEndpoint: aws.String(srv.URL), UsePathStyle: true, Region: "us-east-1", Credentials: aws.AnonymousCredentials{}})
+	open := func() string {
+		t.Helper()
+		file, err := s3.New(client, bucket).Open(context.Background(), "obj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return file.Identity()
+	}
+	data, etag, version = objfiletest.Data(10, 1), `"a"`, "null"
+	first := open()
+	data, etag = objfiletest.Data(10, 2), `"b"`
+	if second := open(); first != `"a"` || second != `"b"` {
+		t.Fatalf("Identity of a null version before and after a same-size overwrite = %q, %q; want the ETags", first, second)
+	}
+	version = "v3"
+	if id := open(); id != "v3" {
+		t.Fatalf("Identity of version v3 = %q", id)
 	}
 }

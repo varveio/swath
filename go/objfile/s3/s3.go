@@ -86,7 +86,9 @@ func (o opener) getter(name string) ranged.Getter {
 }
 
 // pinOf pins an ETag and version id. A version id of "null" (an object
-// written before versioning was enabled) is kept: S3 reads that version by it.
+// written before versioning was enabled, or while it is suspended) is kept:
+// S3 reads that version by it. It is not the Object's Identity, which is the
+// ETag then, since an overwrite keeps the id "null".
 func pinOf(etag, versionID *string) ranged.Pin {
 	return ranged.Pin{Version: aws.ToString(versionID), ETag: aws.ToString(etag)}
 }
