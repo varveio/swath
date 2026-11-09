@@ -22,7 +22,8 @@ what a reader decodes are described once.
 type SchemaID string // S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1
 type ColumnType uint8 // TypeString, TypeInt32, TypeInt64, TypeTimestampMicros, TypeBool, TypeUint32, TypeUint64, TypeBinary
 type ColumnSpec struct { Name string; Type ColumnType; Required, MayBeAbsent bool }
-type SchemaSpec struct { ID SchemaID; Key ColumnSpec; UniqueKeys bool; MaxKeyBytes int; Columns []ColumnSpec }
+type SchemaSpec struct { ID SchemaID; Key ColumnSpec; UniqueKeys bool; MaxKeyBytes int; Columns []ColumnSpec; Versions VersionSpec }
+type VersionSpec struct { ID, Latest, DeleteMarker, DeletedAt string } // a versions schema's role columns; zero: not versions
 func Schema(id SchemaID) (SchemaSpec, bool)       // a copy; false for an id swath does not write
 func (SchemaSpec) Column(name string) (ColumnSpec, bool)
 func (SchemaSpec) ColumnNames() []string          // the projection the decoders read
@@ -153,6 +154,26 @@ for _, r := range rows {
 // the next page: Range{..., Cursor: last.Cursor()}
 ```
 
+
+### Version roles
+
+`SchemaSpec.Versions` names, by role, the columns that make a versions schema's rows versions, so a generic
+consumer interprets any such schema from its spec instead of from column names (the typed decoders keep reading
+their named columns). The zero value means the rows are not versions (every current-object schema). Otherwise
+the schema's keys repeat (`UniqueKeys` false), `ID` is set, and exactly one of `Latest` and `DeletedAt` is:
+
+| Role | Column | Meaning |
+|---|---|---|
+| `ID` | STRING, or signed INT64 read in decimal; nullable | the version's identifier |
+| `Latest` | required BOOLEAN | true on the key's latest row |
+| `DeletedAt` | nullable timestamp | the alternative to `Latest`: null on the latest (live) row; any value, zero included, is not latest |
+| `DeleteMarker` | required BOOLEAN; optional role | true on a delete marker (no object and no bytes); a schema without the role has no delete markers |
+
+`swath/s3-versions/v1` declares `{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}` and
+`swath/gcs-generations/v1` `{ID: "generation", DeletedAt: "time_deleted"}`. A row is current when it is latest and
+not a delete marker, noncurrent when neither. A future schema declares its own columns' roles: an Azure versions
+schema, say, its string identifier and an explicit latest boolean, and no delete-marker role unless its rows are
+delete markers (a blob snapshot or a soft-deleted blob is not one).
 ## What is checked, and when
 
 - **`Open`, `OpenDir`.** The module reads and checks the manifest and opens no part

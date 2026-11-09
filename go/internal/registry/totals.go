@@ -14,17 +14,18 @@ import (
 
 // totalsSink sums the counted rows per prefix (swath du) into a
 // tally, reading the payload through the schema's columns by name, as the
-// filters and the versions counts do, so it serves every schema: the bytes
-// column (size, or another the tally names), last_modified, and what is not
-// an object (schema.Schema.Container, an S3 is_delete_marker), and to
-// count hard links once nlink, dev and inode (the local schema's). It is
-// order.CountWithSink's sink: called concurrently, one batch per call, and
-// it keeps nothing of the rows. next, if set, observes the rows after it.
+// filters do, so it serves every schema: the bytes column (size, or another
+// the tally names), last_modified, and what is not an object
+// (schema.Schema.Container, or a delete marker by the schema's version
+// roles), and to count hard links once nlink, dev and inode (the local
+// schema's). It is order.CountWithSink's sink: called concurrently, one
+// batch per call, and it keeps nothing of the rows. next, if set, observes
+// the rows after it.
 type totalsSink[P any] struct {
 	t      *totals.Tally
 	bytes  func(*P) (int64, bool)
 	mtime  func(*P) (int64, bool)
-	marker func(*P) (bool, bool)
+	marker func(*P) bool
 	box    func(*P) bool
 	// strict: the bytes column was asked for by name (not the size), so
 	// an object without a value fails the count rather than count none.
@@ -33,18 +34,19 @@ type totalsSink[P any] struct {
 	next              order.Sink[P]
 }
 
-// bindTotals binds t to schema s.
-func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], next order.Sink[P]) (order.Sink[P], error) {
+// bindTotals binds t to schema s and its version roles (nil for none).
+func bindTotals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P]) (order.Sink[P], error) {
 	opt := t.Options()
 	k := totalsSink[P]{t: t, box: s.Container, next: next, strict: opt.BytesColumn != totals.Size}
+	if vers != nil {
+		k.marker = vers.DeleteMarker
+	}
 	for _, c := range s.Columns {
 		switch c.Name {
 		case opt.BytesColumn:
 			k.bytes = c.Int
 		case "last_modified":
 			k.mtime = c.Int
-		case "is_delete_marker":
-			k.marker = c.Bool
 		case "nlink":
 			k.nlink = c.Int
 		case "dev":
@@ -76,10 +78,8 @@ func (k totalsSink[P]) Write(ctx context.Context, segs [][]schema.Row[P]) error 
 			r := totals.Row{Key: seg[i].Key, Object: true}
 			if k.box != nil && k.box(p) {
 				r.Object, r.Dir = false, true
-			} else if k.marker != nil {
-				if m, _ := k.marker(p); m {
-					r.Object = false
-				}
+			} else if k.marker != nil && k.marker(p) {
+				r.Object = false
 			}
 			r.Bytes, r.HasBytes = k.bytes(p)
 			if r.Object && k.strict && !r.HasBytes {

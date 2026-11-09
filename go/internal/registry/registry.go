@@ -190,11 +190,20 @@ type Sizes struct {
 type Bound[P any] struct {
 	p source.Provider[any, P]
 	s *schema.Schema[P]
+	// v is s's version roles (schema.BindVersions), nil for none.
+	v *schema.Versions[P]
 }
 
-// Bind erases p's range type and binds it to its row schema.
+// Bind erases p's range type and binds it to its row schema and its
+// version roles. It panics on roles that do not define the rows
+// (schema.BindVersions), as schema.Bind does: a producer's bug, found when
+// the source is opened, before any output exists.
 func Bind[R, P any](p source.Provider[R, P], s *schema.Schema[P]) Bound[P] {
-	return Bound[P]{source.Erase[R, P](p), s}
+	v, err := schema.BindVersions(s)
+	if err != nil {
+		panic(err.Error())
+	}
+	return Bound[P]{source.Erase[R, P](p), s, v}
 }
 
 // Schema is the bound schema's description.
@@ -209,6 +218,7 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if err != nil {
 		return order.Stats{}, nil, err
 	}
+	vers := b.v
 	var sink order.Sink[P] = discard[P]{}
 	var enc parquetout.Encoder
 	if env.Router != nil {
@@ -227,15 +237,14 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	if _, seg := sink.(segSink[P]); env.Ordered != nil && !seg { // segSink counts its own rows
 		sink = countSink[P]{sink, env.Ordered}
 	}
-	observer := versionSink[P]{counts: env.Versions}
-	if env.Versions != nil && b.s.Groups {
-		observer.bind(b.s)
-		if observer.latest != nil || observer.deleted != nil {
-			observer.Sink = sink
-			sink = observer
-			if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
-				sink = versionSegmenter[P]{observer, sg}
-			}
+	counted := env.Versions != nil && vers != nil
+	observer := versionSink[P]{counts: env.Versions, v: vers}
+	if counted {
+		env.Versions.Enabled, env.Versions.HasDeleteMarkers = true, vers.HasDeleteMarkers()
+		observer.Sink = sink
+		sink = observer
+		if sg, ok := observer.Sink.(order.Segmenter[P]); ok { // the tail's segments are counted too
+			sink = versionSegmenter[P]{observer, sg}
 		}
 	}
 	p := b.p
@@ -255,12 +264,12 @@ func (b Bound[P]) Run(ctx context.Context, env Env) (order.Stats, parquetout.Enc
 	}
 	if env.Count {
 		var observe order.Sink[P]
-		if observer.latest != nil || observer.deleted != nil {
+		if counted {
 			observer.Sink = discard[P]{}
 			observe = observer
 		}
 		if env.Totals != nil {
-			if observe, err = bindTotals(env.Totals, b.s, observe); err != nil {
+			if observe, err = bindTotals(env.Totals, b.s, vers, observe); err != nil {
 				return order.Stats{}, nil, err
 			}
 		}
