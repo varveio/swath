@@ -5,11 +5,13 @@ package sdkclient
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -52,8 +54,8 @@ func page(next string, names ...string) string {
 	return b.String()
 }
 
-// azureError writes an Azure error answer that quotes the request URL (SAS
-// included) in its message, as some answers do.
+// azureError writes an Azure error answer that quotes the request's query
+// (SAS included, as sent and decoded) in its message, as some answers do.
 func azureError(w http.ResponseWriter, r *http.Request, status int, code string) {
 	if code != "" {
 		w.Header().Set("x-ms-error-code", code)
@@ -62,9 +64,13 @@ func azureError(w http.ResponseWriter, r *http.Request, status int, code string)
 	w.WriteHeader(status)
 	quote := ""
 	if r != nil {
-		quote = r.URL.RawQuery
+		// as sent and decoded: the signature both ways
+		dec, _ := url.QueryUnescape(r.URL.RawQuery)
+		quote = r.URL.RawQuery + " " + dec
 	}
-	fmt.Fprintf(w, "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>%s</Code><Message>m %s</Message></Error>", code, quote)
+	fmt.Fprintf(w, "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>%s</Code><Message>m ", code)
+	xml.EscapeText(w, []byte(quote))
+	fmt.Fprint(w, "</Message></Error>")
 }
 
 type contractClient struct{ *Client }
@@ -243,6 +249,12 @@ func TestScriptedAnswers(t *testing.T) {
 			fmt.Fprint(w, sized(r))
 		}},
 	}
+	var scrubbed atomic.Int64
+	t.Cleanup(func() {
+		if scrubbed.Load() == 0 {
+			t.Error("no echoing answer's message reached a client")
+		}
+	})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var got [2]outcome
@@ -303,6 +315,22 @@ func TestScriptedAnswers(t *testing.T) {
 					}
 					if e, ok := errors.AsType[*client.Error](err); ok {
 						o.Answer = e
+						if strings.HasPrefix(e.Message, "m ") {
+							// an echoing answer: its message kept, the
+							// signature redacted. The echoed query is the
+							// client's own wire form (the SDK sorts the SAS
+							// in among the parameters, so only its sig is
+							// redacted, where the hand-rolled client's SAS
+							// suffix goes whole), so the texts are compared
+							// for that, not equality.
+							scrubbed.Add(1)
+							if !strings.Contains(e.Message, "sig=REDACTED") || !strings.Contains(e.Message, "sp=rl") {
+								t.Errorf("sdk %v: message %q", sdk, e.Message)
+							}
+							cp := *e
+							cp.Message = "m (echo)"
+							o.Answer = &cp
+						}
 					}
 					for _, s := range []error{objhttp.ErrSyntax, client.ErrInvalidPage} {
 						if errors.Is(err, s) {

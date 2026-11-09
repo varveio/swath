@@ -938,6 +938,11 @@ func (c *Core) scrub(s string) string {
 	return sigParam.ReplaceAllString(s, "${1}REDACTED")
 }
 
+// Scrub removes the SAS, and its signature as sent or decoded, from s
+// (text an SDK client got from its library: a log line, a decoder's
+// error).
+func (c *Core) Scrub(s string) string { return c.scrub(s) }
+
 // sigParam is a SAS signature parameter in any text, as sent or escaped.
 var sigParam = regexp.MustCompile(`(?i)((?:^|[?&;\s"'(])sig(?:=|%3D))[^&\s"'<>)]*`)
 

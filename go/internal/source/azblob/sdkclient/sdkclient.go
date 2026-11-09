@@ -28,9 +28,15 @@
 //     TestServiceVersionPinned), startFrom (the v1.7.0 pagers drop
 //     StartFrom, TestStartFromSent) and the User-Agent.
 //   - envelope, Guard.Validate on a listing's 200: its root must be
-//     EnumerationResults (the SDK decodes an empty body, or any root, as an
-//     empty final page; TestMalformed200), and the decoded page must hold
-//     Blobs (Segment nil otherwise).
+//     EnumerationResults with nothing after it and no <Error> element in it
+//     (the SDK decodes an empty body, any root, or a listing holding an
+//     error, as a page, an empty final one; TestScriptedAnswers,
+//     TestSDKDecoding), and the decoded page must hold Blobs (Segment nil
+//     otherwise).
+//   - refusal and scrubLogs: the SAS kept out of what the SDK's decoder
+//     errors quote (TestRedactedRefusal) and out of the SDK's own log
+//     (TestLogScrubbed), which quotes failed requests' URLs and echoed
+//     error messages before this package maps them.
 //   - merge: the SDK returns a hierarchy page's blobs and prefixes as two
 //     arrays; the provider's byte-order adapter needs them as one sequence
 //     in wire (UTF-16 code-unit) order. Both arrays are in that order and
@@ -66,10 +72,14 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
@@ -101,6 +111,7 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{Core: core}
+	scrubLogs(core)
 	root := core.Base()
 	if sas := core.SAS(); sas != "" {
 		root += "?" + sas
@@ -120,6 +131,7 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
 			PerCallPolicies: []policy.Policy{pin{}},
 			Telemetry:       policy.TelemetryOptions{Disabled: true}, // pin sets the User-Agent
+			Logging:         policy.LogOptions{IncludeBody: false},   // and no query value (scrubLogs)
 		}}
 		var svc *service.Client
 		if cred != nil {
@@ -133,6 +145,51 @@ func New(ctx context.Context, cfg client.Config) (*Client, error) {
 		c.svc, c.guards = append(c.svc, svc), append(c.guards, g)
 	}
 	return c, nil
+}
+
+// The SDK's log: azcore writes it to its process-wide listener, which
+// it sets itself, writing to stderr, when AZURE_SDK_GO_LOGGING is "all".
+// Its lines quote what the SAS-free errors this package returns do not:
+// a failed request's url.Error (the URL with the SAS), an error answer
+// whose message echoes it. scrubLogs replaces that listener, process-wide,
+// with the same one passing every line through each SAS client's
+// Core.Scrub first; with the variable unset there is no listener and no
+// log, as in azcore. A listener set later by other code is not scrubbed
+// (swath sets none).
+var (
+	logMu     sync.Mutex
+	logScrubs []func(string) string // one per client with a SAS
+	logOnce   sync.Once
+)
+
+// scrubLogs registers core's SAS with the log scrubber and installs it
+// once, when azcore would log.
+func scrubLogs(core *client.Core) {
+	if core.SAS() != "" {
+		logMu.Lock()
+		logScrubs = append(logScrubs, core.Scrub)
+		logMu.Unlock()
+	}
+	logOnce.Do(func() {
+		if os.Getenv("AZURE_SDK_GO_LOGGING") == "all" {
+			azlog.SetListener(scrubbing(func(e azlog.Event, msg string) {
+				fmt.Fprintf(os.Stderr, "[%s] %s: %s\n", time.Now().Format(time.StampMicro), e, msg)
+			}))
+		}
+	})
+}
+
+// scrubbing is next with every line scrubbed of every registered SAS.
+func scrubbing(next func(azlog.Event, string)) func(azlog.Event, string) {
+	return func(e azlog.Event, msg string) {
+		logMu.Lock()
+		scrubs := logScrubs
+		logMu.Unlock()
+		for _, f := range scrubs {
+			msg = f(msg)
+		}
+		next(e, msg)
+	}
 }
 
 // List sends one List Blobs request, retrying retryable failures
@@ -181,13 +238,7 @@ func (c *Client) list(ctx context.Context, in *client.ListInput) (*client.ListOu
 		if !s.refused(err) {
 			return nil, c.failure(actx, ctx, s, err, in.Container)
 		}
-		if !errors.Is(err, client.ErrInvalidPage) {
-			c.Counts().ParseFailure()
-			if !errors.Is(err, objhttp.ErrSyntax) {
-				err = fmt.Errorf("%w: %v", objhttp.ErrSyntax, err) // the SDK's decoder
-			}
-		}
-		return nil, err
+		return nil, c.refusal(err)
 	}
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
@@ -270,6 +321,25 @@ func (c *Client) failure(actx, ctx context.Context, s *sent, err error, containe
 		return err
 	}
 	return objhttp.Timeout(actx, ctx, c.Timeout(), c.Redact(err, u))
+}
+
+// refusal is the error of a 200 the SDK's decoder (or a header it reads)
+// refused, or whose page did not convert: client.ErrInvalidPage when the
+// page broke the listing contract, else objhttp.ErrSyntax (a parse
+// failure, counted and retried). Its text is scrubbed of the SAS: the SDK's
+// errors quote what they could not read (a Date header, a name).
+func (c *Client) refusal(err error) error {
+	sentinel := objhttp.ErrSyntax
+	if errors.Is(err, client.ErrInvalidPage) {
+		sentinel = client.ErrInvalidPage
+	} else {
+		c.Counts().ParseFailure()
+	}
+	msg := err.Error()
+	if s := c.Scrub(msg); s != msg || !errors.Is(err, sentinel) {
+		return fmt.Errorf("%w: %s", sentinel, s)
+	}
+	return err
 }
 
 // str is s as an SDK option: nil when empty (not sent).
