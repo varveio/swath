@@ -121,9 +121,18 @@ func New(ctx context.Context, cfg client.Config, opts ...Option) (*Client, error
 		DisableS3ExpressSessionAuth: aws.Bool(true), // directory buckets are refused before any request
 		RequestChecksumCalculation:  aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation:  aws.ResponseChecksumValidationWhenRequired,
-		APIOptions:                  []func(*smithymiddleware.Stack) error{awsmiddleware.AddUserAgentKey(buildinfo.Tool)},
+		APIOptions:                  []func(*smithymiddleware.Stack) error{awsmiddleware.AddUserAgentKey(buildinfo.Tool), allowGzip},
 	})
 	return c, nil
+}
+
+// allowGzip removes the SDK's "Accept-Encoding: identity", so net/http
+// asks for gzip and decompresses as it does for the hand-rolled client:
+// the same request on the wire, and a body that does not decompress is a
+// read failure (class other), not a garbled document.
+func allowGzip(stack *smithymiddleware.Stack) error {
+	_, err := stack.Finalize.Remove("DisableAcceptEncodingGzip")
+	return err
 }
 
 func fipsState(on bool) aws.FIPSEndpointState {
@@ -334,14 +343,16 @@ func attempt[T any](c *Client, ctx context.Context, capture *objhttp.Capture, ca
 }
 
 // failure maps an attempt's error to the provider's vocabulary: a Guard
-// failure is its cause (ErrSyntax, the size cap, a credential error); an
+// failure is its cause (ErrSyntax, a 2xx answer other than 200, the size
+// cap, a credential error, a failed body read: a cut body is transport, a
+// read past the attempt's deadline ErrTimeout); an
 // HTTP answer other than 2xx is a *client.Error; a 2xx body the SDK could
 // not decode, or a body the scanner refused, is ErrSyntax; a
 // transport failure stays one (an attempt timeout is ErrTimeout).
 func (c *Client) failure(actx, ctx context.Context, err error) error {
 	var ge *objhttp.GuardError
 	if errors.As(err, &ge) {
-		return ge.Err
+		return objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, ge.Err)
 	}
 	var re *awshttp.ResponseError
 	if errors.As(err, &re) && re.HTTPStatusCode() != 0 { // 0: no answer (the SDK wraps a send failure too)
@@ -391,13 +402,16 @@ func answer(err error) (objhttp.Class, bool) {
 	return client.Classify(se), true
 }
 
-// validate is the Guard's check of a 2xx body: a ListBucketResult or a
-// ListVersionsResult root element. An empty body, another root (an <Error>
-// under 200) or another 2xx status is ErrSyntax: retried, never read as an
-// empty final page.
+// validate is the Guard's check of a 2xx body. A 2xx other than 200 is an
+// answer, as the hand-rolled client reads it (client.ResponseError: an
+// <Error> body's code, else the status text; the response headers are not
+// seen here, so no request ID or region from them). A 200 must hold a
+// ListBucketResult or ListVersionsResult root element: an empty body or
+// another root (an <Error> under 200) is ErrSyntax, retried, never read as
+// an empty final page.
 func validate(_ *http.Request, status int, body []byte) error {
 	if status != http.StatusOK {
-		return fmt.Errorf("%w: HTTP %d answer to a listing", objhttp.ErrSyntax, status)
+		return client.ResponseError(status, nil, body)
 	}
 	d := xml.NewDecoder(bytes.NewReader(body))
 	for {

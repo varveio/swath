@@ -76,7 +76,9 @@ func sized(n int) string {
 // TestAnswersMatchHandRolled: for each scripted answer, the hand-rolled
 // client and the SDK-backed one (every decoder) fail with the same class,
 // the same retry decision (exhausted or not) and the same request
-// counters, and every original response body is closed once.
+// counters, and every original response body is closed once. Both are
+// supplied an HTTP client whose policy follows redirects: neither follows
+// a 307 or 308.
 func TestAnswersMatchHandRolled(t *testing.T) {
 	s3test.NoCredentials(t)
 	xmlError := func(status int, code string, hdr ...string) http.HandlerFunc {
@@ -105,76 +107,83 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 			w.WriteHeader(status)
 		}
 	}
+	cut := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		io.WriteString(w, okPage[:20])
+	}
+	stall := func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, okPage[:20])
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}
+	gzipped := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		io.WriteString(w, "not gzip at all")
+	}
 	for _, c := range []struct {
 		name  string
 		h     http.HandlerFunc
 		class objhttp.Class // "" for success
-		// differs: the SDK-backed client's class where the hand-rolled
-		// one's differs by design (the brief: a non-200 2xx is ErrSyntax)
-		differs objhttp.Class
 	}{
-		{"429 SlowDown", xmlError(429, "SlowDown"), objhttp.ClassThrottle, ""},
-		{"503 SlowDown", xmlError(503, "SlowDown"), objhttp.ClassThrottle, ""},
-		{"503 no body", body(503, ""), objhttp.ClassThrottle, ""},
-		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassServer, ""},
-		{"500 html", body(500, "<html>oops"), objhttp.ClassServer, ""},
-		{"400 RequestTimeout", xmlError(400, "RequestTimeout"), objhttp.ClassTimeout, ""},
-		{"408", body(408, ""), objhttp.ClassTimeout, ""}, // code RequestTimeout from the status text
-		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied, ""},
-		{"403 InvalidAccessKeyId", xmlError(403, "InvalidAccessKeyId"), objhttp.ClassAuth, ""},
-		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassNoSuchBucket, ""},
-		{"404 no body", body(404, ""), objhttp.ClassNoSuchBucket, ""},
-		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassRedirect, ""},
-		{"307", redirect(307), objhttp.ClassOther, ""},
-		{"308", redirect(308), objhttp.ClassRedirect, ""}, // code PermanentRedirect from the status text
-		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassServer, ""},
-		{"error body over 64 KiB", body(403, `<Error><Code>AccessDenied</Code><Message>`+strings.Repeat("m", 70<<10)+`</Message></Error>`), objhttp.ClassAccessDenied, ""},
-		{"200 Error envelope", xmlError(200, "InternalError"), objhttp.ClassParse, ""},
-		{"200 wrong root", body(200, `<ListAllMyBucketsResult></ListAllMyBucketsResult>`), objhttp.ClassParse, ""},
-		{"200 empty", body(200, ""), objhttp.ClassParse, ""},
-		{"200 prolog only", body(200, `<?xml version="1.0" encoding="UTF-8"?>`), objhttp.ClassParse, ""},
-		{"200 cut mid-element", body(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Ke`), objhttp.ClassParse, ""},
-		{"200 16 MiB", body(200, sized(maxBody)), "", ""},
-		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther, ""},
-		{"201", body(201, okPage), objhttp.ClassOther, objhttp.ClassParse},
-		{"204", body(204, ""), objhttp.ClassOther, objhttp.ClassParse},
+		{"429 SlowDown", xmlError(429, "SlowDown"), objhttp.ClassThrottle},
+		{"503 SlowDown", xmlError(503, "SlowDown"), objhttp.ClassThrottle},
+		{"503 no body", body(503, ""), objhttp.ClassThrottle},
+		{"500 InternalError", xmlError(500, "InternalError"), objhttp.ClassServer},
+		{"500 html", body(500, "<html>oops"), objhttp.ClassServer},
+		{"400 RequestTimeout", xmlError(400, "RequestTimeout"), objhttp.ClassTimeout},
+		{"408", body(408, ""), objhttp.ClassTimeout}, // code RequestTimeout from the status text
+		{"403 AccessDenied", xmlError(403, "AccessDenied"), objhttp.ClassAccessDenied},
+		{"403 InvalidAccessKeyId", xmlError(403, "InvalidAccessKeyId"), objhttp.ClassAuth},
+		{"404 NoSuchBucket", xmlError(404, "NoSuchBucket"), objhttp.ClassNoSuchBucket},
+		{"404 no body", body(404, ""), objhttp.ClassNoSuchBucket},
+		{"301 PermanentRedirect", xmlError(301, "PermanentRedirect", "X-Amz-Bucket-Region", "eu-west-2"), objhttp.ClassRedirect},
+		{"307", redirect(307), objhttp.ClassOther},
+		{"308", redirect(308), objhttp.ClassRedirect}, // code PermanentRedirect from the status text
+		{"error body cut", body(500, `<Error><Code>InternalError</Code><Mess`), objhttp.ClassServer},
+		{"error body over 64 KiB", body(403, `<Error><Code>AccessDenied</Code><Message>`+strings.Repeat("m", 70<<10)+`</Message></Error>`), objhttp.ClassAccessDenied},
+		{"200 Error envelope", xmlError(200, "InternalError"), objhttp.ClassParse},
+		{"200 wrong root", body(200, `<ListAllMyBucketsResult></ListAllMyBucketsResult>`), objhttp.ClassParse},
+		{"200 empty", body(200, ""), objhttp.ClassParse},
+		{"200 prolog only", body(200, `<?xml version="1.0" encoding="UTF-8"?>`), objhttp.ClassParse},
+		{"200 cut mid-element", body(200, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>k</Ke`), objhttp.ClassParse},
+		{"200 16 MiB", body(200, sized(maxBody)), ""},
+		{"200 16 MiB + 1", body(200, sized(maxBody+1)), objhttp.ClassOther},
+		{"200 cut mid-stream", cut, objhttp.ClassTransport},
+		{"200 past the deadline mid-body", stall, objhttp.ClassTimeout},
+		{"200 malformed gzip", gzipped, objhttp.ClassOther},
+		{"201", body(201, okPage), objhttp.ClassOther},
+		{"201 SlowDown", xmlError(201, "SlowDown"), objhttp.ClassThrottle},
+		{"202", body(202, ""), objhttp.ClassOther},
+		{"204", body(204, ""), objhttp.ClassOther},
 	} {
 		for _, d := range decoders {
 			t.Run(c.name+"/"+d.name, func(t *testing.T) {
 				srv := httptest.NewServer(c.h)
 				defer srv.Close()
 				cfg := testConfig(srv.URL)
-				cfg.MaxAttempts = 3
+				cfg.MaxAttempts, cfg.RequestTimeout = 3, 200*time.Millisecond
 				hrt, srt := &closeCounter{next: http.DefaultTransport}, &closeCounter{next: http.DefaultTransport}
-				hand, err := client.New(context.Background(), withHTTP(cfg, hrt, true))
+				hand, err := client.New(context.Background(), withHTTP(cfg, hrt))
 				if err != nil {
 					t.Fatal(err)
 				}
-				sdk, err := New(context.Background(), withHTTP(cfg, srt, false), WithDecoder(d.dec))
+				sdk, err := New(context.Background(), withHTTP(cfg, srt), WithDecoder(d.dec))
 				if err != nil {
 					t.Fatal(err)
 				}
 				in := &client.ListInput{Bucket: "b"}
 				_, herr := hand.ListObjectsV2(context.Background(), in)
 				_, serr := sdk.ListObjectsV2(context.Background(), in)
-				want := c.class
-				if c.differs != "" {
-					want = c.differs
-				}
-				if client.Classify(herr) != c.class || client.Classify(serr) != want {
-					t.Fatalf("class: hand-rolled %q (%v), sdk %q (%v), want %q/%q", client.Classify(herr), herr, client.Classify(serr), serr, c.class, want)
+				if client.Classify(herr) != c.class || client.Classify(serr) != c.class {
+					t.Fatalf("class: hand-rolled %q (%v), sdk %q (%v), want %q", client.Classify(herr), herr, client.Classify(serr), serr, c.class)
 				}
 				var hex, sex *objhttp.ExhaustedError
 				hc, sc := requests(hand.Counters()), requests(sdk.Counters())
-				if c.differs == "" {
-					if errors.As(herr, &hex) != errors.As(serr, &sex) || hc != sc {
-						t.Fatalf("hand-rolled %+v (%v)\n        sdk %+v (%v)", hc, herr, sc, serr)
-					}
-				} else if !errors.As(serr, &sex) || sc != (client.Counters{Attempts: 3, Retries: 2, ParseFailures: 3}) {
-					t.Fatalf("sdk %+v (%v)", sc, serr)
+				if errors.As(herr, &hex) != errors.As(serr, &sex) || hc != sc {
+					t.Fatalf("hand-rolled %+v (%v)\n        sdk %+v (%v)", hc, herr, sc, serr)
 				}
 				var he, se *client.Error
-				if errors.As(herr, &he) && c.differs == "" {
+				if errors.As(herr, &he) {
 					if !errors.As(serr, &se) || he.Status != se.Status || he.Code != se.Code || he.Region != se.Region || he.RequestID != se.RequestID {
 						t.Fatalf("answers: hand-rolled %#v, sdk %#v", he, se)
 					}
@@ -189,15 +198,10 @@ func TestAnswersMatchHandRolled(t *testing.T) {
 	}
 }
 
-// withHTTP supplies an HTTP client over rt; redirects is whether it is
-// given a no-redirect policy (the hand-rolled client keeps a supplied
-// client's policy; the SDK-backed one sets its own on a copy).
-func withHTTP(cfg client.Config, rt http.RoundTripper, noRedirect bool) client.Config {
-	hc := &http.Client{Transport: rt}
-	if noRedirect {
-		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	}
-	cfg.HTTPClient = hc
+// withHTTP supplies an HTTP client over rt whose policy follows redirects
+// (http.Client's default): each client sets its own on a copy.
+func withHTTP(cfg client.Config, rt http.RoundTripper) client.Config {
+	cfg.HTTPClient = &http.Client{Transport: rt}
 	return cfg
 }
 
@@ -220,8 +224,8 @@ func TestCancelAfterHeaders(t *testing.T) {
 	for _, d := range decoders {
 		cfg := testConfig(srv.URL)
 		hrt, srt := &closeCounter{next: http.DefaultTransport}, &closeCounter{next: http.DefaultTransport}
-		hand, _ := client.New(context.Background(), withHTTP(cfg, hrt, true))
-		sdk, _ := New(context.Background(), withHTTP(cfg, srt, false), WithDecoder(d.dec))
+		hand, _ := client.New(context.Background(), withHTTP(cfg, hrt))
+		sdk, _ := New(context.Background(), withHTTP(cfg, srt), WithDecoder(d.dec))
 		for who, c := range map[string]lister{"hand-rolled": hand, "sdk": sdk} {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			_, err := c.ListObjectsV2(ctx, &client.ListInput{Bucket: "b"})

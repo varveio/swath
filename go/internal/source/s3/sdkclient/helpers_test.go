@@ -42,7 +42,6 @@ func pair(t *testing.T, cfg client.Config, dec Decoder, hc *http.Client) (hand, 
 	hcfg, scfg := cfg, cfg
 	if hc != nil {
 		h, s := *hc, *hc
-		h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse } // the hand-rolled client keeps a supplied policy
 		hcfg.HTTPClient, scfg.HTTPClient = &h, &s
 	}
 	h, err := client.New(context.Background(), hcfg)
