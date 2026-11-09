@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package source_test
+package main
 
 import (
 	"flag"
@@ -18,10 +18,6 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/registry"
-	_ "github.com/varveio/swath/go/internal/source/azblob"
-	_ "github.com/varveio/swath/go/internal/source/gcs"
-	_ "github.com/varveio/swath/go/internal/source/localfs"
-	_ "github.com/varveio/swath/go/internal/source/s3"
 )
 
 // spellings are what the command must not spell: the registered providers'
@@ -33,7 +29,9 @@ type spellings struct {
 	prefixes []string
 }
 
-// providerSpellings collects the spellings from the registered factories.
+// providerSpellings collects the spellings from the registered factories:
+// this test binary is the command's package, so they are the providers
+// the command itself imports, with no second list to keep in step.
 // A prefix (the name up to its first '-', "gcs-") is a provider's
 // namespace when two or more of its own flags start with it and no shared
 // group's flag, other provider's flag or command flag (command) does.
@@ -238,11 +236,12 @@ func (placeholders) Import(path string) (*types.Package, error) {
 // source, not a proof: it fails when a constant string expression the type
 // checker evaluates in cmd/swath's non-test files spells a registered
 // provider's scheme, own flag or flag namespace (scan). A value built at
-// run time (a variable, fmt.Sprintf's result) passes it. What the command
-// needs of a provider, it reads from the registered factories
-// (registry.Factory).
+// run time (a variable, fmt.Sprintf's result) passes it, and so does a
+// constant expression the placeholder imports leave unevaluated (one that
+// uses another package's constant). What the command needs of a provider,
+// it reads from the registered factories (registry.Factory).
 func TestCommandNamesNoProvider(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join(moduleDir(t), "cmd", "swath", "*.go"))
+	files, err := filepath.Glob("*.go") // the package's directory is the test's working directory
 	if err != nil {
 		t.Fatal(err)
 	}
