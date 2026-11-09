@@ -75,6 +75,17 @@ func TestNamespaceInfo(t *testing.T) {
 			}
 		}
 	}
+	// Shared Key: not asked (the request is not signed), no request sent.
+	k, err := New(ctx, Config{Account: "acct", SharedKey: testKey, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	n := len(seen)
+	mu.Unlock()
+	if _, err := k.NamespaceInfo(ctx, "cont"); !errors.Is(err, ErrNoDFSEndpoint) || len(seen) != n {
+		t.Fatalf("Shared Key: %v, %d requests", err, len(seen)-n)
+	}
 	c, _ := New(ctx, Config{Account: "acct", Anonymous: true, MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}})
 	mu.Lock()
 	answer = ""

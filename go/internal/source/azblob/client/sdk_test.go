@@ -198,7 +198,7 @@ func walkSDK(t *testing.T, ep string, in ListInput) []ListOutput {
 			if err != nil {
 				t.Fatalf("%+v: SDK: %v", in, err)
 			}
-			p := ListOutput{NextMarker: deref(r.NextMarker)}
+			p := ListOutput{NextMarker: sdkDeref(r.NextMarker)}
 			for _, b := range r.Segment.BlobItems {
 				p.Items = append(p.Items, sdkItem(b))
 			}
@@ -212,12 +212,12 @@ func walkSDK(t *testing.T, ep string, in ListInput) []ListOutput {
 		if err != nil {
 			t.Fatalf("%+v: SDK: %v", in, err)
 		}
-		p := ListOutput{NextMarker: deref(r.NextMarker)}
+		p := ListOutput{NextMarker: sdkDeref(r.NextMarker)}
 		for _, b := range r.Segment.BlobItems {
 			p.Items = append(p.Items, sdkItem(b))
 		}
 		for _, x := range r.Segment.BlobPrefixes {
-			p.Items = append(p.Items, Item{Name: deref(x.Name), Prefix: true})
+			p.Items = append(p.Items, Item{Name: sdkDeref(x.Name), Prefix: true})
 		}
 		pages = append(pages, p)
 	}
@@ -237,7 +237,7 @@ func byKind(items []Item) (blobs, prefixes []Item) {
 }
 
 func sdkItem(b *container.BlobItem) Item {
-	it := Item{Name: deref(b.Name)}
+	it := Item{Name: sdkDeref(b.Name)}
 	p := b.Properties
 	if p.ContentLength != nil {
 		it.Size = *p.ContentLength
@@ -254,7 +254,7 @@ func sdkItem(b *container.BlobItem) Item {
 	if len(p.ContentMD5) > 0 {
 		it.ContentMD5 = base64.StdEncoding.EncodeToString(p.ContentMD5)
 	}
-	it.ContentType = deref(p.ContentType)
+	it.ContentType = sdkDeref(p.ContentType)
 	if p.BlobType != nil {
 		it.BlobType = string(*p.BlobType)
 	}
@@ -264,7 +264,7 @@ func sdkItem(b *container.BlobItem) Item {
 	return it
 }
 
-func deref(s *string) string {
+func sdkDeref(s *string) string {
 	if s == nil {
 		return ""
 	}

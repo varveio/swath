@@ -7,16 +7,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,5 +222,62 @@ func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 			t.Fatalf("report %v: %s", rerr, b)
 		}
 		noSecret(t, azblob.RedactRoot(root), stderr, out, report)
+	}
+}
+
+// TestAzureSDKLogSuppressed: with AZURE_SDK_GO_LOGGING=all, which makes
+// azcore write its own log (request URLs, a SAS included) to stderr, a run
+// in a fresh process writes no line of it: the command turns it off at
+// startup. The child's requests are answered with an error that quotes the
+// query, and one endpoint refuses connections, the two cases azcore logs.
+func TestAzureSDKLogSuppressed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAzureSDKLogProcess$", "-test.v")
+	cmd.Env = append(os.Environ(), "SWATH_TEST_AZLOG=1", "AZURE_SDK_GO_LOGGING=all")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil || !bytes.Contains(stdout, []byte("--- PASS: TestAzureSDKLogProcess")) {
+		t.Fatalf("child: %v\nstdout: %s\nstderr: %s", err, stdout, stderr.String())
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		// azcore's listener writes "[time] Event: message"
+		for _, ev := range []string{"] Request: ", "] Response: ", "] Retry: ", "] ResponseError: "} {
+			if strings.Contains(line, ev) {
+				t.Errorf("the SDK logged: %s", line)
+			}
+		}
+	}
+	if bytes.Contains(stderr.Bytes(), []byte("SECRET")) || bytes.Contains(stdout, []byte("SECRET")) {
+		t.Errorf("the signature reached the output:\nstdout: %s\nstderr: %s", stdout, stderr.String())
+	}
+}
+
+// TestAzureSDKLogProcess is run only by TestAzureSDKLogSuppressed's child,
+// so azcore reads AZURE_SDK_GO_LOGGING in a fresh process.
+func TestAzureSDKLogProcess(t *testing.T) {
+	if os.Getenv("SWATH_TEST_AZLOG") != "1" {
+		t.Skip("subprocess helper for TestAzureSDKLogSuppressed")
+	}
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("x-ms-error-code", "AuthorizationFailure")
+		w.WriteHeader(403)
+		fmt.Fprintf(w, "\xef\xbb\xbf<Error><Code>AuthorizationFailure</Code><Message>%s</Message></Error>", url.QueryEscape(r.URL.RawQuery))
+	}))
+	t.Cleanup(srv.Close)
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close() // a connection refused
+	for _, ep := range []string{srv.URL, down.URL} {
+		err := run(context.Background(), []string{"az://acct/c?sv=2026-10-06&sig=SECRET9", "--azblob-endpoint", ep, "--workers", "1",
+			"--azblob-request-timeout", "2s", "-o", filepath.Join(t.TempDir(), "ds")}, io.Discard, false)
+		if err == nil {
+			t.Fatalf("%s: the run did not fail", ep)
+		}
+	}
+	if requests.Load() == 0 {
+		t.Fatal("no request reached the server")
 	}
 }

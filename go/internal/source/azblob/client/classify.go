@@ -39,14 +39,11 @@ const (
 	headerRetryAfter       = "Retry-After"
 	headerHNSEnabled       = "x-ms-is-hns-enabled"
 	headerNamespaceEnabled = "x-ms-namespace-enabled"
-	headerClientRequestID  = "x-ms-client-request-id"
 	headerVersion          = "x-ms-version"
 	headerDate             = "x-ms-date"
 	headerAuthorization    = "Authorization"
-	headerAccept           = "Accept"
 	headerUserAgent        = "User-Agent"
 	headerLocation         = "Location"
-	acceptXML              = "application/xml"
 	maxErrorBody           = 64 << 10 // an error body read for its code and message
 )
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,9 +22,9 @@ import (
 // testSAS is a SAS whose signature is easy to find in a message.
 const testSAS = "sv=2026-10-06&ss=b&srt=co&sp=rl&se=2026-12-01T00%3A00%3A00Z&sig=TopSecretSig%2Bpart%3D"
 
-// TestSASOnEveryRequest: the SAS (with or without '?') is appended to the
-// listing and account-information queries as given, and nothing else
-// authenticates the request.
+// TestSASOnEveryRequest: the SAS (with or without '?') is sent with the
+// listing and account-information queries, every parameter as given, and
+// nothing else authenticates the request.
 func TestSASOnEveryRequest(t *testing.T) {
 	var queries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,9 +49,13 @@ func TestSASOnEveryRequest(t *testing.T) {
 		if _, err := c.AccountInfo(context.Background(), "c"); err != nil {
 			t.Fatal(err)
 		}
+		want, _ := url.ParseQuery(testSAS)
 		for _, q := range queries {
-			if !strings.HasSuffix(q, "&"+testSAS) {
-				t.Errorf("query %q lacks the SAS", q)
+			got, _ := url.ParseQuery(q)
+			for k, v := range want {
+				if !slices.Equal(got[k], v) {
+					t.Errorf("query %q lacks the SAS's %s", q, k)
+				}
 			}
 		}
 		if src, anon := c.Credentials(); src != "shared access signature" || anon || strings.Contains(c.Route("c"), "sig") {
@@ -59,9 +64,9 @@ func TestSASOnEveryRequest(t *testing.T) {
 	}
 }
 
-// TestSASRedacted: the SAS appears in no error: not a transport error's
-// URL, a 400's query echo, a redirect target, nor a message that quotes
-// it.
+// TestSASRedacted: the SAS's signature appears in no error: not a
+// transport error's URL, a 400's query echo, a redirect target, nor a
+// message that quotes it.
 func TestSASRedacted(t *testing.T) {
 	sig, _ := url.QueryUnescape("TopSecretSig%2Bpart%3D")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +108,9 @@ func TestSASRedacted(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: no error", x.prefix)
 		}
-		if msg := err.Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") || strings.Contains(msg, "elsewhere") {
+		// The SDK sorts the SAS's parameters in among the request's, so a
+		// quoted query keeps them: only the signature is secret.
+		if msg := err.Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "elsewhere") {
 			t.Errorf("%s: the SAS or a redirect target leaks: %s", x.prefix, msg)
 		}
 		if strings.Contains(x.prefix, "redirect") || x.prefix == "bad-location" {
@@ -124,7 +131,7 @@ func TestSASRedacted(t *testing.T) {
 	// Recursive redaction: a SAS quoted deep inside a wrapped error.
 	u, _ := url.Parse(srv.URL + "/acct/c?comp=list")
 	inner := &url.Error{Op: "Get", URL: srv.URL + "?" + testSAS, Err: fmt.Errorf("wrapped: %w", &url.Error{Op: "Get", URL: "x?" + testSAS, Err: fmt.Errorf("location %q", "https://e/?sig="+sig)})}
-	if msg := c.Redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
+	if msg := c.redact(fmt.Errorf("outer: %w", inner), u).Error(); strings.Contains(msg, "TopSecretSig") || strings.Contains(msg, "se=2026") {
 		t.Errorf("nested errors leak: %s", msg)
 	}
 	if _, err := New(context.Background(), Config{Account: "acct", SAS: "%zz&sig=TopSecretSig"}); err == nil || strings.Contains(err.Error(), "TopSecretSig") {

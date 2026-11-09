@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package sdkclient
+package client
 
 import (
 	"bytes"
@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/varveio/swath/go/internal/source/azblob/client"
 )
 
 // memory answers every request with body from memory: no network, so a
@@ -29,7 +27,7 @@ func (m memory) RoundTrip(req *http.Request) (*http.Response, error) {
 func benchPage(hierarchy bool) []byte {
 	var b strings.Builder
 	b.WriteString(listHead)
-	for i := range client.MaxPageSize {
+	for i := range MaxPageSize {
 		if hierarchy && i%2 == 1 {
 			fmt.Fprintf(&b, "<BlobPrefix><Name>data/%05d/</Name></BlobPrefix>", i)
 			continue
@@ -44,42 +42,32 @@ func benchPage(hierarchy bool) []byte {
 	return []byte(b.String())
 }
 
-// BenchmarkList is one full List call (request, bounded read, decoding,
-// conversion, page validation) of a 5,000-entry page from memory through
-// each client, the SDK client's Guard in place: ns/object and allocs/page
-// (allocs/op).
+// BenchmarkList is one full List call (request, bounded read, envelope
+// check, the SDK's decoding, conversion, page validation) of a 5,000-entry
+// page from memory: ns/object and allocs/page (allocs/op).
 func BenchmarkList(b *testing.B) {
 	for _, shape := range []string{"flat", "hierarchy"} {
 		body := benchPage(shape == "hierarchy")
-		in := client.ListInput{Container: "c", MaxResults: client.MaxPageSize}
+		in := ListInput{Container: "c", MaxResults: MaxPageSize}
 		if shape == "hierarchy" {
 			in.Delimiter = "/"
 		}
-		cfg := client.Config{Endpoint: "http://127.0.0.1:1", Account: "acct", Anonymous: true, MaxAttempts: 1,
+		cfg := Config{Endpoint: "http://127.0.0.1:1", Account: "acct", Anonymous: true, MaxAttempts: 1,
 			HTTPClient: &http.Client{Transport: memory{body}}}
-		hand, err := client.New(context.Background(), cfg)
+		c, err := New(context.Background(), cfg)
 		if err != nil {
 			b.Fatal(err)
 		}
-		sdk, err := New(context.Background(), cfg)
-		if err != nil {
-			b.Fatal(err)
-		}
-		for _, c := range []struct {
-			name string
-			l    lister
-		}{{"handrolled", hand}, {"sdk", sdk}} {
-			b.Run(shape+"/"+c.name, func(b *testing.B) {
-				b.ReportAllocs()
-				b.SetBytes(int64(len(body)))
-				for b.Loop() {
-					p, err := c.l.List(context.Background(), &in)
-					if err != nil || len(p.Items) != client.MaxPageSize {
-						b.Fatalf("%v", err)
-					}
+		b.Run(shape, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(body)))
+			for b.Loop() {
+				p, err := c.List(context.Background(), &in)
+				if err != nil || len(p.Items) != MaxPageSize {
+					b.Fatalf("%v", err)
 				}
-				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*client.MaxPageSize), "ns/object")
-			})
-		}
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*MaxPageSize), "ns/object")
+		})
 	}
 }

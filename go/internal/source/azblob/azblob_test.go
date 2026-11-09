@@ -521,7 +521,7 @@ func TestAdmissionFallback(t *testing.T) {
 // answer whose x-ms-is-hns-enabled is not exactly "true" or "false" ("0",
 // which strconv.ParseBool would read as flat) is unknown: refused unless
 // --azblob-flat asserts it (no Data Lake host is asked: the endpoint has
-// none, and the SDK client does not ask one with Shared Key).
+// none, and the client does not ask one with Shared Key).
 func TestAdmitSharedKeyUnknown(t *testing.T) {
 	t.Setenv(EnvKey, "c2VjcmV0LWtleS1mb3ItdGVzdHM=")
 	t.Setenv(EnvSAS, "")
@@ -788,21 +788,18 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 	}
 }
 
-// cappedAPI is a supplied client that reports the client's cut waits and
-// shrunk pages (the body cap is 64 MiB, more than any page the replay can
-// serve, so its path is driven in the client's own tests).
+// cappedAPI is a supplied client that reports the client's cut waits.
 type cappedAPI struct {
 	*sortedAPI
-	retryAfter, shrinks int64
+	retryAfter int64
 }
 
 func (c cappedAPI) RetryAfterCapped() int64 { return c.retryAfter }
-func (c cappedAPI) BodyCapShrinks() int64   { return c.shrinks }
 
 // TestClientCutsReported: retry_after_capped counts the 503 ServerBusy
 // answers whose Retry-After (an hour) passed the request timeout, through
-// the built client against the replay; body_cap_shrinks is reported from
-// the client.
+// the built client against the replay, and is reported from a supplied
+// client that counts it.
 func TestClientCutsReported(t *testing.T) {
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
@@ -821,29 +818,25 @@ func TestClientCutsReported(t *testing.T) {
 	t.Cleanup(srv.Close)
 	rows, st := list(t, Options{Account: r.Account, Container: r.Container, Endpoint: srv.URL, Timeout: 300 * time.Millisecond,
 		Policy: keyrange.Policy{Sequential: true}}, 1)
-	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 || st.Counters.Value("body_cap_shrinks") != 0 {
-		t.Fatalf("%d rows, retry_after_capped %d, body_cap_shrinks %d", len(rows), st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
+	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 {
+		t.Fatalf("%d rows, retry_after_capped %d", len(rows), st.Counters.Value("retry_after_capped"))
 	}
-	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3, shrinks: 5}
+	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3}
 	_, st = list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
-	if st.Counters.Value("retry_after_capped") != 3 || st.Counters.Value("body_cap_shrinks") != 5 {
-		t.Fatalf("supplied client: retry_after_capped %d, body_cap_shrinks %d", st.Counters.Value("retry_after_capped"), st.Counters.Value("body_cap_shrinks"))
+	if st.Counters.Value("retry_after_capped") != 3 {
+		t.Fatalf("supplied client: retry_after_capped %d", st.Counters.Value("retry_after_capped"))
 	}
 }
 
 // TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, the client's counters
-// follow the engine's, and the report names the built client (the SDK
-// client under the swath_sdkclient build tag).
+// client's pool, one transport per 16 workers, and the client's counters
+// follow the engine's.
 func TestPoolSizeReported(t *testing.T) {
 	r := azblobtest.Serve(t, azblobtest.Keys())
 	for workers, want := range map[int]int64{1: 1, 40: 3} {
 		_, st := list(t, replayOptions(r), workers)
 		if n := st.Counters.Value("transport.pool_size"); n != want || st.Counters.Value("attempts") == 0 {
 			t.Fatalf("%d workers: transport.pool_size %d (want %d), attempts %d", workers, n, want, st.Counters.Value("attempts"))
-		}
-		if st.Client != clientKind {
-			t.Fatalf("client %q, want %q", st.Client, clientKind)
 		}
 	}
 }

@@ -1,14 +1,15 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package client is a small Azure Blob Storage client: List Blobs (flat or
-// with a delimiter), Get Account Information and, on the account's Data
+// Package client is swath's Azure Blob Storage client: List Blobs (flat or
+// with a delimiter) and Get Account Information through the Azure SDK's
+// service and container clients (list.go), and, on the account's Data
 // Lake host, Filesystem Get Properties (NamespaceInfo, which exists for
 // anonymous admission: only it tells an anonymous caller whether the
-// namespace is flat) only, authenticated by a
-// SAS, an account key signed here (Shared Key), Entra ID tokens from
-// azidentity's DefaultAzureCredential, or nothing, with counted retries and
-// typed errors from objhttp.
+// namespace is flat), authenticated by a SAS, an account key (Shared Key,
+// signed by the SDK), Entra ID tokens from azidentity's
+// DefaultAzureCredential, or nothing, with counted retries and typed
+// errors from objhttp.
 //
 // Entra ID tokens live as long as the client: they are fetched by a token
 // source whose HTTP client bounds each exchange by the request timeout, and
@@ -21,7 +22,6 @@ package client
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -32,8 +32,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -41,10 +39,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"golang.org/x/oauth2"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
-	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -77,7 +75,7 @@ type Config struct {
 	// SAS is a shared access signature, a query string with or without a
 	// leading '?', appended to every request and kept out of every error.
 	SAS string
-	// SharedKey is the account key (base64): requests are signed here.
+	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey string
 	// Credential overrides the Entra ID lookup (tests).
 	Credential     azcore.TokenCredential
@@ -128,53 +126,42 @@ type ListOutput struct {
 	NextMarker string
 }
 
-// Client lists Azure Blob containers; safe for concurrent use.
-type Client struct{ *Core }
-
-// New resolves credentials and builds the client (NewCore).
-func New(ctx context.Context, cfg Config) (*Client, error) {
-	c, err := NewCore(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{c}, nil
-}
-
-// Core is what an Azure Blob listing client is built on, whatever sends
-// its List Blobs: the account's root, the transport pool, credentials, the
-// retry policy and the counters, and the calls both clients share (Filesystem
-// Get Properties, the body-cap halving, answers as *Error, SAS redaction).
-// Client embeds it; so does the SDK-backed client (azblob/sdkclient).
-type Core struct {
-	cfg  Config
-	base *url.URL // ends in '/': the account's root
-	http []*http.Client
-	next atomic.Uint64
+// Client lists Azure Blob containers; safe for concurrent use. It holds
+// the account's root, the transport pool with one SDK service client per
+// transport, the credentials, the retry policy and the counters.
+type Client struct {
+	cfg    Config
+	base   *url.URL          // ends in '/': the account's root
+	http   []*http.Client    // the pool: redirects never followed, Location dropped
+	svc    []*service.Client // one per pooled transport, the same order
+	guards []*objhttp.Guard  // the same order (tests lower MaxBody)
+	next   atomic.Uint64
 
 	sas    string              // without '?'; "" when none
-	key    *sharedKey          // nil: no shared key
+	key    string              // the account key; "" when the credential is another
 	ts     *tokensource.Shared // nil: no bearer token
 	source string
 	note   string
 
-	maxBody          int64 // MaxBody; tests lower it
 	retry            objhttp.Retry
 	counts           objhttp.Counters
 	retryAfterCapped atomic.Int64
-	bodyCapShrinks   atomic.Int64
 }
 
 // MaxBody is the body cap: the memory one in-flight response may hold.
 // Responses are read whole and sit outside the engine's memory budget, so
-// the cap is fixed, not derived from the page size; a page past it is
-// asked again with fewer entries (List).
+// the cap is fixed, not derived from the page size. A listing page past it
+// fails the request (ErrBodyCap): Azure answers at most 5,000 entries,
+// which stay far below it.
 const MaxBody = 64 << 20
 
-// ErrBodyCap is a 200 whose body passed the cap (List halves maxresults).
+// ErrBodyCap is a 200 whose body passed the cap: a terminal failure, not
+// retried, not asked again with fewer entries.
 var ErrBodyCap = errors.New("response larger than the body cap")
 
-// NewCore resolves credentials and builds the transport pool.
-func NewCore(ctx context.Context, cfg Config) (*Core, error) {
+// New resolves credentials and builds the transport pool and the SDK
+// clients over it.
+func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -188,7 +175,7 @@ func NewCore(ctx context.Context, cfg Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Core{cfg: cfg, base: base, maxBody: MaxBody,
+	c := &Client{cfg: cfg, base: base,
 		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate, Answer: answer}}
 	c.retry.Defaults()
 	// Redirects are answers, never followed, also through a supplied HTTP
@@ -219,6 +206,9 @@ func NewCore(ctx context.Context, cfg Config) (*Core, error) {
 		c.http = []*http.Client{&hc}
 	}
 	if err := c.credentials(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.services(); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -255,7 +245,7 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 // credentials resolves the credential in precedence order: anonymous, a
 // SAS, a shared key, a supplied token credential, then Entra ID through
 // DefaultAzureCredential.
-func (c *Core) credentials(ctx context.Context) error {
+func (c *Client) credentials(ctx context.Context) error {
 	cfg := c.cfg
 	switch {
 	case cfg.Anonymous:
@@ -269,11 +259,12 @@ func (c *Core) credentials(ctx context.Context) error {
 		}
 	case cfg.SharedKey != "":
 		c.source = "shared key"
-		k, err := newSharedKey(cfg.Account, cfg.SharedKey)
-		if err != nil {
+		// The SDK signs; the key must be base64 (its error does not quote
+		// the key).
+		if _, err := service.NewSharedKeyCredential(cfg.Account, cfg.SharedKey); err != nil {
 			return &CredentialError{Source: c.source, Err: err}
 		}
-		c.key = k
+		c.key = cfg.SharedKey
 	case cfg.Credential != nil:
 		c.ts, c.source = c.shared(cfg.Credential), "token credential"
 	default:
@@ -345,7 +336,7 @@ func entraConfigured() bool {
 // every login is absent the requests go unauthenticated (the note says
 // so), as GCS goes without Application Default Credentials; a refused
 // grant is a credential error; a transient failure keeps the chain.
-func (c *Core) entra(ctx context.Context) error {
+func (c *Client) entra(ctx context.Context) error {
 	const source = "Entra ID (DefaultAzureCredential)"
 	configured, vm := entraConfigured(), onAzureVM()
 	if !configured && !vm {
@@ -379,7 +370,7 @@ func (c *Core) entra(ctx context.Context) error {
 // path", "az login") is no credential: anonymous with the note, as a
 // missing gcloud login is for GCS. Only a login that ran and had its
 // token refused refuses the run.
-func (c *Core) login(ctx context.Context) error {
+func (c *Client) login(ctx context.Context) error {
 	const source = "Entra ID (Azure CLI login)"
 	cred, err := newLoginCredential()
 	if err != nil {
@@ -433,12 +424,12 @@ func onAzureVM() bool {
 // tokenHTTP is the HTTP client of token exchanges: the first pooled
 // transport. Each exchange is bounded by the token call's context
 // (credentialSource), the one deadline whose expiry is classified.
-func (c *Core) tokenHTTP() *http.Client {
+func (c *Client) tokenHTTP() *http.Client {
 	return &http.Client{Transport: c.http[0].Transport}
 }
 
 // shared wraps cred as the client's coalesced token source.
-func (c *Core) shared(cred azcore.TokenCredential) *tokensource.Shared {
+func (c *Client) shared(cred azcore.TokenCredential) *tokensource.Shared {
 	return tokensource.NewShared(credentialSource{cred: cred, timeout: c.cfg.RequestTimeout}, 0)
 }
 
@@ -475,9 +466,9 @@ func anonymousNote(cfg Config) string {
 	return ""
 }
 
-// Token waits for the token source under the attempt's deadline (as the
+// token waits for the token source under the attempt's deadline (as the
 // GCS client does).
-func (c *Core) Token(ctx context.Context) (*oauth2.Token, error) {
+func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
 	t, err := c.ts.Token(ctx)
 	switch {
 	case err == nil:
@@ -517,13 +508,13 @@ func refused(err error) bool {
 }
 
 // Credentials names where the credentials came from (never the secret).
-func (c *Core) Credentials() (source string, anonymous bool) {
-	return c.source, c.sas == "" && c.key == nil && c.ts == nil
+func (c *Client) Credentials() (source string, anonymous bool) {
+	return c.source, c.sas == "" && c.key == "" && c.ts == nil
 }
 
 // Note is a warning about the credentials for the run's log ("" when
 // none).
-func (c *Core) Note() string { return c.note }
+func (c *Client) Note() string { return c.note }
 
 // connWorkers is the workers per pooled transport (one HTTP/2 connection
 // each, below the server's stream limit); maxConns caps the pool.
@@ -537,86 +528,38 @@ func PoolSize(workers int) int {
 
 // Transports is the size of the client's transport pool (1 with a supplied
 // HTTPClient): the report's transport.pool_size.
-func (c *Core) Transports() int { return len(c.http) }
+func (c *Client) Transports() int { return len(c.http) }
 
-func (c *Core) pick() *http.Client { return c.http[c.Next()] }
+// pick is the index of the pooled transport the next request takes
+// (round-robin).
+func (c *Client) pick() int { return int((c.next.Add(1) - 1) % uint64(len(c.http))) }
 
 // Answered is the number of requests the service answered usably
 // (objhttp.Counters.Answered).
-func (c *Core) Answered() int64 { return c.counts.Answered() }
+func (c *Client) Answered() int64 { return c.counts.Answered() }
 
 // Live is the request account now with the limiter's current limit, for
 // the progress sampler (objhttp.Live).
-func (c *Core) Live() objhttp.Live {
+func (c *Client) Live() objhttp.Live {
 	l := c.counts.Live()
 	l.Limit = c.retry.Limiter.Limit()
 	return l
 }
 
-// BodyCapShrinks is the number of times a response past the body cap made
-// List halve maxresults (body_cap_shrinks).
-func (c *Core) BodyCapShrinks() int64 { return c.bodyCapShrinks.Load() }
-
 // RetryAfterCapped is the number of answers whose Retry-After was cut to
 // the request timeout (retry_after_capped).
-func (c *Core) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
+func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
 
 // Counters returns the request counters so far.
-func (c *Core) Counters() Counters {
+func (c *Client) Counters() Counters {
 	n := c.counts.Load()
 	n.Limiter = c.retry.Limiter.Counts()
 	n.Rate = c.retry.Rate.Counts()
 	return n
 }
 
-// Retry is the client's retry policy, for objhttp.Do.
-func (c *Core) Retry() objhttp.Retry { return c.retry }
-
-// Counts is the client's request account, for objhttp.Do and its own
-// attempts.
-func (c *Core) Counts() *objhttp.Counters { return &c.counts }
-
-// Timeout is the per-attempt deadline (Config.RequestTimeout).
-func (c *Core) Timeout() time.Duration { return c.cfg.RequestTimeout }
-
-// BodyCap is the success body cap (MaxBody unless a test lowered it).
-func (c *Core) BodyCap() int64 { return c.maxBody }
-
-// SetBodyCap lowers the success body cap (tests).
-func (c *Core) SetBodyCap(n int64) { c.maxBody = n }
-
-// Pool is a copy of the transport pool: redirects never followed, a 3xx's
-// Location dropped (noLocation).
-func (c *Core) Pool() []*http.Client { return slices.Clone(c.http) }
-
-// Next is the index of the pooled transport the next request takes
-// (round-robin, as the client's own requests).
-func (c *Core) Next() int { return int((c.next.Add(1) - 1) % uint64(len(c.http))) }
-
-// Account is the storage account's name.
-func (c *Core) Account() string { return c.cfg.Account }
-
-// Base is the account's root URL (ending in '/'), without the SAS.
-func (c *Core) Base() string { return c.base.String() }
-
-// SAS is the shared access signature sent with every request, without
-// '?'; "" when none.
-func (c *Core) SAS() string { return c.sas }
-
-// SharedKey is the account key requests are signed with; "" when the
-// credential is another.
-func (c *Core) SharedKey() string {
-	if c.key == nil {
-		return ""
-	}
-	return c.cfg.SharedKey
-}
-
-// Bearer reports Entra ID: every attempt carries a token (Token).
-func (c *Core) Bearer() bool { return c.ts != nil }
-
 // route is the URL of a container, without a query.
-func (c *Core) route(container string) url.URL {
+func (c *Client) route(container string) url.URL {
 	u := *c.base
 	u.Path += container
 	u.RawPath = ""
@@ -625,7 +568,7 @@ func (c *Core) route(container string) url.URL {
 
 // Route is the URL a container's requests go to, before the query (never
 // the SAS).
-func (c *Core) Route(container string) string {
+func (c *Client) Route(container string) string {
 	u := c.route(container)
 	return u.String()
 }
@@ -634,99 +577,9 @@ func (c *Core) Route(container string) string {
 // it ('+' itself is %2B either way).
 func encodeQuery(q url.Values) string { return strings.ReplaceAll(q.Encode(), "+", "%20") }
 
-// listURL is the List Blobs URL for in, without the SAS.
-func (c *Client) listURL(in *ListInput) url.URL {
-	u := c.route(in.Container)
-	q := url.Values{"restype": {"container"}, "comp": {"list"}}
-	for name, v := range map[string]string{"prefix": in.Prefix, "delimiter": in.Delimiter, "startFrom": in.StartFrom, "marker": in.Marker} {
-		if v != "" {
-			q.Set(name, v)
-		}
-	}
-	if in.MaxResults > 0 {
-		q.Set("maxresults", strconv.Itoa(in.MaxResults))
-	}
-	u.RawQuery = encodeQuery(q)
-	return u
-}
-
-// List sends one List Blobs request, retrying retryable failures
-// (objhttp.Do), and validates the page (ErrInvalidPage), its size bounded
-// as Shrinking says.
-func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	return c.Shrinking(ctx, in, c.list)
-}
-
-// Shrinking runs list (one logical List Blobs request: retries included)
-// for in. A response past the body cap (list returns ErrBodyCap) is asked
-// again with maxresults halved, the marker and query unchanged (the next
-// page continues from the shorter one's NextMarker), down to 1; only a
-// single entry past the cap is a parse failure. Each call starts again at
-// the caller's page size.
-func (c *Core) Shrinking(ctx context.Context, in *ListInput, list func(context.Context, *ListInput) (*ListOutput, error)) (*ListOutput, error) {
-	req := *in // sent as the caller set it until a response passes the cap
-	for {
-		p, err := list(ctx, &req)
-		if !errors.Is(err, ErrBodyCap) {
-			return p, err
-		}
-		if req.MaxResults == 1 {
-			c.counts.ParseFailure()
-			return nil, fmt.Errorf("%w: one entry's page is larger than %d bytes", ErrSyntax, c.maxBody)
-		}
-		if req.MaxResults <= 0 || req.MaxResults > MaxPageSize {
-			req.MaxResults = MaxPageSize // what the server answered with
-		}
-		req.MaxResults = max(req.MaxResults/2, 1)
-		c.bodyCapShrinks.Add(1)
-	}
-}
-
-// list is one logical List Blobs request at in's page size.
-func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	u := c.listURL(in)
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (*ListOutput, error) {
-		_, body, err := c.attempt(ctx, http.MethodGet, &u, c.maxBody)
-		if err != nil {
-			return nil, err
-		}
-		if err := faults.At("response-read"); err != nil {
-			return nil, err
-		}
-		p, err := parse(ctx, body)
-		if err != nil {
-			if errors.Is(err, ErrSyntax) {
-				c.counts.ParseFailure()
-			}
-			return nil, err
-		}
-		if err := p.Validate(in.Marker); err != nil {
-			return nil, err
-		}
-		return p, nil
-	})
-}
-
 // ErrHNSUnknown is an account-information answer without
 // x-ms-is-hns-enabled: the namespace is unknown, never taken for flat.
 var ErrHNSUnknown = errors.New("account information without " + headerHNSEnabled)
-
-// AccountInfo sends Get Account Information on the container's path
-// (restype=account&comp=properties, which a SAS scoped to the container
-// may call) and reports whether the account has a hierarchical namespace.
-// A refused call or a missing header is an error the caller takes for
-// "unknown", never for flat.
-func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
-	u := c.route(container)
-	u.RawQuery = encodeQuery(url.Values{"restype": {"account"}, "comp": {"properties"}})
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
-		hdr, _, err := c.attempt(ctx, http.MethodGet, &u, maxErrorBody)
-		if err != nil {
-			return false, err
-		}
-		return HNS(hdr)
-	})
-}
 
 // HNS reads an account-information answer's x-ms-is-hns-enabled exactly as
 // Azure sends it: "true" is a hierarchical namespace, "false" a flat one,
@@ -760,19 +613,26 @@ const blobSuffix, dfsSuffix = ".blob.core.windows.net", ".dfs.core.windows.net"
 // x-ms-namespace-enabled. It exists for anonymous admission: Azure answers
 // an anonymous Get Account Information with 401, but tells an anonymous
 // caller of a public container this header (checked live on 2026-11-08).
-// The DFS host is the blob host with its blob label replaced, so only the
-// exact default endpoint, https://ACCOUNT.blob.core.windows.net without a
-// port or path, has one; any other endpoint answers ErrNoDFSEndpoint. Credentials, retries and classification are
+// There is no azblob call for it: it is one plain HEAD, with the SAS or the
+// Entra ID token. The DFS host is the blob host with its blob label
+// replaced, so only the exact default endpoint,
+// https://ACCOUNT.blob.core.windows.net without a port or path, has one;
+// any other endpoint answers ErrNoDFSEndpoint, and so does Shared Key,
+// which this request is not signed with (a key Get Account Information
+// refused would be refused here too). Retries and classification are
 // AccountInfo's; a refused call or a missing header is an error, never
 // "flat".
-func (c *Core) NamespaceInfo(ctx context.Context, container string) (bool, error) {
+func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, error) {
 	if !c.defaultEndpoint() {
 		return false, ErrNoDFSEndpoint
+	}
+	if c.key != "" {
+		return false, fmt.Errorf("%w (Shared Key: not asked)", ErrNoDFSEndpoint)
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
 	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
-		hdr, _, err := c.attempt(ctx, http.MethodHead, &u, maxErrorBody)
+		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err
 		}
@@ -790,7 +650,7 @@ func (c *Core) NamespaceInfo(ctx context.Context, container string) (bool, error
 // host, https://ACCOUNT.blob.core.windows.net with no port or path (the
 // default, or that URL given explicitly), the only form with a Data Lake
 // host beside it.
-func (c *Core) defaultEndpoint() bool {
+func (c *Client) defaultEndpoint() bool {
 	if c.cfg.Endpoint == "" {
 		return true
 	}
@@ -799,65 +659,49 @@ func (c *Core) defaultEndpoint() bool {
 		(u.Path == "" || u.Path == "/") && u.User == nil
 }
 
-// attempt sends one request of u with method (GET or HEAD; the SAS
-// appended on the wire only) and returns a 200's header and body, read up
-// to limit bytes; any other answer is an *Error. Errors never carry the
+// head sends one HEAD of u (the SAS appended on the wire only) and returns
+// a 200's header; any other answer is an *Error. Errors never carry the
 // SAS.
-func (c *Core) attempt(ctx context.Context, method string, u *url.URL, limit int64) (http.Header, []byte, error) {
+func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	wire := *u
 	if c.sas != "" {
 		wire.RawQuery += "&" + c.sas
 	}
-	req, err := http.NewRequestWithContext(actx, method, wire.String(), nil)
+	req, err := http.NewRequestWithContext(actx, http.MethodHead, wire.String(), nil)
 	if err != nil {
-		return nil, nil, c.Redact(err, u)
+		return nil, c.redact(err, u)
 	}
-	h := req.Header
-	h.Set(headerVersion, Version)
-	h.Set(headerClientRequestID, requestID())
-	h.Set(headerAccept, acceptXML)
-	h.Set(headerUserAgent, buildinfo.UserAgent())
-	switch {
-	case c.key != nil:
-		h.Set(headerDate, time.Now().UTC().Format(http.TimeFormat))
-		if err := c.key.sign(req); err != nil {
-			return nil, nil, &CredentialError{Source: c.source, Err: err}
-		}
-	case c.ts != nil:
-		tok, err := c.Token(actx)
+	req.Header.Set(headerVersion, Version)
+	req.Header.Set(headerUserAgent, buildinfo.UserAgent())
+	if c.ts != nil {
+		tok, err := c.token(actx)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		h.Set(headerAuthorization, "Bearer "+tok.AccessToken)
+		req.Header.Set(headerAuthorization, "Bearer "+tok.AccessToken)
 	}
 	defer c.counts.Attempt()()
-	resp, err := c.pick().Do(req)
+	resp, err := c.http[c.pick()].Do(req)
 	if err != nil {
-		return nil, nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.Redact(err, u))
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		limit = maxErrorBody
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	if err != nil {
-		return nil, nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.Redact(err, u))
+		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, c.ResponseError(resp, body, u)
+		return nil, c.responseError(resp, body, u)
 	}
-	if int64(len(body)) > limit {
-		return nil, nil, ErrBodyCap
-	}
-	return resp.Header, body, nil
+	return resp.Header, nil
 }
 
-// ResponseError is a non-200 answer as an *Error: the code from
+// responseError is a non-200 answer as an *Error: the code from
 // x-ms-error-code or else the body, a redirect's target, a 400's query
 // (without the SAS), the Retry-After wait.
-func (c *Core) ResponseError(resp *http.Response, body []byte, u *url.URL) *Error {
+func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Error {
 	code, msg := errorBody(body)
 	e := &Error{Status: resp.StatusCode, Code: resp.Header.Get(headerErrorCode), Message: msg,
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
@@ -881,10 +725,10 @@ func (c *Core) ResponseError(resp *http.Response, body []byte, u *url.URL) *Erro
 	return e
 }
 
-// Redact keeps the SAS out of a request error: the URL net/http names
+// redact keeps the SAS out of a request error: the URL net/http names
 // is the one without it. It runs before any wrapping that flattens the
 // error into text (objhttp.Timeout).
-func (c *Core) Redact(err error, u *url.URL) error {
+func (c *Client) redact(err error, u *url.URL) error {
 	if c.sas == "" || err == nil {
 		return err
 	}
@@ -919,8 +763,8 @@ func (e *scrubbedNetError) Timeout() bool   { return e.timeout }
 func (e *scrubbedNetError) Temporary() bool { return false }
 
 // scrub removes the SAS, and its signature as sent or decoded, from text
-// the service or a redirect returned.
-func (c *Core) scrub(s string) string {
+// the service, a redirect or the SDK's decoder returned.
+func (c *Client) scrub(s string) string {
 	if s == "" {
 		return s
 	}
@@ -938,18 +782,5 @@ func (c *Core) scrub(s string) string {
 	return sigParam.ReplaceAllString(s, "${1}REDACTED")
 }
 
-// Scrub removes the SAS, and its signature as sent or decoded, from s
-// (text an SDK client got from its library: a log line, a decoder's
-// error).
-func (c *Core) Scrub(s string) string { return c.scrub(s) }
-
 // sigParam is a SAS signature parameter in any text, as sent or escaped.
 var sigParam = regexp.MustCompile(`(?i)((?:^|[?&;\s"'(])sig(?:=|%3D))[^&\s"'<>)]*`)
-
-// requestID is a fresh x-ms-client-request-id: a random UUID.
-func requestID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6], b[8] = b[6]&0x0f|0x40, b[8]&0x3f|0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
-}

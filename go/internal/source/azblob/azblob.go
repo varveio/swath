@@ -54,12 +54,9 @@ type counted interface{ Counters() client.Counters }
 // pool (client.Client).
 type pooled interface{ Transports() int }
 
-// capped is implemented by clients that count the waits and pages they
-// cut (client.Client: retry_after_capped, body_cap_shrinks).
-type capped interface {
-	RetryAfterCapped() int64
-	BodyCapShrinks() int64
-}
+// capped is implemented by clients that count the waits they cut
+// (client.Client: retry_after_capped).
+type capped interface{ RetryAfterCapped() int64 }
 
 // live is implemented by clients that count their attempts live
 // (source.Requested).
@@ -74,21 +71,6 @@ type answering interface{ Answered() int64 }
 // supplied client that cannot is listed, but the run declines resume.
 type Routed interface {
 	Route(container string) string
-}
-
-// built is the client connect builds (newClient: client.New, or the SDK
-// client under the swath_sdkclient build tag).
-type built interface {
-	API
-	namespaced
-	Routed
-	counted
-	pooled
-	capped
-	live
-	answering
-	Credentials() (source string, anonymous bool)
-	Note() string
 }
 
 // The environment variables of the Azure CLI that carry a credential: a
@@ -233,10 +215,7 @@ type Stats struct {
 	Credentials string `json:"credentials,omitempty"`
 	// Namespace is how admission found the namespace flat: "account
 	// information", "filesystem properties" or "asserted" (--azblob-flat).
-	Namespace string `json:"namespace"`
-	// Client is the built client: "hand-rolled" or "sdk"; "" for a
-	// supplied one.
-	Client     string            `json:"client,omitempty"`
+	Namespace  string            `json:"namespace"`
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
 }
@@ -385,7 +364,7 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 			cfg.SAS = os.Getenv(EnvSAS)
 		}
 		cfg.SharedKey = os.Getenv(EnvKey)
-		c, err := newClient(ctx, cfg)
+		c, err := client.New(ctx, cfg)
 		if err != nil {
 			return nil, false, fmt.Errorf("Azure client: %w", err)
 		}
@@ -464,13 +443,9 @@ func (p *Provider) Stats() Stats {
 	}
 	if c, ok := p.client.(capped); ok {
 		p.Set().Set(p.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
-		p.Set().Set(p.ID(client.CBodyCapShrinks), c.BodyCapShrinks())
 	}
 	e := p.Engine.Stats()
 	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
-	if p.opt.Client == nil {
-		st.Client = clientKind
-	}
 	return st
 }
 

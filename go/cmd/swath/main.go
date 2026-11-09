@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/faults"
 	"github.com/varveio/swath/go/internal/filter"
@@ -69,6 +71,11 @@ type forensicTarget struct {
 	att    *listing.Attempt
 	t      *terminal // the run's terminal result
 }
+
+// The Azure SDK's own log (azcore writes it to stderr when
+// AZURE_SDK_GO_LOGGING=all) quotes request URLs, a SAS included: swath
+// turns it off before any SDK use (TestAzureSDKLogSuppressed).
+func init() { azlog.SetListener(nil) }
 
 func main() {
 	ctx, cancel := context.WithCancelCause(context.Background())
