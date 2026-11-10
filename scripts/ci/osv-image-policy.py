@@ -166,9 +166,9 @@ def group_member_ids(group: dict, vulnerabilities: dict[str, dict]) -> set[str]:
 
 
 def parse_report(
-    document: object, java_exceptions: set[str] | None = None
+    document: object, exceptions: set[str] | None = None
 ) -> list[Occurrence]:
-    java_exceptions = java_exceptions or set()
+    exceptions = exceptions or set()
     root = require_dict(document, "report")
     results = require_list(root.get("results"), "report.results")
     occurrences: list[Occurrence] = []
@@ -256,13 +256,13 @@ def parse_report(
                     (value for value in ids if value.startswith("USN-")), ids[0]
                 )
                 if ubuntu_release(package["ecosystem"]) is None:
-                    excepted = set(ids).issubset(java_exceptions)
+                    excepted = set(ids).issubset(exceptions)
                     occurrences.append(
                         Occurrence(
                             key=key,
                             display_id=display_id,
                             disposition="EXCEPT" if excepted else "FAIL",
-                            priority="Java-exception" if excepted else "non-Ubuntu",
+                            priority="exception" if excepted else "non-Ubuntu",
                             package=package_label,
                         )
                     )
@@ -381,13 +381,13 @@ def render(occurrences: list[Occurrence], output: io.TextIOBase) -> int:
     return 0
 
 
-def load_java_exceptions(path: Path, today: datetime.date | None = None) -> set[str]:
+def load_exceptions(path: Path, today: datetime.date | None = None) -> set[str]:
     today = today or datetime.date.today()
     try:
         with path.open("rb") as config_file:
             config = tomllib.load(config_file)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise SchemaError(f"cannot read Java exception config: {error}") from error
+        raise SchemaError(f"cannot read exception config: {error}") from error
     entries = require_list(config.get("IgnoredVulns", []), "IgnoredVulns")
     active: set[str] = set()
     seen: set[str] = set()
@@ -399,7 +399,7 @@ def load_java_exceptions(path: Path, today: datetime.date | None = None) -> set[
         if not isinstance(vulnerability_id, str) or not vulnerability_id:
             raise SchemaError(f"IgnoredVulns[{index}].id must be a string")
         if vulnerability_id in seen:
-            raise SchemaError(f"duplicate Java exception {vulnerability_id}")
+            raise SchemaError(f"duplicate exception {vulnerability_id}")
         seen.add(vulnerability_id)
         # datetime.datetime subclasses datetime.date; require a bare TOML local date so
         # comparison cannot raise TypeError and silently turn a policy error into rc=1.
@@ -417,7 +417,7 @@ def evaluate(
     path: Path,
     scanner_exit_code: int,
     output: io.TextIOBase,
-    java_exceptions: set[str] | None = None,
+    exceptions: set[str] | None = None,
 ) -> int:
     if scanner_exit_code not in (0, 1):
         print(
@@ -428,7 +428,7 @@ def evaluate(
     try:
         with path.open(encoding="utf-8") as report_file:
             document = json.load(report_file)
-        occurrences = parse_report(document, java_exceptions)
+        occurrences = parse_report(document, exceptions)
         if scanner_exit_code == 0 and occurrences:
             raise SchemaError("scanner returned 0 but the report contains findings")
         if scanner_exit_code == 1 and not occurrences:
@@ -492,14 +492,14 @@ class PolicySelfTest(unittest.TestCase):
         self,
         document: object,
         scanner_rc: int = 1,
-        java_exceptions: set[str] | None = None,
+        exceptions: set[str] | None = None,
     ) -> tuple[int, str]:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(document), encoding="utf-8")
             output = io.StringIO()
             return (
-                evaluate(path, scanner_rc, output, java_exceptions),
+                evaluate(path, scanner_rc, output, exceptions),
                 output.getvalue(),
             )
 
@@ -604,7 +604,7 @@ class PolicySelfTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("FAIL non-Ubuntu GHSA-1", output)
 
-    def test_active_java_exception_is_the_only_non_ubuntu_allowance(self) -> None:
+    def test_active_exception_is_the_only_non_ubuntu_allowance(self) -> None:
         document = report(
             [{"ids": ["GHSA-1"], "aliases": []}],
             [{"id": "GHSA-1", "affected": [], "severity": []}],
@@ -616,7 +616,7 @@ class PolicySelfTest(unittest.TestCase):
             output = io.StringIO()
             code = evaluate(path, 1, output, {"GHSA-1"})
         self.assertEqual(0, code)
-        self.assertIn("EXCEPT Java-exception GHSA-1", output.getvalue())
+        self.assertIn("EXCEPT exception GHSA-1", output.getvalue())
 
         ubuntu_document = report(
             [{"ids": ["GHSA-1"], "aliases": []}],
@@ -630,7 +630,7 @@ class PolicySelfTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertNotIn("EXCEPT", output.getvalue())
 
-    def test_expired_java_exception_is_inactive(self) -> None:
+    def test_expired_exception_is_inactive(self) -> None:
         config = """
 [[IgnoredVulns]]
 id = "GHSA-active"
@@ -650,7 +650,7 @@ reason = "equal-date fixture"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "osv-scanner.toml"
             path.write_text(config, encoding="utf-8")
-            exceptions = load_java_exceptions(
+            exceptions = load_exceptions(
                 path, today=datetime.date(2026, 8, 31)
             )
         self.assertEqual({"GHSA-active"}, exceptions)
@@ -678,7 +678,7 @@ reason = "datetime fixture"
             path = Path(directory) / "osv-scanner.toml"
             path.write_text(config, encoding="utf-8")
             with self.assertRaisesRegex(SchemaError, "must be a TOML date"):
-                load_java_exceptions(path, today=datetime.date(2026, 8, 31))
+                load_exceptions(path, today=datetime.date(2026, 8, 31))
 
     def test_missing_ungrouped_and_duplicate_documents_fail_closed(self) -> None:
         missing_group_document = report(
@@ -687,7 +687,7 @@ reason = "datetime fixture"
             ecosystem="Maven",
         )
         code, output = self.evaluate_document(
-            missing_group_document, java_exceptions={"GHSA-1"}
+            missing_group_document, exceptions={"GHSA-1"}
         )
         self.assertEqual(2, code)
         self.assertIn("missing vulnerability documents", output)
@@ -753,7 +753,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", nargs="?", type=Path)
     parser.add_argument("--scanner-exit-code", type=int)
-    parser.add_argument("--java-exceptions", type=Path)
+    parser.add_argument("--exceptions", type=Path)
     parser.add_argument("--self-test", action="store_true")
     arguments = parser.parse_args()
     if arguments.self_test:
@@ -762,9 +762,9 @@ def main() -> int:
     if arguments.report is None or arguments.scanner_exit_code is None:
         parser.error("report and --scanner-exit-code are required unless --self-test is used")
     try:
-        java_exceptions = (
-            load_java_exceptions(arguments.java_exceptions)
-            if arguments.java_exceptions is not None
+        exceptions = (
+            load_exceptions(arguments.exceptions)
+            if arguments.exceptions is not None
             else set()
         )
     except SchemaError as error:
@@ -774,7 +774,7 @@ def main() -> int:
         arguments.report,
         arguments.scanner_exit_code,
         sys.stdout,
-        java_exceptions,
+        exceptions,
     )
 
 

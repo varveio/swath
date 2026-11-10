@@ -60,7 +60,7 @@ for target in "$@"; do
             fi
             policy_status=0
             python3 "$IMAGE_POLICY" --scanner-exit-code "$scanner_status" \
-                --java-exceptions "$CONFIG" "$report" \
+                --exceptions "$CONFIG" "$report" \
                 || policy_status=$?
             if [ "$policy_status" -gt 1 ]; then
                 echo "::error::The OSV image report could not be evaluated safely." >&2
