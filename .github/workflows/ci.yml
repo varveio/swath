@@ -20,8 +20,9 @@ concurrency:
 
 jobs:
   # Shared change detection for the Java tiers and the Go jobs. java=false ONLY when every changed
-  # file is Go-only (go/**, Dockerfile.go and its ignore file); anything else -- this
-  # workflow, root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
+  # file is Go-only (go/**, Dockerfile.go and its ignore file) or a named root prose
+  # file (README, CHANGELOG, CONTRIBUTING, AGENTS, CODE_OF_CONDUCT, SECURITY); anything else -- this
+  # workflow, root build files, other docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
   # tiers. go=true when go/**, this workflow, Dockerfile.go (and its ignore file), the lister and
   # replay smoke scripts, the race shard table or the SeekParquet conformance scripts changed. The
   # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
@@ -58,7 +59,7 @@ jobs:
             # --no-renames: a rename reports only its destination, so moving a Java file under go/
             # would otherwise read as Go-only. Listing both paths keeps the source path visible.
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.go)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.go|((README|CHANGELOG|CONTRIBUTING|AGENTS|CODE_OF_CONDUCT|SECURITY)\.md)$)' >/dev/null <<<"$changed"; then
               echo "java=true" >> "$GITHUB_OUTPUT"
             else
               echo "java=false" >> "$GITHUB_OUTPUT"
@@ -72,6 +73,9 @@ jobs:
             fi
           fi
           echo "changes: $(cat "$GITHUB_OUTPUT")"
+
+      - name: CI policy regression tests
+        run: python3 scripts/ci/test-ci-policy.py
 
       # Always computed: go-race expands it before its steps can skip. When go=false it is one
       # step-skipped leg on ubuntu-latest, not every shard's (arm64) runner.
@@ -91,8 +95,8 @@ jobs:
 
       # Always computed, for the same reason: go-xos's runners are chosen before its steps can
       # skip, and a job-level `if` would make it `skipped`, which fails ci-gate on a pull request.
-      # A pull request runs Windows and linux/arm64: the macOS runner queue set the pull request's
-      # wall time, so macOS runs on main and dispatch here and nightly in nightly.yml. Without a Go
+      # A pull request runs linux/arm64. Windows setup/tests and the macOS runner queue set
+      # the pull request wall time; both run on main and dispatch here and nightly in nightly.yml. Without a Go
       # change, one step-skipped leg on ubuntu-latest, so no macOS, Windows or arm64 runner is
       # queued.
       - name: Go cross-OS matrix
@@ -105,7 +109,7 @@ jobs:
           if [ "$GO_CHANGED" != true ]; then
             matrix='[{"os":"off","runner":"ubuntu-latest"}]'
           elif [ "$EVENT" = pull_request ]; then
-            matrix='[{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+            matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
           else
             matrix='[{"os":"macos-latest","runner":"macos-latest"},{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
           fi
@@ -753,8 +757,8 @@ jobs:
   # The Go default tier on the other platforms the port ships for: plain `go test` (no -race:
   # slow on macOS, and the Windows race detector needs cgo) on Windows, linux/arm64 and macOS.
   # Only vet and the tests: gofmt, the shard check, the heap gates, the cross-builds and the
-  # image stay in the jobs above. The legs are the changes job's go_xos: Windows and linux/arm64
-  # on every Go change, macOS on main and dispatch only (and nightly, nightly.yml go-xos-macos),
+  # image stay in the jobs above. The legs are the changes job's go_xos: linux/arm64
+  # on every Go change, Windows and macOS on main, dispatch and nightly only,
   # and without a Go change one go-xos (off) leg on ubuntu-latest whose steps skip.
   #
   # The linux/arm64 leg is what keeps arm64 before merge: the go-race arm64 shards cover only
@@ -908,30 +912,6 @@ jobs:
             echo "::error::fixture-tier tests that did not run: $(comm -23 <(echo "$want") <(echo "$ran") | paste -sd' ' -)"
             exit 1
           fi
-
-  # Bounded retention for the Go build caches: after the Go jobs of a push to main, every
-  # `go-build-` cache except the newest of its family is deleted (scripts/ci/go-cache-prune.sh),
-  # so main keeps one generation per job instead of filling the repository's cache quota. It runs
-  # when a Go job failed too, since the caches of the jobs that passed were saved. Housekeeping,
-  # not a gate: ci-gate does not need it. The only job with `actions: write`.
-  go-cache-prune:
-    needs: [go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    concurrency:
-      group: go-cache-prune
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-
-      - name: Delete all but the newest Go build cache per job
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/ci/go-cache-prune.sh
 
   # The single required status check on `main`, and the only job here that exists for the
   # branch rule rather than for what it runs.

@@ -19,6 +19,7 @@ runners are owned elsewhere and are only summarized here:
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
+| [`cache-maintenance.yml`](../../../.github/workflows/cache-maintenance.yml) | main CI or CodeQL completion, hourly, dispatch | bound Go and CodeQL cache generations |
 | [`go-stress.yml`](../../../.github/workflows/go-stress.yml) | dispatch only | repeat one Go test or pattern N times on a chosen runner |
 
 The split follows one question: what does a failure mean? A red `ci.yml` means this commit broke
@@ -76,8 +77,8 @@ The job writes a table of every dependency and its result to the step summary; t
 first place to look when the gate is red.
 
 `deep-tests` is not in `ci-gate`'s `needs`: it does not run on pull requests, so requiring it would
-fail every pull request. `go-cache-prune` is housekeeping and is not gated either. Neither
-`nightly.yml` nor `site.yml` is a required check.
+fail every pull request. Cache maintenance is a separate housekeeping workflow and is not gated
+either. Neither `nightly.yml` nor `site.yml` is a required check.
 
 ## Change detection
 
@@ -85,9 +86,10 @@ Most pull requests touch only one side of the repository, and nearly all recent 
 port. The `changes` job diffs the pull request's base (or the push's previous commit) against
 `HEAD` and emits two flags:
 
-- **Java change:** any path outside `go/` and `Dockerfile.go*`. Documentation, scripts,
-  this workflow and the root build files count, so the Java tiers run unless the change is
-  provably Go-only.
+- **Java change:** any path outside `go/`, `Dockerfile.go*`, and the named root prose files
+  `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md`.
+  Other documentation, scripts, workflows and build files still count. In particular, evidence
+  and fixtures under `docs/` are not exempt; the site workflow still checks root prose.
 - **Go change:** a path under `go/`, the CI workflow, the `setup-go` composite action,
   `Dockerfile.go*`, or one of the scripts the Go jobs run (the image smokes, the race shard
   table, the SeekParquet conformance scripts).
@@ -205,23 +207,23 @@ cgo). The `changes` job chooses its legs:
 
 | Event, with a Go change | Legs |
 | --- | --- |
-| pull request | `windows-latest`, `ubuntu-24.04-arm` |
+| pull request | `ubuntu-24.04-arm` |
 | push to `main`, dispatch | `macos-latest`, `windows-latest`, `ubuntu-24.04-arm` |
-| nightly | `nightly.yml` `go-xos-macos` |
+| nightly | `nightly.yml` `go-xos-macos`, `go-xos-windows` |
 
 macOS is off pull requests because its runner queue set the pull request's wall time: every run
 over 13 minutes in the measured history waited 7–10 minutes for a macOS runner, and that wait is
 not tunable from the workflow. The macOS-only failures in that history were test-timing flakes,
 except one: `TestFooterOnlyChange` (#308), which was parquet-go's arm64 encoder path, not Darwin.
 The `ubuntu-24.04-arm` leg keeps that class of finding before merge, running the whole tree on
-arm64 on a Linux runner with no comparable queue. Windows stays on pull requests because it has
-found a real filesystem difference (#310).
+arm64 on a Linux runner with no comparable queue. Windows is also off pull requests: on
+2026-11-10 its cache restoration, vet and tests set the typical PR critical path at 6–8 minutes. It has found a real filesystem difference (#310);
+that coverage remains on main and nightly.
 
-The trade-off: a change that breaks only on Darwin itself (APFS's refusal of names that are not
-UTF-8, the crash, durable and kill matrices on Darwin's filesystem and signals) passes its pull
-request and fails on its merge to `main`, or at the latest in the nightly run. To check a branch on
-macOS before merging, dispatch `nightly.yml` on it with `jobs=go-xos-macos`, or `go-stress.yml`
-with `os=macos-latest`.
+The trade-off: a change that breaks only on Windows or Darwin itself (filesystem behavior or
+signals) passes its pull request and fails on its merge to `main`, or at the latest in the nightly run. To check a branch on
+either platform before merging, dispatch `nightly.yml` on it with `jobs=go-xos-macos` or
+`jobs=go-xos-windows`, or use `go-stress.yml` with the corresponding OS.
 
 A matrix leg cannot be dropped with a job-level `if:` (it is evaluated before expansion) and a
 step-level `if:` still waits for the runner, which is why the leg list comes from `changes`.
@@ -261,15 +263,24 @@ stays per job. It is keyed per commit so that parallel jobs never overwrite one 
 `main` commit saves a whole cache; restore falls back to the job's newest entry with the same
 DEPS, then any.
 
-Per-commit build keys would grow without bound, so after the Go jobs of a `main` push
-`go-cache-prune` runs [`scripts/ci/go-cache-prune.sh`](../../../scripts/ci/go-cache-prune.sh). It
-lists every `go-build-` cache on `main` once, keeps the newest per job family by creation time and
-deletes the older ones. Newest by creation, not this run's commit: `main` runs overlap, and an older
-run finishing last must not delete a newer run's caches. It runs even when a Go job failed, since
-the passing jobs' caches were saved, and it is the only job with `actions: write`. Module caches are
-not pruned; GitHub evicts superseded ones after seven days unused. The compressed size of one
-generation under this layout is to be measured on the first `main` pushes and recorded in
-[`go/docs/measurements.md`](../../../go/docs/measurements.md).
+Per-commit build keys would grow without bound, so `cache-maintenance.yml` runs
+[`scripts/ci/cache-prune.sh`](../../../scripts/ci/cache-prune.sh) after main CI, on CodeQL
+completion events, hourly, and on manual dispatch. The hourly pass backstops dynamic CodeQL
+setups that do not emit completion events and catches late writes. Only this housekeeping job
+grants `actions: write`. It checks out `main`, never the triggering PR, and consumes no artifacts
+from it. Its concurrency group cannot cancel a job in the main CI workflow.
+
+The policy keeps the newest Go build cache per job family, Go module cache per OS/architecture,
+and CodeQL dependency and overlay cache per family on `main`. Cache versions are separate
+families. CodeQL PR dependency copies are deleted; scans can restore main's shared copy or
+fetch dependencies again. Scanning remains enabled. Unknown cache key formats and other refs
+are untouched. The script can print a plan without writes using `--plan` with an API cache array
+on stdin.
+
+Newest means creation time, not this run's commit: overlapping main runs must not remove a newer
+run's caches. A fixed-order, deduplicated snapshot limits deletions to observed IDs; new entries
+are left for the next pass. This bounds generations, not bytes: concurrent writes can temporarily
+exceed the quota, and the retained families still need to fit the repository budget.
 
 ### Other caches
 
@@ -280,8 +291,8 @@ generation under this layout is to be measured on the first `main` pushes and re
   written from `main` only (`docker-check` and `go-build` on a push). A pull request reads
   them and writes nothing: a cache written on a pull request is scoped to that pull request's
   ref, so it serves no other run while taking 0.5–1 GB of the quota per open pull request.
-- **Code scanning** (GitHub's CodeQL setup, outside these workflows) also uses the repository's
-  cache budget.
+- **Code scanning:** GitHub's default CodeQL setup remains enabled; the retention policy above
+  prevents its PR dependency caches from accumulating in the shared budget.
 
 ## Concurrency
 
@@ -289,8 +300,8 @@ generation under this layout is to be measured on the first `main` pushes and re
 superseded run. `main` and dispatch runs each get a unique group (`github.run_id`), so a merge is
 never cancelled or queued behind another: every merge runs its full suite.
 
-What must not run twice at once is serialized per job instead: `go-cache-prune` has its own group,
-so two prunes never race over the same cache generations.
+The cache maintenance workflow serializes cleanup in its own group, so two prunes never race
+over the same cache generations.
 
 The other workflows follow the same rule: `nightly.yml` coalesces per ref; `release.yml` runs one
 release at a time and never cancels; `site.yml` cancels superseded pull request checks but never a
@@ -299,7 +310,7 @@ running deploy.
 ## Runners and cost
 
 Everything runs on GitHub-hosted runners. Linux jobs use `ubuntu-latest` (amd64) or
-`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` and
+`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` and
 `go-stress.yml`. The choices above are driven mostly by wall time and queueing rather than by
 minutes:
 
@@ -322,7 +333,7 @@ minutes:
 - **Java test failure:** the `test-reports-*` artifacts hold the Gradle reports.
 - **Slow run:** compare the legs' durations; a shard that grew is rebalanced in the shard table
   using its `-json` artifact. A Go job that took minutes longer than usual on `main` probably
-  missed its build cache; the `go-cache-prune` step summary lists the kept caches.
+  missed its build cache; the `cache-prune` step summary lists the kept caches.
 - **Red nightly or deep:** an invariant broke outside the per-commit gate, or the OSV scan found a
   new advisory. Treat it as a bug on `main`.
 
@@ -339,7 +350,7 @@ minutes:
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it
   should run.
 - **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`; its build
-  cache is pruned automatically, and `go-cache-prune` should `need` it.
+  cache is pruned automatically after the CI workflow completes.
 - **Any change:** a commit that touches `go/` needs the Go jobs green, and the owning page
   ([`go/docs/testing.md`](../../../go/docs/testing.md) or [`TESTING.md`](TESTING.md)) must be
   current in the same change.
