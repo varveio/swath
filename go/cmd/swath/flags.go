@@ -120,7 +120,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
-		Long: "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
+		Long:  "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
 		Value: source.Func(names(&o.filter.StorageClasses))})
 
 	o.partSize, o.rowBudget, o.partInterval, o.stall = listing.DefaultPartSize, listing.DefaultRowBudget, listing.DefaultPartInterval, 10*time.Minute
@@ -285,7 +285,7 @@ func mayChange(name string) bool {
 	return slices.Contains(resumeFlags, name) || slices.Contains(resumeFlags, undoName(name))
 }
 
-// names appends a comma list's names to dst; an empty name (--columns '',
+// names appends a comma list's names to dst; an empty name (--columns ”,
 // --storage-class ,) is refused, never read as no restriction.
 func names(dst *[]string) func(string) error {
 	return func(v string) error {
