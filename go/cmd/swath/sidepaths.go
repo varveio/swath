@@ -39,6 +39,9 @@ func checkSidePaths(o *options) error {
 			continue
 		}
 		dest, err := checkSidePath(*o, *side.path)
+		if err == nil {
+			err = writable(dest)
+		}
 		if fi, lerr := os.Lstat(dest); err == nil && side.what != "--report" && lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 			// A profile is opened, which would follow the link to wherever
 			// it points by then (createNoFollow refuses it there too); the
@@ -49,6 +52,18 @@ func checkSidePaths(o *options) error {
 			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
 		}
 		*side.path = dest
+	}
+	return nil
+}
+
+// writable refuses a side file's destination that cannot be written: a
+// directory, or a name whose directory does not exist.
+func writable(dest string) error {
+	if fi, err := os.Stat(dest); err == nil && fi.IsDir() {
+		return fmt.Errorf("is a directory")
+	}
+	if fi, err := os.Stat(filepath.Dir(dest)); err != nil || !fi.IsDir() {
+		return fmt.Errorf("its directory %s does not exist", filepath.Dir(dest))
 	}
 	return nil
 }

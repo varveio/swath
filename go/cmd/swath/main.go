@@ -182,8 +182,8 @@ var reported sync.Map
 
 // writeReport writes the run report to path (--report), atomically, when
 // the attempt ends. That file, at a path the supervisor names outside the
-// output, is the attempt's outcome of record; a failure to write it goes to
-// stderr and the exit code stands alone.
+// output, is the attempt's outcome of record; a failure to write it is
+// returned (reportFailed), naming the attempt.
 //
 // An attempt has one terminal report: the first of its writers (the
 // graceful path or the forced exit) claims it and a later one leaves it.
@@ -206,14 +206,31 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 	}
 	if err := dataset.ReplaceJSON(path, r, dataset.Durable); err != nil {
 		// The attempt is named, so a supervisor never takes an older
-		// error.json (another attempt's) for this one's outcome.
+		// report (another attempt's) for this one's outcome.
 		id := ""
 		if r.Attempt != nil {
 			id = r.Attempt.ID
 		}
-		elog().warn(fmt.Sprintf("the report of attempt %s is not written to %s: %v", id, path, err))
+		return fmt.Errorf("the report of attempt %s is not written to %s: %w", id, path, err)
 	}
 	return nil
+}
+
+// reportFailed is the command's error once the report could not be
+// written (rerr): the run's own error with it, or, for a run that
+// succeeded, that failure (exit 1); the run's outcome stands in its
+// accounts.
+func reportFailed(err, rerr error) error {
+	var ee *exitError
+	switch {
+	case rerr == nil:
+		return err
+	case errors.As(err, &ee):
+		return &exitError{error: fmt.Errorf("%w; %w", ee.error, rerr), code: ee.code, out: ee.out}
+	case err != nil:
+		return fmt.Errorf("%w; %w", err, rerr)
+	}
+	return &exitError{error: rerr, code: exitFatal, out: outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: rerr.Error()}}
 }
 
 // stopEarly ends an attempt that stopped before a run began (an unknown
@@ -224,9 +241,11 @@ func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
-	_ = writeReport(report, r, stdout)
-	return &exitError{error: err, code: o.ExitCode, out: o}
+	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, writeReport(report, r, stdout))
 }
+
+// errReportStdout refuses --report - where stdout carries the rows.
+var errReportStdout = errors.New("--report - prints the report on stdout, which carries the rows: give --report FILE")
 
 // errText refuses swath resume of a text run.
 var errText = errors.New("text output (table, tsv, jsonl) is not resumable: it keeps no journal; run swath list again")
@@ -472,6 +491,7 @@ type options struct {
 	countOnly              bool     // swath du or swath diag count: rows counted, none written
 	du                     bool     // swath du: the per-prefix totals
 	report                 string   // --report: a file, or - for stdout
+	parsed                 bool     // the flags parsed: a refusal after it writes the report
 	argv                   []string // the command line as recorded: canonical flags, then SOURCE
 	cpuProfile, memProfile string   // SWATH_CPUPROFILE, SWATH_MEMPROFILE, resolved (checkSidePaths)
 	maxDuration, stall     time.Duration
@@ -703,6 +723,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		usage(stdout, f, cmd, styleFor(stdout, o.term.color, p.longHelp))
 		return o, "", err
 	}
+	o.parsed = err == nil
 	switch {
 	case err != nil:
 		return o, "", err
@@ -758,7 +779,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", usageError{err}
 	}
 	if (text != nil && text.Path == "" || o.totals != nil) && o.report == "-" {
-		return o, "", usageError{errors.New("--report - prints the report on stdout, which carries the rows: give --report FILE")}
+		return o, "", usageError{errReportStdout}
 	}
 	if text != nil && text.Path == "" {
 		text.Stdout = stdout
@@ -773,6 +794,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		att = newAttempt()
 	}
 	o, root, err := parseList(args, stdout, cmd)
+	if err != nil && o.parsed && o.report != "" && !errors.Is(err, errReportStdout) {
+		// A refusal of a command line that parsed has a report, unless
+		// its destination is itself refused.
+		if checkSidePaths(&o) == nil {
+			return stopEarly(stdout, o.report, redactArgv(append(strings.Fields(cmd.name()), args...)), "", att, err)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -929,7 +957,7 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
 		account(&sum.Outcome, out)
 		alreadyComplete(stdout, o.report, dir, &sum)
-		return writeReport(o.report, sum, stdout)
+		return reportFailed(nil, writeReport(o.report, sum, stdout))
 	}
 	if dir != "" && !settled && (err != nil || unrecorded != "") {
 		// Refused before ownership (another owner's outcome stands, the
@@ -963,9 +991,11 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if end.failing != "" && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
 			err = fmt.Errorf("%w; every request was failing: %s", err, end.failing)
 		}
-		return &exitError{error: err, code: out.ExitCode, out: out}
+		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
+	case rerr != nil:
+		return reportFailed(nil, rerr)
 	case o.report == "-":
-		return rerr // stdout carries the report
+		return nil // stdout carries the report
 	case !o.countOnly || o.du:
 		return nil // stdout carries the rows (swath du's: Deliver), or nothing: the data went to -o; --stats prints the account on stderr
 	}

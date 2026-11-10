@@ -264,8 +264,11 @@ Limits:
 
 Reporting:
       --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
-                                Written on failure too, with the outcome and the attempt id. - is
-                                refused where stdout carries rows.
+                                Written on failure too, with the outcome and the attempt id; not for
+                                a command line that does not parse (an unknown flag, a bad value). A
+                                directory, or a name whose directory does not exist, is refused
+                                before listing; a report that cannot be written at the end fails the
+                                command (exit 1). - is refused where stdout carries rows.
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
@@ -457,8 +460,11 @@ Limits:
 
 Reporting:
       --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
-                                Written on failure too, with the outcome and the attempt id. - is
-                                refused where stdout carries rows.
+                                Written on failure too, with the outcome and the attempt id; not for
+                                a command line that does not parse (an unknown flag, a bad value). A
+                                directory, or a name whose directory does not exist, is refused
+                                before listing; a report that cannot be written at the end fails the
+                                command (exit 1). - is refused where stdout carries rows.
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
@@ -655,8 +661,11 @@ Limits:
 
 Reporting:
       --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
-                                Written on failure too, with the outcome and the attempt id. - is
-                                refused where stdout carries rows.
+                                Written on failure too, with the outcome and the attempt id; not for
+                                a command line that does not parse (an unknown flag, a bad value). A
+                                directory, or a name whose directory does not exist, is refused
+                                before listing; a report that cannot be written at the end fails the
+                                command (exit 1). - is refused where stdout carries rows.
   -v, --verbose               a start line, progress records; -vv, -vvv: the request log
                                 -vv adds each failed request and retry with its cause, -vvv every
                                 request (credentials and tokens redacted).
@@ -1082,8 +1091,10 @@ table changes.
   `error.json` is a convenience: it is current only when its `attempt.id` is the report's. No program can
   promise a new file on storage that refuses writes, so an attempt whose `error.json` write fails leaves the
   previous one in place, possibly with the same class and exit code; its report names another attempt and says
-  why in `outcome.unrecorded`. With no report (it could not be written either; a usage error, exit 2, before
-  the flags were read), only the exit code is current. `error.json` and the
+  why in `outcome.unrecorded`. With no report (it could not be written either, which fails a command that
+  succeeded with exit 1 and joins the error line otherwise; a usage error, exit 2, before the flags were
+  read), only the exit code is current. A `--report` that names a directory or a missing directory is refused
+  before listing (exit 2). `error.json` and the
   progress file are written only while the run holds the output lock, and `error.json` is removed when a later
   run or resume completes. `error.json` is always the last attempt's outcome: a resume (or `--overwrite`) that
   fails before it runs (credentials that do not load, a damaged journal, a failed recovery) takes the lock and

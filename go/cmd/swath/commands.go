@@ -227,9 +227,9 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	}
 	rerr := writeReport(report, r, stdout)
 	if done {
-		return rerr
+		return reportFailed(nil, rerr)
 	}
-	return &exitError{error: err, code: o.ExitCode, out: o}
+	return reportFailed(&exitError{error: err, code: o.ExitCode, out: o}, rerr)
 }
 
 // show prints what an output directory holds: a committed dataset or an

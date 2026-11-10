@@ -172,7 +172,8 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 
 	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",
-		Long:  "Written on failure too, with the outcome and the attempt id. - is refused where stdout carries rows."})
+		Long: "Written on failure too, with the outcome and the attempt id; not for a command line that does not parse (an unknown flag, a bad value). " +
+			"A directory, or a name whose directory does not exist, is refused before listing; a report that cannot be written at the end fails the command (exit 1). - is refused where stdout carries rows."})
 	o.term.register(f)
 
 	o.spillCompress = true
