@@ -6,6 +6,7 @@ package reader
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -166,15 +167,39 @@ func decodeLocal(r seekparquet.Row) (LocalEntry, error) {
 // streamed: a size, not negative, and a modification time in years 1 to
 // 9999. A filesystem entry (unsized) may lack its size.
 func checkObject(o *Object, unsized bool) error {
-	switch {
-	case o.Size == nil && !unsized:
-		return semantic(KindRow, "size", &o.Position, "null: an object has a size")
-	case o.Size != nil && *o.Size < 0:
-		return semantic(KindRow, "size", &o.Position, "%d is negative", *o.Size)
-	case o.LastModified != nil && (o.LastModified.Year() < 1 || o.LastModified.Year() > 9999):
+	var size int64
+	if o.Size != nil {
+		size = *o.Size
+	}
+	if err := checkSize(size, o.Size != nil, unsized); err != nil {
+		return &SemanticError{Kind: KindRow, Column: "size", Row: &o.Position, Err: err}
+	}
+	if o.LastModified != nil && !objectMicrosInRange(o.LastModified.UnixMicro()) {
 		return semantic(KindRow, "last_modified", &o.Position, "%d µs is outside the years 1 to 9999", o.LastModified.UnixMicro())
 	}
 	return nil
+}
+
+// checkSize is shared by the owning and borrowed readers. Filesystem
+// entries (unsized) may lack a size; present sizes must be non-negative.
+func checkSize(size int64, present, unsized bool) error {
+	if !present && !unsized {
+		return fmt.Errorf("null: an object has a size")
+	}
+	if present && size < 0 {
+		return fmt.Errorf("%d is negative", size)
+	}
+	return nil
+}
+
+// UTC microseconds for 0001-01-01 (inclusive) and 10000-01-01 (exclusive).
+const minObjectMicros int64 = -62135596800000000
+const endObjectMicros int64 = 253402300800000000
+
+// objectMicrosInRange implements the years 1..9999 check without constructing
+// a time.Time for each borrowed row. Owning rows use the same bounds.
+func objectMicrosInRange(micros int64) bool {
+	return micros >= minObjectMicros && micros < endObjectMicros
 }
 
 // addRead adds one request's statistics to the Dataset's.

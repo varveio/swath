@@ -979,10 +979,17 @@ rows; owner columns null. The rows depend only on the row count and the seed.
 **Default suite.** `TestFixtureFooter` checks a 5,000-row fixture's footer encodings and codecs and reads it
 back in key order, its nulls and folder objects present. `TestScanAllocations` holds Scan (Workers 1, warm,
 no-op callback) over a 20,000-row fixture to `scanAllocBudget` allocations an object (`testing.AllocsPerRun`),
-a ceiling to lower as allocations are removed. Both run in `go-reader` with the rest of the module.
+a ceiling to lower as allocations are removed. `TestScanBatchesAllocations` scans 300,000 rows with key+size,
+overview fields and all Object fields, failing above 0.06 allocations/row including planning and SeekParquet
+page decoding (observed maximum 0.0444 on Go 1.26.10). These run with the rest of the reader module, including
+under the race detector; run performance benchmarks separately from allocation tests, since `AllocsPerRun`
+sets GOMAXPROCS to 1 and can affect decoder initialization.
 
 **Benchmarks.** `BenchmarkReaderScan/workers={1,4,8}` (end to end: plan, Split and scan, GOMAXPROCS unchanged)
-and `BenchmarkReaderStream` read the whole fixture with a no-op callback, on a Dataset opened and read once
+includes `Scan` (owning), `Batch-noop` (last_modified and storage class), `Batch-touch` (the same selection,
+reading every key byte, size, time and class byte), `Batch-all` (all Object fields) and `Batch-size` (key+size).
+`BenchmarkReaderStream` remains ordered and owning. Counting-only callbacks serve as the no-op baseline;
+all cases read the whole fixture on a Dataset opened and read once
 before the timed loop. Each reports the standard ns/op, B/op and allocs/op, `rows/op` (divide by it for a
 per-row cost) and `ns/row` from the benchmark's elapsed time, and fails unless the callback saw exactly
 `rows/op` objects in every operation. The fixture has `SWATH_READER_BENCH_ROWS` rows (default 4,000,000), is

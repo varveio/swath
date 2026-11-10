@@ -54,6 +54,13 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	if err != nil {
 		return err
 	}
+	return d.scan(ctx, req, columns, func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error {
+		return d.scanShard(ctx, shard, st, fn)
+	})
+}
+
+// scan plans and runs parallel shards for either scan representation.
+func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, scanShard func(context.Context, *seekparquet.RangePlan, *ReadStats) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -76,7 +83,7 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	for i, shard := range shards {
 		addStats(req.Stats, shard.Stats())
 		wg.Go(func() {
-			if err := d.scanShard(ctx, shard, &stats[i], fn); err != nil {
+			if err := scanShard(ctx, shard, &stats[i]); err != nil {
 				once.Do(func() { first = err; cancel() })
 			}
 		})
