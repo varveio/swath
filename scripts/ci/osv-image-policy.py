@@ -407,7 +407,7 @@ def load_exceptions(path: Path, today: datetime.date | None = None) -> set[str]:
             raise SchemaError(f"IgnoredVulns[{index}].ignoreUntil must be a TOML date")
         if not isinstance(reason, str) or not reason.strip():
             raise SchemaError(f"IgnoredVulns[{index}].reason must be a non-empty string")
-        # Match OSV-Scanner 2.5.1: ignoreUntil is active only while it is after today.
+        # Match OSV-Scanner 2.7.1: ignoreUntil is active only while it is after today.
         if expiry > today:
             active.add(vulnerability_id)
     return active

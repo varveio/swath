@@ -15,8 +15,8 @@ set -euo pipefail
 # Pinned by version AND checksum: this binary decides whether a release is allowed to ship.
 # Hand-bumped (Dependabot does not track a raw release download) -- when raising it, take the
 # new sum from the release's osv-scanner_SHA256SUMS.
-OSV_SCANNER_VERSION="2.5.1"
-OSV_SCANNER_SHA256="f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be"
+OSV_SCANNER_VERSION="2.7.1"
+OSV_SCANNER_SHA256="fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${REPO_ROOT}/config/osv/osv-scanner.toml"

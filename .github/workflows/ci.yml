@@ -639,10 +639,12 @@ jobs:
         if: needs.changes.outputs.images == 'true'
         run: |
           set -euo pipefail
-          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
-          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
-          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz -o /tmp/duckdb.tar.gz
+          echo "c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc  /tmp/duckdb.tar.gz" | sha256sum --check -
+          mkdir -p /tmp/duckdb
+          tar -xzf /tmp/duckdb.tar.gz -C /tmp/duckdb
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+          duckdb --version
 
       # Three smokes on data written here, so they need no network, no Java and no recording.
       # The lister image runs the release's smoke script against a fake bucket (bench/s3fake):
