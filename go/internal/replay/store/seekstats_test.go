@@ -7,8 +7,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-
-	"github.com/varveio/swath/go/internal/replay/legacy"
 )
 
 // TestSeekParquetPageStats: over a SeekParquet dataset the store's page
@@ -26,8 +24,8 @@ func TestSeekParquetPageStats(t *testing.T) {
 		t.Fatalf("kind %s", meta.Kind)
 	}
 	s := st.(*Sorted)
-	var rollups []legacy.Stats
-	s.SetMeters(Meters{Rollup: func(stats legacy.Stats) { rollups = append(rollups, stats) }})
+	var rollups []RollupStats
+	s.SetMeters(Meters{Rollup: func(stats RollupStats) { rollups = append(rollups, stats) }})
 	ctx := context.Background()
 	if rows, err := s.ReadRows(ctx, nil, true, nil, 1500, nil); err != nil || len(rows) != 1500 {
 		t.Fatalf("read: %d rows, %v", len(rows), err)

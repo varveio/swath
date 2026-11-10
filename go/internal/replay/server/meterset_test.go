@@ -104,7 +104,7 @@ func meterLines(p scrape) []string {
 // without the meters the Go server has no counterpart for (the sort
 // progress counter, the JVM and host meters) and
 // with the handle_cache meters that stand for the Java delimiter reader
-// pool. docs/internals/replay-java.md (the meters side by side) lists
+// pool and the delimiter.index meters of the SeekParquet list index. docs/internals/replay-java.md (the meters side by side) lists
 // every difference.
 // The test then sums the http.requests count as the bench scripts do.
 func TestMeterSetMatchesTheContract(t *testing.T) {
@@ -169,7 +169,8 @@ func TestMeterSetMatchesTheContract(t *testing.T) {
 				t.Errorf("%s has no %s", m["name"], f)
 			}
 		}
-		noPercentiles := m["name"] == metrics.IndexLoadLatency.Name || m["name"] == metrics.SortFixtureBuildLatency.Name
+		noPercentiles := m["name"] == metrics.IndexLoadLatency.Name || m["name"] == metrics.SortFixtureBuildLatency.Name ||
+			m["name"] == metrics.DelimiterIndexBuildLatency.Name
 		if (m["p50_ms"] == nil) != noPercentiles {
 			t.Errorf("%s p50_ms %v", m["name"], m["p50_ms"])
 		}

@@ -1414,6 +1414,77 @@ of `pq.baseline`, `pq.highbytes`, `pq.punct_siblings`): `main` 15.32 s, the bran
 `WriteRows` (runs 42525290072 / 42525288025) the `pq.*` arms took 29.0 s against 36.0 (+24.3 %) and the
 listing-only arms moved +0.9 %. One core hashes SHA-256 at 1,504 MiB/s and MD5 at 692.
 
+## Listing index on a wide prefix, 2026-11-10
+
+`swath-replay serve` with `--list-index` on and off (the [listing index](swath-replay.md)), one server at a time,
+on the dev VM: 4 vCPU (Xeon Platinum 8581C @ 2.30 GHz), about 7.7 GiB RAM, Linux 7.0, shared. Seekparquet `go`
+at `6acba1a0`, default flags otherwise. Fixture: a SeekParquet conversion of an `aws-public-blockchain`
+recording, 143 million keys, 3.0 GB, 371 row groups (a private working copy; not in the repository). All
+requests are S3 `list-type=2` over loopback with no injected latency.
+
+**The wide listing.** Build `8eb53c04`, load average about 4. The four pages of
+`delimiter=/&prefix=v1.1/stellar/parquet/pubnet/v1/` (1,000, 1,000, 1,000 and 984 common prefixes, following
+continuation tokens), one sample each, first after startup, Python client wall clock:
+
+| Page | on | off |
+|---|---|---|
+| 1 | 43.3 ms | 118.8 ms |
+| 2, 3, 4 | 1.8, 1.8, 1.8 ms | 81.4, 80.8, 80.9 ms |
+
+Byte-identical on and off (`cmp`), as were seven other delimiter and plain listings in the same run, which are
+measured under control below. Over its eight rollups `delimiter.skipscan.decoded_key_rows` averaged 2,560 key
+values per rollup with the index (max 5,120) and 512,112 without (max 1,026,048); `page_reseeks` 0.6 against
+479; `delimiter.index.skips` counted 3,984 and `delimiter.index.declines{dense_page}` 11 (no other declines).
+
+**Controlled repetition.** The single-sample run above also showed slower plain and root listings with the index
+(14.2 and 9.3 ms against 2.9 and 5.4 ms; 7.5 against 1.7 ms). An independent review re-measured those shapes:
+build `52632f60` (the same code), load average 3.5 to 3.9, no other build or test jobs. Each server process warmed
+the four shapes five times, then measured each 30 times, interleaved (plain page 1, plain page 2 from its
+continuation token, root, wide). Default-cache processes ran on, off, off, on, so each default-cache cell is 60
+samples; window-cache-off controls (`--prefetch-window-rows=0`) ran off, on, 30 samples each. Times are the
+client's, the full body read over one persistent HTTP/1.1 connection; p90 is nearest rank. Every response hash
+matched across on, off and both cache modes. Plain and wide use `prefix=v1.1/stellar/parquet/pubnet/v1/` and
+`max-keys=1000`; root and wide use `delimiter=/`.
+
+| Request | on, median / p90 ms | off | on, window cache off | off, window cache off |
+|---|---:|---:|---:|---:|
+| Plain page 1, 1,000 keys | 2.407 / 3.878 | 2.465 / 4.028 | 2.474 / 4.350 | 2.516 / 2.627 |
+| Plain page 2, 1,000 keys | 0.571 / 0.646 | 0.571 / 0.713 | 2.460 / 2.624 | 2.461 / 3.384 |
+| Root delimiter, 2 prefixes and 3 keys | 1.488 / 1.618 | 1.513 / 1.962 | 1.408 / 1.497 | 1.468 / 2.820 |
+| Wide delimiter page 1, 1,000 prefixes | 1.366 / 1.751 | 81.061 / 83.225 | 1.278 / 1.381 | 81.413 / 82.783 |
+
+The plain and root slowdown does not reproduce: the two default-cache process pairs agree (plain page 1 on
+2.405 and 2.410 ms against off 2.487 and 2.436; root 1.485 and 1.493 against 1.521 and 1.501). Per-request read
+work, from the store's reader with the window cache bypassed (5 warm-ups, 30 reads per shape and arm, counts
+constant across samples, the 1,001-entry lookahead included):
+
+| Request | key / value pages, on : off | keys decoded | groups opened | reseeks | source reads | index skips / dense declines, on |
+|---|---|---|---|---|---|---|
+| Plain page 1 | 2/12 : 2/12 | 2,048 : 2,048 | 1 : 1 | 0 : 0 | 23 : 23 | 0 / 0 |
+| Plain page 2 | 2/12 : 2/12 | 2,048 : 2,048 | 1 : 1 | 0 : 0 | 23 : 23 | 0 / 0 |
+| Root delimiter | 2/12 : 2/12 | 2,048 : 2,048 | 1 : 1 | 1 : 1 | 24 : 24 | 0 / 2 |
+| Wide delimiter | 1/0 : 1,001/0 | 1,024 : 1,025,024 | 1 : 45 | 0 : 956 | 1 : 1,001 | 1,000 / 0 |
+
+Source bytes were equal for the plain and root shapes (74,394, 73,249 and 106,452); the wide page read 1,853
+bytes with the index and 603,547 without. The root listing's two index probes decline at dense pages before
+moving the scan, so it does the same page work as without the index. The server's meters agree: per request,
+plain page 1 is one cold window fill of 1,001 rows and plain page 2 a window hit in both arms; root is one rollup
+of 2,048 decoded keys, one group open and one reseek in both arms, plus two `delimiter.index.declines{dense_page}`
+with the index; wide is 1,000 `delimiter.index.skips` and 1,024 decoded keys against 1,025,024 keys and 956
+reseeks.
+
+**The build.** Build `8eb53c04`:
+
+```
+swath_replay list_index state=built max_bytes=67108864 workers=4 groups_indexed=371 groups_skipped=0 groups_failed=0 parts_failed=0 pages=139818 entries=8288 bytes=1173440 budget_exhausted=false has_index=true seconds=9.391
+```
+
+It adds 9.4 s before the startup line (every key page decoded once; 12.3 and 12.6 s in two more starts minutes
+later, and 8.9, 8.9 and 8.7 s in the review's three starts, with the same stats) and retains 1.1 MiB. Peak RSS
+over the run (`/usr/bin/time -v`) was 147 MB with the index and 97 MB without. `index.load.latency`, which
+excludes the build, read 879 ms with the index and 157 ms without in the first pair, and 201, 179 and 194 ms
+(on, off, on) in three later starts: the 879 ms was a one-off.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's

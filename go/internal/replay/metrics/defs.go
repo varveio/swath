@@ -102,6 +102,24 @@ var (
 	DelimiterSkipScanWholeGroupShortcuts = Def{Name: "swath.replay.delimiter.skipscan.whole_group_shortcuts", Kind: Counter}
 	DelimiterSkipScanDecodedKeyRows      = Def{Name: "swath.replay.delimiter.skipscan.decoded_key_rows", Kind: Distribution}
 	DelimiterSkipScanPageReseeks         = Def{Name: "swath.replay.delimiter.skipscan.page_reseeks", Kind: Distribution}
+	// The "/" list index over a SeekParquet dataset (store.ListIndex),
+	// which the Java server has no counterpart for: the common prefixes
+	// rollups skipped through it and the skips it declined by reason
+	// (missing_group, dense_page, unsafe_run); and its build at open, row
+	// groups by outcome (indexed, skipped, failed), key pages decoded,
+	// entries and bytes retained, the byte budget, whether the budget ran
+	// out (1) and the build's duration. Zero when no build was attempted. A
+	// failed or empty build still reports its attempted work and budget;
+	// retained entries and bytes are zero.
+	DelimiterIndexSkips           = Def{Name: "swath.replay.delimiter.index.skips", Kind: Counter}
+	DelimiterIndexDeclines        = Def{Name: "swath.replay.delimiter.index.declines", Kind: Counter, Tags: []string{"reason"}}
+	DelimiterIndexBuildGroups     = Def{Name: "swath.replay.delimiter.index.build.groups", Kind: Gauge, Tags: []string{"outcome"}}
+	DelimiterIndexBuildPages      = Def{Name: "swath.replay.delimiter.index.build.pages", Kind: Gauge}
+	DelimiterIndexEntries         = Def{Name: "swath.replay.delimiter.index.entries", Kind: Gauge}
+	DelimiterIndexBytes           = Def{Name: "swath.replay.delimiter.index.bytes", Kind: Gauge}
+	DelimiterIndexMaxBytes        = Def{Name: "swath.replay.delimiter.index.max_bytes", Kind: Gauge}
+	DelimiterIndexBudgetExhausted = Def{Name: "swath.replay.delimiter.index.budget_exhausted", Kind: Gauge}
+	DelimiterIndexBuildLatency    = Def{Name: "swath.replay.delimiter.index.build.latency", Kind: Timer, NoPercentiles: true}
 	// The descriptor cache every part is read through: files opened
 	// (first opens and reopens after eviction), idle descriptors closed to
 	// make room, reads that waited for a descriptor, and the descriptors

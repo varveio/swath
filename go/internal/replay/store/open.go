@@ -111,12 +111,20 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 			_ = s.reader.Close()
 			return nil, Metadata{}, err
 		}
+		if s.listIndex, err = dataset.buildListIndex(ctx, opts.ListIndex); err != nil {
+			_ = s.reader.Close()
+			return nil, Metadata{}, fmt.Errorf("open %s: list index: %w", path, err)
+		}
 	} else {
 		fixture, err := javaera.Open(ctx, path, expect, s.files)
 		if err != nil {
 			return nil, Metadata{}, fmt.Errorf("open %s: %w", path, err)
 		}
-		s.reader = fixture.Reader
+		s.reader = legacyReader{fixture.Reader}
+		s.listIndex = ListIndexBuild{State: ListIndexUnsupported}
+		if opts.ListIndex.Off {
+			s.listIndex.State = ListIndexOff
+		}
 		meta.Kind, meta.SchemaID = KindJavaEra, javaera.SchemaID
 		if meta.Identity, err = javaEraIdentity(path, fixture.Files, fixture.Stamps); err != nil {
 			_ = s.reader.Close()
@@ -124,7 +132,7 @@ func open(ctx context.Context, path string, opts Options) (Store, Metadata, erro
 		}
 	}
 	meta.Parts, meta.RowGroups, meta.Rows = s.reader.Parts(), s.reader.RowGroups(), s.reader.Rows()
-	s.schemaID = meta.SchemaID
+	s.schemaID, meta.ListIndex = meta.SchemaID, s.listIndex
 	s.objects = objectProjectionFor(meta.SchemaID)
 	if !opts.Prefetch.Off {
 		s.prefetch = newPrefetcher(opts.Prefetch, s.packedRows, s.objectRows)

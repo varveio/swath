@@ -46,7 +46,8 @@ func TestFlagSpellings(t *testing.T) {
 		}
 	}
 	f, _ := parseServe([]string{"--fixture", "f", "--bucket", "b"}, io.Discard)
-	if f.latencyScale != 1 || f.metricsPort != -1 || f.maxConcurrentRequests != 512 || f.host != "127.0.0.1" || f.stopTimeout != "10s" {
+	if f.latencyScale != 1 || f.metricsPort != -1 || f.maxConcurrentRequests != 512 || f.host != "127.0.0.1" || f.stopTimeout != "10s" ||
+		!f.listIndex || f.listIndexMaxBytes != store.DefaultListIndexMaxBytes {
 		t.Errorf("defaults: %+v", f)
 	}
 	if _, err := parseServe([]string{"--bucket", "b"}, io.Discard); err == nil {
@@ -61,7 +62,7 @@ func TestConfigRefusals(t *testing.T) {
 		{"--protocols", "azure", "--host", "0.0.0.0"},
 		{"--protocols", "s3,"}, {"--protocols", "replay"}, {"--azure-account", "replay"}, {"--azure-hns"}, {"--advertised-host", "http://x"},
 		{"--max-concurrent-requests", "7"}, {"--stop-timeout", "0s"}, {"--write-timeout", "soon"},
-		{"--max-response-bytes", "300000000"},
+		{"--max-response-bytes", "300000000"}, {"--list-index-max-bytes", "0"}, {"--list-index-max-bytes=-1"},
 	} {
 		f, err := parseServe(append(append([]string{}, base...), extra...), io.Discard)
 		if err != nil {

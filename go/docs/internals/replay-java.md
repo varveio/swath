@@ -77,6 +77,7 @@ requests lists the same meters with the same types and tags on either server, ap
 | `parquet.queries.in_flight`, `parquet.queries.peak` | one pool serves every read, so the peak is at most `--parquet-connections` | a pool per file and per read kind, so its peak can exceed the flag (46 against 8 in the measurements below) |
 | `delimiter.skipscan.row_group_opens`, `.decoded_key_rows` | a key cursor stays open on its group for the whole rollup and decodes whole key pages, so `row_group_opens` is lower and `decoded_key_rows` higher for the same rollup | higher `row_group_opens` and lower `decoded_key_rows` for the same rollup |
 | `delimiter.reader_pool.open.latency`, `delimiter.reader_pool.readers_opened` | absent: the Go reader has no reader pools; every part is read through one descriptor cache, `handle_cache.opens`, `.evictions`, `.waits`, `.open`, `.peak`, `.limit` | a row-group reader pool per file, opened on its first rollup; no `handle_cache.*` |
+| `delimiter.index.*` | the SeekParquet list index's skips, declines and build (`--list-index`) | absent: the Java server reads no SeekParquet dataset |
 | `sort.progress`, `sort.steal_reason{outcome,reason}` | absent: `sort-fixture` sorts in memory | the Java sorter's own scheduling |
 | `jvm.*`, `process.*`, `system.*` | absent: read the process from `/proc` and the limits from `/runtime-attestation` | the Java runtime's and the host's meters |
 

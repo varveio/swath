@@ -148,9 +148,9 @@ type serveFlags struct {
 	port, metricsPort, parquetConnections, maxConcurrentRequests   int
 	prefetchWindowRows, prefetchMaxWindows                         int
 	maxResponseBytes                                               int
-	responseBufferBudget, slowRequestLogMs                         int64
+	responseBufferBudget, slowRequestLogMs, listIndexMaxBytes      int64
 	latencyJitter, latencyScale                                    float64
-	azureHNS                                                       bool
+	azureHNS, listIndex                                            bool
 }
 
 // slowLogEnv sets the slow-request log threshold when --slow-request-log-ms
@@ -173,6 +173,8 @@ func parseServe(args []string, stderr io.Writer) (*serveFlags, error) {
 	fs.IntVar(&f.parquetConnections, "parquet-connections", 0, "concurrent fixture page decodes; 0 is max(8, min(32, GOMAXPROCS))")
 	fs.IntVar(&f.prefetchWindowRows, "prefetch-window-rows", store.DefaultPrefetchWindowRows, "rows a walk's window cache fill ramps to; 0 turns the window cache off")
 	fs.IntVar(&f.prefetchMaxWindows, "prefetch-max-windows", store.DefaultPrefetchMaxWindows, "windows the window cache holds (at most this many times --prefetch-window-rows rows); 0 turns it off")
+	fs.BoolVar(&f.listIndex, "list-index", true, "build the '/' listing index of a SeekParquet dataset at startup, so a delimited listing skips a wide common prefix without decoding its key pages")
+	fs.Int64Var(&f.listIndexMaxBytes, "list-index-max-bytes", store.DefaultListIndexMaxBytes, "memory the listing index retains at most; row groups past it are listed without it")
 	fs.IntVar(&f.maxConcurrentRequests, "max-concurrent-requests", server.DefaultMaxConcurrentRequests,
 		"requests served at once; more queue. Injected delay holds a slot, so set it above the widest client fan-out")
 	fs.Int64Var(&f.responseBufferBudget, "response-buffer-budget", server.DefaultResponseBufferBudget, "bytes of encoded responses held at once")
@@ -234,13 +236,16 @@ func serve(args []string, stderr io.Writer) error {
 		readers = store.DefaultReaders()
 	}
 	opened := time.Now()
-	st, mode, meta, err := openFixture(f.fixture, store.Options{Readers: readers, Prefetch: f.prefetch()})
+	st, mode, meta, err := openFixture(f.fixture, store.Options{Readers: readers, Prefetch: f.prefetch(),
+		ListIndex: store.ListIndex{Off: !f.listIndex, MaxBytes: f.listIndexMaxBytes}})
 	if err != nil {
 		return err
 	}
 	cfg.Store, cfg.ServingMode, cfg.FixtureIdentity = st, mode, meta.Identity
 	if mode == "SORTED" {
-		cfg.IndexLoad, cfg.IndexEntries = time.Since(opened), meta.RowGroups
+		// The routing index's load, without the listing index's build,
+		// which has its own meter.
+		cfg.IndexLoad, cfg.IndexEntries = time.Since(opened)-meta.ListIndex.Stats.Duration, meta.RowGroups
 	}
 	srv, err := startServer(cfg, stderr)
 	if err != nil {
@@ -257,6 +262,7 @@ func serve(args []string, stderr io.Writer) error {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve() }()
 	fmt.Fprintln(stderr, startupLine(f, srv, cfg, readers))
+	fmt.Fprintln(stderr, listIndexLine(meta.ListIndex))
 	select {
 	case err := <-served:
 		if _, cerr := srv.Shutdown(cfg.StopTimeout); err == nil {
@@ -372,6 +378,9 @@ func (f *serveFlags) config() (server.Config, error) {
 	}
 	if f.prefetchWindowRows < 0 || f.prefetchMaxWindows < 0 {
 		return cfg, errors.New("--prefetch-window-rows and --prefetch-max-windows must not be negative (0 turns the window cache off)")
+	}
+	if f.listIndexMaxBytes <= 0 {
+		return cfg, fmt.Errorf("--list-index-max-bytes must be positive, got %d", f.listIndexMaxBytes)
 	}
 	switch strings.ToLower(f.servingMode) {
 	case "sorted":
@@ -535,6 +544,27 @@ func startupLine(f *serveFlags, srv *server.Server, cfg server.Config, readers i
 		metricsEndpoint, cfg.MaxConcurrentRequests, cfg.ProtocolList(), cfg.ResponseBufferBudget, cfg.MaxResponseBytes, cfg.MaxResponses(),
 		server.OutputChunkBytes, cfg.FixtureIdentity, cfg.OrderingProfile(), cfg.ProfilesString(),
 		nativeEndpoints(f, cfg, srv.Port()))
+}
+
+// listIndexLine reports the listing index build, after the startup line:
+// its state (built, off, unsupported for a fixture that is not a
+// SeekParquet dataset, failed), the budget and workers, the module's build
+// stats (has_index: any row group indexed), and a failed build's error. A failed build leaves
+// the server serving without the index.
+func listIndexLine(b store.ListIndexBuild) string {
+	state := b.State
+	if state == "" {
+		state = store.ListIndexUnsupported
+	}
+	st := b.Stats
+	line := fmt.Sprintf("swath_replay list_index state=%s max_bytes=%d workers=%d groups_indexed=%d groups_skipped=%d "+
+		"groups_failed=%d parts_failed=%d pages=%d entries=%d bytes=%d budget_exhausted=%t has_index=%t seconds=%s",
+		state, b.MaxBytes, b.Workers, st.GroupsIndexed, st.GroupsSkipped, st.GroupsFailed, st.PartsFailed, st.Pages,
+		st.Entries, st.Bytes, st.BudgetExhausted, st.HasIndex, strconv.FormatFloat(st.Duration.Seconds(), 'f', 3, 64))
+	if b.Err != nil {
+		line += " error=" + strconv.Quote(b.Err.Error())
+	}
+	return line
 }
 
 // nativeEndpoints is one example URL per enabled route, S3 first.

@@ -41,6 +41,19 @@ built from it is byte-identical to the range walk's; it may decline (`ok == fals
 resume point (the client already has it), while a route whose inclusive start offset can land inside a prefix
 (GCS) passes false.
 
+Over a SeekParquet dataset, `store.Open` builds the module's list boundary index (`Dataset.BuildListIndex`)
+after `Verify` and before it returns, with `Options.ListIndex` (on by default; `MaxBytes` and `Workers`, zero
+for `DefaultListIndexMaxBytes` and `DefaultListIndexWorkers`). The module then answers a `/` listing's prefix
+skips from the index where it covers the row group and page, so `RollupRead` needs no change: the entries are
+the module's either way (`store` `TestListIndexRollupsMatchAndSkipKeyPages` compares paged rollups with the
+index on and off over directories spanning several key pages, and bounds the key pages a page decodes). A build
+error other than cancellation is recorded, not returned: the store serves without the index
+(`TestListIndexBuildFailureServes`). The outcome, `ListIndexBuild` (state, resolved options, the module's
+`ListIndexStats`, error), is in `Metadata.ListIndex` for the command's `list_index` line and
+`Sorted.ListIndex()` for the build meters. Each rollup's module counts of answered skips and declines by reason
+(`ReadStats.ListIndex*`) are added to its `RollupStats.ListIndex`, beside the page counts in the embedded
+`legacy.Stats`; the legacy core's reader (`legacyReader`) leaves them zero.
+
 `Object`'s fields other than the key are nullable; rendering policy is the route's: a null size is `0`, a null
 time the epoch, a null ETag, storage class, checksum or owner field an absent element. The store fills an
 `Object` by the recording's declared schema id, never by the columns present: the S3-shaped schemas column for
@@ -223,9 +236,11 @@ registers at startup are created when the server starts, so a scrape tells a zer
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
 - **The store's measurements** arrive through `store.Meters`, installed by `server.New` when the store is a
   `*store.Sorted` (`storemeters.go`): the slot hold time of each read (`page.read.latency`), each call with its
-  rows and failure (`parquet.query.*`), each rollup's `legacy.Stats` (`delimiter.skipscan.*`; over a SeekParquet dataset each module request carries its own `seekparquet.ReadStats`, added to the read's `legacy.Stats`: key and value pages decoded, keys decoded, row groups opened, page-index seeks, groups skipped whole and parts checked on first touch, `PartsOpened`, which stays zero because the store verifies every part at open) and each
+  rows and failure (`parquet.query.*`), each rollup's `store.RollupStats` (`delimiter.skipscan.*`; over a SeekParquet dataset each module request carries its own `seekparquet.ReadStats`, added to the read's `legacy.Stats`: key and value pages decoded, keys decoded, row groups opened, page-index seeks, groups skipped whole and parts checked on first touch, `PartsOpened`, which stays zero because the store verifies every part at open; and `delimiter.index.skips`, `.declines{reason}` from its list index counts) and each
   read-time refusal (`serving.refused`). The fixture open's duration and routing entries come from the command
-  (`Config.IndexLoad`, `Config.IndexEntries`).
+  (`Config.IndexLoad`, `Config.IndexEntries`; the list index build's time is taken out of `IndexLoad`), and the
+  list index build's stats from `Sorted.ListIndex()` (`delimiter.index.build.*`, `.entries`, `.bytes`,
+  `.max_bytes`, `.budget_exhausted`).
 - **Spans.** `http.request.latency` ends where the write begins, and only a page records the `write` stage, as on
   the Java server, whose request meter stops when the response is handed to the write
   (`TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`). A page's reads run under a context that a client

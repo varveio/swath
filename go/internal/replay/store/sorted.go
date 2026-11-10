@@ -57,15 +57,16 @@ type Counters struct {
 // provider's object fields) reads through the same cursor and reader
 // slots without the Object projection.
 type Sorted struct {
-	reader   reader
-	sem      *semaphore.Weighted
-	readers  int
-	schemaID string
-	objects  objectProjection
-	counters Counters
-	files    *legacy.FileCache
-	meters   Meters
-	prefetch *prefetcher
+	reader    reader
+	listIndex ListIndexBuild
+	sem       *semaphore.Weighted
+	readers   int
+	schemaID  string
+	objects   objectProjection
+	counters  Counters
+	files     *legacy.FileCache
+	meters    Meters
+	prefetch  *prefetcher
 	// arenaLimit bounds a packed read's arenas; zero is maxPackedArena.
 	// Tests lower it to reach the overflow path without gigabytes.
 	arenaLimit int
@@ -82,7 +83,7 @@ type Meters struct {
 	// whether it failed.
 	Query func(d time.Duration, rows int, failed bool)
 	// Rollup is one skip-scan's work.
-	Rollup func(legacy.Stats)
+	Rollup func(RollupStats)
 	// Refused is a read that failed for a fixture reason
 	// (row_group_disorder).
 	Refused func(reason string)
@@ -107,6 +108,9 @@ func (s *Sorted) PrefetchStats() (PrefetchStats, bool) {
 	}
 	return s.prefetch.stats(), true
 }
+
+// ListIndex reports the list index build at open.
+func (s *Sorted) ListIndex() ListIndexBuild { return s.listIndex }
 
 // Readers returns the reader-slot bound (Options.Readers resolved).
 func (s *Sorted) Readers() int { return s.readers }
@@ -150,17 +154,21 @@ func (s *Sorted) acquire(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// record adds a read's stats to the counters; a rollup's also go to
-// Meters.Rollup.
-func (s *Sorted) record(stats *legacy.Stats, rollup bool) {
-	if f := s.meters.Rollup; f != nil && rollup {
-		f(*stats)
-	}
+// record adds a read's stats to the counters.
+func (s *Sorted) record(stats *legacy.Stats) {
 	s.counters.PageDecodes.Add(stats.PagesDecoded)
 	s.counters.RowsDecoded.Add(stats.KeysDecoded)
 	s.counters.Reseeks.Add(stats.Reseeks)
 	s.counters.GroupShortcuts.Add(stats.GroupShortcuts)
 	s.counters.PartsOpened.Add(stats.PartsOpened)
+}
+
+// recordRollup adds a rollup's stats to the counters and Meters.Rollup.
+func (s *Sorted) recordRollup(stats *RollupStats) {
+	if f := s.meters.Rollup; f != nil {
+		f(*stats)
+	}
+	s.record(&stats.Stats)
 }
 
 // ReadRows returns up to limit rows with key in [from, toExclusive), as
@@ -177,7 +185,7 @@ func (s *Sorted) ReadRows(ctx context.Context, from []byte, fromInclusive bool, 
 	rows, err := func() ([]legacy.Row, error) {
 		defer release()
 		var stats legacy.Stats
-		defer s.record(&stats, false)
+		defer s.record(&stats)
 		return s.reader.Read(ctx, legacy.Range{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Limit: limit, Columns: columns,
@@ -210,7 +218,7 @@ func (s *Sorted) packedRows(ctx context.Context, from []byte, fromInclusive bool
 		sink = s.objects.packer(columns, proj, min(limit, s.windowRows()), s.arenaLimit)
 		sink.stop = stop
 		var stats legacy.Stats
-		defer s.record(&stats, false)
+		defer s.record(&stats)
 		return s.reader.Scan(ctx, legacy.Range{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Limit: limit, Columns: columns,
@@ -269,8 +277,8 @@ func (s *Sorted) RollupRows(ctx context.Context, from []byte, fromInclusive bool
 	s.counters.DelimiterEngagements.Add(1)
 	entries, err := func() ([]legacy.Entry, error) {
 		defer release()
-		var stats legacy.Stats
-		defer s.record(&stats, true)
+		var stats RollupStats
+		defer s.recordRollup(&stats)
 		return s.reader.RollupRead(ctx, legacy.Rollup{
 			From: bytes.Clone(from), FromInclusive: fromInclusive, To: bytes.Clone(toExclusive),
 			Prefix: bytes.Clone(prefix), Delimiter: '/', Limit: saturatingIncrement(limit),
