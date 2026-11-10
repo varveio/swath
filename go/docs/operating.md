@@ -65,9 +65,10 @@ archives' linux binaries, and the archives' three legal files in `/licenses/`:
 | `ghcr.io/varveio/swath-replay` | `/opt/swath-replay/swath-replay` ([replay.md](replay.md#container-image)) | `scratch` |
 
 Tags are `X.Y.Z`, `X.Y` and `latest` (and `X` from 1.0); a release candidate publishes only `X.Y.Z-rc.N`. Pin
-the digest for anything that must not move. Both run as `10001:10001` with no home directory, so mount a
-directory that user can write for `-o`, and pass credentials through the environment (or mount a file and
-point the provider's variable at it, such as `AWS_SHARED_CREDENTIALS_FILE`):
+the digest for anything that must not move. Both run as `65532:65532` (distroless's `nonroot`), so mount a directory that user can
+write for `-o`. The lister's home directory is `/home/nonroot`: pass credentials through the environment, or
+mount the provider's credential directory there (`-v ~/.aws:/home/nonroot/.aws:ro`), its files readable by
+that user:
 
 ```bash
 docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:X.Y.Z \

@@ -119,7 +119,7 @@ func encoderBytes(maxKey, wide, columns int) int64 {
 // DraftRevision), the logical schema (schema IDs), the private journal
 // (journal.Version) and this recipe. created_by names the real build, so bytes are identical
 // within a build; across builds only the recipe is promised.
-const Recipe = "swath-go/parquet-r3"
+const Recipe = "swath/parquet-r3"
 
 // createdApp, createdVersion and createdBuild make the footer's
 // created_by: the tool, its module version and its VCS revision, from the

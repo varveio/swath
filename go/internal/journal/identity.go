@@ -148,7 +148,7 @@ func (id Identity) Hash() string {
 		h.Write([]byte(v))
 		h.Write([]byte{0})
 	}
-	put("v=", "swath-go/args/1")
+	put("v=", "swath/args/1")
 	put("tool=", id.Tool)
 	put("format=", strconv.Itoa(id.Format))
 	put("schema=", id.SchemaID)
