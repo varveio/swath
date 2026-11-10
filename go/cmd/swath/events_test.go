@@ -62,7 +62,7 @@ func captureSyncStderr(t *testing.T) *syncBuffer {
 var errConnRefused = errors.New("connection refused")
 
 // TestEventGolden pins --log-format json: each event once, as
-// docs/cli.md's "Log events" block shows it (UPDATE=1 rewrites the block).
+// docs/reference/log-events.md shows it (UPDATE=1 rewrites the block).
 func TestEventGolden(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
@@ -103,27 +103,7 @@ func TestEventGolden(t *testing.T) {
 			t.Fatalf("no %s event in %s", e, got)
 		}
 	}
-	const begin, end = "<!-- events:begin -->\n", "<!-- events:end -->"
-	doc, err := os.ReadFile("../../docs/cli.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(doc)
-	i, j := strings.Index(s, begin), strings.Index(s, end)
-	if i < 0 || j < i {
-		t.Fatal("docs/cli.md lacks the events markers")
-	}
-	want := s[:i+len(begin)] + "```json\n" + got + "```\n" + s[j:]
-	if want == s {
-		return
-	}
-	if os.Getenv("UPDATE") != "" {
-		if err := os.WriteFile("../../docs/cli.md", []byte(want), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	t.Fatalf("docs/cli.md's log events are stale; run UPDATE=1 go test ./cmd/swath\n%s", got)
+	docBlock(t, "../../docs/reference/log-events.md", "events", "json", got)
 }
 
 // TestFailureWatch: one cause failing every request warns once it has

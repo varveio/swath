@@ -108,7 +108,7 @@ runs on one path.
 Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 4); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
-[../cli.md](../cli.md#run-report) (pinned by `internal/listing/testdata/report-schema.golden`). It is
+[../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is
 operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
 acceptance, which reads the manifest's coverage ([../dataset.md](../dataset.md#the-swath-extension)).
 
@@ -173,7 +173,7 @@ the report counts such cuts (`resources.part_time_cuts`); with none, or with the
 point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a
 claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at the claimed part's row count
 (`Options.Cut`) whatever the interval. The command sets it with
-`--part-interval` ([../cli.md](../cli.md)). Each part is
+`--part-interval` ([../commands/swath-list.md](../commands/swath-list.md)). Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
 
 **Group mode** (`schema.Info.Groups`: a versions listing). A part never ends inside a key's rows: the journal

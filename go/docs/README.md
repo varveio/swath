@@ -12,7 +12,7 @@ provider pages linked there describe each provider's support and differences.
 Who reads what. Each page owns its facts; the others link to it.
 
 - **Operator** (schedules and watches runs): [production.md](production.md), then [running.md](running.md)
-  for the full reference and [cli.md](cli.md) for every flag, exit code and report field.
+  for the full reference and [cli.md](commands/swath.md) for every flag, exit code and report field.
 - **Coming from the Java CLI:** [from-java.md](from-java.md), then [internals/cli-inventory.md](internals/cli-inventory.md) (every
   Java option against this tool) and [upgrade.md](upgrade.md) (from the Java layout to the swath dataset, for Java users and for readers).
 - **Reading or integrating a dataset** (any language): [dataset.md](dataset.md), the swath dataset profile: what

@@ -3,7 +3,7 @@
 Every option, output mode, exit code, report field class and documented guarantee of the Java `swath` CLI
 (`swath-cli`, [docs/cli.md](../../../docs/cli.md), [docs/usage.md](../../../docs/usage.md),
 [docs/metrics-and-observability.md](../../../docs/metrics-and-observability.md)) against this tool
-([../cli.md](../cli.md), [../upgrade.md](../upgrade.md)). Dates are owner decisions.
+([../commands/swath.md](../commands/swath.md), [../upgrade.md](../upgrade.md)). Dates are owner decisions.
 
 Legend (the Decision column records implementation dates and reasons for omitting Java features): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
 **removed** (with the recorded decision and its date, or "no decision recorded"), **deferred** (a recorded
@@ -37,7 +37,7 @@ decision to add it later).
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--storage-class CLASS[,CLASS]` | `--storage-class` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](../cli.md) and [schema registry](../dataset.md#schema-registry) |
+| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](../commands/swath-list.md) and [schema registry](../dataset.md#schema-registry) |
 
 ## Output formats and datasets
 

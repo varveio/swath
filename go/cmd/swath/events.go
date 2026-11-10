@@ -27,7 +27,7 @@ import (
 // progress line and the statistics block: warnings, the start line,
 // progress records, the request log (-vv, -vvv) and the command's end.
 // --log-format text prints them as prose, json as one object per line
-// (go/docs/cli.md, "Log events").
+// (go/docs/reference/log-events.md).
 
 // The --log-format values.
 const (

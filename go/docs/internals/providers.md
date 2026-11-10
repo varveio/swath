@@ -90,7 +90,7 @@ last two are operational.
 The range engine's group (`keyrange.Group`, value `*keyrange.Common`) holds a `keyrange.Policy`,
 an `objhttp.Admission` and version-mode selection. `keyrange.Flags` registers the policy comparisons and
 slow start only when `diag` is true; the ordinary help shows the supported controls. The generated CLI
-help ([cli.md](../cli.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials-file`, `--azure-sas-token`; S3's
+help ([commands/](../commands/swath.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials-file`, `--azure-sas-token`; S3's
 are unprefixed, the Java tool's names). Each provider's `Open` reads the group values into its options. A test
 or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
 

@@ -167,7 +167,7 @@ claimed but not recorded when a run stopped is reproduced on resume with its own
 
 ## Run report and counters
 
-`run.json` replaces Java's run summary (its schema: "Run report" in [cli.md](cli.md#run-report)). It keeps
+`run.json` replaces Java's run summary (its schema: [reference/run-report.md](reference/run-report.md)). It keeps
 these Java fields with their names: `cost.cost_usd` and `cost.basis` (`null` on a custom endpoint),
 `efficiency.keys_per_sec`, `args_hash`
 (the cloud importer's configuration digest; SHA-256 of the Go run's frozen identity, filters included, so its
@@ -225,7 +225,7 @@ by default, as Java's `shallow` is), and `--format discard` is `swath diag count
 spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
 `--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows are the source schema's
-columns under the dataset's names ([cli.md](cli.md), "Text output"): Java's `key`, `size`, `last_modified`,
+columns under the dataset's names ([output.md](output.md#text-rows)): Java's `key`, `size`, `last_modified`,
 `etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`, `checksum_type` keep their names,
 in the dataset's order, with every other column of the schema (GCS's `generation`, a local tree's `kind`);
 times have six fraction digits; a null is `\N` in TSV and `null` in JSONL; `row_type` is gone; the table has a
@@ -236,7 +236,7 @@ file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`
 never recorded, so a resume must be given it again (Java's rule too) and is now refused with a message when it
 is not, instead of failing on its first request. Java's `--endpoint-url` keeps its name, its `--force` is `--overwrite`, and its `--output` is
 `-o, --output`; a custom endpoint is path-style by default, as Java's. The seven filters are
-Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
+Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([filters.md](filters.md#regular-expressions)).
 The Java CLI's options, exit codes and report fields against this tool: [internals/cli-inventory.md](internals/cli-inventory.md).
 
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
@@ -317,7 +317,7 @@ and the Java tool is deprecated with it. Moving from Java 0.3 to Go 0.4 changes 
 dataset format: the flag-by-flag mapping is [from-java.md](from-java.md) and
 [internals/cli-inventory.md](internals/cli-inventory.md), the dataset changes are [Files](#files) through [Versions](#versions). A run interrupted under Java
 is finished with Java or started over; `swath resume` reads only this tool's journal. The current flags are
-the generated help in [cli.md](cli.md#flags).
+the generated options of [commands/swath-list.md](commands/swath-list.md#options).
 
 The binary reports its version (`swath --version`, the report's `build.version`) from the Go module build
 information: a binary built from a source checkout reads `devel`, and the revision it was built from is
@@ -338,7 +338,7 @@ is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes t
 are delta coded and zstd compressed by default.
 
 **Run report: version 4.** Version 4 adds `invocation.narrowing` (whether the includes narrowed the listed
-prefix, or why not; [cli.md](cli.md#semantics-worth-stating)), `outcome.unreadable` (a local listing skipped
+prefix, or why not; [filters.md](filters.md#what-narrows-the-listing)), `outcome.unreadable` (a local listing skipped
 entries it could not read) and `requests.failure_warnings` (the persistent-failure warnings printed); a
 version 3 reader reads them by ignoring them.
 
@@ -350,7 +350,7 @@ meaning is narrowed, a local tree's `output.object_bytes` (the last item):
   `reuse.boundary_overfetch_keys`.
 - **Drain tail:** `timings.listing_done_at` (the provider finished) and `resources.drain` (sorted Parquet: the
   tail's times, the read-ahead's frames and waits, the parallel segments' plan and holdings, and the encoders
-  admitted at start and after listing; [cli.md](cli.md#run-report)).
+  admitted at start and after listing; [reference/run-report.md](reference/run-report.md)).
 - **Versions schemas** (`--all-versions`): attempt-scoped `output.versions`, `output.distinct_keys`,
   `output.live_objects` and S3 `output.delete_markers` or GCS `output.noncurrent`, present only for versions
   schemas (zero counts included). They count filtered rows handed on by order, or counted, and exclude
@@ -366,7 +366,7 @@ meaning is narrowed, a local tree's `output.object_bytes` (the last item):
 
 Version 2 introduced the names below; builds before 0.4 wrote version 1. A reader
 dispatches on `report_version`; `internal/listing/testdata/report-schema.golden`
-is the full schema and "Run report" in [cli.md](cli.md#run-report) its description.
+is the full schema and [reference/run-report.md](reference/run-report.md) its description.
 
 | Version 1 | Version 2 |
 |---|---|

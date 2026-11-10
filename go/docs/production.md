@@ -1,7 +1,7 @@
 # Running swath in production
 
 A short guide for whoever schedules and watches swath. The full reference is [running.md](running.md);
-every flag is in [cli.md](cli.md). Numbers below are observations on the stated runs
+every flag is in [cli.md](commands/swath.md). Numbers below are observations on the stated runs
 ([internals/measurements.md](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
@@ -111,7 +111,7 @@ directory listing keeps no journal and starts over.
   `c48ea228`, run `cand3`), because the output waits for the leftmost range while the rest is spilled.
 
 The resume replays the recorded command. Only the resource, reporting and request flags may change
-([cli.md](cli.md)). Give each attempt a fresh `--report` path.
+([cli.md](commands/swath.md)). Give each attempt a fresh `--report` path.
 
 ## Where things are
 

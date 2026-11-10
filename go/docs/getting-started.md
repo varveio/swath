@@ -27,7 +27,7 @@ needs no cloud account. `-d 2` prints totals down to two levels below the root.
 Sizes default to apparent bytes in listed metadata. For local sources, `--allocated`
 uses allocated bytes and `--count-links-once` counts hard-linked files once, where the
 platform supplies the required metadata. `--one-file-system` keeps a local walk on the
-root's filesystem where supported. See [CLI details](cli.md) for metadata tiers,
+root's filesystem where supported. See [CLI details](commands/swath.md) for metadata tiers,
 unsupported combinations and missing-size reporting.
 
 ## List and summarize
@@ -49,7 +49,7 @@ swath list s3://bucket/prefix/ -o objects.tsv.zst
 Replace `bucket/prefix/` with your source and configure the appropriate credentials.
 Cloud listings make provider requests and may incur charges. `du` does not write an
 inventory. Text listing is available for every source, local trees included. Filters select the output, and do not generally eliminate the underlying
-listing work. Prefix narrowing and filter semantics are in [cli.md](cli.md).
+listing work. Prefix narrowing and filter semantics are in [cli.md](commands/swath.md).
 
 ## Save and read an inventory
 
