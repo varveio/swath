@@ -91,6 +91,7 @@ output.versions int64
 report_version int
 requests.failure_warnings int64
 requests.http_attempts int64
+requests.log_dropped int64
 requests.retries int64
 requests.throttles int64
 requests.timeouts int64

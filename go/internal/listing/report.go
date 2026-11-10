@@ -84,6 +84,9 @@ type Requests struct {
 	// FailureWarnings counts the persistent-failure warnings printed on
 	// stderr: requests failing with one cause, none answered, for 10 s.
 	FailureWarnings int64 `json:"failure_warnings"`
+	// LogDropped counts the stderr lines (the request log, mostly) dropped
+	// because stderr did not drain.
+	LogDropped int64 `json:"log_dropped"`
 }
 
 // Cost is the estimated price of an invocation's HTTP attempts

@@ -850,7 +850,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			r.Outcome.Status, r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Error = listing.StatusStopped, false, listing.StopDownstreamClosed, ""
 		}
 		if r.Requests != nil {
-			r.Requests.FailureWarnings = fw.warnings.Load()
+			r.Requests.FailureWarnings, r.Requests.LogDropped = fw.warnings.Load(), dropped.Load()
 		}
 		term.account(r, err)
 	}

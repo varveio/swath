@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -351,17 +353,94 @@ const diagWait = 250 * time.Millisecond
 // (diagWait each) fit in it; os.Exit follows at the latest then.
 const forcedAllowance = 5 * time.Second
 
-// note writes s to w, waiting at most diagWait; past that the line is
-// dropped (the write goes on in the background, and is lost at exit).
-func note(w io.Writer, s string) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.WriteString(w, s)
-	}()
+// diagQueue bounds the lines waiting for one writer (stderr) that does not
+// drain: past it a line is dropped, and counted (dropped).
+const diagQueue = 256
+
+// dropped counts the lines note dropped (the report's
+// requests.log_dropped).
+var dropped atomic.Int64
+
+// diagLine is a line waiting for its writer; done closes once it is
+// written.
+type diagLine struct {
+	s    string
+	done chan struct{}
+}
+
+// diagSink is one writer's queue, drained in order by one goroutine while
+// it holds lines. stuck: a line waited diagWait unwritten, and no write
+// has completed since.
+type diagSink struct {
+	queue []diagLine
+	stuck bool
+}
+
+var (
+	diagMu    sync.Mutex
+	diagSinks = map[io.Writer]*diagSink{}
+)
+
+// note writes s to w, through w's one writer goroutine, waiting at most
+// diagWait. While a write to w is stuck, lines queue without waiting; past
+// diagQueue of them they are dropped. A queued line is lost at exit.
+func note(w io.Writer, s string) { send(w, s, false) }
+
+// noteFinal is note for a command's last lines (its outcome): queued even
+// when the queue is full, and waited for (at most diagWait) even while a
+// write is stuck.
+func noteFinal(w io.Writer, s string) { send(w, s, true) }
+
+func send(w io.Writer, s string, final bool) {
+	l := diagLine{s, make(chan struct{})}
+	diagMu.Lock()
+	k := diagSinks[w]
+	if k == nil {
+		k = &diagSink{}
+		diagSinks[w] = k
+		go drain(w, k)
+	}
+	full, stuck := len(k.queue) >= diagQueue, k.stuck
+	if !full || final {
+		k.queue = append(k.queue, l)
+	}
+	diagMu.Unlock()
+	switch {
+	case full && !final:
+		dropped.Add(1)
+		return
+	case stuck && !final:
+		return
+	}
+	t := time.NewTimer(diagWait)
+	defer t.Stop()
 	select {
-	case <-done:
-	case <-time.After(diagWait):
+	case <-l.done:
+	case <-t.C:
+		diagMu.Lock()
+		k.stuck = true
+		diagMu.Unlock()
+	}
+}
+
+// drain writes k's lines to w in order, and ends once none waits.
+func drain(w io.Writer, k *diagSink) {
+	for {
+		diagMu.Lock()
+		if len(k.queue) == 0 {
+			delete(diagSinks, w)
+			diagMu.Unlock()
+			return
+		}
+		l := k.queue[0]
+		k.queue[0] = diagLine{}
+		k.queue = k.queue[1:]
+		diagMu.Unlock()
+		_, _ = io.WriteString(w, l.s)
+		diagMu.Lock()
+		k.stuck = false
+		diagMu.Unlock()
+		close(l.done)
 	}
 }
 

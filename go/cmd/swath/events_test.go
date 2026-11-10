@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -415,5 +416,54 @@ func TestJSONProgress(t *testing.T) {
 	}
 	if !strings.Contains(s, `"event":"outcome","attempt":"`) || !strings.Contains(s, `"class":"completed","exit_code":0`) {
 		t.Fatalf("stderr %q", s)
+	}
+}
+
+// blockedWriter is a stderr nobody drains: every write blocks until
+// release closes.
+type blockedWriter struct{ release chan struct{} }
+
+func (b blockedWriter) Write(p []byte) (int, error) {
+	<-b.release
+	return len(p), nil
+}
+
+// TestBlockedStderrBounded: a stderr that does not drain holds bounded
+// work. Thousands of request events from many goroutines leave one writer
+// goroutine and at most the queue's lines, the rest dropped and counted;
+// only the first event waits (diagWait), and the outcome line still gets
+// its bounded attempt.
+func TestBlockedStderrBounded(t *testing.T) {
+	b := blockedWriter{make(chan struct{})}
+	errOut = b
+	t.Cleanup(func() { close(b.release); errOut = os.Stderr; logs.Store(nil) })
+	setLog(termOptions{logFormat: logJSON, verbose: 3}, "a")
+	before, base := runtime.NumGoroutine(), dropped.Load()
+	start := time.Now()
+	var wg sync.WaitGroup
+	const workers, each = 64, 100
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range each {
+				elog().request(source.Exchange{Method: "GET", Status: 200, URL: &url.URL{Host: "h", Path: "/b"}})
+			}
+		}()
+	}
+	wg.Wait()
+	if d := time.Since(start); d > 4*diagWait {
+		t.Errorf("%d events took %s", workers*each, d)
+	}
+	if n := runtime.NumGoroutine(); n > before+2 {
+		t.Errorf("%d goroutines, %d before", n, before)
+	}
+	if n := dropped.Load() - base; n < workers*each-diagQueue-1 {
+		t.Errorf("%d dropped of %d", n, workers*each)
+	}
+	start = time.Now()
+	conclude(errors.New("boom"))
+	if d := time.Since(start); d < diagWait || d > 2*diagWait {
+		t.Errorf("the outcome line waited %s, want its own diagWait", d)
 	}
 }

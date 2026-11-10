@@ -1208,7 +1208,9 @@ table changes.
   the provider, the endpoint host and the cause (`swath: warning: S3 127.0.0.1:9: connection refused
   (retrying; 14 attempts)`), and again at most once a minute while it lasts; a run that then ends stuck or
   at its deadline names the cause in its final error line, and `requests.failure_warnings` in the report
-  counts the warnings. A local listing that could not read entries names up to five of them with their cause,
+  counts the warnings. A stderr that does not drain never holds the run: a line waits at most 250 ms, later
+  ones queue (up to 256) without waiting while the write is stuck and are then dropped, counted in
+  `requests.log_dropped`; the final error line gets its own 250 ms. A local listing that could not read entries names up to five of them with their cause,
   then the count of the rest, and still exits 0; the report's `outcome.unreadable` is then true. On Unix,
   SIGUSR1 (and SIGINFO, Ctrl-T, on macOS and the BSDs) prints one progress record on stderr in the log
   format, whatever the progress settings (as GNU dd). `--color auto|always|never` colors the progress line
@@ -1322,7 +1324,8 @@ violations; caller cancellation keeps its stop disposition.
 is the one request count: every counted HTTP attempt (pages, probes, client retries, engine requeues).
 `retries` counts retry-loop repetitions, `throttles` counts throttle failures and `timeouts` counts
 timeout failures. Credential waits can fail before HTTP accounting starts, so `retries` and `timeouts`
-can increase with zero `http_attempts`; they are not subsets of the HTTP count. `failure_warnings` counts the persistent-failure warnings printed on stderr (Terminal). See
+can increase with zero `http_attempts`; they are not subsets of the HTTP count. `failure_warnings` counts the persistent-failure warnings printed on stderr (Terminal), `log_dropped` the
+stderr lines dropped because stderr did not drain. See
 [retry accounting](internals/clients.md#retry-policy-and-accounting). `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint-url` spells it); both `null` on a

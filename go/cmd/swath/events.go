@@ -227,7 +227,7 @@ func conclude(err error) int {
 			if err != nil {
 				level, msg = lvError, err.Error()
 			}
-			l.print(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Message})
+			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Message}))
 		}
 		return o.ExitCode
 	}
@@ -236,12 +236,12 @@ func conclude(err error) int {
 	}
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
-		note(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
+		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
 	}
-	note(errOut, "swath: "+err.Error()+"\n")
+	noteFinal(errOut, "swath: "+err.Error()+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
-		note(errOut, sh.see()+"\n")
+		noteFinal(errOut, sh.see()+"\n")
 	}
 	return o.ExitCode
 }
