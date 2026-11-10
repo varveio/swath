@@ -344,8 +344,9 @@ are delta coded and zstd compressed by default.
 
 **Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
 (`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most
-1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`; a version 4 reader ignores
-the additions and reads the buffer from `sort_buffer_bytes` in place of `row_budget_bytes`.
+1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`. A version 4 reader ignores
+the additions but must change one lookup: the buffer is `sort_buffer_bytes`, no longer `row_budget_bytes`; a reader
+of historical reports accepts both.
 
 **Run report: version 4.** Version 4 adds `invocation.narrowing` (whether the includes narrowed the listed
 prefix, or why not; [filters.md](filters.md#what-narrows-the-listing)), `outcome.unreadable` (a local listing skipped

@@ -330,7 +330,7 @@ func (c *Config) resolve() error {
 		l.Spill.Reserve = 0
 	}
 	if l.RowBudget < minRowBudget {
-		return bad("row budget %d is below %d bytes", l.RowBudget, minRowBudget)
+		return bad("sort buffer %d is below %d bytes", l.RowBudget, minRowBudget)
 	}
 	return nil
 }
@@ -472,10 +472,10 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	switch n := admit(cfg); {
 	case asked <= n || cfg.Warn == nil:
 	case cfg.Output.Text != nil:
-		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the row budget; --sort-buffer %d MiB carries %d",
+		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the sort buffer; --sort-buffer %d MiB carries %d",
 			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
 	default:
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --sort-buffer %d MiB and the descriptor limit carry %d",
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the sort buffer and %d descriptors; --sort-buffer %d MiB and the descriptor limit carry %d",
 			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
