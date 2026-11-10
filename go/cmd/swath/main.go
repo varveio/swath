@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
@@ -1093,19 +1094,27 @@ func (e *credentialRefusal) Unwrap() error { return e.error }
 const causeCap = 200
 
 // credentialLine is a refused credential's line: its source and its
-// cause's first line (capped at causeCap); the --anonymous advice when
-// swath was searching for credentials on its own (discovered), not when
-// one was configured; and, without -v (verbose), that -v shows what the
-// line leaves out, when it leaves something out.
+// cause's first line that is not blank (capped at causeCap), control
+// characters in either escaped; the --anonymous advice when swath was
+// searching for credentials on its own (discovered), not when one was
+// configured; and, without -v (verbose), that -v shows what the line
+// leaves out (lines before or after it, or past the cap), when it leaves
+// something out.
 func credentialLine(source, cause string, discovered, verbose bool) string {
-	first, _, more := strings.Cut(strings.TrimSpace(cause), "\n")
-	first = strings.TrimSpace(first)
+	lines := strings.Split(strings.ReplaceAll(cause, "\r", "\n"), "\n")
+	first, more := "", false
+	for i, l := range lines {
+		if first = strings.TrimSpace(l); first != "" {
+			more = i > 0 || strings.TrimSpace(strings.Join(lines[i+1:], "")) != ""
+			break
+		}
+	}
 	if r := []rune(first); len(r) > causeCap {
 		first, more = strings.TrimSpace(string(r[:causeCap]))+"...", true
 	}
-	msg := "could not obtain credentials (" + source + ")"
+	msg := "could not obtain credentials (" + escapeControl(source) + ")"
 	if first != "" {
-		msg += ": " + first
+		msg += ": " + escapeControl(first)
 	}
 	var advice []string
 	if discovered {
@@ -1122,6 +1131,23 @@ func credentialLine(source, cause string, discovered, verbose bool) string {
 	}
 	a := strings.Join(advice, "; ")
 	return msg + " " + strings.ToUpper(a[:1]) + a[1:]
+}
+
+// escapeControl writes each control character of s as its Go escape (\n,
+// \x1b), so the text stays on one line and draws nothing.
+func escapeControl(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			b.WriteString(strings.Trim(strconv.QuoteRune(r), "'"))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // profile starts the CPU profile and arranges the allocation profile, the

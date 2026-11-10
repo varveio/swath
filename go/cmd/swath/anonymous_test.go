@@ -126,10 +126,12 @@ func TestPublicBucketHint(t *testing.T) {
 	}
 }
 
-// TestCredentialLine: the line is the source and the cause's first line,
-// trimmed and capped at causeCap runes; the --anonymous advice only where
-// swath searched on its own; the -v advice only when the line leaves part
-// of the cause out (more lines, or the cap), and not under -v.
+// TestCredentialLine: the line is the source and the cause's first line
+// that is not blank (lines end at \n or \r), trimmed and capped at
+// causeCap runes, control characters in either escaped; the --anonymous
+// advice only where swath searched on its own; the -v advice only when the
+// line leaves part of the cause out (lines before or after it, or the
+// cap), and not under -v.
 func TestCredentialLine(t *testing.T) {
 	long := strings.Repeat("é", causeCap+50)
 	for _, c := range []struct {
@@ -148,10 +150,19 @@ func TestCredentialLine(t *testing.T) {
 		{long, false, false, "could not obtain credentials (S): " + long[:2*causeCap] + "... -v shows the details"},
 		{long, true, true, "could not obtain credentials (S): " + long[:2*causeCap] + "... For public storage use --anonymous"},
 		{"", true, false, "could not obtain credentials (S). For public storage use --anonymous"},
+		{"refused\rDETAIL", false, false, "could not obtain credentials (S): refused. -v shows the details"},
+		{"refused\r\n", false, false, "could not obtain credentials (S): refused"},
+		{"\nDETAIL", false, false, "could not obtain credentials (S): DETAIL. -v shows the details"},
+		{"\nDETAIL", false, true, "could not obtain credentials (S): DETAIL"},
+		{"bad\x1b[31mred\tx", false, false, `could not obtain credentials (S): bad\x1b[31mred\tx`},
 	} {
 		if got := credentialLine("S", c.cause, c.discovered, c.verbose); got != c.want {
 			t.Errorf("%q discovered %v verbose %v:\n got  %q\n want %q", c.cause, c.discovered, c.verbose, got, c.want)
 		}
+	}
+	// A source is a path or a profile name, which may hold anything.
+	if got, want := credentialLine("file /tmp/a\nb.json", "refused", false, false), `could not obtain credentials (file /tmp/a\nb.json): refused`; got != want {
+		t.Errorf("\n got  %q\n want %q", got, want)
 	}
 }
 

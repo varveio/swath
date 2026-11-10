@@ -12,10 +12,11 @@ swath: could not obtain credentials (environment): AWS_ACCESS_KEY_ID is set with
 
 Exit 1, cause `auth`. Without `--anonymous` swath needs working credentials before it sends a request, and
 it never falls back to unsigned requests. The line names the credential source and the first line of the
-cause. When swath was searching for credentials on its own (the AWS default chain, GCS Application Default
-Credentials, Azure's `DefaultAzureCredential`) and found none that work, a public bucket or container may be
-the reason: the line says to add `--anonymous`. A credential you configured (keys in the environment, a
-profile, a bearer token command, a SAS, a GCS credentials file) gets no such advice: fix it.
+cause. When swath was searching for credentials on its own (the AWS default chain with no profile, keys or
+bearer token command; GCS Application Default Credentials; Azure's `DefaultAzureCredential`) and found none
+that work, a public bucket or container may be the reason: the line says to add `--anonymous`. A credential
+you configured (keys in the environment, a profile by `--s3-profile` or `AWS_PROFILE`, a bearer token command,
+a SAS, a GCS credentials file) or an AWS configuration that does not load gets no such advice: fix it.
 
 The whole cause, which can be long (an SDK's report of every credential it tried, a token endpoint's
 answer), is the outcome's message: in the outcome line `-v` prints first (the `outcome` event's `message`

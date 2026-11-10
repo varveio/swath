@@ -39,24 +39,26 @@ func TestWaitToken(t *testing.T) {
 		{"exchange timeout", fmt.Errorf("exchange: %w", context.DeadlineExceeded), true, true},
 		{"terminal deadline", fmt.Errorf("refused: %w", context.DeadlineExceeded), false, true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ts := tokensource.NewShared(tokenFunc(func() (*oauth2.Token, error) { return nil, tc.err }))
-			calls := 0
-			tok, err := WaitToken(t.Context(), ts, "test source", tc.transient, time.Second, func(err error) bool {
-				calls++
-				if err != tc.err {
-					t.Errorf("predicate got %v", err)
+		for _, discovered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s discovered=%v", tc.name, discovered), func(t *testing.T) {
+				ts := tokensource.NewShared(tokenFunc(func() (*oauth2.Token, error) { return nil, tc.err }))
+				calls := 0
+				tok, err := WaitToken(t.Context(), ts, "test source", discovered, time.Second, func(err error) bool {
+					calls++
+					if err != tc.err {
+						t.Errorf("predicate got %v", err)
+					}
+					return tc.transient
+				})
+				var ce *CredentialError
+				if tok != nil || !errors.As(err, &ce) || ce.Source != "test source" || ce.Discovered != discovered || ce.Transient != tc.transient || ce.Timeout != tc.timeout || ce.Err != tc.err || calls != 1 {
+					t.Fatalf("token %v, error %+v, predicate calls %d", tok, ce, calls)
 				}
-				return tc.transient
+				if ce.CredentialRefused() != !tc.transient || ce.CredentialDiscovered() != discovered || ce.CredentialSource() != "test source" || !strings.Contains(err.Error(), tc.err.Error()) {
+					t.Fatalf("credential error: %v", err)
+				}
 			})
-			var ce *CredentialError
-			if tok != nil || !errors.As(err, &ce) || ce.Source != "test source" || ce.Discovered != tc.transient || ce.Transient != tc.transient || ce.Timeout != tc.timeout || ce.Err != tc.err || calls != 1 {
-				t.Fatalf("token %v, error %+v, predicate calls %d", tok, ce, calls)
-			}
-			if ce.CredentialRefused() != !tc.transient || ce.CredentialDiscovered() != tc.transient || ce.CredentialSource() != "test source" || !strings.Contains(err.Error(), tc.err.Error()) {
-				t.Fatalf("credential error: %v", err)
-			}
-		})
+		}
 	}
 }
 

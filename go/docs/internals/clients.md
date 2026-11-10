@@ -38,14 +38,17 @@ clients are described in [providers.md](providers.md) and the page of each provi
   challenge re-send (`TestBearer`).
 - **Explicit anonymity.** Requests go unsigned only with `--anonymous`. Without it, credentials the SDK's chain does
   not find or cannot load stop the run before listing; swath never falls back to anonymous
-  requests. Credential failures normally have class `auth`; failed Entra acquisition during Azure
-  namespace admission can instead yield `refused`, cause `unsupported` (exit 2), when flatness
-  cannot be established. Provider-specific diagnostics describe the credential source. The command shows a
+  requests. Credential failures have class `auth`, during Azure namespace admission too: admission
+  returns the `CredentialError` as it is, before any fallback that could read as a namespace it cannot
+  establish (`TestAdmissionKeepsCredentialFailure`). Provider-specific diagnostics describe the credential source. The command shows a
   credential failure that will not pass (`CredentialRefused`) as one line: its source (`CredentialSource`) and
-  the first line of its cause, capped at 200 characters. It advises `--anonymous` only when the SDK's own search
-  failed with nothing configured (`CredentialError.Discovered`: S3's default chain without `--s3-profile`, GCS
-  Application Default Credentials, Azure's `DefaultAzureCredential`), never for a configured credential (keys in
-  the environment, a profile, a bearer token command, a SAS or shared key, a GCS credentials file). The rest of
+  the first line of its cause that is not blank (lines end at `\n` or `\r`), capped at 200 characters, control
+  characters in either escaped (`\n`). It advises `--anonymous` only when the SDK's own search failed with
+  nothing configured (`CredentialError.Discovered`, refreshes of what it found included: S3's default chain with
+  no profile, no keys in the environment and no bearer token command; GCS Application Default Credentials;
+  Azure's `DefaultAzureCredential`), never for a configured credential (keys in the environment, a profile by
+  `--s3-profile` or `AWS_PROFILE`, a bearer token command, a SAS or shared key, a GCS credentials file) or an
+  AWS configuration that does not load. The rest of
   the cause, which can be an SDK's chain report or a token endpoint's HTML body, is left to the outcome's
   message: stderr shows it only with `-v`, the report always. The typed error, its chain, class and exit code
   are unchanged; transient credential failures and the service's refusals print whole (`TestPublicBucketHint`,
