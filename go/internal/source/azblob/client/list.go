@@ -234,7 +234,7 @@ func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error
 func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.CancelFunc, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	if c.ts != nil {
-		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, entraDiscovered, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			cancel()
 			return nil, nil, err

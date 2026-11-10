@@ -54,10 +54,13 @@ type Answer interface {
 // endpoint's 5xx, a cut connection, an attempt past the request timeout)
 // are retried; the others stop the request.
 type CredentialError struct {
-	Source    string // where the credentials came from (never the secret)
-	Transient bool
-	Timeout   bool // the credential did not arrive within the request timeout
-	Err       error
+	Source string // where the credentials came from (never the secret)
+	// Discovered: the SDK's own search (a default chain, Application
+	// Default Credentials) was looking for them; nothing was configured.
+	Discovered bool
+	Transient  bool
+	Timeout    bool // the credential did not arrive within the request timeout
+	Err        error
 }
 
 func (e *CredentialError) Error() string {

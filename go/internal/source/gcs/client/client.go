@@ -149,6 +149,9 @@ type Client struct {
 	next     atomic.Uint64
 	ts       *tokensource.Shared // nil: anonymous
 	source   string
+	// discovered: the credentials are Application Default Credentials'
+	// (objhttp.CredentialError.Discovered), not a configured file.
+	discovered bool
 
 	*objhttp.Meter
 }
@@ -206,10 +209,10 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource)
 	default:
-		c.source = "application default credentials"
+		c.source, c.discovered = "application default credentials", true
 		creds, err := finder(life, readScope)
 		if err != nil {
-			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Discovered: true, Err: err}
 		}
 		c.ts = tokensource.NewShared(creds.TokenSource)
 	}

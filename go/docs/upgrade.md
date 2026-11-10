@@ -252,7 +252,8 @@ the list below is the earlier history of the unreleased builds.
   `access_denied`) ([credentials](sources.md#credentials-on-every-object-store)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error is one
-  line naming the credential source and `--anonymous`; `-v` shows its cause.
+  line: the credential source, the cause's first line and, when swath was searching for credentials on its
+  own, `--anonymous`; `-v` shows the whole cause.
 - An endpoint URL with user information (`http://user:password@host/`, through `--endpoint-url`, then
   also `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
   its password recorded in the journal identity; give credentials through the provider's own configuration.

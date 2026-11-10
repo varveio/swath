@@ -1042,6 +1042,8 @@ func explain(err error) error {
 	var ce interface { // objhttp.CredentialError
 		CredentialRefused() bool
 		CredentialSource() string
+		CredentialDiscovered() bool
+		Unwrap() error
 	}
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
@@ -1067,29 +1069,60 @@ func explain(err error) error {
 	case errors.As(err, &ce) && ce.CredentialRefused():
 		// No credentials, or none that load: swath never falls back to
 		// anonymous requests on its own.
-		return &credentialRefusal{error: err, source: ce.CredentialSource(), verbose: elog().shows(lvInfo)}
+		line := credentialLine(ce.CredentialSource(), ce.Unwrap().Error(), ce.CredentialDiscovered(), elog().shows(lvInfo))
+		return &credentialRefusal{error: err, line: line}
 	}
 	return err
 }
 
-// credentialRefusal is a credential failure that will not pass, shown in
-// one line. Its cause (an SDK's chain report, a token endpoint's answer)
-// is the outcome's message, which -v shows (conclude).
+// credentialRefusal is a credential failure that will not pass, shown as
+// its line (credentialLine). The whole cause (an SDK's chain report, a
+// token endpoint's answer) is the outcome's message, which -v shows
+// (conclude).
 type credentialRefusal struct {
 	error
-	source  string
-	verbose bool
+	line string
 }
 
-func (e *credentialRefusal) Error() string {
-	msg := "could not obtain credentials (" + e.source + "); for public storage use --anonymous"
-	if !e.verbose {
-		msg += "; use -v for details"
-	}
-	return msg
-}
+func (e *credentialRefusal) Error() string { return e.line }
 
 func (e *credentialRefusal) Unwrap() error { return e.error }
+
+// causeCap bounds the cause's first line in a credential refusal's line,
+// in runes.
+const causeCap = 200
+
+// credentialLine is a refused credential's line: its source and its
+// cause's first line (capped at causeCap); the --anonymous advice when
+// swath was searching for credentials on its own (discovered), not when
+// one was configured; and, without -v (verbose), that -v shows what the
+// line leaves out, when it leaves something out.
+func credentialLine(source, cause string, discovered, verbose bool) string {
+	first, _, more := strings.Cut(strings.TrimSpace(cause), "\n")
+	first = strings.TrimSpace(first)
+	if r := []rune(first); len(r) > causeCap {
+		first, more = strings.TrimSpace(string(r[:causeCap]))+"...", true
+	}
+	msg := "could not obtain credentials (" + source + ")"
+	if first != "" {
+		msg += ": " + first
+	}
+	var advice []string
+	if discovered {
+		advice = append(advice, "for public storage use --anonymous")
+	}
+	if more && !verbose {
+		advice = append(advice, "-v shows the details")
+	}
+	if len(advice) == 0 {
+		return msg
+	}
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	a := strings.Join(advice, "; ")
+	return msg + " " + strings.ToUpper(a[:1]) + a[1:]
+}
 
 // profile starts the CPU profile and arranges the allocation profile, the
 // files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths

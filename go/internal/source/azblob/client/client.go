@@ -292,6 +292,12 @@ var operationParams = func() map[string]string {
 var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH",
 	"AZURE_USERNAME", "AZURE_FEDERATED_TOKEN_FILE", "IDENTITY_ENDPOINT", "MSI_ENDPOINT", "AZURE_TOKEN_CREDENTIALS"}
 
+// entraDiscovered marks Entra ID failures as the SDK's own search
+// (objhttp.CredentialError.Discovered): DefaultAzureCredential is used only
+// when no credential is configured, and its tokens are the only ones the
+// client waits for.
+const entraDiscovered = true
+
 // entra sets up Entra ID through DefaultAzureCredential, its chain as the
 // SDK builds it (environment, workload identity, managed identity, the
 // Azure CLI and Developer CLI logins). Its tokens are fetched per attempt,
@@ -299,13 +305,13 @@ var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SEC
 // first request with azidentity's own error (class auth), and nothing is
 // listed; a token endpoint's transient failure is retried.
 func (c *Client) entra(entra entraSource) error {
-	const source = "Entra ID (DefaultAzureCredential)"
+	const source = "Entra ID, DefaultAzureCredential"
 	cred, err := entra(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
 	if err != nil {
-		return &objhttp.CredentialError{Source: source, Err: err}
+		return &objhttp.CredentialError{Source: source, Discovered: entraDiscovered, Err: err}
 	}
 	c.ts, c.source = c.shared(cred), source
 	return nil
@@ -510,7 +516,7 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	req.Header.Set(headerVersion, Version)
 	req.Header.Set(headerUserAgent, buildinfo.UserAgent())
 	if c.ts != nil {
-		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, entraDiscovered, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			return nil, err
 		}

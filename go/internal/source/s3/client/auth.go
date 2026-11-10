@@ -92,7 +92,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if err != nil {
 		// A profile that does not exist, a role without its token: the
 		// configuration names credentials it cannot give (class auth).
-		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: err}
+		return nil, &objhttp.CredentialError{Source: "AWS configuration", Discovered: cfg.Profile == "", Err: err}
 	}
 	a := &auth{region: cfg.Region, note: anonymousNote(cfg)}
 	if a.region == "" {
@@ -107,7 +107,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		a.anonymous, a.source = true, "anonymous"
 		return a, nil
 	case ac.Credentials == nil:
-		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: errors.New("no credential provider")}
+		return nil, &objhttp.CredentialError{Source: "AWS configuration", Discovered: cfg.Profile == "", Err: errors.New("no credential provider")}
 	}
 	src, tf := "AWS default chain", tokenFile(ac)
 	if cfg.Profile != "" {
@@ -125,7 +125,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		// the credentials.
 		return nil, context.Cause(ctx)
 	case err != nil:
-		return nil, &objhttp.CredentialError{Source: src, Err: err}
+		return nil, &objhttp.CredentialError{Source: src, Discovered: cfg.Profile == "", Err: err}
 	}
 	a.credentials, a.source = ac.Credentials, c.Source
 	return a, nil

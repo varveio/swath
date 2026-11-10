@@ -6,18 +6,25 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 ## Credentials could not be loaded
 
 ```text
-swath: could not obtain credentials (environment); for public storage use --anonymous; use -v for details
+swath: could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token. For public storage use --anonymous; -v shows the details
+swath: could not obtain credentials (environment): AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY
 ```
 
 Exit 1, cause `auth`. Without `--anonymous` swath needs working credentials before it sends a request, and
-it never falls back to unsigned requests. For a public bucket or container, add `--anonymous`. Otherwise fix
-the credential source the message names. Its cause, which can be long (an SDK's report of every credential it
-tried, a token endpoint's answer), is the outcome's message: in the outcome line `-v` prints first (the
-`outcome` event's `message` under `--log-format json -v`) and in the report's `outcome.message`:
+it never falls back to unsigned requests. The line names the credential source and the first line of the
+cause. When swath was searching for credentials on its own (the AWS default chain, GCS Application Default
+Credentials, Azure's `DefaultAzureCredential`) and found none that work, a public bucket or container may be
+the reason: the line says to add `--anonymous`. A credential you configured (keys in the environment, a
+profile, a bearer token command, a SAS, a GCS credentials file) gets no such advice: fix it.
+
+The whole cause, which can be long (an SDK's report of every credential it tried, a token endpoint's
+answer), is the outcome's message: in the outcome line `-v` prints first (the `outcome` event's `message`
+under `--log-format json -v`) and in the report's `outcome.message`. "-v shows the details" says the line
+left some of it out:
 
 ```text
-swath: outcome: {"class":"fatal","exit_code":1,"message":"S3 client: credentials (environment): AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY",...}
-swath: could not obtain credentials (environment); for public storage use --anonymous
+swath: outcome: {"class":"fatal","exit_code":1,"message":"Azure Blob client: credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:\n\tEnvironmentCredential: missing environment variable AZURE_TENANT_ID\n...",...}
+swath: could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token. For public storage use --anonymous
 ```
 
 Common causes: a key without its secret, a profile that does not exist, an expired SSO login (`aws sso login`),

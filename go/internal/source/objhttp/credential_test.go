@@ -21,12 +21,12 @@ type tokenFunc func() (*oauth2.Token, error)
 func (f tokenFunc) Token() (*oauth2.Token, error) { return f() }
 
 func TestWaitToken(t *testing.T) {
-	if tok, err := WaitToken(t.Context(), nil, "anonymous", time.Second, nil); tok != nil || err != nil {
+	if tok, err := WaitToken(t.Context(), nil, "anonymous", false, time.Second, nil); tok != nil || err != nil {
 		t.Fatalf("nil source: %v, %v", tok, err)
 	}
 	want := &oauth2.Token{AccessToken: "token", Expiry: time.Now().Add(time.Hour)}
 	ts := tokensource.NewShared(oauth2.StaticTokenSource(want))
-	if tok, err := WaitToken(t.Context(), ts, "test", time.Second, nil); tok != want || err != nil {
+	if tok, err := WaitToken(t.Context(), ts, "test", false, time.Second, nil); tok != want || err != nil {
 		t.Fatalf("token: %v, %v", tok, err)
 	}
 	for _, tc := range []struct {
@@ -42,7 +42,7 @@ func TestWaitToken(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := tokensource.NewShared(tokenFunc(func() (*oauth2.Token, error) { return nil, tc.err }))
 			calls := 0
-			tok, err := WaitToken(t.Context(), ts, "test source", time.Second, func(err error) bool {
+			tok, err := WaitToken(t.Context(), ts, "test source", tc.transient, time.Second, func(err error) bool {
 				calls++
 				if err != tc.err {
 					t.Errorf("predicate got %v", err)
@@ -50,10 +50,10 @@ func TestWaitToken(t *testing.T) {
 				return tc.transient
 			})
 			var ce *CredentialError
-			if tok != nil || !errors.As(err, &ce) || ce.Source != "test source" || ce.Transient != tc.transient || ce.Timeout != tc.timeout || ce.Err != tc.err || calls != 1 {
+			if tok != nil || !errors.As(err, &ce) || ce.Source != "test source" || ce.Discovered != tc.transient || ce.Transient != tc.transient || ce.Timeout != tc.timeout || ce.Err != tc.err || calls != 1 {
 				t.Fatalf("token %v, error %+v, predicate calls %d", tok, ce, calls)
 			}
-			if ce.CredentialRefused() != !tc.transient || !strings.Contains(err.Error(), tc.err.Error()) {
+			if ce.CredentialRefused() != !tc.transient || ce.CredentialDiscovered() != tc.transient || ce.CredentialSource() != "test source" || !strings.Contains(err.Error(), tc.err.Error()) {
 				t.Fatalf("credential error: %v", err)
 			}
 		})
@@ -75,9 +75,9 @@ func TestWaitTokenContextEnded(t *testing.T) {
 				<-release
 				return &oauth2.Token{AccessToken: "late"}, nil
 			}))
-			tok, err := WaitToken(ctx, ts, "test source", 7*time.Second, func(error) bool { t.Error("classified a wait timeout"); return false })
+			tok, err := WaitToken(ctx, ts, "test source", true, 7*time.Second, func(error) bool { t.Error("classified a wait timeout"); return false })
 			var ce *CredentialError
-			if tok != nil || !errors.As(err, &ce) || !ce.Transient || !ce.Timeout || ce.Source != "test source" {
+			if tok != nil || !errors.As(err, &ce) || !ce.Transient || !ce.Timeout || ce.Source != "test source" || !ce.Discovered {
 				t.Fatalf("token %v, error %+v", tok, ce)
 			}
 			if want := fmt.Sprintf("no token within 7s: %v", ctx.Err()); ce.Err.Error() != want {

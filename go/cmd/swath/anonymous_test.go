@@ -28,12 +28,15 @@ const remoteBody = "<!DOCTYPE html>\n<html><head><style>body{margin:0}</style></
 
 // TestPublicBucketHint: a listing that fails because no credentials were
 // found or they would not load (swath never falls back to anonymous
-// requests) fails in one line that names its source and --anonymous,
-// sends no listing request, and keeps the typed failure and its class:
-// S3, refused at construction; Azure, whose default chain fails the first
-// request; GCS, a credentials file that does not parse and one whose token
-// endpoint refuses the grant with an HTML page. The public container lists
-// with --anonymous.
+// requests) fails in one line, sends no listing request, and keeps the
+// typed failure, its class and its whole cause in the outcome. The line
+// names the source and the cause's first line; --anonymous only where
+// swath searched on its own (S3's default chain, refused at construction;
+// Azure's DefaultAzureCredential, which fails the first request), not for
+// a configured credential (S3 keys in the environment, an Azure SAS, GCS
+// credentials files: one that does not parse, one whose token endpoint
+// refuses the grant with an HTML page); -v when the cause has more. The
+// public container lists with --anonymous.
 func TestPublicBucketHint(t *testing.T) {
 	captureStderr(t)
 	home := t.TempDir()
@@ -71,32 +74,48 @@ func TestPublicBucketHint(t *testing.T) {
 	refusedGrant, broken := filepath.Join(home, "refused.json"), filepath.Join(home, "broken.json")
 	os.WriteFile(refusedGrant, fmt.Appendf(nil, `{"type":"authorized_user","client_id":"c","client_secret":"s","refresh_token":"rt","token_uri":%q}`, tok.URL), 0o600)
 	os.WriteFile(broken, []byte(`{"type":"authorized_user",`), 0o600)
+	const anonymous = ". For public storage use --anonymous"
 	for _, c := range []struct {
-		name, source string
-		args         []string
-		requests     *atomic.Int64
-		cause        string // in the chain, not the line
+		name, env string // env: AWS_ACCESS_KEY_ID's value
+		args      []string
+		requests  *atomic.Int64
+		want      string // the line, the cause's first line as FIRST
+		first     string // in the cause's first line
+		cause     string // in the cause, not the line
 	}{
-		{"s3", "AWS default chain", []string{"s3://bkt", "--endpoint-url", s3.URL}, &s3Requests, "EC2 IMDS"},
-		{"azblob normal endpoint", "Entra ID (DefaultAzureCredential)", []string{"az://replay/corpus"}, &azRequests, "Attempted credentials:\n"},
-		{"azblob", "Entra ID (DefaultAzureCredential)", []string{"az://replay/corpus", "--endpoint-url", azProxy.URL}, &azRequests, "AZURE_TENANT_ID"},
-		{"gcs broken file", "file " + broken, []string{"gs://bkt", "--endpoint-url", gcs.URL, "--gcs-credentials-file", broken}, &gcsRequests, "unexpected end of JSON"},
-		{"gcs refused grant", "file " + refusedGrant, []string{"gs://bkt", "--endpoint-url", gcs.URL, "--gcs-credentials-file", refusedGrant}, &gcsRequests, remoteBody},
+		{"s3 default chain", "", []string{"s3://bkt", "--endpoint-url", s3.URL}, &s3Requests,
+			"could not obtain credentials (AWS default chain): FIRST" + anonymous, "EC2 IMDS", "EC2 IMDS"},
+		{"s3 environment", "AKIDEXAMPLE", []string{"s3://bkt", "--endpoint-url", s3.URL}, &s3Requests,
+			"could not obtain credentials (environment): AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"},
+		{"azblob normal endpoint", "", []string{"az://replay/corpus"}, &azRequests,
+			"could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token" + anonymous + "; -v shows the details",
+			"failed to acquire a token", "Attempted credentials:\n"},
+		{"azblob", "", []string{"az://replay/corpus", "--endpoint-url", azProxy.URL}, &azRequests,
+			"could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token" + anonymous + "; -v shows the details",
+			"failed to acquire a token", "AZURE_TENANT_ID"},
+		{"azblob sas", "", []string{"az://replay/corpus", "--endpoint-url", azProxy.URL, "--azure-sas-token", "%zz"}, &azRequests,
+			"could not obtain credentials (shared access signature): not a query string", "not a query string", "not a query string"},
+		{"gcs broken file", "", []string{"gs://bkt", "--endpoint-url", gcs.URL, "--gcs-credentials-file", broken}, &gcsRequests,
+			"could not obtain credentials (file " + broken + "): FIRST", "JSON", "unexpected end of JSON"},
+		{"gcs refused grant", "", []string{"gs://bkt", "--endpoint-url", gcs.URL, "--gcs-credentials-file", refusedGrant}, &gcsRequests,
+			"could not obtain credentials (file " + refusedGrant + "): FIRST. -v shows the details", "400", remoteBody},
 	} {
+		t.Setenv("AWS_ACCESS_KEY_ID", c.env)
 		out := filepath.Join(t.TempDir(), "ds")
 		err := run(context.Background(), append(append(c.args, "-o", out), unjournaled...), io.Discard, diagList)
-		want := "could not obtain credentials (" + c.source + "); for public storage use --anonymous; use -v for details"
-		if err == nil || err.Error() != want || c.requests.Load() != 0 {
-			t.Errorf("%s: %v, %d requests; want %q and none sent", c.name, err, c.requests.Load(), want)
-			continue
-		}
 		var ce *objhttp.CredentialError
 		var ee *exitError
 		if !errors.As(err, &ce) || !ce.CredentialRefused() || !strings.Contains(ce.Err.Error(), c.cause) ||
-			!errors.As(err, &ee) || ee.code != exitFatal || ee.out.Cause != "auth" || !strings.Contains(ee.out.Message, c.cause) {
-			t.Errorf("%s: the failure's chain or class changed: %#v", c.name, ee)
+			!errors.As(err, &ee) || ee.code != exitFatal || ee.out.Cause != "auth" || !strings.Contains(ee.out.Message, c.cause) || c.requests.Load() != 0 {
+			t.Errorf("%s: %v, %d requests: the failure's chain or class changed, or a request went out", c.name, err, c.requests.Load())
+			continue
+		}
+		first, _, _ := strings.Cut(ce.Err.Error(), "\n")
+		if want := strings.Replace(c.want, "FIRST", strings.TrimSpace(first), 1); err.Error() != want || !strings.Contains(first, c.first) {
+			t.Errorf("%s:\n got  %q\n want %q", c.name, err, want)
 		}
 	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	// The hint is right: the public container lists with --anonymous.
 	out := filepath.Join(t.TempDir(), "ds")
 	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint-url", azEndpoint(az), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
@@ -107,17 +126,47 @@ func TestPublicBucketHint(t *testing.T) {
 	}
 }
 
+// TestCredentialLine: the line is the source and the cause's first line,
+// trimmed and capped at causeCap runes; the --anonymous advice only where
+// swath searched on its own; the -v advice only when the line leaves part
+// of the cause out (more lines, or the cap), and not under -v.
+func TestCredentialLine(t *testing.T) {
+	long := strings.Repeat("é", causeCap+50)
+	for _, c := range []struct {
+		cause               string
+		discovered, verbose bool
+		want                string
+	}{
+		{"none found", true, false, "could not obtain credentials (S): none found. For public storage use --anonymous"},
+		{"none found.", true, false, "could not obtain credentials (S): none found. For public storage use --anonymous"},
+		{"refused\n<html>\n</html>", true, false, "could not obtain credentials (S): refused. For public storage use --anonymous; -v shows the details"},
+		{"refused\n<html>\n</html>", true, true, "could not obtain credentials (S): refused. For public storage use --anonymous"},
+		{"exited 4: nope", false, false, "could not obtain credentials (S): exited 4: nope"},
+		{"  exited 4: nope \n\t \n", false, false, "could not obtain credentials (S): exited 4: nope"},
+		{"exited 4: nope\nusage: ...", false, false, "could not obtain credentials (S): exited 4: nope. -v shows the details"},
+		{"exited 4: nope\nusage: ...", false, true, "could not obtain credentials (S): exited 4: nope"},
+		{long, false, false, "could not obtain credentials (S): " + long[:2*causeCap] + "... -v shows the details"},
+		{long, true, true, "could not obtain credentials (S): " + long[:2*causeCap] + "... For public storage use --anonymous"},
+		{"", true, false, "could not obtain credentials (S). For public storage use --anonymous"},
+	} {
+		if got := credentialLine("S", c.cause, c.discovered, c.verbose); got != c.want {
+			t.Errorf("%q discovered %v verbose %v:\n got  %q\n want %q", c.cause, c.discovered, c.verbose, got, c.want)
+		}
+	}
+}
+
 // TestCredentialRefusalShown: a refused credential's multi-line cause (an
 // SDK chain report quoting a remote HTML page) stays off stderr at the
 // default verbosity, in text and json alike (the outcome's message
-// included), and -q; -v shows it once, in the outcome; -qq prints
-// nothing. A transient credential failure, and the service refusing
-// credentials, are not credential refusals: they print as they are.
+// included), and -q, its first line in the line; -v shows it whole once,
+// in the outcome; -qq prints nothing. A transient credential failure, and
+// the service refusing credentials, are not credential refusals: they
+// print as they are.
 func TestCredentialRefusalShown(t *testing.T) {
-	cause := fmt.Errorf("Azure Blob client: %w", &objhttp.CredentialError{Source: "Entra ID (DefaultAzureCredential)",
+	cause := fmt.Errorf("Azure Blob client: %w", &objhttp.CredentialError{Source: "Entra ID, DefaultAzureCredential", Discovered: true,
 		Err: errors.New("DefaultAzureCredential: failed to acquire a token.\nAttempted credentials:\n\tManagedIdentityCredential: RESPONSE 404\n" + remoteBody)})
-	const line = "could not obtain credentials (Entra ID (DefaultAzureCredential)); for public storage use --anonymous"
-	const brief = line + "; use -v for details"
+	const line = "could not obtain credentials (Entra ID, DefaultAzureCredential): DefaultAzureCredential: failed to acquire a token. For public storage use --anonymous"
+	const brief = line + "; -v shows the details"
 	show := func(term termOptions) []string {
 		t.Helper()
 		stderr := captureSyncStderr(t)
@@ -160,7 +209,7 @@ func TestCredentialRefusalShown(t *testing.T) {
 		t.Errorf("json -v: msg %q, message %q", msg, message)
 	}
 	for _, err := range []error{
-		&objhttp.CredentialError{Source: "Entra ID (DefaultAzureCredential)", Transient: true, Err: errors.New("token endpoint: 503")},
+		&objhttp.CredentialError{Source: "Entra ID, DefaultAzureCredential", Discovered: true, Transient: true, Err: errors.New("token endpoint: 503")},
 		fmt.Errorf("Azure Blob: account a: %w", errors.New("403 AuthorizationFailure")),
 	} {
 		if got := explain(err); got != err {
