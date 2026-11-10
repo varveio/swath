@@ -78,6 +78,7 @@ type Stats struct {
 	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
 	ReaddirplusHints int64    `json:"readdirplus_hints,omitempty"` // full directory reads followed by a few stats, so an NFS client fetches attributes with the next (readNames)
 	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (opened.Run)
+	StreamedBatches  int64    `json:"streamed_batches,omitempty"`  // directory reads a count statted and emitted before the next (streamNames, Linux)
 	Presized         int64    `json:"presized"`                    // large directories whose buffers were sized from st_size
 	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (opened.Run)
 	Samples          []string `json:"error_samples,omitempty"`
@@ -116,6 +117,7 @@ func (s *Stats) add(o *Stats) {
 	s.Chunks += o.Chunks
 	s.ParallelSorts += o.ParallelSorts
 	s.Unsorted += o.Unsorted
+	s.StreamedBatches += o.StreamedBatches
 	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice

@@ -129,6 +129,10 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	st.DirsRead++
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
+	if p.unsorted {
+		defer unix.Close(fd)
+		return p.streamNames(ctx, fd, r, sc, e, st)
+	}
 	if err := readNames(ctx, fd, r.path, sc, p.opt.Fields != Names, st); err != nil {
 		unix.Close(fd)
 		return err
@@ -140,9 +144,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	p.resolveUnknown(fd, sc)
 	buildKeys(r.prefix, sc)
-	if p.unsorted {
-		st.Unsorted++
-	} else if err := sortChecked(ctx, len(r.prefix), sc, st); err != nil {
+	if err := sortChecked(ctx, len(r.prefix), sc, st); err != nil {
 		unix.Close(fd)
 		return err
 	}
@@ -156,6 +158,53 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		return err
 	}
 	return p.emit(r, rows, e, st)
+}
+
+// streamNames lists a directory for a count, whose rows are neither sorted
+// nor kept (opened.Run): each getdents batch is typed, keyed, statted and
+// emitted before the next is read, as find does, so the directory's memory
+// is one batch, not its whole listing. Holding a directory of 1M files
+// (about 140 MiB) was what made a count thrash the page cache on a 512 MiB
+// machine (issue #388). The batch's stats come before the next read, so an
+// NFS client keeps fetching attributes with the names (readNames) without a
+// hint.
+func (p *Provider) streamNames(ctx context.Context, fd int, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
+	st.Unsorted++
+	add := func(_ uint64, typ uint8, name []byte) {
+		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
+		sc.names = append(sc.names, name...)
+	}
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		n, err := unix.Getdents(fd, sc.buf)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			st.note(&st.ReadErrors, r.path, err)
+			return nil
+		}
+		if n <= 0 {
+			return nil
+		}
+		sc.names, sc.ents = sc.names[:0], sc.ents[:0]
+		if err := parseDirents(sc.buf[:n], add); err != nil {
+			st.note(&st.ReadErrors, r.path, err)
+			return nil
+		}
+		st.StreamedBatches++
+		p.resolveUnknown(fd, sc)
+		buildKeys(r.prefix, sc) // a new arena: the emitted rows are views of it
+		rows, err := p.statInto(ctx, fd, r.path, sc.names, sc.keys, sc.ents, st)
+		if err != nil {
+			return err
+		}
+		if err := p.emit(r, rows, e, st); err != nil {
+			return err
+		}
+	}
 }
 
 // openDir opens a directory for reading entries; below the root it never

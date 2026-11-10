@@ -360,6 +360,11 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 				if got.Unsorted != got.DirsRead {
 					t.Fatalf("unsorted_dirs %d, want every directory read (%d)", got.Unsorted, got.DirsRead)
 				}
+				// The Linux engine streams: every directory read is a batch at least, the 5000-entry
+				// directory several, and nothing is chunked or held for a sort.
+				if !portable && nativeEngine && (got.StreamedBatches <= got.DirsRead || got.Chunks != 0 || got.ParallelSorts != 0) {
+					t.Fatalf("streamed_batches %d for %d directories, chunks %d, parallel_sorts %d", got.StreamedBatches, got.DirsRead, got.Chunks, got.ParallelSorts)
+				}
 				// The same keys, through a sink on the provider the run left unsorted.
 				c := &collect{}
 				if _, err := order.CountWithSink[Range, Entry](context.Background(), p, nil, order.Options{Workers: 4, Unordered: true}, c); err != nil {
