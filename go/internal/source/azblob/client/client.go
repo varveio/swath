@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -71,6 +72,7 @@ type Config struct {
 	Anonymous bool
 	// SAS is a shared access signature, a query string with or without a
 	// leading '?', appended to every request and kept out of every error.
+	// One that names a request parameter (operationParams) is refused.
 	SAS string
 	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey      string
@@ -247,9 +249,18 @@ func (c *Client) credentials(entra entraSource) error {
 	case cfg.SAS != "":
 		c.sas = strings.TrimPrefix(cfg.SAS, "?")
 		c.source = "shared access signature"
-		if _, err := url.ParseQuery(c.sas); err != nil || c.sas == "" {
+		q, err := url.ParseQuery(c.sas)
+		if err != nil || c.sas == "" {
 			// the parse error would quote the signature
 			return &objhttp.CredentialError{Source: c.source, Err: errors.New("not a query string")}
+		}
+		for _, name := range slices.Sorted(maps.Keys(q)) {
+			if p, ok := operationParams[strings.ToLower(name)]; ok {
+				// Appended to every request, it would repeat a parameter
+				// swath sends (the SDK puts the selectors in the path) or
+				// change what is listed.
+				return source.Unsupported(fmt.Errorf("the shared access signature names %s, a request parameter swath sets itself; give a SAS without it", p))
+			}
 		}
 		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
@@ -262,6 +273,18 @@ func (c *Client) credentials(entra entraSource) error {
 	}
 	return nil
 }
+
+// operationParams are the query parameters of the requests swath sends
+// (List Blobs, Get Account Information, and resource on the Data Lake
+// host), by lower-case name: a SAS that names one is refused.
+var operationParams = func() map[string]string {
+	m := map[string]string{}
+	for _, p := range []string{"comp", "restype", "prefix", "delimiter", "marker", "maxresults", "startFrom", "endBefore",
+		"include", "showonly", "timeout", "resource"} {
+		m[strings.ToLower(p)] = p
+	}
+	return m
+}()
 
 // entraVars are the environment variables by which DefaultAzureCredential
 // is configured (environment, workload identity and managed identity

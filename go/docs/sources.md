@@ -149,7 +149,9 @@ role that includes it.
 `AZURE_STORAGE_KEY` (Shared Key); else Entra ID through the Azure SDK's default chain (environment, workload
 identity, managed identity, the Azure CLI and Developer CLI logins). A SAS is never recorded or shown: the
 source is shown as `?sig=[redacted]`, and a resume needs the SAS again, by `--azure-sas-token` or
-`AZURE_STORAGE_SAS_TOKEN`.
+`AZURE_STORAGE_SAS_TOKEN`. A SAS holds only its own fields: one that also names a request parameter swath sets
+(`comp`, `restype`, `prefix`, `marker` or another List Blobs parameter, in any case) is refused at startup with
+exit 2, naming the parameter, before any request.
 
 **Endpoint.** `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net`, and the account is then
 its first path segment (Azurite: `--endpoint-url http://127.0.0.1:10000`).

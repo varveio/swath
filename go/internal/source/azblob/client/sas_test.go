@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -294,5 +295,41 @@ func TestScrubbedTransportSignals(t *testing.T) {
 				t.Fatalf("error %v, failure %+v, counters %+v", err, f, counts)
 			}
 		})
+	}
+}
+
+// TestSASReservedParameters: a SAS naming a parameter of swath's requests
+// is refused when the client is built (unsupported: the caller's to fix),
+// whatever the name's case or escaping, with an empty, repeated or absent
+// value, first or last, with or without '?'; the message names the
+// parameter alone, never a value or the SAS. Ordinary SAS fields and
+// unknown ones pass, and Anonymous, which ignores the SAS, is not refused.
+func TestSASReservedParameters(t *testing.T) {
+	build := func(cfg Config) error {
+		cfg.Account = "acct"
+		_, err := newClient(context.Background(), cfg, withEntra(failingCredential{}))
+		return err
+	}
+	for _, p := range []string{"comp", "restype", "prefix", "delimiter", "marker", "maxresults", "startFrom", "endBefore",
+		"include", "showonly", "timeout", "resource"} {
+		escaped := fmt.Sprintf("%%%02X", p[0]) + p[1:]
+		for _, sas := range []string{
+			testSAS + "&" + p + "=TopSecretSig", testSAS + "&" + strings.ToUpper(p) + "=TopSecretSig", testSAS + "&" + escaped + "=TopSecretSig",
+			testSAS + "&" + p + "=", testSAS + "&" + p, testSAS + "&" + p + "=a&" + p + "=TopSecretSig",
+			p + "=TopSecretSig&" + testSAS, "?" + p + "=TopSecretSig&" + testSAS,
+		} {
+			err := build(Config{SAS: sas})
+			if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "names "+p+",") || sasLeak(err.Error()) != "" {
+				t.Errorf("%s: %v, want the refusal naming %s alone", sas, err, p)
+			}
+		}
+	}
+	for _, sas := range []string{testSAS, "?" + testSAS, testSAS + "&sdd=2&ses=x&skoid=o&unknown=v&compx=list&xprefix=p"} {
+		if err := build(Config{SAS: sas}); err != nil {
+			t.Errorf("%s: %v", sas, err)
+		}
+	}
+	if err := build(Config{Anonymous: true, SAS: testSAS + "&comp=list"}); err != nil {
+		t.Errorf("anonymous: %v", err)
 	}
 }

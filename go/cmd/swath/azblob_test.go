@@ -225,6 +225,44 @@ func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 	}
 }
 
+// TestAzblobSASReservedParameter: a SAS naming a parameter swath sends
+// (here comp) is refused at startup by each route a SAS arrives by (the
+// root, --azure-sas-token, AZURE_STORAGE_SAS_TOKEN): exit 2, naming the
+// parameter, no request sent and no SAS on stderr, in the error or in the
+// report. --anonymous ignores the environment's SAS and lists.
+func TestAzblobSASReservedParameter(t *testing.T) {
+	stderr := captureStderr(t)
+	t.Setenv(azblob.EnvSAS, "")
+	t.Setenv(azblob.EnvKey, "")
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	t.Cleanup(srv.Close)
+	const sas = "sv=2026-10-06&sig=SECRET7&Comp=SECRET8"
+	for _, c := range []struct {
+		name, env string
+		args      []string
+	}{
+		{"root", "", []string{"az://acct/ctr?" + sas}},
+		{"flag", "", []string{"az://acct/ctr", "--azure-sas-token", sas}},
+		{"environment", sas, []string{"az://acct/ctr"}},
+	} {
+		t.Setenv(azblob.EnvSAS, c.env)
+		out := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		err := run(context.Background(), append(append(c.args, "--endpoint-url", srv.URL, "--report", report, "-o", out), unjournaled...), io.Discard, diagList)
+		if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "names comp,") || strings.Contains(err.Error(), "SECRET") || requests.Load() != 0 {
+			t.Fatalf("%s: %v, %d requests; want the refusal naming comp, before any request", c.name, err, requests.Load())
+		}
+		noSecret(t, c.name, stderr, out, report)
+	}
+	r := azblobtest.Serve(t, []string{"a"})
+	t.Setenv(azblob.EnvSAS, sas)
+	out := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), append([]string{"az://replay/corpus", "--endpoint-url", azEndpoint(r), "--anonymous", "-o", out}, unjournaled...), io.Discard, diagList); err != nil {
+		t.Fatalf("--anonymous: %v", err)
+	}
+}
+
 // TestAzureSDKLogSuppressed: with AZURE_SDK_GO_LOGGING=all, which makes
 // azcore write its own log (request URLs, a SAS included) to stderr, a run
 // in a fresh process writes no line of it: the command turns it off at
