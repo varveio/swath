@@ -4,7 +4,8 @@
 # Trees: huge (HUGE_FILES files in one directory), realistic (~1M nested), manybig (32 directories x 60,000).
 # Two machines: the whole runner, at the default workers and at 64; and a small one (systemd scope: 1 CPU,
 # 512 MiB, no swap) at the default workers and at 1. find runs beside them as a reference.
-# Env: SWATH_A, SWATH_B, GEN, OUT, ROUNDS (8), SMALL_ROUNDS (3), TREES ("huge realistic manybig").
+# Small-scope runs also log the scope's refaults, reclaim and peak memory (scoped.sh) to small-memory.jsonl.
+# Env: SWATH_A, SWATH_B, GEN, OUT, ROUNDS (8), SMALL_ROUNDS (5), TREES ("huge realistic manybig").
 set -euo pipefail
 : "${SWATH_A:?} ${SWATH_B:?} ${GEN:?} ${OUT:?}"
 mkdir -p "$OUT"
@@ -33,7 +34,8 @@ echo "generated in $(( $(date +%s) - t0 )) s; $(nproc) CPUs, $(free -g | awk '/M
 uname -r >> "$OUT/machine.txt"
 
 DROP='["bash", "-c", "sync && echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null"]'
-SMALL='"sudo", "systemd-run", "--scope", "-q", "--uid", "'$(id -u)'", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0", "-p", "AllowedCPUs=0"'
+SCOPED=$(cd "$(dirname "$0")" && pwd)/scoped.sh
+SMALL='"sudo", "systemd-run", "--scope", "-q", "--uid", "'$(id -u)'", "-p", "MemoryMax=512M", "-p", "MemorySwapMax=0", "-p", "AllowedCPUs=0", "env", "MEMLOG='$OUT'/small-memory.jsonl", "'$SCOPED'"'
 arm() { # name, prefix (JSON argv items or empty), binary, tree, extra args (JSON items or empty)
   printf '{"name": "%s", "argv": [%s"%s", "diag", "count", "%s", "--no-stats"%s]}' "$1" "${2:+$2, }" "$3" "$ROOT/$4" "${5:+, $5}"
 }
@@ -63,7 +65,7 @@ for tree in $TREES; do
     if python3 "$PAIRED" $f.spec $f.json; then summary $f.json | tee -a "$OUT/summary.md"; else echo "FAILED $f"; fail=1; fi
   done
   f=$OUT/small-$tree-cold
-  echo "{\"rounds\": ${SMALL_ROUNDS:-3}, \"warmup\": 0, \"ref\": \"A\", \"drop\": $DROP, \"arms\": [
+  echo "{\"rounds\": ${SMALL_ROUNDS:-5}, \"warmup\": 0, \"ref\": \"A\", \"drop\": $DROP, \"arms\": [
     $(arm B "$SMALL" "$SWATH_B" $tree), $(arm A "$SMALL" "$SWATH_A" $tree),
     $(arm "B w1" "$SMALL" "$SWATH_B" $tree '"--workers", "1"'), $(arm "A w1" "$SMALL" "$SWATH_A" $tree '"--workers", "1"'),
     $(findarm $tree "$SMALL")]}" > $f.spec

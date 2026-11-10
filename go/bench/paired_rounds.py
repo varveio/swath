@@ -18,13 +18,20 @@ import random
 import statistics
 import subprocess
 import sys
+import threading
 import time
 
 
 def run(argv, timeout=1800):
+    # a blocking wait, not subprocess's timeout polling (up to 50 ms late); a timer kills a hung arm
     t = time.perf_counter()
-    rc = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout).returncode
-    return time.perf_counter() - t, rc
+    p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    killer = threading.Timer(timeout, p.kill)
+    killer.start()
+    rc = p.wait()
+    el = time.perf_counter() - t
+    killer.cancel()
+    return el, rc
 
 
 def ci(xs, rng, n=2000):
