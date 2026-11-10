@@ -130,7 +130,7 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 	root, _ := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
-	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "^c/", "--no-stats", "--report", report}, &out, false); err != nil {
+	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "c/**", "--no-stats", "--report", report}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	var r listing.Report
@@ -208,7 +208,7 @@ func TestDuOrigin(t *testing.T) {
 		{[]string{"s3://bkt/logs/2026/", "-d", "1"}, "0:logs/2026/ 4,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
 		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/ 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
 		{[]string{"s3://bkt/logs", "-d", "1"}, "0: 5,1:logs/ 5"},
-		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "^logs/2026/"}, "0:logs/ 4,1:logs/2026/ 4"},
+		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "2026/**"}, "0:logs/ 4,1:logs/2026/ 4"},
 		{[]string{"s3://bkt", "-d", "2"}, "0: 6,1:logs/ 5,2:logs/2026/ 4,2:logs/2027/ 1,1:other/ 1"},
 	} {
 		if got := du(tc.args...); got != tc.want {

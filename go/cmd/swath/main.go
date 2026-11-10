@@ -722,9 +722,23 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	if err := o.term.validate(); err != nil {
 		return o, "", usageError{err}
 	}
+	o.filter.Resolve(time.Now())
+	for i, a := range o.argv {
+		for _, t := range []struct{ flag, v string }{{"--modified-since=", o.filter.Since}, {"--modified-until=", o.filter.Until}} {
+			if strings.HasPrefix(a, t.flag) {
+				o.argv[i] = t.flag + t.v
+			}
+		}
+	}
 	if err := o.filter.Validate(); err != nil {
 		return o, "", usageError{err}
 	}
+	if pf, err := registry.Lookup(root); err == nil && pf.CheckFilter != nil {
+		if err := pf.CheckFilter(o.sources[pf.Scheme], &o.filter); err != nil {
+			return o, "", usageError{err}
+		}
+	}
+	o.filter.Base, _ = keyOrigin(root) // a root it cannot read is refused when the run opens it
 	text, err := resolveOutput(&o, stdoutTerminal())
 	if err != nil {
 		return o, "", usageError{err}
@@ -769,9 +783,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	if err != nil {
 		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})
 	}
-	root = narrowRoot(root, &o.filter)
+	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
-		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom},
+		Source: listing.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
 		Output: listing.OutputConfig{Replace: o.overwrite, Resume: resumed, NoJournal: o.noJournal, Text: o.text},
 		Limits: listing.Limits{Workers: o.workers, Encoders: o.encoders, RowBudget: int64(o.rowBudget), PartSize: int64(o.partSize), PartInterval: o.partInterval, PartMaxRows: o.partMaxRows,
 			Spill: listing.SpillLimits{Off: o.noSpill, Plain: o.spillPlain, Uncompressed: !o.spillCompress, Max: int64(o.spillBudget), Reserve: int64(o.spillReserve)}},
@@ -1042,22 +1056,28 @@ func (s *size) Set(v string) error {
 	return nil
 }
 
-// narrowRoot is an object-store root narrowed to the prefix an anchored
-// --include implies (filter.Spec.NarrowPrefix): the same rows, fewer
-// requests. A resume replays the same command, so it narrows the same way.
-// Only a provider that can name another prefix (registry.Factory.WithPrefix)
-// narrows.
-func narrowRoot(root string, f *filter.Spec) string {
+// narrowRoot is an object-store root narrowed to the prefix the includes
+// imply (filter.Spec.NarrowPrefix), and the narrowing's engagement: the
+// same rows, fewer requests. A resume replays the same command, so it
+// narrows the same way. Only a provider that can name another prefix
+// (registry.Factory.WithPrefix) narrows.
+func narrowRoot(root string, f *filter.Spec) (string, string) {
 	pf, err := registry.Lookup(root)
-	if err != nil || pf.WithPrefix == nil || pf.KeyPrefix == nil {
-		return root
-	}
-	prefix, err := pf.KeyPrefix(root)
 	if err != nil {
-		return root
+		return root, ""
 	}
-	if n := f.NarrowPrefix(prefix); n != prefix {
-		return pf.WithPrefix(root, n)
+	prefix := "" // a local tree's keys are relative to its root
+	if pf.KeyPrefix != nil {
+		if prefix, err = pf.KeyPrefix(root); err != nil {
+			return root, ""
+		}
 	}
-	return root
+	n, why := f.NarrowPrefix(prefix)
+	switch {
+	case why != filter.Narrowed:
+		return root, why
+	case pf.WithPrefix == nil:
+		return root, filter.NarrowUnsupported
+	}
+	return pf.WithPrefix(root, n), why
 }

@@ -21,8 +21,9 @@ import (
 // the reuse.* counters, timings.listing_done_at and resources.drain (the
 // drain tail: read-ahead, segments, encoder admission after listing), and
 // for versions schemas the attempt-scoped version classification and
-// distinct keys, and swath du's per-prefix totals (output.totals).
-const ReportVersion = 3
+// distinct keys, and swath du's per-prefix totals (output.totals). 4:
+// invocation.narrowing (the includes' prefix narrowing).
+const ReportVersion = 4
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: readers accept
@@ -144,9 +145,10 @@ type Build = buildinfo.Build
 // Invocation is what was asked.
 type Invocation struct {
 	Argv           []string `json:"argv"`
-	Source         string   `json:"source"`           // the root as recorded
-	Out            string   `json:"out,omitempty"`    // the dataset directory; empty for a dry run
-	Resume         bool     `json:"resume,omitempty"` // continued an interrupted run
+	Source         string   `json:"source"`              // the root as recorded
+	Narrowing      string   `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
+	Out            string   `json:"out,omitempty"`       // the dataset directory; empty for a dry run
+	Resume         bool     `json:"resume,omitempty"`    // continued an interrupted run
 	SchemaID       string   `json:"schema_id"`
 	Fields         string   `json:"fields,omitempty"` // the metadata tier, for providers with tiers
 	Workers        int      `json:"workers"`

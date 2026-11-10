@@ -91,9 +91,9 @@ func TestVersion(t *testing.T) {
 }
 
 func TestSize(t *testing.T) {
-	// One syntax with the size filters (filter.ParseSize): binary units in
-	// any case, exact decimal quantities.
-	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4 << 20, "4mb": 4 << 20, "4m": 4 << 20, "123": 123, "2GiB": 2 << 30,
+	// One syntax with the size filters (filter.ParseSize): K, M, G, T and
+	// KiB... binary, KB... decimal, in any case, exact decimal quantities.
+	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4e6, "4mb": 4e6, "4m": 4 << 20, "123": 123, "2GiB": 2 << 30,
 		"1.5g": 3 << 29, "0.5KiB": 512, " 64 MiB ": 64 << 20, "1t": 1 << 40} {
 		var s size
 		if err := s.Set(in); err != nil || int64(s) != want {
