@@ -154,7 +154,7 @@ shipped two complete Jackson generations at once. The nightly OSV scan
 (`scripts/ci/osv-scan.sh`) no longer covers these distributions or the Java
 images: no release ships them since v0.3.2, and it scans the Go release images
 instead ([Go testing](../go/docs/testing.md#nightly)). The script can still scan
-a Java distribution's `lib/` directory against the argued, expiring Java
+a Java distribution's `lib/` directory against the argued, expiring
 exceptions in `config/osv/osv-scanner.toml`.
 
 ## 5. Docker images
