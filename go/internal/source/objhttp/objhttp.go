@@ -260,7 +260,8 @@ func (r *Retry) Defaults() {
 // throttles and timeouts (every throttled or timed-out attempt, the last
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
-// during a backoff. The caller's cancellation ends it at once.
+// during a backoff. The caller's cancellation ends it at once. A watch
+// (SetWatch) is told of each failed attempt and whether it is retried.
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
@@ -288,6 +289,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 			c.parseFailures.Add(1)
 		}
 		if !f.Transient || n >= r.MaxAttempts {
+			failed(n, f, false, 0)
 			if f.Transient {
 				return zero, &ExhaustedError{Attempts: n, Err: f}
 			}
@@ -297,6 +299,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
 		wait := rand.N(d) + 1
 		wait = max(wait, f.Wait)
+		failed(n, f, true, wait)
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():

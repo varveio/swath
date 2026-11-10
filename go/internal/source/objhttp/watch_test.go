@@ -1,0 +1,62 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package objhttp
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// TestWatch: the watch sees each round trip through a Guard (method, URL,
+// status) and each failed attempt of Do, retried or the last.
+func TestWatch(t *testing.T) {
+	var n atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	var mu sync.Mutex
+	var seen []Exchange
+	var failures []Failed
+	SetWatch(&Watch{
+		Exchange: func(e Exchange) { mu.Lock(); seen = append(seen, e); mu.Unlock() },
+		Failed:   func(f Failed) { mu.Lock(); failures = append(failures, f); mu.Unlock() },
+	})
+	t.Cleanup(func() { SetWatch(nil) })
+	hc := &http.Client{Transport: &Guard{}}
+	var c Counters
+	r := Retry{BaseBackoff: time.Millisecond}
+	r.Defaults()
+	_, err := Do(context.Background(), r, &c, func() (int, error) {
+		resp, err := hc.Get(srv.URL + "/b?prefix=a")
+		if err != nil {
+			return 0, err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return 0, &Failure{Transient: true, Status: resp.StatusCode, Class: ClassOther, Cause: http.ErrHandlerTimeout}
+		}
+		return resp.StatusCode, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 || seen[0].Status != 503 || seen[1].Status != 200 || seen[0].Method != http.MethodGet || seen[0].URL.Path != "/b" || seen[1].Latency <= 0 {
+		t.Fatalf("exchanges %+v", seen)
+	}
+	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Failure.Status != 503 {
+		t.Fatalf("failures %+v", failures)
+	}
+}

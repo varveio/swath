@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 )
 
 const (
@@ -90,8 +91,24 @@ func WithCapture(ctx context.Context, c *Capture) context.Context {
 	return context.WithValue(ctx, captureKey{}, c)
 }
 
-// RoundTrip implements http.RoundTripper.
+// RoundTrip implements http.RoundTripper. The watch (SetWatch) sees each
+// round trip, its body read included.
 func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
+	w := watching.Load()
+	if w == nil || w.Exchange == nil {
+		return g.roundTrip(req)
+	}
+	t0 := time.Now()
+	resp, err := g.roundTrip(req)
+	e := Exchange{Method: req.Method, URL: req.URL, Err: err, Latency: time.Since(t0)}
+	if resp != nil {
+		e.Status = resp.StatusCode
+	}
+	w.Exchange(e)
+	return resp, err
+}
+
+func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 	c, _ := req.Context().Value(captureKey{}).(*Capture)
 	if c != nil {
 		u := *req.URL
