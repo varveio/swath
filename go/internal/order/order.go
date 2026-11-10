@@ -786,6 +786,7 @@ func (o *run[R, P]) worker() {
 			return
 		}
 		n := o.stack[len(o.stack)-1]
+		o.stack[len(o.stack)-1] = nil // the spare capacity must not keep the node (and its range) alive
 		o.stack = o.stack[:len(o.stack)-1]
 		if n.state != queued { // the drainer took it
 			continue
@@ -1346,6 +1347,7 @@ func (o *run[R, P]) drainTree(root *node[R, P], sink Sink[P]) (Stats, error) {
 			child, err = o.drainNext(f, releaseEvery)
 		case n.state == done:
 			if err = o.closeNode(n); err == nil {
+				o.path[len(o.path)-1] = drainFrame[R, P]{} // the spare capacity must not keep the node alive
 				o.path = o.path[:len(o.path)-1]
 				o.g.nodes.add(-1)
 				if len(o.path) > 0 {

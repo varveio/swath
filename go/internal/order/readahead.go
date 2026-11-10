@@ -170,7 +170,11 @@ func (o *run[R, P]) idle(t time.Time) {
 func (o *run[R, P]) planAhead(reset bool) {
 	ra := o.ra
 	if reset {
+		old := ra.cursor
 		ra.cursor = append(ra.cursor[:0], o.path...)
+		if len(old) > len(ra.cursor) { // frames past the new walk must not keep their nodes alive
+			clear(old[len(ra.cursor):])
+		}
 	} else if len(ra.q) > aheadFrames/2 {
 		return
 	}
@@ -181,6 +185,7 @@ func (o *run[R, P]) planAhead(reset bool) {
 			break
 		}
 		if c.i >= len(c.n.items) {
+			ra.cursor[len(ra.cursor)-1] = drainFrame[R, P]{}
 			ra.cursor = ra.cursor[:len(ra.cursor)-1]
 			continue
 		}
