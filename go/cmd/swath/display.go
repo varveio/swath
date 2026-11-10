@@ -100,7 +100,7 @@ func (t *termOptions) register(f *flag.FlagSet) {
 	f.Var(countFlag{&t.verbose, 3}, "vvv", "short for -v -v -v")
 	f.Var(countFlag{&t.quiet, 1}, "q", "quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)")
 	f.Var(countFlag{&t.quiet, 2}, "qq", "short for -q -q")
-	f.StringVar(&t.color, "color", "auto", "colour the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it)")
+	f.StringVar(&t.color, "color", "auto", "color the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it)")
 }
 
 func (t *termOptions) validate() error {

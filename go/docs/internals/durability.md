@@ -1,6 +1,6 @@
 # Durability and resume
 
-An S3 or GCS run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
+A resumable S3, GCS or Azure Blob run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
 publishes a key twice and never skips one, and the final dataset holds an uninterrupted run's rows: byte-identical
 to it on a static source when no part was cut by time, the same rows with timing-dependent part boundaries when
 `--part-interval` cut one (the promise below). Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
@@ -8,7 +8,7 @@ and the provider. Filesystem runs opt out: they are fast enough to restart.
 
 ## Progress states
 
-A key passes through five states. Only the last two survive a crash. Durable progress always runs ahead of
+A key passes through six states. Certified, durable and published rows can survive a crash. Durable progress always runs ahead of
 the rename into `data/` (a record is synced before its part is renamed), and recovery closes that gap:
 
 | State | Where it lives | After a crash |
@@ -42,7 +42,8 @@ fetched far past K holds rows that exist only in memory, so the resume lists fro
 | manifest installed (`manifest`) | committed; `swath resume` reports `ErrComplete`. The run reports are written after the commit and cannot revoke it |
 
 Every boundary in the left column is a named crash point (`internal/faults`). `TestCrashMatrix` stops the run
-there without cleanup, and `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there, for S3 and GCS. Both then
+there without cleanup for S3 and GCS; `TestSIGKILLAtEveryPoint` has the real process SIGKILL itself there
+for S3, GCS and Azure. Both then
 resume and compare with an uninterrupted run: byte for byte with the part interval off, and row for row (no
 refusal) with it on, where parts are closed by time (a trickling source in `TestCrashMatrix`, a slower bucket
 with a 1 ms interval in `TestSIGKILLAtEveryPoint`).
@@ -239,23 +240,17 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    `data/` that is a link is removed itself, never what it names.
    The journal is synced first (its accepted frames are acted on). Every retained part
    must match its record's size and SHA-256 (`ErrPartAltered` otherwise). A part whose record is durable but whose
-   rename did not happen is renamed now. Every unrecorded file in `data/` is removed, `data/` is synced, the
+   rename did not happen is renamed during recovery. Every unrecorded file in `data/` is removed, `data/` is synced, the
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
-   Verification reads every retained part in full, so it costs O(dataset bytes): measured once (2026-11-06,
-   a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 files of 64 MiB, `TestVerifyThroughput`): 247, 306 and
-   376 MiB/s with the page cache dropped before each of three reps (the host's own cache likely warms), 511
-   MiB/s warm, where MD5 on one core was the limit (the digest was MD5 then). SHA-256 replaced it in journal
-   version 9: on a CPU with the SHA extensions it hashes about twice as fast as MD5 (1,504 against 692 MiB/s
-   on one core, Xeon Platinum 8581C, 2026-11-08), so the cold rates above stay disk-bound; without them it is
-   slower than MD5. At the default part size, 10,000 retained parts (640 GB) take roughly 30 to 45 minutes. The read stops when the run is stopped (a signal, `--max-duration`) and
+   Verification reads every retained part in full and checks SHA-256, so it costs O(dataset bytes).
+   Throughput depends on disk/cache behavior and CPU SHA support; measurements belong in
+   [measurements.md](../measurements.md). The read stops when the run is stopped (a signal, `--max-duration`) and
    before recovery renames or removes anything, and its bytes count as progress (`progress.json`
    `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
    (`TestRecoveryVerificationIsCancellableAndReported`).
-4. Has the source restart after K, the last recorded part's max key (`source.Resumable.Restart`), from its
-   normal start-up. S3 and GCS tile `(K, ⊤]` as a fresh run tiles the scope: with the seed (the default) from
-   delimiter listings of every folder above K, keeping only cuts above K, else as one range `(K, ⊤]` that
-   splits ([range-engine.md](range-engine.md), "A resumed scope"). If K is not a
-   bound the provider accepts, the first tile starts at K's longest accepted prefix and drops keys up to K.
+4. Calls `source.Resumable.Restart(K)`, where K is the last recorded part's max key. The
+   [range engine owns restart](range-engine.md#resume) for all object stores; the provider keeps no second
+   resume state.
 5. Continues the router at the next ordinal with the recorded limit, so size cuts fall exactly where the
    uninterrupted run would have put them (a cut by `--part-interval` depends on timing in either run).
 
@@ -372,7 +367,7 @@ yields a part there, the resume refuses with `ErrAmbiguousTail` and keeps the pa
 A resume on a machine of the other encoder path (amd64 with AVX2 against any other) can refuse the same way on
 an unchanged source, when the part has dictionary pages the two paths encode differently
 ([parquet-output.md](parquet-output.md#byte-identity)); resuming on a machine of the original path reproduces it.
-The operator decides: `--overwrite` starts over, and removing `.swath/suspect/` accepts the source as it is now.
+The operator decides: `--overwrite` starts over, and removing `.swath/suspect/` accepts the current source.
 Everything else is corruption (`ErrCorrupt`), and the resume refuses before deleting or renaming
 anything: a bad checksum with data after it; a whole last frame with a bad checksum whose last byte is not
 zero, `}` or any other (an acknowledged record damaged since, its closing byte included: its part may be
@@ -392,9 +387,9 @@ tail as JSON lines.
   `ENOSPC`, or the bytes written and the sync failing with `EIO`): the run fails with that error and no
   manifest, the published parts stay, and a resume completes the uninterrupted run's dataset
   (`TestDiskFaultMatrix`, through the `faults.SetIO` seam); a full disk exits 74, class `disk_full`, resumable
-  (`TestDiskFullExits74`). The kernel's behaviour after a failed fsync
-  (pages it may drop or mark clean) is not modelled.
-- **Power loss or a kernel crash.** Recovery holds when the filesystem honours `fsync` on files and
+  (`TestDiskFullExits74`). The kernel's behavior after a failed fsync
+  (pages it may drop or mark clean) is not modeled.
+- **Power loss or a kernel crash.** Recovery holds when the filesystem honors `fsync` on files and
   directories (ext4, XFS and APFS do). Before a journal record names a part:
   - the part file is synced, and so is its claimed name in `.swath/parts/`;
   - `data/` and `.swath/` were created with their entries in the output directory synced;
@@ -402,7 +397,7 @@ tail as JSON lines.
   - a rename is followed by a sync of `data/`;
   - recovery syncs the journal before renaming on its strength, and `data/` before removing temporary parts.
 
-  Nothing tests this: SIGKILL cannot show power-loss behaviour.
+  Nothing tests this: SIGKILL cannot show power-loss behavior.
 - **Refused on Windows:** the output lock is enforced (`LockFileEx`, exclusive and failing at once, with the
   same identity checks as on Unix), but directories cannot be synced (`dataset.DirSyncEnforced` is false;
   `syncDir` is a no-op there). A process crash loses nothing; after a power loss NTFS replays its metadata

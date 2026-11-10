@@ -16,6 +16,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/objhttp/faulttest"
 )
 
@@ -38,7 +39,7 @@ func (c *counting) List(ctx context.Context, in *client.ListInput) (*client.List
 func replayClient(t *testing.T, endpoint, account string) *client.Client {
 	t.Helper()
 	c, err := client.New(context.Background(), client.Config{Endpoint: endpoint, Account: account, Anonymous: true, Workers: 1,
-		BaseBackoff: time.Millisecond, MaxBackoff: 4 * time.Millisecond})
+		Retry: objhttp.Retry{BaseBackoff: time.Millisecond, MaxBackoff: 4 * time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -151,7 +151,7 @@ func TestStartFromSent(t *testing.T) {
 	if cp.last().URL.Query().Has("startFrom") {
 		t.Error("the SDK's hierarchy pager sends StartFrom now: pin need not")
 	}
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SharedKey: testKey, MaxAttempts: 1})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SharedKey: testKey, Retry: objhttp.Retry{MaxAttempts: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +265,11 @@ func TestSDKDecoding(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, c.body) }))
 			defer srv.Close()
-			cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+			cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 			var got result
 			p, err := cl.List(context.Background(), &ListInput{Container: "c", Delimiter: c.delimiter})
 			if err != nil {
-				got.class = Classify(err)
+				got.class = objhttp.Classify(err)
 			} else {
 				for _, it := range p.Items {
 					got.names = append(got.names, it.Name)
@@ -277,7 +277,7 @@ func TestSDKDecoding(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("%+v (%v), want %+v", got, err, c.want)
-			} else if c.want.class == objhttp.ClassOther && !errors.Is(err, ErrInvalidPage) {
+			} else if c.want.class == objhttp.ClassOther && !errors.Is(err, objhttp.ErrInvalidPage) {
 				t.Fatalf("%v does not wrap ErrInvalidPage", err)
 			} else if c.want.class == objhttp.ClassParse && !errors.Is(err, objhttp.ErrSyntax) {
 				t.Errorf("%v does not wrap ErrSyntax", err)
@@ -314,7 +314,7 @@ func TestAccountInfoExact(t *testing.T) {
 				w.Header().Set("x-ms-is-hns-enabled", c.header)
 			}
 		}))
-		cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
+		cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
 		hns, err := cl.AccountInfo(context.Background(), "c")
 		got := answer{hns: hns, unknown: errors.Is(err, ErrHNSUnknown)}
 		if err != nil && !got.unknown {
@@ -334,9 +334,9 @@ func TestAccountInfoExact(t *testing.T) {
 		azureError(w, 403, codeAuthorization)
 	}))
 	defer srv.Close()
-	cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, MaxAttempts: 1})
-	if hns, err := cl.AccountInfo(context.Background(), "denied"); hns || Classify(err) != objhttp.ClassAccessDenied {
-		t.Errorf("denied: hns %v, class %q (%v)", hns, Classify(err), err)
+	cl := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 1}})
+	if hns, err := cl.AccountInfo(context.Background(), "denied"); hns || objhttp.Classify(err) != objhttp.ClassAccessDenied {
+		t.Errorf("denied: hns %v, class %q (%v)", hns, objhttp.Classify(err), err)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestRoute(t *testing.T) {
 		"https://h.example:8443/a%2Fb":       "https://h.example:8443/a/b/acct/cont",
 	} {
 		for _, sas := range []string{"", testSAS} {
-			cfg := Config{Endpoint: ep, Account: "acct", SAS: sas, Anonymous: sas == "", MaxAttempts: 1, HTTPClient: &http.Client{Transport: toFake{u}}}
+			cfg := Config{Endpoint: ep, Account: "acct", SAS: sas, Anonymous: sas == "", Retry: objhttp.Retry{MaxAttempts: 1}, HTTPClient: &http.Client{Transport: toFake{u}}}
 			sdk := newTestClient(t, cfg)
 			route := sdk.Route("cont")
 			if route != want {
@@ -447,7 +447,7 @@ func TestBearer(t *testing.T) {
 		}
 		fmt.Fprint(w, page(""))
 	})
-	c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 3}, withEntra(fakeToken{tok: "tok"}))
+	c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Retry: objhttp.Retry{MaxAttempts: 3}}, withEntra(fakeToken{tok: "tok"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,16 +459,16 @@ func TestBearer(t *testing.T) {
 	}
 	n := len(cp.reqs)
 	_, err = c.List(context.Background(), &ListInput{Container: "challenge"})
-	if Classify(err) != objhttp.ClassAuth || len(cp.reqs) != n+1 {
-		t.Fatalf("challenge: %v (class %q), %d requests", err, Classify(err), len(cp.reqs)-n)
+	if objhttp.Classify(err) != objhttp.ClassAuth || len(cp.reqs) != n+1 {
+		t.Fatalf("challenge: %v (class %q), %d requests", err, objhttp.Classify(err), len(cp.reqs)-n)
 	}
-	bad, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, withEntra(fakeToken{err: errors.New("refused")}))
+	bad, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Retry: objhttp.Retry{MaxAttempts: 1}}, withEntra(fakeToken{err: errors.New("refused")}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	n = len(cp.reqs)
 	_, err = bad.List(context.Background(), &ListInput{Container: "c"})
-	if _, ok := errors.AsType[*CredentialError](err); !ok || len(cp.reqs) != n || bad.Counters().Attempts != 0 {
+	if _, ok := errors.AsType[*objhttp.CredentialError](err); !ok || len(cp.reqs) != n || bad.Counters().Attempts != 0 {
 		t.Fatalf("token failure: %v, %d requests, %d attempts", err, len(cp.reqs)-n, bad.Counters().Attempts)
 	}
 }
@@ -483,15 +483,14 @@ func TestRedactedRefusal(t *testing.T) {
 		fmt.Fprint(w, page("", "a"))
 	}))
 	t.Cleanup(srv.Close)
-	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, MaxAttempts: 3,
-		BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Container: "c"})
-	ex, ok := errors.AsType[*ExhaustedError](err)
-	if !ok || ex.Attempts != 3 || Classify(err) != objhttp.ClassParse || c.Counters().ParseFailures != 3 {
-		t.Fatalf("%v: class %q, parse failures %d", err, Classify(err), c.Counters().ParseFailures)
+	ex, ok := errors.AsType[*objhttp.ExhaustedError](err)
+	if !ok || ex.Attempts != 3 || objhttp.Classify(err) != objhttp.ClassParse || c.Counters().ParseFailures != 3 {
+		t.Fatalf("%v: class %q, parse failures %d", err, objhttp.Classify(err), c.Counters().ParseFailures)
 	}
 	if sasLeak(err.Error()) != "" || !strings.Contains(err.Error(), "REDACTED") {
 		t.Fatalf("not redacted: %v", err)
@@ -530,7 +529,7 @@ func TestConcurrentClient(t *testing.T) {
 	}))
 	t.Cleanup(proxy.Close)
 	sdk, err := New(context.Background(), Config{Endpoint: proxy.URL, Account: replayAccount, Anonymous: true, Workers: 32,
-		BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond})
+		Retry: objhttp.Retry{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,4 +590,15 @@ func withHost(req *http.Request, target *url.URL) *http.Request {
 	out.RequestURI = ""
 	out.URL.Scheme, out.URL.Host, out.Host = target.Scheme, target.Host, target.Host
 	return out
+}
+
+func TestEndpointRefusal(t *testing.T) {
+	for _, ep := range []string{"http://%zz/", "http://host/%zz", "ftp://host/", "host/path", "http:///path"} {
+		t.Run(ep, func(t *testing.T) {
+			c, err := New(t.Context(), Config{Endpoint: ep, Account: "acct", Anonymous: true})
+			if c != nil || err == nil || !strings.Contains(err.Error(), "endpoint") {
+				t.Fatalf("client %v, error %v", c, err)
+			}
+		})
+	}
 }

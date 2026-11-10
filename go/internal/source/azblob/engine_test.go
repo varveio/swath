@@ -172,7 +172,9 @@ func TestFetchDropsCoveredPrefixes(t *testing.T) {
 	keys := []string{"f05/a", "f06/a", "f06/x/y", "f07/a", "f08/a", "f/a", "f/b", "f\U00010000/a"}
 	st := azblobtest.NewStore(keys)
 	p := azureEngine(t, st, keyrange.Options{Workers: 1})
-	ctx := context.WithValue(context.Background(), adapterKey{}, p.adapter())
+	a := p.adapter()
+	defer a.Release()
+	ctx := context.WithValue(context.Background(), adapterKey{}, a)
 	for _, c := range []struct {
 		after string
 		want  []string

@@ -374,7 +374,7 @@ func TestVersionsPageRows(t *testing.T) {
 func TestVersionsPageInvalid(t *testing.T) {
 	out := &client.VersionPage{IsTruncated: true, NextVersionIDMarker: "v",
 		Versions: []client.Version{{Object: client.Object{Key: "k"}, VersionID: "v"}}}
-	if _, err := versionsPage(out, false); !errors.Is(err, client.ErrInvalidPage) {
+	if _, err := versionsPage(out, false); !errors.Is(err, objhttp.ErrInvalidPage) {
 		t.Fatal(err)
 	}
 }
@@ -400,7 +400,7 @@ func TestVersionsRejectMissingVersionMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
-	if !errors.Is(err, client.ErrInvalidPage) {
+	if !errors.Is(err, objhttp.ErrInvalidPage) {
 		t.Fatalf("missing version marker accepted: rows=%d err=%v; the older versions of k are skipped", st.Rows, err)
 	}
 }
@@ -501,7 +501,7 @@ func TestVersionsFakeClientRefusals(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "s3:ListBucketVersions") {
 				t.Fatalf("403: %v", err)
 			}
-		} else if !errors.Is(err, client.ErrInvalidPage) {
+		} else if !errors.Is(err, objhttp.ErrInvalidPage) {
 			t.Fatal(err)
 		}
 		if f.calls != 1 {
@@ -531,5 +531,14 @@ func TestVersionsPermissionPolicy(t *testing.T) {
 				t.Errorf("%v: permission hint %v, want %v", wrapped, got, c.want)
 			}
 		}
+	}
+}
+
+func TestVersionsConstructorRefusals(t *testing.T) {
+	if _, err := New(context.Background(), Options{Bucket: "b", AllVersions: true}); err == nil || err.Error() != "s3: Options.AllVersions lists versions: use NewVersions" {
+		t.Fatalf("wrong constructor: %v", err)
+	}
+	if _, err := NewVersions(context.Background(), Options{Bucket: "b", Client: &recorder{}}); err == nil || !strings.Contains(err.Error(), "cannot list versions") {
+		t.Fatalf("client without VersionsAPI: %v", err)
 	}
 }

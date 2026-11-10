@@ -34,13 +34,13 @@ var Schema = schema.Bind(reader.GCSObjectsV1, schema.Schema[Object]{
 	Columns: []schema.Column[Object]{
 		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},
-		{Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
 		{Int: func(o *Object) (int64, bool) { return o.Generation, o.Generation != 0 }},
 		{Int: func(o *Object) (int64, bool) { return o.Metageneration, o.Metageneration != 0 }},
-		{Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
-		{Str: nonEmpty(func(o *Object) string { return o.MD5 })},
-		{Str: nonEmpty(func(o *Object) string { return o.CRC32C })},
-		{Str: nonEmpty(func(o *Object) string { return o.ContentType })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.StorageClass })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.MD5 })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.CRC32C })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.ContentType })},
 		// time_created is an optional column of the schema id, placed
 		// last: parts written before the lister recorded it lack it, so a
 		// reader may read it where present but not require it
@@ -54,13 +54,6 @@ var Schema = schema.Bind(reader.GCSObjectsV1, schema.Schema[Object]{
 
 func objectHeap(o *Object) int64 {
 	return int64(len(o.ETag) + len(o.StorageClass) + len(o.MD5) + len(o.CRC32C) + len(o.ContentType))
-}
-
-func nonEmpty(get func(*Object) string) func(*Object) (string, bool) {
-	return func(o *Object) (string, bool) {
-		v := get(o)
-		return v, v != ""
-	}
 }
 
 // objectCodec is the spill encoding of an Object (private to one run).

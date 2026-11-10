@@ -5,23 +5,22 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
-- Go port: the flags every object store has are one shared group, the same for S3, GCS and Azure Blob:
-  `--endpoint`, `--request-timeout` (default 30s) and `--anonymous`. `--gcs-endpoint`, `--azblob-endpoint`,
-  `--gcs-request-timeout` and `--azblob-request-timeout` are removed; a resume of a run that recorded one is
-  refused naming the flag. A provider declares its operational flags and help entries on its
-  `registry.Factory`, and the command derives its flag lists, help and redaction from the registered factories.
-- Go port: an object-store provider's registered source embeds `keyrange.Registered` (its `Listed` and the
-  optional interfaces `Live`, `Advancing`, `Requested`, `SeedTimed`, `Faulted`, `Contended`, `Resumable`,
-  `Seeded`, `Reusing`, `Fencing`), set to the provider, in place of eleven forwarding methods in each
-  `register.go`; each asserts its whole interface set, and a test opens every provider through the registry
-  and checks them. The providers' `Restart` returns an error, and their client activity (`Faults`,
-  `Requests`, `Answered`) is one `objhttp.Activity`. No behavior changes.
-- Go port: `go/reader` declares each versions schema's column roles once, in its spec (`SchemaSpec.Versions`,
-  `VersionSpec{ID, Latest, DeleteMarker, DeletedAt}`): `swath/s3-versions/v1` names `version_id`, `is_latest` and
-  `is_delete_marker`, `swath/gcs-generations/v1` names `generation` and `time_deleted`, and the current-object
-  schemas none. The lister's text output, version counts and per-prefix totals read version rows through these
-  roles instead of by column name. Columns, schema ids, dataset metadata, text output and the report's fields are
-  unchanged.
+- Go port: S3, GCS and Azure Blob share `--endpoint`, `--request-timeout` (default 30 s)
+  and `--anonymous`. The provider-prefixed endpoint and timeout flags are removed; resume
+  refuses a recorded removed flag by name. Help derives shared groups and provider flags from
+  registration, placing shared groups first and providers by scheme within each section (#338).
+- Go port: contributors add a provider's runtime integration in its directory plus one blank
+  command import, composing shared flags, range-engine interfaces and client activity. Reader
+  schemas, verifier support and conformance tests still need explicit integration; the
+  [provider checklist](go/docs/internals/providers.md#adding-a-provider) lists the steps (#338).
+- Go port: the reader exposes version-column roles as `VersionSpec` on `SchemaSpec.Versions`.
+  Text output, version counts and prefix totals use those declarations; typed decoders still
+  read named columns. Schema ids, columns, dataset metadata and report fields are unchanged (#338).
+- Go port: the provider audit consolidates retry accounting, token waits, response capture,
+  transport pools and payload delta encoding, and gives restart state to the range engine.
+  Azure binds its producer schema to the reader specification. Shared conformance tests check
+  client and provider integration. Listing behavior, diagnostics and persisted bytes are unchanged;
+  provider-specific credentials, endpoint rules and retry signals remain explicit.
 - Go port: `go/reader` reads a filesystem's entries typed: `Dataset.StreamLocal` hands on every `LocalEntry`
   (every column, nulls kept), `List` and `Page` return an entry's `Entry.Local` (a directory's prefix `d/` paired
   with its own row), and `Stream` refuses a local dataset. `Totals` and `Aggregates` total local entries of every

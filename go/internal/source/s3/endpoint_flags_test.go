@@ -4,13 +4,18 @@
 package s3
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"flag"
+	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
@@ -57,5 +62,56 @@ func TestEndpointURLDefaultsPathStyle(t *testing.T) {
 	}
 	if path.Load() != "/bkt" || host.Load() != srv[len("http://"):] {
 		t.Fatalf("request to %v%v", host.Load(), path.Load())
+	}
+}
+
+func TestPathStyleFlag(t *testing.T) {
+	for _, c := range []struct {
+		args            []string
+		value, set, bad bool
+	}{
+		{nil, false, false, false},
+		{[]string{"--path-style"}, true, true, false},
+		{[]string{"--path-style=false"}, false, true, false},
+		{[]string{"--path-style=true", "--path-style=false"}, false, true, false},
+		{[]string{"--path-style=false", "--path-style"}, true, true, false},
+		{[]string{"--path-style=invalid"}, false, false, true},
+		{[]string{"--path-style", "--path-style=invalid"}, true, true, true},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		opt := factory(t).RegisterFlags(fs, false).(*flagged)
+		err := fs.Parse(c.args)
+		if (err != nil) != c.bad || opt.PathStyle != c.value || opt.pathStyleSet != c.set {
+			t.Errorf("%q: value=%v set=%v err=%v", c.args, opt.PathStyle, opt.pathStyleSet, err)
+		}
+		var help bytes.Buffer
+		fs.SetOutput(&help)
+		fs.PrintDefaults()
+		if !strings.Contains(help.String(), "  -path-style\n    \tS3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)\n") {
+			t.Fatalf("path-style help changed: %s", help.String())
+		}
+	}
+}
+
+func TestBearerFlagConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--bearer-token-refresh-interval=1m"}, "--bearer-token-refresh-interval requires --bearer-token-command"},
+		{[]string{"--bearer-token-command=unused", "--profile=work"}, "--bearer-token-command excludes --anonymous and --profile"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			f := flag.NewFlagSet("t", flag.ContinueOnError)
+			opt := factory(t).RegisterFlags(f, false)
+			if err := f.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			opened, err := open(t.Context(), registry.Request{Root: "s3://bkt", Options: opt, Workers: 1})
+			if opened != nil || !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("opened %v, error %v", opened, err)
+			}
+		})
 	}
 }

@@ -1,5 +1,10 @@
 # Filesystem (`internal/source/localfs`)
 
+A local or mounted directory supports dataset output and direct `du` summaries. A local
+`list` requires `-o DIR`; local scans do not resume. Mounted shares use the operating system's
+filesystem API. [Object-store request controls](../../operating.md#object-store-requests) do not
+apply to this provider; metadata and platform limits are described below.
+
 A range is a directory. Its entries are sorted by key, where a directory's key is `prefix/name/` and anything
 else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a directory's DIR row followed
 by its subtree, before the next sibling, is global order. A directory with more than 4096 entries is split into
@@ -10,7 +15,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
   that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
   directory (every stat column and `birth_time`; `os.DirEntry.Info` is an `lstat` of the full path, which
-  resolves the path again per entry and was slower), on Windows the directory enumeration's own size, times and attributes
+  resolves the path again per entry), on Windows the directory enumeration's own size, times and attributes
   (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`), elsewhere `Lstat`.
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
@@ -42,7 +47,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
-  is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and stat checks as before.
+  is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
 - Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
   its exact bytes, like any other. Mount points are crossed unless `--one-filesystem` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the

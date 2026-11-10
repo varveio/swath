@@ -498,7 +498,13 @@ Over the 74 arms in both runs the after/before ratio's geometric mean is 0.59; t
 `wide_top.d200` at 1.08x (box noise at its size; its requests per 1k keys are unchanged). `--slow-split` on
 `hotcold.half`, `jitter.baseline`, `zipf_folders.d200` and `baseline.d200` moved none by more than 1 %. On
 2M-key lists the first data page costs nothing measurable (`baseline.d200` 9.3 to 8.5 s, requests per 1k
-unchanged). (Before the megascenes fix the truncated first page was emitted and the first tile started after it; it is now discarded.)
+unchanged). In the rejected implementation, a truncated first page was emitted and the first tile
+started after it. On the 12.6M-key megascenes list this left a serial tail: wall time rose from
+12 s to 20 s and mean active workers fell from 57 to 35, with the same requests and splits.
+The retained implementation discarded that page and started the tiles at the scope's start.
+The flat-leaf arms spent 4–6 delimiter waves finding no cut before flat chains stopped being
+followed. In the earlier Java seed measurement, a serial 256-probe descent spent 13.5 s of a
+39 s run on its chain. These are dated observations, not current performance bounds.
 
 ## Split admission on small lists
 
@@ -916,7 +922,7 @@ output to `/dev/null`):
 
 The names tier is the fastest lister measured; the stat tier ties the fastest Rust disk-usage tools and spends
 less kernel time than every full-path stat tool. The disk-usage tools only sum sizes; the walker builds a full
-row per entry. Not established: cold-cache behaviour of these tools, hard-link de-duplication, network or
+row per entry. Not established: cold-cache behavior of these tools, hard-link de-duplication, network or
 overlay filesystems.
 
 ### Against fd at equal output, huge directories, cold count (2026-11-08)

@@ -16,6 +16,7 @@ import (
 	"github.com/varveio/swath/go/internal/schema"
 	"github.com/varveio/swath/go/internal/source/gcs/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // TestGenerationSchema: the generations schema is gcs-objects/v1's columns
@@ -216,7 +217,7 @@ func TestGenerationsRejectDescendingPageSeam(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
-	if !errors.Is(err, client.ErrInvalidPage) {
+	if !errors.Is(err, objhttp.ErrInvalidPage) {
 		t.Fatalf("descending generation seam accepted: rows=%d err=%v", st.Rows, err)
 	}
 }
@@ -255,7 +256,7 @@ func TestGenerationsSeamsAndEmptyPages(t *testing.T) {
 				}
 				st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
 				if generation <= 2 {
-					if !errors.Is(err, client.ErrInvalidPage) {
+					if !errors.Is(err, objhttp.ErrInvalidPage) {
 						t.Fatalf("rows=%d err=%v", st.Rows, err)
 					}
 				} else if err != nil || st.Rows != 2 || st.DistinctKeys != 1 {
@@ -298,8 +299,11 @@ func TestFetchGenerationsResumeStart(t *testing.T) {
 				}
 				return &client.Page{Items: []client.Object{{Name: "b", Generation: 3}}}, nil
 			})
-			p, err := NewGenerations(context.Background(), Options{Bucket: "b", Workers: 1, Client: api, Resume: &Resume{After: name}, Policy: keyrange.Policy{PageSize: 1}})
+			p, err := NewGenerations(context.Background(), Options{Bucket: "b", Workers: 1, Client: api, Policy: keyrange.Policy{PageSize: 1}})
 			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Restart(name); err != nil {
 				t.Fatal(err)
 			}
 			st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true, After: &name})
@@ -327,8 +331,53 @@ func TestFetchGenerationsWithinPageOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.fetchGenerations(context.Background(), &keyrange.Query{}); !errors.Is(err, client.ErrInvalidPage) {
+		if _, err := p.fetchGenerations(context.Background(), &keyrange.Query{}); !errors.Is(err, objhttp.ErrInvalidPage) {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestGenerationsConstructorRefusal(t *testing.T) {
+	if _, err := New(context.Background(), Options{Bucket: "b", AllVersions: true}); err == nil || err.Error() != "gcs: Options.AllVersions lists generations: use NewGenerations" {
+		t.Fatalf("wrong constructor: %v", err)
+	}
+}
+
+// Both modes omit an unrepresentable exclusive end once per query, including
+// continuations; only generations move a representable start past its key.
+func TestListInputBounds(t *testing.T) {
+	p, err := New(context.Background(), Options{Bucket: "b", Client: generationAPI(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("x", 1024)
+	var omitted int64
+	for _, versions := range []bool{false, true} {
+		for _, c := range []struct {
+			after, through, token string
+			bounded               bool
+			start, end            string
+		}{
+			{"a", "z", "", true, "a", "z\x00"},
+			{"a", long, "", true, "a", ""},
+			{"a", long, "next", true, "a", ""},
+			{long, "", "", false, long, ""},
+		} {
+			q := &keyrange.Query{Prefix: "p/", Delimiter: "/", After: c.after, Through: c.through, Token: c.token, Bounded: c.bounded, Max: 7}
+			in := p.input(q, versions)
+			start := c.start
+			if versions && len(start) < 1024 {
+				start += "\x00"
+			}
+			if in.Bucket != "b" || in.Prefix != q.Prefix || in.Delimiter != q.Delimiter || in.MaxResults != q.Max || in.PageToken != q.Token || in.Versions != versions || in.StartOffset != start || in.EndOffset != c.end {
+				t.Fatalf("versions=%v query=%+v input=%+v", versions, q, in)
+			}
+			if c.bounded && c.end == "" {
+				omitted++
+			}
+			if got := p.Stats().Counters.Value("end_offset_omitted"); got != omitted {
+				t.Fatalf("omitted=%d want=%d", got, omitted)
+			}
 		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/client"
 )
 
@@ -38,7 +39,7 @@ func TestRejectUnchangedMarkersOnKeyAdvance(t *testing.T) {
 				t.Fatal(err)
 			}
 			st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
-			if !errors.Is(err, client.ErrInvalidPage) || api.calls != 2 {
+			if !errors.Is(err, objhttp.ErrInvalidPage) || api.calls != 2 {
 				t.Fatalf("calls=%d rows=%d error=%v; want invalid page at second request", api.calls, st.Rows, err)
 			}
 		})

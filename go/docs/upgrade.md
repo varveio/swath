@@ -1,8 +1,7 @@
 # Upgrading to the Go tool's datasets
 
 The Java tool writes swath's format 1; this tool writes a swath dataset, a
-[SeekParquet](https://github.com/varveio/seekparquet) dataset (format 1 draft revision 1, stamped `format_version`
-0 and `draft_revision` 1) defined by the swath dataset profile in [dataset.md](dataset.md). This guide is the
+[SeekParquet](https://github.com/varveio/seekparquet) dataset (`format_version` 0, `draft_revision` 1) defined by the swath dataset profile in [dataset.md](dataset.md). This guide is the
 migration from one to the other, for two audiences:
 
 - **A user of the Java tool** moving to this one: what a format 1 dataset becomes ([Files](#files) through
@@ -235,9 +234,11 @@ the list below is the earlier history of the unreleased builds.
 - Anonymity is explicit: requests go unauthenticated only with `--anonymous`, one flag for S3, GCS and Azure
   Blob (`--gcs-anonymous` and `--azblob-anonymous` are gone; a resume that recorded either is refused as an
   unknown flag). A source with no usable credentials, an empty AWS chain, no Application Default Credentials,
-  or an Entra ID chain that finds none, now stops the run with cause `auth` before any listing request,
-  where it listed a public bucket unauthenticated: give `--anonymous` for a public bucket or container (it
-  may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
+  or an Entra ID chain that finds none, stops the run before listing. Credential failures normally
+  have cause `auth`; failed Entra acquisition during Azure namespace admission can instead yield
+  `refused`, cause `unsupported` (exit 2), without `--azblob-flat`
+  ([credentials](operating.md#credentials)). Give `--anonymous` for a public bucket or container
+  (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
   with "(a public bucket needs --anonymous)".
 - An endpoint URL with user information (`http://user:password@host/`, through `--endpoint`, then
@@ -411,8 +412,8 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage and the source: kind, container and URI),
   `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
   (every part's SHA-256 against its bytes).
-- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates either mode and can compare the complete rows
-  against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
+- **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
+  and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
   schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
   test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool

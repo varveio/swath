@@ -5,8 +5,7 @@ Every option, output mode, exit code, report field class and documented guarante
 [docs/metrics-and-observability.md](../../docs/metrics-and-observability.md)) against this tool
 ([cli.md](cli.md), [upgrade.md](upgrade.md)). Dates are owner decisions.
 
-Legend (the Decision column's "ported 2026-11-06" rows were restored by one lane; "not ported, 2026-11-06" gives the
-reason a Java feature stays out): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
+Legend (the Decision column records implementation dates and reasons for omitting Java features): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
 **removed** (with the recorded decision and its date, or "no decision recorded"), **deferred** (a recorded
 decision to add it later).
 
@@ -23,7 +22,7 @@ decision to add it later).
 | `--fetch-owner` | `--fetch-owner` | kept | – |
 | `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Credential-chain failure fails the run | a chain that gives no credentials (empty, or configured and broken) stops the run with cause `auth` before any listing request; requests go unsigned only with `--anonymous` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
+| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](operating.md#credentials) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
@@ -31,7 +30,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include` (Go RE2, found anywhere; `^literal` also narrows the listed prefix); `coverage.filters` records each filter | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--include REGEX` | `--include` (Go RE2, found anywhere; `^literal` also narrows the listed prefix on S3 and GCS; Azure filters rows without prefix narrowing); `coverage.filters` records each filter | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--exclude REGEX` | `--exclude` (Go RE2) | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--min-size SIZE` | `--min-size` (Java's units) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
@@ -118,8 +117,8 @@ decision to add it later).
 |---|---|---|---|
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
-| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on): ×0.7 at most once per round trip while 15 % or more of the last 4 × workers answers (at least 256) are throttles, +1/s while under 7.5 % are or after 10 s without one; `--limiter=false` removes the limit (the workers' page requests, with the seed's listings and the structure probes beside them) | changed | 2026-11-07: Java's rule held the limit at its floor under 1 % random throttles ([providers/s3.md](internals/providers/s3.md)) |
-| Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` (moved to `swath diag` 2026-11-07: off by default and unmeasured, an experiment): the limit starts at 4 and doubles each second up to `--workers` until the first cut or timeout; feature `slow_start` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `51ec3a7`) |
+| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on) adapts concurrency to sustained throttling and recovery; `--limiter=false` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
+| Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
@@ -146,7 +145,7 @@ decision to add it later).
 | Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `engine_flags` | `resources.features` | renamed | – |
 | Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [upgrade.md](upgrade.md)) | renamed | no Java names, 2026-11-05 |
-| Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
+| Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint and for Azure Blob), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
 | Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
 | Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 
@@ -168,7 +167,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--help`, `help` | `--help`, `help`, and `--help` on every command (grouped flags with when to change them) | kept | – |
+| `--help`, `help` | `--help`, `help`, and `--help` on every command (shared groups first, then provider hints by scheme within each section; limits and performance flags say when to change them) | kept | – |
 | `--version` (five lines) | `--version` (tool, version, revision) | kept | – |
 | `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |

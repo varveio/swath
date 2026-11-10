@@ -5,13 +5,6 @@ package client
 
 import "github.com/varveio/swath/go/internal/source/objhttp"
 
-// ErrInvalidPage marks a page that parsed but breaks the listing contract
-// (out of order, truncated without a token); the range engine wraps it.
-var ErrInvalidPage = objhttp.ErrInvalidPage
-
-// Classify returns the stored report label (or normalizes a construction error).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
-
 // Failure preserves reason-sensitive throttling, including a 403.
 func (e *Error) Failure() objhttp.Failure {
 	f := objhttp.Failure{Status: e.Status, Code: e.Reason}

@@ -24,9 +24,6 @@ func hostileKeys() []string {
 	return keys
 }
 
-// HostileKeys is hostileKeys for the external tests (wire_test.go).
-var HostileKeys = hostileKeys
-
 type lister interface {
 	List(ctx context.Context, in *ListInput) (*ListOutput, error)
 }

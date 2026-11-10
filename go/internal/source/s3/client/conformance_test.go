@@ -200,7 +200,7 @@ func TestCrossEnvelopeIsParseFailure(t *testing.T) {
 	c := newTest(t, cfg)
 	_, lerr := c.ListObjectsV2(context.Background(), &ListInput{Bucket: "b"})
 	_, verr := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
-	if Classify(lerr) != objhttp.ClassParse || Classify(verr) != objhttp.ClassParse || c.Counters().ParseFailures != 4 {
+	if objhttp.Classify(lerr) != objhttp.ClassParse || objhttp.Classify(verr) != objhttp.ClassParse || c.Counters().ParseFailures != 4 {
 		t.Fatalf("list %v, versions %v, %+v", lerr, verr, c.Counters())
 	}
 }

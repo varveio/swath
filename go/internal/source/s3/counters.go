@@ -11,7 +11,7 @@ import (
 
 // clientCounters follow the range engine's in the S3 tally (the client's
 // Counts.Store fills them).
-var clientCounters = objhttp.CounterDefs("429/503/SlowDown", "-request-timeout")
+var clientCounters = objhttp.CounterDefs("429/503/SlowDown")
 
 // Counters is the S3 provider's tally, in report order: the range engine's
 // counters, then the client's. The run report (source.stats.counters) and

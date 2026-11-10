@@ -1,11 +1,26 @@
 # GCS (`internal/source/gcs`)
 
+## Support and differences
+
+`gs://bucket[/prefix]` uses the native JSON API for current objects, or live and noncurrent
+generations with `--all-versions`. Soft-deleted objects are outside its listing scope.
+[Shared object-store controls](../../operating.md#object-store-requests) cover authentication,
+request timeout, retries and admission.
+
+An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a
+reference Class A request-cost estimate; custom endpoints have none. GCS does not honor
+`Retry-After`. `--anonymous` overrides ambient and explicit credentials silently: it prints no
+ignored-credentials note. Endpoint validation rejects user information and URI-template braces
+in the path, but does not reject queries or fragments.
+
+## Provider implementation
+
 **Client** (`internal/source/gcs/client`). Google's generated JSON API client
 (`google.golang.org/api/storage/v1`) sends one `objects.list` GET per attempt: `ENDPOINT/b/BUCKET/o` with
 `projection=noAcl`, `prefix`, `delimiter`, `startOffset`, `endOffset`, `pageToken`, `maxResults` and
 `userProject` when set (`TestRequests`; the rest of the query is the generated client's). **Endpoint**
 (the shared `--endpoint`, default `https://storage.googleapis.com/storage/v1/`): an `http` or `https` URL with a host,
-no user information (a password would be recorded; `TestEndpointUserinfoRefused`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
+no user information (a password would be recorded; `source` `TestRegisteredEndpointRefusals`) and no URI-template brace (`{`, `}`, `%7B`, `%7D`) in its path, which the generated client would expand as a
 template (an empty expression panics, a named one is dropped). `client.Endpoint` normalizes it once, for the
 client and the resume identity alike: a literal `/` is added when the escaped path does not end in one, and
 escapes are kept, so `…/tenant%2F` is the base `…/tenant%2F/`. The generated client then resolves `b/BUCKET/o`
@@ -33,23 +48,22 @@ the first reason and the message; a 400 names its query. The User-Agent is swath
 (`swath-go/<version>`) followed by the generated client's. `TestAnswers` drives each scripted answer through
 the client: class, retry decision, attempts and counters, the answer, every body closed once, no redirect
 followed. Credentials: `--anonymous` (shared with S3 and Azure Blob) sends none, and is the only way a request goes
-unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials FILE` reads a service-account or
-authorized-user JSON; otherwise Application Default Credentials, found by the client library's own search
+unauthenticated (`TestAnonymousPrecedence`); `--gcs-credentials FILE` loads Google credential JSON through the pinned OAuth library; otherwise Application Default Credentials, found by the client library's own search
 (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud). Credentials that
-cannot be found or do not load refuse the run before any listing request (`client.CredentialError`, class
-`auth`), never anonymity. The token source lives as long as the client: it is built on a context that is
-never cancelled, whose HTTP client bounds each token exchange by `--request-timeout`, and each attempt
-waits for its token under its own deadline, all waiters sharing one outstanding token call (one goroutine at a
-time: `tokensource.Shared`, the coalescer S3's bearer tokens use, `TestTokenWaitersCoalesce`); a token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429,
-transport failure or timeout is
-retried like a listing failure (counted in `timeouts` for the last), a refused grant stops the request
-(`TestAuthorizedUserADC`, `TestSlowRefreshBounded`, `TestRefusedGrant`, `TestADCConfiguredButBroken`, against a
-local token endpoint; the last injects a failed ADC search, so its refusal holds on a Google Cloud host too;
-`TestComputeTokenFromSearch` serves the compute token from a fake metadata server). The token is fetched before the attempt is counted and set
-as the request's `Authorization` header (the generated client is built without authentication), so a credential
-failure is a `CredentialError` and not an attempt. The scope is `devstorage.read_only`. The client is Google's
+cannot be found or do not load refuse the run before any listing request (`objhttp.CredentialError`, class
+`auth`), never anonymity. The token source lives as long as the client, built on a context that is never
+canceled. Each attempt bounds its own wait through [the shared token waiter](../clients.md#token-waits).
+Exchanges that use the supplied OAuth HTTP client have `--request-timeout`; metadata refresh uses the
+metadata SDK's HTTP timeout and retries, with no total refresh deadline. Ending a waiter does not cancel
+that refresh. A token endpoint's or the metadata server's (`metadata.Error`) 5xx, 408, 429, transport failure
+or timeout is retried; a refused grant stops the request (`TestAuthorizedUserADC`, `TestSlowRefreshBounded`,
+`TestRefusedGrant`, `TestADCConfiguredButBroken`). `TestConcurrentBearerRequests` checks concurrent client
+wiring; coalescing mechanics are tested in `source/tokensource`. The token is fetched before the attempt is
+counted and set as `Authorization`. The supplied HTTP client bypasses the generated client's authentication
+construction, so swath owns bearer injection; a credential failure is an `objhttp.CredentialError` and not
+an attempt. The scope is `devstorage.read_only`. The client is Google's
 generated `google.golang.org/api/storage/v1` client, with `golang.org/x/oauth2` credentials ([clients.md](../clients.md));
-`TestClientPagesMatchGoogleClient` compares the client's pages, through
+`gcs` `TestClientPagesMatchGoogleClient` compares the client's pages, through
 the production fields selector too, with the generated client's own full responses. Retries: 429, 408, 5xx and transport errors, up to 9 attempts with exponential backoff
 (100 ms to 5 s); exhaustion is requeued by the engine, as for S3. *Failures* are normalized once into `objhttp.Failure` with transient/throttle/timeout signals,
 HTTP status, the first reason, and a safe cause. A 403 with `rateLimitExceeded` or
@@ -58,10 +72,10 @@ outage or timeout remains transient, independently of report labels. Diagnostics
 `access_denied`, `throttle`, `timeout`, `parse` and `unsupported`
 ([Run report](../../cli.md#run-report)); other errors keep status/reason without a separate label.
 A 200 outside the objects.list envelope is a retried parse failure, never an empty final page
-(`TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `client.ErrInvalidPage`;
+(`listing` `TestGCSInvalidEnvelopeNeverCommits`). A parsed invalid page preserves `objhttp.ErrInvalidPage`;
 the engine wraps it as a protocol violation (`cause` `protocol`, unresumable). Redirects are never
 followed, including with a supplied HTTP client, so they cannot change the resume source
-(`TestGCSRedirectCannotChangeResumeSource`).
+(`listing` `TestGCSRedirectCannotChangeResumeSource`).
 
 **On the range engine.** Object names list in unsigned UTF-8 byte order and `startOffset` takes any name,
 so `Description.Listing` is `keyrange.Listing`. `startOffset` is inclusive (`StartInclusive`); `endOffset`
@@ -102,16 +116,24 @@ a name, and pages are native, continued by the API's `pageToken`. The payload `g
 `TimeDeleted`; its schema `swath/gcs-generations/v1` is the `gcs-objects/v1` columns in the same order (the same
 accessors; `generation` an exact INT64) and then `time_deleted`, null for the live generation (there is no
 `is_latest`: a name may have no live generation, and the highest generation is not taken to be live), with
-`Info.Groups` set and the spec's version roles (`generation` the ID, read in decimal; `time_deleted` the
-deleted-at, so latest is null, by presence); its delta spill codec codes integers as wrapping differences and repeated strings as flags.
+`Info.Groups` set. Its [version roles](../parquet-output.md#version-roles) declare `generation` as ID and
+`time_deleted` as deleted-at. Its spill codec uses the [shared payload delta encoding](../ordering.md#payload-delta-codec).
 `gcs.ExclusiveStart(name)` is the start that lists strictly after a name, `name + NUL` (checked live: it lists
 none of the name's generations); for a 1,024-byte name, whose successor `AcceptBound` refuses, the provider
 sends `startOffset = name` and declares it (`Description.InclusiveStart`), and the engine's inclusive drop
 removes all of the name's rows, across pages. A page whose generations of one name do not ascend is invalid.
 
-**Connections.** The built client spreads its requests round-robin over a pool of transports (`objhttp.Pool`,
-one generated service on each), one per 16 workers (1 to 8), sharing one TLS session cache: Go's HTTP/2 transport opens a second
-connection only at the server's stream limit (about 100), so a single transport would carry all 64 workers on
-one connection, which caps throughput once the engine keeps many requests in flight
-(`TestTransportPoolSpreadsConnections`). A supplied `Config.HTTPClient` is used alone (a pool of 1). There is
-no flag; the pool follows `--workers`.
+**Connections.** The built client rotates one generated service per [pooled transport](../clients.md#pool-construction).
+`TestServicePool` checks service count and supplied-client wiring; `TestServicePoolRoundRobin` observes
+actual requests through each service. Transport construction and HTTP/2 connection spread are tested in
+`source/objhttp`.
+
+**Overload signals** (`client.Error.Failure`):
+
+| Answer | Shared limiter input |
+|---|---|
+| 429, `rateLimitExceeded` or `userRateLimitExceeded` (including a 403) | Throttle |
+| 408 or an attempt deadline | Timeout; holds growth, does not cut |
+| Another 5xx, including a plain 503 | Transient; no throttle signal |
+
+[Request admission](../clients.md#request-admission) describes the shared controller and its tuning limits.

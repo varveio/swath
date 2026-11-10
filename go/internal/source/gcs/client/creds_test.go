@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/oauth2"
-
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -119,7 +117,7 @@ func TestAuthorizedUserADC(t *testing.T) {
 	adc(t, authorizedUser(tok.URL))
 	ls := newListServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	c, err := New(ctx, Config{Endpoint: ls.URL + "/storage/v1/", MaxAttempts: 1})
+	c, err := New(ctx, Config{Endpoint: ls.URL + "/storage/v1/", Retry: objhttp.Retry{MaxAttempts: 1}})
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +150,7 @@ func TestCredentialsFileLifetime(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 	ls := newListServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	c, err := New(ctx, Config{Endpoint: ls.URL + "/storage/v1/", CredentialsFile: f, MaxAttempts: 1})
+	c, err := New(ctx, Config{Endpoint: ls.URL + "/storage/v1/", CredentialsFile: f, Retry: objhttp.Retry{MaxAttempts: 1}})
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +178,7 @@ func TestSlowRefreshBounded(t *testing.T) {
 	adc(t, authorizedUser(tok.URL))
 	ls := newListServer(t)
 	c, err := New(context.Background(), Config{Endpoint: ls.URL + "/storage/v1/", RequestTimeout: 150 * time.Millisecond,
-		MaxAttempts: 2, BaseBackoff: time.Millisecond})
+		Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,13 +187,13 @@ func TestSlowRefreshBounded(t *testing.T) {
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("List took %s with a 150 ms request timeout", d)
 	}
-	var ex *ExhaustedError
-	var ce *CredentialError
+	var ex *objhttp.ExhaustedError
+	var ce *objhttp.CredentialError
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
-		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout, not a stop", Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
+		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout, not a stop", objhttp.Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 || n.InflightMax != 0 {
 		t.Fatalf("counters %+v, want two timeouts (one retried) and no HTTP attempt", n)
@@ -212,18 +210,18 @@ func TestRefusedGrant(t *testing.T) {
 	tok.status = 400
 	adc(t, authorizedUser(tok.URL))
 	ls := newListServer(t)
-	c, err := New(context.Background(), Config{Endpoint: ls.URL + "/storage/v1/", BaseBackoff: time.Millisecond})
+	c, err := New(context.Background(), Config{Endpoint: ls.URL + "/storage/v1/", Retry: objhttp.Retry{BaseBackoff: time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Bucket: "b"})
-	var ce *CredentialError
-	var ex *ExhaustedError
+	var ce *objhttp.CredentialError
+	var ex *objhttp.ExhaustedError
 	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) {
 		t.Fatalf("err %v, want a non-transient credential error", err)
 	}
-	if Classify(err) != objhttp.ClassAuth {
-		t.Fatalf("class %q, want auth", Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("class %q, want auth", objhttp.Classify(err))
 	}
 	if n := tok.refreshes.Load(); n != 1 || len(ls.seen()) != 0 {
 		t.Fatalf("%d refreshes, %d listing requests; want 1 and 0", n, len(ls.seen()))
@@ -241,7 +239,7 @@ func TestADCConfiguredButBroken(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, f := range map[string]string{"missing file": filepath.Join(t.TempDir(), "absent.json"), "malformed file": malformed} {
-		var ce *CredentialError
+		var ce *objhttp.CredentialError
 		if _, err := New(context.Background(), Config{CredentialsFile: f}); !errors.As(err, &ce) {
 			t.Fatalf("%s: err %v, want a credential error", name, err)
 		}
@@ -249,52 +247,40 @@ func TestADCConfiguredButBroken(t *testing.T) {
 	// The search is injected, so the outcome does not depend on the host
 	// running the test.
 	_, err := newClient(context.Background(), Config{}, found{err: errors.New("google: could not find default credentials")}, objhttp.Pool(0, nil, nil))
-	var ce *CredentialError
+	var ce *objhttp.CredentialError
 	if !errors.As(err, &ce) || ce.Transient {
 		t.Fatalf("nothing found: err %v, want a credential error (auth)", err)
 	}
 }
 
-// slowTokens takes 200 ms per token and records the calls and the most
-// concurrent ones.
-type slowTokens struct{ calls, now, most atomic.Int64 }
-
-func (s *slowTokens) Token() (*oauth2.Token, error) {
-	s.calls.Add(1)
-	n := s.now.Add(1)
-	defer s.now.Add(-1)
-	for m := s.most.Load(); n > m && !s.most.CompareAndSwap(m, n); m = s.most.Load() {
-	}
-	time.Sleep(200 * time.Millisecond)
-	return &oauth2.Token{AccessToken: "t", Expiry: time.Now().Add(-time.Second)}, nil // expired: every wait asks again
-}
-
-// TestTokenWaitersCoalesce: attempts that give up waiting for a slow token
-// source leave no goroutine behind each; all waiters share one outstanding
-// call, so the source is never called concurrently.
-func TestTokenWaitersCoalesce(t *testing.T) {
-	ts := &slowTokens{}
-	c, err := withTokens(Config{Endpoint: "http://127.0.0.1:1/storage/v1/"}, ts)
+// TestConcurrentBearerRequests checks the client's token-source wiring and
+// bearer injection. Shared's waiter and refresh mechanics live in tokensource.
+func TestConcurrentBearerRequests(t *testing.T) {
+	tok := newTokenServer(t, 3600)
+	tok.delay = 10 * time.Millisecond
+	file := adc(t, authorizedUser(tok.URL))
+	listings := newListServer(t)
+	c, err := New(context.Background(), Config{Endpoint: listings.URL + "/storage/v1/", CredentialsFile: file})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	start := time.Now()
-	for range 40 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 10 {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-				_, _ = c.token(ctx)
-				cancel()
+	for range 4 {
+		wg.Go(func() {
+			if _, err := c.List(context.Background(), &ListInput{Bucket: "b"}); err != nil {
+				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
-	elapsed := time.Since(start)
-	if ts.most.Load() != 1 || ts.calls.Load() > int64(elapsed/(200*time.Millisecond))+2 {
-		t.Fatalf("400 waits over %s: %d token calls, at most %d at once", elapsed, ts.calls.Load(), ts.most.Load())
+	if got := listings.seen(); len(got) != 4 || tok.refreshes.Load() != 1 {
+		t.Fatalf("headers %q after %d refreshes", got, tok.refreshes.Load())
+	} else {
+		for _, auth := range got {
+			if auth != "Bearer tok-1" {
+				t.Errorf("Authorization %q", auth)
+			}
+		}
 	}
 }
 

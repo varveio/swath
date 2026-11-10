@@ -1,6 +1,6 @@
 # Replay server internals
 
-How `cmd/swath-replay` is put together, and what holds it to the Java server's wire behaviour. The user's view
+How `cmd/swath-replay` is put together, and what holds it to the Java server's wire behavior. The user's view
 is [../replay.md](../replay.md); [replay-java.md](replay-java.md) lists every difference from the Java server
 and why.
 
@@ -18,7 +18,7 @@ and why.
 | `internal/replay/latency` | profiles, jitter, scale, and the provider-neutral request classification | javanum |
 | `internal/replay/metrics` | the meter registry (definitions, tagged instances, the maximum and percentile windows) and the schema-2 JSON | – |
 | `internal/replay/store` | the serving seam: `Store`, `Object`, `Projection`, `Open`; the sorted store over a SeekParquet dataset with unique keys (through `github.com/varveio/seekparquet/go`, `seek.go`, which opens it lazily and then calls `Dataset.Verify`, so a long-lived replay fails at startup on any bad part rather than on its first touch; repeated keys are refused, `ErrRepeatedKeys`, until the versions routes) or an older fixture (through `legacy`) | legacy, seekparquet |
-| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts) and `legacytest` (writes them for tests); formerly the public `go/sortedparquet` | – |
+| `internal/replay/legacy` | the reader of the fixtures before SeekParquet: its core, `javaera` (the Java tool's stamped parts) and `legacytest` (writes them for tests) | – |
 | `internal/replay/store/memstore` | an in-memory `Store` and the TSV fixture format | store |
 | `bench/replaydiff` | the differential driver (a `main` package, never linked into the server) | s3, store, memstore, server (tests) |
 | `internal/replay/evidence` | the provider evidence replay (tests only) | server, sortfixture, store |
@@ -130,7 +130,7 @@ Three conversions decide bytes on the wire, and each was measured against the Ja
   (an absent token, a default `max-keys`) is the Unicode separators except the no-break spaces plus the ASCII
   and information-separator controls.
 
-The XML is written byte by byte rather than marshalled: `encoding/xml` escapes `"` as `&#34;`, TAB, LF and CR as
+The XML is written byte by byte rather than marshaled: `encoding/xml` escapes `"` as `&#34;`, TAB, LF and CR as
 character references and other control bytes as U+FFFD, and the element order, `&apos;`, ETag quoting as
 `&quot;`, millisecond `LastModified` rounded toward the earlier millisecond with the year of era (`+10000`,
 `0001` for year 0, `TestLastModifiedYears`) are fixed by the wire contract (`TestRenderListGolden` is a page the
@@ -217,9 +217,7 @@ registers at startup are created when the server starts, so a scrape tells a zer
   `Registry.clock` replaces the clock in tests (`TestWindowsFollowTheJavaRegistry`, `TestWindowRotationRules`).
   The histograms are this package's log-linear ones (exact below 32 ns, then 32 buckets per power of two), not
   HdrHistogram's one-digit precision: a percentile is the upper bound of the bucket holding the nearest-rank
-  sample, so the two servers agree on which samples a percentile covers, not on its digits. A bounded reservoir
-  of recent samples was the first design; it covers a sample count, which at a few thousand requests a second is
-  under a second. `Def.NoPercentiles` renders `null` percentiles for the one-off timers the Java server builds
+  sample, so the two servers agree on which samples a percentile covers, not on its digits. `Def.NoPercentiles` renders `null` percentiles for the one-off timers the Java server builds
   without them.
 - **Function counters and gauges** (`SetCounter`, `SetGauge`) read a count another package keeps at each
   snapshot: the store's reader-slot counters and the descriptor cache's `FileCacheStats`.
@@ -331,21 +329,21 @@ every walk compared byte for byte (`sorted_differential_test.go`, the contract's
 |---|---|
 | request parsing and its errors | `s3` `TestParseRequest`, `TestParseRequestErrors`, `TestParseHTTPRoutesByFirstSegment` |
 | query and text decoding | `s3` `TestQueryTextMatchesTable`, `TestDecodeTextMatchesTable`, `TestIsBlank`, `TestParseInt32`; `javanum` `TestDigitTable`, `TestParseInt`, `TestParseDouble`, `TestSaturate` |
-| pager rules | `s3` `TestListsByPrefixAndExclusiveStartAfter`, `TestTruncatesAndResumesFromToken`, `TestMaxKeysZeroIsEmptyAndNotTruncated`, `TestRollsUpAndResumesPastARolledUpPrefix`, `TestStartAfterFiltersCommonPrefixes`, `TestBadTokenIsRejectedEvenWithAStartAfter`, `TestTokenTakesPrecedenceOverStartAfter`, `TestBlankTokenLeavesStartAfterAsTheBoundary`, `TestShortRunScansLongRunSeeksSameOutput`, `TestPrefixResumeIsInclusiveAtSuccessor`, `TestAllFFPrefixEndsTheListing` |
+| pager rules | `s3` `TestListsByPrefixAndExclusiveStartAfter`, `TestTruncatesAndResumesFromToken`, `TestMaxKeysZeroIsEmptyAndNotTruncated`, `TestRollsUpAndResumesPastARolledUpPrefix`, `TestStartAfterFiltersCommonPrefixes`, `TestBadTokenIsRejectedEvenWithAStartAfter`, `TestTokenTakesPrecedenceOverStartAfter`, `TestBlankTokenIsRefusedEvenWithAStartAfter`, `TestShortRunScansLongRunSeeksSameOutput`, `TestPrefixResumeIsInclusiveAtSuccessor`, `TestAllFFPrefixEndsTheListing` |
 | rollup equals walk | `s3` `TestRollupMatchesWalk`; `replaydiff` `TestDriverFindsNoDifferenceBetweenRollupAndWalk`, `TestTokenCasesSkipWithoutAToken` |
 | the 0xFF carry | `s3` `TestPrefixUpperAndSuccessor`, `TestPrefixRangeLaw` |
-| tokens | `s3` `TestTokenGolden`, `TestTokenRoundTripsAndLegacyV1`, `TestBlankTokenIsAbsent`, `TestMalformedTokensAreRejected`, `TestTokenProperties`, `TestHasTokenAgreesWithDecode` |
+| tokens | `s3` `TestTokenGolden`, `TestTokenRoundTripsAndRefusesUncheckedForms`, `TestBlankTokenIsRefused`, `TestMalformedTokensAreRejected`, `TestTokenProperties` |
 | response memory | `output` (the contract's sink tests by name), `s3` `TestOneKeyAndEmptyPagesUseSmallFirstChunks`, `TestRenderStopsAtTheCap`; `server` `TestSparseResponsesReturnTheirReservation`, `TestBudgetRefusesAnOverlappingPage`, `TestOversizedResponseStopsAtTheCap`, `TestSlowReadersReachTheResponseCeiling` |
 | the S3 view of a GCS recording | `store` `TestGCSETag`, `TestGCSRecordingS3View` (window cache, bare reader, arena overflow, rollup), `TestPackerDerivedETagsStopAtTheArenaLimit`; `server` `TestLiveGCSXMLAPIContents` (the XML API's probed `Contents`), `TestGCSRecordingOnTheS3Route` |
 | the Azure view of a GCS recording | `store` `TestGCSRecordingAzureView` (window cache, bare reader, arena overflow, rollup, the projection dropped by other schemas); `server` `TestGCSRecordingOnTheAzureRoute` (against the native captures' `Properties` order) |
 | the S3 view of a local recording | `store` `TestLocalRecordingS3View` (window cache, bare reader, arena overflow, rollup); `server` `TestLocalRecordingOnTheS3Route`; `s3` `TestRowFastPathMatchesUnits` |
-| the window cache | `store` `TestWindowCacheMatchesTheFixture` (every conformance fixture through a small cache against the bare reader: walks, probes, joins, evictions, reads past a window, concurrent walkers), `TestWindowCacheHitsTakeNoReaderSlot`, `TestWindowCacheReadsAhead`; `sortedparquet` `TestScanMatchesRead`; `server` `TestMeterSetMatchesTheContract` (`prefetch.*`) |
-| XML | `s3` `TestRowFastPathMatchesUnits` (whole elements appended where they fit against unit-by-unit rendering: bytes, refusal, chunks, percent-encoding counts), `TestTimestampCacheMatchesFreshFormatting`, `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestPercentEncodeMatchesS3` |
+| the window cache | `store` `TestWindowCacheMatchesTheFixture` (every conformance fixture through a small cache against the bare reader: walks, probes, joins, evictions, reads past a window, concurrent walkers), `TestWindowCacheHitsTakeNoReaderSlot`, `TestWindowCacheReadsAhead`; `legacy` `TestScanMatchesRead`; `server` `TestMeterSetMatchesTheContract` (`prefetch.*`) |
+| XML | `s3` `TestRowFastPathMatchesUnits` (whole elements appended where they fit against unit-by-unit rendering: bytes, refusal, chunks, percent-encoding counts), `TestTimestampCacheMatchesFreshFormatting`, `TestRenderListGolden`, `TestRenderListElementsAndOrder`, `TestRenderAdversarialUnencodedValues`, `TestRenderSurrogateBytesUnencoded`, `TestLastModifiedYears`, `TestRenderNullSizeAndTimeAsZeroAndEpoch`, `TestPercentEncodesEveryUnsafeByte`, `TestTokenSuppressesTheIgnoredStartAfter`, `TestRenderError`, `TestLiveURLEncodingTable` |
 | latency | `latency` `TestClassify`, `TestDelayByShapeAndPerCommonPrefix`, `TestScaleDividesEveryTerm`, `TestParseRejects`, `TestJitterIsDeterministicAndBounded`, `TestNumberGrammar`, `TestHugeDelaysSaturate`; `s3` `TestLatencyKeyGolden`; `server` `TestContinuationPagesDrawDistinctJitter`, `TestCountsNoOverrunWhenInjectionIsOff` |
 | serving | `server` `TestServesPathStyleListObjectsV2`, `TestErrorsAreS3Answers`, `TestStoreFailureCarriesNoDetail`, `TestEchoesMaxKeysButClampsThePage`, `TestConcurrentRequests`, `TestRequestCeilingQueues`, `TestInjectedDelayIsADeadline`, `TestShutdownInterruptsALongDelay`, `TestUninterruptibleReadDefersStoreClose`, `TestShutdownBoundsABlockingStoreClose`, `TestShutdownIsIdempotentAndSurfacesCloseFailureOnce`, `TestRejectsAmbiguousTargets`, `TestDisorderedFixtureNamesOnlyThePart`, `TestDisorderedPartOverHTTP` |
 | sorted serving | `server` `sorted_differential_test.go` (eleven cases of the contract's `SortedServingFullDifferentialTest`) |
 | metrics port | `server` `TestMetricsPort`, `TestAttestation`; `metrics` `TestSnapshotIsStableAndTyped` |
-| meters | `server` `TestMeterSetMatchesTheContract` (names, types and tags after a three-route mix against `testdata/meters.txt`, the Java scrape's set; the bench scripts' `http.requests` extraction), `TestStoreMetersFollowTheReads`, `TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`, `TestClientGoneFinishesThePage`, `TestDisorderedPartOverHTTP` (`serving.refused`); `metrics` `TestWindowsFollowTheJavaRegistry`, `TestWindowRotationRules`, `TestHistogramBuckets`, `TestCounterFunc`; `sortedparquet` `TestFileCacheBoundsHandles` and `TestCacheWaitEndsWithContextAndClose` (evictions, waits) |
+| meters | `server` `TestMeterSetMatchesTheContract` (names, types and tags after a three-route mix against `testdata/meters.txt`, the Java scrape's set; the bench scripts' `http.requests` extraction), `TestStoreMetersFollowTheReads`, `TestRequestMeterSpans`, `TestAzureErrorHasNoWriteStage`, `TestClientGoneFinishesThePage`, `TestDisorderedPartOverHTTP` (`serving.refused`); `metrics` `TestWindowsFollowTheJavaRegistry`, `TestWindowRotationRules`, `TestHistogramBuckets`, `TestCounterFunc`; `legacy` `TestFileCacheBoundsHandles` and `TestCacheWaitEndsWithContextAndClose` (evictions, waits) |
 | diagnostics | `server` `TestSlowRequestLogLine`; `javanum` `TestFormatDouble` |
 | resource bounds under load (`SWATH_REPLAY_LOAD=1`) | `server` `TestLoadRequestCeilingUnderFaultProxy`, `TestLoadReadersBoundPageDecodes`, `TestLoadNoOverrunAtSixtyFourWalks`; `cmd/swath-replay` `TestServeWithinADescriptorLimit` (default suite) |
 | the command | `cmd/swath-replay` `TestFlagSpellings`, `TestConfigRefusals`, `TestParseTimeout`, `TestServeEndToEnd` (startup line keys, a listing, SIGTERM exit 143), `TestSigtermWithActiveWorkIsBoundedAndIdempotent`, `TestSortFixtureThenServe` (a Java-era capture sorted by the command and listed through the S3 route), `TestSortFixtureRefusals` (stderr line and exit codes) |

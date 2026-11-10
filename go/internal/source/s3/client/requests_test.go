@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
@@ -48,7 +49,7 @@ func TestUserAgent(t *testing.T) {
 	s3test.NoCredentials(t)
 	rec := &recorder{fail: 1}
 	c, err := New(context.Background(), Config{Region: "us-east-1", Anonymous: true,
-		HTTPClient: &http.Client{Transport: rec}, MaxAttempts: 2})
+		HTTPClient: &http.Client{Transport: rec}, Retry: objhttp.Retry{MaxAttempts: 2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,5 +168,16 @@ func TestCustomEndpointIgnoresEndpointFlags(t *testing.T) {
 		if err != nil || len(pg.Contents) != 2 {
 			t.Fatalf("%+v: %v %+v", flags, err, pg)
 		}
+	}
+}
+
+func TestEndpointRefusal(t *testing.T) {
+	for _, ep := range []string{"http://%zz/", "http://host/%zz", "ftp://host/", "host/path", "http:///path"} {
+		t.Run(ep, func(t *testing.T) {
+			c, err := New(t.Context(), Config{Endpoint: ep, Anonymous: true})
+			if c != nil || err == nil || !strings.Contains(err.Error(), "endpoint") {
+				t.Fatalf("client %v, error %v", c, err)
+			}
+		})
 	}
 }

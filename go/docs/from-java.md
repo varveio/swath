@@ -38,11 +38,9 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 - **The dataset.** `manifest.json` installed last is the commit (not `_SUCCESS`). Schemas are source-
   and mode-specific: current objects, local entries, S3 versions and GCS generations have different
   fields ([dataset.md](dataset.md)). Java's reader does not read this format ([upgrade.md](upgrade.md)).
-- **The request limiter.** Java cuts the limit by 0.7 on every throttle answer and grows it only after 10 s
-  without one. Here a cut happens at most once per round trip, and only while 15 % or more of the recent
-  answers (the last 4 × `--workers`, at least 256) are throttles. The limit grows by one per second while under
-  7.5 % are. A small random background of throttles no longer pins the limit near 1. Java's slow start is a
-  diagnostic flag (`swath diag list --limiter-slow-start`).
+- **The request limiter.** Java cuts concurrency on every throttle; Go uses a recent-answer window and
+  at most one cut per round trip. S3, GCS and Azure Blob share the controller, with provider-specific throttle
+  signals. See [request controls and tuning](operating.md#throttling).
 - **The seed.** Before ranges list, delimiter requests tile the bucket at its folders, in parallel waves, and
   the first wave also fetches the first data page, so a one-page bucket lists in one round trip. The seed is on
   by default. `--seed-from PATH` starts from a previous dataset instead.
@@ -57,7 +55,9 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 The flags kept, renamed and removed are in [cli-inventory.md](cli-inventory.md). The most common ones:
 `--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` is
 `--endpoint`, `--parquet-part-size` is `--part-size` (64 MiB by default, Java's was 256 MB), and
-`--format parquet --sort -o DIR` is simply `-o DIR`.
+`--format parquet --sort -o DIR` is simply `-o DIR`. Object stores share `--anonymous`,
+`--endpoint` and `--request-timeout`; provider-specific credentials and limits are described in the
+[operating reference](operating.md#object-store-requests).
 
 ## The run report
 
@@ -66,7 +66,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 | Java | This tool |
 |---|---|
-| `schema_version` | `report_version` (2) |
+| `schema_version` | `report_version` (3) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.object_bytes` (object sizes); the dataset's own size is `output.output_bytes` |

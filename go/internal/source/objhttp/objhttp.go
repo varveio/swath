@@ -3,8 +3,9 @@
 
 // Package objhttp is the HTTP support the object-store listing clients
 // share: the retry loop (attempts, full-jitter backoff, exhaustion), the
-// failure classes and transport classification, the client counters and
-// route canonicalization. What a service's answers mean (status codes,
+// failure vocabulary and transport classification, retry policy and meters,
+// token waits, response guards and captures, transport pools and route
+// canonicalization. What a service's answers mean (status codes,
 // error codes and reasons), its payload parsing and its authentication stay
 // in each client.
 package objhttp
@@ -209,6 +210,15 @@ func Classify(err error) Class {
 	return ""
 }
 
+// Label returns the diagnostic label for the run report, or "" when
+// the error has no provider label.
+func Label(err error) string {
+	if c := Classify(err); c != ClassOther {
+		return string(c)
+	}
+	return ""
+}
+
 // Requeue reads the exhausted attempt's stored decision. A diagnostic
 // label (or a raw error merely wrapped as exhausted) cannot authorize it.
 func Requeue(err error) bool {
@@ -341,8 +351,9 @@ type Counts struct {
 	Retries   int64 `json:"retries"`   // attempts repeated after a retryable failure
 	Throttles int64 `json:"throttles"` // attempts answered with a throttle, retried or not
 	Timeouts  int64 `json:"timeouts"`  // attempts past the per-request timeout, retried or not
-	// ParseFailures counts 200 responses whose body did not parse (a cut or
-	// garbled body); they are retried like transport faults, never dropped.
+	// ParseFailures counts 200 responses refused as ErrSyntax. They are
+	// retried, never dropped. A failed body read is classified separately
+	// from a malformed document delivered to the parser.
 	ParseFailures int64 `json:"parse_failures"`
 	// InflightMax is the most attempts in flight at once (admitted, from
 	// send to body read); InflightNs sums their time in flight, so
@@ -467,19 +478,9 @@ func (c *Counters) Attempt() (done func()) {
 // part of Counts.
 func (c *Counters) Answered() int64 { return c.answered.Load() }
 
-// Live is a client's request account now, for the progress sampler and
-// the end-of-run summary: atomics only, nothing on the request path.
-type Live struct {
-	Attempts, Retries, Throttles int64
-	Timeouts                     int64 // as Counts
-	Inflight                     int64 // attempts in flight now
-	InflightMax, InflightNs      int64 // as Counts
-	Limit                        int   // the limiter's current limit (0 without one)
-}
-
 // Live reads the counters (Limit is the client's to fill).
-func (c *Counters) Live() Live {
-	return Live{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Timeouts: c.timeouts.Load(), Inflight: c.inflight.Load(),
+func (c *Counters) Live() source.Requests {
+	return source.Requests{Attempts: c.attempts.Load(), Retries: c.retries.Load(), Throttles: c.throttles.Load(), Timeouts: c.timeouts.Load(), Inflight: c.inflight.Load(),
 		InflightMax: c.inflightMax.Load(), InflightNs: c.inflightNs.Load()}
 }
 
@@ -532,18 +533,18 @@ const (
 )
 
 // CounterDefs are the client counters' definitions, by ClientCounter, after
-// the engine's in a provider's tally (Store fills them); throttles and
-// timeouts name the provider's own answers and flag. The limiter's carry
+// the engine's in a provider's tally (Store fills them); throttles names
+// the provider's own throttle answers. The limiter's carry
 // the feature "limiter", its slow start's "slow_start" (on only with both),
 // the rate cap's "request_rate". Names follow the engine's: a dotted group,
 // a snake_case leaf, high-water marks prefixed max_, durations suffixed _ns.
-func CounterDefs(throttles, timeoutFlag string) []counters.Def {
+func CounterDefs(throttles string) []counters.Def {
 	const f = FeatureLimiter
 	d := make([]counters.Def, NumCounters)
 	d[CAttempts] = counters.Def{Key: "attempts", Kind: counters.Count, Unit: "requests", Help: "HTTP requests sent: every attempt, client retries and engine requeues included (the request economics)"}
 	d[CRetries] = counters.Def{Key: "retries", Kind: counters.Count, Unit: "requests", Help: "attempts repeated after a retryable failure"}
 	d[CThrottles] = counters.Def{Key: "throttles", Kind: counters.Count, Unit: "requests", Help: "attempts answered " + throttles + ", retried or not (the last of an exhausted call included)"}
-	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past " + timeoutFlag + ", retried or not"}
+	d[CTimeouts] = counters.Def{Key: "timeouts", Kind: counters.Count, Unit: "requests", Help: "attempts past -request-timeout, retried or not"}
 	d[CParseFailures] = counters.Def{Key: "parse_failures", Kind: counters.Count, Unit: "responses", Help: "200 answers whose body did not parse (retried)"}
 	d[CInflightMax] = counters.Def{Key: "inflight.max_active", Kind: counters.Max, Unit: "requests", Help: "most attempts in flight at once (admitted, send to body read)"}
 	d[CInflightNs] = counters.Def{Key: "inflight.busy_ns", Kind: counters.Count, Unit: "ns", Help: "attempts' time in flight, summed: over the listing's wall time, the mean in flight"}

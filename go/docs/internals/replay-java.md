@@ -87,7 +87,7 @@ requests lists the same meters with the same types and tags on either server, ap
 - **The in-process `bench` command**, a token-walk benchmark that starts each serving mode and walks it over
   loopback. `bench/replayload` drives a running server instead ([the user page](../replay.md#with-the-bench-scripts)).
 - **The HAR conformance kit** (`swath-replay-conformance`): a HAR of a live S3 listing replayed against the server
-  and its canonical XML compared, covering the request shapes the lister sends. It was not ported; the Go
+  and its canonical XML compared, covering the request shapes the lister sends. The Go
   counterparts are `bench/replaydiff -live-endpoint` (a request matrix against the live provider) and
   `bench/faultproxy -record` with `replaydiff -capture` (a client's whole recorded stream)
   ([the user page](../replay.md#live-conformance)).
@@ -154,7 +154,7 @@ the Java server's answer to each case today.
 
 Five request cases are not byte-identical with the Java server, by decision: the first is the Go server's own
 error page, and Go's HTTP layer decides the other four before any handler runs ([the user page](../replay.md#limits)
-describes the Go behaviour):
+describes the Go behavior):
 
 - **The error page of a target refused before routing.** Status `400`, `Content-Type:
   text/html;charset=iso-8859-1` and `Cache-Control: must-revalidate,no-cache,no-store` match; the HTML body is

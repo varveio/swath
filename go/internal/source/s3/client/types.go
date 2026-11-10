@@ -3,7 +3,11 @@
 
 package client
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
+)
 
 // ListInput is one ListObjectsV2 request.
 type ListInput struct {
@@ -111,10 +115,10 @@ func (p *VersionPage) Validate() error {
 		return nil
 	}
 	if p.NextKeyMarker == "" {
-		return fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", ErrInvalidPage)
+		return fmt.Errorf("%w: a truncated ListObjectVersions page without a NextKeyMarker", objhttp.ErrInvalidPage)
 	}
 	if n := len(p.Versions); n > 0 && p.Versions[n-1].Key == p.NextKeyMarker && p.NextVersionIDMarker == "" {
-		return fmt.Errorf("%w: a truncated ListObjectVersions page ending at its NextKeyMarker without a NextVersionIdMarker", ErrInvalidPage)
+		return fmt.Errorf("%w: a truncated ListObjectVersions page ending at its NextKeyMarker without a NextVersionIdMarker", objhttp.ErrInvalidPage)
 	}
 	return nil
 }

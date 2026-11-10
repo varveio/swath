@@ -22,5 +22,5 @@ import (
 // NewBearerToken is the token source for command, refreshed every refresh
 // (0: tokensource.DefaultRefresh).
 func NewBearerToken(command string, refresh time.Duration) *tokensource.Shared {
-	return tokensource.NewShared(&tokensource.Command{Cmd: command, Refresh: refresh}, 0)
+	return tokensource.NewShared(&tokensource.Command{Cmd: command, Refresh: refresh})
 }

@@ -48,8 +48,6 @@ type namespaced interface {
 	NamespaceInfo(ctx context.Context, container string) (hns bool, err error)
 }
 
-type counted interface{ Counters() client.Counters }
-
 // pooled is implemented by clients that spread requests over a transport
 // pool (client.Client).
 type pooled interface{ Transports() int }
@@ -91,9 +89,8 @@ type Options struct {
 	Workers int
 	Warn    func(string) // one-time warnings for the user; may be nil
 	Client  API          // optional; built from the options above when nil
-	Resume  *Resume      // continue after a journaled run's last published key
-	// AllVersions is refused: versions, snapshots and deleted blobs are a
-	// later lane.
+	// AllVersions is refused: versions, snapshots and deleted blobs are
+	// not supported.
 	AllVersions bool
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
@@ -101,9 +98,6 @@ type Options struct {
 	// supplied Client has its own.
 	Admission objhttp.Admission
 }
-
-// Resume continues after the last published key.
-type Resume struct{ After string }
 
 // RedactedSAS stands for a root's SAS in a recorded command line: a resume
 // of a run started with one must be given it again.
@@ -192,9 +186,6 @@ type Provider struct {
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace        string // how admission found the namespace flat (Stats.Namespace)
-	// loose serves a fetch outside any Expand (none in the engine today);
-	// its idle chains are evicted past order.MaxChains.
-	loose *order.Adapter
 }
 
 // Range is the engine's range.
@@ -204,11 +195,10 @@ var _ source.Provider[Range, Object] = (*Provider)(nil)
 
 // New builds a provider and admits the account (admit): its namespace
 // must be positively flat, or the run is refused (source.Unsupported)
-// before any listing request: on a hierarchical-namespace account '/'
-// sorts lowest,
-// and after a byte cursor "a.z" the key "a/child" is still in range, but a
-// seek that sorts '/' lowest skips it while every page still ascends, so
-// nothing downstream could notice.
+// before any listing request: on a hierarchical-namespace account '/' sorts
+// lowest, and after a byte cursor "a.z" the key "a/child" is still in range,
+// but a seek that sorts '/' lowest skips it while every page still ascends,
+// so nothing downstream could notice.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, source.Unsupported(errors.New("azblob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
@@ -225,7 +215,6 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		return nil, err
 	}
 	p.Engine = e
-	p.loose = p.adapter()
 	return p, nil
 }
 
@@ -237,8 +226,8 @@ func (p *Provider) description() keyrange.Description[Object] {
 		// name, after After (exclusive) and up to Through.
 		Listing:     keyrange.Listing,
 		AcceptBound: AcceptBound,
-		Requeue:     requeue,
-		InvalidPage: client.ErrInvalidPage,
+		Requeue:     objhttp.Requeue,
+		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
 		Counters:    slices.Concat(client.CounterDefs, order.CounterDefs),
 	}
@@ -319,14 +308,8 @@ func fallback(err error) bool {
 	if errors.As(f, &ce) {
 		return !ce.Transient
 	}
-	switch f.Code {
-	case "NoAuthenticationInformation", "AuthenticationFailed", "InvalidAuthenticationInfo",
-		"AuthorizationFailure", "AuthorizationPermissionMismatch":
-		return true
-	case "ContainerNotFound", "ServerBusy", "OperationTimedOut", "InternalError":
-		return false
-	}
-	return f.Status == 401 || f.Status == 403
+	classified := (&client.Error{Status: f.Status, Code: f.Code}).Failure()
+	return classified.Class == objhttp.ClassAuth || classified.Class == objhttp.ClassAccessDenied
 }
 
 // connect builds the client unless Options.Client supplies one (own).
@@ -338,7 +321,7 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		cfg := client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Account: opt.Account, Anonymous: opt.Anonymous,
+		cfg := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Account: opt.Account, Anonymous: opt.Anonymous,
 			SAS: opt.SAS, RequestTimeout: opt.Timeout, Workers: opt.Workers}
 		if cfg.SAS == "" {
 			cfg.SAS = os.Getenv(EnvSAS)
@@ -365,12 +348,8 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 // client.MaxPageSize unless the policy asks for smaller ones.
 func (p *Provider) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
-	var resume *keyrange.Resume
-	if opt.Resume != nil {
-		resume = &keyrange.Resume{After: opt.Resume.After}
-	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume, eo.ClientOff = opt.Prefix, opt.Workers, resume, opt.Admission.Off(own)
+	eo.Prefix, eo.Workers, eo.ClientOff = opt.Prefix, opt.Workers, opt.Admission.Off(own)
 	if eo.PageSize <= 0 {
 		eo.PageSize = client.MaxPageSize
 	}
@@ -406,23 +385,9 @@ func AcceptBound(s string) bool {
 	return units <= maxNameUnits
 }
 
-var requeue = objhttp.Requeue
-
-// Restart continues after a journaled run's last published key, from
-// the normal start-up: one range (after, ⊤], split as on a fresh run
-// (source.Resumable). It records the resume in the provider's options and
-// the engine's.
-func (p *Provider) Restart(after string) error {
-	p.opt.Resume = &Resume{After: after}
-	p.Engine.Restart(after)
-	return nil
-}
-
 // Stats snapshots the counters.
 func (p *Provider) Stats() Stats {
-	if c, ok := p.client.(counted); ok {
-		c.Counters().Store(p.Set(), p.ID(0))
-	}
+	p.Activity.Store(p.Set(), p.ID(0))
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
 	}
@@ -438,8 +403,8 @@ func (p *Provider) Stats() Stats {
 // converts its items to rows and prefixes.
 func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
 	a, ok := ctx.Value(adapterKey{}).(*order.Adapter)
-	if !ok {
-		a = p.loose
+	if !ok || a == nil {
+		return nil, source.Violation(errors.New("azblob: fetch without an Expand adapter"))
 	}
 	out, err := a.Fetch(ctx, q)
 	if err != nil {

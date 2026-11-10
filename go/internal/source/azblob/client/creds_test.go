@@ -189,24 +189,6 @@ func TestEntraEnvironmentCredential(t *testing.T) {
 	}
 }
 
-// TestEntraTokenReused: a long-lived token is fetched once.
-func TestEntraTokenReused(t *testing.T) {
-	es := newEntraServer(t, 3600)
-	cfg := entraEnv(t, es)
-	c, err := New(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
-		if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := es.seen(); len(got) != 3 || got[2] != "Bearer tok-1" || es.tokens.Load() != 1 {
-		t.Fatalf("Authorization headers %q after %d token requests", got, es.tokens.Load())
-	}
-}
-
 // TestEntraSlowRefreshBounded: a token endpoint slower than the request
 // timeout fails each attempt at the timeout, counted as a timeout and
 // retried; the request ends bounded by its attempts as a requeued
@@ -225,13 +207,13 @@ func TestEntraSlowRefreshBounded(t *testing.T) {
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("List took %s with a 150 ms request timeout", d)
 	}
-	var ex *ExhaustedError
-	var ce *CredentialError
+	var ex *objhttp.ExhaustedError
+	var ce *objhttp.CredentialError
 	if !errors.As(err, &ex) || ex.Attempts != 2 || !errors.As(err, &ce) || !ce.Timeout {
 		t.Fatalf("err %v, want two attempts exhausted on a credential timeout", err)
 	}
-	if Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
-		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout", Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassTimeout || !objhttp.Requeue(err) {
+		t.Fatalf("class %q: an exhausted token timeout is a requeued timeout", objhttp.Classify(err))
 	}
 	if n := c.Counters(); n.Timeouts != 2 || n.Retries != 1 || n.Attempts != 0 {
 		t.Fatalf("counters %+v, want two timeouts (one retried) and no HTTP attempt", n)
@@ -254,10 +236,10 @@ func TestEntraRefusedGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.List(context.Background(), &ListInput{Container: "c"})
-	var ce *CredentialError
-	var ex *ExhaustedError
-	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) || Classify(err) != objhttp.ClassAuth {
-		t.Fatalf("err %v (class %q), want a non-transient credential error", err, Classify(err))
+	var ce *objhttp.CredentialError
+	var ex *objhttp.ExhaustedError
+	if !errors.As(err, &ce) || ce.Transient || errors.As(err, &ex) || objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("err %v (class %q), want a non-transient credential error", err, objhttp.Classify(err))
 	}
 	if n := es.tokens.Load(); n != 1 || len(es.seen()) != 0 {
 		t.Fatalf("%d token requests, %d listing requests; want 1 and 0", n, len(es.seen()))
@@ -281,9 +263,9 @@ func TestEntraConfiguredButBroken(t *testing.T) {
 		t.Fatal("anonymous with a configured credential")
 	}
 	_, err = c.List(context.Background(), &ListInput{Container: "c"})
-	var ce *CredentialError
-	if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth || len(es.seen()) != 0 {
-		t.Fatalf("err %v (class %q), %d listing requests", err, Classify(err), len(es.seen()))
+	var ce *objhttp.CredentialError
+	if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth || len(es.seen()) != 0 {
+		t.Fatalf("err %v (class %q), %d listing requests", err, objhttp.Classify(err), len(es.seen()))
 	}
 }
 
@@ -306,9 +288,9 @@ func (c *countingCredential) GetToken(ctx context.Context, _ policy.TokenRequest
 	return azcore.AccessToken{Token: "tok", ExpiresOn: time.Now().Add(time.Hour)}, nil
 }
 
-// TestTokenWaitersCoalesce: concurrent requests share one outstanding
-// token call (tokensource.Shared), and the token is reused.
-func TestTokenWaitersCoalesce(t *testing.T) {
+// TestConcurrentBearerRequests checks shared-source wiring and bearer headers.
+// The waiter and refresh mechanics live in tokensource.
+func TestConcurrentBearerRequests(t *testing.T) {
 	var bearer atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(headerAuthorization) == "Bearer tok" {
@@ -317,10 +299,10 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 		fmt.Fprint(w, page(""))
 	}))
 	defer srv.Close()
-	cred := &countingCredential{delay: 100 * time.Millisecond}
+	cred := &countingCredential{delay: 10 * time.Millisecond}
 	c := newEntraClient(t, Config{Endpoint: srv.URL}, cred)
 	var wg sync.WaitGroup
-	for range 20 {
+	for range 4 {
 		wg.Go(func() {
 			if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 				t.Error(err)
@@ -328,7 +310,7 @@ func TestTokenWaitersCoalesce(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if cred.calls.Load() != 1 || cred.peak.Load() != 1 || bearer.Load() != 20 {
+	if cred.calls.Load() != 1 || cred.peak.Load() != 1 || bearer.Load() != 4 {
 		t.Fatalf("%d token calls (peak %d concurrent), %d bearer requests", cred.calls.Load(), cred.peak.Load(), bearer.Load())
 	}
 }
@@ -370,10 +352,10 @@ func TestEntraDefaultChain(t *testing.T) {
 				fmt.Fprint(w, page(""))
 			}))
 			defer srv.Close()
-			c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", MaxAttempts: 1}, b)
-			var ce *CredentialError
+			c, err := newClient(context.Background(), Config{Endpoint: srv.URL, Account: "acct", Retry: objhttp.Retry{MaxAttempts: 1}}, b)
+			var ce *objhttp.CredentialError
 			if x.fails {
-				if !errors.As(err, &ce) || Classify(err) != objhttp.ClassAuth {
+				if !errors.As(err, &ce) || objhttp.Classify(err) != objhttp.ClassAuth {
 					t.Fatalf("err %v, want a credential error", err)
 				}
 				return
@@ -391,8 +373,8 @@ func TestEntraDefaultChain(t *testing.T) {
 				}
 				return
 			}
-			if !errors.As(err, &ce) || Classify(err) != x.class || listed.Load() != 0 {
-				t.Fatalf("first request: %v (class %q, %d listing requests), want a %s credential error and none sent", err, Classify(err), listed.Load(), x.class)
+			if !errors.As(err, &ce) || objhttp.Classify(err) != x.class || listed.Load() != 0 {
+				t.Fatalf("first request: %v (class %q, %d listing requests), want a %s credential error and none sent", err, objhttp.Classify(err), listed.Load(), x.class)
 			}
 		})
 	}

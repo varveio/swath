@@ -32,6 +32,7 @@ import (
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/client"
 	"github.com/varveio/swath/go/internal/source/keyrange"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/utf16order"
 )
 
@@ -121,7 +122,7 @@ var (
 )
 
 func invariant(format string, args ...any) error {
-	return source.Violation(fmt.Errorf("%w (%w): %s", ErrInvariant, client.ErrInvalidPage, fmt.Sprintf(format, args...)))
+	return source.Violation(fmt.Errorf("%w (%w): %s", ErrInvariant, objhttp.ErrInvalidPage, fmt.Sprintf(format, args...)))
 }
 
 // Page is one page in byte order: blobs and, with a delimiter, BlobPrefix
@@ -161,16 +162,6 @@ func New(l Lister, container string, set *counters.Set, base counters.ID) *Adapt
 		set, base = counters.New(CounterDefs), 0
 	}
 	return &Adapter{l: l, container: container, set: set, base: base, chains: map[uint64]*chain{}, busy: map[uint64]int{}}
-}
-
-// Counter is the value of counter i of CounterDefs.
-func (a *Adapter) Counter(i int) int64 { return a.set.Load(a.base + counters.ID(i)) }
-
-// Len is the number of chains registered.
-func (a *Adapter) Len() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.chains)
 }
 
 // Release drops every registered chain (the provider's Expand, however it

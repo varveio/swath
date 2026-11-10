@@ -9,9 +9,12 @@ package objhttptest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,9 +39,10 @@ type Wire struct {
 
 // Settings are what the contract builds a client with.
 type Settings struct {
-	Endpoint string // the test server's base URL
-	Retry    objhttp.Retry
-	Timeout  time.Duration // per attempt
+	Endpoint   string // the test server's base URL
+	Retry      objhttp.Retry
+	Timeout    time.Duration // per attempt
+	HTTPClient *http.Client  // supplied transport and redirect policy
 }
 
 type answer int
@@ -51,6 +55,11 @@ const (
 	garbled
 	slow
 	cut
+	cutBody
+	bodyDeadline
+	badGzip
+	redirect307
+	redirect308
 )
 
 // Contract runs the shared retry and classification cases against a
@@ -78,75 +87,155 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 		{"timeout exhausted", []answer{slow}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 2}, objhttp.ClassTimeout, true},
 		{"cut exhausted", []answer{cut}, 2, objhttp.Counts{Attempts: 2, Retries: 1}, objhttp.ClassOther, true},
 		{"garbled exhausted", []answer{garbled}, 2, objhttp.Counts{Attempts: 2, Retries: 1, ParseFailures: 2}, objhttp.ClassParse, true},
+		{"cut success body, then a page", []answer{cutBody, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1}, "", false},
+		{"cut success body exhausted", []answer{cutBody}, 2, objhttp.Counts{Attempts: 2, Retries: 1}, objhttp.ClassOther, true},
+		{"body deadline, then a page", []answer{bodyDeadline, ok}, 9, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 1}, "", false},
+		{"body deadline exhausted", []answer{bodyDeadline}, 2, objhttp.Counts{Attempts: 2, Retries: 1, Timeouts: 2}, objhttp.ClassTimeout, true},
+		{"malformed gzip", []answer{badGzip}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassOther, false},
+		{"307 redirect refused", []answer{redirect307}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassOther, false},
+		{"308 redirect refused", []answer{redirect308}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassOther, false},
 		{"denied, not retried", []answer{denied}, 9, objhttp.Counts{Attempts: 1}, objhttp.ClassAccessDenied, false},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			var n atomic.Int64
-			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-				i := int(n.Add(1)) - 1
-				a := c.answers[min(i, len(c.answers)-1)]
-				switch a {
-				case ok:
-					w.OK(rw)
-				case throttle:
-					w.Throttle(rw)
-				case server:
-					w.Server(rw)
-				case denied:
-					w.Denied(rw)
-				case garbled:
-					w.Garbled(rw)
-				case slow:
-					select {
-					case <-time.After(5 * time.Second):
-					case <-r.Context().Done():
+		modes := []bool{true}
+		if c.answers[0] == redirect307 || c.answers[0] == redirect308 {
+			modes = append(modes, false)
+		}
+		for _, supplied := range modes {
+			t.Run(fmt.Sprintf("%s/supplied=%v", c.name, supplied), func(t *testing.T) {
+				var n, followed, answered atomic.Int64
+				target := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { followed.Add(1); w.OK(rw) }))
+				defer target.Close()
+				srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+					i := int(n.Add(1)) - 1
+					a := c.answers[min(i, len(c.answers)-1)]
+					if a != cut && a != slow {
+						answered.Add(1)
 					}
-				case cut:
-					conn, _, err := rw.(http.Hijacker).Hijack()
-					if err == nil {
-						conn.Close()
+					switch a {
+					case ok:
+						w.OK(rw)
+					case throttle:
+						w.Throttle(rw)
+					case server:
+						w.Server(rw)
+					case denied:
+						w.Denied(rw)
+					case garbled:
+						w.Garbled(rw)
+					case slow:
+						select {
+						case <-time.After(5 * time.Second):
+						case <-r.Context().Done():
+						}
+					case cutBody:
+						rw.Header().Set("Content-Length", "100000")
+						w.Garbled(rw)
+					case bodyDeadline:
+						w.Garbled(rw)
+						rw.(http.Flusher).Flush()
+						<-r.Context().Done()
+					case badGzip:
+						rw.Header().Set("Content-Encoding", "gzip")
+						fmt.Fprint(rw, "not gzip at all")
+					case redirect307, redirect308:
+						status := 307
+						if a == redirect308 {
+							status = 308
+						}
+						http.Redirect(rw, r, target.URL, status)
+					case cut:
+						conn, _, err := rw.(http.Hijacker).Hijack()
+						if err == nil {
+							conn.Close()
+						}
 					}
+				}))
+				defer srv.Close()
+				bodies := &bodyCloses{next: http.DefaultTransport}
+				var hc *http.Client
+				if supplied {
+					hc = &http.Client{Transport: bodies}
 				}
+				cl := build(Settings{Endpoint: srv.URL, Timeout: 200 * time.Millisecond, HTTPClient: hc,
+					Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
+				err := cl.List(context.Background())
+				if supplied {
+					bodies.check(t, int(answered.Load()))
+				}
+				if followed.Load() != 0 || n.Load() != c.want.Attempts {
+					t.Fatalf("%d listing requests, %d redirects followed", n.Load(), followed.Load())
+				}
+				got := cl.Counters()
+				// one attempt at a time, each in flight for some time
+				if want := min(c.want.Attempts, 1); got.InflightMax != want || mistimed(want > 0, got.InflightNs) {
+					t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
+				}
+				// every attempt is timed: ordered percentiles, a timed-out one at the top
+				if mistimed(c.want.Attempts > 0, got.P50Ns) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
+					(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
+					t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
+				}
+				got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
+				if got != c.want {
+					t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
+				}
+				if c.class == "" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				var f *objhttp.Failure
+				var ex *objhttp.ExhaustedError
+				if !errors.As(err, &f) {
+					t.Fatalf("error has no normalized failure: %v", err)
+				}
+				if f.Class != c.class || f.Transient != c.requeue ||
+					f.Throttle != (c.want.Throttles > 0) || f.Timeout != (c.want.Timeouts > 0) ||
+					errors.As(err, &ex) != c.requeue || (ex != nil && (ex.Attempts != c.attempts || ex.Err != f)) ||
+					objhttp.Requeue(err) != c.requeue || objhttp.Normalize(err) != f {
+					t.Fatalf("err %v: failure %+v exhausted %v, want %q (requeue %v)", err, f, ex != nil, c.class, c.requeue)
+				}
+				last := c.answers[len(c.answers)-1]
+				if (last == cutBody || last == bodyDeadline || last == badGzip) && (f.Status != 0 || f.Code != "") {
+					t.Fatalf("wire failure became a service answer: %+v", f)
+				}
+				if (last == redirect307 && f.Status != 307) || (last == redirect308 && f.Status != 308) {
+					t.Fatalf("redirect lost status: %+v", f)
+				}
+				if (last == throttle || last == server || last == denied) && (f.Status == 0 || f.Code == "" || (last == denied && f.Status != 403)) {
+					t.Fatalf("service answer lost its HTTP status: %+v", f)
+				}
+			})
+		}
+	}
+	for _, deadline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel after headers/deadline=%v", deadline), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				w.Garbled(rw)
+				rw.(http.Flusher).Flush()
+				<-r.Context().Done()
 			}))
 			defer srv.Close()
-			cl := build(Settings{Endpoint: srv.URL, Timeout: 200 * time.Millisecond,
-				Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
-			err := cl.List(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
+			want := context.Canceled
+			if deadline {
+				cancel()
+				ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
+				want = context.DeadlineExceeded
+			}
+			defer cancel()
+			bodies := &bodyCloses{next: http.DefaultTransport}
+			if !deadline {
+				bodies.afterHeaders = cancel
+			}
+			cl := build(Settings{Endpoint: srv.URL, Timeout: 5 * time.Second, HTTPClient: &http.Client{Transport: bodies}, Retry: objhttp.Retry{MaxAttempts: 3}})
+			err := cl.List(ctx)
 			got := cl.Counters()
-			// one attempt at a time, each in flight for some time
-			if want := min(c.want.Attempts, 1); got.InflightMax != want || mistimed(want > 0, got.InflightNs) {
-				t.Errorf("in flight: max %d, %d ns, want max %d", got.InflightMax, got.InflightNs, want)
+			if !errors.Is(err, want) || objhttp.Classify(err) != objhttp.ClassOther || objhttp.Requeue(err) || got.Attempts != 1 || got.Retries != 0 || got.Timeouts != 0 || got.ParseFailures != 0 {
+				t.Fatalf("error %v, counters %+v", err, got)
 			}
-			// every attempt is timed: ordered percentiles, a timed-out one at the top
-			if mistimed(c.want.Attempts > 0, got.P50Ns) || got.P50Ns > got.P90Ns || got.P90Ns > got.P99Ns ||
-				(c.want.Timeouts > 0 && got.P99Ns < int64(200*time.Millisecond)) {
-				t.Errorf("attempt latency p50 %d, p90 %d, p99 %d ns", got.P50Ns, got.P90Ns, got.P99Ns)
-			}
-			got.InflightMax, got.InflightNs, got.P50Ns, got.P90Ns, got.P99Ns = 0, 0, 0, 0, 0
-			if got != c.want {
-				t.Errorf("counters %+v, want %+v (err %v)", got, c.want, err)
-			}
-			if c.class == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			var f *objhttp.Failure
-			var ex *objhttp.ExhaustedError
-			if !errors.As(err, &f) {
-				t.Fatalf("error has no normalized failure: %v", err)
-			}
-			if f.Class != c.class || f.Transient != c.requeue ||
-				f.Throttle != (c.want.Throttles > 0) || f.Timeout != (c.want.Timeouts > 0) ||
-				errors.As(err, &ex) != c.requeue || (ex != nil && (ex.Attempts != c.attempts || ex.Err != f)) ||
-				objhttp.Requeue(err) != c.requeue || objhttp.Normalize(err) != f {
-				t.Fatalf("err %v: failure %+v exhausted %v, want %q (requeue %v)", err, f, ex != nil, c.class, c.requeue)
-			}
-			last := c.answers[len(c.answers)-1]
-			if (last == throttle || last == server || last == denied) && (f.Status == 0 || f.Code == "" || (last == denied && f.Status != 403)) {
-				t.Fatalf("service answer lost its HTTP status: %+v", f)
-			}
+			bodies.check(t, 1)
 		})
 	}
 	// A limiter of 8 has a 256-answer window (the floor): the 39th throttle
@@ -205,3 +294,47 @@ var coarseClock = runtime.GOOS == "windows"
 func mistimed(ran bool, ns int64) bool {
 	return (!ran && ns != 0) || (ran && ns == 0 && !coarseClock)
 }
+
+// bodyCloses observes the original bodies beneath each client's Guard.
+type bodyCloses struct {
+	next         http.RoundTripper
+	afterHeaders func()
+	mu           sync.Mutex
+	bodies       []*closedBody
+}
+
+func (c *bodyCloses) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := c.next.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	b := &closedBody{ReadCloser: resp.Body}
+	resp.Body = b
+	c.mu.Lock()
+	c.bodies = append(c.bodies, b)
+	c.mu.Unlock()
+	if c.afterHeaders != nil {
+		c.afterHeaders()
+	}
+	return resp, nil
+}
+func (c *bodyCloses) check(t *testing.T, want int) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.bodies) != want {
+		t.Errorf("%d original bodies, want %d", len(c.bodies), want)
+	}
+	for i, b := range c.bodies {
+		if got := b.closes.Load(); got != 1 {
+			t.Errorf("body %d closed %d times", i, got)
+		}
+	}
+}
+
+type closedBody struct {
+	io.ReadCloser
+	closes atomic.Int64
+}
+
+func (b *closedBody) Close() error { b.closes.Add(1); return b.ReadCloser.Close() }

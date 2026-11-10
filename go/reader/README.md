@@ -157,10 +157,10 @@ for _, r := range rows {
 
 ### Version roles
 
-`SchemaSpec.Versions` names, by role, the columns that make a versions schema's rows versions, so a generic
-consumer interprets any such schema from its spec instead of from column names (the typed decoders keep reading
-their named columns). The zero value means the rows are not versions (every current-object schema). Otherwise
-the schema's keys repeat (`UniqueKeys` false), `ID` is set, and exactly one of `Latest` and `DeletedAt` is:
+`VersionSpec`, carried by `SchemaSpec.Versions`, is the public description of a versions schema's column roles.
+Generic version consumers, including the lister's text output, version counts and per-prefix totals, use these
+roles. The typed reader decoders still read their schema's named columns. The zero value means the rows are not
+versions (every current-object schema). Otherwise the schema's keys repeat (`UniqueKeys` false), `ID` is set, and exactly one of `Latest` and `DeletedAt` is:
 
 | Role | Column | Meaning |
 |---|---|---|
@@ -171,9 +171,9 @@ the schema's keys repeat (`UniqueKeys` false), `ID` is set, and exactly one of `
 
 `swath/s3-versions/v1` declares `{ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"}` and
 `swath/gcs-generations/v1` `{ID: "generation", DeletedAt: "time_deleted"}`. A row is current when it is latest and
-not a delete marker, noncurrent when neither. A future schema declares its own columns' roles: an Azure versions
-schema, say, its string identifier and an explicit latest boolean, and no delete-marker role unless its rows are
-delete markers (a blob snapshot or a soft-deleted blob is not one).
+not a delete marker, noncurrent when neither. Azure Blob supports current objects only; there is no registered
+Azure versions schema.
+
 ## What is checked, and when
 
 - **`Open`, `OpenDir`.** The module reads and checks the manifest and opens no part
@@ -356,7 +356,7 @@ storage class; an Azure blob's access tier), from `swath/s3-objects/v1`, `swath/
 `swath/azblob-objects/v1`: a versions row is not a current object, and `DecodeObject` refuses its schema id.
 `DecodeObject` also projects a `swath/local-entries/v1` row (no ETag or storage class), as `Totals` reports an
 exact entry, while `StreamLocal` and `List` hand on a filesystem's entries whole, as `LocalEntry`. A local key
-is the path relative to the root as bytes, unnormalised, a directory's ending in `/`; a link target is bytes,
+is the path relative to the root as bytes, unnormalized, a directory's ending in `/`; a link target is bytes,
 written with `/` separators by the portable engine on Windows (`filepath.ToSlash`).
 
 ## Errors

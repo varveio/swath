@@ -65,7 +65,7 @@ func TestLatencySaturation(t *testing.T) {
 	if n := c.Load(); n.P50Ns != LatencyOpen || n.P90Ns != LatencyOpen || n.P99Ns != LatencyOpen {
 		t.Fatalf("one 20-minute attempt: p50 %d, p90 %d, p99 %d", n.P50Ns, n.P90Ns, n.P99Ns)
 	}
-	set := counters.New(CounterDefs("throttle", "-timeout"))
+	set := counters.New(CounterDefs("throttle"))
 	n.Store(set, 0)
 	if set.Load(counters.ID(CInflightP99)) != LatencyOpen || set.Load(counters.ID(CLatencyOverflow)) != 2 {
 		t.Fatal("Store left saturation out")
@@ -93,7 +93,7 @@ func TestLatencyQuantiles(t *testing.T) {
 	if !within(n.P50Ns, 10*time.Millisecond) || !within(n.P90Ns, 100*time.Millisecond) || !within(n.P99Ns, 100*time.Millisecond) {
 		t.Fatalf("p50 %d, p90 %d, p99 %d", n.P50Ns, n.P90Ns, n.P99Ns)
 	}
-	set := counters.New(CounterDefs("throttle", "-timeout"))
+	set := counters.New(CounterDefs("throttle"))
 	n.Store(set, 0)
 	if set.Load(counters.ID(CInflightP50)) != n.P50Ns || set.Load(counters.ID(CInflightP90)) != n.P90Ns || set.Load(counters.ID(CInflightP99)) != n.P99Ns {
 		t.Fatal("Store left the percentiles out")

@@ -86,7 +86,8 @@ before choosing columns.
 | Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
 | Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
 
-Authentication and request billing: [operating reference](operating.md#credentials).
+Authentication: [credentials](operating.md#credentials). Shared timeouts, retries and request controls:
+[object-store requests](operating.md#object-store-requests).
 Azure credential precedence and namespace checks: [Azure provider](internals/providers/azblob.md).
 Use `--azblob-flat` only when you know the account has a flat namespace and the provider
 cannot confirm it. S3-compatible endpoints need their own compatibility checks.

@@ -17,7 +17,7 @@
 // waiters sharing one outstanding call (tokensource.Shared). Requests go
 // unauthenticated only with Anonymous; a credential that is configured but
 // will not load, or a DefaultAzureCredential chain that finds none, is a
-// *CredentialError, never anonymity.
+// *objhttp.CredentialError, never anonymity.
 package client
 
 import (
@@ -42,6 +42,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -50,10 +51,6 @@ import (
 // the newer of the two the live account and the replay answer, which
 // behave the same for listing.
 const Version = "2026-10-06"
-
-// DefaultEndpoint is the blob service of an account, ACCOUNT standing for
-// the account name.
-const DefaultEndpoint = "https://ACCOUNT.blob.core.windows.net"
 
 // storageScope is the Entra ID scope of Azure Storage.
 const storageScope = "https://storage.azure.com/.default"
@@ -64,9 +61,11 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
-	// Endpoint is the blob service base URL; default DefaultEndpoint for
-	// Account. Any other endpoint (an emulator, the replay server) takes
-	// the account as its first path segment: ENDPOINT/ACCOUNT/CONTAINER.
+	objhttp.Retry
+	// Endpoint is the blob service base URL; default
+	// https://ACCOUNT.blob.core.windows.net. An explicit endpoint (an
+	// emulator, the replay server) takes the account as its first path
+	// segment: ENDPOINT/ACCOUNT/CONTAINER.
 	Endpoint string
 	Account  string
 	// Anonymous sends no credentials, whatever is configured.
@@ -77,17 +76,10 @@ type Config struct {
 	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey      string
 	RequestTimeout time.Duration // per attempt; default 30 s
-	MaxAttempts    int           // default 9
-	BaseBackoff    time.Duration // default 100 ms
-	MaxBackoff     time.Duration // default 5 s
 	HTTPClient     *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
-	// Limiter, if set, admits every attempt (objhttp.Limiter).
-	Limiter *objhttp.Limiter
-	// Rate, if set, caps attempts per second (objhttp.Rate).
-	Rate *objhttp.Rate
 }
 
 // ListInput is one List Blobs request. StartFrom is inclusive; Marker is
@@ -140,8 +132,7 @@ type Client struct {
 	source string
 	note   string
 
-	retry            objhttp.Retry
-	counts           objhttp.Counters
+	*objhttp.Meter
 	retryAfterCapped atomic.Int64
 }
 
@@ -188,7 +179,7 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		return nil, err
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	if !accountName.MatchString(cfg.Account) {
 		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", cfg.Account)
@@ -198,8 +189,7 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, base: base,
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
-	c.retry.Defaults()
+		Meter: objhttp.NewMeter(cfg.Retry)}
 	// Redirects are answers, never followed (objhttp.Pool). The Location
 	// header is removed before net/http sees it (noLocation): a malformed
 	// one would otherwise end the request in an error that quotes it, SAS
@@ -231,7 +221,7 @@ func (n noLocation) RoundTrip(req *http.Request) (*http.Response, error) {
 // baseURL is the account's root URL, ending in '/'.
 func baseURL(endpoint, account string) (*url.URL, error) {
 	if endpoint == "" {
-		return &url.URL{Scheme: "https", Host: account + ".blob.core.windows.net", Path: "/"}, nil
+		return &url.URL{Scheme: "https", Host: account + blobSuffix, Path: "/"}, nil
 	}
 	u, err := url.Parse(endpoint)
 	switch {
@@ -259,7 +249,7 @@ func (c *Client) credentials(entra entraSource) error {
 		c.source = "shared access signature"
 		if _, err := url.ParseQuery(c.sas); err != nil || c.sas == "" {
 			// the parse error would quote the signature
-			return &CredentialError{Source: c.source, Err: errors.New("not a query string")}
+			return &objhttp.CredentialError{Source: c.source, Err: errors.New("not a query string")}
 		}
 		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
@@ -292,7 +282,7 @@ func (c *Client) entra(entra entraSource) error {
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
 	if err != nil {
-		return &CredentialError{Source: source, Err: err}
+		return &objhttp.CredentialError{Source: source, Err: err}
 	}
 	c.ts, c.source = c.shared(cred), source
 	return nil
@@ -307,7 +297,7 @@ func (c *Client) tokenHTTP() *http.Client {
 
 // shared wraps cred as the client's coalesced token source.
 func (c *Client) shared(cred azcore.TokenCredential) *tokensource.Shared {
-	return tokensource.NewShared(credentialSource{cred: cred, timeout: c.cfg.RequestTimeout}, 0)
+	return tokensource.NewShared(credentialSource{cred: cred, timeout: c.cfg.RequestTimeout})
 }
 
 // credentialSource is an azcore credential as an oauth2 token source. It
@@ -347,21 +337,6 @@ func anonymousNote(cfg Config) string {
 	return ""
 }
 
-// token waits for the token source under the attempt's deadline (as the
-// GCS client does).
-func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	t, err := c.ts.Token(ctx)
-	switch {
-	case err == nil:
-		return t, nil
-	case ctx.Err() != nil:
-		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
-			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
-	}
-	return nil, &CredentialError{Source: c.source, Transient: transientToken(err),
-		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
-}
-
 // transientToken: a token endpoint's 5xx, 408 and 429, an exchange that got
 // no answer (a transport failure, which azidentity reports without a
 // response) and an exchange's own timeout may pass; a refused grant and a
@@ -375,10 +350,9 @@ func transientToken(err error) bool {
 		if af.RawResponse == nil {
 			return true
 		}
-		s := af.RawResponse.StatusCode
-		return s >= 500 || s == 408 || s == 429
+		return objhttp.TransientStatus(af.RawResponse.StatusCode)
 	}
-	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
+	return objhttp.Transport(err)
 }
 
 // Credentials names where the credentials came from (never the secret).
@@ -398,29 +372,9 @@ func (c *Client) Transports() int { return len(c.http) }
 // (round-robin).
 func (c *Client) pick() int { return int((c.next.Add(1) - 1) % uint64(len(c.http))) }
 
-// Answered is the number of requests the service answered usably
-// (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
-
-// Live is the request account now with the limiter's current limit, for
-// the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
-	l := c.counts.Live()
-	l.Limit = c.retry.Limiter.Limit()
-	return l
-}
-
 // RetryAfterCapped is the number of answers whose Retry-After was cut to
 // the request timeout (retry_after_capped).
 func (c *Client) RetryAfterCapped() int64 { return c.retryAfterCapped.Load() }
-
-// Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
-	n := c.counts.Load()
-	n.Limiter = c.retry.Limiter.Counts()
-	n.Rate = c.retry.Rate.Counts()
-	return n
-}
 
 // route is the URL of a container, without a query.
 func (c *Client) route(container string) url.URL {
@@ -495,7 +449,7 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
-	return objhttp.Do(ctx, c.retry, &c.counts, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
 		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err
@@ -540,13 +494,13 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	req.Header.Set(headerVersion, Version)
 	req.Header.Set(headerUserAgent, buildinfo.UserAgent())
 	if c.ts != nil {
-		tok, err := c.token(actx)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set(headerAuthorization, "Bearer "+tok.AccessToken)
 	}
-	defer c.counts.Attempt()()
+	defer c.Tally.Attempt()()
 	resp, err := c.http[c.pick()].Do(req)
 	if err != nil {
 		return nil, objhttp.Timeout(actx, ctx, c.cfg.RequestTimeout, c.redact(err, u))
@@ -563,13 +517,19 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	return resp.Header, nil
 }
 
-// responseError is a non-200 answer as an *Error: the code given (azcore's
-// ResponseError.ErrorCode, with XML character decoding restored), the
-// message read from the bounded body, both scrubbed of the SAS, a
+// responseError is a non-200 answer as an *Error: the header code, else
+// decoded XML code, else the SDK code (which also reads JSON); the message
+// from the bounded XML body, both scrubbed of the SAS; a
 // redirect's target withheld, a 400's query (without the SAS), the
 // Retry-After wait.
 func (c *Client) responseError(resp *http.Response, code string, body []byte, u *url.URL) *Error {
-	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: errorMessage(body),
+	decoded, message := errorDocument(body)
+	if header := resp.Header.Get(headerErrorCode); header != "" {
+		code = header
+	} else if decoded != "" {
+		code = decoded
+	}
+	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: message,
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
 	if len(e.Code) > maxErrorBody {
 		e.Code = e.Code[:maxErrorBody]

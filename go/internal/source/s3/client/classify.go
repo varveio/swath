@@ -5,16 +5,6 @@ package client
 
 import "github.com/varveio/swath/go/internal/source/objhttp"
 
-// ExhaustedError is a transient failure that outlasted the client's own
-// retries (objhttp.ExhaustedError).
-type ExhaustedError = objhttp.ExhaustedError
-
-// ErrInvalidPage marks a page that breaks the listing contract.
-var ErrInvalidPage = objhttp.ErrInvalidPage
-
-// Classify returns the stored report label (or normalizes a construction error).
-func Classify(err error) objhttp.Class { return objhttp.Classify(err) }
-
 // Failure maps the service answer once; labels do not drive retry policy.
 func (e *Error) Failure() objhttp.Failure {
 	f := objhttp.Failure{Status: e.Status, Code: e.Code}

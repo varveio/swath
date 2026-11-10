@@ -41,14 +41,14 @@ var VersionsSchema = schema.Bind(reader.S3VersionsV1, schema.Schema[Version]{
 	Columns: []schema.Column[Version]{
 		{Int: func(v *Version) (int64, bool) { return v.Size, !v.DeleteMarker }},
 		{Int: func(v *Version) (int64, bool) { return v.Mtime, true }},
-		{Str: nonEmpty(func(v *Version) string { return v.ETag }), Delta: true},
-		{Str: nonEmpty(func(v *Version) string { return v.StorageClass })},
-		{Str: nonEmpty(func(v *Version) string { return v.OwnerID })},
-		{Str: nonEmpty(func(v *Version) string { return v.OwnerDisplayName })},
-		{Str: nonEmpty(func(v *Version) string { return v.ChecksumAlgorithm })},
-		{Str: nonEmpty(func(v *Version) string { return v.ChecksumType })},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.ETag }), Delta: true},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.StorageClass })},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.OwnerID })},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.OwnerDisplayName })},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.ChecksumAlgorithm })},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.ChecksumType })},
 		// Version IDs are unique except "null": a dictionary rarely pays.
-		{Str: nonEmpty(func(v *Version) string { return v.VersionID }), Delta: true},
+		{Str: schema.NonEmpty(func(v *Version) string { return v.VersionID }), Delta: true},
 		{Bool: func(v *Version) (bool, bool) { return v.IsLatest, true }},
 		{Bool: func(v *Version) (bool, bool) { return v.DeleteMarker, true }},
 	},
@@ -232,17 +232,14 @@ func versionRows(out *client.VersionPage, owner bool) []VersionRow {
 		v := &r.Data
 		r.Key = e.Key
 		v.VersionID, v.IsLatest, v.DeleteMarker = e.VersionID, e.IsLatest, e.DeleteMarker
-		v.Mtime = e.Mtime
-		if owner {
-			v.OwnerID, v.OwnerDisplayName = e.OwnerID, e.OwnerDisplayName
-		}
 		if e.DeleteMarker {
+			v.Mtime = e.Mtime
+			if owner {
+				v.OwnerID, v.OwnerDisplayName = e.OwnerID, e.OwnerDisplayName
+			}
 			continue // no object fields: absent, not zero
 		}
-		v.ETag = stripQuotes(e.ETag)
-		v.StorageClass = e.StorageClass
-		v.ChecksumAlgorithm, v.ChecksumType = e.ChecksumAlgorithm, e.ChecksumType
-		v.Size = e.Size
+		v.Object = object(&e.Object, owner)
 	}
 	return rows
 }
@@ -252,7 +249,7 @@ func versionRows(out *client.VersionPage, owner bool) []VersionRow {
 func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *keyrange.Query) (*keyrange.Page[Version], error) {
 	in, err := versionsInput(p.opt.Bucket, q)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", client.ErrInvalidPage, err)
+		return nil, fmt.Errorf("%w: %w", objhttp.ErrInvalidPage, err)
 	}
 	// ListObjectVersions always returns owners (no fetch-owner
 	// parameter); --fetch-owner decides whether they are kept.
@@ -266,7 +263,7 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		return nil, err
 	}
 	if out.IsTruncated && out.NextKeyMarker == in.KeyMarker && out.NextVersionIDMarker == in.VersionIDMarker {
-		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", client.ErrInvalidPage)
+		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", objhttp.ErrInvalidPage)
 	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
 }

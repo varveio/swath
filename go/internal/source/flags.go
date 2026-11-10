@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// DefaultRequestTimeout bounds one object-store request attempt.
+const DefaultRequestTimeout = 30 * time.Second
+
 // A FlagGroup is a flag group several providers share (the store's, the
 // range engine's): the command registers it once and passes its value to
 // every provider that names it (registry.Factory.Shared), so the flags are
@@ -102,6 +105,6 @@ func StoreFlags(fs *flag.FlagSet) *Store {
 	s := &Store{}
 	fs.BoolVar(&s.Anonymous, anonymousFlag, false, "credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing")
 	fs.StringVar(&s.Endpoint, endpointFlag, "", "store: endpoint `URL` in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity")
-	fs.DurationVar(&s.Timeout, requestTimeoutFlag, 30*time.Second, "requests: per-request timeout; a request that exceeds it is retried")
+	fs.DurationVar(&s.Timeout, requestTimeoutFlag, DefaultRequestTimeout, "requests: per-request timeout; a request that exceeds it is retried")
 	return s
 }

@@ -25,8 +25,6 @@ type API interface {
 	List(ctx context.Context, in *client.ListInput) (*client.Page, error)
 }
 
-type counted interface{ Counters() client.Counters }
-
 // pooled is implemented by clients that spread requests over a transport
 // pool (client.Client).
 type pooled interface{ Transports() int }
@@ -35,14 +33,13 @@ type pooled interface{ Transports() int }
 type Options struct {
 	Bucket          string
 	Prefix          string
-	Endpoint        string // JSON API base (replay, tests); default client.DefaultEndpoint
+	Endpoint        string // JSON API base supplied by --endpoint; default client.DefaultEndpoint
 	Anonymous       bool   // send no credentials, whatever the environment holds
 	CredentialsFile string // service-account or authorized-user JSON; else Application Default Credentials
 	UserProject     string // billed project for a requester-pays bucket
 	Timeout         time.Duration
 	Workers         int
-	Client          API     // optional; built from the options above when nil
-	Resume          *Resume // continue after a journaled run's last published key
+	Client          API // optional; built from the options above when nil
 	// AllVersions lists every generation (versions=true, NewGenerations)
 	// instead of the live objects.
 	AllVersions bool
@@ -52,9 +49,6 @@ type Options struct {
 	// supplied Client has its own.
 	Admission objhttp.Admission
 }
-
-// Resume continues after the last published key.
-type Resume struct{ After string }
 
 // ParseURL splits gs://bucket[/prefix].
 func ParseURL(u string) (bucket, prefix string, err error) {
@@ -118,8 +112,8 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		// below it.
 		StartInclusive: true,
 		AcceptBound:    AcceptBound,
-		Requeue:        requeue,
-		InvalidPage:    client.ErrInvalidPage,
+		Requeue:        objhttp.Requeue,
+		InvalidPage:    objhttp.ErrInvalidPage,
 		Size:           func(o *Object) int64 { return o.Size },
 		Counters:       clientCounters,
 	}, p.fetch)
@@ -147,8 +141,8 @@ func NewGenerations(ctx context.Context, opt Options) (*GenerationsProvider, err
 		Listing:        keyrange.Listing,
 		InclusiveStart: func(after string) bool { _, ok := ExclusiveStart(after); return !ok },
 		AcceptBound:    AcceptBound,
-		Requeue:        requeue,
-		InvalidPage:    client.ErrInvalidPage,
+		Requeue:        objhttp.Requeue,
+		InvalidPage:    objhttp.ErrInvalidPage,
 		Groups:         GenerationSchema.Groups,
 		GroupOrdinal:   func(g *Generation) int64 { return g.Generation },
 		Detach:         GenerationSchema.Detach,
@@ -171,7 +165,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
-		c, err := client.New(ctx, client.Config{Limiter: lim, Rate: rate, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
+		c, err := client.New(ctx, client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
 			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
 		if err != nil {
 			return nil, false, fmt.Errorf("GCS client: %w", err)
@@ -186,12 +180,8 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 // engineOptions is the range engine's options for p.
 func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
-	var resume *keyrange.Resume
-	if opt.Resume != nil {
-		resume = &keyrange.Resume{After: opt.Resume.After}
-	}
 	eo := opt.Policy.Options()
-	eo.Prefix, eo.Workers, eo.Resume, eo.ClientOff = opt.Prefix, opt.Workers, resume, opt.Admission.Off(own)
+	eo.Prefix, eo.Workers, eo.ClientOff = opt.Prefix, opt.Workers, opt.Admission.Off(own)
 	return eo
 }
 
@@ -201,10 +191,6 @@ func (p *provider[P]) engineOptions(own bool) keyrange.Options {
 func AcceptBound(s string) bool {
 	return len(s) <= maxName && !strings.ContainsAny(s, "\r\n")
 }
-
-// acceptEnd: an endOffset is a name bound too; NUL is sent query-escaped,
-// so through+NUL is accepted unless it passes the name length.
-func acceptEnd(s string) bool { return AcceptBound(s) }
 
 // ExclusiveStart is the startOffset that lists names strictly after name,
 // and whether the provider sends it: name + NUL, the immediate successor
@@ -224,23 +210,9 @@ func ExclusiveStart(name string) (string, bool) {
 // maxName is the longest object name, in bytes.
 const maxName = 1024
 
-var requeue = objhttp.Requeue
-
-// Restart continues after a journaled run's last published key, from
-// the normal start-up: one range (after, ⊤], split as on a fresh run
-// (source.Resumable). It records the resume in the provider's options and
-// the engine's.
-func (p *provider[P]) Restart(after string) error {
-	p.opt.Resume = &Resume{After: after}
-	p.Engine.Restart(after)
-	return nil
-}
-
 // Stats snapshots the counters.
 func (p *provider[P]) Stats() Stats {
-	if c, ok := p.client.(counted); ok {
-		c.Counters().Store(p.Set(), p.ID(0))
-	}
+	p.Activity.Store(p.Set(), p.ID(0))
 	if c, ok := p.client.(pooled); ok {
 		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}
@@ -249,15 +221,7 @@ func (p *provider[P]) Stats() Stats {
 }
 
 func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
-	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
-		StartOffset: q.After, PageToken: q.Token, MaxResults: q.Max}
-	if q.Bounded {
-		if end, ok := keyrange.ExclusiveEnd(q.Through, acceptEnd); ok {
-			in.EndOffset = end
-		} else {
-			p.Set().Inc(p.ID(cEndOmitted)) // the engine trims at Through
-		}
-	}
+	in := p.input(q, false)
 	out, err := p.client.List(ctx, in)
 	if err != nil {
 		return nil, err
@@ -265,11 +229,35 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	rows := make([]Row, len(out.Items))
 	for i := range out.Items {
 		o, r := &out.Items[i], &rows[i]
-		r.Key = o.Name
-		r.Data = Object{Size: o.Size, Mtime: o.Updated, TimeCreated: o.TimeCreated, ETag: o.ETag, Generation: o.Generation,
-			Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5, CRC32C: o.CRC32C,
-			ContentType: o.ContentType}
+		r.Key, r.Data = o.Name, object(o)
 	}
 	return &keyrange.Page[Object]{Rows: rows, Prefixes: out.Prefixes, Truncated: out.NextPageToken != "",
 		Token: out.NextPageToken}, nil
+}
+
+// input translates an engine query to objects.list, with exclusive starts
+// for complete generation groups and an exclusive upper name bound.
+func (p *provider[P]) input(q *keyrange.Query, versions bool) *client.ListInput {
+	in := &client.ListInput{Bucket: p.opt.Bucket, Prefix: q.Prefix, Delimiter: q.Delimiter,
+		StartOffset: q.After, PageToken: q.Token, MaxResults: q.Max, Versions: versions}
+	if versions && q.After != "" {
+		if start, ok := ExclusiveStart(q.After); ok {
+			in.StartOffset = start
+		}
+	}
+	if q.Bounded {
+		// endOffset is a name bound too; through+NUL is accepted unless
+		// it exceeds the name length. The engine trims when it is omitted.
+		if end, ok := keyrange.ExclusiveEnd(q.Through, AcceptBound); ok {
+			in.EndOffset = end
+		} else {
+			p.Set().Inc(p.ID(cEndOmitted)) // the engine trims at Through
+		}
+	}
+	return in
+}
+
+func object(o *client.Object) Object {
+	return Object{Size: o.Size, Mtime: o.Updated, TimeCreated: o.TimeCreated, ETag: o.ETag, Generation: o.Generation,
+		Metageneration: o.Metageneration, StorageClass: o.StorageClass, MD5: o.MD5, CRC32C: o.CRC32C, ContentType: o.ContentType}
 }

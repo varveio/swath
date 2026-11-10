@@ -5,6 +5,7 @@ package objhttp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -62,37 +63,62 @@ func get(t *testing.T, g *Guard, url string) (*http.Response, []byte, error) {
 }
 
 func TestGuardCap(t *testing.T) {
-	const max = 100
-	for _, tc := range []struct {
-		size int
-		fail bool
-	}{{max - 1, false}, {max, false}, {max + 1, true}, {10 * max, true}} {
-		t.Run(fmt.Sprint(tc.size), func(t *testing.T) {
-			srv := serve(t, 200, tc.size)
-			resp, body, err := get(t, &Guard{MaxBody: max}, srv.URL)
-			if !tc.fail {
-				if err != nil || len(body) != tc.size || resp.ContentLength != int64(tc.size) {
-					t.Fatalf("err %v, %d bytes, ContentLength %d", err, len(body), resp.ContentLength)
-				}
-				return
+	const limit = 100
+	for _, status := range []int{200, 201, 299, 403, 503} {
+		for _, size := range []int{limit - 1, limit, limit + 1, 10 * limit} {
+			for _, declared := range []bool{false, true} {
+				t.Run(fmt.Sprintf("status=%d/size=%d/declared=%v", status, size, declared), func(t *testing.T) {
+					original := strings.NewReader(strings.Repeat("x", size))
+					var closed atomic.Int32
+					validated := false
+					length := int64(-1)
+					if declared {
+						length = int64(size)
+					}
+					g := &Guard{MaxBody: limit, MaxError: limit,
+						Next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+							return &http.Response{StatusCode: status, ContentLength: length, Header: make(http.Header), Body: &countingBody{ReadCloser: io.NopCloser(original), n: &closed}}, nil
+						}),
+						Validate: func(_ *http.Request, gotStatus int, body []byte) error {
+							validated = true
+							if gotStatus != status || len(body) != size {
+								t.Errorf("validated status %d, %d bytes", gotStatus, len(body))
+							}
+							return nil
+						},
+					}
+					resp, err := g.RoundTrip(mustReq(t, "http://example.test/list"))
+					success := status/100 == 2
+					tooLarge := success && size > limit
+					if closed.Load() != 1 || size-original.Len() != min(size, limit+1) {
+						t.Fatalf("closed %d times, read %d bytes", closed.Load(), size-original.Len())
+					}
+					if validated != (success && !tooLarge) {
+						t.Errorf("Validate called: %v", validated)
+					}
+					if tooLarge {
+						var ge *GuardError
+						var tl *TooLargeError
+						if resp != nil || !errors.As(err, &ge) || !errors.As(err, &tl) || tl.Limit != limit || Cause(err) != ge.Err || errors.Is(err, ErrSyntax) || Transport(Cause(err)) {
+							t.Fatalf("response %v, error %v: want terminal Guard cap error", resp, err)
+						}
+						if want := fmt.Sprintf("response larger than %d bytes", limit); Cause(err).Error() != want {
+							t.Errorf("cause %q, want %q", Cause(err), want)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer resp.Body.Close()
+					body, err := io.ReadAll(resp.Body)
+					want := min(size, limit)
+					if err != nil || len(body) != want || resp.StatusCode != status || resp.ContentLength != int64(want) || resp.Header.Get("Content-Length") != fmt.Sprint(want) {
+						t.Fatalf("error %v, body %d bytes, response %+v", err, len(body), resp)
+					}
+				})
 			}
-			var ge *GuardError
-			if !errors.As(err, &ge) {
-				t.Fatalf("err %v is not a *GuardError", err)
-			}
-			if Cause(err) != ge.Err {
-				t.Errorf("Cause %v, want %v", Cause(err), ge.Err)
-			}
-			if errors.Is(Cause(err), ErrSyntax) || errors.Is(err, ErrSyntax) {
-				t.Errorf("an over-cap body must not be ErrSyntax: %v", err)
-			}
-			if want := fmt.Sprintf("response larger than %d bytes", max); Cause(err).Error() != want {
-				t.Errorf("cause %q, want %q", Cause(err), want)
-			}
-			if tl, ok := errors.AsType[*TooLargeError](err); !ok || tl.Limit != max {
-				t.Errorf("err %v: want a *TooLargeError of limit %d", err, max)
-			}
-		})
+		}
 	}
 }
 
@@ -393,4 +419,151 @@ func TestGuardCutErrorBodyKeepsAnswer(t *testing.T) {
 			t.Errorf("original closed %d times, want 1", n)
 		}
 	})
+}
+
+// Status describes a response handed upward, never headers whose body or
+// validation later failed. URL is already an independent copy at send time.
+func TestCaptureDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		readErr error
+		reject  bool
+		cap     int64
+		replace []byte
+		wantErr bool
+	}{
+		{name: "success", status: 200},
+		{name: "replacement", status: 200, replace: []byte("replacement")},
+		{name: "empty success", status: 204},
+		{name: "cut success", status: 200, readErr: io.ErrUnexpectedEOF, wantErr: true},
+		{name: "body deadline", status: 200, readErr: context.DeadlineExceeded, wantErr: true},
+		{name: "validation refused", status: 200, reject: true, wantErr: true},
+		{name: "success over cap", status: 200, cap: 3, wantErr: true},
+		{name: "error answer", status: 403},
+		{name: "cut error answer", status: 503, readErr: io.ErrUnexpectedEOF},
+		{name: "truncated error answer", status: 503, cap: 3},
+		{name: "redirect", status: 307},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Capture{Replace: tc.replace}
+			unpublished := func() {
+				t.Helper()
+				if c.Status != 0 || c.Header != nil || c.Body != nil {
+					t.Fatalf("response published before delivery: %+v", c)
+				}
+			}
+			wire := "body"
+			if tc.status == 204 {
+				wire = ""
+			}
+			var closed atomic.Int32
+			body := &captureBody{Reader: strings.NewReader(wire), err: tc.readErr, check: unpublished, closed: &closed}
+			header := http.Header{"X-Test": {"value"}, "Content-Length": {"99"}}
+			g := &Guard{MaxBody: tc.cap, MaxError: tc.cap,
+				Next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					unpublished()
+					if c.URL == nil || c.URL == req.URL || c.URL.String() != "https://example.test/list?q=sent" {
+						t.Fatalf("URL not copied before send: %v", c.URL)
+					}
+					req.URL.RawQuery = "q=changed"
+					return &http.Response{StatusCode: tc.status, Header: header, Body: body, ContentLength: -1}, nil
+				}),
+				Validate: func(*http.Request, int, []byte) error {
+					unpublished()
+					if tc.reject {
+						return ErrSyntax
+					}
+					return nil
+				},
+			}
+			req, _ := http.NewRequestWithContext(WithCapture(t.Context(), c), http.MethodGet, "https://example.test/list?q=sent", nil)
+			resp, err := g.RoundTrip(req)
+			if (err != nil) != tc.wantErr || closed.Load() != 1 {
+				t.Fatalf("error %v, original body closed %d times", err, closed.Load())
+			}
+			if c.URL.RawQuery != "q=sent" {
+				t.Fatal("captured URL changed with the request")
+			}
+			if tc.wantErr {
+				unpublished()
+				if resp != nil {
+					t.Fatal("response delivered on failure")
+				}
+				return
+			}
+			defer resp.Body.Close()
+			got, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := wire
+			if tc.cap != 0 {
+				want = want[:tc.cap]
+			}
+			if tc.replace != nil {
+				want = string(tc.replace)
+			}
+			if string(got) != want || c.Status != tc.status || c.Header.Get("X-Test") != "value" || c.Header.Get("Content-Length") != fmt.Sprint(len(want)) {
+				t.Fatalf("delivered %q, capture %+v", got, c)
+			}
+			if tc.status/100 == 2 && string(c.Body) != wire || tc.status/100 != 2 && c.Body != nil {
+				t.Fatalf("captured body %q", c.Body)
+			}
+			c.Header.Set("X-Test", "delivered")
+			if header.Get("X-Test") != "value" || header.Get("Content-Length") != "99" {
+				t.Fatal("original headers mutated")
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type captureBody struct {
+	io.Reader
+	err    error
+	check  func()
+	closed *atomic.Int32
+}
+
+func (b *captureBody) Read(p []byte) (int, error) {
+	b.check()
+	n, err := b.Reader.Read(p)
+	if err == io.EOF && b.err != nil {
+		return n, b.err
+	}
+	return n, err
+}
+
+func (b *captureBody) Close() error { b.closed.Add(1); return nil }
+
+func TestCaptureWithoutAnswer(t *testing.T) {
+	for _, headerFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(headerFailure), func(t *testing.T) {
+			c := &Capture{}
+			boom := errors.New("no answer")
+			g := &Guard{Next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Body != nil {
+					_ = req.Body.Close()
+				}
+				return nil, boom
+			})}
+			var closed atomic.Int32
+			if headerFailure {
+				g.Header = func(*http.Request) error { return boom }
+			}
+			req, _ := http.NewRequestWithContext(WithCapture(t.Context(), c), http.MethodPost, "https://example.test/", nil)
+			req.Body = &countingBody{ReadCloser: io.NopCloser(strings.NewReader("request")), n: &closed}
+			resp, err := g.RoundTrip(req)
+			if !errors.Is(err, boom) || resp != nil || c.URL == nil || c.Status != 0 || c.Header != nil || c.Body != nil {
+				t.Fatalf("response %v, error %v, capture %+v", resp, err, c)
+			}
+			if closed.Load() != 1 {
+				t.Fatalf("request body closed %d times", closed.Load())
+			}
+		})
+	}
 }

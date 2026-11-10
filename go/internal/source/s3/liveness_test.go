@@ -36,7 +36,7 @@ func (f *flaky) ListObjectsV2(ctx context.Context, in *client.ListInput) (*clien
 func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	defer keyrange.SetRequeueBackoff(time.Millisecond, 4*time.Millisecond)()
 	page := &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}}}
-	exhausted := &client.ExhaustedError{Attempts: 9, Err: objhttp.Normalize(&client.Error{Status: 503, Code: "SlowDown"})}
+	exhausted := &objhttp.ExhaustedError{Attempts: 9, Err: objhttp.Normalize(&client.Error{Status: 503, Code: "SlowDown"})}
 	f := &flaky{stub: stub{pages: []*client.Page{page}}, err: exhausted}
 	f.n.Store(5)
 	rows, st := list(t, Options{Bucket: "b", Client: f, Policy: keyrange.Policy{Sequential: true}}, 1)
@@ -50,8 +50,8 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if client.Classify(err) != objhttp.ClassAccessDenied {
-		t.Fatalf("access denied: %v (%s)", err, client.Classify(err))
+	if objhttp.Classify(err) != objhttp.ClassAccessDenied {
+		t.Fatalf("access denied: %v (%s)", err, objhttp.Classify(err))
 	}
 }
 
@@ -59,7 +59,7 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 // The status and code classes are TestAnswers' and the shared contract's.
 func TestClassify(t *testing.T) {
 	err := errors.Join(errors.New("read: connection reset by peer"))
-	if f := objhttp.Normalize(err); client.Classify(f) != objhttp.ClassOther || !f.Transient {
+	if f := objhttp.Normalize(err); objhttp.Classify(f) != objhttp.ClassOther || !f.Transient {
 		t.Errorf("%v: failure %+v, want other, transient", err, f)
 	}
 }

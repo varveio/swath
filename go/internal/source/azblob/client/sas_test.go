@@ -148,11 +148,11 @@ func TestSASRedacted(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, SAS: testSAS, MaxAttempts: 1, RequestTimeout: 100 * time.Millisecond})
+	c := newTestClient(t, Config{Endpoint: srv.URL, SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}, RequestTimeout: 100 * time.Millisecond})
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	addr := ln.Addr().String()
 	ln.Close()
-	down := newTestClient(t, Config{Endpoint: "http://" + addr, SAS: testSAS, MaxAttempts: 1})
+	down := newTestClient(t, Config{Endpoint: "http://" + addr, SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}})
 	for _, x := range []struct {
 		c      *Client
 		prefix string
@@ -251,5 +251,48 @@ func TestScrubSASParameters(t *testing.T) {
 		if got := c.scrub(x.in); got != x.want {
 			t.Errorf("scrub(%q)\n got  %q\n want %q", x.in, got, x.want)
 		}
+	}
+}
+
+// secretTransport returns an error whose text quotes the SAS independently
+// of net/http's request URL, forcing redact to preserve the network signals.
+type secretTransport struct{ timeout bool }
+
+func (s secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if s.timeout {
+		<-req.Context().Done()
+	}
+	return nil, &secretNetError{timeout: s.timeout}
+}
+
+type secretNetError struct{ timeout bool }
+
+func (e *secretNetError) Error() string   { return "transport failure: " + testSAS }
+func (e *secretNetError) Timeout() bool   { return e.timeout }
+func (e *secretNetError) Temporary() bool { return false }
+
+func TestScrubbedTransportSignals(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(fmt.Sprint(timeout), func(t *testing.T) {
+			c := newTestClient(t, Config{Endpoint: "http://storage.test", SAS: testSAS, RequestTimeout: 20 * time.Millisecond,
+				Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}, HTTPClient: &http.Client{Transport: secretTransport{timeout}}})
+			safe := c.route("c")
+			redacted := c.redact(fmt.Errorf("send: %w", &secretNetError{timeout: timeout}), &safe)
+			var ne net.Error
+			var scrubbed *scrubbedNetError
+			if !errors.As(redacted, &scrubbed) || !errors.As(redacted, &ne) || ne.Timeout() != timeout || !objhttp.Transport(redacted) || sasLeak(redacted.Error()) != "" {
+				t.Fatalf("redacted error: %v", redacted)
+			}
+			_, err := c.List(t.Context(), &ListInput{Container: "c"})
+			f := objhttp.Normalize(err)
+			counts := c.Counters()
+			wantClass := objhttp.ClassOther
+			if timeout {
+				wantClass = objhttp.ClassTimeout
+			}
+			if err == nil || !objhttp.Requeue(err) || !f.Transient || f.Timeout != timeout || f.Class != wantClass || counts.Attempts != 2 || counts.Retries != 1 || (counts.Timeouts != 0 && !timeout || timeout && counts.Timeouts != 2) || sasLeak(err.Error()) != "" {
+				t.Fatalf("error %v, failure %+v, counters %+v", err, f, counts)
+			}
+		})
 	}
 }

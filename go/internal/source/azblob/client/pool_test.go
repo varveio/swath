@@ -8,64 +8,44 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync"
+	"net/url"
 	"testing"
 )
 
-// TestTransportPoolSpreadsConnections lists over HTTP/2 through a TLS
-// server that records each request's connection: the distinct connections
-// are the pool's transports, and round-robin gives each the same share.
-func TestTransportPoolSpreadsConnections(t *testing.T) {
-	for _, workers := range []int{1, 16, 64, 128} {
-		var mu sync.Mutex
-		perConn := map[string]int{}
-		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.ProtoMajor != 2 {
-				t.Errorf("request over %s, want HTTP/2", r.Proto)
-			}
-			mu.Lock()
-			perConn[r.RemoteAddr]++
-			mu.Unlock()
-			fmt.Fprint(w, page(""))
-		}))
-		srv.EnableHTTP2 = true
-		srv.StartTLS()
-		c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Workers: workers})
-		roots := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-		for _, hc := range c.http {
-			hc.Transport.(noLocation).next.(*http.Transport).TLSClientConfig.RootCAs = roots
+func TestServicePool(t *testing.T) {
+	for _, supplied := range []*http.Client{nil, {}} {
+		c := newTestClient(t, Config{Anonymous: true, Workers: 64, HTTPClient: supplied})
+		want := 4
+		if supplied != nil {
+			want = 1
 		}
-		n := c.Transports()
-		list := func() {
-			if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
-				t.Error(err)
-			}
-		}
-		for range n {
-			list()
-		}
-		const per = 8
-		var wg sync.WaitGroup
-		for range n * per {
-			wg.Go(list)
-		}
-		wg.Wait()
-		srv.Close()
-		if len(perConn) != n {
-			t.Fatalf("%d workers: %d connections %v, want %d", workers, len(perConn), perConn, n)
-		}
-		for addr, k := range perConn {
-			if k != per+1 {
-				t.Errorf("%d workers: connection %s carried %d requests, want %d", workers, addr, k, per+1)
-			}
+		if c.Transports() != want || len(c.svc) != want {
+			t.Fatalf("%d transports, %d services, want %d", c.Transports(), len(c.svc), want)
 		}
 	}
 }
 
-// TestSuppliedClientIsOnePool: a supplied HTTP client is used alone.
-func TestSuppliedClientIsOnePool(t *testing.T) {
-	c := newTestClient(t, Config{Anonymous: true, Workers: 128, HTTPClient: &http.Client{}})
-	if n := c.Transports(); n != 1 {
-		t.Fatalf("%d transports with a supplied client, want 1", n)
+func TestServicePoolRoundRobin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("")) }))
+	defer srv.Close()
+	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Workers: 64})
+	seen := make(chan int, len(c.http)*2)
+	for i, hc := range c.http {
+		tr := hc.Transport.(noLocation).next.(*http.Transport)
+		t.Cleanup(tr.CloseIdleConnections)
+		tr.Proxy = func(*http.Request) (*url.URL, error) { seen <- i; return nil, nil }
+	}
+	for i := range len(c.http) * 2 {
+		if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-seen:
+			if got != i%len(c.http) {
+				t.Fatalf("request %d used service %d", i, got)
+			}
+		default:
+			t.Fatal("request bypassed the pool")
+		}
 	}
 }

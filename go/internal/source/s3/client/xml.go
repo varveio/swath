@@ -33,9 +33,6 @@ import (
 // encoding/xml accepts a document this parser returns the same page. It is
 // more lenient on malformed input (it does not validate UTF-8 or names).
 
-// ErrSyntax wraps every parse failure (objhttp.ErrSyntax: retried).
-var ErrSyntax = objhttp.ErrSyntax
-
 type span struct{ off, n uint32 }
 
 type objSpan struct {
@@ -70,7 +67,7 @@ const (
 )
 
 func syntax(format string, a ...any) error {
-	return fmt.Errorf("%w: %s", ErrSyntax, fmt.Sprintf(format, a...))
+	return fmt.Errorf("%w: %s", objhttp.ErrSyntax, fmt.Sprintf(format, a...))
 }
 
 // reset starts a parse of body, keeping the scratch buffers.
@@ -82,7 +79,7 @@ func (p *parser) reset(body []byte, versions bool) {
 var parsers sync.Pool // *parser
 
 // parseList parses a ListObjectsV2 response body (a ListBucketResult) with
-// the scanner. A body that does not parse is ErrSyntax.
+// the scanner. A body that does not parse is objhttp.ErrSyntax.
 func parseList(body []byte) (*Page, error) { return pooled(body, (*parser).parseList) }
 
 // parseVersions parses a ListObjectVersions response body (a

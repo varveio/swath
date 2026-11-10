@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 
+	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/utf16order"
 )
 
@@ -27,36 +28,25 @@ const MaxPageSize = 5000
 func (p *ListOutput) Validate(sent string) error {
 	for i := 1; i < len(p.Items); i++ {
 		if a, b := p.Items[i-1].Name, p.Items[i].Name; utf16order.Compare(a, b) >= 0 {
-			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", ErrInvalidPage, b, a)
+			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", objhttp.ErrInvalidPage, b, a)
 		}
 	}
 	if p.NextMarker != "" && p.NextMarker == sent {
-		return fmt.Errorf("%w: NextMarker repeats the marker sent", ErrInvalidPage)
+		return fmt.Errorf("%w: NextMarker repeats the marker sent", objhttp.ErrInvalidPage)
 	}
 	return nil
 }
 
-// errorMessage reads an <Error> document's Message (the BOM stripped) from
-// the bounded body; empty when the body is not one.
-func errorMessage(body []byte) string {
+// errorDocument reads code and message from the bounded XML body, stripping
+// its BOM. XML character decoding repairs azcore's headerless code parsing,
+// which does not read CDATA or entity references.
+func errorDocument(body []byte) (code, message string) {
 	var w struct {
+		Code    string `xml:"Code"`
 		Message string `xml:"Message"`
 	}
 	if xml.Unmarshal(bytes.TrimPrefix(body, bom), &w) != nil {
-		return ""
+		return "", ""
 	}
-	return w.Message
-}
-
-// errorCode preserves XML character decoding for headerless answers:
-// azcore's regular expression does not read CDATA or entity references.
-// The Guard has already bounded body to maxErrorBody.
-func errorCode(body []byte) string {
-	var w struct {
-		Code string `xml:"Code"`
-	}
-	if xml.Unmarshal(bytes.TrimPrefix(body, bom), &w) != nil {
-		return ""
-	}
-	return w.Code
+	return w.Code, w.Message
 }

@@ -15,11 +15,12 @@
 // Redirects are never followed.
 //
 // Credentials live as long as the client: the token source is built on a
-// context that is never cancelled, whose HTTP client bounds each token
-// exchange by the request timeout, and every attempt waits for its token
-// under its own attempt deadline. Requests go unauthenticated only with
-// Anonymous; Application Default Credentials that cannot be found or
-// loaded refuse the client.
+// context that is never cancelled. Every attempt bounds its wait for a
+// token by its own deadline. Token exchanges using the supplied HTTP client
+// have the request timeout; metadata refresh uses the metadata SDK's own
+// HTTP timeout and retries, without a total refresh deadline. Requests go
+// unauthenticated only with Anonymous; Application Default Credentials that
+// cannot be found or loaded refuse the client.
 package client
 
 import (
@@ -40,6 +41,7 @@ import (
 	"google.golang.org/api/option"
 	storage "google.golang.org/api/storage/v1"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -50,8 +52,8 @@ const DefaultEndpoint = "https://storage.googleapis.com/storage/v1/"
 // readScope is the OAuth2 scope a listing needs.
 const readScope = "https://www.googleapis.com/auth/devstorage.read_only"
 
-// fields asks only for what a listing reads (sent to DefaultEndpoint), and
-// the envelope's kind, which a client can require of every 200;
+// fields asks only for what a listing reads, plus the envelope's kind,
+// which a client can require of every 200;
 // versionFields adds what a generations listing reads (timeDeleted).
 const (
 	fields        = "kind,nextPageToken,prefixes,items(name,size,updated,timeCreated,etag,generation,metageneration,storageClass,md5Hash,crc32c,contentType)"
@@ -60,26 +62,20 @@ const (
 
 // Config configures a Client. Zero values take the defaults.
 type Config struct {
+	objhttp.Retry
 	Endpoint string // JSON API base; default DefaultEndpoint
 	// Anonymous sends no credentials, whatever the environment holds.
 	Anonymous bool
-	// CredentialsFile is a service-account or authorized-user JSON file;
-	// else Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
+	// CredentialsFile is a Google credential JSON file loaded by the
+	// pinned OAuth library; else Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
 	// gcloud's file, the metadata server).
 	CredentialsFile string
 	UserProject     string        // billed project for a requester-pays bucket
 	RequestTimeout  time.Duration // per attempt; default 30 s
-	MaxAttempts     int           // default 9
-	BaseBackoff     time.Duration // default 100 ms
-	MaxBackoff      time.Duration // default 5 s
 	HTTPClient      *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
 	Workers int
-	// Limiter, if set, admits every attempt (objhttp.Limiter).
-	Limiter *objhttp.Limiter
-	// Rate, if set, caps attempts per second (objhttp.Rate).
-	Rate *objhttp.Rate
 }
 
 // ListInput is one objects.list request. StartOffset is inclusive and
@@ -145,20 +141,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// Counters are what the client did.
-type Counters = objhttp.Counts
-
-// CredentialError is a credential failure (objhttp.CredentialError):
-// configured credentials that do not load, or a token the token endpoint
-// would not issue; transient ones are retried.
-type CredentialError = objhttp.CredentialError
-
-// ExhaustedError is a transient failure that outlived its attempts.
-type ExhaustedError = objhttp.ExhaustedError
-
-// ErrSyntax marks a 200 whose body did not parse (objhttp.ErrSyntax).
-var ErrSyntax = objhttp.ErrSyntax
-
 // Client lists Cloud Storage buckets; safe for concurrent use.
 type Client struct {
 	cfg      Config
@@ -168,14 +150,13 @@ type Client struct {
 	ts       *tokensource.Shared // nil: anonymous
 	source   string
 
-	retry  objhttp.Retry
-	counts objhttp.Counters
+	*objhttp.Meter
 }
 
 // New resolves credentials and builds the client. Requests go
 // unauthenticated only with cfg.Anonymous (a public bucket); otherwise
 // credentials that cannot be found or loaded (the client library's
-// Application Default Credentials search) are a *CredentialError, and
+// Application Default Credentials search) are a *objhttp.CredentialError, and
 // nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
@@ -200,18 +181,19 @@ func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Creden
 // given.
 func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []*http.Client) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	ep, err := Endpoint(cfg.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
-		retry: objhttp.Retry{MaxAttempts: cfg.MaxAttempts, BaseBackoff: cfg.BaseBackoff, MaxBackoff: cfg.MaxBackoff, Limiter: cfg.Limiter, Rate: cfg.Rate}}
-	c.retry.Defaults()
+		Meter: objhttp.NewMeter(cfg.Retry)}
 	// The token source keeps this context for every refresh: it must
-	// outlive New's caller's deadline, and its HTTP client bounds each token
-	// exchange (the attempt deadline bounds the wait, token below).
+	// outlive New's caller's deadline. The attempt deadline bounds the wait
+	// for a token. This HTTP client bounds exchanges that use it; metadata
+	// exchanges use the metadata SDK's background context, HTTP timeout
+	// and retry policy.
 	life := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient,
 		&http.Client{Transport: pool[0].Transport, Timeout: cfg.RequestTimeout})
 	switch {
@@ -220,25 +202,25 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		c.source = "file " + cfg.CredentialsFile
 		b, err := os.ReadFile(cfg.CredentialsFile)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
 		creds, err := google.CredentialsFromJSON(life, b, readScope)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
-		c.ts = tokensource.NewShared(creds.TokenSource, 0)
+		c.ts = tokensource.NewShared(creds.TokenSource)
 	default:
 		c.source = "application default credentials"
 		creds, err := finder.find(life, readScope)
 		if err != nil {
-			return nil, &CredentialError{Source: c.source, Err: err}
+			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
-		c.ts = tokensource.NewShared(creds.TokenSource, 0)
+		c.ts = tokensource.NewShared(creds.TokenSource)
 	}
 	for _, hc := range pool {
 		g := *hc // keeps the pool's no-redirect policy
-		g.Transport = record{&objhttp.Guard{Next: hc.Transport, Validate: validate}}
-		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint), option.WithoutAuthentication(),
+		g.Transport = &objhttp.Guard{Next: hc.Transport, Validate: validate}
+		svc, err := storage.NewService(ctx, option.WithHTTPClient(&g), option.WithEndpoint(c.endpoint),
 			option.WithLogger(quiet))
 		if err != nil {
 			return nil, err
@@ -256,14 +238,13 @@ var quiet = slog.New(slog.DiscardHandler)
 
 // Endpoint is the JSON API base a client built with ep sends to, and the
 // form the resume identity records: DefaultEndpoint for "", an http(s) URL
-// with a host and no user information (a password would be recorded), its path's escapes kept as given and a literal trailing
-// slash added when the escaped path has none (so "tenant%2F" is the base
-// "tenant%2F/", not a base whose last segment the generated client's
-// relative resolution would drop). One string is one destination: the
-// client sends to exactly this base. A path holding a URI-template brace,
-// literal or escaped (%7B, %7D), is refused: the generated client expands
-// the request path as a template, which panics on an empty expression
-// and drops a named one.
+// with a host and no user information (a password would be recorded), its
+// path's escapes kept as given and a literal trailing slash added when the
+// escaped path has none (so "tenant%2F" is the base "tenant%2F/", not a base
+// whose last segment the generated client's relative resolution would
+// drop). A path holding a URI-template brace, literal or escaped (%7B, %7D),
+// is refused: the generated client expands the request path as a template,
+// which panics on an empty expression and drops a named one.
 //
 // The generated client resolves the request path against the base (dot
 // segments removed: "/a/../storage/v1/" sends to "/storage/v1/...") and
@@ -304,64 +285,20 @@ func (c *Client) pick() int {
 	return int((c.next.Add(1) - 1) % uint64(len(c.svc)))
 }
 
-// token waits for the token source under the attempt's deadline (ctx);
-// nil without credentials. A failure is a *CredentialError. Waiters
-// share one outstanding call (tokensource.Shared: at most one goroutine
-// calls the source at a time, however many attempts wait or give up); a
-// call that outlives the waits finishes in the background (its own HTTP
-// client is bounded by the request timeout) and later attempts reuse its
-// token.
-func (c *Client) token(ctx context.Context) (*oauth2.Token, error) {
-	if c.ts == nil {
-		return nil, nil
-	}
-	t, err := c.ts.Token(ctx)
-	switch {
-	case err == nil:
-		return t, nil
-	case ctx.Err() != nil:
-		return nil, &CredentialError{Source: c.source, Transient: true, Timeout: true,
-			Err: fmt.Errorf("no token within %s: %v", c.cfg.RequestTimeout, ctx.Err())}
-	}
-	return nil, &CredentialError{Source: c.source, Transient: transientToken(err),
-		Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
-}
-
 // transientToken: the token endpoint's or the metadata server's 5xx, 408
 // and 429, transport failures and a token exchange's own timeout may pass;
 // a refused grant (400, 401) and unusable credentials will not.
 func transientToken(err error) bool {
-	status := func(s int) bool { return s >= 500 || s == 408 || s == 429 }
 	var re *oauth2.RetrieveError
 	var me *metadata.Error
 	switch {
 	case errors.As(err, &re):
-		return re.Response != nil && status(re.Response.StatusCode)
+		return re.Response != nil && objhttp.TransientStatus(re.Response.StatusCode)
 	case errors.As(err, &me):
-		return status(me.Code)
+		return objhttp.TransientStatus(me.Code)
 	}
 	return objhttp.Transport(err) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // Credentials names where the credentials came from (never the secret).
 func (c *Client) Credentials() (source string, anonymous bool) { return c.source, c.ts == nil }
-
-// Answered is the number of requests the service answered usably
-// (objhttp.Counters.Answered).
-func (c *Client) Answered() int64 { return c.counts.Answered() }
-
-// Live is the request account now with the limiter's current limit, for
-// the progress sampler (objhttp.Live).
-func (c *Client) Live() objhttp.Live {
-	l := c.counts.Live()
-	l.Limit = c.retry.Limiter.Limit()
-	return l
-}
-
-// Counters returns the request counters so far.
-func (c *Client) Counters() Counters {
-	n := c.counts.Load()
-	n.Limiter = c.retry.Limiter.Counts()
-	n.Rate = c.retry.Rate.Counts()
-	return n
-}

@@ -19,6 +19,6 @@ const (
 // (attempts, retries, throttles, timeouts, parse_failures and the
 // admission's; Counters().Store fills them), then transport.pool_size
 // (Transports) and retry_after_capped (RetryAfterCapped).
-var CounterDefs = append(objhttp.CounterDefs("503 ServerBusy and 429", "-request-timeout"),
+var CounterDefs = append(objhttp.CounterDefs("503 ServerBusy and 429"),
 	counters.Def{Key: "transport.pool_size", Kind: counters.Max, Unit: "transports", Help: "HTTP transports the built client spreads requests over, round-robin: one per 16 workers, 1 to 8 (one HTTP/2 connection each below the server's stream limit); 0 with a supplied client that does not report one"},
 	counters.Def{Key: "retry_after_capped", Kind: counters.Count, Unit: "answers", Help: "answers whose Retry-After exceeded the request timeout: the wait before the next attempt was cut to it"})

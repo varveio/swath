@@ -37,12 +37,12 @@ var Schema = schema.Bind(reader.S3ObjectsV1, schema.Schema[Object]{
 		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Int: func(o *Object) (int64, bool) { return o.Mtime, true }},
 		// ETags are unique hex: a dictionary never pays.
-		{Str: nonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
-		{Str: nonEmpty(func(o *Object) string { return o.StorageClass })},
-		{Str: nonEmpty(func(o *Object) string { return o.OwnerID })},
-		{Str: nonEmpty(func(o *Object) string { return o.OwnerDisplayName })},
-		{Str: nonEmpty(func(o *Object) string { return o.ChecksumAlgorithm })},
-		{Str: nonEmpty(func(o *Object) string { return o.ChecksumType })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.ETag }), Delta: true},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.StorageClass })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.OwnerID })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.OwnerDisplayName })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.ChecksumAlgorithm })},
+		{Str: schema.NonEmpty(func(o *Object) string { return o.ChecksumType })},
 	},
 	Bytes: func(o *Object) int64 { return 16 + objectHeap(o) },
 	Heap:  objectHeap,
@@ -51,13 +51,6 @@ var Schema = schema.Bind(reader.S3ObjectsV1, schema.Schema[Object]{
 
 func objectHeap(o *Object) int64 {
 	return int64(len(o.ETag) + len(o.StorageClass) + len(o.OwnerID) + len(o.OwnerDisplayName) + len(o.ChecksumAlgorithm) + len(o.ChecksumType))
-}
-
-func nonEmpty[P any](get func(*P) string) func(*P) (string, bool) {
-	return func(o *P) (string, bool) {
-		v := get(o)
-		return v, v != ""
-	}
 }
 
 // objectCodec is the spill encoding of an Object: size and mtime as

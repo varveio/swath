@@ -45,8 +45,8 @@ func TestFaultsRequeued(t *testing.T) {
 		t.Cleanup(srv.Close)
 		lim, _ := objhttp.Admission{Limiter: true}.New(workers)
 		c, err := client.New(context.Background(), client.Config{Endpoint: srv.URL, Account: r.Account, Anonymous: true, Workers: workers,
-			MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, RequestTimeout: 300 * time.Millisecond,
-			Limiter: lim})
+			Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, Limiter: lim}, RequestTimeout: 300 * time.Millisecond,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

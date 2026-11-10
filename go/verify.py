@@ -6,7 +6,7 @@
 Dispatches on schema_id, refusing unknown schemas. Current keys are strict;
 versions keys are nondecreasing within a part and strict across parts. Checks
 the manifest's SeekParquet members and key declaration, the swath extension,
-S3 version nullability, per-part GCS schemas, generation ordering, manifest row
+S3 version nullability, per-part GCS and Azure schemas, generation ordering, manifest row
 counts, byte-exact bounds, part SHA-256 digests and footer stamps. Optional reference-dir compares ordered
 whole-row sequences and multisets, including nulls and metadata, via diffds.
 """
@@ -17,7 +17,7 @@ import os
 import sys
 
 from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
-                            GCS_VERSIONS, VERSION_IDS, GCS_COLUMNS, sql_string)
+                            GCS_VERSIONS, AZBLOB_CURRENT, VERSION_IDS, GCS_COLUMNS, AZBLOB_COLUMNS, sql_string)
 
 
 # Physical type, repetition and logical annotation for every declared GCS
@@ -30,9 +30,16 @@ GCS_CONTRACT = {
     for name in GCS_COLUMNS
 }
 
+AZBLOB_CONTRACT = {
+    name: ("INT64", "OPTIONAL", "Int" if name == "size" else "Timestamp")
+    if name in {"size", "last_modified", "creation_time"}
+    else ("BYTE_ARRAY", "REQUIRED" if name == "key" else "OPTIONAL", "String")
+    for name in AZBLOB_COLUMNS
+}
 
-def check_gcs_schema(con, path, sid, check):
-    contract = dict(GCS_CONTRACT)
+
+def check_object_schema(con, path, sid, check):
+    contract = dict(AZBLOB_CONTRACT if sid == AZBLOB_CURRENT else GCS_CONTRACT)
     if sid == GCS_VERSIONS:
         contract["time_deleted"] = ("INT64", "OPTIONAL", "Timestamp")
     rows = con.execute(f"SELECT name, type, repetition_type, logical_type, converted_type, num_children "
@@ -58,7 +65,8 @@ def check_gcs_schema(con, path, sid, check):
         if annotation == "String":
             good = good and logical.startswith("String")
         elif annotation == "Int":
-            good = good and logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64"
+            good = good and ((logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64")
+                             or (sid == AZBLOB_CURRENT and not logical and row[4] in (None, "INT_64")))
         else:
             good = good and logical.startswith("Timestamp") and "isAdjustedToUTC=1" in logical and "MICROS=MicroSeconds" in logical
         check(good, f"  {name}: {row[1]} {row[2]} {row[3]}")
@@ -101,7 +109,9 @@ def main(out, reference=None):
     groups = sid in VERSION_IDS
     s3 = sid in (S3_CURRENT, S3_VERSIONS)
     check(m.get("key") == {"column": "key", "unique": not groups}, f"key declaration {m.get('key')} (unique unless the schema repeats keys)")
-    check(ext.get("source", {}).get("kind") == ("s3" if s3 else "gcs" if sid in (GCS_CURRENT, GCS_VERSIONS) else "local-fs"),
+    source_kinds = {S3_CURRENT: "s3", S3_VERSIONS: "s3", GCS_CURRENT: "gcs",
+                    GCS_VERSIONS: "gcs", AZBLOB_CURRENT: "azblob"}
+    check(ext.get("source", {}).get("kind") == source_kinds.get(sid, "local-fs"),
           "source kind agrees with schema id")
     report = "run.json"
     check(os.path.exists(os.path.join(out, report)), f"{report} present (operational report)")
@@ -113,10 +123,10 @@ def main(out, reference=None):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
-    if sid in (GCS_CURRENT, GCS_VERSIONS):
+    if sid in (GCS_CURRENT, GCS_VERSIONS, AZBLOB_CURRENT):
         schemas_valid = True
         for path in paths:
-            schemas_valid = check_gcs_schema(con, path, sid, check) and schemas_valid
+            schemas_valid = check_object_schema(con, path, sid, check) and schemas_valid
         if not schemas_valid:
             con.close()
             print("\nRESULT: FAILED")
@@ -169,7 +179,7 @@ def main(out, reference=None):
         ).fetchall():
             print("  " + " | ".join(str(x) for x in row))
 
-    # S3 keys are STRING (VARCHAR); filesystem keys are unannotated BYTE_ARRAY (BLOB).
+    # Object-store keys are STRING (VARCHAR); filesystem keys are unannotated BYTE_ARRAY (BLOB).
     key_type = dict((r[0], r[1]) for r in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)").fetchall())["key"]
     kb = "key" if key_type == "BLOB" else "encode(key)"
     print("\nPer part:")

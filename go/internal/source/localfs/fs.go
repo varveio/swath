@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fs is the local filesystem listing provider. A range is a
+// Package localfs is the local filesystem listing provider. A range is a
 // directory (or a slice of a large directory's entries); its entries are
 // sorted by key, where a directory's key is prefix+name+"/" (its DIR row key)
 // and anything else is prefix+name. Emitting a DIR row and then its subtree
@@ -194,7 +194,7 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	// a cancellation before any work included: a range a worker has taken
 	// is no longer queued, so the order stage will not dispose it.
 	defer disposeChunk(r)
-	if done(ctx) {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	var st Stats
@@ -263,17 +263,6 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 	return e.Rows(rows[start:])
 }
 
-// done reports whether ctx is finished without ctx.Err(), which takes the
-// context's mutex; a non-blocking receive on an open channel does not lock.
-func done(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	default:
-		return false
-	}
-}
-
 func sortRows(rows []Row) {
 	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 }
@@ -292,7 +281,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	}
 	rows := make([]Row, 0, len(ents))
 	for i, d := range ents {
-		if i%1024 == 1023 && done(ctx) { // stat-heavy loop: stay cancellable
+		if i%1024 == 1023 && ctx.Err() != nil { // stat-heavy loop: stay cancellable
 			return ctx.Err()
 		}
 		name := d.Name()

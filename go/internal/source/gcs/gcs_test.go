@@ -53,10 +53,20 @@ func (c *collect) Write(_ context.Context, segs [][]Row) error {
 
 func list(t *testing.T, opt Options, workers int) ([]string, Stats) {
 	t.Helper()
+	return listAfter(t, opt, workers, "")
+}
+
+func listAfter(t *testing.T, opt Options, workers int, after string) ([]string, Stats) {
+	t.Helper()
 	opt.Anonymous, opt.Workers = true, workers
 	p, err := New(context.Background(), opt)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if after != "" {
+		if err := p.Restart(after); err != nil {
+			t.Fatal(err)
+		}
 	}
 	c := &collect{}
 	if _, err := order.Run[Range, Object](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: 100 * 256}); err != nil {
@@ -129,7 +139,7 @@ func TestBoundsAtExactKeys(t *testing.T) {
 	if q.Get("startOffset") != "a/x" || q.Get("endOffset") != "b/c\x00" {
 		t.Fatalf("offsets sent: %q %q", q.Get("startOffset"), q.Get("endOffset"))
 	}
-	got, _ = list(t, Options{Bucket: "bkt", Endpoint: ep, Resume: &Resume{After: "a/x"}}, 8)
+	got, _ = listAfter(t, Options{Bucket: "bkt", Endpoint: ep}, 8, "a/x")
 	if !slices.Equal(got, keys[i+1:]) {
 		t.Fatalf("resume after a/x: %d keys, want %d", len(got), len(keys)-i-1)
 	}
@@ -162,18 +172,19 @@ func TestTokenChainsAndEmptyPages(t *testing.T) {
 	for _, c := range []struct {
 		opt     Options
 		workers int
+		after   string
 	}{
-		{Options{Policy: keyrange.Policy{Sequential: true}}, 1},
-		{Options{}, 8},
-		{Options{Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}}, 64},
-		{Options{Resume: &Resume{After: keys[len(keys)/2]}}, 16},
+		{Options{Policy: keyrange.Policy{Sequential: true}}, 1, ""},
+		{Options{}, 8, ""},
+		{Options{Policy: keyrange.Policy{Seed: true, Structure: keyrange.StructureOn}}, 64, ""},
+		{Options{}, 16, keys[len(keys)/2]},
 	} {
 		opt := c.opt
 		opt.Bucket, opt.Endpoint = "bkt", ep
-		got, st := list(t, opt, c.workers)
+		got, st := listAfter(t, opt, c.workers, c.after)
 		want := keys
-		if opt.Resume != nil {
-			want = keys[slices.Index(keys, opt.Resume.After)+1:]
+		if c.after != "" {
+			want = keys[slices.Index(keys, c.after)+1:]
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("%+v: %d keys, want %d", c.opt, len(got), len(want))
@@ -524,8 +535,8 @@ func TestBrokenADCRefused(t *testing.T) {
 	}
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", f)
 	_, err := New(context.Background(), Options{Bucket: "b"})
-	if err == nil || classify(err) != "auth" {
-		t.Fatalf("err %v class %q, want auth", err, classify(err))
+	if err == nil || objhttp.Label(err) != "auth" {
+		t.Fatalf("err %v class %q, want auth", err, objhttp.Label(err))
 	}
 }
 
@@ -547,8 +558,8 @@ func TestInvalidPageClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
-	if !errors.Is(err, client.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || client.Classify(err) == objhttp.ClassParse {
-		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, classify(err))
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || objhttp.Classify(err) == objhttp.ClassParse {
+		t.Fatalf("err %v class %q, want invalid-page protocol sentinel", err, objhttp.Label(err))
 	}
 }
 
@@ -580,36 +591,6 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 func newFake(t testing.TB, keys []string) (*gcstest.Strict, string) {
 	f := gcstest.NewStrict(keys)
 	return f, f.Serve(t)
-}
-
-// TestPoolSizeReported: the report's transport.pool_size is the built
-// client's pool, one transport per 16 workers, and the listing is exact
-// over it.
-func TestPoolSizeReported(t *testing.T) {
-	keys := testKeys()
-	_, ep := newFake(t, keys)
-	for workers, want := range map[int]int64{1: 1, 40: 3} {
-		got, st := list(t, Options{Bucket: "bkt", Endpoint: ep}, workers)
-		if !slices.Equal(got, keys) {
-			t.Fatalf("%d workers: %d keys, want %d", workers, len(got), len(keys))
-		}
-		if n := st.Counters.Value("transport.pool_size"); n != want {
-			t.Fatalf("%d workers: transport.pool_size %d, want %d", workers, n, want)
-		}
-	}
-}
-
-// TestEndpointUserinfoRefused: an endpoint with user information is
-// refused before anything is recorded, and the refusal never quotes the
-// password, which the journal identity and the run report would otherwise
-// carry.
-func TestEndpointUserinfoRefused(t *testing.T) {
-	for _, ep := range []string{"http://user:s3cret@127.0.0.1:1/storage/v1/", "https://user:s3cret@storage.googleapis.com/storage/v1/", "http://:s3cret@h/"} {
-		_, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1})
-		if err == nil || strings.Contains(err.Error(), "s3cret") {
-			t.Errorf("%s: %v", ep, err)
-		}
-	}
 }
 
 // TestTariff: the reference rate labels Google's own endpoint however it

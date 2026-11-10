@@ -13,13 +13,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // testConfig is an anonymous path-style config for endpoint with tiny
 // backoffs.
 func testConfig(endpoint string) Config {
 	return Config{Endpoint: endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1",
-		BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}
+		Retry: objhttp.Retry{BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}}
 }
 
 // newTest is New(testConfig(endpoint)), failing the test on an error.
@@ -33,8 +35,8 @@ func newTest(t testing.TB, cfg Config) *Client {
 }
 
 // requests is a counter view: what the answer tests compare.
-func requests(c Counters) Counters {
-	return Counters{Attempts: c.Attempts, Retries: c.Retries, Throttles: c.Throttles, Timeouts: c.Timeouts, ParseFailures: c.ParseFailures}
+func requests(c objhttp.Counts) objhttp.Counts {
+	return objhttp.Counts{Attempts: c.Attempts, Retries: c.Retries, Throttles: c.Throttles, Timeouts: c.Timeouts, ParseFailures: c.ParseFailures}
 }
 
 // stock is the AWS SDK's own S3 client with its own decoder, anonymous,

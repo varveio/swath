@@ -65,6 +65,14 @@ type Column[P any] struct {
 	Delta bool
 }
 
+// NonEmpty makes an optional string accessor: an empty value is null.
+func NonEmpty[P any](get func(*P) string) func(*P) (string, bool) {
+	return func(p *P) (string, bool) {
+		v := get(p)
+		return v, v != ""
+	}
+}
+
 // Info is what the pipeline needs to know about a schema without its row
 // type: the names it stamps and the key rules it enforces.
 type Info struct {
