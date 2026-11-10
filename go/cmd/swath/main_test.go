@@ -33,8 +33,11 @@ func TestRun(t *testing.T) {
 	if err := run(context.Background(), []string{"-o", out, src, "--part-size", "4MiB"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "rows=1 parts=1") {
-		t.Fatalf("summary: %s", buf.String())
+	if buf.Len() != 0 {
+		t.Fatalf("a dataset run wrote %q on stdout", buf.String())
+	}
+	if !dataset.Committed(out) {
+		t.Fatal("not committed")
 	}
 	err := run(context.Background(), []string{src, "-o", out}, &buf, false)
 	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
@@ -42,7 +45,7 @@ func TestRun(t *testing.T) {
 	}
 	// The report goes out on failure too, with the outcome.
 	buf.Reset()
-	if err := run(context.Background(), []string{src, "-o", out, "--report-format", "json"}, &buf, false); err == nil ||
+	if err := run(context.Background(), []string{src, "-o", out, "--report", "-"}, &buf, false); err == nil ||
 		!strings.Contains(buf.String(), `"status": "failed"`) || !strings.Contains(buf.String(), "not empty") {
 		t.Fatalf("failure report: %v\n%s", err, buf.String())
 	}
@@ -59,7 +62,8 @@ func TestRun(t *testing.T) {
 
 // TestShowDataset: swath show names a committed dataset's layers, the
 // SeekParquet format and draft, the swath schema id and the swath metadata
-// version, before its coverage.
+// version, before its coverage, and counts its parts and rows in English
+// (1 part, 1 row).
 func TestShowDataset(t *testing.T) {
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
@@ -75,22 +79,22 @@ func TestShowDataset(t *testing.T) {
 	}
 	lines := strings.Split(shown.String(), "\n")
 	want := "dataset " + out + ": SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1"
-	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") {
+	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") || !strings.HasPrefix(lines[4], "1 part, 1 row, ") {
 		t.Fatalf("show:\n%s\nwant first line %q", shown.String(), want)
 	}
 }
 
 func TestVersion(t *testing.T) {
 	var b bytes.Buffer
-	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath-go ") {
+	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath ") {
 		t.Fatalf("%v %q", err, b.String())
 	}
 }
 
 func TestSize(t *testing.T) {
-	// One syntax with the size filters (filter.ParseSize): binary units in
-	// any case, exact decimal quantities.
-	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4 << 20, "4mb": 4 << 20, "4m": 4 << 20, "123": 123, "2GiB": 2 << 30,
+	// One syntax with the size filters (filter.ParseSize): K, M, G, T and
+	// KiB... binary, KB... decimal, in any case, exact decimal quantities.
+	for in, want := range map[string]int64{"4MiB": 4 << 20, "4MB": 4e6, "4mb": 4e6, "4m": 4 << 20, "123": 123, "2GiB": 2 << 30,
 		"1.5g": 3 << 29, "0.5KiB": 512, " 64 MiB ": 64 << 20, "1t": 1 << 40} {
 		var s size
 		if err := s.Set(in); err != nil || int64(s) != want {
@@ -124,7 +128,7 @@ func TestCLIDocFlags(t *testing.T) {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "$ swath %s --help\n", cmd.name())
-		usage(&b, newFlags(&options{}, cmd.diag), cmd)
+		usage(&b, newFlags(&options{}, cmd.diag), cmd, docStyle)
 	}
 	if strings.Contains(b.String(), " \t") {
 		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
@@ -260,9 +264,9 @@ func TestSpillFormatFlags(t *testing.T) {
 			plain, compress bool
 		}{
 			{nil, false, true},
-			{[]string{"--spill-compress=false"}, false, false},
+			{[]string{"--no-spill-compress"}, false, false},
 			{[]string{"--spill-plain"}, true, true},
-			{[]string{"--spill-plain", "--spill-compress=false"}, true, false},
+			{[]string{"--spill-plain", "--no-spill-compress"}, true, false},
 		} {
 			if !diag && c.args != nil {
 				continue // diagnostic flags: TestMovedFlagsNameDiag

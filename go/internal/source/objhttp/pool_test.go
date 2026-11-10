@@ -20,7 +20,7 @@ import (
 func TestPoolSize(t *testing.T) {
 	for workers, want := range map[int]int{-1: 1, 0: 1, 1: 1, 16: 1, 17: 2, 64: 4, 128: 8, 129: 8, 1024: 8} {
 		t.Run(fmt.Sprint(workers), func(t *testing.T) {
-			pool := Pool(workers, nil, nil)
+			pool := Pool(workers, nil, nil, nil)
 			if len(pool) != want {
 				t.Fatalf("%d clients, want %d", len(pool), want)
 			}
@@ -55,7 +55,7 @@ func TestPoolPreservesDefaultTLS(t *testing.T) {
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS13,
 		ServerName: "custom.test", RootCAs: x509.NewCertPool(), NextProtos: []string{"h2"}, ClientSessionCache: cache}
 	http.DefaultTransport = tr
-	pool := Pool(64, nil, nil)
+	pool := Pool(64, nil, nil, nil)
 	for _, hc := range pool {
 		got := hc.Transport.(*http.Transport).TLSClientConfig
 		want := tr.TLSClientConfig.Clone()
@@ -81,7 +81,7 @@ func TestPoolSuppliedClient(t *testing.T) {
 				CheckRedirect: func(*http.Request, []*http.Request) error { return redirectErr }}
 			var wrapped http.RoundTripper
 			var calls int
-			pool := Pool(128, supplied, func(next http.RoundTripper) http.RoundTripper {
+			pool := Pool(128, supplied, nil, func(next http.RoundTripper) http.RoundTripper {
 				wrapped = next
 				calls++
 				return &Guard{Next: next}
@@ -126,7 +126,7 @@ func TestPoolSpreadsConnections(t *testing.T) {
 			srv.EnableHTTP2 = true
 			srv.StartTLS()
 			defer srv.Close()
-			pool := Pool(workers, nil, nil)
+			pool := Pool(workers, nil, nil, nil)
 			roots := srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 			for _, hc := range pool {
 				hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = roots

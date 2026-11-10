@@ -6,12 +6,13 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
 // TestRequestRateFlag: --request-rate reaches the client: a GCS run at 20
@@ -84,7 +85,7 @@ func TestRequestRateFlag(t *testing.T) {
 }
 
 // newFlagsWith is the list flag set parsed from args.
-func newFlagsWith(t *testing.T, args ...string) *flag.FlagSet {
+func newFlagsWith(t *testing.T, args ...string) *pflag.FlagSet {
 	t.Helper()
 	var o options
 	f := newFlags(&o, false)

@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -63,6 +64,9 @@ type Column[P any] struct {
 	// Delta writes a byte-array column DELTA_BYTE_ARRAY instead of
 	// dictionary-then-PLAIN (unique values such as ETags).
 	Delta bool
+	// Values are every value a column of names holds (a local entry's
+	// kind): a text table reserves the widest.
+	Values []string
 }
 
 // NonEmpty makes an optional string accessor: an empty value is null.
@@ -85,10 +89,6 @@ type Info struct {
 	// bytes; filesystem paths are not capped, and their column-index
 	// bounds are truncated (conservative) instead.
 	MaxKeyBytes int
-	// QuotedETag: the etag column holds an HTTP entity tag stored without
-	// its surrounding quotes (S3); text output restores them, so a row
-	// shows the ETag exactly as the API returned it.
-	QuotedETag bool
 	// Groups: rows may repeat a key, as consecutive rows forming one key
 	// group in the producer's within-key order (a versions listing). False
 	// for current-object schemas: every key is unique and strictly
@@ -100,6 +100,10 @@ type Info struct {
 	// spec's; zero for rows that are not versions. Consumers interpret
 	// the rows through BindVersions, never by column name.
 	Versions reader.VersionSpec
+	// StorageClass names the column holding an object's storage class
+	// (Azure Blob's access tier), the one --storage-class filters on; ""
+	// for a schema without one.
+	StorageClass string
 }
 
 // Schema is a producer's row schema: the key column, then Columns in
@@ -178,6 +182,9 @@ func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
 	}
 	if _, err := BindVersions(&s); err != nil {
 		panic(err.Error())
+	}
+	if s.StorageClass != "" && !slices.ContainsFunc(s.Columns, func(c Column[P]) bool { return c.Name == s.StorageClass && c.Str != nil }) {
+		panic(fmt.Sprintf("schema %s: no string column %s holds the storage class", id, s.StorageClass))
 	}
 	return s
 }

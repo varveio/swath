@@ -80,7 +80,7 @@ func TestCredentialChain(t *testing.T) {
 	}
 }
 
-// TestRequestPayer: --request-payer sends x-amz-request-payer: requester
+// TestRequestPayer: --s3-requester-pays sends x-amz-request-payer: requester
 // and signs it.
 func TestRequestPayer(t *testing.T) {
 	dir := t.TempDir()

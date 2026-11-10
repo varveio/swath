@@ -37,9 +37,12 @@ A local directory tree is not an object store, and its words are its own. Its ro
 **entries**: **files** (every kind that is not a directory: regular files, symbolic links,
 devices) and **directories**. Do not call a local entry an object in prose or on the
 terminal. Machine-readable names (report fields, TSV columns, JSON members) stay the same
-for every source so one script reads them all: there `objects` counts a local tree's files,
-and a field that means rows, directories included, says so (`rows_emitted`; `progress.json`'s
-`objects`). A directory's own size is not an object's: it is in no object byte count.
+for every source so one script reads them all: there `objects` counts a local tree's files and
+never a directory, and a field that means rows, directories included, says `rows` (`rows_emitted`;
+`progress.json`'s `rows`). A directory's own size is not an object's: it is in no object byte count.
+On the terminal a rate takes the rows' noun (`entries/s` for a local tree, `keys/s` for a store,
+`rows/s` with `--all-versions`), what swath writes is a **part** (Parquet) or a **file** (a `.tsv` or
+`.jsonl` output), and sizes are binary (`KiB`, `MiB`), as in the tables.
 
 ### Live listing, result, and snapshot
 

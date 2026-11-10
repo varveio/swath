@@ -8,17 +8,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"time"
 
 	pq "github.com/parquet-go/parquet-go"
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/listing"
@@ -38,8 +37,8 @@ type Arm struct {
 	// ignored.
 	Fake scalefake.Options
 	// Flags are the S3 provider's and the engine's flags, as on the
-	// command line (diagnostic ones included: "-seed=false",
-	// "-limiter=false", "-slow-split"); the rest is the command's defaults.
+	// command line (diagnostic ones included: "--no-seed",
+	// "--no-adaptive-limit", "--slow-split"); the rest is the command's defaults.
 	Flags []string
 	// Out, if set, is a dataset directory to write (it must not exist),
 	// whose keys are then read back; otherwise the rows go to an ordered
@@ -97,10 +96,10 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	if err != nil {
 		return Result{}, err
 	}
-	fs := flag.NewFlagSet(a.Name, flag.ContinueOnError)
+	fs := pflag.NewFlagSet(a.Name, pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	opts := f.RegisterFlags(fs, true)
-	args := append([]string{"-endpoint", srv.URL, "-anonymous", "-region", "us-east-1"}, a.Flags...)
+	args := append([]string{"--endpoint-url", srv.URL, "--anonymous", "--s3-region", "us-east-1"}, a.Flags...)
 	if err := fs.Parse(args); err != nil {
 		return Result{}, fmt.Errorf("%s: flags %q: %w", a.Name, a.Flags, err)
 	}
@@ -214,9 +213,11 @@ func (m *matcher) Write(p []byte) (int, error) {
 		if tab := bytes.IndexByte(line, '\t'); tab >= 0 {
 			line = line[:tab]
 		}
-		key := unescape(line)
+		key, _, err := textout.UnescapeTSV(string(line))
 		if m.bad == "" {
 			switch {
+			case err != nil:
+				m.bad = fmt.Sprintf("row %d: %v", m.next, err)
 			case m.next >= len(m.keys):
 				m.bad = fmt.Sprintf("row %d is %q past the last key", m.next, key)
 			case key != m.keys[m.next]:
@@ -239,48 +240,6 @@ func (m *matcher) done() (bool, string) {
 		return false, fmt.Sprintf("%d rows, want %d", m.next, len(m.keys))
 	}
 	return true, ""
-}
-
-// unescape reverses the text output's escaping (textout.appendEscaped:
-// JSON's escapes for bytes below 0x20, 0x7f and the backslash; nothing
-// else is touched).
-func unescape(b []byte) string {
-	if bytes.IndexByte(b, '\\') < 0 {
-		return string(b)
-	}
-	out := make([]byte, 0, len(b))
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if c != '\\' || i+1 >= len(b) {
-			out = append(out, c)
-			continue
-		}
-		i++
-		switch b[i] {
-		case 'b':
-			out = append(out, '\b')
-		case 'f':
-			out = append(out, '\f')
-		case 'n':
-			out = append(out, '\n')
-		case 'r':
-			out = append(out, '\r')
-		case 't':
-			out = append(out, '\t')
-		case 'u':
-			if i+4 < len(b) {
-				if v, err := strconv.ParseUint(string(b[i+1:i+5]), 16, 8); err == nil {
-					out = append(out, byte(v))
-					i += 4
-					continue
-				}
-			}
-			out = append(out, '\\', 'u')
-		default:
-			out = append(out, b[i])
-		}
-	}
-	return string(out)
 }
 
 // DatasetKeys reads the keys of a committed dataset's parts, in the

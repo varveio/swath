@@ -28,7 +28,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -76,6 +75,7 @@ type Config struct {
 	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey      string
 	RequestTimeout time.Duration // per attempt; default 30 s
+	Trust          source.Trust  // verifies the service's certificate; a supplied HTTPClient keeps its own
 	HTTPClient     *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
@@ -188,13 +188,17 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	trust, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
+	}
 	c := &Client{cfg: cfg, base: base,
 		Meter: objhttp.NewMeter(cfg.Retry)}
 	// Redirects are answers, never followed (objhttp.Pool). The Location
 	// header is removed before net/http sees it (noLocation): a malformed
 	// one would otherwise end the request in an error that quotes it, SAS
 	// included, before CheckRedirect runs.
-	c.http = objhttp.Pool(cfg.Workers, cfg.HTTPClient, func(next http.RoundTripper) http.RoundTripper { return noLocation{next} })
+	c.http = objhttp.Pool(cfg.Workers, cfg.HTTPClient, trust, func(next http.RoundTripper) http.RoundTripper { return noLocation{next} })
 	if err := c.credentials(b.entra); err != nil {
 		return nil, err
 	}
@@ -238,7 +242,7 @@ func (c *Client) credentials(entra entraSource) error {
 	cfg := c.cfg
 	switch {
 	case cfg.Anonymous:
-		c.source, c.note = "anonymous", anonymousNote(cfg)
+		c.source, c.note = "anonymous", anonymousNote()
 	case cfg.SAS != "":
 		c.sas = strings.TrimPrefix(cfg.SAS, "?")
 		c.source = "shared access signature"
@@ -321,15 +325,8 @@ func (s credentialSource) Token() (*oauth2.Token, error) {
 
 // anonymousNote warns when Anonymous hides credentials the environment
 // holds.
-func anonymousNote(cfg Config) string {
-	configured := cfg.SAS != "" || cfg.SharedKey != "" || os.Getenv("AZURE_STORAGE_KEY") != "" || os.Getenv("AZURE_STORAGE_SAS_TOKEN") != ""
-	for _, v := range entraVars {
-		configured = configured || os.Getenv(v) != ""
-	}
-	if configured {
-		return "anonymous: ignoring the configured Azure credentials"
-	}
-	return ""
+func anonymousNote() string {
+	return source.AnonymousNote("Azure Blob", append([]string{"AZURE_STORAGE_SAS_TOKEN", "AZURE_STORAGE_KEY"}, entraVars...)...)
 }
 
 // transientToken: a token endpoint's 5xx, 408 and 429, an exchange that got
@@ -444,7 +441,7 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
 		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err

@@ -64,7 +64,7 @@ func TestExitCodes(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	s3args := func(bucket, out string, extra ...string) []string {
-		return append([]string{"list", "s3://" + bucket, "--endpoint", srv.URL, "--path-style", "--anonymous", "--workers", "4",
+		return append([]string{"list", "s3://" + bucket, "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "-o", out}, extra...)
 	}
 	code := func(err error) int {
@@ -187,7 +187,7 @@ func TestGCSOutageThenResume(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	args := func(out string) []string {
-		return []string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--stall-timeout", "1s", "-o", out}
 	}
 	ctx := context.Background()
@@ -241,7 +241,7 @@ func TestDiskFullExits74(t *testing.T) {
 	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()
@@ -327,7 +327,7 @@ func stuckEvidence(dir string) string {
 // return do not. With the limiter at one permit (one worker; the windowed
 // limiter no longer falls to one on three throttle answers) the root range's first pages come back empty
 // with a continuation for longer than twice the stall timeout before any
-// row (--seed=false: the seed would stop following them at its budgets,
+// row (--no-seed: the seed would stop following them at its budgets,
 // TestSeedChargesEmptyPages): the run completes (before, it stopped as stuck with 75 while the
 // service answered every request). A source that hangs, or answers only
 // 503, still stops as stuck (durability review).
@@ -382,8 +382,8 @@ func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		var out bytes.Buffer
 		start := time.Now()
-		err := run(ctx, append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--limiter", "--workers", "1", "--seed=false",
-			"--stall-timeout", stall.String(), "--report-format", "json", "-o", dir}, unjournaled...), &out, true)
+		err := run(ctx, append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
+			"--stall-timeout", stall.String(), "--report", "-", "-o", dir}, unjournaled...), &out, true)
 		if m == "healthy" {
 			if err != nil {
 				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
@@ -413,7 +413,7 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
 	dir := filepath.Join(t.TempDir(), "ds")
 	ctx := context.Background()
-	err := run(ctx, []string{"gs://bkt", "--endpoint", ep, "--anonymous", "--sequential", "--max-keys", "10",
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10",
 		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
 	if c := exitCode(t, err); c != exitFatal {
 		t.Fatalf("capped run: exit %d (%v)", c, err)
@@ -478,7 +478,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	args := func(out string, extra ...string) []string {
-		return append([]string{"gs://bkt", "--endpoint", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+		return append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
 			"--part-size", "4KiB", "--row-budget", "512KiB", "--part-interval", "0", "-o", out}, extra...)
 	}
 	ctx := context.Background()
@@ -564,7 +564,7 @@ func TestDirectoryBucketRefused(t *testing.T) {
 	t.Cleanup(srv.Close)
 	out := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	err := run(context.Background(), []string{"s3://orders--use1-az4--x-s3/prefix", "--endpoint", srv.URL, "--path-style", "--anonymous",
+	err := run(context.Background(), []string{"s3://orders--use1-az4--x-s3/prefix", "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous",
 		"-o", out, "--report", report}, io.Discard, false)
 	if c := exitCode(t, err); c != exitUsage || !strings.Contains(err.Error(), "directory bucket") {
 		t.Fatalf("exit %d: %v", c, err)

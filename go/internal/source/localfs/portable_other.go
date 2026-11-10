@@ -7,6 +7,7 @@ package localfs
 
 import (
 	"context"
+	"os"
 
 	"github.com/varveio/swath/go/internal/source"
 )
@@ -23,3 +24,14 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 }
 
 func disposeChunk(Range) {}
+
+// statPath fills r from an lstat of path, as the portable engine reads an
+// entry.
+func statPath(path string, _ Fields, r *Entry) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	fromFileInfo(r, fi)
+	return nil
+}

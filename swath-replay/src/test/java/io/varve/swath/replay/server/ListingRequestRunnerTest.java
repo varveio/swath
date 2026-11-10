@@ -551,6 +551,8 @@ class ListingRequestRunnerTest {
             assertThat(pages.get()).isEqualTo(2);
             release.countDown();
             assertThat(first.get(5, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+            // Receiving the body can precede Jetty's write callback and resource release.
+            assertThat(runner.awaitAll(System.nanoTime() + Duration.ofSeconds(5).toNanos())).isTrue();
             assertThat(runner.chargedBytes()).isZero();
             assertThat(runner.activeResponses()).isZero();
             assertThat(runner.writeDeadlineQueueSize()).isZero();

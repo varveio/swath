@@ -78,10 +78,10 @@ chmod 777 "$workdir"
 workdir=$(cd "$workdir" && pwd)
 
 run=(docker run --rm -v "$workdir:/out")
-list=(list "$BUCKET" --anonymous --region us-east-1 -o /out/data)
+list=(list "$BUCKET" --anonymous --s3-region us-east-1 -o /out/data)
 if [[ -n $ENDPOINT ]]; then
   run+=(--network host)
-  list+=(--endpoint "$ENDPOINT" --path-style)
+  list+=(--endpoint-url "$ENDPOINT" --s3-path-style)
 fi
 
 count_objects() {

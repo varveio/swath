@@ -16,7 +16,7 @@ import (
 )
 
 // TestFilterDropsDirectoryRows: a filter that drops every DIR row of a
-// filesystem listing (--exclude '/$') keeps the files below them, on the
+// filesystem listing (--exclude-regex '/$') keeps the files below them, on the
 // native (Linux getdents) and the portable engine. The traversal reads each
 // subdirectory before handing its row to the filter, which clears the rows
 // it drops: the same rows as --no-dirs, and listed = kept + dropped.
@@ -45,7 +45,7 @@ func TestFilterDropsDirectoryRows(t *testing.T) {
 			}
 			out := filepath.Join(t.TempDir(), "out")
 			report := filepath.Join(t.TempDir(), "r.json")
-			if err := run(context.Background(), []string{root, "-o", out, "--exclude", "/$", "--report", report}, io.Discard, false); err != nil {
+			if err := run(context.Background(), []string{root, "-o", out, "--exclude-regex", "/$", "--report", report}, io.Discard, false); err != nil {
 				t.Fatal(err)
 			}
 			sameRows(t, engine, ref, out)

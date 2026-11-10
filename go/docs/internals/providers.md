@@ -68,8 +68,8 @@ factory, for one:
 ```go
 registry.Register(registry.Factory{Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 	Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
-	Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
-	Operational: []string{"profile", "bearer-token-refresh-interval"},
+	Secrets:     []registry.Secret{{Flag: "s3-bearer-token-command"}},
+	Operational: []string{"profile", "s3-bearer-token-refresh-interval"},
 	Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, ...},
 	Usage: "s3://bucket[/prefix]", ...})
 ```
@@ -82,7 +82,7 @@ it did not name or a value of another type: a programming error, not a dropped f
 owned by those providers, so it is accepted for any of their roots and refused for any other (a local tree).
 A group declares its own `Operational` flags, `Hints` and `URLs` (flags whose value a recorded command line
 redacts when it carries user information, `registry.RedactArgv`) once, not per provider. Two groups exist.
-The store group (`source.StoreGroup`, value `*source.Store`), named by S3, GCS and Azure Blob, supplies `--endpoint`
+The store group (`source.StoreGroup`, value `*source.Store`), named by S3, GCS and Azure Blob, supplies `--endpoint-url`
 (the provider's own service replaced; part of each provider's resume identity, `endpoint` with its canonical
 route), `--request-timeout` and `--anonymous` (the only way a request goes unauthenticated); the
 last two are operational.
@@ -90,7 +90,7 @@ last two are operational.
 The range engine's group (`keyrange.Group`, value `*keyrange.Common`) holds a `keyrange.Policy`,
 an `objhttp.Admission` and version-mode selection. `keyrange.Flags` registers the policy comparisons and
 slow start only when `diag` is true; the ordinary help shows the supported controls. The generated CLI
-help ([cli.md](../cli.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials`, `--azblob-sas`; S3's
+help ([cli.md](../cli.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials-file`, `--azure-sas-token`; S3's
 are unprefixed, the Java tool's names). Each provider's `Open` reads the group values into its options. A test
 or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
 
@@ -101,9 +101,10 @@ touching the output. An object store's factory also gives `KeyPrefix(root)`, the
 (each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
 are relative to the root. `WithPrefix(root, prefix)` (S3 and GCS) names another prefix of the same bucket, through
-which an anchored `--include` narrows the listed prefix; Azure has none, and lists its root as given.
+which includes sharing a literal prefix narrow the listed prefix; Azure has none, and lists its root as given.
 `CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` or
-`--count-links-once` with `--metadata names`) before the source opens.
+`--count-links-once` with `--metadata names`) before the source opens, and `CheckFilter` (the local provider)
+filters on values its options do not read (sizes and times with `--metadata names`, storage classes).
 
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router

@@ -134,7 +134,7 @@ func sameParts(t *testing.T, a, b string) {
 // mismatch, a missing row or a surplus one.
 func TestMatcher(t *testing.T) {
 	keys := []string{"a/1", "a/\t2", "b\\c", "ctl\x01", "日本/x"}
-	stream := "key\tsize\na/1\t1\na/\\t2\t2\nb\\\\c\t3\nctl\\u0001\t4\n日本/x\t5\n"
+	stream := "key\tsize\na/1\t1\na/\\t2\t2\nb\\\\c\t3\nctl\\x01\t4\n日本/x\t5\n"
 	for _, cut := range []int{1, 7, len(stream)} {
 		m := &matcher{keys: keys}
 		for i := 0; i < len(stream); i += cut {

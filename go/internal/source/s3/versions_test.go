@@ -27,7 +27,7 @@ import (
 func TestVersionsSchemaColumns(t *testing.T) {
 	s := &VersionsSchema
 	if s.ID != "swath/s3-versions/v1" || !s.Groups || Schema.Groups || s.Name != Schema.Name || s.Key != Schema.Key ||
-		s.MaxKeyBytes != Schema.MaxKeyBytes || s.QuotedETag != Schema.QuotedETag {
+		s.MaxKeyBytes != Schema.MaxKeyBytes {
 		t.Fatalf("%+v", s.Info)
 	}
 	if len(s.Columns) != len(Schema.Columns)+3 {

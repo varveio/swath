@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
@@ -85,7 +86,7 @@ func roleSource(t *testing.T, s *schema.Schema[roleRow], rows []schema.Row[roleR
 	return registry.Bind(p, s)
 }
 
-// TestVersionRolesFollowDeclaration: the text output and the versions
+// TestVersionRolesFollowDeclaration: the text table and the versions
 // counts of one run, and the per-prefix totals of a count, read the
 // declared role columns together, never the conventionally named decoys:
 // a string ID with a latest boolean and delete markers, and an integer ID
@@ -112,11 +113,12 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 				{Key: "d/b", Data: roleRow{label: "b1", hasLabel: true, size: 4, hasSize: true}},
 				{Key: "d/c", Data: roleRow{head: true, size: 8, hasSize: true}},
 			},
-			text: `{"Key":"d/a","VersionId":"a2","IsLatest":true,"IsDeleteMarker":false,"Size":1}
-{"Key":"d/a","VersionId":"a1","IsLatest":false,"IsDeleteMarker":false,"Size":2}
-{"Key":"d/b","VersionId":"bm","IsLatest":true,"IsDeleteMarker":true}
-{"Key":"d/b","VersionId":"b1","IsLatest":false,"IsDeleteMarker":false,"Size":4}
-{"Key":"d/c","VersionId":"","IsLatest":true,"IsDeleteMarker":false,"Size":8}
+			text: `last_modified (local)      size  label  latest  delete_marker  key
+                            1 B  a2     true    false          d/a
+                            2 B  a1     false   false          d/a
+                                 bm     true    true           d/b
+                            4 B  b1     false   false          d/b
+                            8 B         true    false          d/c
 `,
 			markers: true,
 			counts:  [4]int64{4, 1, 2, 2},
@@ -131,10 +133,11 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 				{Key: "d/b", Data: roleRow{serial: 0, hasSer: true, retired: 0, hasRetired: true, head: true, size: 4, hasSize: true}},
 				{Key: "d/c", Data: roleRow{head: true, size: 8, hasSize: true}},
 			},
-			text: `{"Key":"d/a","VersionId":"1700000000000001","IsLatest":false,"Size":1}
-{"Key":"d/a","VersionId":"1700000000000002","IsLatest":true,"Size":2}
-{"Key":"d/b","VersionId":"0","IsLatest":false,"Size":4}
-{"Key":"d/c","VersionId":"","IsLatest":true,"Size":8}
+			text: `last_modified (local)      size  serial  latest  key
+                            1 B  1700000000000001  false   d/a
+                            2 B  1700000000000002  true    d/a
+                            4 B  0                 false   d/b
+                            8 B                    true    d/c
 `,
 			counts:  [4]int64{4, 0, 2, 2},
 			objects: 4, bytes: 15,
@@ -143,7 +146,7 @@ func TestVersionRolesFollowDeclaration(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := roleSchema(c.roles)
 			var buf bytes.Buffer
-			o, err := textout.Open(textout.Config{Format: textout.JSONL, Stdout: &buf})
+			o, err := textout.Open(textout.Config{Format: textout.Table, Stdout: &buf, Loc: time.UTC})
 			if err != nil {
 				t.Fatal(err)
 			}

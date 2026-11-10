@@ -33,13 +33,15 @@ type pooled interface{ Transports() int }
 type Options struct {
 	Bucket          string
 	Prefix          string
-	Endpoint        string // JSON API base supplied by --endpoint; default client.DefaultEndpoint
+	Endpoint        string // JSON API base supplied by --endpoint-url; default client.DefaultEndpoint
 	Anonymous       bool   // send no credentials, whatever the environment holds
 	CredentialsFile string // service-account or authorized-user JSON; else Application Default Credentials
 	UserProject     string // billed project for a requester-pays bucket
 	Timeout         time.Duration
+	Trust           source.Trust // how the service's certificate is verified
 	Workers         int
-	Client          API // optional; built from the options above when nil
+	Warn            func(string) // one-time warnings for the user; may be nil
+	Client          API          // optional; built from the options above when nil
 	// AllVersions lists every generation (versions=true, NewGenerations)
 	// instead of the live objects.
 	AllVersions bool
@@ -67,6 +69,7 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 type Stats struct {
 	Anonymous   bool              `json:"anonymous"`
 	Credentials string            `json:"credentials,omitempty"`
+	NoVerifySSL bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	MeanActive  float64           `json:"mean_active"`
 	Counters    counters.Snapshot `json:"counters"`
 }
@@ -166,9 +169,17 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
 		c, err := client.New(ctx, client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Anonymous: opt.Anonymous,
-			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Workers: opt.Workers})
+			CredentialsFile: opt.CredentialsFile, UserProject: opt.UserProject, RequestTimeout: opt.Timeout, Trust: opt.Trust, Workers: opt.Workers})
 		if err != nil {
 			return nil, false, fmt.Errorf("GCS client: %w", err)
+		}
+		if opt.Warn != nil {
+			if n := source.AnonymousNote("GCS", "GOOGLE_APPLICATION_CREDENTIALS"); opt.Anonymous && n != "" {
+				opt.Warn(n)
+			}
+			if opt.Trust.NoVerify {
+				opt.Warn(source.NoVerifyWarning)
+			}
 		}
 		p.client = c
 		p.creds, p.anonymous = c.Credentials()
@@ -217,7 +228,8 @@ func (p *provider[P]) Stats() Stats {
 		p.Set().Set(p.ID(cPoolSize), int64(c.Transports()))
 	}
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, MeanActive: e.MeanActive, Counters: e.Counters}
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+		MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {

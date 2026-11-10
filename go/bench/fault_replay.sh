@@ -36,8 +36,8 @@ for rep in $(seq 1 "$REPS"); do
     rm -rf "$out"
     read -r bin flags <<< "$args"
     # shellcheck disable=SC2086
-    /usr/bin/time -f '%e' -o "$W/t" "$bin" diag list "s3://$B" --endpoint "http://127.0.0.1:$PP" --path-style \
-      --anonymous --region us-east-1 --workers 64 --seed -o "$out" --report-format json $flags \
+    /usr/bin/time -f '%e' -o "$W/t" "$bin" diag list "s3://$B" --endpoint-url "http://127.0.0.1:$PP" --s3-path-style \
+      --anonymous --s3-region us-east-1 --workers 64 -o "$out" --report - $flags \
       > "$W/$name-$rep.json" 2> "$W/$name-$rep.log" < /dev/null
     rc=$?
     kill "$FPID"; wait "$FPID" 2>/dev/null

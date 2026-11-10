@@ -15,8 +15,9 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
   and local or mounted directory trees.
 - **Output.** Object-store text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file
   (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Local `list` requires
-  dataset output; local `du` summaries go directly to stdout. The seven filters (`--include`, `--exclude`, sizes,
-  times, storage classes) are kept. Their regular expressions are Go's RE2, not Java's.
+  dataset output; local `du` summaries go directly to stdout. Java's filters are kept: its regular expressions are
+  `--include-regex` and `--exclude-regex` (Go's RE2, not Java's), `--include` and `--exclude` take globs, every
+  filter is repeatable, and a size's `MB` is decimal (`M` and `MiB` binary).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
   Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
   and resume ([platform limits](operating.md#known-limits)). The exit codes keep their meaning:
@@ -47,8 +48,8 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 - **Splits.** A busy range is split by its owner when workers are idle; there is no thief.
 - **Counting is a command.** Java's `--format discard` is `swath diag count SOURCE`; `swath du SOURCE [-d N]`
   totals a source per prefix, as `du`.
-- **Text rows** use the S3 API's field names (`Key`, `LastModified`, `ETag`, ...), so a JSONL line matches
-  what `aws s3api list-objects-v2` prints for the object.
+- **Text rows** are the dataset's columns under its names (`key`, `size`, `last_modified`, ...), for every
+  source, a local tree's included.
 
 ## Flags
 

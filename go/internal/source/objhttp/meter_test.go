@@ -24,7 +24,7 @@ func TestMeterActivityIsLive(t *testing.T) {
 	m := NewMeter(Retry{MaxAttempts: 2, BaseBackoff: time.Nanosecond, MaxBackoff: time.Nanosecond})
 	a := Observe(m)
 	calls := 0
-	_, err := Do(t.Context(), m.Retry, &m.Tally, func() (int, error) {
+	_, err := Do(t.Context(), m.Retry, &m.Tally, func(context.Context) (int, error) {
 		defer m.Tally.Attempt()()
 		calls++
 		if live := a.Requests(); live.Attempts != int64(calls) || live.Inflight != 1 || a.Answered() != 0 {

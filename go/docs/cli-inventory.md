@@ -13,15 +13,15 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--region REGION` | `--region` (default chain ends at `us-east-1`) | kept | – |
-| `--profile NAME` | `--profile` | kept | – |
-| `--endpoint-url URL` | `--endpoint URL` (one flag for S3, GCS and Azure Blob; `--gcs-endpoint` and `--azblob-endpoint` removed; also `--request-timeout`, default 30 s, for all three, `--gcs-request-timeout` and `--azblob-request-timeout` removed) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); shared by every object store 2026-11-09 (issue 338) |
-| `--force-path-style` / `--no-force-path-style` | `--path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
+| `--region REGION` | `--s3-region` (default chain ends at `us-east-1`) | renamed | – |
+| `--profile NAME` | `--s3-profile` | renamed | – |
+| `--endpoint-url URL` | `--endpoint-url URL` (one flag for S3, GCS and Azure Blob; `--gcs-endpoint` and `--azblob-endpoint` removed; also `--request-timeout`, default 30 s, for all three, `--gcs-request-timeout` and `--azblob-request-timeout` removed) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); shared by every object store 2026-11-09 (issue 338) |
+| `--force-path-style` / `--no-force-path-style` | `--s3-path-style` (boolean; default on with a custom endpoint, as Java's) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) (default) |
 | `--no-sign-request` | `--anonymous` (one flag for S3, GCS and Azure Blob; `--gcs-anonymous` and `--azblob-anonymous` removed) | renamed | shared 2026-11-09 (owner: anonymity is explicit) |
-| `--requester-pays requester` | `--request-payer` (boolean) | renamed | – |
-| `--fetch-owner` | `--fetch-owner` | kept | – |
-| `--bearer-token-command CMD` | `--bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--bearer-token-refresh-interval` (45 m) | `--bearer-token-refresh-interval` (45 m; one refresh in flight) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--requester-pays requester` | `--s3-requester-pays` (boolean) | renamed | – |
+| `--fetch-owner` | `--s3-fetch-owner` | renamed | – |
+| `--bearer-token-command CMD` | `--s3-bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--bearer-token-refresh-interval` (45 m) | `--s3-bearer-token-refresh-interval` (45 m; one refresh in flight) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](operating.md#credentials) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
@@ -30,9 +30,9 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include` (Go RE2, found anywhere; `^literal` also narrows the listed prefix on S3 and GCS; Azure filters rows without prefix narrowing); `coverage.filters` records each filter | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--exclude REGEX` | `--exclude` (Go RE2) | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--min-size SIZE` | `--min-size` (Java's units) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--include REGEX` | `--include-regex` (Go RE2, found anywhere, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
+| `--exclude REGEX` | `--exclude-regex` (Go RE2, repeatable); `--exclude GLOB` is a glob | renamed; globs added | 2026-11-10 (owner: as `--include`) |
+| `--min-size SIZE` | `--min-size` (`KB`, `MB` decimal, unlike Java; `K`, `KiB` binary) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
@@ -45,13 +45,13 @@ decision to add it later).
 |---|---|---|---|
 | `--format auto\|table\|tsv\|jsonl` | `--format auto\|table\|tsv\|jsonl`, stdout only (auto: the table on a terminal, TSV otherwise); with `-o` refused, the name decides | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features); stdout only 2026-11-06 (owner: text output in the shapes people already know): a file's name already says its format |
 | `--format parquet` | none: any `-o` without a text extension is the dataset | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the `-o` name already decides) |
-| Text row fields `key size last_modified etag storage_class row_type` (+ JSONL `owner_id owner_display_name checksum_algorithm checksum_type`) | the S3 API's object: `Key LastModified ETag ChecksumAlgorithm ChecksumType Size StorageClass Owner{DisplayName,ID}`, in the API's order; a JSONL line equals `aws s3api list-objects-v2 \| jq -c '.Contents[]'` | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
+| Text row fields `key size last_modified etag storage_class row_type` (+ JSONL `owner_id owner_display_name checksum_algorithm checksum_type`) | the source schema's columns: `key`, then every column in the dataset's order under its name, values as stored | renamed | 2026-11-06 the S3 API's object; 2026-11-10 (owner: text output works for every source through one interface, the schema) |
 | `row_type` (always `OBJECT`) | none | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (every row is an object) |
-| `last_modified` `...Z` with 0, 3 or 6 fraction digits | `LastModified` as the AWS CLI prints it: `+00:00`, 6 fraction digits only when not zero | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
-| TSV/table escaping: a control byte as `\xNN`, backslash unescaped | JSON's string escapes (`\\ \b \f \n \r \t \u00xx`) in all three formats | renamed | 2026-11-06 (owner: text output in the shapes people already know): reversible (the old rule was not: a key containing `\x09` read back as a tab) and one rule instead of two |
-| Table: size in 14, time in 24, key | the `aws s3 ls` line: `YYYY-MM-DD HH:MM:SS`, size in 10, key (UTC) | renamed | 2026-11-06 (owner: text output in the shapes people already know) |
+| `last_modified` `...Z` with 0, 3 or 6 fraction digits | every time column UTC with 6 fraction digits, `...Z` | renamed | 2026-11-10 (owner: text output works for every source through one interface, the schema) |
+| TSV/table escaping: a control byte as `\xNN`, backslash unescaped | TSV and the table: `\\ \t \n \r`, other control bytes, DEL and bytes that are not UTF-8 as `\xHH`, `\N` a null; JSONL: JSON's escapes, `NAME_base64` for bytes that are not UTF-8 | renamed | 2026-11-10 (owner: text output works for every source through one interface, the schema): reversible for any bytes |
+| Table: size in 14, time in 24, key | a header; the local time to the second, the size in binary units, `kind` and the version columns where the schema has them, the key | renamed | 2026-11-10 (owner: one rule for terminal tables) |
 | `--format discard` | `swath diag count SOURCE` (rows counted as they arrive, never ordered, buffered or spilled; the Go port's `swath list --count-only` until 0.4, `swath count` 2026-11-07 to 2026-11-09) | renamed | command 2026-11-07 (owner: the cleanest CLI surface); `swath diag count` 2026-11-09 (owner: `swath du` totals a source per prefix with readable output, the measurement's one line moves to `diag`) |
-| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for object-store stdout; local `list` requires a dataset | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-o`, `--output PATH` (file, directory or `-` for stdout) | `-o` only: a dataset directory, a `.tsv`/`.jsonl` file (optionally `.gz`/`.zst`), or `-`/none for stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--output-type file\|dir` | none: the `-o` name decides | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (an extensionless text file names no format) |
 | `-o NAME.parquet` one-writer directory layout | none (`-o NAME.parquet` is a dataset directory) | removed | not ported, 2026-11-06: no value now (Java's own FAQ calls it a trap) |
 | `--compression none\|gzip\|zstd` (text only) | the `-o` name's `.gz`/`.zst`; stdout through a pipe (`\| zstd`) | removed | not ported, 2026-11-06 (owner: text output in the shapes people already know): no value (the name says it for a file; a pipe does it for stdout) |
@@ -117,8 +117,8 @@ decision to add it later).
 |---|---|---|---|
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
-| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on) adapts concurrency to sustained throttling and recovery; `--limiter=false` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
-| Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
+| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | the adaptive limit (default on) adapts concurrency to sustained throttling and recovery; `--no-adaptive-limit` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
+| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
@@ -169,11 +169,11 @@ decision to add it later).
 |---|---|---|---|
 | `--help`, `help` | `--help`, `help`, and `--help` on every command (shared groups first, then provider hints by scheme within each section; limits and performance flags say when to change them) | kept | – |
 | `--version` (five lines) | `--version` (tool, version, revision) | kept | – |
-| `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-v`, `-vv`, `-vvv` | `-v`: a start line, progress as appended records; `-vv` failed requests and retries with their causes; `-vvv` every request (redacted) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
-| `--tune seed.mode=none\|shallow` | `swath diag list --seed=false` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
+| `--tune seed.mode=none\|shallow` | `swath diag list --no-seed` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
 | none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [internals/range-engine.md](internals/range-engine.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |

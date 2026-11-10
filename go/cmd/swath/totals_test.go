@@ -59,13 +59,13 @@ func TestDu(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
-	const newest, older = "2026-01-02T04:04:05+00:00", "2026-01-02T03:04:05+00:00"
-	want := "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n" +
+	const newest, older = "2026-01-02T04:04:05.000000Z", "2026-01-02T03:04:05.000000Z"
+	want := "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n" +
 		"0\t4\t4\t9\t0\t" + newest + "\t\n" +
 		"1\t2\t1\t7\t0\t" + newest + "\ta/\n" +
 		"2\t1\t0\t5\t0\t" + newest + "\ta/b/\n" +
 		"1\t1\t0\t1\t0\t" + older + "\tc/\n" +
-		"1\t0\t0\t0\t0\t\te/\n"
+		"1\t0\t0\t0\t0\t\\N\te/\n"
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
 	}
@@ -102,24 +102,78 @@ func TestDu(t *testing.T) {
 		return at.In(time.Local).Format(time.DateTime)
 	}
 	wantTable := "" +
-		"Size  Files  Dirs  LastModified (local)  Prefix\n" +
-		" 7 B      2     1  " + local(newest) + "   a/\n" +
-		" 1 B      1     0  " + local(older) + "   c/\n" +
-		" 0 B      0     0                        e/\n" +
-		" 9 B      4     4  " + local(newest) + "   (total)\n"
+		"size  files  dirs  last_modified (local)  path\n" +
+		" 7 B      2     1  " + local(newest) + "    a/\n" +
+		" 1 B      1     0  " + local(older) + "    c/\n" +
+		" 0 B      0     0                         e/\n" +
+		" 9 B      4     4  " + local(newest) + "    (total)\n"
 	if out.String() != wantTable {
 		t.Fatalf("table\n%s\nwant\n%s", out.String(), wantTable)
 	}
 	// Without -d, the total alone; swath diag count keeps its one line.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv"}, &out); err != nil ||
-		out.String() != "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t9\t0\t"+newest+"\t\n" {
+		out.String() != "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t4\t4\t9\t0\t"+newest+"\t\n" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	out.Reset()
 	if err := runCount(context.Background(), []string{root, "--no-stats"}, &out); err != nil || !strings.HasPrefix(out.String(), "files=4 dirs=4 ") ||
 		!strings.Contains(out.String(), "rows=8 object_bytes=9 ") { // the files' bytes: a directory's own size is no object's
 		t.Fatalf("%v %q", err, out.String())
+	}
+}
+
+// TestDuFile: a file is a local source, as du and ls take one: du gives its
+// one total row, list its one row, keyed by its name.
+func TestDuFile(t *testing.T) {
+	root, at := depthTree(t)
+	file := filepath.Join(root, "a", "g")
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+		out.String() != "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t0\t2\t0\t"+at.Format("2006-01-02T15:04:05.000000Z")+"\t\n" {
+		t.Fatalf("du: %v %q", err, out.String())
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{file, "--columns", "key,size,kind", "--no-stats"}, &out, false); err != nil || out.String() != "key\tsize\tkind\ng\t2\tFILE\n" {
+		t.Fatalf("list: %v %q", err, out.String())
+	}
+}
+
+// TestDuSortSize: --sort size orders the prefixes below each parent by
+// size, the largest first, each prefix's own below it and the total in its
+// place (last in the table, first in TSV); another order is refused.
+func TestDuSortSize(t *testing.T) {
+	root, _ := depthTree(t)
+	if err := os.WriteFile(filepath.Join(root, "c", "big"), make([]byte, 20), 0o644); err != nil { // c/ the largest, after a/ by name
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for l := range strings.Lines(out.String()) {
+		f := strings.Fields(l)
+		order = append(order, f[len(f)-1])
+	}
+	if got := strings.Join(order, " "); got != "path c/ a/ a/b/ e/ (total)" {
+		t.Fatalf("table by size: %s", got)
+	}
+	out.Reset()
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var prefixes []string
+	for l := range strings.Lines(out.String()) {
+		f := strings.Split(strings.TrimSuffix(l, "\n"), "\t")
+		prefixes = append(prefixes, f[0]+":"+f[len(f)-1])
+	}
+	if got := strings.Join(prefixes, " "); got != "depth:prefix 0: 1:c/ 1:a/ 1:e/" {
+		t.Fatalf("tsv by size: %s", got)
+	}
+	var u usageError
+	if err := runDu(context.Background(), []string{root, "--sort", "big"}, &out); !errors.As(err, &u) {
+		t.Fatalf("--sort big: %v", err)
 	}
 }
 
@@ -130,7 +184,7 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 	root, _ := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
-	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "^c/", "--no-stats", "--report", report}, &out, false); err != nil {
+	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "c/", "--exclude", "c/**", "--no-stats", "--report", report}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	var r listing.Report
@@ -146,9 +200,9 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 func TestDuUnsized(t *testing.T) {
 	root, _ := depthTree(t)
 	for format, want := range map[string]string{
-		"tsv":   "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t0\t4\t\t\n1\t2\t1\t0\t2\t\ta/\n1\t1\t0\t0\t1\t\tc/\n1\t0\t0\t0\t0\t\te/\n",
-		"jsonl": `{"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":0,"Unsized":4}` + "\n" + `{"Depth":1,"Prefix":"a/","Objects":2,"Dirs":1,"Size":0,"Unsized":2}` + "\n" + `{"Depth":1,"Prefix":"c/","Objects":1,"Dirs":0,"Size":0,"Unsized":1}` + "\n" + `{"Depth":1,"Prefix":"e/","Objects":0,"Dirs":0,"Size":0,"Unsized":0}` + "\n",
-		"table": "Size  Files  Dirs  LastModified (local)  Prefix\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n   -      4     4                        (total)\n",
+		"tsv":   "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t4\t4\t0\t4\t\\N\t\n1\t2\t1\t0\t2\t\\N\ta/\n1\t1\t0\t0\t1\t\\N\tc/\n1\t0\t0\t0\t0\t\\N\te/\n",
+		"jsonl": `{"depth":0,"prefix":"","objects":4,"dirs":4,"size":0,"unsized":4,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"a/","objects":2,"dirs":1,"size":0,"unsized":2,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"c/","objects":1,"dirs":0,"size":0,"unsized":1,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"unsized":0,"last_modified":null}` + "\n",
+		"table": "size  files  dirs  last_modified (local)  path\n   -      2     1                         a/\n   -      1     0                         c/\n 0 B      0     0                         e/\n   -      4     4                         (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -173,11 +227,11 @@ func TestDuJSONL(t *testing.T) {
 	for _, k := range keys {
 		size += len(k) // the fake's object bodies are their keys
 	}
-	if !strings.HasPrefix(lines[0], `{"Depth":0,"Prefix":"","Objects":50,"Size":`+strconv.Itoa(size)+`,"LastModified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"Depth":1,"Prefix":"`) {
+	if !strings.HasPrefix(lines[0], `{"depth":0,"prefix":"","objects":50,"size":`+strconv.Itoa(size)+`,"last_modified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"depth":1,"prefix":"`) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.Contains(out.String(), "  Objects  LastModified (local)") {
+	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.HasPrefix(out.String(), " size  objects  last_modified (local)  prefix\n") {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }
@@ -191,7 +245,7 @@ func TestDuOrigin(t *testing.T) {
 	du := func(args ...string) string {
 		t.Helper()
 		var out bytes.Buffer
-		if err := runDu(context.Background(), append(args, "--endpoint", end, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
+		if err := runDu(context.Background(), append(args, "--endpoint-url", end, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
 			t.Fatal(err)
 		}
 		var rows []string
@@ -208,7 +262,7 @@ func TestDuOrigin(t *testing.T) {
 		{[]string{"s3://bkt/logs/2026/", "-d", "1"}, "0:logs/2026/ 4,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
 		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/ 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
 		{[]string{"s3://bkt/logs", "-d", "1"}, "0: 5,1:logs/ 5"},
-		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "^logs/2026/"}, "0:logs/ 4,1:logs/2026/ 4"},
+		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "2026/**"}, "0:logs/ 4,1:logs/2026/ 4"},
 		{[]string{"s3://bkt", "-d", "2"}, "0: 6,1:logs/ 5,2:logs/2026/ 4,2:logs/2027/ 1,1:other/ 1"},
 	} {
 		if got := du(tc.args...); got != tc.want {
@@ -228,12 +282,12 @@ func TestDuRefusals(t *testing.T) {
 	}{
 		{false, []string{"--depth", "1"}, "--depth has no meaning for swath list"},
 		{false, []string{"--max-prefixes", "9"}, "--max-prefixes has no meaning for swath list"},
-		{true, []string{"--depth", "-1"}, "--depth -1: negative"},
-		{true, []string{"--max-prefixes", "0"}, "--max-prefixes 0"},
-		{true, []string{"--max-inodes", "0"}, "--max-inodes 0"},
+		{true, []string{"--depth", "-1"}, `--depth "-1": want a whole number, 0 or more`},
+		{true, []string{"--max-prefixes", "0"}, `--max-prefixes "0"`},
+		{true, []string{"--max-inodes", "0"}, `--max-inodes "0"`},
 		{true, []string{"--format", "parquet"}, "want auto, table, tsv or jsonl"},
-		{true, []string{"--report-format", "json"}, "use --report FILE"},
-		{true, []string{"--seed=false"}, "give it to swath diag count or swath diag list"},
+		{true, []string{"--report", "-"}, "give --report FILE"},
+		{true, []string{"--no-seed"}, "give it to swath diag count or swath diag list"},
 	} {
 		var out bytes.Buffer
 		var err error
@@ -352,7 +406,7 @@ func TestDuStopDuringOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	readJSON(t, report, &r)
-	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "Depth\t") {
+	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "depth\t") {
 		t.Fatalf("outcome %+v, wall %d ms, rows %q", r.Outcome, r.Timings.WallMs, w.String())
 	}
 }

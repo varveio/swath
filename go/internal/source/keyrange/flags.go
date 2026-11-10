@@ -4,10 +4,11 @@
 package keyrange
 
 import (
-	"flag"
 	"fmt"
 	"math"
 	"strconv"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
@@ -47,15 +48,8 @@ func (p Policy) Options() Options {
 // names (registry.Factory.Shared): the command registers it once.
 var Group = &source.FlagGroup{
 	Name:        "keyrange",
-	Flags:       func(f *flag.FlagSet, diag bool) any { return Flags(f, diag) },
-	Operational: []string{"limiter", "limiter-slow-start", "request-rate"},
-	Hints: []source.Hint{
-		{Flag: "all-versions"},
-		{Flag: "request-rate", When: "set it to stay under a request quota shared with other clients"},
-		{Flag: "limiter", When: "turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1"},
-		{Flag: "seed"}, {Flag: "structure"}, {Flag: "slow-split"}, {Flag: "floors"}, {Flag: "sequential"}, {Flag: "max-keys"}, {Flag: "page-size"},
-		{Flag: "limiter-slow-start"},
-	},
+	Flags:       func(f *pflag.FlagSet, diag bool) any { return Flags(f, diag) },
+	Operational: []string{"no-adaptive-limit", "adaptive-limit-slow-start", "request-rate"},
 }
 
 // Flags registers the engine's flag group on f and returns the Common
@@ -65,35 +59,50 @@ var Group = &source.FlagGroup{
 // diagnostic (swath diag list): they exist to run an experiment. The
 // limiter switch and the request rate are on swath list too: they are how
 // an operator answers a service that throttles (docs/operating.md).
-func Flags(f *flag.FlagSet, diag bool) *Common {
-	// The command's defaults: the seed tiles the scope (--seed=false skips
+func Flags(f *pflag.FlagSet, diag bool) *Common {
+	// The command's defaults: the seed tiles the scope (--no-seed skips
 	// it), structure probes engage on their evidence (StructureAuto), and
 	// the client admits its requests through the adaptive limiter (Java's
-	// gauge rules; --limiter=false turns it off: no limit at all, not a
+	// gauge rules; --no-adaptive-limit turns it off: no limit at all, not a
 	// fixed --workers, since seed and probe requests run beside the
 	// workers' pages). A library caller's zero
 	// Policy has no seed and no probes, its zero Admission no limiter.
 	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
-	f.BoolVar(&a.Limiter, "limiter", a.Limiter, "requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them")
-	f.BoolVar(&c.AllVersions, "all-versions", false, "list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts")
-	f.Var((*rateFlag)(&a.RequestRate), "request-rate", "requests: cap every HTTP attempt (pages, probes, retries, requeues) at `N` per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap")
+	source.Define(f, source.Flag{Name: source.AllVersionsFlag, Value: source.Switch(&c.AllVersions), Usage: "S3 and GCS: list every version, S3 delete markers too (not Azure Blob)",
+		Long: "S3: versions and delete markers (needs s3:ListBucketVersions). GCS: generations, live and noncurrent. Refused on Azure Blob. A key's rows are consecutive and never split across parts."})
+	source.Define(f, source.Flag{Name: "request-rate", Value: (*rateFlag)(&a.RequestRate), Metavar: "N", Group: source.GroupLimits,
+		Usage: "cap every HTTP attempt at N per second (0: no cap)",
+		Long:  "Set it to stay under a request quota shared with other clients. Refused when the spacing exceeds half --stall-timeout."})
+	source.Define(f, source.Flag{Name: "no-adaptive-limit", Familiar: []string{"limiter"}, Value: source.Off(&a.Limiter), Group: source.GroupLimits,
+		Usage: "do not lower concurrency when the service throttles requests",
+		Long:  "Turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1. Without it each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them."})
 	if diag {
-		f.BoolVar(&a.SlowStart, "limiter-slow-start", a.SlowStart, "requests: with -limiter, start at 4 requests in flight and double each second up to --workers until the first cut or timeout (Java swath's slow start); applies to swath resume too")
-		f.BoolVar(&p.Seed, "seed", p.Seed, "ranges: tile the keyspace from delimiter listings of the folder hierarchy before splitting (the top level up to 4 pages, narrow levels descended up to 4 deep: 1 to 6 serial round trips before the first range lists, the first carrying the first data page, which lists a scope of one page alone; not with -sequential); false: start from one range")
-		f.Var((*structureFlag)(&p.Structure), "structure", "ranges: structure probes (delimiter pages of 32 alongside a range's pages; a split pivots on the folder boundaries they list), written --structure=auto|on|off with '=' (the bare flag is on, so a separate word is the next argument): auto probes on the open frontier while its cursor is in a folder and in bounded ranges whose chain stays inside one folder; on (or true) probes every range in a folder; off (or false) none")
-		f.BoolVar(&p.SlowSplit, "slow-split", p.SlowSplit, "ranges: rank ranges by time left (keys left x their page latency) and split a range without an idle worker when its pages take at least 4 times the run's mean latency and its time left is at least twice the running ranges' mean (one such split waiting at a time)")
-		f.BoolVar(&p.Floors, "floors", p.Floors, "ranges: the gate-chain floors: never split a range with at most 4 pages of keys left, nor leave the child past the pivot below 2 pages")
-		f.BoolVar(&p.Sequential, "sequential", p.Sequential, "ranges: list with one continuation-token chain (no ranges; the reference)")
-		f.Func("page-size", "ranges: ask the service for pages of `N` entries (1 to 1000; provider default when unset): small pages exercise page seams, splits inside a version history and the probes", func(v string) error {
-			n, err := strconv.Atoi(v)
-			if err != nil || n < 1 || n > PageKeys {
-				return fmt.Errorf("want 1 to %d", PageKeys)
-			}
-			p.PageSize = n
-			return nil
-		})
-		f.Int64Var(&p.MaxKeys, "max-keys", p.MaxKeys, "ranges: with -sequential, stop after `N` objects (experiments; the dataset is marked incomplete)")
+		source.Define(f, source.Flag{Name: "adaptive-limit-slow-start", Value: source.Switch(&a.SlowStart),
+			Usage: "start the limit at 4 in flight, doubling each second to --workers"})
+		source.Define(f, source.Flag{Name: "no-seed", Value: source.Off(&p.Seed),
+			Usage: "start from one range, without the delimiter-listing seed"})
+		fl := source.Define(f, source.Flag{Name: "structure", Value: (*structureFlag)(&p.Structure), Metavar: "auto|on|off", Default: StructureAuto.String(),
+			Usage: "probes whose folder boundaries splits pivot on",
+			Long:  "The bare flag is on, so a mode needs '='. auto probes on the open frontier while its cursor is in a folder, and in bounded ranges whose chain stays inside one folder; on probes every range in a folder."})
+		fl.NoOptDefVal = "on"
+		source.Define(f, source.Flag{Name: "slow-split", Value: source.Switch(&p.SlowSplit),
+			Usage: "split a range whose pages are slow without waiting for an idle worker"})
+		source.Define(f, source.Flag{Name: "floors", Value: source.Switch(&p.Floors),
+			Usage: "never split a range of 4 pages or fewer, nor leave a child under 2"})
+		source.Define(f, source.Flag{Name: "sequential", Value: source.Switch(&p.Sequential),
+			Usage: "list with one continuation-token chain (no ranges; the reference)"})
+		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",
+			Usage: "with --sequential, stop after N objects (marked incomplete)"})
+		source.Define(f, source.Flag{Name: "page-size", Metavar: "N", Usage: fmt.Sprintf("ask for pages of N entries (1 to %d; default the provider's)", PageKeys),
+			Value: source.Func(func(v string) error {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1 || n > PageKeys {
+					return fmt.Errorf("want 1 to %d", PageKeys)
+				}
+				p.PageSize = n
+				return nil
+			})})
 	}
 	return c
 }
@@ -106,6 +115,9 @@ func (r *rateFlag) String() string {
 	}
 	return strconv.FormatFloat(float64(*r), 'g', -1, 64)
 }
+
+func (r *rateFlag) Type() string { return "float" }
+
 func (r *rateFlag) Set(s string) error {
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) || (v > 0 && v < objhttp.MinRate) {
@@ -126,6 +138,8 @@ func (s *structureFlag) String() string {
 	return Structure(*s).String()
 }
 
+func (s *structureFlag) Type() string { return "string" }
+
 func (s *structureFlag) Set(v string) error {
 	switch v {
 	case "auto":
@@ -139,5 +153,3 @@ func (s *structureFlag) Set(v string) error {
 	}
 	return nil
 }
-
-func (s *structureFlag) IsBoolFlag() bool { return true }

@@ -85,7 +85,7 @@ large. `resources.free_disk_min_bytes` is close to `resources.spill.reserve_byte
 the output, or a larger `--spill-budget` when the filesystem has the room. An interrupted run resumes with the
 new value: `swath resume DIR --spill-budget 200GiB`.
 
-**A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `objects`
+**A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `rows`
 rises while `encoded` and `parts` stay flat and `part_age_ms` grows. One range at the front of the output is
 slow: a slow, retried or hung request. Check `inflight.p99_ns` against `inflight.p50_ns` and the retries in
 the report's `source.stats.counters.values`. After `--stall-timeout` (10 min) of no progress the run stops
@@ -95,7 +95,7 @@ if it happens again.
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
 `limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
 shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--limiter=false --request-rate N` ([operating.md](operating.md#throttling)).
+sustained throttling, use `--no-adaptive-limit --request-rate N` ([operating.md](operating.md#throttling)).
 
 ## Resume after a kill
 

@@ -111,6 +111,9 @@ type SourceConfig struct {
 	// delimiter seed (--seed-from): a committed dataset directory of the
 	// same source and scope, or a cut file. "" for none.
 	SeedFrom string
+	// Narrowing is how the includes narrowed URI (filter.Narrowed, or why
+	// not; "" without includes): the report's invocation.narrowing.
+	Narrowing string
 }
 
 // OutputConfig is where the dataset goes.
@@ -176,7 +179,7 @@ type Spill struct {
 	// LogicalBytes is the spilled rows' logical size (key and column
 	// values, as the part router counts them): Bytes against it is what
 	// the frame coding saved. Format names the frames: "delta" or "plain",
-	// "+zstd" unless --spill-compress=false.
+	// "+zstd" unless --no-spill-compress.
 	LogicalBytes int64  `json:"logical_bytes"`
 	Format       string `json:"format"`
 	// DecodeRefused counts frames refused at read for decoding past their
@@ -476,7 +479,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if argv == nil {
 		argv = []string{}
 	}
-	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
+	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
 		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
@@ -777,7 +780,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 // sample is the run's progress now, for the history.
 func (a *attempt) sample() Sample {
 	p := a.cfg.Progress.Snapshot()
-	v := Sample{RowsFetched: p.Objects, RowsEmitted: p.Ordered, RowsDurable: a.retained.Load(),
+	v := Sample{RowsFetched: p.Rows, RowsEmitted: p.Ordered, RowsDurable: a.retained.Load(),
 		HTTPAttempts: p.Requests, Inflight: p.Inflight, Limit: p.Limit}
 	if r := a.jr.ackedRows(); r > 0 {
 		v.RowsDurable = r

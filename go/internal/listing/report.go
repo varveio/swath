@@ -21,8 +21,10 @@ import (
 // the reuse.* counters, timings.listing_done_at and resources.drain (the
 // drain tail: read-ahead, segments, encoder admission after listing), and
 // for versions schemas the attempt-scoped version classification and
-// distinct keys, and swath du's per-prefix totals (output.totals).
-const ReportVersion = 3
+// distinct keys, and swath du's per-prefix totals (output.totals). 4:
+// invocation.narrowing (the includes' prefix narrowing), outcome.unreadable
+// and requests.failure_warnings.
+const ReportVersion = 4
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: readers accept
@@ -79,6 +81,12 @@ type Requests struct {
 	Retries      int64 `json:"retries"`
 	Throttles    int64 `json:"throttles"`
 	Timeouts     int64 `json:"timeouts"`
+	// FailureWarnings counts the persistent-failure warnings printed on
+	// stderr: requests failing with one cause, none answered, for 10 s.
+	FailureWarnings int64 `json:"failure_warnings"`
+	// LogDropped counts the stderr lines (the request log, mostly) dropped
+	// because stderr did not drain.
+	LogDropped int64 `json:"log_dropped"`
 }
 
 // Cost is the estimated price of an invocation's HTTP attempts
@@ -144,9 +152,10 @@ type Build = buildinfo.Build
 // Invocation is what was asked.
 type Invocation struct {
 	Argv           []string `json:"argv"`
-	Source         string   `json:"source"`           // the root as recorded
-	Out            string   `json:"out,omitempty"`    // the dataset directory; empty for a dry run
-	Resume         bool     `json:"resume,omitempty"` // continued an interrupted run
+	Source         string   `json:"source"`              // the root as recorded
+	Narrowing      string   `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
+	Out            string   `json:"out,omitempty"`       // the dataset directory; empty for a dry run
+	Resume         bool     `json:"resume,omitempty"`    // continued an interrupted run
 	SchemaID       string   `json:"schema_id"`
 	Fields         string   `json:"fields,omitempty"` // the metadata tier, for providers with tiers
 	Workers        int      `json:"workers"`
@@ -204,6 +213,10 @@ type Outcome struct {
 	StopSource string `json:"stop_source,omitempty"`
 	// EntryErrors counts per-entry problems the provider counted (not fatal).
 	EntryErrors int64 `json:"entry_errors"`
+	// Unreadable says some entries could not be read (EntryErrors > 0):
+	// the rows and totals leave them out, although Complete may be true
+	// and the exit code 0.
+	Unreadable bool `json:"unreadable"`
 	// Class, ExitCode and Resumable are the command's account of how the
 	// run ended (completed, fatal, stuck, deadline, interrupted,
 	// terminated); Cause is the provider's class of a failure.
@@ -507,7 +520,7 @@ func (r *Report) SourceReport() *source.Report { return r.report }
 func (r *Report) setSource(sr source.Report) {
 	r.report = &sr
 	r.Invocation.Fields = sr.Fields
-	r.Outcome.EntryErrors = sr.Errors
+	r.Outcome.EntryErrors, r.Outcome.Unreadable = sr.Errors, sr.Errors > 0
 	r.Outcome.Complete, r.Outcome.StopReason = sr.Coverage.Complete, sr.Coverage.StopReason
 	r.Source = &SourceStats{Name: sr.Name, Stats: sr.Stats}
 }

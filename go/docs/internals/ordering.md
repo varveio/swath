@@ -296,7 +296,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
   Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
-  uncompressed (`--spill-compress=false`), `Z` and `R` plain rows, compressed and not
+  uncompressed (`--no-spill-compress`), `Z` and `R` plain rows, compressed and not
   (`--spill-plain`, the comparison arm; both flags are diagnostic runtime flags (`swath diag list`), and a resume may
   change them: disposable spill is removed when a run starts, so a resume never reads another run's
   disposable frames, and a durable file's frames decode whatever the flags), and `T` the trailer with the row count. A run writes

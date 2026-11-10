@@ -57,6 +57,7 @@ type Options struct {
 	// RequestPayer accepts the request charges of a requester-pays bucket.
 	RequestPayer bool
 	Timeout      time.Duration // per request; default 30 s
+	Trust        source.Trust  // how the service's certificate is verified (client.Config.Trust)
 	Warn         func(string)  // one-time warnings for the user; may be nil
 	FetchOwner   bool
 	// AllVersions lists every version and delete marker
@@ -91,6 +92,7 @@ type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
 	Credentials string `json:"credentials,omitempty"` // where they came from
 	Region      string `json:"region,omitempty"`
+	NoVerifySSL bool   `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	// MeanActive is the time-weighted mean of ranges in Expand.
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
@@ -206,7 +208,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		lim, rate := opt.Admission.New(opt.Workers)
 		cc := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate},
 			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
-			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
+			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer, Trust: opt.Trust,
 		}
 		if opt.BearerCommand != "" {
 			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)
@@ -217,6 +219,9 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
+		}
+		if opt.Trust.NoVerify && opt.Warn != nil {
+			opt.Warn(source.NoVerifyWarning)
 		}
 		p.client, p.region = c, c.Region()
 		p.creds, p.anonymous = c.Credentials()
@@ -250,7 +255,8 @@ func AcceptBound(s string) bool { return keyrange.SafeKey(s) }
 func (p *provider[P]) Stats() Stats {
 	p.Activity.Store(p.Set(), p.ID(0))
 	e := p.Engine.Stats()
-	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, MeanActive: e.MeanActive, Counters: e.Counters}
+	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+		MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

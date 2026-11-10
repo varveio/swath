@@ -31,7 +31,7 @@ const MaxKeyBytes = 3 * maxNameUnits
 
 // Schema is the Azure Blob listing schema.
 var Schema = schema.Bind(reader.AzblobObjectsV1, schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing"},
+	Info: schema.Info{Name: "swath_listing", StorageClass: "access_tier"}, // the access tier is its storage class
 	Columns: []schema.Column[Object]{
 		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Int: func(o *Object) (int64, bool) { return o.Mtime, o.Mtime != 0 }},

@@ -6,9 +6,10 @@ package s3
 import (
 	"context"
 	"errors"
-	"flag"
 	"reflect"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/registry"
@@ -19,7 +20,7 @@ import (
 
 // TestIdentityRecordsInputs: the identity is the inputs the listing was
 // asked with, compared as given: the bucket and prefix, the endpoint, the
-// region (with no --region, what the environment resolved, so a resume in
+// region (with no --s3-region, what the environment resolved, so a resume in
 // an environment that selects another region or AWS partition, and so
 // possibly another bucket of the same name, cannot match), the addressing
 // flags and the owner columns.
@@ -207,9 +208,9 @@ func factory(t *testing.T) registry.Factory {
 // parsed values.
 func TestEngineFlagsShared(t *testing.T) {
 	s3test.NoCredentials(t)
-	f := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	v := factory(t).RegisterFlags(f, true)
-	if err := f.Parse([]string{"-seed", "-floors", "-anonymous", "-endpoint", "http://127.0.0.1:1", "-request-timeout", "7s"}); err != nil {
+	if err := f.Parse([]string{"--floors", "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})

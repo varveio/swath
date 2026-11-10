@@ -46,8 +46,8 @@ func TestSIGKILLResume(t *testing.T) {
 	// Slow enough to kill mid-run.
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
 	args := func(out string, extra ...string) []string {
-		return append([]string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "8",
-			"-part-size", "4KiB", "-row-budget", "512KiB", "-o", out}, extra...)
+		return append([]string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "8",
+			"--part-size", "4KiB", "--row-budget", "512KiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -77,7 +77,7 @@ func TestSIGKILLResume(t *testing.T) {
 		t.Skip("the run finished before the kill")
 	}
 	// Only runtime flags may change on resume: a frozen one is a usage error.
-	if o, err := exec.Command(bin, "resume", out, "--part-size", "8KiB").CombinedOutput(); err == nil || !bytes.Contains(o, []byte("only workers")) {
+	if o, err := exec.Command(bin, "resume", out, "--part-size", "8KiB").CombinedOutput(); err == nil || !bytes.Contains(o, []byte("--part-size is fixed for the run")) {
 		t.Fatalf("resume with a frozen flag: %v\n%s", err, o)
 	} else if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 {
 		t.Fatalf("resume with a frozen flag: exit %v, want 2", err)
@@ -130,7 +130,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	// The hostile corpus: names at U+E000 and above listed through the
 	// byte-order adapter, its pairs on both sides of the filler.
 	azh := azblobtest.Serve(t, azblobtest.Keys())
-	common := []string{"-workers", "8", "-part-size", "4KiB", "-row-budget", "512KiB"}
+	common := []string{"--workers", "8", "--part-size", "4KiB", "--row-budget", "512KiB"}
 	// unsplit: the first occurrences the seeded arms never reach (their
 	// ranges are a page each; the s3-unseeded and azblob-unseeded arms
 	// cross split).
@@ -145,23 +145,23 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		// into ranges of a page each, so the seeded arms never split, and
 		// it moves response-read to its own requests and changes how
 		// ranges finish; the unseeded arm splits.
-		{"s3", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous"}, []string{"--part-interval=0"}, false},
-		{"s3-unseeded", []string{"s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "--seed=false"}, []string{"--part-interval=0"}, false},
-		{"gcs", []string{"gs://bkt", "--endpoint", gcs, "--anonymous"}, []string{"--part-interval=0"}, false},
+		{"s3", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, []string{"--part-interval=0"}, false},
+		{"s3-unseeded", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--no-seed"}, []string{"--part-interval=0"}, false},
+		{"gcs", []string{"gs://bkt", "--endpoint-url", gcs, "--anonymous"}, []string{"--part-interval=0"}, false},
 		// Azure pages are 5,000 by default: 1,000, as the others, so the
 		// seed tiles these keys as it does theirs.
-		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--endpoint-url", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
 			"--anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
 		// Unseeded, as s3-unseeded: one range whose owner splits, so the
 		// split points and recovery after an owner split are crossed on the
 		// Azure route too.
-		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--endpoint", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
-			"--anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
+		{"azblob-unseeded", []string{"az://" + az.Account + "/" + az.Container, "--endpoint-url", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
+			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false},
 		// The hostile corpus, unseeded so that it splits: crashes inside
 		// the adapter's split spans resume to the same parts.
-		{"azblob-hostile", []string{"az://" + azh.Account + "/" + azh.Container, "--endpoint", strings.TrimSuffix(azh.Endpoint, "/"+azh.Account),
-			"--anonymous", "--page-size", "1000", "--seed=false"}, []string{"--part-interval=0"}, false},
-		{"s3-interval", []string{"s3://bkt", "-endpoint", slowURL, "-path-style", "-anonymous"}, []string{"--part-interval", "1ms"}, true},
+		{"azblob-hostile", []string{"az://" + azh.Account + "/" + azh.Container, "--endpoint-url", strings.TrimSuffix(azh.Endpoint, "/"+azh.Account),
+			"--anonymous", "--page-size", "1000", "--no-seed"}, []string{"--part-interval=0"}, false},
+		{"s3-interval", []string{"s3://bkt", "--endpoint-url", slowURL, "--s3-path-style", "--anonymous"}, []string{"--part-interval", "1ms"}, true},
 	} {
 		args := func(out string, extra ...string) []string {
 			a := append(append(append(append([]string{"diag", "list"}, prov.src...), common...), prov.runtime...), "-o", out)
@@ -267,8 +267,8 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	}))
 	runtime := []string{"--part-interval=0"}
 	args := func(out string) []string {
-		return append([]string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32",
-			"-part-size", "6KiB", "-row-budget", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
+		return append([]string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32",
+			"--part-size", "6KiB", "--row-budget", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -402,8 +402,8 @@ func TestSIGKILLInSegments(t *testing.T) {
 	}{{"memory", "96MiB", false}, {"spill", "12MiB", true}} {
 		runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", arm.budget}
 		args := func(out string, extra ...string) []string {
-			a := []string{"list", "s3://bkt", "-endpoint", url, "-path-style", "-anonymous", "-workers", "32",
-				"-part-size", "16KiB", "-o", out}
+			a := []string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32",
+				"--part-size", "16KiB", "-o", out}
 			return append(append(a, runtime...), extra...)
 		}
 		ref := filepath.Join(t.TempDir(), "ref")

@@ -1,4 +1,4 @@
-report_version 3
+report_version 4
 args_hash string
 attempt.id string
 attempt.started time
@@ -24,6 +24,7 @@ history.samples[].spill_bytes int64
 invocation.argv []string
 invocation.encoders int
 invocation.fields string
+invocation.narrowing string
 invocation.out string
 invocation.part_size_bytes int64
 invocation.prior.counted bool
@@ -45,6 +46,7 @@ outcome.resumable bool
 outcome.status string
 outcome.stop_reason string
 outcome.stop_source string
+outcome.unreadable bool
 outcome.unrecorded string
 output.delete_markers int64
 output.distinct_keys int64
@@ -87,7 +89,9 @@ output.totals.prefixes int64
 output.totals.unsized int64
 output.versions int64
 report_version int
+requests.failure_warnings int64
 requests.http_attempts int64
+requests.log_dropped int64
 requests.retries int64
 requests.throttles int64
 requests.timeouts int64

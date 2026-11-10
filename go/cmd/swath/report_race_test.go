@@ -63,8 +63,8 @@ func TestOneTerminalReport(t *testing.T) {
 	first := listing.Unstarted(nil, "", att, nil)
 	first.Outcome.Status = "committed"
 	second := listing.Unstarted(nil, "", att, nil)
-	writeReport(path, first)
-	writeReport(path, second)
+	writeReport(path, first, nil)
+	writeReport(path, second, nil)
 	var r listing.Report
 	readJSON(t, path, &r)
 	if r.Outcome.Status != "committed" {
@@ -101,7 +101,7 @@ func TestOutcomeFilesDurable(t *testing.T) {
 	if err := writeOutcome(dir, outcome{ExitCode: exitStuck, Class: "stuck"}); err != nil {
 		t.Fatal(err)
 	}
-	writeReport(filepath.Join(dir, "report.json"), listing.Report{})
+	writeReport(filepath.Join(dir, "report.json"), listing.Report{}, nil)
 	if !synced["error"] || !synced["report"] {
 		t.Fatalf("synced before rename: %v, want error.json and report.json", synced)
 	}

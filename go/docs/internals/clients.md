@@ -62,7 +62,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
 - **Secret-safe diagnostics.** [Endpoint validation](#endpoint-validation) refuses credential-bearing
   endpoint URLs before they can be recorded. `registry.RedactArgv`, shared by the command and listing,
   replaces every URL flag declared by the shared flag groups (`source.FlagGroup.URLs`, currently
-  `--endpoint`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
+  `--endpoint-url`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
   in either argument spelling. Clean values are kept for resume. This also protects failure reports
   and recorded arguments supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`,
   `TestEndpointQuerySecrecy`; `registry` `TestRedactEndpointArgv`). User information, queries and
@@ -128,6 +128,16 @@ built or supplied. It owns no retry policy or counters. Providers embed `objhttp
 store counters. Pool-size and Azure capped-wait probes, counter order and JSON report structs stay
 provider-owned.
 
+`source.SetWatch` installs one process-wide `source.Watch`, which the command sets for a run (the command
+imports no provider package): every objhttp Guard reports each round trip to its `Exchange` (method, URL,
+status or transport error, latency with the body read), and `objhttp.Do` each failed attempt to `Failed` (the
+normalized `Failure`'s class, status, code and cause, retried with its wait, or the last, and the URL of the
+request it sent: `Do` hands each attempt a context, which the attempt sends on, and the Guard records the
+request's URL there). The
+command's request log (`-vv`, `-vvv`) and its persistent-failure warning read them; the URL's query is the
+reader's to redact. Both are called on the request path and must return promptly (the command's stderr
+writes are bounded); without a watch they cost one atomic load.
+
 ## Token waits
 
 `objhttp.WaitToken(ctx, ts, source, timeout, transient)` waits on `*tokensource.Shared` for GCS and Azure.
@@ -161,9 +171,10 @@ in an error.
 
 ## Pool construction
 
-`objhttp.Pool(workers, supplied, wrap)` returns HTTP clients. With no supplied client it clones
-`http.DefaultTransport` for each, retains the clone's TLS settings and sets only `ClientSessionCache` on
-its TLS configuration. Transports share that cache, set `MaxIdleConns` to 0 (no global idle cap) and
+`objhttp.Pool(workers, supplied, trust, wrap)` returns HTTP clients. With no supplied client it clones
+`http.DefaultTransport` for each, retains the clone's TLS settings and sets `ClientSessionCache` on its TLS
+configuration, and with `trust` (`source.Trust.Config`: `--ca-bundle`'s roots, or `--no-verify-ssl`) the roots
+and whether they are verified; a supplied client keeps its own TLS settings. Transports share that cache, set `MaxIdleConns` to 0 (no global idle cap) and
 `MaxIdleConnsPerHost` to 1,024. The size is `ceil(workers/16)`, clamped to 1..8: below a server's HTTP/2
 stream limit a single transport uses one connection. S3 calls `Pool(1, ...)[0]`; GCS rotates generated
 services; Azure rotates corresponding service and HTTP-client slices. Selection stays provider-owned.
@@ -176,7 +187,7 @@ before `net/http` can parse it. GCS and Azure report `transport.pool_size`.
 ## Request admission
 
 All three object-store providers build `objhttp.Admission.New(workers)` for their own clients, beside the
-engine's `keyrange.Policy`. The CLI enables the adaptive limiter by default (`--limiter=false` disables
+engine's `keyrange.Policy`. The CLI enables the adaptive limiter by default (`--no-adaptive-limit` disables
 it); a library caller's zero `Admission` leaves it off. A supplied listing client owns its admission.
 `Admission.Off` supplies feature states for reporting; the range engine does not admit HTTP requests.
 Namespace admission (for example Azure's flat-namespace check) is a separate provider decision.
@@ -200,7 +211,7 @@ above twice its rolling-minimum baseline also freezes growth; the baseline re-fl
 a latency freeze a +1 valve step is allowed at most every 30 s with more than `max(1, limit/32)` successes
 in that valve window. Timeouts end slow start and hold growth; they do not lower the limit.
 
-`swath diag list --limiter-slow-start` starts at `min(4, workers)` and doubles at paced growth steps until
+`swath diag list --adaptive-limit-slow-start` starts at `min(4, workers)` and doubles at paced growth steps until
 the worker count, the first cut or an attempt timeout. A tolerated throttle does not end the ramp, and the
 latency valve remains +1. Slow start is off by default. Counters `limiter.*` and
 `slow_start.{doubles,ramp_ns,end_limit}` distinguish engagement and brakes; feature `slow_start` distinguishes

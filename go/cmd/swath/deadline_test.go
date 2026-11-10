@@ -76,7 +76,7 @@ func (s *rowlessService) set(m string) {
 }
 
 func (s *rowlessService) args(dir string, extra ...string) []string {
-	return append(append([]string{"gs://bkt", "--endpoint", s.url, "--anonymous", "--workers", "1", "--part-size", "4KiB",
+	return append(append([]string{"gs://bkt", "--endpoint-url", s.url, "--anonymous", "--workers", "1", "--part-size", "4KiB",
 		"--row-budget", "512KiB", "-o", dir}, unjournaled...), extra...)
 }
 
@@ -221,13 +221,20 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	if old.Attempt == nil || old.ExitCode != exitStuck {
 		t.Fatalf("first attempt: error.json %+v", old)
 	}
-	defer failOutcomeWrites()() // error.json cannot be replaced
-	notDir := filepath.Join(t.TempDir(), "file")
-	os.WriteFile(notDir, nil, 0o644)
-	report := filepath.Join(notDir, "report.json") // nor the report written
+	// error.json cannot be replaced, nor the report written (its
+	// destination passes the check before the run; the write fails at the
+	// end).
+	report := filepath.Join(t.TempDir(), "report.json")
+	defer faults.SetIO(func(op, name string, b []byte) (int, error) {
+		if base := filepath.Base(name); op == "write" && (strings.HasPrefix(base, "."+errorName+".") || strings.HasPrefix(base, ".report.json.")) {
+			return 0, errors.New("injected: cannot be written")
+		}
+		return 0, nil
+	})()
 	s.set("empty")
 	stderr.Reset()
-	err := resume(ctx, []string{dir, "--stall-timeout", "1s", "--max-duration", "2s", "--report", report}, io.Discard)
+	err := resume(ctx, []string{dir, "-v", "--stall-timeout", "1s", "--max-duration", "2s", "--report", report}, io.Discard)
+	conclude(err) // -v: the outcome line
 	if c := exitCode(t, err); c != exitDeadline {
 		t.Fatalf("second attempt: exit %d (%v), want %d", c, err, exitDeadline)
 	}

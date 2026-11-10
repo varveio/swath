@@ -58,7 +58,7 @@ func TestResumeOperationalOverrides(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "ds")
-	args := []string{"s3://bkt/p0", "--endpoint", srv.URL, "--path-style", "--profile", "a", "--workers", "2", "--part-size", "4KiB", "-o", dir}
+	args := []string{"s3://bkt/p0", "--endpoint-url", srv.URL, "--s3-path-style", "--s3-profile", "a", "--workers", "2", "--part-size", "4KiB", "-o", dir}
 	if c := exitCode(t, run(ctx, append(args, "--max-duration", "300ms"), io.Discard, false)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
 	}
@@ -69,13 +69,13 @@ func TestResumeOperationalOverrides(t *testing.T) {
 	}
 	// The route is frozen: profile c resolves eu-west-2, another endpoint
 	// region than the recorded run's.
-	if err := resume(ctx, []string{dir, "--profile", "c", "--max-duration", "0"}, io.Discard); err == nil || !strings.Contains(err.Error(), "cannot resume") {
+	if err := resume(ctx, []string{dir, "--s3-profile", "c", "--max-duration", "0"}, io.Discard); err == nil || !strings.Contains(err.Error(), "cannot resume") {
 		t.Fatalf("a profile that moves the route: %v, want an identity refusal", err)
 	}
 	mu.Lock()
 	clear(keys)
 	mu.Unlock()
-	if err := resume(ctx, []string{dir, "--profile", "b", "--request-timeout", "10s", "--limiter=false", "--request-rate", "1000",
+	if err := resume(ctx, []string{dir, "--s3-profile", "b", "--request-timeout", "10s", "--no-adaptive-limit", "--request-rate", "1000",
 		"--max-duration", "0"}, io.Discard); err != nil {
 		t.Fatalf("resume with another profile: %v", err)
 	}

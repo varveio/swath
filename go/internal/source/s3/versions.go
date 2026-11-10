@@ -37,7 +37,7 @@ type VersionRow = schema.Row[Version]
 // entry, in S3's order within the key (newest first), so the schema is
 // grouped.
 var VersionsSchema = schema.Bind(reader.S3VersionsV1, schema.Schema[Version]{
-	Info: schema.Info{Name: "swath_listing", QuotedETag: true},
+	Info: schema.Info{Name: "swath_listing", StorageClass: "storage_class"},
 	Columns: []schema.Column[Version]{
 		{Int: func(v *Version) (int64, bool) { return v.Size, !v.DeleteMarker }},
 		{Int: func(v *Version) (int64, bool) { return v.Mtime, true }},
@@ -210,7 +210,7 @@ func versionsInput(bucket string, q *keyrange.Query) (*client.VersionsInput, err
 // deleted keys is seen), the common prefixes, and, when truncated, a token
 // of the response's own markers. A truncated page without a NextKeyMarker
 // is invalid: a marker is never made up from the last row. Owners are
-// kept when owner is set (--fetch-owner); ETags lose their quotes as
+// kept when owner is set (--s3-fetch-owner); ETags lose their quotes as
 // Object's do.
 func versionsPage(out *client.VersionPage, owner bool) (*keyrange.Page[Version], error) {
 	if err := out.Validate(); err != nil {
@@ -252,7 +252,7 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 		return nil, fmt.Errorf("%w: %w", objhttp.ErrInvalidPage, err)
 	}
 	// ListObjectVersions always returns owners (no fetch-owner
-	// parameter); --fetch-owner decides whether they are kept.
+	// parameter); --s3-fetch-owner decides whether they are kept.
 	out, err := api.ListObjectVersions(ctx, in)
 	if err != nil {
 		if versionsPermission(err) {

@@ -6,8 +6,8 @@
 # usage: resume_storm.sh BUCKET LATENCY_MS PORT REPS OUTDIR WORKERS...
 #   Per rep, per worker count, the arms run interleaved (ARMS, default "shipped slowstart off"):
 #     shipped    the limiter as built (no limiter flag)
-#     slowstart  --limiter-slow-start (recorded by the list, replayed by the resume)
-#     off        --limiter=false
+#     slowstart  --adaptive-limit-slow-start (recorded by the list, replayed by the resume)
+#     off        --no-adaptive-limit
 #   Each arm gets a fresh proxy whose window throttle:0s-${PHASE}s:${FRACTION} starts at the list's first
 #   request (503 SlowDown to that fraction of requests); the list is SIGKILLed KILL_AT seconds after it
 #   starts and resumed at once, through the same proxy, so the phase continues into the resume.
@@ -53,8 +53,8 @@ for rep in $(seq 1 "$REPS"); do
     for arm in $ARMS; do
       case $arm in
         shipped) af="" ;;
-        slowstart) af="--limiter-slow-start" ;;
-        off) af="--limiter=false" ;;
+        slowstart) af="--adaptive-limit-slow-start" ;;
+        off) af="--no-adaptive-limit" ;;
         *) echo "unknown arm $arm" >&2; exit 2 ;;
       esac
       id=$B-$w-$arm-$rep out=$W/out
@@ -65,8 +65,8 @@ for rep in $(seq 1 "$REPS"); do
       until (: < "/dev/tcp/127.0.0.1/$PP") 2> /dev/null; do sleep 0.2; done
       t0=$(ms)
       # shellcheck disable=SC2086
-      $PIN "$SW" diag list "s3://$B" --endpoint "http://127.0.0.1:$PP" --path-style --anonymous --region us-east-1 \
-        --workers "$w" -o "$out" --report-format json $LIST_FLAGS $af > "$W/$id.list.json" 2> "$W/$id.list.log" < /dev/null &
+      $PIN "$SW" diag list "s3://$B" --endpoint-url "http://127.0.0.1:$PP" --s3-path-style --anonymous --s3-region us-east-1 \
+        --workers "$w" -o "$out" --report - $LIST_FLAGS $af > "$W/$id.list.json" 2> "$W/$id.list.log" < /dev/null &
       LPID=$!
       killed=0
       for _ in $(seq 1 $((KILL_AT * 10))); do
@@ -79,7 +79,7 @@ for rep in $(seq 1 "$REPS"); do
       rc=-
       if [ "$killed" = 1 ]; then
         # shellcheck disable=SC2086
-        $PIN "$SW" resume "$out" --report-format json > "$W/$id.json" 2> "$W/$id.log" < /dev/null
+        $PIN "$SW" resume "$out" --report - > "$W/$id.json" 2> "$W/$id.log" < /dev/null
         rc=$?
       fi
       t2=$(ms)
