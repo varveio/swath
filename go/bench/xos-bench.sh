@@ -2,7 +2,8 @@
 # Local walker benchmark on Windows (NTFS) and macOS (APFS) GitHub runners; driven by
 # .github/workflows/localfs-bench-xos.yml. The trees live on a disk image (a VHDX on Windows, an APFS sparse
 # image on macOS) that is detached and re-attached before every cold run, which drops that volume's cache.
-# Env: SWATH_A, SWATH_B (binaries), GEN (gen_tree.py), OUT, TREES (all huge), HUGE_FILES, PEER_ROUNDS.
+# Env: SWATH_A, SWATH_B (binaries), GEN (gen_tree.py), OUT, TREES (all huge; also realistic), HUGE_FILES, PEER_ROUNDS,
+# ROUND_SCALE (1: scales every cell's rounds, for a slower runner).
 set -uo pipefail
 : "${SWATH_A:?} ${SWATH_B:?} ${GEN:?} ${OUT:?}"
 TREES=${TREES:-all huge}
@@ -63,8 +64,16 @@ t0=$(date +%s)
 # Runs under a second are mostly noise: "all" is wide + deep + realistic (~2.5M entries) walked as one tree,
 # "huge" is HUGE_FILES (1M) files in one directory.
 export HUGE_FILES=${HUGE_FILES:-1000000}
-{ python3 "$GEN" --base "$ROOT/all" wide deep realistic && python3 "$GEN" --base "$ROOT/" huge; } > "$OUT/$OS-gen.log" 2>&1 \
-  || { cat "$OUT/$OS-gen.log"; exit 1; }
+gen() { # the trees TREES names: all, realistic (~1M nested) and huge
+  for t in $TREES; do
+    case $t in
+      all) python3 "$GEN" --base "$ROOT/all" wide deep realistic ;;
+      realistic) python3 "$GEN" --base "$ROOT" realistic ;;
+      huge) python3 "$GEN" --base "$ROOT/" huge ;;
+    esac || return 1
+  done
+}
+gen > "$OUT/$OS-gen.log" 2>&1 || { cat "$OUT/$OS-gen.log"; exit 1; }
 echo "$OS: trees generated in $(( $(date +%s) - t0 )) s"; cat "$OUT/$OS-gen.log"
 # Paired, interleaved rounds: xos_arms.py builds the arms, paired_rounds.py times them.
 export SWATH_A SWATH_B TREES

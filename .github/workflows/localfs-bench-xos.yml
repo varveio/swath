@@ -14,12 +14,12 @@ on:
         default: b8a8003ccffea2d2721484e9d2cc6664fd9ce8d0  # main before #368
       ref_b:
         description: swath ref B (after)
-        default: d5d6b526708f4dad3b658e308f86dfa997ad2eeb  # main: #368 + #372
+        default: f76045ad606ed29db6a03ad759f5429d81cff8ef  # main: #368, #372, #389, #399
       peer_rounds:
         default: "6"
       os:
         description: runners (JSON list)
-        default: '["windows-latest", "macos-latest"]'
+        default: '["macos-latest"]'
 
 permissions:
   contents: read
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.os || '["windows-latest", "macos-latest"]') }}
+        os: ${{ fromJSON(inputs.os || '["macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
     defaults:
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'b8a8003ccffea2d2721484e9d2cc6664fd9ce8d0' }}", path: swath-a}
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'd5d6b526708f4dad3b658e308f86dfa997ad2eeb' }}", path: swath-b}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'f76045ad606ed29db6a03ad759f5429d81cff8ef' }}", path: swath-b}
       - uses: actions/setup-go@v5
         with: {go-version-file: swath-b/go/go.mod, cache: false}
       - uses: actions/setup-python@v5
@@ -65,8 +65,13 @@ jobs:
           B="$RUNNER_TEMP/bin"
           if [ "$RUNNER_OS" = Windows ]; then B=$(cygpath -m "$B"); X=.exe; else X=; fi
           SWATH_A="$B/swath-a$X" SWATH_B="$B/swath-b$X" GEN=go/bench/gen_tree.py OUT="$RUNNER_TEMP/out" \
-            PEER_ROUNDS="${{ inputs.peer_rounds || '6' }}" \
+            PEER_ROUNDS="${{ inputs.peer_rounds || '6' }}" TREES="$TREES" ROUND_SCALE="$ROUND_SCALE" HUGE_FILES="$HUGE_FILES" \
             bash go/bench/xos-bench.sh
+        env:
+          # the macOS runner timed out (350 min) on all + huge: about 1M nested and 300k in one directory there
+          TREES: ${{ runner.os == 'macOS' && 'realistic huge' || 'all huge' }}
+          HUGE_FILES: ${{ runner.os == 'macOS' && '300000' || '1000000' }}
+          ROUND_SCALE: ${{ runner.os == 'macOS' && '0.5' || '1' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

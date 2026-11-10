@@ -14,9 +14,9 @@ on:
         default: a93035d26dd0c25ceed434a97143f15f8f43c6e1  # main: #389 + #390
       ref_b:
         description: swath ref B (after)
-        default: 3e8494ecbf07ce3578b8650d00e0515fd6db3e65  # go/localfs-count-stream: slabs with chunk hand-off
+        default: f76045ad606ed29db6a03ad759f5429d81cff8ef  # main with #399 (count slabs)
       trees:
-        default: huge realistic manybig
+        default: huge
 
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'a93035d26dd0c25ceed434a97143f15f8f43c6e1' }}", path: swath-a}
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || '3e8494ecbf07ce3578b8650d00e0515fd6db3e65' }}", path: swath-b}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || 'f76045ad606ed29db6a03ad759f5429d81cff8ef' }}", path: swath-b}
       - uses: actions/setup-go@v5
         with: {go-version-file: swath-b/go/go.mod, cache: false}
       - name: build
@@ -40,7 +40,7 @@ jobs:
       - name: bench
         run: |
           SWATH_A="$RUNNER_TEMP/bin/swath-a" SWATH_B="$RUNNER_TEMP/bin/swath-b" GEN=go/bench/gen_tree.py \
-            OUT="$RUNNER_TEMP/out" TREES="${{ inputs.trees || 'huge realistic manybig' }}" IMG=/mnt/sb.img \
+            OUT="$RUNNER_TEMP/out" TREES="${{ inputs.trees || 'huge' }}" IMG=/mnt/sb.img \
             bash go/bench/stream-bench.sh
       - name: summary
         if: always()

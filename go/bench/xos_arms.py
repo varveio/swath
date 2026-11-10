@@ -19,7 +19,9 @@ here = os.path.dirname(os.path.abspath(__file__))
 win = osn == "windows"
 drop = ["pwsh", "-NoProfile", "-File", drop] if win else [drop]
 # the stat tier carries the #368 A/B question: more pairs there
-rounds = {("warm", "stat"): 20, ("cold", "stat"): 12, ("warm", "names"): 10, ("cold", "names"): 6}
+scale = float(os.environ.get("ROUND_SCALE", "1"))
+rounds = {k: max(4, round(v * scale)) for k, v in
+          {("warm", "stat"): 20, ("cold", "stat"): 12, ("warm", "names"): 10, ("cold", "names"): 6}.items()}
 peer_rounds = int(os.environ.get("PEER_ROUNDS", "6"))
 failed = []
 
