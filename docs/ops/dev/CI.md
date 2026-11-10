@@ -40,7 +40,8 @@ both Java images in `docker-check` and throw them away; nothing outside a releas
 the registry holds release versions and nothing else. An unreleased commit's image is built
 locally from the checkout (`docker build .`).
 
-Uploaded artifacts set their own `retention-days` instead of taking the repository default:
+The artifact uploads of `ci.yml`, `nightly.yml` and `go-stress.yml` set their own `retention-days`
+instead of taking the repository default:
 
 - 14 days for the per-commit test reports and `go test -json` streams in `ci.yml`;
 - 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`;
@@ -324,7 +325,7 @@ minutes:
 
 - **A new job:** add it to `ci-gate`'s `needs`. If it should run only for some changes, gate its
   steps on `needs.changes.outputs.*`, not the job; a job-level `if:` fails every pull request. If it
-  is legitimately event-gated (like `docker-check`), it passes as `skipped` only off pull requests.
+  is legitimately event-gated, it passes as `skipped` only off pull requests.
 - **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
   own list if that tier reads it), and update the change-detection list in
   [`go/docs/testing.md`](../../../go/docs/testing.md#change-detection).
