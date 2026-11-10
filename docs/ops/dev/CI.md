@@ -81,11 +81,11 @@ Most pull requests touch only one side of the repository, and nearly all recent 
 port. The `changes` job diffs the pull request's base (or the push's previous commit) against
 `HEAD` and emits two flags:
 
-- **Java change:** any path outside `go/` and `Dockerfile.replay-go*`. Documentation, scripts,
+- **Java change:** any path outside `go/` and `Dockerfile.go*`. Documentation, scripts,
   this workflow and the root build files count, so the Java tiers run unless the change is
   provably Go-only.
 - **Go change:** a path under `go/`, the CI workflow, the `setup-go` composite action,
-  `Dockerfile.replay-go*`, or one of the scripts the Go jobs run (the replay smoke, the race shard
+  `Dockerfile.go*`, or one of the scripts the Go jobs run (the image smokes, the race shard
   table, the SeekParquet conformance scripts).
 
 A dispatch, an empty diff or a missing base sets both. Renames are listed by both paths
@@ -153,7 +153,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-lint` | `gofmt`, `go vet`, `go mod tidy -diff`, and the shard table's self-test and coverage check |
 | `go-race (SHARD)` | `go test -race` on one shard of the main module |
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
-| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go replay image for two architectures and its smokes |
+| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes |
 | `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)` | `go vet` and the whole suite without `-race` on other platforms |
 | `go-fixtures` | the replay fixture tier on Java-written fixtures |
@@ -271,7 +271,7 @@ generation under this layout is to be measured on the first `main` pushes and re
 
 - **Gradle:** `gradle/actions/setup-gradle` with its defaults in `ci.yml` and `nightly.yml`.
   `release.yml` disables it and builds the tag from a cold cache.
-- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-replay-go`,
+- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-go`,
   written from `main` only (`docker-check` and `go-build` on a push). A pull request reads
   them and writes nothing: a cache written on a pull request is scoped to that pull request's
   ref, so it serves no other run while taking 0.5–1 GB of the quota per open pull request.

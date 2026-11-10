@@ -109,7 +109,7 @@ code emits.
 
 ## When CI runs each tier
 
-A **Java change** is any changed path outside `go/` and `Dockerfile.replay-go*` (`ci.yml` `changes`), so a
+A **Java change** is any changed path outside `go/` and `Dockerfile.go*` (`ci.yml` `changes`), so a
 documentation or script change counts; a pull request that changes only the Go port runs these jobs with
 their steps skipped. A manual dispatch of `ci.yml` sets both change flags and runs every job a dispatch is
 eligible for.

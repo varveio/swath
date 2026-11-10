@@ -333,7 +333,7 @@ Which jobs run depends on the trigger:
 | **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 | **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 
-A change that touches only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
+A change that touches only the Go port (`go/**`, `Dockerfile.go`) runs none of the Java
 tiers and builds no Java image: the Java jobs report success with their steps skipped.
 
 The release publish job requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository variable,

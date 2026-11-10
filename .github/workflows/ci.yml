@@ -20,10 +20,10 @@ concurrency:
 
 jobs:
   # Shared change detection for the Java tiers and the Go jobs. java=false ONLY when every changed
-  # file is Go-only (go/**, Dockerfile.replay-go and its ignore file); anything else -- this
+  # file is Go-only (go/**, Dockerfile.go and its ignore file); anything else -- this
   # workflow, root build files, docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
-  # tiers. go=true when go/**, this workflow, Dockerfile.replay-go (and its ignore file), the
-  # replay smoke script, the race shard table or the SeekParquet conformance scripts changed. The
+  # tiers. go=true when go/**, this workflow, Dockerfile.go (and its ignore file), the lister and
+  # replay smoke scripts, the race shard table or the SeekParquet conformance scripts changed. The
   # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
   # requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
@@ -58,14 +58,14 @@ jobs:
             # --no-renames: a rename reports only its destination, so moving a Java file under go/
             # would otherwise read as Go-only. Listing both paths keeps the source path visible.
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.replay-go)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.go)' >/dev/null <<<"$changed"; then
               echo "java=true" >> "$GITHUB_OUTPUT"
             else
               echo "java=false" >> "$GITHUB_OUTPUT"
             fi
             # grep reads every line rather than exiting at the first match while git still writes
             # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.replay-go|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
+            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.go|scripts/ci/smoke-container\.sh$|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
               echo "go=true" >> "$GITHUB_OUTPUT"
             else
               echo "go=false" >> "$GITHUB_OUTPUT"
@@ -553,11 +553,12 @@ jobs:
         run: ../scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
 
   # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
-  # Windows test compile, and the Go replay image built and smoked.
+  # Windows test compile, and the Go images (Dockerfile.go: the lister and the replay server)
+  # built and smoked.
   go-build:
     needs: changes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: go
@@ -589,51 +590,92 @@ jobs:
             "$RUNNER_TEMP/$cmd-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           done
 
-      # The Go replay image, built like docker-check builds the Java ones: both architectures
-      # (no push), then the builder-native one loaded for the smoke. No QEMU: the build stage
-      # cross-compiles and the scratch runtime stage has no RUN, so the arm64 build here also
-      # guards against a runtime stage that would need emulation.
+      # The Go images, built as release.yml builds them but compiled here rather than promoted
+      # from release archives: both architectures of each target (no push), then the
+      # builder-native ones loaded for the smokes. No QEMU: the build stage cross-compiles and
+      # neither runtime stage has a RUN, so the arm64 builds here also guard against a runtime
+      # stage that would need emulation. The two targets share the build stage, so the second
+      # build reuses the first's layers from the builder and only the first writes the cache.
       - name: Set up Docker Buildx
         if: needs.changes.outputs.go == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Build Go lister image (both architectures, no push)
+        if: needs.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.go
+          target: swath
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-go
+          # Written from main only: a pull request's cache is scoped to its own ref and serves no
+          # other run, while costing the repository's cache quota (about 600 MiB per pull
+          # request); a pull request reads main's.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=swath-go,mode=max' || '' }}
 
       - name: Build Go replay image (both architectures, no push)
         if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.replay-go
+          file: Dockerfile.go
+          target: swath-replay
           platforms: linux/amd64,linux/arm64
           push: false
           build-args: SWATH_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=swath-replay-go
-          # Written from main only: a pull request's cache is scoped to its own ref and serves no
-          # other run, while costing the repository's cache quota (about 600 MiB per pull
-          # request); a pull request reads main's.
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=swath-replay-go,mode=max' || '' }}
+          cache-from: type=gha,scope=swath-go
+
+      - name: Build Go lister image (builder-native arch) + load for smoke
+        if: needs.changes.outputs.go == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.go
+          target: swath
+          load: true
+          tags: swath-go:ci
+          build-args: SWATH_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=swath-go
 
       - name: Build Go replay image (builder-native arch) + load for smoke
         if: needs.changes.outputs.go == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          file: Dockerfile.replay-go
+          file: Dockerfile.go
+          target: swath-replay
           load: true
           tags: swath-replay-go:ci
           build-args: SWATH_REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=swath-replay-go
+          cache-from: type=gha,scope=swath-go
 
-      # Two smokes, both on fixtures written here, so they need no network, no Java and no
-      # recording. The Go lister's dataset of a fake bucket (bench/s3fake) is sorted, so the
-      # server opens it as it is. The unsorted capture from bench/replay/capture is refused as
-      # not servable sorted, so the smoke's fallback sorts it with the image's own sort-fixture
-      # first; the step requires that the fallback ran.
-      - name: Smoke — Go replay image serves a Go lister dataset and a sorted capture
+      # The lister smoke reads the dataset back with DuckDB, checksum-verified before it runs.
+      - name: Install DuckDB CLI
         if: needs.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
-          docker run --rm swath-replay-go:ci --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
-          smoke="$RUNNER_TEMP/replay-smoke"
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+
+      # Three smokes on data written here, so they need no network, no Java and no recording.
+      # The lister image runs the release's smoke script against a fake bucket (bench/s3fake):
+      # list into a dataset, read it back with DuckDB, resume it as a no-op. Its dataset is
+      # sorted, so the replay server opens it as it is. The unsorted capture from
+      # bench/replay/capture is refused as not servable sorted, so the replay smoke's fallback
+      # sorts it with the image's own sort-fixture first; the step requires that the fallback ran.
+      - name: Smoke — Go lister image writes a dataset; Go replay image serves it and a sorted capture
+        if: needs.changes.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          for image in swath-go:ci swath-replay-go:ci; do
+            docker run --rm "$image" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+          done
+          smoke="$RUNNER_TEMP/image-smoke"
           mkdir -p "$smoke"
           go build -o "$smoke/s3fake" ./bench/s3fake
           awk 'BEGIN { for (i = 0; i < 2000; i++) printf "logs/p%02d/obj-%05d.json\t%d\n", i % 37, i, 1767225600000000 + i * 1000000 }' >"$smoke/keys.tsv"
@@ -641,9 +683,9 @@ jobs:
           fake=$!
           trap 'kill "$fake"' EXIT
           for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
-          "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke -endpoint http://127.0.0.1:19400 -path-style -anonymous \
-            -o "$smoke/dataset"
-          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/dataset" sorted
+          SWATH_SMOKE_BUCKET=s3://smoke SWATH_SMOKE_ENDPOINT=http://127.0.0.1:19400 \
+            ../scripts/ci/smoke-container.sh swath-go:ci "$smoke/lister" go
+          ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/lister/data" sorted
           go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/capture" sorted 2>&1 |
             tee "$smoke/capture-smoke.log"
