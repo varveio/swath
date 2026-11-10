@@ -303,6 +303,8 @@ verified), which runs only when the repository is public and the `PUBLIC_RELEASE
 It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: the tag's commit passed them
 to reach `main` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
+Dependabot raises the Go modules and `Dockerfile.go`'s pinned images weekly; [CI.md](../../docs/ops/dev/CI.md) says what it leaves to hand.
+
 ## Flakes
 
 **Policy.** A per-push test asserts structure (keys, order, bytes, counts, the events a barrier waits for),
