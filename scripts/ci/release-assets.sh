@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # The release targets, GOOS/GOARCH. Windows archives are zip, the others tar.gz.
-TARGETS=(linux/amd64 linux/arm64 darwin/arm64 windows/amd64)
+TARGETS=(linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64)
 COMMANDS=(swath swath-replay)
 LEGAL=(LICENSE NOTICE)
 # Generated beside the binaries by go/notices.sh, which fails on a disallowed license.

@@ -179,6 +179,11 @@ jobs:
           path: ${{ runner.temp }}/release-bin
           format: spdx-json
           output-file: release-assets/swath-${{ needs.source.outputs.version }}.spdx.json
+        # Without a source name syft names the SBOM's root package after the scanned
+        # directory, a path on the runner.
+        env:
+          SYFT_SOURCE_NAME: swath
+          SYFT_SOURCE_VERSION: ${{ needs.source.outputs.version }}
 
       - name: Write SHA256SUMS for release assets
         env:
