@@ -36,7 +36,7 @@ What the supervisor does with the exit code:
 On a 1-vCPU machine with 1 to 2 GB of memory the defaults are the place to start. Change these three only
 when the report says so.
 
-- **`--workers`** (default 64). Listing waits on request round trips, not the CPU. On one core the sorted
+- **`--workers`** (default 64 for an object store; for a local path 4 per CPU, so 4 here). Listing waits on request round trips, not the CPU. On one core the sorted
   output (ordering, spill and one Parquet encoder) is the limit, so more workers do not help there. Raise it
   (128, 256) only on a machine with spare cores and a service that does not throttle. Lower it if the service
   throttles at 64.
