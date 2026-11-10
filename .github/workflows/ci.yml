@@ -552,7 +552,7 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: |
           set -euo pipefail
-          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             for cmd in swath swath-replay; do
               echo "building $cmd for $target"
               GOOS="${target%/*}" GOARCH="${target#*/}" SWATH_REVISION="$GITHUB_SHA" \
@@ -698,7 +698,7 @@ jobs:
           go vet ./...
           go mod tidy -diff
           go test -race -count=1 -timeout 10m ./...
-          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
@@ -728,7 +728,7 @@ jobs:
           go vet ./...
           go mod tidy -diff
           go test -race -count=1 -timeout 5m ./...
-          for target in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 

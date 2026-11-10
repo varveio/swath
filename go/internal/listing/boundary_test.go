@@ -199,7 +199,9 @@ func TestBoundaryDefectNeverReachesTheJournal(t *testing.T) {
 // 200 ms publishes parts as it goes, and the recovery point's age
 // (progress.json's part_age_ms) stays near the interval; by size only,
 // the one part closes at the end and the age grows with the run. Both
-// datasets hold the same rows.
+// datasets hold the same rows. The interval run's age is bounded relative to
+// the size-only run's, not in absolute milliseconds: closing a part takes
+// longer on a loaded runner, which stretches both runs alike.
 func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 	datasettest.RequireJournal(t)
 	var keys []string
@@ -243,7 +245,7 @@ func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 	if ages[0] < 1500 || cuts[0] != 0 {
 		t.Fatalf("by size only: age %d ms, %d time cuts", ages[0], cuts[0])
 	}
-	if ages[1] > 700 || cuts[1] < 3 {
-		t.Fatalf("with the interval: age up to %d ms, %d time cuts", ages[1], cuts[1])
+	if 2*ages[1] > ages[0] || cuts[1] < 3 {
+		t.Fatalf("with the interval: age up to %d ms (by size only: %d ms), %d time cuts", ages[1], ages[0], cuts[1])
 	}
 }

@@ -1100,7 +1100,7 @@ main/dispatch; `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` a
 ([testing.md](testing.md#continuous-integration)); two concern the replay:
 
 - `go-build`: when main is selected, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
-  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit). Packaging/dependency/full PRs
+  darwin/amd64, darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit). Packaging/dependency/full PRs
   and all main/dispatch runs also build both images of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
   `swath-go:ci` and `swath-replay-go:ci` and smoked on data written in the job, so none needs network or a
   recording. The lister image lists a `bench/s3fake` bucket of 2,000 keys into a dataset

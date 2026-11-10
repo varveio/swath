@@ -31,7 +31,8 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 - one archive per target, each holding `swath`, `swath-replay`, `LICENSE`, `NOTICE` and
   `THIRD_PARTY_NOTICES` under a `swath-X.Y.Z-OS-ARCH/` directory: `swath-X.Y.Z-linux-amd64.tar.gz`,
-  `swath-X.Y.Z-linux-arm64.tar.gz`, `swath-X.Y.Z-darwin-arm64.tar.gz` and
+  `swath-X.Y.Z-linux-arm64.tar.gz`, `swath-X.Y.Z-darwin-amd64.tar.gz`,
+  `swath-X.Y.Z-darwin-arm64.tar.gz` and
   `swath-X.Y.Z-windows-amd64.zip` (`.exe` binaries). The binaries are static
   (`CGO_ENABLED=0`, `-trimpath`), built once by `scripts/ci/release-assets.sh build`, which
   also generates `THIRD_PARTY_NOTICES` with `go/notices.sh`: the license of every module
@@ -199,6 +200,9 @@ These are the commands a user runs, and the same ones the publish job runs again
 before un-drafting. `IDENTITY` is the workflow that produced the release — renaming
 `release.yml` would change it and invalidate every published instruction, which is why the
 filename is frozen.
+
+The image signatures are stored in the Sigstore bundle format, which cosign reads from v3:
+cosign 2.x verifies the `SHA256SUMS` bundle but reports no signatures on the images.
 
 ```sh
 TAG=v0.4.0

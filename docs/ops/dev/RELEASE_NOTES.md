@@ -17,7 +17,8 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   [Go guide](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/getting-started.md) is the starting point.
 - **Sorted output while listing.** Every dataset is globally key-sorted, with no merge pass at the end:
   rows listed ahead of the output wait in memory and then in spill files under the output directory.
-- **Downloads.** One archive per target (`linux-amd64`, `linux-arm64`, `darwin-arm64`, `windows-amd64`),
+- **Downloads.** One archive per target (`linux-amd64`, `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
+  `windows-amd64`),
   each holding static `swath` and `swath-replay` binaries with `LICENSE`, `NOTICE` and
   `THIRD_PARTY_NOTICES` (the licenses of every module linked into the binaries); an SPDX SBOM;
   `SHA256SUMS`; a keyless cosign signature for each; and build provenance attestations.

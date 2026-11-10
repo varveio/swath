@@ -43,7 +43,8 @@ swath du -d 1 .
 ## Release downloads and images
 
 From 0.4, each [GitHub release](https://github.com/varveio/swath/releases) carries one archive per platform:
-`swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-arm64.tar.gz` and `-windows-amd64.zip`. Each
+`swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-amd64.tar.gz`, `-darwin-arm64.tar.gz` and
+`-windows-amd64.zip`. Each
 holds `swath`, `swath-replay`, `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` (the licenses of every module linked
 into the binaries) in a `swath-X.Y.Z-OS-ARCH/` directory. The release also carries an SPDX SBOM and a signed
 `SHA256SUMS`. Verify before running ([RELEASING.md](../../RELEASING.md#verifying-a-release) has the signature and
@@ -53,6 +54,14 @@ attestation commands):
 tar -xzf swath-X.Y.Z-linux-amd64.tar.gz
 sha256sum --check --ignore-missing SHA256SUMS
 ./swath-X.Y.Z-linux-amd64/swath --version    # swath X.Y.Z (REVISION)
+```
+
+The macOS binaries are not yet notarized, so macOS refuses to run them when the archive was downloaded through a
+browser ("Apple could not verify…"). Clear the quarantine attribute after extracting; archives fetched with
+`curl` or `gh release download` do not carry it:
+
+```bash
+xattr -d com.apple.quarantine swath-X.Y.Z-darwin-arm64/swath swath-X.Y.Z-darwin-arm64/swath-replay
 ```
 
 The same release publishes multi-arch images (linux/amd64, linux/arm64) with the archives' Linux binaries and
@@ -86,6 +95,7 @@ failing on a module whose license is not allowed ([license gate](internals/testi
 ```bash
 GOOS=linux  GOARCH=arm64 ./build.sh -o swath-linux-arm64
 GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
+GOOS=darwin GOARCH=amd64 ./build.sh -o swath-darwin-amd64
 GOOS=windows GOARCH=amd64 ./build.sh -o swath.exe
 ```
 
