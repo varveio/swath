@@ -30,6 +30,7 @@ import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortedFileWriterFactory;
+import io.varve.swath.sort.spill.PageBlock;
 import io.varve.swath.sort.spill.PageCompression;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -40,6 +41,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
+import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
 import net.jqwik.api.constraints.IntRange;
@@ -73,6 +75,18 @@ class FinalizationPipelinePropertyTest {
         SPARSE_OVERLAP
     }
 
+    /**
+     * Drives every shape at a target no larger than the payload routed before the last band, which
+     * is the input the router needs to roll at least once.
+     *
+     * <p>{@code PartSizer}'s warm-up target is {@code finalFileBytes} logical PageBlock payload
+     * bytes, and a part closes only once it reaches that target, before a complete page or overlap
+     * component. Bands have disjoint key prefixes, so no item spans two bands and every byte of the
+     * earlier bands is routed before the last band's first item. Capping the drawn target at those
+     * bytes therefore guarantees that the warm-up part closes before the last band. An uncapped
+     * target can exceed a small input; one part is then the correct output and proves nothing about
+     * rolling.
+     */
     @Property(tries = 60)
     void pipelineFinalizationIsByteExactAcrossEncoderCounts(
             @ForAll @IntRange(min = 1, max = 6) int segmentCount,
@@ -85,12 +99,13 @@ class FinalizationPipelinePropertyTest {
             @ForAll long seed) throws IOException {
         Scenario scenario = build(
                 segmentCount, bandCount, rowsPerPage, style, overlapShape, seed);
+        long rollableTarget = Math.min(finalFileBytes, scenario.bytesBeforeLastBand());
         Path root = Files.createTempDirectory("pipeline-pagerun-");
         try {
             SortedDatasetResult oneEncoder = run(
-                    scenario, 1, root, "one", finalFileBytes);
+                    scenario, 1, root, "one", rollableTarget);
             SortedDatasetResult parallel = run(
-                    scenario, encoders, root, "parallel", finalFileBytes);
+                    scenario, encoders, root, "parallel", rollableTarget);
 
             List<ListEntry> expected = scenario.allEntries();
             List<ListEntry> actual = readAll(parallel.finalFiles());
@@ -124,6 +139,17 @@ class FinalizationPipelinePropertyTest {
         } finally {
             deleteTree(root);
         }
+    }
+
+    /**
+     * Pins the input that once failed the property: a single segment whose first band is one
+     * two-row page of 29 payload bytes and whose second band is one six-row page, so an uncapped
+     * 32-byte target never closes a part before the last band.
+     */
+    @Example
+    void twoSmallBandsUnderTheTargetStillRoll() throws IOException {
+        pipelineFinalizationIsByteExactAcrossEncoderCounts(
+                1, 2, 4, KeyStyle.DENSE_SEQUENTIAL, OverlapShape.DISJOINT_BANDS, 2, 32, 1L);
     }
 
     private static void deleteTree(Path root) throws IOException {
@@ -160,6 +186,7 @@ class FinalizationPipelinePropertyTest {
             segments.add(new ArrayList<>());
         }
         List<ListEntry> all = new ArrayList<>();
+        long bytesBeforeLastBand = 0;
         for (int band = 0; band < bandCount; band++) {
             for (int segment = 0; segment < segmentCount; segment++) {
                 if (!participates(
@@ -175,10 +202,14 @@ class FinalizationPipelinePropertyTest {
                 }
                 page.sort(comparator);
                 segments.get(segment).add(page);
+                if (band < bandCount - 1) {
+                    bytesBeforeLastBand += PageBlock.pack(page, comparator, PageCompression.LZ4)
+                            .rawPayloadLength();
+                }
             }
         }
         all.sort(comparator);
-        return new Scenario(segments, all);
+        return new Scenario(segments, all, bytesBeforeLastBand);
     }
 
     private static boolean participates(
@@ -266,6 +297,7 @@ class FinalizationPipelinePropertyTest {
     }
 
     private record Scenario(
-            List<List<List<ListEntry>>> segments, List<ListEntry> allEntries) {
+            List<List<List<ListEntry>>> segments, List<ListEntry> allEntries,
+            long bytesBeforeLastBand) {
     }
 }
