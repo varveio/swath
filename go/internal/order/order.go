@@ -786,6 +786,7 @@ func (o *run[R, P]) worker() {
 			return
 		}
 		n := o.stack[len(o.stack)-1]
+		o.stack[len(o.stack)-1] = nil // the spare capacity must not keep the node (and its range) alive
 		o.stack = o.stack[:len(o.stack)-1]
 		if n.state != queued { // the drainer took it
 			continue

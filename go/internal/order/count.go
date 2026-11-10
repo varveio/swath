@@ -108,6 +108,8 @@ func (c *counter[R, P]) worker() {
 			return
 		}
 		r := c.stack[len(c.stack)-1]
+		var zero R // the spare capacity must not keep an expanded range alive (a directory's names)
+		c.stack[len(c.stack)-1] = zero
 		c.stack = c.stack[:len(c.stack)-1]
 		c.busy++
 		c.mu.Unlock()
