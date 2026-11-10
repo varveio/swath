@@ -615,6 +615,8 @@ Diagnostics:
   one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
   not `1.3b`).
+- **Durations** (every `DURATION` flag) are Go's (`90s`, `1h30m`) with `d` (24h) and `w` (7d) besides (`2d`,
+  `1d12h`).
 - **Provider flags** (`S3:`, `GCS:`, `Azure Blob:` and `local:` in the list) apply to their own sources only:
   one given for another source (`gs://... --s3-profile`, where GCS takes `--gcs-credentials-file`; an S3 flag on a local
   tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same

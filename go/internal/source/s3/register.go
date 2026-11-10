@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/pflag"
 
@@ -72,7 +71,7 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
 		Usage: "run --s3-bearer-token-command again after this long",
 		Value: source.Func(func(v string) error {
-			d, err := time.ParseDuration(v)
+			d, err := source.ParseDuration(v)
 			if err != nil || d <= 0 {
 				return fmt.Errorf("want a positive duration such as 90s, 1h30m")
 			}
