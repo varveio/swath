@@ -286,8 +286,8 @@ func mayChange(name string) bool {
 	return slices.Contains(resumeFlags, name) || slices.Contains(resumeFlags, undoName(name))
 }
 
-// names appends a comma list's names to dst; an empty name (--columns ”,
-// --storage-class ,) is refused, never read as no restriction.
+// names appends a comma list's names to dst; an empty name (an empty
+// --columns, --storage-class ,) is refused, never read as no restriction.
 func names(dst *[]string) func(string) error {
 	return func(v string) error {
 		var add []string

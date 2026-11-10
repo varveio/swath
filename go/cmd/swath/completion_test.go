@@ -110,6 +110,9 @@ func TestBashCompletes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "swath.bash"), []byte(script(t, "bash")), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "top"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		words     []string // COMP_WORDS, the last being the word completed
 		want, not []string
@@ -135,6 +138,12 @@ func TestBashCompletes(t *testing.T) {
 		{[]string{"swath", "resume", "t"}, []string{"tree"}, []string{"s3://"}},
 		{[]string{"swath", "resume", "--wor"}, []string{"--workers"}, []string{"--output"}},
 		{[]string{"swath", "show", "--j"}, []string{"--journal"}, nil},
+		{[]string{"swath", "show", "--log"}, []string{"--log-format"}, nil},
+		{[]string{"swath", "list", "to"}, []string{"top"}, nil},
+		{[]string{"swath", "resume", "to"}, nil, []string{"top"}},
+		{[]string{"swath", "diag", "list", "--out"}, []string{"--output"}, nil},
+		{[]string{"swath", "diag", "list", "--no-se"}, []string{"--no-seed"}, nil},
+		{[]string{"swath", "resume", "tree", "--no-an"}, []string{"--no-anonymous"}, nil},
 		{[]string{"swath", "completion", ""}, []string{"bash", "zsh", "fish"}, nil},
 		{[]string{"swath", "help", "d"}, []string{"du", "diag"}, nil},
 	} {

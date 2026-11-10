@@ -752,8 +752,10 @@ Diagnostics:
 ## Shell completion
 
 `swath completion bash|zsh|fish` prints a completion script for the commands, each command's flags (long and
-short), the choices of an enumerated flag (`--format`, `--color`, `--metadata`), file and directory names where
-a flag or SOURCE takes a path, and the URL schemes (`s3://`, `gs://`, `az://`). The scripts are generated from
+short; `swath diag list` every `swath list` flag and the diagnostic ones, `swath resume` the other spellings
+that undo a recorded switch), the choices of an enumerated flag (`--format`, `--color`, `--metadata`), file and
+directory names where a flag or SOURCE takes a path (SOURCE: a file or a directory; DIR: a directory), and the
+URL schemes (`s3://`, `gs://`, `az://`). The scripts are generated from
 the flag table of the build, so every flag is in them. Install one for the current shell, or put the line in
 its startup file:
 
