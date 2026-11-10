@@ -391,6 +391,7 @@ func TestMismatchDiagnostics(t *testing.T) {
 		{"source", "s3://old/p", "s3://user:SECRET@new/p", "cannot resume: source was s3://old/p, now s3://[redacted]"},
 		{"source", "s3://old/p?literal#key", "s3://new/p?literal=100%", "cannot resume: source was s3://old/p?literal#key, now s3://new/p?literal=100%"},
 		{"source", "az://old/c?sv=1&%73ig=SECRET", "az://new/c?SIG=SECRET", "cannot resume: source was az://old/c?[redacted], now az://new/c?[redacted]"},
+		{"source", "az://old/c?%73ig=SECRET&x=100%", "az://new/c?%2573ig=SECRET", "cannot resume: source was az://old/c?[redacted], now az://new/c?[redacted]"},
 		{"endpoint", "https://old/%253Fsig=SECRET%25", "https://new/", "cannot resume: endpoint was [redacted], now https://new/"},
 		{"container", "u:SECRET@b", "clean", "cannot resume: container was [redacted], now clean"},
 		{"account", "acct", "u:SECRET@acct", "cannot resume: account was acct, now [redacted]"},

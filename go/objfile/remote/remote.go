@@ -117,7 +117,12 @@ func (s *Store) at(endpoint string) error {
 		raw = "http://" + raw // STORAGE_EMULATOR_HOST may be a bare host, as the SDK takes it
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil || strings.ContainsAny(endpoint, "?#") {
+	// A path or host whose escapes decode to a query, a fragment, a percent
+	// sign or a control character is refused too: the S3 resolver decodes the
+	// path, appends the bucket and parses again, quoting the result.
+	if err != nil || u.Host == "" || u.User != nil || strings.ContainsAny(endpoint, "?#") ||
+		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) ||
+		strings.ContainsFunc(u.Host, func(r rune) bool { return r <= 0x20 || r == 0x7f }) {
 		return errors.New("remote: the endpoint the environment sets is not a URL without user information, query or fragment; build the client with its own settings instead")
 	}
 	s.scope += " at " + endpoint

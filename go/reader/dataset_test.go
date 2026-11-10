@@ -544,6 +544,9 @@ func TestMismatchShowsCleanValuesOnly(t *testing.T) {
 		{"s3://b/p?literal#key@x", "s3://b/p?literal#key@x"},
 		{"s3://u:SECRET@b/p", "s3://[redacted]"},
 		{"az://acct?sig=SECRET/c", "az://[redacted]"},
+		{"az://acct/c?sig=SECRET", "az://acct/c?[redacted]"},
+		{"az://acct/c?%73ig=SECRET&x=100%", "az://acct/c?[redacted]"},
+		{"s3://b/p?literal=100%", "s3://b/p?literal=100%"},
 	} {
 		if got := shown(c.in); got != c.want {
 			t.Errorf("shown(%q) = %q, want %q", c.in, got, c.want)
