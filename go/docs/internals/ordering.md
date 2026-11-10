@@ -126,7 +126,7 @@ keys from one arena (`localfs/getdents_linux.go`, `buildKeys`). A bound that is 
 page alive: about 1,000 keys and ETags, some 130 KB at 100-byte keys, for a range charged 150 bytes. A split's
 lower child is the case that matters (`lo` is the cursor, the last key of its parent's page): on a 3M-key
 reproduction with a held-up first range (4,800 outstanding ranges at a 128 MiB budget) the peak RSS is
-808 MiB with the cursor as a view and 333 MiB with it copied ([measurements](../measurements.md#memory-behind-a-held-up-frontier)).
+808 MiB with the cursor as a view and 333 MiB with it copied ([measurements](measurements.md#memory-behind-a-held-up-frontier)).
 
 So every string the engine keeps past its page is copied, once per page, where it is retained:
 
@@ -321,12 +321,12 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   decodes alone, without the file before it, which reopening an evicted reader at its position needs, and the codecs hold no state, so one serves every emitter at once (`Schema.Detach`
   uses the stateless codec too). On the fake S3 fixture of `TestSpillFormatsIdentical` delta frames take
   24 B/row against 67 B/row plain (zstd: 22 and 21); the measured runs are in
-  [measurements.md](../measurements.md#delta-coded-spill-frames).
+  [measurements.md](measurements.md#delta-coded-spill-frames).
 - **Compressed by default.** zstd level 1 runs over the delta frames: what delta coding leaves are the
   bytes it cannot predict (raw ETags, key suffixes, sizes), and zstd still finds repeats among them,
   while its input is already a few times smaller than a plain frame's, so its CPU cost is bounded by
   the coded bytes, not the rows' logical size. The numbers that justify the default are in
-  [measurements.md](../measurements.md#delta-coded-spill-frames).
+  [measurements.md](measurements.md#delta-coded-spill-frames).
 - **Defensive reads.** A frame length is checked against a bound (256 MiB) before anything is allocated, and
   the reader is closed on every error path. A delta frame decodes into storage of its own (an owning
   `schema.Decoder`, 64 KiB chunks): no decoded key or string views the read buffers, which the drainer

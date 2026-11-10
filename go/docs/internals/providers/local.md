@@ -2,7 +2,7 @@
 
 A local or mounted directory supports dataset output and direct `du` summaries. A local
 `list` requires `-o DIR`; local scans do not resume. Mounted shares use the operating system's
-filesystem API. [Object-store request controls](../../operating.md#object-store-requests) do not
+filesystem API. [Object-store request controls](../../running.md#object-store-requests) do not
 apply to this provider; metadata and platform limits are described below.
 
 A range is a directory. Its entries are sorted by key, where a directory's key is `prefix/name/` and anything
@@ -47,13 +47,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   one LOOKUP per entry past the first page, so at a stat tier, after a read that fills the buffer, the getdents
   engine stats 9 of its entries before the next (`readdirplus_hints`); fdu, which stats each batch before
   reading the next, keeps READDIRPLUS on the same way. A 200,000-file directory over NFS 4.2, cold, Linux 7.0
-  client: 199,722 LOOKUPs to none, 5.85 s to 2.42 s ([measurements](../../measurements.md)). The heuristic is
+  client: 199,722 LOOKUPs to none, 5.85 s to 2.42 s ([measurements](../measurements.md)). The heuristic is
   the kernel's and can change; the client's first reads are short (19, then 5 entries) and are not hinted, as
   hinting after them measured worse (3,277 LOOKUPs).
 - **A count does not sort.** Nothing consumes a count's order, so both engines skip each directory's sort
   (`unsorted_dirs` in the report) and the count runs with `order.Options.Unordered`
   (`TestUnsortedCountEqualsSortedListing`). getdents engine, warm, 4 vCPU, paired: ~1M entries −10.6 % at the `names` tier and
-  −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../../measurements.md)).
+  −5.5 % at `stat`; a 200,000-entry directory −19.7 % ([measurements](../measurements.md)).
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
   symlinks), `statx` (full mask, adds `birth_time`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort

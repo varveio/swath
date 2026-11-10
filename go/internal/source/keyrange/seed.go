@@ -127,7 +127,7 @@ func (b *seedBudget) follow(k *int, t0 int) bool {
 // Swath's hybrid seed descent (a walk that classified each truncated level,
 // sampled ambiguous folders and cut dense flat folders into radix bands)
 // was ported, measured and deleted: it gained nothing on the recordings and
-// cost 30-60 % more requests on the shallow ones (docs/measurements.md,
+// cost 30-60 % more requests on the shallow ones (docs/internals/measurements.md,
 // "Policy switches"; seedplan.go in git). This one only paginates and
 // descends narrow levels, in parallel waves, under fixed budgets.
 func (p *Engine[P]) expandSeed(ctx context.Context, e source.Emitter[Range, P]) error {

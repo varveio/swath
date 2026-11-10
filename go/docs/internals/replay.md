@@ -1,7 +1,7 @@
 # Replay server internals
 
 How `cmd/swath-replay` is put together, and what holds it to the Java server's wire behavior. The user's view
-is [../replay.md](../replay.md); [replay-java.md](replay-java.md) lists every difference from the Java server
+is [swath-replay.md](swath-replay.md); [replay-java.md](replay-java.md) lists every difference from the Java server
 and why.
 
 ## Packages
@@ -287,7 +287,7 @@ policy, one exchange at a time, mapping each captured token to the one the Go se
 (`TestCaptureReplaysAClientStream`). The recorder (`bench/faultproxy`, `record.go`) writes each exchange before it
 releases the answer, so an issuing answer precedes every use of its token and an unknown token is a failure,
 not a skip; bodies, decoded bodies, lines and the token map are bounded by flags, and a bound reached fails the
-exchange explicitly ([replay.md](../replay.md#live-capture)); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
+exchange explicitly ([swath-replay.md](swath-replay.md#live-capture)); `TestLiveModesAgreeWithAFaithfulProvider` runs both live modes against a
 stand-in provider with tokens and headers of its own.
 
 On the S3 route "identical" has exceptions by decision: the route answers as live S3 does where the Java server

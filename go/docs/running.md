@@ -33,7 +33,7 @@ git worktree may lack (`--version` then shows none).
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
 on every Go change without `-race` on macOS (arm64) and Windows (amd64), and with `-race` on Linux: `internal/listing`
 and `cmd/swath` on arm64, the other packages on amd64; a nightly run races the whole suite on amd64
-([testing](testing.md#continuous-integration)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
+([testing](internals/testing.md#continuous-integration)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](internals/measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
 `--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
@@ -256,7 +256,7 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | Signal | Healthy | Act when |
 |---|---|---|
 | `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
-| `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
+| `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
 | `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--row-budget`; a count holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
 | `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
@@ -292,9 +292,9 @@ timeout and latency brakes, and counters.
   under [object-store requests](#object-store-requests). A stall watchdog or deadline can stop
   a run that keeps failing.
 
-Measured on the synthetic S3 fake ([measurements](measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
+Measured on the synthetic S3 fake ([measurements](internals/measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
 throttle answers no longer move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
-throttling have been measured only under the earlier per-answer rule ([history](measurements.md#throttling-through-the-fault-proxy)).
+throttling have been measured only under the earlier per-answer rule ([history](internals/measurements.md#throttling-through-the-fault-proxy)).
 If a run crawls with `throttles` rising and the report's
 `limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), use
 `--no-adaptive-limit` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
@@ -506,7 +506,7 @@ and for S3 the delete-marker state, in wire order.
 - **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
   of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
-  ([measurements](measurements.md#known-gaps)).
+  ([measurements](internals/measurements.md#known-gaps)).
 
 ## When it goes wrong
 

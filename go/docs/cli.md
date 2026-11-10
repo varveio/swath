@@ -77,8 +77,8 @@ local-tree flag; one only a provider has carries its prefix (`--s3-region`, `--g
 `--azure-sas-token`), and is refused for another provider's source in either spelling. From the Java 0.3 releases, and renames since the unreleased builds of `main`: [upgrade.md](upgrade.md#changes-from-03-to-04). The
 Java v0.3.2 distribution has its own launcher and different output contract. This unreleased Go
 implementation will replace Java at release; the Java code has not been removed yet.
-Every Java CLI option, output mode, exit code and report field against this tool: [cli-inventory.md](cli-inventory.md).
-Running it in production (sizing, watching, resuming, reading the output): [operating.md](operating.md).
+Every Java CLI option, output mode, exit code and report field against this tool: [internals/cli-inventory.md](internals/cli-inventory.md).
+Running it in production (sizing, watching, resuming, reading the output): [running.md](running.md).
 
 ## Flags
 
@@ -1022,7 +1022,7 @@ table changes.
   the resumed key) as without it; a delimiter chain whose page held no folder is not
   followed ([internals/range-engine.md](internals/range-engine.md));
   `swath diag list --no-seed` starts from one
-  range instead (an experiment: [measurements](measurements.md) has the seed's effect on split depth);
+  range instead (an experiment: [measurements](internals/measurements.md) has the seed's effect on split depth);
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint-url` selects an S3-compatible store, addressed path-style by default, as Java's
   `--force-path-style` default with a custom endpoint; `--no-s3-path-style` uses virtual-host addressing there.
@@ -1052,7 +1052,7 @@ table changes.
 - **Workers:** `--workers` (default 64 whatever the CPU count, Java's default; listing waits on the service,
   not the CPU) is the listing goroutines and the request limiter's start; `--encoders` stays CPU-derived.
 - **Request admission.** S3, GCS and Azure Blob share `--no-adaptive-limit`, `--request-rate` and
-  `--request-timeout`. See [object-store requests](operating.md#object-store-requests) for defaults,
+  `--request-timeout`. See [object-store requests](running.md#object-store-requests) for defaults,
   retry behavior and tuning, and the provider pages linked there for service-specific differences.
 - **Requester pays:** `--s3-requester-pays` sends `x-amz-request-payer: requester` (signed) on every request, so
   a requester-pays bucket can be listed at the caller's charge.
@@ -1103,7 +1103,7 @@ table changes.
   the workers' connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given;
   it bypasses default resource admission, with a warning when the resources cannot carry it.
   For a `.zst` text file the same flag is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
-  synchronous encoder ([operating.md](operating.md#sizing-a-run), Memory).
+  synchronous encoder ([running.md](running.md#sizing-a-run), Memory).
 - **Row bound per part:** `--part-rotation-max-rows N` (default 0: off; Java's default was 2,000,000 with
   256 MB parts) also closes a part at N rows. The cut depends on the rows only, so it is part of the resume
   identity, a resume reproduces the boundaries, and a row-cut part does not calibrate the size ratio (only a part

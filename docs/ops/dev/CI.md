@@ -4,7 +4,7 @@ This page explains how swath's GitHub Actions CI is shaped and why, for a mainta
 contributor who needs to change it. It owns the reasoning. The exact jobs, commands, triggers and
 runners are owned elsewhere and are only summarized here:
 
-- [`go/docs/testing.md`](../../../go/docs/testing.md): every Go job, the race shards, change
+- [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md): every Go job, the race shards, change
   detection, the Go caches, cross-OS skips, nightly and stress dispatches.
 - [`TESTING.md`](TESTING.md): the Java tiers and when CI runs each.
 - The workflows in [`.github/workflows/`](../../../.github/workflows/) and the scripts in
@@ -138,7 +138,7 @@ tags belong to `release.yml`. A Go-only merge publishes no Java image.
 
 The Go port's jobs run side by side so that a vet error reports in about a minute and the race
 tests' wall time is their slowest shard, not their sum (one serial job once took 17.5 minutes).
-[`go/docs/testing.md`](../../../go/docs/testing.md) owns the commands.
+[`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md) owns the commands.
 
 | Job | Purpose |
 | --- | --- |
@@ -257,7 +257,7 @@ run finishing last must not delete a newer run's caches. It runs even when a Go 
 the passing jobs' caches were saved, and it is the only job with `actions: write`. Module caches are
 not pruned; GitHub evicts superseded ones after seven days unused. The compressed size of one
 generation under this layout is to be measured on the first `main` pushes and recorded in
-[`go/docs/measurements.md`](../../../go/docs/measurements.md).
+[`go/docs/internals/measurements.md`](../../../go/docs/internals/measurements.md).
 
 ### Other caches
 
@@ -307,7 +307,7 @@ minutes:
   artifact.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
   and the runner, and cite the run and its tally in the pull request (see
-  [`go/docs/testing.md`](../../../go/docs/testing.md#stress-repeats)).
+  [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md#stress-repeats)).
 - **Java test failure:** the `test-reports-*` artifacts hold the Gradle reports.
 - **Slow run:** compare the legs' durations; a shard that grew is rebalanced in the shard table
   using its `-json` artifact. A Go job that took minutes longer than usual on `main` probably
@@ -322,13 +322,13 @@ minutes:
   is legitimately event-gated (like `docker-check`), it passes as `skipped` only off pull requests.
 - **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
   own list if that tier reads it), and update the change-detection list in
-  [`go/docs/testing.md`](../../../go/docs/testing.md#change-detection).
+  [`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md#change-detection).
 - **A new race shard:** add a row to the table in `go-race-shards.sh` and nothing else; run
-  `--self-test` and `--check` locally, and update the shard table in `go/docs/testing.md`.
+  `--self-test` and `--check` locally, and update the shard table in `go/docs/internals/testing.md`.
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it
   should run.
 - **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`; its build
   cache is pruned automatically, and `go-cache-prune` should `need` it.
 - **Any change:** a commit that touches `go/` needs the Go jobs green, and the owning page
-  ([`go/docs/testing.md`](../../../go/docs/testing.md) or [`TESTING.md`](TESTING.md)) must be
+  ([`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md) or [`TESTING.md`](TESTING.md)) must be
   current in the same change.

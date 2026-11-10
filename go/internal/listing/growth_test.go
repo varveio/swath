@@ -22,7 +22,7 @@ import (
 // bytes): the journal and the manifest at most growthBase plus growthBytes
 // per part, and the live heap when the last part is published (after a
 // collection: the router's and the committer's per-part records) at most
-// growthHeap more per part between the two sizes. Measured (docs/measurements.md,
+// growthHeap more per part between the two sizes. Measured (docs/internals/measurements.md,
 // "Recovery and part count"): about 233 and 253 bytes per part, and 1.2 KB of
 // live heap per part (2.3 KB under the race detector).
 const (

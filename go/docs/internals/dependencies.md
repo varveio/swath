@@ -25,7 +25,7 @@ Linked into `cmd/swath` unless marked tests.
 | `github.com/varveio/seekparquet/go` | Apache-2.0 | The SeekParquet format's mechanisms: the part writer (`write`), the manifest's JSON, footer and key-page inspection, and the reader `swath-replay` serves datasets through. Pinned at a pseudo-version of its `main` (bumped deliberately) until it releases. |
 | `github.com/varveio/swath/go/reader` | Apache-2.0 | This repository's nested module (`go/reader`, `replace`d to `./reader`): the schema ids and their columns, which the producers' schemas bind to (`schema.Bind`), so writer and readers share one description. |
 | `github.com/parquet-go/parquet-go` | Apache-2.0 | The Parquet writer and reader. It links protobuf, geometry, brotli and lz4 code the port never calls; see the triggers below. |
-| `google.golang.org/api` (`storage/v1`, `option`) | BSD-3 | The GCS list client's request path and decoder: Google's generated JSON API client, under swath's envelope checks ([clients.md](clients.md)). It links gRPC and OpenTelemetry packages it does not call for listing ([measurements](../measurements.md#sdk-backed-clients-2026-11-09)). |
+| `google.golang.org/api` (`storage/v1`, `option`) | BSD-3 | The GCS list client's request path and decoder: Google's generated JSON API client, under swath's envelope checks ([clients.md](clients.md)). It links gRPC and OpenTelemetry packages it does not call for listing ([measurements](measurements.md#sdk-backed-clients-2026-11-09)). |
 | `github.com/johannesboyne/gofakes3` | MIT | Tests and `bench/s3fake`: an in-process S3 server. |
 
 ## Built here, and the package considered

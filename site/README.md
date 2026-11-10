@@ -53,7 +53,7 @@ with the newest released version in [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Publishing a new run
 
-The Go headline measurements currently cite [`go/docs/measurements.md`](../go/docs/measurements.md)
+The Go headline measurements currently cite [`go/docs/internals/measurements.md`](../go/docs/internals/measurements.md)
 (the `cogslive1`/`cogslive2`/`cogslive3` observations). They were checked against that source
 when adding the copy, but are not covered by the historical Java run-fact assertions.
 Keep their revision, date, source, machine, regions, workers and output modes attached;

@@ -1,12 +1,12 @@
 # The Go replay server and the Java one
 
-This page holds every comparison between the Go `swath-replay` ([the user page](../replay.md)) and the Java
+This page holds every comparison between the Go `swath-replay` ([the user page](swath-replay.md)) and the Java
 `swath-replay serve` it was ported from ([`../../../docs/swath-replay.md`](../../../docs/swath-replay.md)): what
 is the same, what the Java server has that this one does not, where the two answer differently and why, how the
 differential driver holds the Go server to the Java one, and the Java side of the measurements. The user page
 describes the Go server in its own terms; this page goes with the Java server, and when the Java server is
-deleted it is deleted whole, with the pointers to it in [the user page](../replay.md),
-[the internals page](replay.md) and [../testing.md](../testing.md).
+deleted it is deleted whole, with the pointers to it in [the user page](swath-replay.md),
+[the internals page](replay.md) and [testing.md](testing.md).
 
 ## What is the same
 
@@ -85,12 +85,12 @@ requests lists the same meters with the same types and tags on either server, ap
 - **The DuckDB serving mode** (`--serving-mode duckdb`), which serves an unsorted capture; the Go server serves
   sorted fixtures only and refuses the mode with the reason. `sort-fixture` turns a capture into a fixture.
 - **The in-process `bench` command**, a token-walk benchmark that starts each serving mode and walks it over
-  loopback. `bench/replayload` drives a running server instead ([the user page](../replay.md#with-the-bench-scripts)).
+  loopback. `bench/replayload` drives a running server instead ([the user page](swath-replay.md#with-the-bench-scripts)).
 - **The HAR conformance kit** (`swath-replay-conformance`): a HAR of a live S3 listing replayed against the server
   and its canonical XML compared, covering the request shapes the lister sends. The Go
   counterparts are `bench/replaydiff -live-endpoint` (a request matrix against the live provider) and
   `bench/faultproxy -record` with `replaydiff -capture` (a client's whole recorded stream)
-  ([the user page](../replay.md#live-conformance)).
+  ([the user page](swath-replay.md#live-conformance)).
 - **The `swath_replay_metrics` summary line at shutdown**, logged below the Java launcher's default log level.
   Scrape `/metrics` before stopping the Go server instead.
 - **The JVM, process and host meters and the sorter's meters** (table above).
@@ -135,7 +135,7 @@ server refuses a Java token, and for the same boundary issues different bytes (`
 both); a continuation page's latency jitter hashes the token text, so it differs from the Java server's for the
 same walk.
 
-The live runs of 2026-11-07 ([the user page](../replay.md#live-s3-2026-11-07)) found these differences with the
+The live runs of 2026-11-07 ([the user page](swath-replay.md#live-s3-2026-11-07)) found these differences with the
 replay answering byte for byte as the Java server does; the "Replay at the first runs" column of that table is
 the Java server's answer to each case today.
 
@@ -153,7 +153,7 @@ the Java server's answer to each case today.
 ### Request framing
 
 Five request cases are not byte-identical with the Java server, by decision: the first is the Go server's own
-error page, and Go's HTTP layer decides the other four before any handler runs ([the user page](../replay.md#limits)
+error page, and Go's HTTP layer decides the other four before any handler runs ([the user page](swath-replay.md#limits)
 describes the Go behavior):
 
 - **The error page of a target refused before routing.** Status `400`, `Content-Type:
@@ -211,7 +211,7 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 
 ## The conformance suite and the evidence
 
-- The live and capture comparisons of [the user page](../replay.md#live-conformance) use the conformance suite's
+- The live and capture comparisons of [the user page](swath-replay.md#live-conformance) use the conformance suite's
   field policy, the Java `ProviderExchangeComparator` with its S3 and GCS profile comparators, ported to Go.
 - The GCS evidence's SDK captures were made with the Java client library; the evidence replay runs them through
   the Go one (`google.golang.org/api/storage/v1`), and the Azure SDK captures through the Azure SDK for Go.
@@ -220,7 +220,7 @@ go build -o /tmp/replaydiff ./bench/replaydiff
 
 ## Measurements, both servers
 
-The configuration of [the user page](../replay.md#measurements) (a 4 vCPU shared host, quiet during the runs, the
+The configuration of [the user page](swath-replay.md#measurements) (a 4 vCPU shared host, quiet during the runs, the
 client on the same vCPUs over loopback), with the Java server: swath `main` at `a2efe16` (0.3.3-SNAPSHOT) on
 Temurin 25.0.5+8 with the launcher's heap defaults and `JAVA_TOOL_OPTIONS` as the host sets it (trust store and
 proxy properties only), as `bench/fault_replay.sh` leaves it, its window cache at its defaults; the Go server at
@@ -305,5 +305,5 @@ on both, and nothing in the Go server needed a change for them. `bench/replayloa
   the store's fixture tier (`TestJavaWrittenFixtures`) compares each fixture's identity with the Java server's.
   The Azure evidence replay sorts the Java-written `evidence-azure/capture` itself.
 - `scripts/ci/smoke-replay-container.sh IMAGE FIXTURE` without the third argument, or with `duckdb`, smokes the
-  Java replay image; with `sorted` it smokes the Go image ([the user page](../replay.md#container-image)). A
+  Java replay image; with `sorted` it smokes the Go image ([the user page](swath-replay.md#container-image)). A
   dataset the Java lister wrote without `--sort` is one the Go smoke sorts first.

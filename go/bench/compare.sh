@@ -2,7 +2,7 @@
 # Copyright 2026 Varve Systems Ltd
 # SPDX-License-Identifier: Apache-2.0
 # Compare the local walker with other listers on the trees from gen_tree.py
-# (docs/measurements.md, "Local filesystem walker"). Warm cache, REPS rounds, configurations interleaved.
+# (docs/internals/measurements.md, "Local filesystem walker"). Warm cache, REPS rounds, configurations interleaved.
 # usage: BIN=swath OUT=dir bench/compare.sh [tree...]
 #   env: BASE ($BENCH_DATA), REPS (3), FILTER (regex on config names, default all)
 # Optional tools are skipped when missing: fdfind (fd-find), bfs, gdu, dust, diskus, pdu, dua.

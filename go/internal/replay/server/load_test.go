@@ -329,7 +329,7 @@ func TestLoadReadersBoundPageDecodes(t *testing.T) {
 // server's own cost stays inside the injected latency, so the clients
 // observe the profile. The pages are 100 keys so that the load (128,000
 // rows a second) is within a small shared host's capacity with the client
-// in the same process; docs/replay.md has the 1,000-key measurement. Not
+// in the same process; docs/internals/swath-replay.md has the 1,000-key measurement. Not
 // run under the race detector, which multiplies the server's cost.
 func TestLoadNoOverrunAtSixtyFourWalks(t *testing.T) {
 	loadGate(t)

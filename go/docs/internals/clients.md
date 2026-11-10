@@ -238,7 +238,7 @@ swath's scanner (`xml.go`) is the only decoder of listing pages. The Guard captu
 (`objhttp.Capture`) and the SDK decodes a minimal replacement envelope in its place. The scanner is kept for two
 measured reasons: through the same SDK stack, over a 1,000-object page with URL-encoded keys, the SDK's decoder
 cost about 14 µs per object and about 102,000 allocations per page, the scanner about 1.8 µs and about 400
-([measurements](../measurements.md#sdk-backed-clients-2026-11-09)); and a versioned listing needs `<Version>` and
+([measurements](measurements.md#sdk-backed-clients-2026-11-09)); and a versioned listing needs `<Version>` and
 `<DeleteMarker>` entries in wire order, which the SDK's two arrays cannot give back
 (`TestStockSDKLosesVersionsOrder`, `TestVersionsKeepWireOrder`). The scanner reads the operation's own root element
 and refuses anything else, so an empty body or another operation's envelope is a parse failure; it allocates per
@@ -302,5 +302,5 @@ the code decides before the status, and a 500 is retried only when it is `Operat
 ## Measurements
 
 CPU per object, allocations, binary sizes and whole-process comparisons are recorded in
-[measurements.md](../measurements.md#client-cpu-per-object-and-binary-size) and its
-[2026-11-09 section](../measurements.md#sdk-backed-clients-2026-11-09).
+[measurements.md](measurements.md#client-cpu-per-object-and-binary-size) and its
+[2026-11-09 section](measurements.md#sdk-backed-clients-2026-11-09).

@@ -1,9 +1,9 @@
 # Testing
 
 This page maps the test methods of the Go port to what it proves, where it lives, how to run it, and when
-CI runs it. The invariants the tests hold are in [internals/contracts.md](internals/contracts.md). The Java
-tiers are owned by [docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md) and appear here only in the
-summary. The reasoning behind CI's shape is in [docs/ops/dev/CI.md](../../docs/ops/dev/CI.md).
+CI runs it. The invariants the tests hold are in [contracts.md](contracts.md). The Java
+tiers are owned by [docs/ops/dev/TESTING.md](../../../docs/ops/dev/TESTING.md) and appear here only in the
+summary. The reasoning behind CI's shape is in [docs/ops/dev/CI.md](../../../docs/ops/dev/CI.md).
 
 ## Summary
 
@@ -93,7 +93,7 @@ passes (`docker-check` is PR-only). `ci-gate` needs `changes`, `fast-tests`,
 `integration-tests`, `docker-check`, `go-lint`, `go-race`, `go-nonrace`, `go-build`, `go-objfile`, `go-reader`,
 `go-xos` and `go-fixtures`. `go-fixtures` keeps its own detection: its inputs add the Java replay modules
 (`swath-replay`, `swath-core`, `swath-model`), the shared Gradle build files and wrapper, and the provider
-evidence archive and expectations under `docs/` ([replay.md](replay.md#continuous-integration)).
+evidence archive and expectations under `docs/` ([swath-replay.md](swath-replay.md#continuous-integration)).
 
 ### Go jobs per push
 
@@ -102,12 +102,12 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a Go change, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
-| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); the Go replay image and its smokes ([swath-replay.md](swath-replay.md#continuous-integration)) | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the four targets | ubuntu-latest |
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo). The `changes` job picks the legs: Windows and linux/arm64 on every Go change, macOS on main and dispatch; without a Go change, a single `go-xos (off)` leg whose steps skip | windows-latest (amd64), ubuntu-24.04-arm; macos-latest (arm64) off pull requests |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
-Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
+Every job above sets up Go through [`.github/actions/setup-go`](../../../.github/actions/setup-go/action.yml): the
 version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
 modules (`go`, `go/objfile`, `go/reader`).
 
@@ -128,7 +128,7 @@ reader with `./reader`, resolved relative to it), since it adds the hashes it fe
 checkout must stay as committed for `go mod tidy -diff`. A job that fails saves nothing.
 
 Retention: after the Go jobs of a push to `main` (passed or not), `go-cache-prune` runs
-[`scripts/ci/go-cache-prune.sh`](../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
+[`scripts/ci/go-cache-prune.sh`](../../../scripts/ci/go-cache-prune.sh), the only job with `actions: write`. It
 lists every `go-build-` cache on `main` once, groups them by family (the key without DEPS and SHA, and the
 cache version), keeps the newest by creation time and deletes the older ones, with a table of what it kept in
 the step summary. Newest by creation, not this run's commit: `main` runs overlap, and an older run finishing
@@ -143,7 +143,7 @@ amd64 nightly, and run without `-race` on Windows, linux/arm64 and (off pull req
 
 ### Race shards
 
-The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh); the
+The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../../scripts/ci/go-race-shards.sh); the
 `changes` job expands it into the `go-race` matrix, so a shard is added there and nowhere else:
 
 | shard | `go test -race` arguments | runner |
@@ -227,7 +227,7 @@ A dispatch (`gh workflow run nightly.yml --ref BRANCH -f jobs=JOB`) takes `jobs`
 | `go-race-nightly` | `go test -race -count=1 -timeout 40m -json ./...`; the stream is the `go-race-nightly` artifact | `all`, `go-race-nightly` |
 | `go-xos-macos` | on macos-latest, `go vet ./...` and `go test -count=1 -timeout 25m ./...`, as `ci.yml` `go-xos` | `all`, `go-xos-macos` |
 | `go-shapes` | `go run ./bench/shapes -out shapes.json -scratch DIR -baseline bench/baselines/shapes.json`; the summary is the `go-shapes-summary` artifact ([shape suite](#shape-suite)) | `all`, `go-shapes` |
-| `deep-and-perf`, `osv-scan` | the Java tiers and the supply-chain scan ([docs/ops/dev/TESTING.md](../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, or their own name |
+| `deep-and-perf`, `osv-scan` | the Java tiers and the supply-chain scan ([docs/ops/dev/TESTING.md](../../../docs/ops/dev/TESTING.md#when-ci-runs-each-tier)) | `all`, or their own name |
 
 The three Go jobs set up Go through `.github/actions/setup-go` and restore without saving: the shared module
 cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos (macos-latest)` (`go-xos-macos`) or
@@ -262,7 +262,7 @@ on `ubuntu-24.04-arm`, `go-xos` on macOS and Windows, a build without `-race`), 
 F failed` and the failing test names to the step summary, and keeps the JSON stream as the
 `go-stress-OS-ARCH` artifact. Stress takes one package pattern and a `-run` pattern, not a race shard and not the shard table's
 comma-separated selectors: to repeat a shard, pass its row's arguments from
-[`scripts/ci/go-race-shards.sh`](../../scripts/ci/go-race-shards.sh), one package or `./x/...` pattern per dispatch.
+[`scripts/ci/go-race-shards.sh`](../../../scripts/ci/go-race-shards.sh), one package or `./x/...` pattern per dispatch.
 A long test at a high count can exceed the job's limit: split the count across several dispatches. To cite a stress run in a pull request, link each run and give its inputs and its tally,
 before and after the change when it fixes a flake, as #300 does.
 
@@ -346,7 +346,7 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
 
 ## Invariant tests
 
-| Invariant ([internals/contracts.md](internals/contracts.md)) | Test |
+| Invariant ([contracts.md](contracts.md)) | Test |
 |---|---|
 | hostile keyspaces | `source/keyrange` `TestHostileFixturesMatchSequential`: the cardinality bomb (6,000 keys after a 200-byte shared run, plus neighbors of the prefix) and the encoding minefield (percent-encoding traps, `+`, spaces, `?#&=`, control characters, NBSP, BOM, U+FFFD, non-BMP, combining marks, long runs of one byte or scalar) list row-identical to the sequential oracle, parallel and seeded, and their ranges tile the keyspace |
 | metamorphic laws | `source/keyrange` `TestMetamorphicLaws`: one table over every fixture and hostile keyspace; the listing is invariant to the page size (pages capped at 3, 7, 13, random short pages), the range decomposition (seed on and off, the seed's pagination and descent at pages of 3, 1, 4, 8, 16, 64 workers, forced random splits, a seeded resume), the memory budget (20 rows to 1 M rows) |
@@ -441,7 +441,7 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
   `TestScriptedAnswers` for Azure) holds it, scripted answer by answer, to the class, retry decision, `*Error`,
   page, counters and body-close counts (every original body closed once), including a real truncation of a 403
   and a 503 (status line, headers and part of the body, then the connection closed: the status still decides).
-  Each client passes the shared [response guard and retry contract](#invariant-tests) (`TestRetryContract`). See [clients.md](internals/clients.md).
+  Each client passes the shared [response guard and retry contract](#invariant-tests) (`TestRetryContract`). See [clients.md](clients.md).
 - **Java swath on replay** (the differential oracle): see "Replay oracle" below.
 
 ## Replay oracle
@@ -449,10 +449,10 @@ small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
 The Java tool and its replay server are the reference producer. The Go tool is held to them on recorded
 listings: Java-produced recordings are the differential input, and the Go dataset must hold the same rows
 (`bench/diffds.py`, all 13 format-1 columns, the SeekParquet fields projected with the constants of
-[upgrade.md](upgrade.md)). That establishes logical value parity, not format compatibility: Java's reader
+[../upgrade.md](../upgrade.md)). That establishes logical value parity, not format compatibility: Java's reader
 does not read SeekParquet (its sorted reader requires Java format-1 sort stamps), so a
 Go dataset is accepted by the downstream reader and by an independent Parquet reader, DuckDB through
-`verify.py` (below; [upgrade.md](upgrade.md#gates)). In a fresh container (JDK 25 is required; the system JDK
+`verify.py` (below; [../upgrade.md](../upgrade.md#gates)). In a fresh container (JDK 25 is required; the system JDK
 will not run the launchers):
 
 ```bash
@@ -507,9 +507,9 @@ python3 verify.py /tmp/go-ds                                         # the swath
   captures (synthetic 10k and 1M rows, the GCS and Azure evidence corpora), sorted by the Java
   `sort-fixture`. The script fixes every file's modification time, so the fixture identity the test
   compares with the Java server's is reproducible. CI runs this tier, except `TestRecordings`, in the
-  `go-fixtures` job ([replay.md](replay.md#continuous-integration)).
+  `go-fixtures` job ([swath-replay.md](swath-replay.md#continuous-integration)).
   The same variable runs the GCS evidence replay (`go/internal/replay/evidence`, see
-  [replay.md](replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
+  [swath-replay.md](swath-replay.md#the-gcs-evidence-replay)); it needs only the committed archive and uses
   `ROOT/fixtures/evidence-gcs/sorted` when present. The Azure evidence replay (`go/internal/replay/azure`
   `TestAzureEvidenceReplay`) runs on the same variable and sorts `ROOT/fixtures/evidence-azure/capture`
   itself; CI's `go-fixtures` job runs both evidence replays.
@@ -532,14 +532,14 @@ python3 verify.py /tmp/go-ds                                         # the swath
   (`go/internal/replay/server` `TestLoad*`: the request ceiling under the fault proxy, the reader-slot bound under
   256 walks, no overrun at 64 walks), a few seconds each; they serve `ROOT/fixtures/synthetic-1m/sorted-rolled`
   when `SWATH_REPLAY_FIXTURES=ROOT` is set, else a generated fixture. `bench/replayload` is the walker the
-  [replay measurements](replay.md#measurements) use.
+  [replay measurements](swath-replay.md#measurements) use.
 
 ## Replay server oracle
 
-The Go `swath-replay` ([replay.md](replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one
+The Go `swath-replay` ([swath-replay.md](swath-replay.md)) is held to the Java one by `bench/replaydiff`: both servers on one
 fixture, the same scripted matrix, token walks and seeded random requests to each, and every answer's status,
-compared headers and body bytes required equal ([internals/replay.md](internals/replay.md#the-differential-driver);
-[internals/replay-java.md](internals/replay-java.md) lists the documented divergences and residuals):
+compared headers and body bytes required equal ([replay.md](replay.md#the-differential-driver);
+[replay-java.md](replay-java.md) lists the documented divergences and residuals):
 
 ```bash
 go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./cmd/swath-replay
@@ -550,7 +550,7 @@ go build -o /tmp/replaydiff ./bench/replaydiff && ./build.sh -o swath-replay ./c
 Against the providers themselves the check is a recording: the live matrix (provider cases, walks, altered and
 invented tokens, the scripted matrix) is sent once through `bench/faultproxy -record` with `replaydiff
 -live-record`, and `replaydiff -capture` replays the recording offline as often as needed, judging each answer by
-the live comparison and its documented differences ([replay.md](replay.md#the-recorded-live-matrix)). A live run
+the live comparison and its documented differences ([swath-replay.md](swath-replay.md#the-recorded-live-matrix)). A live run
 is only how a recording is made. Recordings of real buckets stay local and are never committed; the tests CI
 runs record fake providers in-process (`bench/replaydiff` `TestLiveMatrixRecordedReplaysOffline`,
 `TestPinnedDifferencesAreDocumentedInBoth`; `bench/faultproxy` `TestRecordAnnotations`), and the provider

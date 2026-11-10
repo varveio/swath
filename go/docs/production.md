@@ -1,8 +1,8 @@
 # Running swath in production
 
-A short guide for whoever schedules and watches swath. The full reference is [operating.md](operating.md);
+A short guide for whoever schedules and watches swath. The full reference is [running.md](running.md);
 every flag is in [cli.md](cli.md). Numbers below are observations on the stated runs
-([measurements.md](measurements.md)), not limits or promises.
+([internals/measurements.md](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
 
@@ -14,7 +14,7 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
-  point readers at it once its `manifest.json` exists ([operating.md](operating.md#overwrite-and-refresh)).
+  point readers at it once its `manifest.json` exists ([running.md](running.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset (warm start, below). Leave it out on the first night.
 - `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
@@ -95,7 +95,7 @@ if it happens again.
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
 `limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
 shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--no-adaptive-limit --request-rate N` ([operating.md](operating.md#throttling)).
+sustained throttling, use `--no-adaptive-limit --request-rate N` ([running.md](running.md#throttling)).
 
 ## Resume after a kill
 
@@ -104,7 +104,7 @@ directory listing keeps no journal and starts over.
 
 - **Kept:** every published part, verified by size and SHA-256 before listing continues. Verification read
   247 to 376 MiB/s with a cold page cache and 511 MiB/s warm on a 4-vCPU VM
-  ([measurements](measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
+  ([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
   minutes.
 - **Listed again:** everything after the last published key. On a large sorted run that is most of the
   listing: a kill at 40 % listed 90 to 100 % of the keys again on every list of 20M keys or more (candidate 3,

@@ -11,7 +11,7 @@ filesystems, S3, GCS and Azure Blob flat namespaces, with size summaries and sor
 Parquet output. The latest published release is the S3-focused Java v0.3.2. Go will
 replace Java at release; this repository still contains both implementations.
 
-Start with [`README.md`](README.md) and the [Go guide](go/docs/guide.md). The
+Start with [`README.md`](README.md) and the [Go guide](go/docs/getting-started.md). The
 [visual field guide](https://swath.varve.io/field-guide/) is historical Java v0.3.2
 documentation, not the Go algorithm.
 
@@ -90,7 +90,7 @@ The contributor reference is
   [`go/docs/`](go/docs/) is the source of truth for the Go code (architecture, its
   statement of the invariants, ordering, Parquet output, providers, testing, CLI); a change
   to `go/` is not done until its page there is current. Measurements are recorded in
-  [`go/docs/measurements.md`](go/docs/measurements.md).
+  [`go/docs/internals/measurements.md`](go/docs/internals/measurements.md).
 - A provider's runtime integration is its directory under `go/internal/source/` plus one blank
   import in `go/cmd/swath`; reader contracts, verifier support and central conformance tests
   still need explicit integration. Follow the verified
@@ -106,7 +106,7 @@ The contributor reference is
   builds use `CGO_ENABLED=0`.
 - A commit that touches `go/` needs the Go jobs of `ci.yml` green (`go-lint`, the `go-race`
   shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them).
-  [`go/docs/testing.md`](go/docs/testing.md) says what each job and tier runs and when.
+  [`go/docs/internals/testing.md`](go/docs/internals/testing.md) says what each job and tier runs and when.
 
 ## Repository discipline
 

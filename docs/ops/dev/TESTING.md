@@ -6,7 +6,7 @@ tests against (the invariants tagged `I1`–`I12` and friends) are authoritative
 [`contracts.md`](../../internals/contracts.md); this file only covers tiering,
 speed, and the `MockPageFetcher`-driven no-mass-populate discipline. The Go port's
 tests, and the summary of every CI job across both languages, are in
-[`go/docs/testing.md`](../../../go/docs/testing.md). The reasoning behind CI's shape is in [`CI.md`](CI.md).
+[`go/docs/internals/testing.md`](../../../go/docs/internals/testing.md). The reasoning behind CI's shape is in [`CI.md`](CI.md).
 
 ## The golden rule: never mass-populate a real store
 Listing is cheap; **populating** a store object-by-object is not — 50M `PutObject`

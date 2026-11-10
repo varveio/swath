@@ -24,7 +24,7 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     verbatim-echo endpoint's `StartAfter` crashes on it (I12); this client percent-encodes the query and parses
     no echo, so a real key holding `%` (a cursor, a folder) is a usable `start-after`. Under `Safe` a bucket
     whose every key holds `%` (URL-encoded names) had no usable cursor and listed on one worker: 107.9 s
-    against 8.6 s on 2M keys at 50 ms ([measurements](../measurements.md#red-team-fixes-2026-11-07)).
+    against 8.6 s on 2M keys at 50 ms ([measurements](measurements.md#red-team-fixes-2026-11-07)).
     Synthesized scalars always come from the pivot alphabet: a pivot is a prefix copied from one of its input
     keys (cursor, bound or anchor), up to the scalar it changes or appends, plus safe scalars, so it never
     introduces a `%` its inputs do not hold at that position (`FuzzPropose` checks it). The
@@ -65,7 +65,7 @@ key that the service leaves out. Only a witness outside that reply can expose th
 - a key known to exist past the page's start, inside the range, that the listing lacks.
 
 The durable spill campaign found such a service: MinIO answering a `start-after` inside one prefix with an
-empty page ([measurements.md](../measurements.md#durable-spill), `bench/minio_start_after.sh`). Its key-file
+empty page ([measurements.md](measurements.md#durable-spill), `bench/minio_start_after.sh`). Its key-file
 oracle is the first kind of witness.
 
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --no-seed` turns it
@@ -79,7 +79,7 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   trip in all, as `--no-seed`. A truncated page is discarded (`seed.first_page_discarded`, one
   request more), and the tiles start from the scope's start. `TestSeedFirstPageLargeFirstTile`
   checks that the first tile can split across the discarded page. Dated evidence:
-  [seed measurements](../measurements.md#red-team-fixes-2026-11-07).
+  [seed measurements](measurements.md#red-team-fixes-2026-11-07).
 - *Pagination.* The top level follows its continuation token up to 4 pages (`seed.pages`), so a top level
   with up to four pages of folders is tiled whole; past that it is `seed.truncated`. Four pages are already four
   times the most cuts a seed keeps. A chain whose last page held no folder (objects only) is not followed
@@ -173,14 +173,14 @@ starts with need, and a tile's own pages measure the rest.
 
 The seed is a serial pre-phase of 1 to 6 waves; on a bucket of one page the first wave is the whole listing.
 The default is measured against `swath diag list --no-seed` on production key lists of 1M objects and more
-([measurements](../measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)), and on
-100 to 10,000 keys ([measurements](../measurements.md#red-team-fixes-2026-11-07)).
+([measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)), and on
+100 to 10,000 keys ([measurements](measurements.md#red-team-fixes-2026-11-07)).
 
 The seed only paginates and descends narrow levels, in parallel waves, under fixed budgets. Java swath's hybrid
 seed descent (`HybridSeedPlanner`: a walk of the folder hierarchy that classifies truncated levels, samples
 ambiguous folders and cuts dense flat folders into radix bands) has no counterpart: measured on the replayed
 recordings it gave no gain on any of them and 30-60 % more requests on the shallow ones
-([measurements](../measurements.md#policy-switches)).
+([measurements](measurements.md#policy-switches)).
 
 **Splits are owner-side.** A range's children become claimable only when its `Expand` returns, so there are
 no thieves. After each full page the owner takes the provider mutex and computes demand,
@@ -228,7 +228,7 @@ children, 1.82 requests per 1,000 keys). One estimate serves both the rank and t
 The pivot is not touched by admission; the gates refuse, they do not move a pivot, and they apply to a
 structure boundary as to the policy's pivot. On the 4.1M-key noaa-nws-fourcastnetgfs-pds list and synthetic
 1-2M-key lists the gates cut requests per 1,000 keys by 2-15 % with no wall increase
-([measurements](../measurements.md#split-admission-on-small-lists)); a flat million-key list ends in about 250
+([measurements](measurements.md#split-admission-on-small-lists)); a flat million-key list ends in about 250
 ranges where it ends in 630-810 without them (`TestAdmissionFlat`: 1,000 pages at 64 workers, 100,000 keys in
 pages of 100 by default, the million-key list in pages of 1,000 with `SWATH_PERF=1`). What remains are empty upper children of pivots placed in a folder
 gap (a date's `day=32`-`day=99`, a letter after a counter's digits), which only a structure probe can see.
@@ -245,12 +245,12 @@ seed tile's bound is the next folder, and a page cannot see where its own folder
 listed; a slow split's child that is still an outlier halves again without that test. Bounded: one slow split's
 children wait at a time (they are queued, not run, until a worker frees up), and the admission gates apply.
 Counters `split.slow.max_range_latency_ns`, `split.slow.run_latency_ns`. Measured: on a scaled slow folder
-(`TestSlowRangeSplits`) 9 % off the wall; on the suite ([measurements](../measurements.md#red-team-fixes-2026-11-07))
+(`TestSlowRangeSplits`) 9 % off the wall; on the suite ([measurements](measurements.md#red-team-fixes-2026-11-07))
 too little to adopt: the slow folder still peels a few pages per split, as the pivot policy hands out what an
 idle worker can take, not half a folder whose end no page shows.
 
 **Floors** (Java swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
-[measurements](../measurements.md#policy-switches)).
+[measurements](measurements.md#policy-switches)).
 Two gates on bounded ranges, read from a position estimate rather than a request (Java swath's default
 rate-anchored sensor, `RateAnchoredEstimator`): the keys left are `max(keys listed, 1 page) × g`, where `g`,
 clamped to [1/4, 16], is the remaining span over the consumed span read as base-256 fractions (12 bytes) past
@@ -346,7 +346,7 @@ the split is committed and the mutex released, so `mutex.wait_ns` measures decis
 resume starts new chains).
 
 There is no 1-key pivot probe (Java's `max-keys=1` request after the pivot, moving an empty upper child's
-pivot toward the cursor): on the deep replayed recordings ([measurements](../measurements.md#policy-switches))
+pivot toward the cursor): on the deep replayed recordings ([measurements](measurements.md#policy-switches))
 it cost more than the empty children it saved, a serial round trip before each split that lowered
 concurrency: 27–31 % more requests and 2.2–2.3× the wall.
 

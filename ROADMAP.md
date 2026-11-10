@@ -11,7 +11,7 @@ release. A copy change does not itself make that release or remove Java.
 Go already implements local and mounted filesystem listings, native GCS, S3 and Azure
 Blob flat namespaces, direct size summaries, sorted Parquet inventories, eligible
 object-store dataset resume, S3 versions and delete markers, and GCS generations.
-The [Go guide](go/docs/guide.md) and [CLI](go/docs/cli.md) describe their limits.
+The [Go guide](go/docs/getting-started.md) and [CLI](go/docs/cli.md) describe their limits.
 These capabilities should not be listed as future backend work.
 
 The [publication checklist](docs/go-release-copy-checklist.md) keeps installation,

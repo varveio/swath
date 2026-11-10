@@ -22,7 +22,7 @@ one 32-vCPU `n4-highcpu-32` VM with a 400 GB disk in GCP `us-east1`, listing ano
 across clouds from AWS `us-west-2`.
 
 These are single-run S3 observations, not expected times for every source or machine.
-The [measurements and setup](go/docs/measurements.md) keep the operations, conditions and
+The [measurements and setup](go/docs/internals/measurements.md) keep the operations, conditions and
 other runs separate.
 
 ## Supported sources
@@ -39,7 +39,7 @@ This table describes **Go on main**, not the Java release.
 Eligible journaled object-store dataset scans can resume. Local scans and text output
 cannot. Windows currently refuses journaled object-store runs and `swath resume` because
 directory sync is unavailable; local scans work without resume. See
-[platform and recovery limits](go/docs/operating.md#known-limits).
+[platform and recovery limits](go/docs/running.md#known-limits).
 
 <a id="quickstart"></a>
 
@@ -78,7 +78,7 @@ This small public NOAA prefix needs no cloud account:
 
 Object-store listings go to the terminal or a pipe as text. GCS and Azure Blob use the
 same `list` command with their own source and authentication options. Cloud listings make
-provider requests and may incur charges; read the [operating guide](go/docs/operating.md)
+provider requests and may incur charges; read the [operating guide](go/docs/running.md)
 before a large or requester-pays scan.
 
 ### Keep an inventory
@@ -106,8 +106,8 @@ or another Parquet tool, after checking coverage and schema.
 swath reads listing metadata and does not change source contents. A live walk or
 multi-request listing is not an atomic storage snapshot. Check coverage, filters,
 entry errors and freshness before treating the result as a whole-source inventory.
-The [Go guide](go/docs/guide.md) explains these choices; the
-[operating reference](go/docs/operating.md) owns recovery and resource limits.
+The [Go guide](go/docs/getting-started.md) explains these choices; the
+[operating reference](go/docs/running.md) owns recovery and resource limits.
 
 ## When to use it
 
@@ -124,16 +124,16 @@ supported schemas rather than assuming every swath dataset is accepted.
 
 ## Documentation
 
-- **Start:** [Go guide](go/docs/guide.md), [build and verify](go/docs/operating.md#install-and-verify).
-- **Use:** [CLI reference](go/docs/cli.md), [operating guide](go/docs/operating.md),
-  [production checklist](go/docs/operators.md).
+- **Start:** [Go guide](go/docs/getting-started.md), [build and verify](go/docs/running.md#install-and-verify).
+- **Use:** [CLI reference](go/docs/cli.md), [operating guide](go/docs/running.md),
+  [production checklist](go/docs/production.md).
 - **Read the output:** [swath dataset profile](go/docs/dataset.md).
-- **Understand:** [architecture](go/docs/architecture.md), [providers](go/docs/internals/providers.md),
-  [measurements](go/docs/measurements.md).
+- **Understand:** [architecture](go/docs/internals/architecture.md), [providers](go/docs/internals/providers.md),
+  [measurements](go/docs/internals/measurements.md).
 - **Move from Java:** [migration guide](go/docs/from-java.md) and [dataset changes](go/docs/upgrade.md).
 - **Java v0.3.2:** [release documentation](https://github.com/varveio/swath/tree/v0.3.2/docs)
   and [historical visual field guide](https://swath.varve.io/field-guide/).
-- **Contribute:** [contribution guide](CONTRIBUTING.md), [Go tests](go/docs/testing.md),
+- **Contribute:** [contribution guide](CONTRIBUTING.md), [Go tests](go/docs/internals/testing.md),
   [roadmap](ROADMAP.md).
 
 swath is pre-1.0. Flags and schemas can change; keep the build revision with inventories
