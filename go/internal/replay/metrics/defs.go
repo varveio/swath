@@ -85,8 +85,9 @@ var (
 	// decode service time, slot wait excluded.
 	PageReadLatency = Def{Name: "swath.replay.page.read.latency", Kind: Timer}
 	// ParquetQueryLatency is one store call, slot wait included;
-	// ParquetQueryRows the rows (or rollup entries) it returned and
-	// ParquetQueryErrors the calls that failed.
+	// ParquetQueryRows the rows (or rollup entries) it read, which for a
+	// failed window-cache fill are the rows packed before the failure,
+	// and ParquetQueryErrors the calls that failed.
 	ParquetQueryLatency = Def{Name: "swath.replay.parquet.query.latency", Kind: Timer}
 	ParquetQueryRows    = Def{Name: "swath.replay.parquet.query.rows", Kind: Distribution}
 	ParquetQueryErrors  = Def{Name: "swath.replay.parquet.query.errors", Kind: Counter}

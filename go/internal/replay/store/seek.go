@@ -253,33 +253,47 @@ func (r *seekReader) Read(ctx context.Context, rng legacy.Range, stats *legacy.S
 	}
 	var st seekparquet.ReadStats
 	defer count(stats, &st)
-	out, err := r.d.Range(ctx, seekparquet.Range{Start: rng.From, StartExclusive: rng.From != nil && !rng.FromInclusive, End: rng.To,
-		Limit: rng.Limit, Columns: rng.Columns, Stats: &st})
+	out, err := r.d.Range(ctx, seekRange(rng, &st))
 	if err != nil {
 		return nil, err
 	}
 	return rows(out), nil
 }
 
-// Scan reads rng and hands its rows to sink as one run.
+// seekRange is the module's request for rng, its reads counted in st.
+func seekRange(rng legacy.Range, st *seekparquet.ReadStats) seekparquet.Range {
+	return seekparquet.Range{Start: rng.From, StartExclusive: rng.From != nil && !rng.FromInclusive, End: rng.To,
+		Limit: rng.Limit, Columns: rng.Columns, Stats: st}
+}
+
+// Scan reads the rows Read returns and hands them to sink straight from
+// the module's borrowed batches (Dataset.RangeBatches), one run per batch,
+// without cloning a value or building a row: the keys and values are
+// valid only until each sink call returns, and a column a part lacks is
+// Missing.
 func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error {
-	got, err := r.Read(ctx, rng, stats)
-	if err != nil || len(got) == 0 {
-		return err
+	if rng.Limit <= 0 {
+		return nil
 	}
-	keys := make([][]byte, len(got))
-	for i := range got {
-		keys[i] = got[i].Key
-	}
-	sink.Keys(keys)
-	values := make([]parquet.Value, len(got))
-	for c := range rng.Columns {
-		for i := range got {
-			values[i] = got[i].Values[c]
+	var st seekparquet.ReadStats
+	defer count(stats, &st)
+	var keys [][]byte
+	return r.d.RangeBatches(ctx, seekRange(rng, &st), func(b *seekparquet.Batch) error {
+		keys = keys[:0]
+		for i := range b.Len() {
+			keys = append(keys, b.Key(i))
 		}
-		sink.Values(c, values)
-	}
-	return nil
+		sink.Keys(keys)
+		for c := range rng.Columns {
+			if values, ok := b.Column(c); ok {
+				sink.Values(c, values)
+			} else {
+				sink.Missing(c)
+			}
+		}
+		clear(keys) // hold no borrowed key past the callback
+		return nil
+	})
 }
 
 // RollupRead answers rl with the module's delimited listing, which has no

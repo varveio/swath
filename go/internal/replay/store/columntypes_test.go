@@ -40,11 +40,18 @@ func partOf[T any](rows []T) seekPart {
 // their value columns.
 func writeSeek(t *testing.T, schemaID string, pageRows int, parts ...seekPart) string {
 	t.Helper()
+	return writeSeekWith(t, seekparquet.Key{Column: "key", Unique: true}, write.PartOptions{PageRows: pageRows}, schemaID, parts...)
+}
+
+// writeSeekWith is writeSeek with the key declaration and the part options
+// (whose Key and SchemaID it sets).
+func writeSeekWith(t testing.TB, key seekparquet.Key, opts write.PartOptions, schemaID string, parts ...seekPart) string {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	key := seekparquet.Key{Column: "key", Unique: true}
+	opts.Key, opts.SchemaID = key, schemaID
 	m := seekparquet.Manifest{Key: key, SchemaID: schemaID,
 		Version: seekparquet.Version{FormatVersion: seekparquet.FormatVersion, DraftRevision: seekparquet.DraftRevision}}
 	for i, part := range parts {
@@ -53,7 +60,7 @@ func writeSeek(t *testing.T, schemaID string, pageRows int, parts ...seekPart) s
 		if err != nil {
 			t.Fatal(err)
 		}
-		w, err := write.NewPart(f, part.schema, write.PartOptions{Key: key, SchemaID: schemaID, PageRows: pageRows})
+		w, err := write.NewPart(f, part.schema, opts)
 		if err != nil {
 			_ = f.Close()
 			t.Fatal(err)
