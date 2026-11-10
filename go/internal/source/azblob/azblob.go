@@ -56,8 +56,13 @@ type pooled interface{ Transports() int }
 // (client.Client: retry_after_capped).
 type capped interface{ RetryAfterCapped() int64 }
 
+// formatted is implemented by clients that count the format of each
+// listing page (client.Client: list_format.*).
+type formatted interface{ Formats() client.Formats }
+
 var _ capped = (*client.Client)(nil)
 var _ pooled = (*client.Client)(nil)
+var _ formatted = (*client.Client)(nil)
 
 // Routed is implemented by clients that can name the route a container's
 // requests go to, which resume identity freezes (client.Client). A
@@ -419,6 +424,13 @@ func (p *Provider) Stats() Stats {
 	}
 	if c, ok := p.client.(capped); ok {
 		p.Set().Set(p.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
+	}
+	if c, ok := p.client.(formatted); ok {
+		f := c.Formats()
+		p.Set().Set(p.ID(client.CArrowPages), f.ArrowPages)
+		p.Set().Set(p.ID(client.CArrowItems), f.ArrowItems)
+		p.Set().Set(p.ID(client.CXMLPages), f.XMLPages)
+		p.Set().Set(p.ID(client.CXMLItems), f.XMLItems)
 	}
 	e := p.Engine.Stats()
 	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,

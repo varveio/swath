@@ -27,9 +27,15 @@ Root parse errors keep clean roots, redact SAS queries and hide credential-beari
 clients ([clients.md](../clients.md)). Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.8.3), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
-decodes it (an `EnumerationResults` root, nothing after it, no `Error` element in it). The decoded
-page must hold `Blobs`. A per-call policy pins `x-ms-version` to `2026-10-06`, the listings ask for the XML
-response format (never the SDK's Arrow one), and a hierarchy page's blobs and prefixes, which the SDK returns
+decodes it, in the format its `Content-Type` names. A per-call policy pins `x-ms-version` to `2026-10-06`. Every
+listing asks for the Arrow response format, then XML (`Accept: application/vnd.apache.arrow.stream,application/xml`),
+and the service picks: an account or endpoint without Arrow listings (a hierarchical namespace, Azurite, the replay
+server) answers XML, and so may an account whose eligibility changes mid-run. There is no option: XML is the
+service's fallback, not swath's. An XML page must have an `EnumerationResults` root, nothing after it and no `Error`
+element in it, and must hold `Blobs`; an Arrow page must read without error, with `NextMarker` and
+`NumberOfRecords` in its schema metadata and that many rows ([clients.md](../clients.md#azure-decoding-and-requests)).
+Both convert to the same page (`TestArrowEquivalence`, recorded live). The `list_format.*` counters say which format
+each valid page came in. A hierarchy page's blobs and prefixes, which the SDK returns
 apart, are merged back into wire order (UTF-16 code-unit order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.
 The accepted success-body limit is 64 MiB; a listing page past it fails the request
 (`client.ErrBodyCap`, not retried, not asked again with fewer entries). This does not bound buffer
@@ -145,8 +151,9 @@ service URL as the client requests it, the account path segment kept on a custom
 are the only equivalence), `account`, `container`, `flat_asserted` (`--azure-assume-flat`). Credentials may change, a SAS among them. A run with
 `--max-keys`, or through a supplied client that does not name its route (`azblob.Routed`), cannot resume.
 **Counters**: the engine's, then the client's (`attempts`, `retries`, `throttles`,
-`timeouts`, `parse_failures`, the admission's), `transport.pool_size` and `retry_after_capped` (a `Retry-After`
-past the request timeout, cut to it), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
+`timeouts`, `parse_failures`, the admission's), `transport.pool_size`, `retry_after_capped` (a `Retry-After`
+past the request timeout, cut to it) and `list_format.arrow_pages`, `.arrow_items`, `.xml_pages`, `.xml_items` (the
+valid listing pages each format carried and their blobs and prefixes; an XML page is the service declining Arrow), then the adapter's: `order_spans` (spans beyond each chain's first), `order_splits`,
 `order_seeks`, `order_probes` (span reads that found no member), `order_overlap_rows`, `order_empty_pages` (empty
 continuing pages followed inside a span's read), `order_stack_max`, `order_buffer_rows_max`, `order_responses`,
 `order_chains_evicted` and `order_chains_max`. **Connections**: the [shared pool](../clients.md#pool-construction), with provider-owned rotation of the

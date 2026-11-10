@@ -170,7 +170,7 @@ func parseHeaders(h http.Header) (*Request, error) {
 		return nil, fail(Unsupported, "invalid_header_value")
 	}
 	accept, _, _ := header(h, "accept")
-	if !acceptsXMLOnly(accept) {
+	if !acceptsXML(accept) {
 		return nil, fail(Unsupported, "unsupported_accept")
 	}
 	clientID, hasClientID, _ := header(h, "x-ms-client-request-id")
@@ -353,11 +353,13 @@ func invalidXMLEcho(v string) bool {
 	return false
 }
 
-// acceptsXMLOnly is the Accept rule: absent or blank accepts; otherwise
-// some media range must be application/xml or */* with a quality above
-// zero, no quality may be malformed or outside [0, 1], and the Arrow
-// stream type is refused outright.
-func acceptsXMLOnly(accept string) bool {
+// acceptsXML is the Accept rule: absent or blank accepts; otherwise some
+// media range must be application/xml or */* with a quality above zero,
+// and no quality may be malformed or outside [0, 1]. Other ranges beside
+// it are allowed, the Arrow stream type among them: the replay answers
+// XML, as Azure does for an account without Arrow listings. An Accept
+// naming Arrow and not XML is refused.
+func acceptsXML(accept string) bool {
 	if strings.TrimFunc(accept, unicode.IsSpace) == "" {
 		return true
 	}
@@ -365,9 +367,6 @@ func acceptsXMLOnly(accept string) bool {
 	for _, part := range splitDroppingTrailingEmpty(accept, ",") {
 		pieces := strings.Split(strings.ToLower(trimControl(part)), ";")
 		media := trimControl(pieces[0])
-		if media == "application/vnd.apache.arrow.stream" {
-			return false
-		}
 		quality := 1.0
 		for _, p := range pieces[1:] {
 			p = trimControl(p)

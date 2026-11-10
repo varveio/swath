@@ -27,16 +27,23 @@ package client
 //     TestServiceVersionPinned). The User-Agent is azcore's own telemetry
 //     policy's, swath's product token (buildinfo.UserAgent, its
 //     ApplicationID, 24 bytes at most) before the SDK's.
-//   - the listing options name ResponseFormat XML, so the pagers never take
-//     the SDK's Arrow path, whose answers envelope would refuse, whatever
-//     the SDK's default becomes. StartFrom is the SDK's own option.
-//     TestWireSnapshot pins every request the client sends.
-//   - envelope, Guard.Validate on a listing's 200: its root must be
-//     EnumerationResults with nothing after it and no <Error> element in it
-//     (the SDK decodes an empty body, any root, or a listing holding an
-//     error, as a page, an empty final one; TestScriptedAnswers,
-//     TestSDKDecoding), and the decoded page must hold Blobs (Segment nil
-//     otherwise).
+//   - the listing options name ResponseFormat Arrow: the SDK asks for
+//     Arrow, then XML (Accept), and decodes the answer by its Content-Type.
+//     The service picks the format; an account or endpoint without Arrow
+//     listings (a hierarchical namespace, Azurite, swath-replay) answers
+//     XML. Each valid page counts in its format (list_format.*). StartFrom
+//     is the SDK's own option. TestWireSnapshot pins every request the
+//     client sends.
+//   - envelope, Guard.Validate on a listing's 200, in the format its
+//     Content-Type names. XML: the root must be EnumerationResults with
+//     nothing after it and no <Error> element in it (the SDK decodes an
+//     empty body, any root, or a listing holding an error, as a page, an
+//     empty final one; TestScriptedAnswers, TestSDKDecoding), and the
+//     decoded page must hold Blobs (Segment nil otherwise). Arrow: the
+//     stream must read without error, its schema metadata must hold NextMarker
+//     and NumberOfRecords, and its batches that many rows (the SDK reads a
+//     stream cut after a batch as whole and one without NextMarker as a
+//     final page; TestArrowEnvelope).
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
 //     (TestRedactedRefusal). The SDK's own log, which quotes failed
 //     requests' URLs, is not swath's: the command turns it off at startup
@@ -46,11 +53,13 @@ package client
 //     in wire (UTF-16 code-unit) order. Both arrays are in that order and
 //     no name is in both on a valid page, so merging them with
 //     utf16order.Compare restores the wire sequence (TestWireOrder,
-//     TestMergeOrder); a page out of order across the two kinds is not
+//     TestMergeOrder). An Arrow page is one sequence the SDK splits by
+//     ResourceType, each kind kept in order, so the merge restores it too
+//     (TestArrowEquivalence). A page out of order across the two kinds is not
 //     detected, one out of order within a kind still is
 //     (ListOutput.Validate).
 //
-// Accepted readings of the SDK's decoder, each pinned by TestSDKDecoding:
+// Accepted readings of the SDK's XML decoder, each pinned by TestSDKDecoding:
 // an Encoded name is percent-decoded with query semantics (a literal '+'
 // reads as a space; Azure sends '+' as %2B, as every Encoded name in the
 // October 2026 captures escapes every reserved byte) and a malformed escape
@@ -74,6 +83,8 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -81,6 +92,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/faults"
@@ -155,14 +167,14 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
 		r, err = cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Marker: str(in.Marker), Prefix: str(in.Prefix),
-			MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatXML}).NextPage(actx)
+			MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
 		if err == nil {
 			out, err = flat(r.Segment, r.NextMarker)
 		}
 	} else {
 		var r container.ListBlobsHierarchyResponse
 		r, err = cc.NewListBlobsHierarchyPager(in.Delimiter, &container.ListBlobsHierarchyOptions{Marker: str(in.Marker),
-			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatXML}).NextPage(actx)
+			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatArrow}).NextPage(actx)
 		if err == nil {
 			out, err = merge(r.Segment, r.NextMarker)
 		}
@@ -180,6 +192,7 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if err := out.Validate(in.Marker); err != nil {
 		return nil, err
 	}
+	c.formats.count(arrowAnswer(s.Header), len(out.Items))
 	return out, nil
 }
 
@@ -369,10 +382,65 @@ func deref(s *string) string {
 	return *s
 }
 
-// envelope is the Guard's check of a listing's 200 (comp=list), what the
-// SDK's decoder does not check: the root element is EnumerationResults
-// without a namespace (Azure never prefixes it), nothing but whitespace
-// follows its end, and no <Error> element is in it
+// arrowType is the Content-Type of an Arrow listing. The SDK decodes a 200
+// whose Content-Type starts with it as Arrow, any other as XML.
+const arrowType = "application/vnd.apache.arrow.stream"
+
+// arrowAnswer reports a response the SDK decodes as an Arrow listing.
+func arrowAnswer(h http.Header) bool { return strings.HasPrefix(h.Get("Content-Type"), arrowType) }
+
+// envelope is the Guard's check of a listing's 200 (comp=list): what the
+// SDK's decoder does not check, in the format the Content-Type names, the
+// one the SDK decodes (arrowEnvelope, xmlEnvelope).
+func envelope(req *http.Request, status int, header http.Header, body []byte) error {
+	if status != http.StatusOK || req.URL.Query().Get("comp") != "list" {
+		return nil
+	}
+	if arrowAnswer(header) {
+		return arrowEnvelope(body)
+	}
+	return xmlEnvelope(body)
+}
+
+// arrowEnvelope checks an Arrow listing: an IPC stream whose schema
+// metadata holds NextMarker and NumberOfRecords (Azure's listing metadata)
+// and whose record batches hold NumberOfRecords rows. The SDK's decoder
+// reads a stream cut at a message boundary as whole (the Arrow reader
+// takes the body's end for the stream's), batches missing, all of them
+// included, as a shorter page, and a schema without NextMarker as a final
+// page; each would drop entries, so each is refused (TestArrowEnvelope).
+// The batches are read (one copy of the body), not converted row by row.
+func arrowEnvelope(body []byte) error {
+	r, err := ipc.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("%w: an Arrow listing without a schema (%d bytes): %v", objhttp.ErrSyntax, len(body), err)
+	}
+	defer r.Release()
+	md := r.Schema().Metadata()
+	n := md.FindKey("NumberOfRecords")
+	if n < 0 || md.FindKey("NextMarker") < 0 {
+		return fmt.Errorf("%w: an Arrow listing whose schema lacks NextMarker or NumberOfRecords (%d bytes)", objhttp.ErrSyntax, len(body))
+	}
+	want, err := strconv.ParseInt(md.Values()[n], 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: an Arrow listing's NumberOfRecords %q", objhttp.ErrSyntax, md.Values()[n])
+	}
+	var rows int64
+	for r.Next() {
+		rows += r.RecordBatch().NumRows()
+	}
+	if err := r.Err(); err != nil {
+		return fmt.Errorf("%w: an Arrow listing (%d bytes): %v", objhttp.ErrSyntax, len(body), err)
+	}
+	if rows != want {
+		return fmt.Errorf("%w: an Arrow listing of %d rows declaring %d (%d bytes)", objhttp.ErrSyntax, rows, want, len(body))
+	}
+	return nil
+}
+
+// xmlEnvelope checks an XML listing: the root element is
+// EnumerationResults without a namespace (Azure never prefixes it),
+// nothing but whitespace follows its end, and no <Error> element is in it
 // (the SDK would read such a body as a page, an empty final one when the
 // error replaces the entries). XML text cannot hold a literal '<', so a
 // body with one "</EnumerationResults" ending in it has nothing after its
@@ -380,10 +448,7 @@ func deref(s *string) string {
 // prefix: the token walk runs only for a body that holds "Error" (an
 // ErrorCode element or a blob name, say). Any other answer is the SDK's to
 // read.
-func envelope(req *http.Request, status int, body []byte) error {
-	if status != http.StatusOK || req.URL.Query().Get("comp") != "list" {
-		return nil
-	}
+func xmlEnvelope(body []byte) error {
 	d := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(body, bom)))
 	for {
 		tok, err := d.Token()

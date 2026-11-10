@@ -269,7 +269,10 @@ the S3 selector and the account-information selector is now that ambiguous-reque
 the list selector stays on the S3 route as before.
 
 - `x-ms-version` must be `2026-06-06` or `2026-10-06` and is echoed; anything else is `400 InvalidHeaderValue`.
-  `x-ms-client-request-id` (at most 1,024 bytes, no CR or LF) is echoed. `Accept` must allow `application/xml`.
+  `x-ms-client-request-id` (at most 1,024 bytes, no CR or LF) is echoed. `Accept` must allow `application/xml` (or `*/*`)
+  with a quality above zero; other types may stand beside it, `application/vnd.apache.arrow.stream` among them, and
+  the answer is XML, as Azure's is for an account without Arrow listings (the Azure client asks for Arrow, then XML).
+  An `Accept` naming Arrow and not XML is `400 InvalidHeaderValue`; the replay never serves Arrow.
 - Parameters: `prefix`, `delimiter` (any string), `marker`, `maxresults` (1 to 2,147,483,647 ASCII digits; a page
   holds at most 5,000, the default; the value is echoed as sent), `startFrom` (inclusive), `timeout` (1 to
   3,600), an empty `include`, and the parameters of a shared access signature (`sv`, `ss`, `srt`, `sp`, `se`,

@@ -39,9 +39,11 @@ type Guard struct {
 	MaxBody  int64             // 2xx bodies; zero is 16 MiB
 	MaxError int64             // non-2xx bodies; zero is 64 KiB
 	// Validate inspects a fully read 2xx body (any 2xx, an empty 204
-	// included). A non-nil error (wrap ErrSyntax for a garbled or
-	// wrong-envelope body) fails the round trip with a *GuardError.
-	Validate func(req *http.Request, status int, body []byte) error
+	// included) with the response's status and headers (a body's format
+	// is its Content-Type's). A non-nil error (wrap ErrSyntax for a
+	// garbled or wrong-envelope body) fails the round trip with a
+	// *GuardError.
+	Validate func(req *http.Request, status int, header http.Header, body []byte) error
 	// Header, if set, runs first on a clone of the request (a bearer
 	// token); its error fails the round trip with a *GuardError.
 	Header func(req *http.Request) error
@@ -172,7 +174,7 @@ func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if ok {
 		if g.Validate != nil {
-			if err := g.Validate(req, resp.StatusCode, body); err != nil {
+			if err := g.Validate(req, resp.StatusCode, resp.Header, body); err != nil {
 				return nil, &GuardError{Err: err}
 			}
 		}

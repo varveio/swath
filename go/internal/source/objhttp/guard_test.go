@@ -79,7 +79,7 @@ func TestGuardCap(t *testing.T) {
 						Next: roundTripFunc(func(*http.Request) (*http.Response, error) {
 							return &http.Response{StatusCode: status, ContentLength: length, Header: make(http.Header), Body: &countingBody{ReadCloser: io.NopCloser(original), n: &closed}}, nil
 						}),
-						Validate: func(_ *http.Request, gotStatus int, body []byte) error {
+						Validate: func(_ *http.Request, gotStatus int, _ http.Header, body []byte) error {
 							validated = true
 							if gotStatus != status || len(body) != size {
 								t.Errorf("validated status %d, %d bytes", gotStatus, len(body))
@@ -133,7 +133,7 @@ func TestGuardDefaults(t *testing.T) {
 func TestGuardValidateRejection(t *testing.T) {
 	cause := fmt.Errorf("%w: wrong root", ErrSyntax)
 	srv := serve(t, 200, 10)
-	_, _, err := get(t, &Guard{Validate: func(*http.Request, int, []byte) error { return cause }}, srv.URL)
+	_, _, err := get(t, &Guard{Validate: func(*http.Request, int, http.Header, []byte) error { return cause }}, srv.URL)
 	if !errors.Is(err, ErrSyntax) {
 		t.Fatalf("err %v is not ErrSyntax", err)
 	}
@@ -209,7 +209,7 @@ func TestGuardNoContentGoesToValidate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
 	defer srv.Close()
 	var status, n = -1, -1
-	validate := func(_ *http.Request, s int, b []byte) error {
+	validate := func(_ *http.Request, s int, _ http.Header, b []byte) error {
 		status, n = s, len(b)
 		return fmt.Errorf("%w: empty answer", ErrSyntax)
 	}
@@ -221,7 +221,7 @@ func TestGuardNoContentGoesToValidate(t *testing.T) {
 		t.Errorf("err %v, want a GuardError around ErrSyntax", err)
 	}
 	// a Validate that accepts lets the 204 through
-	resp, body, err := get(t, &Guard{Validate: func(*http.Request, int, []byte) error { return nil }}, srv.URL)
+	resp, body, err := get(t, &Guard{Validate: func(*http.Request, int, http.Header, []byte) error { return nil }}, srv.URL)
 	if err != nil || resp.StatusCode != 204 || len(body) != 0 {
 		t.Errorf("err %v, status %d, %d bytes", err, resp.StatusCode, len(body))
 	}
@@ -261,7 +261,7 @@ func cutServer(t *testing.T, status int, part string) *httptest.Server {
 // transport failure. The original body is closed once either way.
 func TestGuardCutErrorBodyKeepsAnswer(t *testing.T) {
 	const part = "<Error><Code>AccessDenied</Code>"
-	reject := func(*http.Request, int, []byte) error { return errors.New("no") }
+	reject := func(*http.Request, int, http.Header, []byte) error { return errors.New("no") }
 	for _, status := range []int{301, 403, 404, 500, 503} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			cc := &closeCounter{next: http.DefaultTransport}
@@ -354,7 +354,7 @@ func TestCaptureDelivery(t *testing.T) {
 					req.URL.RawQuery = "q=changed"
 					return &http.Response{StatusCode: tc.status, Header: header, Body: body, ContentLength: -1}, nil
 				}),
-				Validate: func(*http.Request, int, []byte) error {
+				Validate: func(*http.Request, int, http.Header, []byte) error {
 					unpublished()
 					if tc.reject {
 						return ErrSyntax

@@ -51,8 +51,9 @@ clients are described in [providers.md](providers.md) and the page of each provi
   closed once on every path. Guard failures are `*GuardError`, recovered through `objhttp.Cause`,
   so the wrapping `url.Error` is never mistaken for a retryable connection failure.
   Guard validation is only part of page validation: S3 scans its captured listing body after the SDK
-  call; GCS decodes in the SDK, then maps and validates rows; Azure checks the XML envelope in the
-  Guard, then checks and maps the SDK result. Malformed-page failures can therefore occur after the
+  call; GCS decodes in the SDK, then maps and validates rows; Azure checks the XML or Arrow envelope in the
+  Guard (by `Content-Type`: `Validate` sees the status, headers and body), then checks and maps the SDK result.
+  Malformed-page failures can therefore occur after the
   Guard delivers status 200. A captured 200 does not certify a valid listing page.
 - **Redirects are answers**, never followed, also through a supplied HTTP client: the resume identity freezes where
   requests go. Azure drops the `Location` header before `net/http` sees it, so a malformed one never reaches an
@@ -265,19 +266,33 @@ escapes kept, a URI-template brace refused ([providers/gcs.md](providers/gcs.md)
 
 ## Azure decoding and requests
 
-The SDK's decoder reads the page, and the Guard's validation checks the envelope first, because the decoder reads an
-empty body, any root element, or a listing holding an `<Error>` as an empty final page: a listing's 200 must have
-`EnumerationResults` as its root, nothing but whitespace after it, and no `Error` element in it; the decoded page
-must hold `Blobs`. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
+Both listing pagers name `ResponseFormat` Arrow. The SDK then sends
+`Accept: application/vnd.apache.arrow.stream,application/xml` and decodes a 200 as Arrow when its `Content-Type`
+starts with `application/vnd.apache.arrow.stream`, as XML otherwise. Azure answers Arrow where the account has Arrow
+listings and XML where it does not (a hierarchical namespace, Azurite, the replay server); its documentation
+says eligibility can change between requests. swath has no option for it: the format is the service's choice,
+and each valid page counts as `list_format.arrow_pages` or `list_format.xml_pages`, with its items.
+
+The SDK's decoder reads the page, and the Guard's validation checks the envelope first, in the format the
+`Content-Type` names. The XML decoder reads an empty body, any root element, or a listing holding an `<Error>` as an
+empty final page: an XML listing's 200 must have `EnumerationResults` as its root, nothing but whitespace after it,
+and no `Error` element in it; the decoded page must hold `Blobs`. The Arrow decoder (`parseArrowStream`) takes the
+end of the body for the end of the stream, so a stream cut after a record batch reads as a whole page with the
+schema's `NextMarker`, and a schema without `NextMarker` as a final page; an empty body, a stream cut inside a
+message and a body that is not Arrow fail it. An Arrow listing must therefore read without error (the batches are read
+once, not converted), its schema metadata must hold `NextMarker` and `NumberOfRecords`, Azure's documented listing
+metadata, and its batches must hold `NumberOfRecords` rows (`TestArrowEnvelope`). A refused envelope is a parse
+failure, retried. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
 prefixes; both are in wire (UTF-16 code-unit) order and no name is in both, so merging them with
 `utf16order.Compare` restores the one sequence the byte-order adapter needs (`TestWireOrder`, `TestMergeOrder`); a
 page out of order across the two kinds is merged into order and not detected, one out of order within a kind
-still is (`ListOutput.Validate`). One per-call policy, `pin`, runs before azcore's signing policy and sets what
+still is (`ListOutput.Validate`). An Arrow hierarchy page is one sequence whose rows carry `ResourceType`
+`blobprefix` or `blob`; the SDK splits it into the same two arrays, each in order, and the merge restores it. A
+recorded Arrow page and the XML page of the same listing, flat and hierarchy, convert to the same `ListOutput`
+(`TestArrowEquivalence`). One per-call policy, `pin`, runs before azcore's signing policy and sets what
 azblob cannot: `x-ms-version` to the pinned `client.Version` (the SDK sends its own default and refuses
-`ClientOptions.APIVersion`, `TestServiceVersionPinned`). Both listing pagers name `ResponseFormat` XML: the SDK's
-`Auto` resolves to XML today, and a later release may resolve it to Arrow, whose answer the envelope check would
-refuse before the SDK's Arrow decoder could read it. The XML request sends `Accept: application/xml`; Get Account
-Information sends no `Accept`, and swath reads its header only. `startFrom`, `marker` and `prefix` are the SDK's
+`ClientOptions.APIVersion`, `TestServiceVersionPinned`). Get Account Information sends no `Accept`, and swath reads
+its header only. `startFrom`, `marker` and `prefix` are the SDK's
 own options (`TestStartFromSent`). `TestWireSnapshot` holds every request the client sends, under each
 authentication form, to `testdata/wire.txt`: method, intended host, path, every query parameter as sent, every
 header value and the body's length, with dates, Shared Key signatures (verified first) and the SDK's version and

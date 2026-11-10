@@ -2,7 +2,7 @@
 GET https://acct.blob.core.windows.net/c
   query comp=list
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -15,7 +15,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -25,7 +25,7 @@ GET https://acct.blob.core.windows.net/c
   query comp=list
   query delimiter=%2F
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -39,7 +39,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -68,7 +68,7 @@ GET https://acct.blob.core.windows.net/c
   query srt=co
   query ss=b
   query sv=2026-10-06
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -87,7 +87,7 @@ GET https://acct.blob.core.windows.net/c
   query ss=b
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
   query sv=2026-10-06
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -103,7 +103,7 @@ GET https://acct.blob.core.windows.net/c
   query srt=co
   query ss=b
   query sv=2026-10-06
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -123,7 +123,7 @@ GET https://acct.blob.core.windows.net/c
   query ss=b
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
   query sv=2026-10-06
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Version: 2026-10-06
@@ -158,7 +158,7 @@ HEAD https://acct.dfs.core.windows.net/c
 GET https://acct.blob.core.windows.net/c
   query comp=list
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -173,7 +173,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -185,7 +185,7 @@ GET https://acct.blob.core.windows.net/c
   query comp=list
   query delimiter=%2F
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -201,7 +201,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -222,7 +222,7 @@ GET https://acct.blob.core.windows.net/c
 GET https://acct.blob.core.windows.net/c
   query comp=list
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -236,7 +236,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -247,7 +247,7 @@ GET https://acct.blob.core.windows.net/c
   query comp=list
   query delimiter=%2F
   query restype=container
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
@@ -262,7 +262,7 @@ GET https://acct.blob.core.windows.net/c
   query prefix=a%20b%2Bc%2F%C3%A9
   query restype=container
   query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
-  header Accept: application/xml
+  header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
