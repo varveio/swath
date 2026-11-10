@@ -1,0 +1,286 @@
+== anonymous: flat
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== anonymous: flat, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== anonymous: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== anonymous: hierarchy, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== anonymous: account information
+GET https://acct.blob.core.windows.net/c
+  query comp=properties
+  query restype=account
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== anonymous: filesystem properties
+HEAD https://acct.dfs.core.windows.net/c
+  query resource=filesystem
+  header User-Agent: <swath>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: flat
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query restype=container
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
+  query sv=2026-10-06
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: flat, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  query sv=2026-10-06
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
+  query sv=2026-10-06
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: hierarchy, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  query sv=2026-10-06
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: account information
+GET https://acct.blob.core.windows.net/c
+  query comp=properties
+  query restype=account
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  query sp=rl
+  query srt=co
+  query ss=b
+  query sv=2026-10-06
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== SAS: filesystem properties
+HEAD https://acct.dfs.core.windows.net/c
+  query resource=filesystem
+  query sv=2026-10-06
+  query ss=b
+  query srt=co
+  query sp=rl
+  query se=2026-12-01T00%3A00%3A00Z
+  query sig=TopSecretSig%2Bpart%3D
+  header User-Agent: <swath>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Shared Key: flat
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Shared Key: flat, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Shared Key: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Shared Key: hierarchy, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Shared Key: account information
+GET https://acct.blob.core.windows.net/c
+  query comp=properties
+  query restype=account
+  header Accept-Encoding: gzip
+  header Authorization: SharedKey acct:<signature>
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Date: <date>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: flat
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: flat, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: hierarchy
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query restype=container
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: hierarchy, every option
+GET https://acct.blob.core.windows.net/c
+  query comp=list
+  query delimiter=%2F
+  query marker=m
+  query maxresults=10
+  query prefix=a%20b%2Bc%2F%C3%A9
+  query restype=container
+  query startFrom=a%20b%2Bc%2F%C3%A9%2Fx
+  header Accept: application/xml
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: account information
+GET https://acct.blob.core.windows.net/c
+  query comp=properties
+  query restype=account
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes
+== Entra ID: filesystem properties
+HEAD https://acct.dfs.core.windows.net/c
+  query resource=filesystem
+  header Authorization: Bearer tok
+  header User-Agent: <swath>
+  header X-Ms-Version: 2026-10-06
+  body 0 bytes

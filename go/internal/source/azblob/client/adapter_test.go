@@ -34,16 +34,22 @@ import (
 	"github.com/varveio/swath/go/internal/utf16order"
 )
 
-// reqLog serves every request with answer and keeps the requests.
+// reqLog serves every request with answer and keeps the requests and the
+// length of each one's body.
 type reqLog struct {
-	mu   sync.Mutex
-	reqs []*http.Request
+	mu     sync.Mutex
+	reqs   []*http.Request
+	bodies []int
 }
 
 func (c *reqLog) server(t *testing.T, answer func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
 		c.mu.Lock()
-		c.reqs = append(c.reqs, r.Clone(context.Background()))
+		c.reqs, c.bodies = append(c.reqs, r.Clone(context.Background())), append(c.bodies, len(body))
 		c.mu.Unlock()
 		answer(w, r)
 	}))
@@ -59,31 +65,20 @@ func (c *reqLog) last() *http.Request {
 
 const testKey = "c2VjcmV0LWtleS1mb3ItdGVzdHM="
 
-// TestServiceVersionPinned: azblob v1.7.0 sends its own service version,
-// which the replay (answering only the captured 2026-06-06 and 2026-10-06)
-// refuses, and refuses ClientOptions.APIVersion; the client's requests
-// carry exactly one x-ms-version, Version, with swath's User-Agent
-// product token once, before the SDK's own, and Accept, signed under Shared
-// Key.
+// TestServiceVersionPinned: azblob refuses ClientOptions.APIVersion (pin
+// can go when it stops refusing), so the client's flat, hierarchy and
+// account-information requests carry exactly one x-ms-version, Version,
+// set by pin, with swath's User-Agent product token once, before the SDK's
+// own, signed under Shared Key; the listings ask for XML (Accept; account
+// information sends none, TestWireSnapshot).
 func TestServiceVersionPinned(t *testing.T) {
-	root := replayServer(t, []string{"a", "b"}) + "/" + replayAccount + "/" + replayContainer
-	plain, err := container.NewClientWithNoCredential(root, &container.ClientOptions{ClientOptions: azcore.ClientOptions{
-		Retry: policy.RetryOptions{MaxRetries: -1}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := plain.NewListBlobsFlatPager(nil).NextPage(context.Background()); err == nil {
-		t.Fatal("the replay answered the SDK's own service version: the pinned version may no longer be needed")
-	} else if re, ok := errors.AsType[*azcore.ResponseError](err); !ok || re.StatusCode/100 != 4 {
-		t.Fatalf("the SDK's own version: %v", err)
-	}
-	over, err := container.NewClientWithNoCredential(root, &container.ClientOptions{ClientOptions: azcore.ClientOptions{
+	over, err := container.NewClientWithNoCredential("http://127.0.0.1:1/acct/c", &container.ClientOptions{ClientOptions: azcore.ClientOptions{
 		APIVersion: Version, Retry: policy.RetryOptions{MaxRetries: -1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := over.NewListBlobsFlatPager(nil).NextPage(context.Background()); err == nil || !strings.Contains(err.Error(), "doesn't support overriding its API version") {
-		t.Fatalf("ClientOptions.APIVersion: %v", err)
+		t.Fatalf("ClientOptions.APIVersion: %v (if the SDK takes it now, pin can go)", err)
 	}
 
 	var cp reqLog
@@ -100,14 +95,21 @@ func TestServiceVersionPinned(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, call := range []func() error{
-			func() error {
+		for _, call := range []struct {
+			listing bool
+			do      func() error
+		}{
+			{true, func() error {
 				_, err := c.List(context.Background(), &ListInput{Container: "c", StartFrom: "s"})
 				return err
-			},
-			func() error { _, err := c.AccountInfo(context.Background(), "c"); return err },
+			}},
+			{true, func() error {
+				_, err := c.List(context.Background(), &ListInput{Container: "c", Delimiter: "/", StartFrom: "s"})
+				return err
+			}},
+			{false, func() error { _, err := c.AccountInfo(context.Background(), "c"); return err }},
 		} {
-			if err := call(); err != nil {
+			if err := call.do(); err != nil {
 				t.Fatal(err)
 			}
 			req := cp.last()
@@ -119,10 +121,12 @@ func TestServiceVersionPinned(t *testing.T) {
 			}
 			agent, token := req.Header.Get("User-Agent"), buildinfo.UserAgent()
 			if !slices.Equal(versions, []string{Version}) || !strings.HasPrefix(agent, token+" ") ||
-				!strings.Contains(agent, "azsdk-go-azblob/") || strings.Count(agent, token) != 1 || req.Header.Get("Accept") != "application/xml" {
-				t.Errorf("%+v: x-ms-version %q, User-Agent %q, Accept %q", cfg, versions, agent, req.Header.Get("Accept"))
+				!strings.Contains(agent, "azsdk-go-azblob/") || strings.Count(agent, token) != 1 {
+				t.Errorf("%+v %s: x-ms-version %q, User-Agent %q", cfg, req.URL.RawQuery, versions, agent)
 			}
-			t.Logf("User-Agent: %s", agent)
+			if accept := req.Header.Values("Accept"); call.listing && !slices.Equal(accept, []string{"application/xml"}) {
+				t.Errorf("%+v %s: Accept %q", cfg, req.URL.RawQuery, accept)
+			}
 			if cfg.SharedKey != "" {
 				verifySharedKey(t, req, "acct", cfg.SharedKey)
 			}
@@ -130,41 +134,43 @@ func TestServiceVersionPinned(t *testing.T) {
 	}
 }
 
-// TestStartFromSent: azblob v1.7.0's pagers do not send StartFrom; the
-// client's do, flat and with a delimiter, before Shared Key signs.
+// TestStartFromSent: the client sends StartFrom (the SDK's own option)
+// exactly once, escaped, flat and with a delimiter, on a first request and
+// on a continuation (the marker and the original seek both sent), and
+// nothing when it is unset; Shared Key signs it.
 func TestStartFromSent(t *testing.T) {
 	var cp reqLog
 	srv := cp.server(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, page("")) })
-	sf := "s t+u/\ue000"
-	plain, err := container.NewClientWithNoCredential(srv.URL+"/acct/c", &container.ClientOptions{ClientOptions: azcore.ClientOptions{Retry: policy.RetryOptions{MaxRetries: -1}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := plain.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{StartFrom: &sf}).NextPage(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if cp.last().URL.Query().Has("startFrom") {
-		t.Error("the SDK's flat pager sends StartFrom now: pin need not")
-	}
-	if _, err := plain.NewListBlobsHierarchyPager("/", &container.ListBlobsHierarchyOptions{StartFrom: &sf}).NextPage(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if cp.last().URL.Query().Has("startFrom") {
-		t.Error("the SDK's hierarchy pager sends StartFrom now: pin need not")
-	}
+	sf := "s t+u/"
 	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SharedKey: testKey, Retry: objhttp.Retry{MaxAttempts: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, delim := range []string{"", "/"} {
-		if _, err := c.List(context.Background(), &ListInput{Container: "c", StartFrom: sf, Delimiter: delim, Prefix: "p q"}); err != nil {
-			t.Fatal(err)
+		for _, in := range []ListInput{
+			{Container: "c", Delimiter: delim, Prefix: "p q"},
+			{Container: "c", Delimiter: delim, Prefix: "p q", StartFrom: sf},
+			{Container: "c", Delimiter: delim, Prefix: "p q", StartFrom: sf, Marker: "m"},
+		} {
+			if _, err := c.List(context.Background(), &in); err != nil {
+				t.Fatal(err)
+			}
+			req := cp.last()
+			q := req.URL.Query()
+			for k, want := range map[string]string{"startFrom": in.StartFrom, "marker": in.Marker, "prefix": in.Prefix} {
+				var vs []string
+				if want != "" {
+					vs = []string{want}
+				}
+				if !slices.Equal(q[k], vs) {
+					t.Errorf("%+v: %s %q, want %q (query %s)", in, k, q[k], vs, req.URL.RawQuery)
+				}
+			}
+			if strings.Contains(req.URL.RawQuery, "+") {
+				t.Errorf("%+v: query %s holds an unescaped '+'", in, req.URL.RawQuery)
+			}
+			verifySharedKey(t, req, "acct", testKey)
 		}
-		req := cp.last()
-		if q := req.URL.Query(); q.Get("startFrom") != sf || q.Get("prefix") != "p q" || strings.Contains(req.URL.RawQuery, "+") && !strings.Contains(req.URL.RawQuery, "%2B") {
-			t.Errorf("delimiter %q: query %s", delim, req.URL.RawQuery)
-		}
-		verifySharedKey(t, req, "acct", testKey)
 	}
 }
 

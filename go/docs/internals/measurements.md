@@ -873,6 +873,22 @@ commit: default 21,434,530 bytes; tagged (both SDK service clients) 35,778,722 b
 S3 versions were not measured: gofakes3 answers the versions listing of an unversioned bucket with a truncated page
 and no marker. Raw logs, profiles and scripts: swath-notes `runs/2026-11-09-sdk-clients/`.
 
+### azblob v1.7.0 to v1.8.3 (2026-11-10)
+
+`BenchmarkList` (`internal/source/azblob/client`), main `05e36feb` (azblob v1.7.0, azcore v1.21.1) against the
+v1.8.3 change (azcore v1.24.0, explicit XML response format), both with Go 1.27.3, in one GitHub-hosted
+`ubuntu-latest` job (4 CPUs), the two test binaries alternated ten times at `-benchtime=300x`, compared with benchstat:
+
+| Page | v1.7.0 µs/object | v1.8.3 µs/object | Change | Allocations/page | Bytes/page |
+|---|---:|---:|---:|---|---|
+| flat | 22.54 ± 1 % | 22.73 ± 1 % | +0.8 % (p=0.000) | 865.2k, unchanged | 40.25 MiB, unchanged |
+| hierarchy | 12.54 ± 0 % | 12.57 ± 3 % | ~ (p=0.10) | 485.3k, unchanged | 22.14 MiB, unchanged |
+
+The XML path costs the same. v1.8's `container` package imports `apache/arrow-go` for its Arrow listing format with no
+build tag to leave it out, so `cmd/swath` links it although swath never selects Arrow: stripped static binaries
+40,194,208 to 45,015,200 bytes (+4.8 MB), 727 to 767 packages, 34 of the 40 from Arrow and its dependencies. Arrow's
+`arrow_json_stdlib` tag would save 1.4 MB of that; it is not used. Package initialisation grows by about 0.3 ms.
+
 ## Local filesystem walker
 
 Trees are synthetic (`bench/gen_tree.py`, seed 20261105): `realistic` is 971,927 non-directory entries and
