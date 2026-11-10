@@ -59,8 +59,10 @@ func (r *Reader) Read(ctx context.Context, rng Range, stats *Stats) ([]Row, erro
 // column of Range.Columns, in order, is given by Values calls or one
 // Missing call.
 type ColumnSink interface {
-	// Keys starts a run with its rows' keys, which the sink may keep
-	// (they share one allocation, each capped at its own end).
+	// Keys starts a run with its rows' keys. They may alias page buffers
+	// (the SeekParquet reader's do) and are valid only until the call
+	// returns: a sink copies what it keeps. Reader.Scan's own keys share
+	// one allocation, each capped at its own end, which rowSink keeps.
 	Keys(keys [][]byte)
 	// Values gives the next values of column c (an index into
 	// Range.Columns) for the run's rows, in row order; the run's rows take

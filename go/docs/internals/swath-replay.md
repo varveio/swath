@@ -244,7 +244,11 @@ the fixture.
 Windows are evicted least recently used first, past `--prefetch-max-windows` windows or past that many times
 `--prefetch-window-rows` rows (a walk holds two while it reads the last quarter of one, so the default of 192
 windows serves 96 walks); a window's rows are held packed, the keys and each text column in one array
-apiece (about 130 bytes a row for the canonical schema with 44-byte keys). With the defaults the cache holds
+apiece (about 130 bytes a row for the canonical schema with 44-byte keys). A fill packs straight from the
+decoded pages: over a SeekParquet dataset it takes the seekparquet module's borrowed batches
+(`Dataset.RangeBatches`) and copies each key and value once, into the packed arrays, with no owning row or
+cloned value between (`store` `TestSeekScanPacksAsOwnedRows`). A fill whose keys or a text column would
+outgrow the packed offsets stops reading at the next batch and is read again unpacked. With the defaults the cache holds
 up to 2.4 million rows (the server's resident memory under load is in Measurements below). `0` for either flag
 turns the cache off: every read then decodes its pages from the fixture. The cache's meters are `prefetch.*`
 (below); a read-ahead is counted as a fill (`prefetch.window.fill`, `prefetch.fill.rows`), not as a miss.
@@ -448,7 +452,7 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `serving.refused{reason}` | on first use | `row_group_disorder` (a Java-era fixture) or `key_order` (a SeekParquet dataset), counted for every read that finds it, a range read or a rollup |
 | `index.load.latency{source=derived}`, `index.entries` | from startup | the fixture open (footers, routing keys); one routing entry per non-empty row group |
 | `page.read.latency` | from startup | how long a store read holds its reader slot, slot wait excluded |
-| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none |
+| `parquet.query.latency`, `parquet.query.rows`, `parquet.query.errors` | from startup | one fixture read, slot wait included; its rows or rollup entries. A window cache fill is one such read; a read answered from a window is none. A fill that fails counts in `errors`, and its `rows` are those it packed before the failure |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag |
 | `delimiter.path{path}` | on first use | `rollup` or `walk` for an S3 delimiter page |
 | `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks; over a SeekParquet dataset, the seekparquet module's per-request counts (`ReadStats`: row groups opened, groups skipped, keys decoded, page-index seeks). A key cursor stays open on its group for the whole rollup and decodes whole key pages |
