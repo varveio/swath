@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -404,6 +405,7 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		} else {
 			p.given = append(p.given, "--"+fl.Name+"="+value)
 			p.recorded = append(p.recorded, "--"+fl.Name+"="+shownValue(fl, value))
+			remember(fl, value)
 		}
 		return nil
 	})
@@ -517,6 +519,64 @@ func askedFormat(flags []argFlag) string {
 		return ""
 	}
 	return v
+}
+
+// hidden are the parts of place and secret values given on command lines
+// in this process that their shown form leaves out (shownValue): what
+// scrub takes out of any message, an error that quotes a value as it was
+// used (open PATH: ...) among them.
+var hidden struct {
+	mu    sync.Mutex
+	parts []string // longest first
+}
+
+// minHidden is the shortest part scrub replaces: a shorter one would cut
+// into ordinary words.
+const minHidden = 4
+
+// remember notes the parts of fl's value that its shown form hides.
+func remember(fl *pflag.Flag, value string) {
+	shown := shownValue(fl, value)
+	if shown == value {
+		return
+	}
+	parts := []string{value}
+	if source.Described(fl).Shown == source.ShownPlace {
+		// A place's userinfo, query and fragment, which an error may
+		// quote apart from the rest (a path made absolute).
+		if _, rest, ok := strings.Cut(value, "://"); ok {
+			authority, _, _ := strings.Cut(rest, "/")
+			if i := strings.LastIndex(authority, "@"); i >= 0 {
+				parts = append(parts, authority[:i])
+			}
+		}
+		if _, q, ok := strings.Cut(value, "?"); ok {
+			q, frag, _ := strings.Cut(q, "#")
+			parts = append(parts, q, frag)
+		} else if _, frag, ok := strings.Cut(value, "#"); ok {
+			parts = append(parts, frag)
+		}
+	}
+	hidden.mu.Lock()
+	defer hidden.mu.Unlock()
+	for _, p := range parts {
+		if len(p) >= minHidden && !slices.Contains(hidden.parts, p) {
+			hidden.parts = append(hidden.parts, p)
+		}
+	}
+	slices.SortFunc(hidden.parts, func(a, b string) int { return len(b) - len(a) })
+}
+
+// scrub is s without the hidden parts of the place and secret values
+// given (remember): the backstop for a message that quotes one as it was
+// used, applied where an outcome or an event is settled.
+func scrub(s string) string {
+	hidden.mu.Lock()
+	defer hidden.mu.Unlock()
+	for _, p := range hidden.parts {
+		s = strings.ReplaceAll(s, p, redacted)
+	}
+	return s
 }
 
 // shownValue is fl's value as a recorded or reported command line, or an

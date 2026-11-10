@@ -108,7 +108,7 @@ func classify(err, cause error, dir string) outcome {
 		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
 	}
 	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
-	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
+	o := outcome{Message: scrub(err.Error()), Resumable: resumable, StopSource: stopSource(cause)}
 	var u usageError
 	var se *signalError
 	var ue *journal.UnresumableError

@@ -21,7 +21,10 @@ flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--i
 by every command (`show` and `completion` too), before or after the command word; a command line refused
 before `--log-format` is read still reports in the format it names. An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
 --s3-region?)`) and the help to read; an error never repeats a typed value it cannot tell from a credential
-(an unknown flag's value, a SAS in `-o` or an extra argument). A default-on switch is turned off by `--no-NAME`; the help never shows
+(an unknown flag's value, a SAS in `-o` or an extra argument), and a message that quotes a place or secret flag's
+value as it was used (a CA bundle, seed or credentials file it could not read) shows it redacted, on stderr, in
+the events, the report and `error.json`; the request log shows a query parameter whose name is no plain name
+redacted, name and value. A default-on switch is turned off by `--no-NAME`; the help never shows
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
 (`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`) is the source `az://ACCOUNT/CONTAINER[/PREFIX]`.
 

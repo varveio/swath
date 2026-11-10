@@ -118,7 +118,7 @@ func (l *eventLog) print(level, event, msg string, fields any) {
 	if level == lvWarn {
 		p += "warning: "
 	}
-	send(errOut, p+msg+"\n")
+	send(errOut, p+scrub(msg)+"\n")
 }
 
 // line is an event as one JSON object: ts, level, event, attempt, msg,
@@ -133,8 +133,8 @@ func (l *eventLog) line(level, event, msg string, fields any) string {
 	if l.attempt != "" {
 		b = str(b, "attempt", l.attempt)
 	}
-	b = str(b, "msg", msg)
-	if f := marshal(fields); len(f) > 2 && f[0] == '{' {
+	b = str(b, "msg", scrub(msg))
+	if f := []byte(scrub(string(marshal(fields)))); len(f) > 2 && f[0] == '{' {
 		return string(append(append(b, ','), f[1:]...)) + "\n"
 	}
 	return string(append(b, '}')) + "\n"
@@ -253,7 +253,7 @@ func conclude(err error) int {
 			if err != nil {
 				level, msg = lvError, err.Error()
 			}
-			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Message}))
+			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, scrub(o.Message)}))
 		}
 		return o.ExitCode
 	}
@@ -262,9 +262,9 @@ func conclude(err error) int {
 	}
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
-		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
+		noteFinal(errOut, scrub(fmt.Sprintf("swath: outcome: %s\n", b)))
 	}
-	noteFinal(errOut, "swath: "+err.Error()+"\n")
+	noteFinal(errOut, "swath: "+scrub(err.Error())+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
 		noteFinal(errOut, sh.see()+"\n")
@@ -472,6 +472,14 @@ func watchRequests(w *failureWatch) (stop func()) {
 // Azure SAS, a continuation token), whose values are redacted.
 var shownQuery = []string{"comp", "delimiter", "endOffset", "include", "list-type", "max-keys", "maxResults", "maxresults", "prefix", "restype", "start-after", "startOffset", "versions"}
 
+// plainName says a query parameter's name is a name: at most 32 letters,
+// digits, '-' and '_'.
+func plainName(k string) bool {
+	return len(k) > 0 && len(k) <= 32 && !strings.ContainsFunc(k, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '-' || r == '_')
+	})
+}
+
 // requestPath is a request's path and query as the request log shows it.
 func requestPath(u *url.URL) string {
 	p := u.EscapedPath()
@@ -490,13 +498,17 @@ func requestPath(u *url.URL) string {
 		if i == 0 {
 			sep = "?"
 		}
+		name := url.QueryEscape(k)
+		if !slices.Contains(shownQuery, k) && !plainName(k) {
+			name = redacted // a name that is no name (a malformed SAS) may carry one
+		}
 		for _, v := range q[k] {
 			if !slices.Contains(shownQuery, k) {
 				v = redacted
 			} else {
 				v = url.QueryEscape(v)
 			}
-			b.WriteString(sep + url.QueryEscape(k) + "=" + v)
+			b.WriteString(sep + name + "=" + v)
 			sep = "&"
 		}
 	}

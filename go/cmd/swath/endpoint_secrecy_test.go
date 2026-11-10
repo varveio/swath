@@ -335,13 +335,24 @@ func TestSecrecyRunOutputs(t *testing.T) {
 // TestPlaceAndSecretFlagsNeverEchoed: every flag whose value is a place
 // or a secret (source.Flag.Shown), in every spelling (--name=V, --name V,
 // -xV, -x V), carries a credential nowhere: not in the recorded command
-// (what the journal records), stderr (text or JSON events) or the report.
+// (what the journal records), and not when the run gets as far as using
+// the value and fails there (a CA bundle, a seed or a credentials file
+// that cannot be read, a token command that does not run, a SAS that is
+// no query string): not on stderr (text or JSON events), stdout, the
+// report or error.json.
 func TestPlaceAndSecretFlagsNeverEchoed(t *testing.T) {
 	const value = "https://user:TESTSECRET@acct.blob.core.windows.net/c?sv=1&sig=TESTSECRET"
+	roots := map[string]string{"s3": "s3://bkt", "gs": "gs://bkt", "az": "az://acct/c"}
+	credentials := []string{"gcs-credentials-file", "azure-sas-token", "s3-bearer-token-command"} // not with --anonymous
+	var o options
 	n := 0
-	newFlags(&options{}, true).VisitAll(func(fl *pflag.Flag) {
+	newFlags(&o, true).VisitAll(func(fl *pflag.Flag) {
 		if source.Described(fl).Shown == "" {
 			return
+		}
+		root := roots["s3"]
+		if own := o.owners[fl.Name]; len(own) > 0 {
+			root = roots[own[0]]
 		}
 		spellings := [][]string{{"--" + fl.Name + "=" + value}, {"--" + fl.Name, value}}
 		if fl.Shorthand != "" {
@@ -349,22 +360,36 @@ func TestPlaceAndSecretFlagsNeverEchoed(t *testing.T) {
 		}
 		for _, sp := range spellings {
 			n++
-			o, _, _ := parseList(append([]string{"s3://b"}, sp...), io.Discard, command{diag: true})
+			o, _, _ := parseList(append([]string{root}, sp...), io.Discard, command{diag: true})
 			if strings.Contains(strings.Join(o.argv, " "), "TESTSECRET") {
 				t.Errorf("%q: recorded %q", sp, o.argv)
 			}
 			for _, format := range []string{logText, logJSON} {
-				stderr := captureStderr(t)
+				stderr := captureSyncStderr(t)
+				dir := filepath.Join(t.TempDir(), "ds")
 				report := filepath.Join(t.TempDir(), "report.json")
-				args := append([]string{"--log-format", format, "-v", "diag", "list", "bad://b"}, sp...)
+				args := append([]string{"--log-format", format, "-vv", "diag", "list", root}, sp...)
+				if fl.Name != "endpoint-url" {
+					args = append(args, "--endpoint-url", "http://127.0.0.1:1")
+				}
+				if !slices.Contains(credentials, fl.Name) {
+					args = append(args, "--anonymous")
+				}
+				if fl.Name != "output" {
+					args = append(args, "-o", dir)
+				}
 				if fl.Name != "report" {
 					args = append(args, "--report", report)
 				}
+				args = append(append(args, "--max-duration", "2s"), unjournaled...)
 				var stdout bytes.Buffer
-				conclude(dispatch(context.Background(), args, &stdout))
+				if code := conclude(dispatch(context.Background(), args, &stdout)); code == exitCompleted {
+					t.Errorf("%s %q: exit 0", format, sp)
+				}
 				logs.Store(nil)
 				raw, _ := os.ReadFile(report)
-				for what, b := range map[string][]byte{"stderr": stderr.Bytes(), "stdout": stdout.Bytes(), "report": raw} {
+				errJSON, _ := os.ReadFile(filepath.Join(dir, errorName))
+				for what, b := range map[string][]byte{"stderr": []byte(stderr.String()), "stdout": stdout.Bytes(), "report": raw, errorName: errJSON} {
 					if bytes.Contains(b, []byte("TESTSECRET")) {
 						t.Errorf("%s %q: %s holds the secret: %s", format, sp, what, b)
 					}
