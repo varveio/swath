@@ -9,6 +9,7 @@ _swath_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--columns=[TSV and JSONL: these columns, in order (key,size; repeatable)]:NAME: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--include=[keep keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
         '--exclude=[drop keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
@@ -69,6 +70,7 @@ _swath_du() {
         '(-d --depth)'{-d+,--depth=}'[also total each prefix down to N levels below SOURCE (0: the total)]:N: ' \
         '--allocated[local: total the files'\'' allocated bytes instead of their apparent size]' \
         '--count-links-once[local: count a file with several hard links once, as du does]' \
+        '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
