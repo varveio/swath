@@ -346,6 +346,11 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 				if got.Unsorted != got.DirsRead {
 					t.Fatalf("unsorted_dirs %d, want every directory read (%d)", got.Unsorted, got.DirsRead)
 				}
+				// The Linux engine reads in slabs: every directory read is a slab at least, the 5000-entry
+				// directory one (5000 < slabEntries) handed out as chunks at a stat tier, and nothing sorted.
+				if !portable && nativeEngine && (got.Slabs < got.DirsRead || got.ParallelSorts != 0 || (got.Chunks == 0) != (fields == Names)) {
+					t.Fatalf("count_slabs %d for %d directories, chunks %d, parallel_sorts %d", got.Slabs, got.DirsRead, got.Chunks, got.ParallelSorts)
+				}
 				// The same keys, through a sink on the provider the run left unsorted.
 				c := &collect{}
 				if _, err := order.CountWithSink[Range, Entry](context.Background(), p, nil, order.Options{Workers: 4, Unordered: true}, c); err != nil {
