@@ -125,7 +125,7 @@ supported schemas rather than assuming every swath dataset is accepted.
 ## Documentation
 
 - **Start:** [Go guide](go/docs/getting-started.md), [build and verify](go/docs/running.md#install-and-verify).
-- **Use:** [CLI reference](go/docs/cli.md), [operating guide](go/docs/running.md),
+- **Use:** [command reference](go/docs/commands/swath.md), [operating guide](go/docs/running.md),
   [production checklist](go/docs/production.md).
 - **Read the output:** [swath dataset profile](go/docs/dataset.md).
 - **Understand:** [architecture](go/docs/internals/architecture.md), [providers](go/docs/internals/providers.md),

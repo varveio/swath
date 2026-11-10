@@ -148,7 +148,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../commands/swath-resume.md](../commands/swath-resume.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the

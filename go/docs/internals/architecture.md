@@ -161,4 +161,4 @@ budget.
 [durability.md](durability.md) ·
 [providers.md](providers.md) · [contracts.md](contracts.md) ·
 [dependencies.md](dependencies.md) ·
-[testing.md](testing.md) · [../cli.md](../cli.md) · [measurements.md](measurements.md)
+[testing.md](testing.md) · [../commands/swath.md](../commands/swath.md) · [run-lifecycle.md](run-lifecycle.md) · [measurements.md](measurements.md)

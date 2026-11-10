@@ -1,7 +1,7 @@
 # Operating swath (Go)
 
 For the person who runs `swath` in production: how to install it, size and run a listing, watch it, stop and
-resume it, and read what it produced. Flags and exit codes in full: [cli.md](cli.md). Why it behaves as it
+resume it, and read what it produced. Flags and exit codes in full: [cli.md](commands/swath.md). Why it behaves as it
 does: [internals/durability.md](internals/durability.md), [internals/ordering.md](internals/ordering.md),
 [internals/providers.md](internals/providers.md).
 
@@ -115,7 +115,7 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
   `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
   (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
-  recorded, so give it again to `swath resume DIR` ([cli.md](cli.md), "Bearer tokens").
+  recorded, so give it again to `swath resume DIR` ([cli.md](commands/swath.md), "Bearer tokens").
 - Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
   in `--x-s3` is refused, exit 2).
 
@@ -285,7 +285,7 @@ stage's resources. The report written at the end keeps the curve (`history`, up 
 (`timings.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
 resources and the provider's counters (`source.stats.counters.values`: attempt latency percentiles, the
 limiter's steps, the split counters). Both schemas are listed once, under "Progress file" and "Run report" in
-[cli.md](cli.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
+[cli.md](commands/swath.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
 
 **The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
 parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)

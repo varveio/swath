@@ -78,7 +78,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 Java's engine, seed and meter blocks have no counterpart. The engine's counters are under
 `source.stats.counters` with their own names ([internals/counters.md](internals/counters.md)). The full schema
-is under "Run report" in [cli.md](cli.md).
+is [reference/run-report.md](reference/run-report.md).
 
 ## What is not here
 

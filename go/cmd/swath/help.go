@@ -34,7 +34,7 @@ const (
 	plainHelpWidth = 80
 )
 
-// docStyle is the help as docs/cli.md holds it: the long form, the widest,
+// docStyle is the help as docs/commands/ holds it: the long form, the widest,
 // no styling.
 var docStyle = helpStyle{width: maxHelpWidth, long: true}
 
