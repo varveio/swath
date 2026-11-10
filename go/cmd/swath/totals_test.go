@@ -184,7 +184,7 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 	root, _ := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
-	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "c/**", "--no-stats", "--report", report}, &out, false); err != nil {
+	if err := run(context.Background(), []string{root, "-o", filepath.Join(t.TempDir(), "ds"), "--exclude", "c/", "--exclude", "c/**", "--no-stats", "--report", report}, &out, false); err != nil {
 		t.Fatal(err)
 	}
 	var r listing.Report
