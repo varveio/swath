@@ -107,7 +107,16 @@ func TestStreamMatchesPages(t *testing.T) {
 			if err != nil || len(want) == 0 {
 				t.Fatalf("oracle: %d objects, %v", len(want), err)
 			}
-			for _, limit := range []int{math.MaxInt, 1, 7, 1024, len(want), len(want) - 1} {
+			// Every request is a RangeBatches call. Tiny limits cost one call
+			// per object or so, which only the small fixtures can afford under
+			// -race; the large one continues across a few requests instead.
+			limits := []int{math.MaxInt, 1024, len(want), len(want) - 1}
+			if len(want) <= 2000 {
+				limits = append(limits, 1, 7)
+			} else {
+				limits = append(limits, len(want)/3+1)
+			}
+			for _, limit := range limits {
 				d := openDir(t, dir)
 				var got []Object
 				withStreamLimit(limit, func() { got, err = collect(d, newStream) })
