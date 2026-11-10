@@ -352,13 +352,9 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 	}
 	p.longHelp = slices.Contains(flagArgs, "--help")
 	usage := func(err error) error { return seeHelp{usageError{err}, cmd} }
-	for _, a := range flagArgs {
-		if len(a) > 2 && a[0] == '-' && a[1] != '-' {
-			name, _, _ := strings.Cut(a[1:], "=")
-			if len(name) > 1 && f.Lookup(name) != nil {
-				return p, usage(fmt.Errorf("unknown flag %s (did you mean --%s?)", a, name))
-			}
-		}
+	// The root's flags end at the command word (dispatch).
+	if name := singleDashLong(f, args, cmd != ""); name != "" {
+		return p, usage(fmt.Errorf("unknown flag -%s (did you mean --%s?)", name, name))
 	}
 	f.Usage = func() {}
 	err := f.ParseAll(args, func(fl *pflag.Flag, value string) error {
@@ -370,7 +366,7 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		if err := f.Set(fl.Name, value); err != nil {
 			return err
 		}
-		if value == fl.NoOptDefVal {
+		if fl.NoOptDefVal != "" && value == fl.NoOptDefVal {
 			p.given = append(p.given, "--"+fl.Name)
 		} else {
 			p.given = append(p.given, "--"+fl.Name+"="+value)
@@ -390,20 +386,66 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 	case errors.As(err, &u):
 		return p, seeHelp{u, cmd}
 	case errors.As(err, &ne):
+		// The name alone: what follows it may be a value.
 		typed := "--" + ne.GetSpecifiedName()
 		if ne.GetSpecifiedShortnames() != "" {
 			typed = "-" + ne.GetSpecifiedName()
-			if s := ne.GetSpecifiedShortnames(); len(s) > 1 {
-				typed += " in -" + s
-			}
 		}
 		return p, usage(errors.New("unknown flag " + typed + suggestFlag(f, ne.GetSpecifiedName())))
 	case errors.As(err, &ve):
 		return p, usage(fmt.Errorf("--%s needs a value (%s)", ve.GetFlag().Name, source.Described(ve.GetFlag()).Metavar))
 	case errors.As(err, &ie):
-		return p, usage(fmt.Errorf("--%s %q: %w", ie.GetFlag().Name, ie.GetValue(), errors.Unwrap(ie)))
+		return p, usage(fmt.Errorf("--%s %q: %w", ie.GetFlag().Name, shownValue(ie.GetFlag().Name, ie.GetValue()), errors.Unwrap(ie)))
 	}
 	return p, usage(err)
+}
+
+// singleDashLong is the first long name typed with one dash (-depth) among
+// the flags of args as f's parser reads them: a flag's value is consumed,
+// not read as a flag, and the flags end at -- (and, unless interspersed,
+// at the first operand). "" for none.
+func singleDashLong(f *pflag.FlagSet, args []string, interspersed bool) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return ""
+		case len(a) < 2 || a[0] != '-':
+			if !interspersed {
+				return ""
+			}
+		case a[1] == '-':
+			name, _, eq := strings.Cut(a[2:], "=")
+			if fl := f.Lookup(name); fl != nil && !eq && fl.NoOptDefVal == "" {
+				i++
+			}
+		default:
+			if name, _, _ := strings.Cut(a[1:], "="); len(name) > 1 && f.Lookup(name) != nil {
+				return name
+			}
+			// A bundle (-vd 2): the first value-taking flag takes the
+			// rest of the token, or the next argument when it ends it.
+			for j := 1; j < len(a); j++ {
+				fl := f.ShorthandLookup(a[j : j+1])
+				if fl == nil || fl.NoOptDefVal == "" {
+					if fl != nil && j == len(a)-1 {
+						i++
+					}
+					break
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// shownValue is a flag's value as an error may quote it: redacted as the
+// recorded command line redacts it (registry.RedactArgv).
+func shownValue(name, value string) string {
+	if registry.RedactArgv([]string{"--" + name + "=" + value})[0] == "--"+name+"="+redacted {
+		return redacted
+	}
+	return value
 }
 
 // suggestFlag is the " (did you mean --x?)" of an unknown flag name: a

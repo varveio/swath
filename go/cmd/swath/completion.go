@@ -184,7 +184,7 @@ func completion(args []string, stdout io.Writer) error {
 	case len(p.operands) == 0:
 		return seeHelp{usageError{errors.New("missing SHELL (bash, zsh or fish)")}, "completion"}
 	case len(p.operands) > 1:
-		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", p.operands[1])}, "completion"}
+		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", registry.Redact(p.operands[1]))}, "completion"}
 	}
 	return writeCompletion(stdout, p.operands[0])
 }
@@ -201,7 +201,7 @@ func writeCompletion(w io.Writer, shell string) error {
 	case "fish":
 		fishScript(&b, ctxs)
 	default:
-		return seeHelp{usageError{fmt.Errorf("unknown shell %q (bash, zsh or fish)", shell)}, "completion"}
+		return seeHelp{usageError{fmt.Errorf("unknown shell %q (bash, zsh or fish)", registry.Redact(shell))}, "completion"}
 	}
 	_, err := io.WriteString(w, b.String())
 	return err

@@ -66,7 +66,7 @@ func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
 	case err != nil || len(o.columns) == 0:
 		return c, err
 	case c == nil:
-		return nil, fmt.Errorf("--columns: -o %s is a dataset directory, which holds every column; the columns are chosen for TSV and JSONL", o.out)
+		return nil, fmt.Errorf("--columns: -o %s is a dataset directory, which holds every column; the columns are chosen for TSV and JSONL", registry.Redact(o.out))
 	case c.Format == textout.Table:
 		return nil, errors.New("--columns: the table's columns are fixed; the columns are chosen for --format tsv or jsonl")
 	}
@@ -80,7 +80,7 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	case o.countOnly: // swath du and swath diag count write no rows (placement refuses -o; du's --format is resolveTotals')
 		return nil, nil
 	case !toStdout && hasScheme(o.out):
-		return nil, fmt.Errorf("-o %s: an object-store destination is not supported; %s", o.out, outputForms)
+		return nil, fmt.Errorf("-o %s: an object-store destination is not supported; %s", registry.Redact(o.out), outputForms)
 	case !toStdout:
 		format, comp := textDest(o.out)
 		dir := strings.HasSuffix(o.out, "/") || strings.HasSuffix(o.out, string(filepath.Separator))
@@ -90,14 +90,14 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 		lower := strings.ToLower(o.out)
 		for _, ext := range unwritten {
 			if format == "" && !dir && strings.HasSuffix(lower, ext) {
-				return nil, fmt.Errorf("-o %s: swath does not write %s files; %s", o.out, ext, outputForms)
+				return nil, fmt.Errorf("-o %s: swath does not write %s files; %s", registry.Redact(o.out), ext, outputForms)
 			}
 		}
 		switch {
 		case format == "" && o.format != "":
-			return nil, fmt.Errorf("--format %s: -o %s is a dataset directory, not text rows", o.format, o.out)
+			return nil, fmt.Errorf("--format %s: -o %s is a dataset directory, not text rows", o.format, registry.Redact(o.out))
 		case format != "" && o.format != "" && o.format != "auto" && o.format != format:
-			return nil, fmt.Errorf("--format %s: -o %s names %s; %s", o.format, o.out, format, outputForms)
+			return nil, fmt.Errorf("--format %s: -o %s names %s; %s", o.format, registry.Redact(o.out), format, outputForms)
 		case format == "":
 			return nil, nil
 		}

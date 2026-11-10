@@ -15,9 +15,10 @@ swath version, swath -V, --version        print swath VERSION (REVISION)
 prints its flags one line each, `--help` adds each flag's further text (when to change it, its constraints);
 both go to stdout and exit 0. Flags are parsed GNU-style: short flags bundle (`-vq`) and take attached values
 (`-d1`, `-oPATH`), long ones take `--name value` or `--name=value`, flags and operands interleave, `--` ends the
-flags, and a long name with one dash (`-depth`) is refused. `-v`, `-q` and `--color` may also come before the
+flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--include -verbose`, is a value). `-v`, `-q` and `--color` may also come before the
 command word. An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
---s3-region?)`) and the help to read. A default-on switch is turned off by `--no-NAME`; the help never shows
+--s3-region?)`) and the help to read; an error never repeats a typed value it cannot tell from a credential
+(an unknown flag's value, a SAS in `-o` or an extra argument). A default-on switch is turned off by `--no-NAME`; the help never shows
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
 (`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`) is the source `az://ACCOUNT/CONTAINER[/PREFIX]`.
 

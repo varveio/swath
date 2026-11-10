@@ -20,6 +20,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/textout"
 )
@@ -50,7 +51,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	case len(p.operands) == 0:
 		return seeHelp{usageError{errors.New("missing DIR")}, "resume"}
 	case len(p.operands) > 1:
-		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", p.operands[1])}, "resume"}
+		return seeHelp{usageError{fmt.Errorf("unexpected argument %q", registry.Redact(p.operands[1]))}, "resume"}
 	}
 	dir, overrides := p.operands[0], p.given
 	// Every refusal below settles: it writes the report (--report). Its

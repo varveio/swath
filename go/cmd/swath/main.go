@@ -217,13 +217,14 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 }
 
 // stopEarly ends an attempt that stopped before a run began (an unknown
-// scheme, say): the report (--report) holds its outcome.
-func stopEarly(report string, argv []string, dir string, att *listing.Attempt, err error) error {
+// scheme, say): the report (--report, or stdout for --report -) holds its
+// outcome.
+func stopEarly(stdout io.Writer, report string, argv []string, dir string, att *listing.Attempt, err error) error {
 	o := classify(err, nil, "")
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
-	_ = writeReport(report, r, nil)
+	_ = writeReport(report, r, stdout)
 	return &exitError{error: err, code: o.ExitCode, out: o}
 }
 
@@ -787,7 +788,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	argv = redactArgv(argv)
 	pf, err := registry.Lookup(root)
 	if err != nil {
-		return stopEarly(o.report, argv, cfgOut(o), att, usageError{err})
+		return stopEarly(stdout, o.report, argv, cfgOut(o), att, usageError{err})
 	}
 	root, narrowing := narrowRoot(root, &o.filter)
 	cfg := listing.Config{
@@ -811,7 +812,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	stopProfile, err := profile(o.cpuProfile, o.memProfile)
 	if err != nil {
-		return stopEarly(o.report, argv, cfgOut(o), att, err)
+		return stopEarly(stdout, o.report, argv, cfgOut(o), att, err)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

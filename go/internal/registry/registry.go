@@ -380,13 +380,47 @@ func Register(f Factory) {
 }
 
 // Redact is root as it may be shown or recorded (Factory.Redact): with its
-// provider's credential redacted, or as it is.
+// provider's credential redacted, or as it is. A URL of a scheme no
+// provider takes, which none can say the credentials of, loses its
+// userinfo and its query.
 func Redact(root string) string {
 	root = Canonical(root)
-	if f, err := Lookup(root); err == nil && f.Redact != nil {
+	f, err := Lookup(root)
+	switch {
+	case err == nil && f.Redact != nil:
 		return f.Redact(root)
+	case err != nil && urlScheme(root):
+		u, perr := url.Parse(root)
+		if perr != nil {
+			return root[:strings.Index(root, "://")+3] + redactedValue
+		}
+		if u.User == nil && u.RawQuery == "" {
+			return root
+		}
+		u.User = nil
+		if u.RawQuery != "" {
+			u.RawQuery = redactedValue
+		}
+		return u.String()
 	}
 	return root
+}
+
+// redactedValue replaces a credential in a recorded or shown argument.
+const redactedValue = "[redacted]"
+
+// urlScheme says s starts with a URL scheme and "://".
+func urlScheme(s string) bool {
+	i := strings.Index(s, "://")
+	if i <= 0 || !('a' <= s[0] && s[0] <= 'z' || 'A' <= s[0] && s[0] <= 'Z') {
+		return false
+	}
+	for _, c := range s[1:i] {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '+' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // RedactArgv copies a command line for reports and journals: registered
@@ -428,7 +462,7 @@ func RedactArgv(argv []string) []string {
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]
-		out = append(out, dashes+name+"=[redacted]")
+		out = append(out, dashes+name+"="+redactedValue)
 		if !eq && i+1 < len(argv) {
 			i++
 		}
@@ -475,10 +509,11 @@ func Lookup(root string) (Factory, error) {
 	defer regMu.Unlock()
 	f, ok := factories[scheme]
 	if !ok {
+		// The root is not quoted: no provider can redact it (Redact).
 		if scheme == "" {
-			return f, fmt.Errorf("no provider for local paths is registered (root %q)", root)
+			return f, errors.New("no provider for local paths is registered")
 		}
-		return f, fmt.Errorf("unsupported root %q: no provider for %s://", root, scheme)
+		return f, fmt.Errorf("unsupported source: no provider for %s://", scheme)
 	}
 	return f, nil
 }

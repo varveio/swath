@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/internal/dataset"
@@ -84,6 +85,57 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// TestSecretsNeverEchoed: a credential typed on the command line is never
+// echoed by an error about that command line: a misspelled or one-dash
+// secret flag, a credential-bearing -o, SOURCE or extra argument, an
+// unknown scheme. Neither stderr (text or JSON events) nor the report
+// holds it.
+func TestSecretsNeverEchoed(t *testing.T) {
+	const secret = "TESTSECRET"
+	sas := "sv=2024-01-01&sig=" + secret
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"list", "az://acct/c", "-azure-sas-token=" + secret},
+		{"list", "az://acct/c", "--azure-sas-tokn=" + secret},
+		{"list", "az://acct/c", "--azure-sas-tokn", secret},
+		{"list", "az://acct/c", "-Z" + secret},
+		{"list", "az://acct/c", "-Z=" + secret},
+		{"list", "az://acct/c", "-o", "https://acct.blob.core.windows.net/c?" + sas},
+		{"list", "az://acct/c", "-o", "az://acct/c?" + sas},
+		{"list", "az://acct/c", "az://acct/d?" + sas},
+		{"list", "bad://b?" + sas, "-o", filepath.Join(dir, "ds")},
+		{"diag", "count", "az://acct/c", "--columns", "key", "az://acct/d?" + sas},
+		{"resume", dir, "az://acct/c?" + sas},
+		{"completion", "bash", "az://acct/c?" + sas},
+		{"az://acct/c?" + sas},
+	} {
+		for _, format := range []string{logText, logJSON} {
+			t.Run(format+"/"+strings.Join(args, " "), func(t *testing.T) {
+				stderr := captureStderr(t)
+				t.Cleanup(func() { logs.Store(nil) })
+				report := filepath.Join(t.TempDir(), "report.json")
+				var stdout bytes.Buffer
+				argv := append([]string{"--log-format", format, "-v"}, args...)
+				if args[0] == "list" || args[0] == "resume" {
+					argv = append(argv, "--report", report)
+				}
+				if code := conclude(dispatch(context.Background(), argv, &stdout)); code == exitCompleted {
+					t.Fatalf("exit 0; stderr %q", stderr.String())
+				}
+				raw, _ := os.ReadFile(report)
+				for what, b := range map[string][]byte{"stderr": stderr.Bytes(), "stdout": stdout.Bytes(), "report": raw} {
+					if bytes.Contains(b, []byte(secret)) {
+						t.Errorf("%s holds the secret: %s", what, b)
+					}
+				}
+				if stderr.Len() == 0 {
+					t.Error("no error on stderr")
+				}
+			})
 		}
 	}
 }

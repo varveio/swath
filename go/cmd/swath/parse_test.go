@@ -58,6 +58,22 @@ func TestGNUParsing(t *testing.T) {
 	if err != nil || root != "-dir" || o.workers != 2 {
 		t.Errorf("-- -dir: %v %q", err, root)
 	}
+	// A flag's value, and anything after --, is not read as a flag
+	// spelled with one dash.
+	for _, args := range [][]string{
+		{"s3://b", "--include", "-verbose"},
+		{"s3://b", "-v", "--include", "-depth"},
+		{"--include=-verbose", "s3://b"},
+		{"--include", "x", "--", "-verbose"},
+	} {
+		o, _, err := parseList(args, io.Discard, command{})
+		if err != nil || len(o.filter.Include) != 1 {
+			t.Errorf("%q: %v, includes %q", args, err, o.filter.Include)
+		}
+	}
+	if err := dispatch(context.Background(), []string{"list", "--include", "-verbose", "--help"}, io.Discard); !errors.Is(err, pflag.ErrHelp) {
+		t.Errorf("the root read list's value as its flag: %v", err)
+	}
 }
 
 // TestUsageErrors: an unknown flag names the nearest one (or the flag
@@ -278,6 +294,36 @@ func TestRecordedCommandCanonical(t *testing.T) {
 	}
 }
 
+// TestRecordedCommandRoundTrip: every value-taking flag's recorded form
+// parses back to the same value and the same SOURCE, for an empty value
+// (--name=, not --name, which would take the next argument), one that
+// starts with a dash and one that holds '='.
+func TestRecordedCommandRoundTrip(t *testing.T) {
+	accepted := 0
+	newFlags(&options{}, true).VisitAll(func(fl *pflag.Flag) {
+		if fl.NoOptDefVal != "" {
+			return
+		}
+		for _, v := range []string{"", "-x", "a=b"} {
+			f1 := newFlags(&options{}, true)
+			p1, err := parseFlags(f1, cmdDiagList, []string{"--" + fl.Name, v, "s3://b"}, nil)
+			if err != nil {
+				continue // a value this flag refuses
+			}
+			accepted++
+			f2 := newFlags(&options{}, true)
+			p2, err := parseFlags(f2, cmdDiagList, append(slices.Clone(p1.given), "s3://b"), nil)
+			if err != nil || !slices.Equal(p2.given, p1.given) || !slices.Equal(p2.operands, []string{"s3://b"}) ||
+				f2.Lookup(fl.Name).Value.String() != f1.Lookup(fl.Name).Value.String() {
+				t.Errorf("--%s %q: recorded %q, parsed back %q %q (%v)", fl.Name, v, p1.given, p2.given, p2.operands, err)
+			}
+		}
+	})
+	if accepted == 0 {
+		t.Fatal("no flag took any of the values")
+	}
+}
+
 // TestNegation: a default-on switch is turned off by --no-NAME; a
 // resumable switch has its other spelling for a resume to undo it, outside
 // the list help; a provider's switch is refused on another provider's
@@ -340,5 +386,12 @@ func TestReportStdout(t *testing.T) {
 	}
 	if err := runDu(context.Background(), []string{src, "--report", "-"}, &out); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "carries the rows") {
 		t.Fatalf("du --report -: %v", err)
+	}
+	// A refusal before the run (an unknown scheme) prints its report too.
+	out.Reset()
+	err := run(context.Background(), []string{"bad://b", "-o", filepath.Join(t.TempDir(), "ds"), "--report", "-"}, &out, false)
+	r = listing.Report{}
+	if exitOf(err) != exitUsage || json.Unmarshal(out.Bytes(), &r) != nil || r.Outcome.ExitCode != exitUsage {
+		t.Fatalf("unknown scheme, --report -: %v, stdout %q", err, out.String())
 	}
 }
