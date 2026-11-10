@@ -193,6 +193,9 @@ func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, e source
 	if err != nil {
 		return err
 	}
+	if len(sc.ents) == 0 && r.chunk != nil { // a continuation at the end: the last slab filled exactly
+		return nil
+	}
 	st.Slabs++
 	p.resolveUnknown(d.fd, sc)
 	buildKeys(r.prefix, sc)
