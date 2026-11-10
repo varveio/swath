@@ -125,7 +125,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Value: source.Func(names(&o.filter.StorageClasses))})
 
 	o.partSize, o.rowBudget, o.partInterval, o.stall = listing.DefaultPartSize, listing.DefaultRowBudget, listing.DefaultPartInterval, 10*time.Minute
-	def(source.Flag{Name: "workers", Short: "j", Value: source.Count(&o.workers, 1), Metavar: "N", Group: source.GroupPerformance,
+	def(source.Flag{Name: "workers", Familiar: []string{"concurrency"}, Short: "j", Value: source.Count(&o.workers, 1), Metavar: "N", Group: source.GroupPerformance,
 		Usage: "listing workers (default 64; a local tree: 4 per CPU, at most 64)",
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
 	def(source.Flag{Name: "encoders", Value: source.Count(&o.encoders, 1), Metavar: "N", Group: source.GroupPerformance, Commands: writing,

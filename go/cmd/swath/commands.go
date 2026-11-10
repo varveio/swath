@@ -263,7 +263,14 @@ func show(args []string, stdout io.Writer) error {
 	}
 	dir := p.operands[0]
 	if raw {
-		return journal.Dump(stdout, dir)
+		err := journal.Dump(stdout, dir)
+		switch {
+		case errors.Is(err, journal.ErrNoJournal) && dataset.Committed(dir):
+			return fmt.Errorf("%s is a committed dataset, which keeps no journal (swath show %s prints its summary)", dir, dir)
+		case errors.Is(err, journal.ErrNoJournal):
+			return fmt.Errorf("%s holds no journal: no interrupted run", dir)
+		}
+		return err
 	}
 	if dataset.Committed(dir) {
 		var m dataset.Manifest

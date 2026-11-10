@@ -69,9 +69,9 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "s3-profile", Familiar: []string{"profile"}, Value: source.Text(&o.Profile), Metavar: "NAME", Usage: "the shared config profile to take credentials and region from",
 		Long: "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS)."})
 	source.Define(f, source.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: source.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
-	source.Define(f, source.Flag{Name: "s3-path-style", Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
+	source.Define(f, source.Flag{Name: "s3-path-style", Familiar: []string{"path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
 	source.Define(f, source.Flag{Name: "no-s3-path-style", Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
-	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
+	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Familiar: []string{"bearer-token-command"}, Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
 		Usage: "a shell command printing a bearer token, sent instead of SigV4",
 		Long:  "For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again."})
 	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),
@@ -84,11 +84,11 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 			o.BearerRefresh, o.refreshSet = d, true
 			return nil
 		})})
-	source.Define(f, source.Flag{Name: "s3-fips", Value: tracked(&o.FIPS, true, &o.fipsSet), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)",
+	source.Define(f, source.Flag{Name: "s3-fips", Familiar: []string{"fips"}, Value: tracked(&o.FIPS, true, &o.fipsSet), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)",
 		Long: "Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
-	source.Define(f, source.Flag{Name: "s3-dualstack", Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
+	source.Define(f, source.Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
 		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
-	source.Define(f, source.Flag{Name: "s3-fetch-owner", Value: source.Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
+	source.Define(f, source.Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: source.Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
 	return o
 }
 

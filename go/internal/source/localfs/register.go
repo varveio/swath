@@ -65,7 +65,7 @@ func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 		Usage: "what is read per entry (statx adds birth_time; Linux)"})
 	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind DIR)"})
 	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
-	source.Define(f, source.Flag{Name: "one-file-system", Value: source.Switch(&o.OneFilesystem),
+	source.Define(f, source.Flag{Name: "one-file-system", Familiar: []string{"one-filesystem"}, Value: source.Switch(&o.OneFilesystem),
 		Usage: "do not walk into a mount point below the root, as du -x"})
 	return o
 }

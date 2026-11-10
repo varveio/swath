@@ -101,6 +101,9 @@ func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 		case format == "":
 			return nil, nil
 		}
+		if parent := filepath.Dir(o.out); !isDir(parent) {
+			return nil, fmt.Errorf("-o %s: its directory %s does not exist", o.out, parent)
+		}
 		return &textout.Config{Format: format, Path: o.out, Compression: comp}, nil
 	}
 	switch o.format {

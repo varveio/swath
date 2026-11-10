@@ -862,7 +862,7 @@ table changes.
     last_modified (local)      size  key
     2023-11-14 22:13:20     424 KiB  logs/2023/app.log
     ```
-  A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
+  Its directory must exist (else exit 2 before listing). A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
   directory synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
   `downstream_closed`, `complete` false. On stdout the one-line summary is not printed (stdout carries the

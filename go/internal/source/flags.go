@@ -388,7 +388,7 @@ var StoreGroup = &FlagGroup{
 // it fills when fs is parsed.
 func StoreFlags(fs *pflag.FlagSet) *Store {
 	s := &Store{Timeout: DefaultRequestTimeout}
-	Define(fs, Flag{Name: anonymousFlag, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
+	Define(fs, Flag{Name: anonymousFlag, Familiar: []string{"no-sign-request"}, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
 		Long: "Ignores any configured. Without it a source with no usable credentials fails (auth) before listing."})
 	Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
 		Long: "S3: path-style addressing unless --no-s3-path-style; default AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). Part of the resume identity."})

@@ -93,6 +93,18 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--requester-pays"}, "unknown flag --requester-pays (did you mean --s3-requester-pays?)"},
 		{[]string{"s3://b", "--endpoint", "http://x"}, "unknown flag --endpoint (did you mean --endpoint-url?)"},
 		{[]string{"s3://b", "--bogus"}, "unknown flag --bogus"},
+		{[]string{"s3://b", "--path-style"}, "unknown flag --path-style (did you mean --s3-path-style?)"},
+		{[]string{"s3://b", "--fips"}, "unknown flag --fips (did you mean --s3-fips?)"},
+		{[]string{"s3://b", "--dualstack"}, "unknown flag --dualstack (did you mean --s3-dualstack?)"},
+		{[]string{"s3://b", "--fetch-owner"}, "unknown flag --fetch-owner (did you mean --s3-fetch-owner?)"},
+		{[]string{"s3://b", "--bearer-token-command", "x"}, "unknown flag --bearer-token-command (did you mean --s3-bearer-token-command?)"},
+		{[]string{"s3://b", "--gcs-credentials", "x"}, "unknown flag --gcs-credentials (did you mean --gcs-credentials-file?)"},
+		{[]string{"s3://b", "--gcs-user-project", "x"}, "unknown flag --gcs-user-project (did you mean --gcs-billing-project?)"},
+		{[]string{"s3://b", "--azblob-sas", "x"}, "unknown flag --azblob-sas (did you mean --azure-sas-token?)"},
+		{[]string{"s3://b", "--no-sign-request"}, "unknown flag --no-sign-request (did you mean --anonymous?)"},
+		{[]string{"s3://b", "--one-filesystem"}, "unknown flag --one-filesystem (did you mean --one-file-system?)"},
+		{[]string{"s3://b", "--limiter=false"}, "unknown flag --limiter (did you mean --no-adaptive-limit?)"},
+		{[]string{"s3://b", "--concurrency", "8"}, "unknown flag --concurrency (did you mean --workers?)"},
 		{[]string{"s3://b", "--max-duration", "2x"}, `--max-duration "2x": want a duration such as 90s, 1h30m`},
 		{[]string{"s3://b", "--max-duration=-1s"}, `--max-duration "-1s": negative`},
 		{[]string{"s3://b", "--workers", "0"}, `--workers "0": want a whole number of at least 1`},
@@ -481,5 +493,25 @@ func TestShortHelp(t *testing.T) {
 				t.Errorf("%s -h: line over %d columns: %q", cmd.name(), maxHelpWidth, l)
 			}
 		}
+	}
+}
+
+// TestRefusalsSayWhy: a text -o in a directory that does not exist says
+// so before listing; show --journal on a committed dataset says a dataset
+// keeps no journal.
+func TestRefusalsSayWhy(t *testing.T) {
+	captureStderr(t)
+	src := localSource(t)
+	missing := filepath.Join(t.TempDir(), "missing")
+	err := run(context.Background(), []string{src, "-o", filepath.Join(missing, "rows.tsv")}, io.Discard, false)
+	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "its directory "+missing+" does not exist") {
+		t.Errorf("-o in a missing directory: %v", err)
+	}
+	ds := filepath.Join(t.TempDir(), "ds")
+	if err := run(context.Background(), []string{src, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := show([]string{ds, "--journal"}, io.Discard); err == nil || !strings.Contains(err.Error(), "is a committed dataset, which keeps no journal") {
+		t.Errorf("show --journal on a dataset: %v", err)
 	}
 }

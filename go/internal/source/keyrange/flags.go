@@ -74,7 +74,7 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 	source.Define(f, source.Flag{Name: "request-rate", Value: (*rateFlag)(&a.RequestRate), Metavar: "N", Group: source.GroupLimits,
 		Usage: "cap every HTTP attempt at N per second (0: no cap)",
 		Long:  "Set it to stay under a request quota shared with other clients. Refused when the spacing exceeds half --stall-timeout."})
-	source.Define(f, source.Flag{Name: "no-adaptive-limit", Value: source.Off(&a.Limiter), Group: source.GroupLimits,
+	source.Define(f, source.Flag{Name: "no-adaptive-limit", Familiar: []string{"limiter"}, Value: source.Off(&a.Limiter), Group: source.GroupLimits,
 		Usage: "do not lower concurrency when the service throttles requests",
 		Long:  "Turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1. Without it each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them."})
 	if diag {
