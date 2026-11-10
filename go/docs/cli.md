@@ -1265,7 +1265,8 @@ table changes.
   transport or service cause (a connection refused, a 503) for 10 s with none answered, one warning names
   the provider, the endpoint host and the cause (`swath: warning: S3 127.0.0.1:9: connection refused
   (retrying; 14 attempts)`), and again at most once a minute while it lasts; a run that then ends stuck or
-  at its deadline names the cause in its final error line, and `requests.failure_warnings` in the report
+  at its deadline names the cause in its final error line, the outcome's `message` and the report's
+  `outcome.error` (and so does one that ends so with no request ever answered, however short it was), and `requests.failure_warnings` in the report
   counts the warnings. A stderr that does not drain never holds the run: a line waits at most 250 ms, later
   ones queue (up to 256) without waiting while the write is stuck and are then dropped, counted in
   `requests.log_dropped`; the final error line gets its own 250 ms. A local listing that could not read entries names up to five of them with their cause,

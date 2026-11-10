@@ -343,7 +343,8 @@ type failureFields struct {
 }
 
 // outstanding names the cause that has failed every request for at least
-// persistFor up to now, the one with the most attempts ("" when none).
+// persistFor up to now, or for any time when no request was ever
+// answered, the one with the most attempts ("" when none).
 func (w *failureWatch) outstanding(now time.Time) string {
 	if w == nil {
 		return ""
@@ -353,7 +354,7 @@ func (w *failureWatch) outstanding(now time.Time) string {
 	answers := w.answers.Load()
 	best, n := "", int64(0)
 	for k, s := range w.streaks {
-		if s.answers == answers && now.Sub(s.first) >= persistFor && s.n > n {
+		if s.answers == answers && (answers == 0 || now.Sub(s.first) >= persistFor) && s.n > n {
 			best, n = k, s.n
 		}
 	}

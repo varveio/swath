@@ -955,6 +955,13 @@ func oneLine(sum listing.Report, out outcome, started bool) bool {
 func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, end runEnd, tt *termUI) error {
 	settled, unrecorded := end.settled, end.unrecorded
 	brief := oneLine(sum, out, end.started)
+	failing := ""
+	if err != nil && end.failing != "" && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
+		// The report's error and the outcome's message name the cause
+		// too, not only the error line.
+		failing = "; every request was failing: " + end.failing
+		out.Message += failing
+	}
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
@@ -991,8 +998,8 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	switch {
 	case err != nil:
 		err = explain(err)
-		if end.failing != "" && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
-			err = fmt.Errorf("%w; every request was failing: %s", err, end.failing)
+		if failing != "" {
+			err = fmt.Errorf("%w%s", err, failing)
 		}
 		return reportFailed(&exitError{error: err, code: out.ExitCode, out: out}, rerr)
 	case rerr != nil:

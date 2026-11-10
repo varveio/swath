@@ -129,7 +129,8 @@ func TestEventGolden(t *testing.T) {
 // TestFailureWatch: one cause failing every request warns once it has
 // lasted persistFor, then at most once per persistEvery; an answer ends
 // it, and a new failure starts over; the end of a run names the cause
-// outstanding.
+// outstanding: at once while no request was ever answered, after
+// persistFor once one was.
 func TestFailureWatch(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	setLog(termOptions{logFormat: logText}, "")
@@ -141,8 +142,8 @@ func TestFailureWatch(t *testing.T) {
 	for d := time.Duration(0); d < persistFor; d += time.Second {
 		fail(d)
 	}
-	if stderr.String() != "" || w.outstanding(at.Add(persistFor-time.Millisecond)) != "" {
-		t.Fatalf("warned before %s: %q", persistFor, stderr.String())
+	if stderr.String() != "" || !strings.HasPrefix(w.outstanding(at.Add(persistFor-time.Millisecond)), "S3 127.0.0.1:9: connection refused (") {
+		t.Fatalf("warned before %s, or no cause outstanding with nothing answered: %q", persistFor, stderr.String())
 	}
 	fail(persistFor)
 	if want := "swath: warning: S3 127.0.0.1:9: connection refused (retrying; 11 attempts)\n"; stderr.String() != want {
@@ -171,10 +172,14 @@ func TestFailureWatch(t *testing.T) {
 	if o := w.outstanding(end); o != "" {
 		t.Fatalf("outstanding after an answer: %q", o)
 	}
+	w.exchange(source.Exchange{URL: u, Status: http.StatusServiceUnavailable}, end)
+	if o := w.outstanding(end); o != "" {
+		t.Fatalf("a new failure after an answer outstanding at once: %q", o)
+	}
 	for d := time.Duration(0); d <= persistFor; d += time.Second {
 		w.exchange(source.Exchange{URL: u, Status: http.StatusServiceUnavailable}, end.Add(d))
 	}
-	if w.warnings.Load() != 3 || !strings.HasSuffix(stderr.String(), "S3 127.0.0.1:9: 503 Service Unavailable (retrying; 11 attempts)\n") {
+	if w.warnings.Load() != 3 || !strings.HasSuffix(stderr.String(), "S3 127.0.0.1:9: 503 Service Unavailable (retrying; 12 attempts)\n") {
 		t.Fatalf("a new failure after an answer: %q", stderr.String())
 	}
 	// -q: no warnings.
@@ -465,5 +470,35 @@ func TestBlockedStderrBounded(t *testing.T) {
 	conclude(errors.New("boom"))
 	if d := time.Since(start); d < diagWait || d > 2*diagWait {
 		t.Errorf("the outcome line waited %s, want its own diagWait", d)
+	}
+}
+
+// TestNeverAnsweredRunNamesCause (D2): a run that ends at its deadline
+// with no request ever answered names the last failure's cause however
+// short it was (before the persistent-failure warning is due), in its
+// error line, in the JSON outcome's message and in the report's error.
+func TestNeverAnsweredRunNamesCause(t *testing.T) {
+	stderr := captureSyncStderr(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := ln.Addr().String()
+	ln.Close()
+	report := filepath.Join(t.TempDir(), "report.json")
+	err = dispatch(context.Background(), []string{"list", "gs://bkt", "--endpoint-url", "http://" + host + gcstest.Path, "--anonymous", "--max-duration", "1s",
+		"--log-format", "json", "--report", report, "--columns", "key"}, io.Discard)
+	if code := conclude(err); code != exitDeadline || !strings.Contains(err.Error(), "every request was failing: GCS "+host+": ") {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	var ev outcomeFields
+	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
+	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || !strings.Contains(ev.Message, "every request was failing: GCS "+host) {
+		t.Fatalf("outcome event %q", lines[len(lines)-1])
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if !strings.Contains(rep.Outcome.Error, "every request was failing") {
+		t.Fatalf("report error %q", rep.Outcome.Error)
 	}
 }
