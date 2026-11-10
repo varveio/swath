@@ -119,7 +119,7 @@ func TestMetamorphicLaws(t *testing.T) {
 				want = want[len(want)/3+1:]
 			}
 			got, st, _ := runPolicy(t, api, opt, v.workers, v.budget, v.accept)
-			if !opt.Sequential && !opt.SeedFirstPage && len(got) > 0 {
+			if !opt.Sequential && !opt.SeedFirstPage {
 				check(t, name+" "+v.name, st, int64(len(got)))
 			}
 			for id := range numCounters {

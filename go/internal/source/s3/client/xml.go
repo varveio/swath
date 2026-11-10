@@ -285,53 +285,80 @@ func (p *parser) contents(self []byte, i int) error {
 			field = "" // not ListObjectsV2's: skipped
 		}
 		switch field {
+		case "VersionId":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			// Kept verbatim (never URL-decoded); "null" repeats on every
+			// entry of an unversioned bucket, so it is shared.
+			o.vid = p.shared(t, i, func(o *objSpan) span { return o.vid })
+		case "IsLatest":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			if o.latest, err = parseBool(t); err != nil {
+				return err
+			}
+		case "Key":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			o.key = p.store(t)
+		case "ETag":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			o.etag = p.store(t)
+		case "Size":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			if o.size, err = parseInt(t); err != nil {
+				return err
+			}
+		case "LastModified":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			if o.mtime, err = parseTime(t); err != nil {
+				return err
+			}
+		case "StorageClass":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			o.class = p.shared(t, i, func(o *objSpan) span { return o.class })
+		case "ChecksumAlgorithm":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			if !o.hasAlgo {
+				o.algo, o.hasAlgo = p.shared(t, i, func(o *objSpan) span { return o.algo }), true
+			}
+		case "ChecksumType":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			o.ctype = p.shared(t, i, func(o *objSpan) span { return o.ctype })
 		case "Owner":
 			if !empty {
 				if err := p.owner(name, i); err != nil {
 					return err
 				}
 			}
-			continue
-		case "VersionId", "IsLatest", "Key", "ETag", "Size", "LastModified", "StorageClass", "ChecksumAlgorithm", "ChecksumType":
 		default: // RestoreStatus and anything newer
 			if err := p.skip(name, empty); err != nil {
 				return err
 			}
-			continue
-		}
-		t, err := p.scalar(name, empty)
-		if err != nil {
-			return err
-		}
-		switch field {
-		case "VersionId":
-			// Kept verbatim (never URL-decoded); "null" repeats on every
-			// entry of an unversioned bucket, so it is shared.
-			o.vid = p.shared(t, i, func(o *objSpan) span { return o.vid })
-		case "IsLatest":
-			if o.latest, err = parseBool(t); err != nil {
-				return err
-			}
-		case "Key":
-			o.key = p.store(t)
-		case "ETag":
-			o.etag = p.store(t)
-		case "Size":
-			if o.size, err = parseInt(t); err != nil {
-				return err
-			}
-		case "LastModified":
-			if o.mtime, err = parseTime(t); err != nil {
-				return err
-			}
-		case "StorageClass":
-			o.class = p.shared(t, i, func(o *objSpan) span { return o.class })
-		case "ChecksumAlgorithm":
-			if !o.hasAlgo {
-				o.algo, o.hasAlgo = p.shared(t, i, func(o *objSpan) span { return o.algo }), true
-			}
-		case "ChecksumType":
-			o.ctype = p.shared(t, i, func(o *objSpan) span { return o.ctype })
 		}
 	}
 }
@@ -345,22 +372,23 @@ func (p *parser) owner(self []byte, i int) error {
 		if k == tEnd {
 			return p.closes(self, name)
 		}
-		field := string(local(name))
-		if field != "ID" && field != "DisplayName" {
+		switch string(local(name)) {
+		case "ID":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			p.objs[i].ownerID = p.shared(t, i, func(o *objSpan) span { return o.ownerID })
+		case "DisplayName":
+			t, err := p.scalar(name, empty)
+			if err != nil {
+				return err
+			}
+			p.objs[i].ownerName = p.shared(t, i, func(o *objSpan) span { return o.ownerName })
+		default:
 			if err := p.skip(name, empty); err != nil {
 				return err
 			}
-			continue
-		}
-		t, err := p.scalar(name, empty)
-		if err != nil {
-			return err
-		}
-		switch field {
-		case "ID":
-			p.objs[i].ownerID = p.shared(t, i, func(o *objSpan) span { return o.ownerID })
-		case "DisplayName":
-			p.objs[i].ownerName = p.shared(t, i, func(o *objSpan) span { return o.ownerName })
 		}
 	}
 }
