@@ -37,14 +37,8 @@ import (
 // sdkTransport sends the SDK's requests to the server and records them.
 type sdkTransport struct {
 	version, idPrefix string
-	// startFrom, when set, is added to a call that lacks it: the flat
-	// paginator of the SDK release used here drops its StartFrom option
-	// (the hierarchy paginator keeps it). Later releases send it, but
-	// they require Apache Arrow and newer compression modules than the
-	// production build uses, so the test adds what they would send.
-	startFrom string
-	mu        sync.Mutex
-	steps     []replayStep
+	mu                sync.Mutex
+	steps             []replayStep
 }
 
 func (tr *sdkTransport) Do(req *http.Request) (*http.Response, error) {
@@ -67,11 +61,6 @@ func (tr *sdkTransport) Do(req *http.Request) (*http.Response, error) {
 	}
 	if tr.idPrefix != "" {
 		set("x-ms-client-request-id", tr.idPrefix+"-"+strconv.Itoa(n))
-	}
-	if tr.startFrom != "" && !req.URL.Query().Has("startFrom") {
-		q := req.URL.Query()
-		q.Set("startFrom", tr.startFrom)
-		req.URL.RawQuery = q.Encode()
 	}
 	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
@@ -218,9 +207,6 @@ func (e *endpoint) verifySDK(c capture, raw json.RawMessage) {
 		fail("SDK options lack a client request id prefix")
 	}
 	tr := &sdkTransport{version: o.ServiceVersion, idPrefix: o.ClientRequestIDPrefix}
-	if o.Walk == "flat" {
-		tr.startFrom = o.StartFrom
-	}
 	items, err := sdkWalk(sdkClient(e.replayEndpoint(), tr, -1), o)
 	if err != nil {
 		fail("replay SDK walk incomplete: %v", err)

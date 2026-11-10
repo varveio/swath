@@ -567,8 +567,7 @@ manifest) on the Azure route alone, and replays each capture as the conformance 
 are spelled as the pins in `azure/replay-expectations.json` spell them. The SDK runs (`azure-10a`, `10b`,
 `10c`) are consumed by the official Azure SDK for Go (`sdk_test.go`): its flat and hierarchy paginators on the
 local account path, retries off, through a recording transport that sets only what the captured Java run set by
-option (the service version, client request ids `prefix-N`) and, for the flat walk, adds the captured
-`startFrom` that this SDK release's flat paginator drops. The recorded exchanges are held to the capture as an
+option (the service version, client request ids `prefix-N`). The recorded exchanges are held to the capture as an
 SDK run (request scope compared as decoded parameters, since the Go SDK orders and escapes them its own way;
 the Go SDK's product token in place of the Java one), and the SDK's decoded blobs, prefixes, sizes and times,
 Encoded names included, to the native pages. `sdkunit_test.go` adds Encoded names and properties, 5,000-name

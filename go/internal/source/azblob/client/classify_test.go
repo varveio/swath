@@ -7,14 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -251,49 +249,9 @@ func TestInvalidPage(t *testing.T) {
 	}
 }
 
-// TestRequestShape: the List Blobs options the client maps: the container
-// path under the account segment of a non-default endpoint, each set input
-// as its query parameter (startFrom included, which the SDK's flat pager
-// drops), an unset one absent, never include or endBefore, no credentials
-// when anonymous; the route; and the configurations New refuses. The
-// version, Accept and User-Agent headers are TestServiceVersionPinned's.
-func TestRequestShape(t *testing.T) {
-	var mu sync.Mutex
-	var reqs []*http.Request
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		reqs = append(reqs, r)
-		mu.Unlock()
-		fmt.Fprint(w, page(""))
-	}))
-	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL + "/", Anonymous: true})
-	full := &ListInput{Container: "c", Prefix: "a b+c/\u00e9", Delimiter: "/", StartFrom: "a b+c/\u00e9/x", Marker: "m", MaxResults: 10}
-	for _, in := range []*ListInput{full, {Container: "c"}} {
-		if _, err := c.List(context.Background(), in); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := []map[string]string{
-		{"restype": "container", "comp": "list", "prefix": full.Prefix, "delimiter": "/", "startFrom": full.StartFrom, "marker": "m", "maxresults": "10"},
-		{"restype": "container", "comp": "list"},
-	}
-	for i, r := range reqs {
-		got := map[string]string{}
-		for k, v := range r.URL.Query() {
-			got[k] = strings.Join(v, ",")
-		}
-		if r.URL.Path != "/acct/c" || !maps.Equal(got, want[i]) || r.Header.Get(headerAuthorization) != "" {
-			t.Errorf("request %d: %s %v, Authorization %q", i, r.URL.Path, got, r.Header.Get(headerAuthorization))
-		}
-	}
-	if got := c.Route("c"); got != srv.URL+"/acct/c" {
-		t.Errorf("route %s", got)
-	}
-	d := newTestClient(t, Config{Account: "myacct", Anonymous: true})
-	if got := d.Route("c"); got != "https://myacct.blob.core.windows.net/c" {
-		t.Errorf("default route %s", got)
-	}
+// TestConfigRefused: the configurations New refuses. What the client sends
+// is TestWireSnapshot's; the route on each endpoint form is TestRoute's.
+func TestConfigRefused(t *testing.T) {
 	for _, bad := range []Config{{Account: "Bad"}, {Account: "ab"}, {Account: "acct", Endpoint: "ftp://h"}, {Account: "acct", Endpoint: "http://h/?sv=1"}} {
 		bad.Anonymous = true
 		if _, err := New(context.Background(), bad); err == nil {

@@ -27,9 +27,9 @@ func (t toFake) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// TestNamespaceInfo: Filesystem Get Properties is a HEAD of the
-// container on the account's DFS host with resource=filesystem (the SAS
-// appended); x-ms-namespace-enabled true or false is the answer, a
+// TestNamespaceInfo: Filesystem Get Properties (one HEAD of the container
+// on the account's DFS host, TestWireSnapshot's request):
+// x-ms-namespace-enabled true or false is the answer, a
 // missing header or a refusal is an error, and an endpoint that is not an
 // account's blob host has no DFS host to ask.
 func TestNamespaceInfo(t *testing.T) {
@@ -63,15 +63,8 @@ func TestNamespaceInfo(t *testing.T) {
 			answer, seen = a, nil
 			mu.Unlock()
 			got, err := c.NamespaceInfo(ctx, "cont")
-			if err != nil || got != want {
-				t.Fatalf("%s: %v %v", a, got, err)
-			}
-			r := seen[0]
-			q := r.URL.Query()
-			if r.Method != http.MethodHead || r.Header.Get("X-Original-Host") != "acct.dfs.core.windows.net" || r.URL.Path != "/cont" ||
-				q.Get("resource") != "filesystem" || q.Get("sig") != map[string]string{"": "", "sv=1&sig=S": "S"}[sas] ||
-				r.Header.Get("x-ms-version") != Version {
-				t.Fatalf("request %s %s%s?%s", r.Method, r.Header.Get("X-Original-Host"), r.URL.Path, r.URL.RawQuery)
+			if err != nil || got != want || len(seen) != 1 {
+				t.Fatalf("%s: %v %v after %d requests", a, got, err, len(seen))
 			}
 		}
 	}

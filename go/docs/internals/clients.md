@@ -3,7 +3,7 @@
 Each object-store provider lists through one client, built on the vendor's SDK service client:
 `internal/source/s3/client` over `service/s3` (ListObjectsV2 and ListObjectVersions),
 `internal/source/gcs/client` over Google's generated `google.golang.org/api/storage/v1` (`objects.list`), and
-`internal/source/azblob/client` over `sdk/storage/azblob` v1.7.0 (List Blobs and Get Account Information). The SDK
+`internal/source/azblob/client` over `sdk/storage/azblob` v1.8.3 (List Blobs and Get Account Information). The SDK
 sends the request; swath keeps what a listing tool must guarantee and the SDKs do not. The providers above the
 clients are described in [providers.md](providers.md) and the page of each provider.
 
@@ -165,7 +165,7 @@ aligned with what the SDK received. A non-2xx with a cut body is still delivered
 SDK decodes instead. `TestCaptureDelivery` and `TestCaptureWithoutAnswer` in `source/objhttp` pin the timing.
 
 GCS uses the capture directly for SDK errors and success status. Azure retains its per-attempt `sent` state
-for `startFrom`, policy context, a scrubbed URL and decoder checks; S3 uses `Body` / `Replace` for its scanner.
+for a scrubbed URL and decoder checks; S3 uses `Body` / `Replace` for its scanner.
 The captured URL is not a diagnostic redaction boundary: each client must sanitize it before retaining it
 in an error.
 
@@ -273,10 +273,17 @@ prefixes; both are in wire (UTF-16 code-unit) order and no name is in both, so m
 `utf16order.Compare` restores the one sequence the byte-order adapter needs (`TestWireOrder`, `TestMergeOrder`); a
 page out of order across the two kinds is merged into order and not detected, one out of order within a kind
 still is (`ListOutput.Validate`). One per-call policy, `pin`, runs before azcore's signing policy and sets what
-azblob v1.7.0 cannot: `x-ms-version` to the pinned `client.Version` (the SDK sends its own and refuses
-`ClientOptions.APIVersion`, `TestServiceVersionPinned`) and `startFrom`, which the v1.7.0 pagers drop
-(`TestStartFromSent`). No `x-ms-client-request-id` is sent, and an attempt's in-flight time includes the SDK's
-decoding.
+azblob cannot: `x-ms-version` to the pinned `client.Version` (the SDK sends its own default and refuses
+`ClientOptions.APIVersion`, `TestServiceVersionPinned`). Both listing pagers name `ResponseFormat` XML: the SDK's
+`Auto` resolves to XML today, and a later release may resolve it to Arrow, whose answer the envelope check would
+refuse before the SDK's Arrow decoder could read it. The XML request sends `Accept: application/xml`; Get Account
+Information sends no `Accept`, and swath reads its header only. `startFrom`, `marker` and `prefix` are the SDK's
+own options (`TestStartFromSent`). `TestWireSnapshot` holds every request the client sends, under each
+authentication form, to `testdata/wire.txt`: method, intended host, path, every query parameter as sent, every
+header value and the body's length, with dates, Shared Key signatures (verified first) and the SDK's version and
+platform text replaced. The file is edited by hand when the wire is meant to change; a difference is SDK drift for
+review, and the semantic tests say whether it is wrong. No `x-ms-client-request-id` is sent, and an attempt's
+in-flight time includes the SDK's decoding.
 
 The SDK's readings, each pinned by `TestSDKDecoding`: an `Encoded` name is percent-decoded with query semantics (a
 literal `+` reads as a space; Azure sends `+` as `%2B`, and every captured `Encoded` name escapes every reserved

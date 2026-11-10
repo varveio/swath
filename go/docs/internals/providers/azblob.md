@@ -25,13 +25,12 @@ Root parse errors keep clean roots, redact SAS queries and hide credential-beari
 
 **Client** (`internal/source/azblob/client`): List Blobs and Get Account Information, described with the list
 clients ([clients.md](../clients.md)). Both are sent through the Azure
-SDK's service and container clients (`sdk/storage/azblob` v1.7.0), with the SDK's retries off: swath's retry loop
+SDK's service and container clients (`sdk/storage/azblob` v1.8.3), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
 decodes it (an `EnumerationResults` root, nothing after it, no `Error` element in it). The decoded
-page must hold `Blobs`. A per-call policy pins `x-ms-version` to `2026-10-06` and sends `startFrom`
-(which the v1.7.0 pagers drop), and
-a hierarchy page's blobs and prefixes, which the SDK returns apart, are merged back into wire order (UTF-16 code-unit
-order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.
+page must hold `Blobs`. A per-call policy pins `x-ms-version` to `2026-10-06`, the listings ask for the XML
+response format (never the SDK's Arrow one), and a hierarchy page's blobs and prefixes, which the SDK returns
+apart, are merged back into wire order (UTF-16 code-unit order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.
 The accepted success-body limit is 64 MiB; a listing page past it fails the request
 (`client.ErrBodyCap`, not retried, not asked again with fewer entries). This does not bound buffer
 capacity or decoded-page allocations; see [shared body handling](../clients.md#what-swath-keeps).
@@ -44,7 +43,7 @@ unauthenticated); a SAS from
 scanning the parameter names, whether or not the query parses; such a query must be a signed query string, or the
 root is refused without quoting it; a `?` with no SAS parameter belongs to the prefix), else
 `AZURE_STORAGE_SAS_TOKEN`; an account key from `AZURE_STORAGE_KEY` (Shared
-Key: signed by the SDK's own policy, after swath's per-call policy, so the pinned version and `startFrom` are signed;
+Key: signed by the SDK's own policy, after swath's per-call policy, so the pinned version is signed with the rest;
 the client's tests check the signature independently of the SDK); else Entra ID through `DefaultAzureCredential`, scope `https://storage.azure.com/.default`,
 its tokens coalesced by `tokensource.Shared`, each fetched before the attempt and sent as the request's
 `Authorization` header (the SDK's bearer policy and its 401 challenge re-send are never in the pipeline), and its

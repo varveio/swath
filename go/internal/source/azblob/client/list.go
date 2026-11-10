@@ -23,11 +23,14 @@ package client
 //
 //   - pin, a per-call policy (before the retry and signing policies, so
 //     Shared Key signs what it sets): the service version (Version; azblob
-//     v1.7.0 sends 2026-04-06 and refuses ClientOptions.APIVersion,
-//     TestServiceVersionPinned) and startFrom (the v1.7.0 pagers drop
-//     StartFrom, TestStartFromSent). The User-Agent is azcore's own
-//     telemetry policy's, swath's product token (buildinfo.UserAgent, its
+//     v1.8.3 sends its own default and refuses ClientOptions.APIVersion,
+//     TestServiceVersionPinned). The User-Agent is azcore's own telemetry
+//     policy's, swath's product token (buildinfo.UserAgent, its
 //     ApplicationID, 24 bytes at most) before the SDK's.
+//   - the listing options name ResponseFormat XML, so the pagers never take
+//     the SDK's Arrow path, whose answers envelope would refuse, whatever
+//     the SDK's default becomes. StartFrom is the SDK's own option.
+//     TestWireSnapshot pins every request the client sends.
 //   - envelope, Guard.Validate on a listing's 200: its root must be
 //     EnumerationResults with nothing after it and no <Error> element in it
 //     (the SDK decodes an empty body, any root, or a listing holding an
@@ -135,7 +138,7 @@ func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
 // list is one List Blobs attempt: a fresh pager seeded with the marker,
 // one NextPage.
 func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	s := &sent{startFrom: in.StartFrom}
+	s := &sent{}
 	actx, cancel, err := c.begin(ctx, s)
 	if err != nil {
 		return nil, err
@@ -152,14 +155,14 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
 		r, err = cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Marker: str(in.Marker), Prefix: str(in.Prefix),
-			MaxResults: size, StartFrom: str(in.StartFrom)}).NextPage(actx)
+			MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatXML}).NextPage(actx)
 		if err == nil {
 			out, err = flat(r.Segment, r.NextMarker)
 		}
 	} else {
 		var r container.ListBlobsHierarchyResponse
 		r, err = cc.NewListBlobsHierarchyPager(in.Delimiter, &container.ListBlobsHierarchyOptions{Marker: str(in.Marker),
-			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom)}).NextPage(actx)
+			Prefix: str(in.Prefix), MaxResults: size, StartFrom: str(in.StartFrom), ResponseFormat: container.StorageResponseFormatXML}).NextPage(actx)
 		if err == nil {
 			out, err = merge(r.Segment, r.NextMarker)
 		}
@@ -220,7 +223,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 		}
 		actx = policy.WithHTTPHeader(actx, http.Header{headerAuthorization: {"Bearer " + tok.AccessToken}})
 	}
-	return objhttp.WithCapture(context.WithValue(actx, sentKey{}, s), &s.Capture), cancel, nil
+	return objhttp.WithCapture(actx, &s.Capture), cancel, nil
 }
 
 // failure is the error of an attempt that got no page: the service's answer
@@ -419,14 +422,10 @@ func envelope(req *http.Request, status int, body []byte) error {
 	}
 }
 
-// sentKey carries an attempt's sent on its context.
-type sentKey struct{}
-
-// sent is what an attempt met on the wire: its startFrom (for pin), the
-// request URL as sent and whether a 200 passed the Guard to the SDK.
+// sent is what an attempt met on the wire: the request URL as sent and
+// whether a 200 passed the Guard to the SDK.
 type sent struct {
 	objhttp.Capture
-	startFrom string
 }
 
 // refused reports err as the SDK's refusal of a 200 the Guard passed (its
@@ -458,18 +457,10 @@ func (s *sent) safeURL(c *Client, container string) *url.URL {
 // pin is the per-call policy (azcore runs it before its retry policy and
 // the Shared Key signing policy): the service version Version, replacing
 // the SDK's own (the generated code keys it in lower case, outside the
-// canonical form, so that key is replaced); and startFrom, which azblob
-// v1.7.0's pagers drop, when the SDK did not send it.
+// canonical form, so that key is replaced).
 type pin struct{}
 
 func (pin) Do(req *policy.Request) (*http.Response, error) {
-	r := req.Raw()
-	r.Header["x-ms-version"] = []string{Version}
-	if s, _ := r.Context().Value(sentKey{}).(*sent); s != nil && s.startFrom != "" {
-		if q := r.URL.Query(); !q.Has("startFrom") {
-			q.Set("startFrom", s.startFrom)
-			r.URL.RawQuery = encodeQuery(q)
-		}
-	}
+	req.Raw().Header["x-ms-version"] = []string{Version}
 	return req.Next()
 }
