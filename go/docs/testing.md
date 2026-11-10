@@ -84,9 +84,13 @@ of the `keyrange` laws. CI never passes `-short`.
 - **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.go` or its ignore file,
   `scripts/ci/smoke-container.sh`, `scripts/ci/smoke-replay-container.sh`, `scripts/ci/go-race-shards.sh`, or the SeekParquet conformance scripts
   (`scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py`).
-- **Java change:** any path outside `go/`, `Dockerfile.go*`, and the named root prose files
-  `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md`.
-  Other docs (including fixtures), scripts and build inputs still run Java.
+- **Java change:** Java module trees (`swath-*`), Gradle build/configuration/wrapper inputs,
+  Java Dockerfiles and the shared Docker ignore file, legal inputs, the scripts Java builds/tests
+  execute, and the CI or nightly workflow. Runtime fixtures remain inputs: replay-provider evidence
+  and expectations, `site/data/runs/`, `docs/assets/`, and the Java option table in
+  `docs/configuration.md`. The workflow owns the exact positive path list. General prose, site
+  layout, Go-only scripts and other workflow changes no longer launch Java. Java's prose assertions
+  still run when the Java suite runs; the site workflow is the per-change documentation gate.
 
 A dispatch, or a diff with no base, sets both. Every job still runs and only skips its steps (without a Go
 change, `go-race` and `go-xos` each run one `off` leg on ubuntu-latest, so no arm64, macOS or Windows runner is
@@ -159,6 +163,13 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest |
 | `rest-source` | `./internal/source/...` | ubuntu-latest |
 | `rest` | every package no row names (a new package lands here) | ubuntu-latest |
+
+The four `TestSIGKILL*` matrices and the three long subprocess-only forced-exit tests call
+`t.Parallel` after building their private binaries. Each owns its fake services, child-process
+environment and temporary datasets; no parent-process environment is changed. Go's `-parallel`
+limit (by default `GOMAXPROCS`) bounds concurrency. Builds stay serial, and each crash matrix's
+arms retain their original order and all recovery assertions. This applies both to the race shard
+and the whole non-race cross-OS suite. Tests that mutate process-global state remain sequential.
 
 A row either splits one package with a `-run` pattern or runs whole packages. A package split across rows
 has a remainder row that `-skip`s the union of its other rows' `-run` patterns, so the split is complete and

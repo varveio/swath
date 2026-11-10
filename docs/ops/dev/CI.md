@@ -86,10 +86,13 @@ Most pull requests touch only one side of the repository, and nearly all recent 
 port. The `changes` job diffs the pull request's base (or the push's previous commit) against
 `HEAD` and emits two flags:
 
-- **Java change:** any path outside `go/`, `Dockerfile.go*`, and the named root prose files
-  `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md`.
-  Other documentation, scripts, workflows and build files still count. In particular, evidence
-  and fixtures under `docs/` are not exempt; the site workflow still checks root prose.
+- **Java change:** Java module trees (`swath-*`), Gradle build/configuration/wrapper inputs,
+  Java Dockerfiles and the shared Docker ignore file, legal inputs, the scripts Java builds/tests
+  execute, and the CI or nightly workflow. Runtime fixtures remain inputs: replay-provider evidence
+  and expectations, `site/data/runs/`, `docs/assets/`, and the Java option table in
+  `docs/configuration.md`. The workflow owns the exact positive path list. General prose, site
+  layout, Go-only scripts and other workflow changes no longer launch Java. Java's prose assertions
+  still run when the Java suite runs; the site workflow is the per-change documentation gate.
 - **Go change:** a path under `go/`, the CI workflow, the `setup-go` composite action,
   `Dockerfile.go*`, or one of the scripts the Go jobs run (the image smokes, the race shard
   table, the SeekParquet conformance scripts).

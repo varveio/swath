@@ -75,11 +75,29 @@ class PolicyTests(unittest.TestCase):
             cases = [
                 (['go/internal/x.go', 'CHANGELOG.md'], 'false', 'true'),
                 (['README.md', 'SECURITY.md'], 'false', 'false'),
-                (['docs/fixtures.json'], 'true', 'false'),
+                (['docs/replay-provider-expectations.json'], 'true', 'false'),
+                (['docs/replay-provider-evidence.tar.gz'], 'true', 'false'),
+                (['docs/configuration.md'], 'true', 'false'),
+                (['docs/internals/architecture.md'], 'false', 'false'),
+                (['scripts/ci/cache-prune.sh'], 'false', 'false'),
+                (['site/data/runs/fixture.json'], 'true', 'false'),
+                (['docs/assets/swath-demo.mp4'], 'true', 'false'),
+                (['go/docs/guide.md'], 'false', 'true'),
+                (['site/index.html'], 'false', 'false'),
+                (['scripts/ci/report-test-counts.sh'], 'true', 'false'),
+                (['.github/workflows/nightly.yml'], 'true', 'false'),
+                (['scripts/provider-conformance/java/Capture.java'], 'true', 'false'),
+                (['scripts/legal/render-third-party-notices.py'], 'true', 'false'),
+                (['Dockerfile.replay'], 'true', 'false'),
+                (['.dockerignore'], 'true', 'false'),
+                (['gradlew.bat'], 'true', 'false'),
+                (['gradle/libs.versions.toml'], 'true', 'false'),
+                (['config/license/allowed-licenses.json'], 'true', 'false'),
+                (['THIRD_PARTY_NOTICES.md'], 'true', 'false'),
                 (['Dockerfile.go'], 'false', 'true'),
-                (['scripts/ci/smoke-container.sh'], 'true', 'true'),
-                (['docs/README.md'], 'true', 'false'),
-                (['CHANGELOG.md.java'], 'true', 'false'),
+                (['scripts/ci/smoke-container.sh'], 'false', 'true'),
+                (['docs/README.md'], 'false', 'false'),
+                (['CHANGELOG.md.java'], 'false', 'false'),
                 (['build.gradle.kts'], 'true', 'false'),
                 (['.github/workflows/ci.yml'], 'true', 'true'),
                 (['swath-core/src/X.java', 'go/X.java'], 'true', 'true'),
@@ -111,12 +129,13 @@ class PolicyTests(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual(output.read_text(), '')
             output.unlink()
-            (cwd / 'Source.java').write_text('source')
+            (cwd / 'swath-core').mkdir(exist_ok=True)
+            (cwd / 'swath-core/Source.java').write_text('source')
             subprocess.run(['git', 'add', '.'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'Java source'], cwd=temp, check=True)
             rename_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
             (cwd / 'go').mkdir(exist_ok=True)
-            subprocess.run(['git', 'mv', 'Source.java', 'go/Source.java'], cwd=temp, check=True)
+            subprocess.run(['git', 'mv', 'swath-core/Source.java', 'go/Source.java'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'Move source'], cwd=temp, check=True)
             output.write_text('')
             subprocess.run(['bash', '-c', run_step('Detect Java- and Go-relevant changes')],

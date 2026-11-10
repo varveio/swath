@@ -19,13 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Shared change detection for the Java tiers and the Go jobs. java=false ONLY when every changed
-  # file is Go-only (go/**, Dockerfile.go and its ignore file) or a named root prose
-  # file (README, CHANGELOG, CONTRIBUTING, AGENTS, CODE_OF_CONDUCT, SECURITY); anything else -- this
-  # workflow, root build files, other docs, scripts, Java sources, the Java Dockerfiles -- runs the Java
-  # tiers. go=true when go/**, this workflow, Dockerfile.go (and its ignore file), the lister and
-  # replay smoke scripts, the race shard table or the SeekParquet conformance scripts changed. The
-  # jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
+  # Java runs for its source/build/image inputs and runtime fixtures. Prose changes use the
+  # site checks; Java's documentation assertions run when its suite otherwise runs. Keep
+  # docs/configuration.md: TuneOptionsTest checks that table against the Java implementation.
+  # Go has its own dependency list below. Dispatch and unknown/empty diffs run both tiers.
+  # The jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
   # requiring every job on a pull request.
   # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
   # its own, wider detection. go_shards is the go-race matrix, from the shard table; go_xos is the
@@ -59,7 +57,15 @@ jobs:
             # --no-renames: a rename reports only its destination, so moving a Java file under go/
             # would otherwise read as Go-only. Listing both paths keeps the source path visible.
             changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if [ -z "$changed" ] || grep -vE '^(go/|Dockerfile\.go|((README|CHANGELOG|CONTRIBUTING|AGENTS|CODE_OF_CONDUCT|SECURITY)\.md)$)' >/dev/null <<<"$changed"; then
+            java_inputs='^swath-[^/]+/'
+            java_inputs+='|^(build-logic|gradle|config)/'
+            java_inputs+='|^scripts/(legal|benchmarks/replay|provider-conformance)/'
+            java_inputs+='|^scripts/ci/(check-instrumentation-drift\.(sh|py)|osv-image-policy\.py|report-test-counts\.sh)$'
+            java_inputs+='|^\.github/workflows/(ci|nightly)\.yml$'
+            java_inputs+='|^(docs/assets|site/data/runs)/'
+            java_inputs+='|^docs/(configuration\.md|replay-provider-(evidence\.tar\.gz|expectations\.json))$'
+            java_inputs+='|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?|Dockerfile(\.replay)?|\.dockerignore|LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$'
+            if [ -z "$changed" ] || grep -E "$java_inputs" >/dev/null <<<"$changed"; then
               echo "java=true" >> "$GITHUB_OUTPUT"
             else
               echo "java=false" >> "$GITHUB_OUTPUT"
