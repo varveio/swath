@@ -4,8 +4,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -64,6 +66,14 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	}
 	if tc != nil {
 		opts = append(opts, config.WithHTTPClient(awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.TLSClientConfig = tc })))
+	}
+	if cfg.Trust.CABundle != "" && !cfg.Trust.NoVerify {
+		// Given, it replaces the SDK's own read of AWS_CA_BUNDLE.
+		pem, err := os.ReadFile(cfg.Trust.CABundle)
+		if err != nil {
+			return nil, source.Unsupported(fmt.Errorf("CA bundle: %w", err))
+		}
+		opts = append(opts, config.WithCustomCABundle(bytes.NewReader(pem)))
 	}
 	// The bucket's region (--s3-region) is the signing region only. The
 	// credential chain (STS for web identity and assumed roles) keeps the
