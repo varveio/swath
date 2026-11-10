@@ -4,8 +4,8 @@
 and benchmarked against a real bucket's shape without the bucket; with `--protocols` it also serves the Cloud
 Storage JSON API's `objects.list` and Azure Blob's flat `List Blobs` from the same recording. It is a
 contributor tool, built from the same module as `swath`, a separate binary (`cmd/swath-replay`).
-[internals/replay.md](internals/replay.md) says how it is built and which tests hold its answers;
-[internals/replay-java.md](internals/replay-java.md) compares it with the Java `swath-replay serve` it was
+[replay.md](replay.md) says how it is built and which tests hold its answers;
+[replay-java.md](replay-java.md) compares it with the Java `swath-replay serve` it was
 ported from.
 
 It is not an object store: no object data, no writes, no authentication, path-style addressing only, current
@@ -255,10 +255,10 @@ the list selector stays on the S3 route as before.
   not authenticate (`server` `TestAzureSASQueries`). A repeated parameter, an unknown one, `endBefore`, a non-empty `include`, a
   malformed `%` escape, a value that decodes to invalid UTF-8, a field over 4,096 bytes (8,192 for `marker`),
   and a `prefix` or `delimiter` holding a control character other than TAB and LF are refused with the code the
-  matrix in [`../../docs/replay-provider-conformance.md`](../../docs/replay-provider-conformance.md) records.
+  matrix in [`../../../docs/replay-provider-conformance.md`](../../../docs/replay-provider-conformance.md) records.
   `+` is a literal plus. Raw non-ASCII bytes in the query are read as UTF-8.
 - Names are listed in UTF-16 code-unit order, as live Azure lists them; the fixture stays byte-sorted
-  ([internals/replay.md](internals/replay.md#the-azure-route)). With a delimiter, `Blob` and `BlobPrefix` entries
+  ([replay.md](replay.md#the-azure-route)). With a delimiter, `Blob` and `BlobPrefix` entries
   interleave in that order, and a `startFrom` inside a rolled prefix keeps the prefix only when one of its names
   is at or after `startFrom`.
 - `NextMarker` is `az1.` and base64url of the resume point, bound to the listing scope (account, container,
@@ -823,7 +823,7 @@ client runs on the same four vCPUs over loopback, so these numbers are the pair'
 server: this module at `56abc8d` (the serving code this page describes), `./build.sh`, GOMAXPROCS 4, the window
 cache's defaults, `--serving-mode sorted --parquet-connections 8 --max-concurrent-requests 1024`, nothing else
 running. Three rounds on 2026-11-07, 19:17 to 19:52 UTC, the Java server (see
-[the comparison](internals/replay-java.md#measurements-both-servers)) measured back to back with this one for each
+[the comparison](replay-java.md#measurements-both-servers)) measured back to back with this one for each
 configuration; every figure below is the median of the three runs, with the range of the three where a cell gives
 one. Fixtures, page cache warm: `synthetic-1m/sorted-rolled` (synthetic, 1,000,000 keys, 6 parts, 110 row groups,
 22.7 MB, written by `bench/replay/make-fixtures.sh`) and the `noaa-gk2a-pds` recording (a public bucket's listing,
@@ -1045,7 +1045,7 @@ prefix is open), and a pinned mismatch that now matches is logged as an improvem
 outcomes to `DIR/<fixture>/gcs-outcomes.json`.
 `scripts/provider-conformance/evidence.py go-receipts` runs this replay and the Azure one at a clean commit and
 writes a `producer: go` receipt for each capture they match (see
-[Go receipts](../../docs/replay-provider-conformance.md#go-receipts)).
+[Go receipts](../../../docs/replay-provider-conformance.md#go-receipts)).
 
 ```bash
 SWATH_REPLAY_FIXTURES=/data/replay SWATH_PROVIDER_REPORT=/tmp/report go test -v ./internal/replay/evidence
@@ -1059,7 +1059,7 @@ The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an 
 and its legal files (`LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES` in `/licenses/`) and nothing else:
 `/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
 `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
-as `ghcr.io/varveio/swath-replay` ([operating.md](operating.md#install-and-verify)). Fixtures are never baked in:
+as `ghcr.io/varveio/swath-replay` ([running.md](../running.md#install-and-verify)). Fixtures are never baked in:
 mount one read-only and pass its container path to `--fixture`.
 
 ```bash

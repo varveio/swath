@@ -26,7 +26,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (the module's `ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; the downstream reader and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
 | `etag` | `DELTA_BYTE_ARRAY` | ETags are unique hex: a dictionary never pays. parquet-mr (Java swath) tries a dictionary and falls back to `DELTA_BYTE_ARRAY`; writing delta directly matches its result and is 2–3 % smaller per dataset than dictionary-then-PLAIN. |
 | Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat. |
-| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
+| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page (SeekParquet GEO-1 recommends at most 1,024 key rows a page). The column index carries page bounds; header statistics would duplicate them. |
 | Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value. Exact bounds therefore matter for long filesystem paths and link targets. `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
@@ -73,7 +73,7 @@ After listing, the allowance adds 1 MiB per worker: at 64 workers the calculated
 writer (−5 %), 1,907 against 2,166 with four (−12 %); through the module's row intake (`WriteRows`, which
 checks and copies every row) it was 803 and 914. What remains is the module's key check (KEY-3, each key
 compared with the one before it, on the page's goroutine before the columns go parallel). The digest is not
-the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. The shape suite's Parquet arms show no difference beyond runner noise ([measurements](../measurements.md#the-seekparquet-modules-part-writer-2026-11-08)).
+the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. The shape suite's Parquet arms show no difference beyond runner noise ([measurements](measurements.md#the-seekparquet-modules-part-writer-2026-11-08)).
 
 ## Byte identity
 
@@ -247,11 +247,11 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 - **SeekParquet readers** (the Go module `github.com/varveio/seekparquet/go`, which `swath-replay` uses) open the
   dataset by its manifest and stamps and seek through the key column's page index; the CI conformance step
-  checks this writer's datasets against the format's reference validator ([../testing.md](../testing.md#seekparquet-conformance)).
+  checks this writer's datasets against the format's reference validator ([testing.md](testing.md#seekparquet-conformance)).
 - **The downstream reader** dispatches on the manifest's format, accepts whole-bucket coverage from the
   manifest's swath extension, and reads the SeekParquet stamps and each schema id's columns
   ([../upgrade.md](../upgrade.md#what-a-reader-of-the-java-layout-changes)); the recorded probe
-  ([measurements](../measurements.md#downstream-reader-compatibility)) predates SeekParquet.
+  ([measurements](measurements.md#downstream-reader-compatibility)) predates SeekParquet.
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 

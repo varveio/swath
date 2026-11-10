@@ -129,7 +129,7 @@ func TestNativeSchemaRendersTheBucketsMetadata(t *testing.T) {
 
 // TestNativeNullContentTypeIsOmitted: live GCS lists an object stored
 // without a content type with no contentType field (pinned by the live
-// capture replay of cloud-samples-data, go/docs/replay.md, Live
+// capture replay of cloud-samples-data, go/docs/internals/swath-replay.md, Live
 // conformance), so a native row whose content_type is null renders none;
 // a fixture without GCS metadata keeps the synthetic profile's value.
 func TestNativeNullContentTypeIsOmitted(t *testing.T) {

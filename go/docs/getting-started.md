@@ -85,8 +85,8 @@ before choosing columns.
 | Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials-file`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
 | Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
 
-Authentication: [credentials](operating.md#credentials). Shared timeouts, retries and request controls:
-[object-store requests](operating.md#object-store-requests).
+Authentication: [credentials](running.md#credentials). Shared timeouts, retries and request controls:
+[object-store requests](running.md#object-store-requests).
 Azure credential precedence and namespace checks: [Azure provider](internals/providers/azblob.md).
 Use `--azure-assume-flat` only when you know the account has a flat namespace and the provider
 cannot confirm it. S3-compatible endpoints need their own compatibility checks.
@@ -96,7 +96,7 @@ cannot confirm it. S3-compatible endpoints need their own compatibility checks.
 Before a long run, check source permissions, request cost, free disk and the output
 schema. Start with the defaults; increase concurrency only with measurements. Memory,
 spill disk, encoder and request budgets are covered in the
-[production checklist](operators.md) and [operating reference](operating.md).
+[production checklist](production.md) and [operating reference](running.md).
 
 Eligible journaled S3, GCS and Azure Blob dataset scans can continue after interruption:
 
@@ -108,7 +108,7 @@ Local scans and text output cannot resume. Windows currently refuses journaled
 object-store scans and `resume` because directory sync is unavailable. A resume retains
 durable parts, may reuse validated durable spill where supported, and can repeat work
 beyond the recovery point. Keep the original compatible build and source identity.
-See [stopping and resuming](operating.md#stopping-and-resuming) before retrying a failed run.
+See [stopping and resuming](running.md#stopping-and-resuming) before retrying a failed run.
 
 A live walk or multi-request listing is not an atomic snapshot. A resumed run can retain
 observations from the earlier attempt. Filters, skipped entries, entry errors and
@@ -132,10 +132,10 @@ feeding it a dataset.
 
 ## Understand the implementation
 
-The [architecture](architecture.md), [range engine](internals/range-engine.md),
+The [architecture](internals/architecture.md), [range engine](internals/range-engine.md),
 [provider contract](internals/providers.md), [ordering](internals/ordering.md) and
 [durability](internals/durability.md) describe Go. Backends have different listing and
-ordering semantics. The [measurements](measurements.md) identify each workload, build,
+ordering semantics. The [measurements](internals/measurements.md) identify each workload, build,
 machine and output mode, including the separate billion-object S3 count and inventory runs.
 
 The [historical Java field guide](https://swath.varve.io/field-guide/) describes Java

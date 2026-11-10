@@ -3,7 +3,7 @@
 This is the contributor reference for building, packaging, and testing the Java
 implementation's self-contained jar, application archives, and container images. Releases no
 longer publish them: from 0.4 a release ships the Go binaries and images
-([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/operating.md#install-and-verify)),
+([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/running.md#install-and-verify)),
 and v0.3.2 was the last Java release. It is not the installation or container-usage guide. To
 run the Java release, use [Installation](install.md); for credentials, output mounts, and
 production object-store access, use [Operating swath](operating.md).
@@ -153,7 +153,7 @@ conformance launcher into the same `lib/`, and before the floors were pinned it
 shipped two complete Jackson generations at once. The nightly OSV scan
 (`scripts/ci/osv-scan.sh`) no longer covers these distributions or the Java
 images: no release ships them since v0.3.2, and it scans the Go release images
-instead ([Go testing](../go/docs/testing.md#nightly)). The script can still scan
+instead ([Go testing](../go/docs/internals/testing.md#nightly)). The script can still scan
 a Java distribution's `lib/` directory against the argued, expiring
 exceptions in `config/osv/osv-scanner.toml`.
 

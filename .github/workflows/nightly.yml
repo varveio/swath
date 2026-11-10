@@ -271,7 +271,7 @@ jobs:
       - name: go test (no -race)
         run: go test -count=1 -timeout 25m ./...
 
-  # The Go port's shape suite at full scale (go/bench/shapes; go/docs/testing.md): every bucket
+  # The Go port's shape suite at full scale (go/bench/shapes; go/docs/internals/testing.md): every bucket
   # shape at about 2M keys behind the in-process fake, with its service behaviours (latency
   # 10/50/200 ms, jitter, 1 % and 5 % throttling, a rate cap, slow prefixes, slow continuations
   # and seeks, a slow first page). A wrong listing fails the job. A number that moved by more

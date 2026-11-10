@@ -59,7 +59,7 @@ import (
 // SWATH_CAMPAIGN_MAX_KEYS: its first lines only): the uninterrupted
 // dataset must list exactly that key file. The reuse arms (kills after
 // seals) must replay certificates. SWATH_CAMPAIGN_RESULTS names a file each arm
-// appends its result line to (go/docs/measurements.md, "Durable spill").
+// appends its result line to (go/docs/internals/measurements.md, "Durable spill").
 
 // campaignFrontierDelay is the skewed fixture's slow frontier (contract
 // §6, "reuse"): a data request (fresh or continued) for keys below the key

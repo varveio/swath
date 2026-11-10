@@ -540,7 +540,7 @@ jobs:
         with:
           key: go-nonrace
 
-      # The writer admission's heap gate (go/docs/testing.md): its full arms allocate hundreds of
+      # The writer admission's heap gate (go/docs/internals/testing.md): its full arms allocate hundreds of
       # MiB and measure the live heap, which -race distorts, so they run here without it, opted in.
       - name: Heap gates (SWATH_HEAP_GATES=1, no -race)
         if: needs.changes.outputs.go == 'true'
@@ -548,14 +548,14 @@ jobs:
           SWATH_HEAP_GATES: "1"
         run: go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing
 
-      # The shape suite at 200,000 keys per shape (internal/shapes, go/docs/testing.md): a
+      # The shape suite at 200,000 keys per shape (internal/shapes, go/docs/internals/testing.md): a
       # measurement with order-of-magnitude bounds, skipped under -race (ten times slower, and the
       # code it drives is race-tested by its own packages), so it runs here without it.
       - name: Shape suite (TestShapes, no -race)
         if: needs.changes.outputs.go == 'true'
         run: go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes
 
-      # SeekParquet conformance (go/docs/testing.md): the suite's reader target against the Go
+      # SeekParquet conformance (go/docs/internals/testing.md): the suite's reader target against the Go
       # adapter of the seekparquet module go.mod pins, then this build's datasets validated by the
       # suite's reference adapter (full and digest) and read alike by both adapters.
       - name: SeekParquet conformance
@@ -773,7 +773,7 @@ jobs:
   # rest of the tree on arm64 at Linux prices with no runner queue. What only the macOS leg
   # covers is Darwin itself: APFS's refusal of names that are not UTF-8, and the crash, durable
   # and kill matrices on Darwin's filesystem and signals, run there without -race
-  # (go/docs/testing.md, cross-OS).
+  # (go/docs/internals/testing.md, cross-OS).
   go-xos:
     needs: changes
     name: go-xos (${{ matrix.os }})

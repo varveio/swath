@@ -174,7 +174,7 @@ these Java fields with their names: `cost.cost_usd` and `cost.basis` (`null` on 
 value differs from Java's listing-scope hash), and `stop_source` (under `outcome`); Java's
 `session_duration_ms` is `timings.session_ms`. Its other Java-only fields (`steals`, `sort.arm`,
 `shape.fingerprint`, `trajectory`, `slow_ranges`, `probe_latency`, `demand_gate`, `shape`) are not kept
-([cli-inventory.md](cli-inventory.md)). The downstream reader does not read it. A reader that tabulates runs
+([internals/cli-inventory.md](internals/cli-inventory.md)). The downstream reader does not read it. A reader that tabulates runs
 (`bench/summaries.py`) maps Java's top-level fields as: `completed` → `outcome.complete`, `objects` →
 `output.rows_committed` (the dataset) or `output.rows_emitted` (this attempt), `cost.api_calls` →
 `requests.http_attempts`, `duration_ms`/`listing_duration_ms` → `timings.wall_ms`/`listing_ms`, `config.target` →
@@ -237,7 +237,7 @@ never recorded, so a resume must be given it again (Java's rule too) and is now 
 is not, instead of failing on its first request. Java's `--endpoint-url` keeps its name, its `--force` is `--overwrite`, and its `--output` is
 `-o, --output`; a custom endpoint is path-style by default, as Java's. The seven filters are
 Java's flags with Java's semantics, except that regular expressions are Go's RE2 ([cli.md](cli.md), "Filters").
-The Java CLI's options, exit codes and report fields against this tool: [cli-inventory.md](cli-inventory.md).
+The Java CLI's options, exit codes and report fields against this tool: [internals/cli-inventory.md](internals/cli-inventory.md).
 
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
 earlier one: `swath resume` replays the recorded command with this build's flags, and a flag this build no
@@ -249,7 +249,7 @@ the list below is the earlier history of the unreleased builds.
   unknown flag). A source with no usable credentials, an empty AWS chain, no Application Default Credentials,
   or an Entra ID chain that finds none, stops the run before listing. Credential failures have
   cause `auth`, during Azure namespace admission too (a SAS the service refuses there: `auth` or
-  `access_denied`) ([credentials](operating.md#credentials)). Give `--anonymous` for a public bucket or container
+  `access_denied`) ([credentials](running.md#credentials)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
   with "(a public bucket needs --anonymous)".
@@ -315,7 +315,7 @@ the list below is the earlier history of the unreleased builds.
 The 0.3 releases (the repository's `v0.3.x` tags) are the Java tool; 0.4 is the first release of this Go tool,
 and the Java tool is deprecated with it. Moving from Java 0.3 to Go 0.4 changes the launcher, the flags and the
 dataset format: the flag-by-flag mapping is [from-java.md](from-java.md) and
-[cli-inventory.md](cli-inventory.md), the dataset changes are [Files](#files) through [Versions](#versions). A run interrupted under Java
+[internals/cli-inventory.md](internals/cli-inventory.md), the dataset changes are [Files](#files) through [Versions](#versions). A run interrupted under Java
 is finished with Java or started over; `swath resume` reads only this tool's journal. The current flags are
 the generated help in [cli.md](cli.md#flags).
 
@@ -434,7 +434,7 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown
   schema ids. `--ts-ms` is refused for versions, so timestamps stay exact. Reader fixtures: `python3 -m unittest
   test_dataset_readers` from `go/`; the SQL fixture tests need DuckDB. One dataset per schema written by this tool
-  serves as the reader's fixture; the commands that produce them are in [testing.md](testing.md).
+  serves as the reader's fixture; the commands that produce them are in [internals/testing.md](internals/testing.md).
 
 ## Gates
 
@@ -443,9 +443,9 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
 - **SeekParquet conformance:** the suite's reader and validator targets against the seekparquet module this
   tool pins, and this tool's datasets validated by the suite's reference adapter and the module's validator
   (full and digest levels, every part declaring `sha256`) and read alike by both
-  ([testing.md](testing.md#seekparquet-conformance)).
+  ([internals/testing.md](internals/testing.md#seekparquet-conformance)).
 - **Downstream reader:** opens and streams this tool's datasets of every schema (section above); the recorded
-  probe ([measurements.md](measurements.md#downstream-reader-compatibility)) predates SeekParquet and is
+  probe ([internals/measurements.md](internals/measurements.md#downstream-reader-compatibility)) predates SeekParquet and is
   historical.
 - **Dropped:** "the Java reader opens Go output". Java stays the producer oracle (replay differential), not
   a reader.

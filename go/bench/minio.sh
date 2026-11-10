@@ -7,7 +7,7 @@
 #        minio.sh campaign KEYFILE      up, TestDurableMinIO against it (KEYFILE its oracle), then down,
 #                                       also on failure or interrupt; RESULTS names the results file
 #                                       (default durable-minio.tsv), the test log beside it
-# The retained campaign (go/docs/measurements.md, "Durable spill"):
+# The retained campaign (go/docs/internals/measurements.md, "Durable spill"):
 #   head -n 250000 noaa-nbm-grib2-pds.keys > nbm250k.keys && bench/minio.sh campaign nbm250k.keys
 #
 # The data lives on a tmpfs inside the container (an object per key costs a directory and a block, about

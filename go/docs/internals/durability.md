@@ -71,9 +71,9 @@ replay.
 The same schedule also runs, opt-in, against MinIO and against production key lists, through the real
 binary: SIGKILLs at the durable steps, after a part record, mid recovery replay, with unsynced state lost,
 and at 40 % and 70 % of the keys. Each resume is checked for oracle equality, reconciliation, and that no
-data request starts inside a replayed certificate ([testing.md](../testing.md#durable-spill-campaign-opt-in)).
+data request starts inside a replayed certificate ([testing.md](testing.md#durable-spill-campaign-opt-in)).
 The results, and the full-scale Batch runs (64 lists of 20 to 150 million keys, killed at 40 % and 70 %), are
-in [measurements.md](../measurements.md#durable-spill).
+in [measurements.md](measurements.md#durable-spill).
 
 **Priors and certificates.** A prior (`--seed-from`: a previous dataset's or a cut file's keys used as seed
 tiles), like `--seed`, only shapes the tiling of the live gaps. On a resume with reused certificates the
@@ -244,7 +244,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
    Verification reads every retained part in full and checks SHA-256, so it costs O(dataset bytes).
    Throughput depends on disk/cache behavior and CPU SHA support; measurements belong in
-   [measurements.md](../measurements.md). The read stops when the run is stopped (a signal, `--max-duration`) and
+   [measurements.md](measurements.md). The read stops when the run is stopped (a signal, `--max-duration`) and
    before recovery renames or removes anything, and its bytes count as progress (`progress.json`
    `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
    (`TestRecoveryVerificationIsCancellableAndReported`).

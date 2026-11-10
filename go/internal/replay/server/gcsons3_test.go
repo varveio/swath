@@ -168,7 +168,7 @@ func TestLiveGCSXMLAPIContents(t *testing.T) {
 // whose rows have no source value for the S3 ETag (neither an MD5 nor an
 // etag), an MD5 that is not one (it does not decode to 16 bytes, so the
 // etag answers), an MD5 and no etag, and a non-STANDARD class, and
-// requires the S3 route's ETag and StorageClass as docs/replay.md's
+// requires the S3 route's ETag and StorageClass as docs/internals/swath-replay.md's
 // route table states them, while the GCS route answers the same rows
 // exactly as stored. Before, the S3 route sent the GCS etag and storage
 // class, and no ETag for a row without an etag.
