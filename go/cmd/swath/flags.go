@@ -87,10 +87,9 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 
 	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
-		Long:  "A trailing / names a directory whatever its name."})
+		Long:  "A trailing / names a directory whatever its name. A file's name says its format; a --format that agrees with it is accepted."})
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
-		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "text rows: auto is the table on a terminal, TSV otherwise",
-		Long: "With -o FILE the file's name says the format; a --format that agrees with it is accepted."})
+		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "on stdout: auto is the table on a terminal, TSV otherwise"})
 	def(source.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: source.GroupOutput, Commands: writing,
 		Usage: "TSV and JSONL: these columns, in order (repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
@@ -148,7 +147,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
 	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
 		Usage: "start from a previous listing's key distribution, not the seed",
-		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively."})
+		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected since the previous cut); the engine still splits adaptively."})
 
 	def(source.Flag{Name: "max-duration", Value: source.Duration(&o.maxDuration), Metavar: "DURATION", Group: source.GroupLimits,
 		Usage: "stop the run after this long (exit 124); 0: no limit",
