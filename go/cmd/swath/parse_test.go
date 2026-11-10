@@ -485,6 +485,9 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 		{[]string{"list", src, "--bogus", "--", "--log-format", "json"}, false},
 		{[]string{"list", src, "--log-format", "json", "--log-format", "text", "--bogus"}, false},
 		{[]string{"list", src, "--log-format", "text", "--log-format=json", "--bogus"}, true},
+		{[]string{"--bogus", "list", src, "--log-format", "json"}, true},
+		{[]string{"diag", "oops", "--log-format", "json"}, true},
+		{[]string{"oops", "--log-format", "json"}, true},
 	} {
 		stderr := captureStderr(t)
 		t.Cleanup(func() { logs.Store(nil) })

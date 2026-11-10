@@ -271,12 +271,12 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return nil
 	})
-	if len(p.operands) > 0 && !slices.Contains(commandWords, p.operands[0]) && !g.Changed("log-format") {
-		// An unknown command is reported in the format its command line
-		// asks for, read with the list commands' flags.
-		if flags, _ := argFlags(newFlags(&options{}, true), p.operands[1:], true); askedFormat(flags) != "" {
-			t.logFormat = askedFormat(flags)
-		}
+	// A refusal here (a bad root flag, an unknown command or diag form)
+	// is reported in the format the whole command line asks for, read
+	// with every command's flags (newFlags with the diagnostic ones takes
+	// them all), so that a value is skipped as a value.
+	if flags, _ := argFlags(newFlags(&options{}, true), args, true); askedFormat(flags) != "" {
+		t.logFormat = askedFormat(flags)
 	}
 	setLog(t, "")
 	switch {
