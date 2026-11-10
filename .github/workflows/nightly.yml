@@ -12,8 +12,9 @@ name: Nightly deep verification
 # The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
 # this workflow is the exhaustive/timing-realistic backstop.
 #
-# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos is
-# the Go default tier on macOS, which ci.yml runs on main and dispatch but not on pull requests.
+# go-race-nightly is the Go port's backstop: the race tests unsharded on amd64. go-xos-macos
+# and go-xos-windows run the Go default tier on macOS and Windows, which ci.yml runs on main
+# and dispatch but not on pull requests.
 #
 # ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
 # outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos or go-shapes"
+        description: "Jobs to run: all, deep-and-perf, osv-scan, go-race-nightly, go-xos-macos, go-xos-windows or go-shapes"
         required: false
         default: all
 
@@ -245,6 +246,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       # Restores the shared module cache and ci.yml's macOS build cache (go-xos); saves nothing
+      # off a push to main.
+      - name: Set up Go (version from go/go.mod)
+        uses: ./.github/actions/setup-go
+        with:
+          key: go-xos
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (no -race)
+        run: go test -count=1 -timeout 25m ./...
+
+  # The Go default tier on Windows, as ci.yml go-xos runs it: vet and the whole suite without
+  # -race. ci.yml runs it on main and dispatch but not on pull requests, so a Windows-only break in
+  # a pull request shows on its merge to main at the latest; this run is the scheduled backstop.
+  go-xos-windows:
+    if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'go-xos-windows'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: go
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      # Restores the shared module cache and ci.yml's Windows build cache (go-xos); saves nothing
       # off a push to main.
       - name: Set up Go (version from go/go.mod)
         uses: ./.github/actions/setup-go

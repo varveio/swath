@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Bounded retention for the Go build caches (ci.yml `go-cache-prune`, after the Go jobs of a
-# push to main): every `go-build-` cache on refs/heads/main except the newest of its family is
-# deleted. Needs GH_TOKEN with actions: write and GITHUB_REPOSITORY.
+# Bounded retention for Go and CodeQL caches (cache-maintenance.yml): keep the newest
+# recognized main cache per family. CodeQL PR dependency caches are discarded: main caches are shared fallback data.
+# Runs after main CI, on CodeQL completion events and hourly. Needs GH_TOKEN with
+# actions: write and GITHUB_REPOSITORY.
 #
 # A key is go-build-OS-ARCH-JOB-DEPS-SHA (.github/actions/setup-go), DEPS 64 and SHA 40 hex
 # digits, so the family is the key with those two stripped (and the cache version, which the
@@ -9,30 +10,48 @@
 # go-race-cmd-kill-. The newest is by creation time, not this run's commit: main runs overlap,
 # and an older run that finishes last must not delete a newer run's caches. Only caches listed
 # in one snapshot taken before any deletion are candidates, each older than a cache of its
-# family in that snapshot, so a family is never left empty and a cache saved meanwhile is never
-# touched. A cache already gone (404) is not an error. Keys of any other shape are left alone.
+# main family in that snapshot, so main families stay populated. Caches saved meanwhile
+# are never touched. A cache already gone (404) is not an error. Keys of any other shape are left alone.
 set -euo pipefail
 
+# --plan consumes an API cache array and prints a deletion plan without credentials or writes.
+# Unknown keys are deliberately outside this policy. Ref and cache version are separate scopes.
+plan_caches() {
+  jq '
+    unique_by(.id)
+    | [ .[]
+        | if (.key | test("^go-build-.+-[0-9a-f]{64}-[0-9a-f]{40}$")) and .ref == "refs/heads/main" then
+            . + {family: (.key | sub("-[0-9a-f]{64}-[0-9a-f]{40}$"; "")), discard: false}
+          elif (.key | test("^go-mod-.+-[0-9a-f]{64}$")) and .ref == "refs/heads/main" then
+            . + {family: (.key | sub("-[0-9a-f]{64}$"; "")), discard: false}
+          elif (.key | test("^codeql-dependencies-[0-9]+-.+-[0-9a-f]{64}$"))
+            and (.ref == "refs/heads/main" or (.ref | test("^refs/pull/[0-9]+/(head|merge)$"))) then
+            . + {family: (.key | sub("-[0-9a-f]{64}$"; "")), discard: (.ref != "refs/heads/main")}
+          elif (.key | test("^codeql-overlay-base-database-[0-9]+-.+-[0-9a-f]{40}-[0-9]+$")) and .ref == "refs/heads/main" then
+            . + {family: (.key | sub("-[0-9a-f]{40}-[0-9]+$"; "")), discard: false}
+          else empty end ]
+    | group_by([.family, .version, .ref])
+    | map(sort_by(.created_at, .id)
+          | {family: .[0].family, ref: .[0].ref,
+             keep: (if .[0].discard then null else .[-1] end),
+             delete: (if .[0].discard then . else .[:-1] end)})
+    | sort_by(.family, .ref)'
+}
+
+if [ "${1:-}" = --plan ]; then
+  plan_caches
+  exit
+fi
+if [ "$#" -ne 0 ]; then echo "usage: $0 [--plan]" >&2; exit 2; fi
 : "${GITHUB_REPOSITORY:?}"
 summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 
-# All pages: the API returns at most 100 per page. Its default order is by last access, which a
-# restore between two page requests changes, so a cache could be listed twice (and one copy
-# deleted as older than the other). Creation order is fixed, and ids are deduplicated anyway.
+# Fixed creation order plus deduplication prevents a moving last-access order from making
+# the same cache appear on two pages. Only IDs in this snapshot can be deleted.
 snapshot=$(gh api --paginate \
-  "repos/$GITHUB_REPOSITORY/actions/caches?ref=refs/heads/main&key=go-build-&sort=created_at&direction=asc&per_page=100" \
+  "repos/$GITHUB_REPOSITORY/actions/caches?sort=created_at&direction=asc&per_page=100" \
   --jq '.actions_caches[]' | jq -s 'unique_by(.id)')
-
-# One object per family: the retained cache and the ones to delete, oldest first.
-plan=$(jq '
-  [ .[]
-    | select(.ref == "refs/heads/main")
-    | (.key | capture("^(?<family>go-build-.+)-[0-9a-f]{64}-[0-9a-f]{40}$")) as $m
-    | . + {family: $m.family} ]
-  | group_by([.family, .version])
-  | map(sort_by(.created_at, .id)
-        | {family: .[0].family, keep: .[-1], delete: .[:-1]})
-  | sort_by(.family)' <<<"$snapshot")
+plan=$(plan_caches <<<"$snapshot")
 
 failed=0
 deleted=0
@@ -51,13 +70,13 @@ while IFS=$'\t' read -r id key size; do
 done < <(jq -r '.[].delete[] | [.id, .key, .size_in_bytes] | @tsv' <<<"$plan")
 
 {
-  echo "### Go build-cache retention"
+  echo "### CI cache retention"
   echo
-  echo "$(jq 'length' <<<"$snapshot") \`go-build-\` caches on main in the snapshot; deleted $deleted, freeing $((freed / 1048576)) MiB."
+  echo "$(jq 'length' <<<"$snapshot") caches in the snapshot; deleted $deleted, freeing $((freed / 1048576)) MiB."
   echo
-  echo "| family | version | kept (created) | kept MiB | older deleted |"
-  echo "| --- | --- | --- | --- | --- |"
-  jq -r '.[] | "| \(.family) | \(.keep.version[0:12]) | \(.keep.created_at) | \(.keep.size_in_bytes / 1048576 | floor) | \(.delete | length) |"' <<<"$plan"
+  echo "| family | ref | kept ID | older/PR caches deleted |"
+  echo "| --- | --- | --- | --- |"
+  jq -r '.[] | "| \(.family) | \(.ref) | \(.keep.id // "none") | \(.delete | length) |"' <<<"$plan"
 } >>"$summary"
 
 if [ "$failed" -ne 0 ]; then
