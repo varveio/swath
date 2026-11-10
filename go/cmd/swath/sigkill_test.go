@@ -148,8 +148,8 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 		{"s3", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous"}, []string{"--part-interval=0"}, false},
 		{"s3-unseeded", []string{"s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--no-seed"}, []string{"--part-interval=0"}, false},
 		{"gcs", []string{"gs://bkt", "--endpoint-url", gcs, "--anonymous"}, []string{"--part-interval=0"}, false},
-		// Azure pages are 5,000 by default: 1,000, as the others, so the
-		// seed tiles these keys as it does theirs.
+		// 1,000, as the others, so the seed tiles these keys as it does
+		// theirs whatever the provider's default.
 		{"azblob", []string{"az://" + az.Account + "/" + az.Container, "--endpoint-url", strings.TrimSuffix(az.Endpoint, "/"+az.Account),
 			"--anonymous", "--page-size", "1000"}, []string{"--part-interval=0"}, false},
 		// Unseeded, as s3-unseeded: one range whose owner splits, so the

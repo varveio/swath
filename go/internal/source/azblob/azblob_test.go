@@ -99,7 +99,7 @@ func replayOptions(r *azblobtest.Replay) Options {
 // i seconds after 2026-01-01 for the i-th key; the route's synthesised
 // ETag, type, tier and content type), sequentially and with 64 workers,
 // with the seed and structure probes (delimiter listings) engaged, at page
-// sizes 1, 2, 7 and 5,000; the default page is 5,000. Where s3 is set, the
+// sizes 1, 2, 7 and 5,000; the default page is 1,000. Where s3 is set, the
 // same fixture through the replay's S3 route (the S3 provider) lists the
 // same keys in the same order, once each, with the same size and
 // Last-Modified at the Azure wire's second resolution (the dual-route
@@ -155,8 +155,8 @@ func TestListReplay(t *testing.T) {
 			if want := int64((len(keys) + c.pol.PageSize - 1) / max(c.pol.PageSize, 1)); c.pol.PageSize > 0 && v("pages") != want {
 				t.Fatalf("%s: %d pages, want %d of %d", c.name, v("pages"), want, c.pol.PageSize)
 			}
-			if c.pol.PageSize == 0 && v("pages") != 2 {
-				t.Fatalf("%s: the default page size: %d pages for %d keys, want 2", c.name, v("pages"), len(keys))
+			if want := int64((len(keys) + defaultPageSize - 1) / defaultPageSize); c.pol.PageSize == 0 && v("pages") != want {
+				t.Fatalf("%s: the default page size: %d pages for %d keys, want %d", c.name, v("pages"), len(keys), want)
 			}
 		}
 		if !c.s3 {
