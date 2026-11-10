@@ -107,6 +107,7 @@ jobs:
           name: test-reports-nightly
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 30
 
   # Supply-chain scan of the artifacts a user actually receives: the resolved jar closure of
   # each application distribution, and the runtime image whose JRE base carries OS packages no
@@ -181,6 +182,7 @@ jobs:
           name: osv-image-reports
           path: build/reports/osv/*.json
           if-no-files-found: ignore
+          retention-days: 30
 
   # The Go race tests in one unsharded run on amd64. Per push, ci.yml races internal/listing and
   # cmd/swath on arm64 only (go-race, scripts/ci/go-race-shards.sh): this is their amd64 race
@@ -230,6 +232,7 @@ jobs:
           name: go-race-nightly
           path: ${{ runner.temp }}/go-race-nightly.json
           if-no-files-found: ignore
+          retention-days: 30
 
   # The Go default tier on macOS, as ci.yml go-xos runs it: vet and the whole suite without
   # -race. ci.yml runs it on main and dispatch but not on pull requests, so a macOS-only break in
@@ -290,3 +293,4 @@ jobs:
           name: go-shapes-summary
           path: ${{ runner.temp }}/shapes.json
           if-no-files-found: ignore
+          retention-days: 30

@@ -207,6 +207,7 @@ jobs:
           # not under a single root build/.
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
   # Slow tier: Docker/LocalStack integration tests. Runs on every event, PRs included:
   # real-store coverage that only runs after merge cannot block the bad merge, and at
@@ -261,6 +262,7 @@ jobs:
           name: test-reports-integration
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
   # Deep tier: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/
   # timeout tests, demoted OFF the per-commit fast gate (they are slow and/or flaky-under-
@@ -334,6 +336,7 @@ jobs:
           name: test-reports-deep
           path: "*/build/reports/tests/"
           if-no-files-found: ignore
+          retention-days: 14
 
   # PR-only Docker build gate: validate the root Dockerfile builds multi-arch and
   # the image runs, on pull requests. It does NOT run on `main`/dispatch — there,
@@ -518,6 +521,7 @@ jobs:
           name: go-race-${{ matrix.shard }}
           path: ${{ runner.temp }}/go-race.json
           if-no-files-found: ignore
+          retention-days: 14
 
   # The tests that measure the process and so must not run under -race, which distorts heap and
   # time: each opted in by its own gate, one step per tier.
