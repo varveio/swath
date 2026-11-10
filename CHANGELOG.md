@@ -5,6 +5,26 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port, Azure Blob: listings ask for the Arrow format and read XML wherever the service answers XML
+  (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay) (#440). On a 468,557-blob public
+  container on a 4-vCPU VM a listing took 3.4 s and 3.9 CPU-seconds against 29.5 s and 58 for XML, with
+  byte-identical output. An Arrow page is checked before it is decoded: a short stream, a missing
+  `NextMarker` or `NumberOfRecords`, a row count that disagrees, or a written column in a type the decoder
+  would read as nulls is refused, never listed as a shorter or final page. The run report counts pages per
+  format (`list_format.*`). The default page is 1,000 entries, not the service's 5,000 (#448): a range reads to
+  its first non-member, and at 5,000 most of each range's last page was discarded (the 1.84M-blob container
+  listed in about half the time). Follow-ups: #449.
+- Go port: a credential that cannot be obtained is reported on one line, the source and the first line of
+  its cause, with `--anonymous` suggested only when swath was discovering credentials itself; `-v` and the
+  run report keep the whole cause (#447). A SAS naming a request parameter (`comp`, `restype`, `prefix`,
+  `marker`, `endBefore` and the like) is refused before any request, naming the parameter, never its value.
+- Go port: Go 1.27.4; azblob 1.8.3 (the SDK now sends `startFrom` itself; swath's service-version pin stays,
+  and the S3, GCS and Azure clients each check the requests they send against a wire snapshot, so an SDK
+  update that changes them fails a test) (#434, #438, #446). azblob 1.8 links `apache/arrow-go` into the
+  binary (about +4.8 MB; Azure/azure-sdk-for-go#27998).
+- Release tooling: DuckDB 2.0.0, OSV-Scanner 2.7.1, Syft 1.57.1, and Buildx v0.38.1 with BuildKit v0.34.2 by
+  digest are pinned (#442, #444); the next release-candidate run is their first use in `release.yml`.
+
 - Go port: `go/reader`'s `Dataset.Stream` and `StreamLocal` read the dataset in one ordered pass
   (SeekParquet `Dataset.RangeBatches`) instead of ⌈N/1,024⌉+1 `Range` requests that each re-seeked after the
   last. Objects, order, values and row errors are unchanged. `StreamStats.Requests` counts `RangeBatches`
