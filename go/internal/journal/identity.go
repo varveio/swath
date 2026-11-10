@@ -191,8 +191,11 @@ func redactSource(value string) string {
 		return scheme + "://[redacted]"
 	}
 	if i := strings.IndexByte(value, '?'); i >= 0 {
-		q, err := url.QueryUnescape(value[i:])
-		if err != nil || strings.Contains(strings.ToLower(q), "sig=") {
+		q := value[i:]
+		if u, err := url.QueryUnescape(q); err == nil {
+			q = u // a literal % in a key prefix does not unescape: judge the raw text
+		}
+		if strings.Contains(strings.ToLower(q), "sig=") {
 			return value[:i] + "?[redacted]"
 		}
 	}

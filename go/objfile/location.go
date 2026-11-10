@@ -35,7 +35,8 @@ func ParseLocation(raw string) (Location, error) {
 	scheme, rest, ok := strings.Cut(raw, "://")
 	shown := raw
 	authority, _, _ := strings.Cut(rest, "/")
-	if strings.ContainsAny(raw, "?#") || strings.ContainsAny(authority, "@:") {
+	// Without "://" there is no authority to judge: an @ anywhere may follow a credential.
+	if strings.ContainsAny(raw, "?#") || strings.ContainsAny(authority, "@:") || !ok && strings.Contains(raw, "@") {
 		shown = "[redacted]"
 	}
 	fail := func(why string) (Location, error) {
