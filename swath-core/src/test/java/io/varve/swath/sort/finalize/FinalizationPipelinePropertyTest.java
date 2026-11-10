@@ -142,9 +142,9 @@ class FinalizationPipelinePropertyTest {
     }
 
     /**
-     * Pins the input that once failed the property: a single segment of two two-row pages whose first
-     * page carries fewer payload bytes than the 32-byte target, so an uncapped target never
-     * reaches a roll.
+     * Pins the input that once failed the property: a single segment whose first band is one
+     * two-row page of 29 payload bytes and whose second band is one six-row page, so an uncapped
+     * 32-byte target never closes a part before the last band.
      */
     @Example
     void twoSmallBandsUnderTheTargetStillRoll() throws IOException {
