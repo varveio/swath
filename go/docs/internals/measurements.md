@@ -1535,6 +1535,33 @@ requires, avoiding repeated output-buffer growth. The reader also shares its siz
 owning and borrowed paths in this run. Overview allocation counts remain about 0.034/row, above the
 proposed <0.01 target; this is cumulative allocated space, not a peak/live-memory measurement.
 
+### Reader Stream in one pass, 2026-11-10
+
+`Stream` reading in one `seekparquet.Dataset.RangeBatches` pass (varve #124, R1b) against the paged `Stream`
+it replaced (`Range-pages`: `Range` requests of 1,024 rows, each re-seeking after the last; kept in
+`stream_test.go` as the oracle), in the same binary: swath main `4121c6fd` plus this change, both modules
+pinned to SeekParquet `b1c848a4d2d6` (#50 OffsetIndex cache, #54 RangeBatches). `BenchmarkReaderStream`,
+`-run '^$' -benchmem -benchtime 3x -count 3 -p 1`, under `flock /tmp/swath-gates.lock`, Go 1.27.4,
+linux/amd64, GOMAXPROCS 4, the shared 4-vCPU Xeon Platinum 8581C; load average 1.1 at the start, 1.9 at the
+end. The same 4,000,000-row, seed-1 fixture (2 parts, 20 row groups, 42.0 B/row on disk); warm Dataset;
+counting-only callback; Workers do not apply. Indicative only.
+
+| Path | ns/row (3 runs) | allocs/row | B/row |
+|---|---|---:|---:|
+| Stream (one pass) | 700, 703, 726 | 9.03 | 537 |
+| Range-pages (before) | 1,235, 1,350, 1,713 | 12.14 | 1,696 |
+
+About 1.8× faster and a third of the bytes on this fixture: the pass opens each projected chunk and its
+OffsetIndex once per row group instead of once per 1,024-row request, positions once instead of re-seeking
+each request's cursor, and copies
+each value once (the row decoder reads a borrowed view of the batch; only kept values are copied) instead of
+cloning rows. The remaining allocations are the owning Object's (key, size, time, ETag and class with their
+pointers) and two the shared row decoder makes per row (the Object and the decoded row move to the heap),
+which Scan and List share. An unsplit `PlanRanges` + `RangePlan.ScanBatches` pass with the same decoding,
+measured as a probe in the same run (not committed), took 677–702 ns/row with the same allocations: within
+this host's noise of the plan-free pass. `TestStreamAllocations` measured 9.04 allocations an object over its
+20,000-row fixture (9.05 under `-race`), budget 10.5.
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through

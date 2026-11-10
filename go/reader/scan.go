@@ -98,9 +98,12 @@ func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, s
 	return first
 }
 
+// scanBatchObjects is the most objects one Scan batch holds.
+const scanBatchObjects = 1024
+
 // scanShard scans one shard, handing fn its objects in batches.
 func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, fn func([]Object) error) error {
-	batch := make([]Object, 0, streamPageRows)
+	batch := make([]Object, 0, scanBatchObjects)
 	flush := func() error {
 		if err := ctx.Err(); err != nil {
 			return err

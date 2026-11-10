@@ -217,15 +217,26 @@ Azure versions schema.
   spec lets a part lack it (`time_created`). Other columns are ignored. A disagreement is `KindSchema` naming the
   column and the part. It reads nothing beyond Verify's reads.
 - **`Stream`.** Current objects only: a versions schema, and a filesystem's entries (`StreamLocal`'s), are
-  refused (`KindSchema`) before any read. Every object
-  in dataset order through `seekparquet.Range`, 1,024 rows a request, each page after the previous page's last
-  row (`Cursor`), projecting `size`, `last_modified` and, for S3 and Cloud Storage, `etag` and
-  `storage_class`. The module checks every key page it decodes (order, bounds, page index). Each object must
-  have a size, at least 0, and a modification time, when it has one, in the years 1 to 9999; else `KindRow`
-  naming the column and the row. The first error ends the stream: `fn`'s and the module's
-  (`*seekparquet.RefusalError`, storage) unchanged, and the context's, checked before each object.
-  Each `Object` owns its key, a copy, so `fn` may keep or change it. `StreamStats` sums every Stream's
-  (and StreamLocal's) requests, objects handed to `fn` (counted before the call) and `ReadStats`.
+  refused (`KindSchema`) before any read. Every object in dataset order in one ordered pass of borrowed
+  batches (`seekparquet.Dataset.RangeBatches`, no plan), projecting `size`, `last_modified` and, for S3,
+  Cloud Storage and Azure, `etag` and the storage class (Azure's `access_tier`). The pass opens each part, row group
+  and projected column chunk when it reaches it, so a part is checked then, not before the first object. The
+  module checks every key page it decodes (order, bounds, page index). Each row is decoded by the schema's
+  row decoder and checked: a size, at least 0, and a modification time, when it has one, in the
+  years 1 to 9999; else `KindRow` naming the column and the row (the error owns its key). The first error ends
+  the stream: `fn`'s and a row's unchanged, the module's (`*seekparquet.RefusalError`, storage, `ErrClosed`)
+  unchanged, and the context's, checked before each object (so a dataset with no objects streams
+  successfully even with an ended context). Objects already handed on stay handed on: every
+  object before a failing row, and every object of the pages before a failing part, page or read. Each
+  `Object` owns its memory (its key a copy), so `fn` may keep or change it. `fn` runs inside the read, as
+  `ScanBatches`' callback does: `Close` from another goroutine waits for the running `fn` to return (if it
+  returns nil, the rest of its batch is still handed on, then the stream ends with `ErrClosed`), and `fn` must not call
+  `Close` or wait for a goroutine that does. `StreamStats` sums every Stream's (and StreamLocal's) requests
+  (`RangeBatches` calls: one for each stream that reaches the read, whatever it ends in: an empty dataset, a
+  context ended before it starts, a failure; none for a refusal before the read; only a dataset of more than
+  `math.MaxInt` rows, where `int` is 32 bits, takes ⌊N/`math.MaxInt`⌋+1), objects handed to `fn` (counted
+  before the call) and `ReadStats` (the reads', failures included). A stream's fields are added together, once,
+  when it returns: `StreamStats` holds nothing of a stream still running.
 - **`StreamLocal`.** `swath/local-entries/v1` only (any other schema id is `KindSchema`, before any read). Every
   entry as `Stream` reads objects, projecting every column of the schema, each `LocalEntry` owning its key.
   Nulls are kept: under `--metadata names` the stat columns, `Size` and `LastModified` included, are nil, and a
@@ -407,6 +418,18 @@ the coverage handed on by `Metadata`) and on an unknown schema id; `CheckSchema`
 uniqueness, the key column, an absent column, a column of another logical type, and a later part lacking a
 column the module accepts; `Stream`'s order and values over pages, nulls, its row checks, cancellation, `fn`'s
 error, a module refusal returned unchanged, and the refusal of a versions schema.
+
+`stream_test.go` holds the one-pass `Stream` to the paged `Stream` it replaced (`streamPages`, kept as the
+oracle): the same objects in the same order over the batch scan's, the scan's and a generated fixture (S3, GCS
+and Azure; parts, row groups, 31- to 1,024-row pages), also with the request limit lowered so a pass continues
+after its last row (`StreamStats` holding nothing of the stream during its second request); one request whose `ReadStats` equal one `Range` of every row; an error decoded from a real batch keeps its
+kind, column, key and offset when the batch's borrowed keys are overwritten after it; the same row errors (kind,
+column, key) after the same objects, deep in a later page, row group or part, and a part lacking a column;
+a missing part refused after the objects before it; a Source failure at reads spread over the pass returned unchanged after a
+prefix of the objects; cancellation by `fn` at each page, row group and part edge (the context's error, as
+before, even at the last object); `StreamStats` for an empty dataset, a context ended before the stream, and
+refusals; `Close` during `fn` (waiting for it; `fn`'s error unchanged, else `ErrClosed`); and `StreamLocal`
+against the paged oracle, owning its keys and link targets.
 
 `local_test.go` writes a filesystem tree (directories with their own rows, an empty one, a name that is not
 UTF-8, a symlink with its target, a FIFO) over two parts, with every stat column and as `--metadata names`

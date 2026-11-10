@@ -468,7 +468,7 @@ func TestScanBatchesLargePageAndAccessAllocations(t *testing.T) {
 		}
 		return stop
 	})
-	if err != stop || largest <= streamPageRows || sum == 0 {
+	if err != stop || largest <= scanBatchObjects || sum == 0 {
 		t.Fatalf("error %v, batch length %d, sum %d", err, largest, sum)
 	}
 	// The existing API still caps its owning batches at 1,024.

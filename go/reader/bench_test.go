@@ -166,17 +166,27 @@ func BenchmarkReaderScan(b *testing.B) {
 	}
 }
 
-// BenchmarkReaderStream: Stream of the whole dataset, ordered and owning.
+// BenchmarkReaderStream: Stream of the whole dataset, ordered and owning,
+// in one pass (Stream) and as it read before, in Range requests of 1,024
+// rows each after the last (Range-pages, oldStream in stream_test.go).
+// Workers do not apply: a stream is one ordered pass.
 func BenchmarkReaderStream(b *testing.B) {
 	dir, rows := benchDataset(b)
-	var counted atomic.Int64
-	stream := func(d *Dataset) {
-		if err := d.Stream(context.Background(), func(Object) error { counted.Add(1); return nil }); err != nil {
-			b.Fatal(err)
-		}
+	for _, mode := range []struct {
+		name string
+		read func(context.Context, *Dataset, func(Object) error) error
+	}{{"Stream", newStream}, {"Range-pages", oldStream}} {
+		b.Run(mode.name, func(b *testing.B) {
+			var counted atomic.Int64
+			stream := func(d *Dataset) {
+				if err := mode.read(context.Background(), d, func(Object) error { counted.Add(1); return nil }); err != nil {
+					b.Fatal(err)
+				}
+			}
+			d := benchWarm(b, dir, stream)
+			benchLoop(b, rows, &counted, func() { stream(d) })
+		})
 	}
-	d := benchWarm(b, dir, stream)
-	benchLoop(b, rows, &counted, func() { stream(d) })
 }
 
 // scanAllocBudget is Scan's allocation budget per object (Workers 1,
@@ -240,5 +250,36 @@ func TestScanBatchesAllocations(t *testing.T) {
 		if perRow > budget {
 			t.Errorf("%.5f allocations/row exceeds %.3f", perRow, budget)
 		}
+	}
+}
+
+// streamAllocBudget is Stream's allocation budget per object (no-op
+// callback, warm Dataset, a 20,000-row fixture). The one-pass Stream
+// measured 9.0 (the Object, its key, size, time, ETag and class with their
+// pointers, and the decoder's row); the paged Stream it replaced made 12.1.
+const streamAllocBudget = 10.5
+
+// TestStreamAllocations: Stream stays within its allocation budget per
+// object, and hands on every object.
+func TestStreamAllocations(t *testing.T) {
+	const rows = 20_000
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := writeFixture(context.Background(), dir, rows, 2); err != nil {
+		t.Fatal(err)
+	}
+	d := openDir(t, dir)
+	var n int64
+	perObject := testing.AllocsPerRun(3, func() {
+		n = 0
+		if err := d.Stream(context.Background(), func(Object) error { n++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}) / rows
+	if n != rows {
+		t.Fatalf("%d objects, want %d", n, rows)
+	}
+	t.Logf("%.2f allocations an object (budget %v)", perObject, streamAllocBudget)
+	if perObject > streamAllocBudget {
+		t.Errorf("%.2f allocations an object, over the budget of %v", perObject, streamAllocBudget)
 	}
 }
