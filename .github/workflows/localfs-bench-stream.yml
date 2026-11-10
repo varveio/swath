@@ -1,0 +1,52 @@
+name: localfs-bench-stream
+
+# Linux count A/B for the local walker (a count streaming each directory read, #388): ref A against
+# ref B on an ext4 image, cold and warm, on the whole runner and in a 1-CPU, 512 MiB scope.
+# Runs on a push that changes its driver, or by hand. Driver: go/bench/stream-bench.sh.
+on:
+  push:
+    branches: [bench/localfs-xos]
+    paths: [go/bench/stream-bench.sh, .github/workflows/localfs-bench-stream.yml]
+  workflow_dispatch:
+    inputs:
+      ref_a:
+        description: swath ref A (before)
+        default: a93035d26dd0c25ceed434a97143f15f8f43c6e1  # main: #389 + #390
+      ref_b:
+        description: swath ref B (after)
+        default: 849999ed3e5820914052c1c2f84bb4994801c5e8  # go/localfs-count-stream
+      trees:
+        default: huge realistic manybig
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'a93035d26dd0c25ceed434a97143f15f8f43c6e1' }}", path: swath-a}
+      - uses: actions/checkout@v4
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || '849999ed3e5820914052c1c2f84bb4994801c5e8' }}", path: swath-b}
+      - uses: actions/setup-go@v5
+        with: {go-version-file: swath-b/go/go.mod, cache: false}
+      - name: build
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for v in a b; do (cd swath-$v/go && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/bin/swath-$v" ./cmd/swath); done
+      - name: bench
+        run: |
+          SWATH_A="$RUNNER_TEMP/bin/swath-a" SWATH_B="$RUNNER_TEMP/bin/swath-b" GEN=go/bench/gen_tree.py \
+            OUT="$RUNNER_TEMP/out" TREES="${{ inputs.trees || 'huge realistic manybig' }}" IMG=/mnt/sb.img \
+            bash go/bench/stream-bench.sh
+      - name: summary
+        if: always()
+        run: cat "$RUNNER_TEMP/out/machine.txt" "$RUNNER_TEMP/out/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: localfs-bench-stream
+          path: ${{ runner.temp }}/out
