@@ -386,9 +386,8 @@ func Register(f Factory) {
 // from a credential in, when it has a query or a fragment or does not parse.
 func Redact(root string) string { return RedactPlace(Canonical(root)) }
 
-// RedactPlace is a flag's place (a path or a URL: source.ShownPlace) as it
-// may be shown or recorded: redacted as Redact redacts a root, in the form
-// given.
+// RedactPlace is a URL-valued flag's value (source.ShownURL) as it may be
+// shown or recorded: redacted as Redact redacts a root, in the form given.
 func RedactPlace(root string) string {
 	if rootCredentials(root) {
 		return source.RedactRoot(root)

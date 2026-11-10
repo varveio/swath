@@ -95,15 +95,16 @@ type Flag struct {
 	// Familiar are other tools' spellings of the flag (region for
 	// --s3-region): the unknown-flag error suggests the flag for them.
 	Familiar []string
-	// Shown is how a recorded or reported command line, and an error,
-	// show the value: as typed (""), a place (ShownPlace: a path or URL,
-	// its userinfo and query redacted) or never (ShownNever: a secret).
+	// Shown is how a recorded or reported command line shows the value:
+	// as typed (""), as a URL (ShownURL: one that may carry a credential,
+	// its userinfo, query and fragment redacted) or never (ShownNever: a
+	// secret).
 	Shown string
 }
 
 // The values of Flag.Shown.
 const (
-	ShownPlace = "place"
+	ShownURL   = "url"
 	ShownNever = "never"
 )
 
@@ -394,9 +395,9 @@ var StoreGroup = &FlagGroup{
 		s := &Store{Timeout: DefaultRequestTimeout}
 		Define(fs, Flag{Name: anonymousFlag, Familiar: []string{"no-sign-request"}, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
 			Long: "Ignores any configured. Without it a source with no usable credentials fails (auth) before listing."})
-		Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Shown: ShownPlace, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
+		Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Shown: ShownURL, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
 			Long: "S3: path-style addressing unless --no-s3-path-style; default AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). User information, a query and a fragment are refused. Part of the resume identity."})
-		Define(fs, Flag{Name: caBundleFlag, Shown: ShownPlace, Value: Text(&s.Trust.CABundle), Metavar: "FILE", Usage: "trust the certificates in this PEM file besides the system's",
+		Define(fs, Flag{Name: caBundleFlag, Value: Text(&s.Trust.CABundle), Metavar: "FILE", Usage: "trust the certificates in this PEM file besides the system's",
 			Long: "For a service behind a private certificate authority. S3: default AWS_CA_BUNDLE."})
 		Define(fs, Flag{Name: noVerifyFlag, Value: Switch(&s.Trust.NoVerify), Usage: "do not verify the service's TLS certificate (warns)",
 			Long: "For a test endpoint only. A resume replays it, and warns again."})

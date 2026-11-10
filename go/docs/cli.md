@@ -22,9 +22,7 @@ by every command (`show` and `completion` too), before or after the command word
 before `--log-format` is read still reports in the format it names (one after `--` is an operand; for a line
 that does not parse, the format is best effort). An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
 --s3-region?)`) and the help to read; an error never repeats a typed value it cannot tell from a credential
-(an unknown flag's value, a SAS in `-o` or an extra argument), and a message that quotes a place or secret flag's
-value whole, as it was used (a CA bundle, seed or credentials file it could not read), shows it as the recorded
-command does, on stderr, in the events, the report and `error.json` (in their string values only). A default-on switch is turned off by `--no-NAME`; the help never shows
+(an unknown flag's value, a SAS in `-o` or an extra argument). A default-on switch is turned off by `--no-NAME`; the help never shows
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
 (`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`) is the source `az://ACCOUNT/CONTAINER[/PREFIX]`.
 
@@ -1280,7 +1278,8 @@ table changes.
   `outcome.error` (and so does one that ends so with no request ever answered, however short it was), and `requests.failure_warnings` in the report
   counts the warnings. A stderr that does not drain never holds the run: a line waits at most 250 ms, later
   ones queue (up to 256) without waiting while the write is stuck and are then dropped, counted in
-  `requests.log_dropped`; warnings, errors and the statistics are never dropped for that bound; the final outcome and error lines go
+  `requests.log_dropped`; warnings, errors and the statistics have a bound of their own (256, the oldest dropped past it, counted),
+  and progress and status records are disposable on every path; the final outcome and error lines go
   before the queued request log and progress records, which are dropped (counted), after the queued warnings,
   within their own 250 ms (past it the warnings left are dropped, counted, and the outcome gets 250 ms more). A local listing that could not read entries names up to five of them with their cause,
   then the count of the rest, and still exits 0; the report's `outcome.unreadable` is then true. On Unix,
@@ -1345,7 +1344,7 @@ never zero.
 | `report_version` | 4 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a place's, `-o`, `--report`, `--seed-from`, `--endpoint-url`, `--ca-bundle`, `--gcs-credentials-file`, and SOURCE's, with a URL's user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `invocation` | what was asked: `argv` (the command in its canonical spelling, each flag `--name=value`; a secret flag's value `[redacted]`; a URL given to `-o` or `--endpoint-url`, and SOURCE, with its user information, query or fragment `[redacted]`, in every spelling of the flag; every other value, a filter's included, as given, so a resume's filters equal the run's), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `unreadable` (some entries could not be read: the rows and totals leave them out, exit 0), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 

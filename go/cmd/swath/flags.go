@@ -10,10 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/spf13/pflag"
 
@@ -88,7 +85,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
 		Long: "With --count-links-once. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
 
-	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownPlace, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
+	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
 		Long:  "A trailing / names a directory whatever its name."})
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
@@ -149,7 +146,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "part-rotation-max-rows", Value: source.Count64(&o.partMaxRows, 0), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
 		Usage: "also close a part at N rows (0: by size and --part-interval only)",
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
-	def(source.Flag{Name: "seed-from", Shown: source.ShownPlace, Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
+	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
 		Usage: "start from a previous listing's key distribution, not the seed",
 		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively."})
 
@@ -160,7 +157,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "stop as stuck after this long without progress (exit 75)",
 		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 
-	def(source.Flag{Name: "report", Shown: source.ShownPlace, Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
+	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",
 		Long: "Written on failure too, with the outcome and the attempt id; not for a command line that does not parse (an unknown flag, a bad value). " +
 			"A directory, or a name whose directory does not exist, is refused before listing; a report that cannot be written at the end fails the command (exit 1). - is refused where stdout carries rows."})
@@ -407,7 +404,6 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		} else {
 			p.given = append(p.given, "--"+fl.Name+"="+value)
 			p.recorded = append(p.recorded, "--"+fl.Name+"="+shownValue(fl, value))
-			remember(fl, value)
 		}
 		return nil
 	})
@@ -523,76 +519,13 @@ func askedFormat(flags []argFlag) string {
 	return v
 }
 
-// hidden are the place and secret values given on command lines in this
-// process whose shown form (shownValue) differs from them, each with that
-// form: what scrub puts in their place in a message that quotes one as it
-// was used (open VALUE: ...).
-var hidden struct {
-	mu    sync.Mutex
-	pairs [][2]string // value, shown form; longest value first
-}
-
-// remember notes fl's value when its shown form hides some of it.
-func remember(fl *pflag.Flag, value string) {
-	shown := shownValue(fl, value)
-	if shown == value || value == "" {
-		return
-	}
-	hidden.mu.Lock()
-	defer hidden.mu.Unlock()
-	if !slices.Contains(hidden.pairs, [2]string{value, shown}) {
-		hidden.pairs = append(hidden.pairs, [2]string{value, shown})
-		slices.SortFunc(hidden.pairs, func(a, b [2]string) int { return len(b[0]) - len(a[0]) })
-	}
-}
-
-// scrub is a message (a free-text value: never serialized output) with
-// every whole occurrence of a remembered value, one not inside a longer
-// word, replaced by its shown form. A part of a value is left alone, and
-// so is a shown form already there: scrubbing twice changes nothing more.
-func scrub(s string) string {
-	hidden.mu.Lock()
-	defer hidden.mu.Unlock()
-	for _, p := range hidden.pairs {
-		parts := strings.Split(s, p[1]) // a shown form already there stays
-		for i, part := range parts {
-			parts[i] = replaceWhole(part, p[0], p[1])
-		}
-		s = strings.Join(parts, p[1])
-	}
-	return s
-}
-
-// replaceWhole replaces each occurrence of v in s that no letter or digit
-// adjoins.
-func replaceWhole(s, v, with string) string {
-	var b strings.Builder
-	for {
-		i := strings.Index(s, v)
-		if i < 0 {
-			b.WriteString(s)
-			return b.String()
-		}
-		before, _ := utf8.DecodeLastRuneInString(s[:i])
-		after, _ := utf8.DecodeRuneInString(s[i+len(v):])
-		if i > 0 && wordRune(before) || i+len(v) < len(s) && wordRune(after) {
-			b.WriteString(s[:i+len(v)])
-		} else {
-			b.WriteString(s[:i] + with)
-		}
-		s = s[i+len(v):]
-	}
-}
-
-func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
-
 // shownValue is fl's value as a recorded or reported command line, or an
 // error, shows it: by its table entry (source.Flag.Shown).
 func shownValue(fl *pflag.Flag, value string) string {
 	switch source.Described(fl).Shown {
 	case source.ShownNever:
 		return redacted
-	case source.ShownPlace:
+	case source.ShownURL:
 		return registry.RedactPlace(value)
 	}
 	return value

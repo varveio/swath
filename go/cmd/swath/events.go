@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -119,7 +118,7 @@ func (l *eventLog) print(level, event, msg string, fields any) {
 	if level == lvWarn {
 		p += "warning: "
 	}
-	send(errOut, p+scrub(msg)+"\n")
+	send(errOut, p+msg+"\n")
 }
 
 // line is an event as one JSON object: ts, level, event, attempt, msg,
@@ -134,69 +133,11 @@ func (l *eventLog) line(level, event, msg string, fields any) string {
 	if l.attempt != "" {
 		b = str(b, "attempt", l.attempt)
 	}
-	b = str(b, "msg", scrub(msg))
-	if f := scrubValues(marshal(fields)); len(f) > 2 && f[0] == '{' {
+	b = str(b, "msg", msg)
+	if f := marshal(fields); len(f) > 2 && f[0] == '{' {
 		return string(append(append(b, ','), f[1:]...)) + "\n"
 	}
 	return string(append(b, '}')) + "\n"
-}
-
-// scrubValues is the JSON object b with scrub applied to each string
-// value, its keys, numbers, literals and structure as they are; b as it
-// is if it does not decode.
-func scrubValues(b []byte) []byte {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	var out bytes.Buffer
-	type level struct{ object, key bool } // key: the next string is a key
-	var stack []level
-	sep := func() {
-		if n := len(stack); n > 0 && out.Len() > 0 {
-			if last := out.Bytes()[out.Len()-1]; last != '{' && last != '[' && last != ':' {
-				out.WriteByte(',')
-			}
-		}
-	}
-	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			return out.Bytes()
-		}
-		if err != nil {
-			return b
-		}
-		switch v := tok.(type) {
-		case json.Delim:
-			switch v {
-			case '{', '[':
-				sep()
-				out.WriteByte(byte(v))
-				stack = append(stack, level{object: v == '{', key: v == '{'})
-				continue
-			default:
-				out.WriteByte(byte(v))
-				stack = stack[:len(stack)-1]
-			}
-		case string:
-			sep()
-			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
-				out.Write(marshal(v))
-				out.WriteByte(':')
-				stack[n-1].key = false
-				continue
-			}
-			out.Write(marshal(scrub(v)))
-		case json.Number:
-			sep()
-			out.WriteString(v.String())
-		default: // bool, nil
-			sep()
-			out.Write(marshal(v))
-		}
-		if n := len(stack); n > 0 && stack[n-1].object {
-			stack[n-1].key = true
-		}
-	}
 }
 
 // marshal is v as JSON, with & < > as they are (a query, a path).
@@ -312,7 +253,7 @@ func conclude(err error) int {
 			if err != nil {
 				level, msg = lvError, err.Error()
 			}
-			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, scrub(o.Message)}))
+			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Message}))
 		}
 		return o.ExitCode
 	}
@@ -321,9 +262,9 @@ func conclude(err error) int {
 	}
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
-		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", scrubValues(b)))
+		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
 	}
-	noteFinal(errOut, "swath: "+scrub(err.Error())+"\n")
+	noteFinal(errOut, "swath: "+err.Error()+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
 		noteFinal(errOut, sh.see()+"\n")
