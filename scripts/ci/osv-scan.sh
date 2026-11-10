@@ -3,7 +3,7 @@
 # (Dockerfile.go): the scanner reads the Go version and module list embedded in each binary,
 # and the OS packages of the image's base. Image findings are written as raw JSON and passed to
 # the checked-in policy in osv-image-policy.py. A directory target scans the jars in it (a Java
-# application distribution's `lib/`, its resolved closure) against the argued Java exceptions
+# application distribution's `lib/`, its resolved closure) against the argued exceptions
 # in config/osv/osv-scanner.toml; `--no-ignore` is required because `lib/` lives under build/,
 # which .gitignore excludes and the scanner honors by default.
 #
@@ -45,7 +45,7 @@ for target in "$@"; do
             # `scan image` reads the image's OS package database and the language artifacts
             # inside it, here the Go binaries' embedded module lists.
             # Keep unfiltered scanner output as an audit artifact. The policy reads the
-            # Java-only exception file itself, so OS-package findings cannot be hidden in it.
+            # exception file itself, so OS-package findings cannot be hidden in it.
             mkdir -p "$REPORT_DIR"
             image_name="${target#image:}"
             report_name="${image_name//\//_}"

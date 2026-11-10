@@ -121,7 +121,7 @@ jobs:
   #
   # The checked-in image policy fails every advisory that is neither an Ubuntu package's
   # (the images have none) nor an argued exception in config/osv/osv-scanner.toml, which lists
-  # Java findings only. See scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
+  # Java and Go findings. See scripts/ci/osv-scan.sh and scripts/ci/osv-image-policy.py.
   osv-scan:
     if: github.event_name == 'schedule' || inputs.jobs == 'all' || inputs.jobs == 'osv-scan'
     runs-on: ubuntu-latest
