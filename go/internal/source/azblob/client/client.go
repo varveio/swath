@@ -48,9 +48,11 @@ import (
 )
 
 // Version is the service version every request names (x-ms-version):
-// the newer of the two the live account and the replay answer, which
-// behave the same for listing.
-const Version = "2026-10-06"
+// the oldest with the Arrow listing format (and endBefore), which the live
+// service, swath-replay and Azurite 3.37 all answer. Azurite refuses
+// 2026-10-06; the live service lists the same pages at both
+// (byte-identical Arrow, checked 2026-11-10).
+const Version = "2026-06-06"
 
 // storageScope is the Entra ID scope of Azure Storage.
 const storageScope = "https://storage.azure.com/.default"

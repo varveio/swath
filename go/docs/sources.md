@@ -156,7 +156,7 @@ source is shown as `?sig=[redacted]`, and a resume needs the SAS again, by `--az
 exit 2, naming the parameter, before any request.
 
 **Endpoint.** `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net`, and the account is then
-its first path segment (Azurite: `--endpoint-url http://127.0.0.1:10000`).
+its first path segment (Azurite: `--endpoint-url http://127.0.0.1:10000 --azure-assume-flat`; Azurite does not report whether a namespace is hierarchical).
 
 **Order.** Azure lists names in UTF-16 order, which differs from byte order for some names at U+E000 and
 above (fullwidth forms, emoji). swath reorders them, so an Azure listing is in byte order like every other

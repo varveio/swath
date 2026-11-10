@@ -5,7 +5,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == anonymous: flat, every option
 GET https://acct.blob.core.windows.net/c
@@ -18,7 +18,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == anonymous: hierarchy
 GET https://acct.blob.core.windows.net/c
@@ -28,7 +28,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == anonymous: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
@@ -42,7 +42,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == anonymous: account information
 GET https://acct.blob.core.windows.net/c
@@ -50,13 +50,13 @@ GET https://acct.blob.core.windows.net/c
   query restype=account
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == anonymous: filesystem properties
 HEAD https://acct.dfs.core.windows.net/c
   query resource=filesystem
   header User-Agent: <swath>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: flat
 GET https://acct.blob.core.windows.net/c
@@ -71,7 +71,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: flat, every option
 GET https://acct.blob.core.windows.net/c
@@ -90,7 +90,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: hierarchy
 GET https://acct.blob.core.windows.net/c
@@ -106,7 +106,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
@@ -126,7 +126,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept: application/vnd.apache.arrow.stream,application/xml
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: account information
 GET https://acct.blob.core.windows.net/c
@@ -140,7 +140,7 @@ GET https://acct.blob.core.windows.net/c
   query sv=2026-10-06
   header Accept-Encoding: gzip
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == SAS: filesystem properties
 HEAD https://acct.dfs.core.windows.net/c
@@ -152,7 +152,7 @@ HEAD https://acct.dfs.core.windows.net/c
   query se=2026-12-01T00%3A00%3A00Z
   query sig=TopSecretSig%2Bpart%3D
   header User-Agent: <swath>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Shared Key: flat
 GET https://acct.blob.core.windows.net/c
@@ -163,7 +163,7 @@ GET https://acct.blob.core.windows.net/c
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Date: <date>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Shared Key: flat, every option
 GET https://acct.blob.core.windows.net/c
@@ -178,7 +178,7 @@ GET https://acct.blob.core.windows.net/c
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Date: <date>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Shared Key: hierarchy
 GET https://acct.blob.core.windows.net/c
@@ -190,7 +190,7 @@ GET https://acct.blob.core.windows.net/c
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Date: <date>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Shared Key: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
@@ -206,7 +206,7 @@ GET https://acct.blob.core.windows.net/c
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Date: <date>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Shared Key: account information
 GET https://acct.blob.core.windows.net/c
@@ -216,7 +216,7 @@ GET https://acct.blob.core.windows.net/c
   header Authorization: SharedKey acct:<signature>
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
   header X-Ms-Date: <date>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: flat
 GET https://acct.blob.core.windows.net/c
@@ -226,7 +226,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: flat, every option
 GET https://acct.blob.core.windows.net/c
@@ -240,7 +240,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: hierarchy
 GET https://acct.blob.core.windows.net/c
@@ -251,7 +251,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: hierarchy, every option
 GET https://acct.blob.core.windows.net/c
@@ -266,7 +266,7 @@ GET https://acct.blob.core.windows.net/c
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: account information
 GET https://acct.blob.core.windows.net/c
@@ -275,12 +275,12 @@ GET https://acct.blob.core.windows.net/c
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
   header User-Agent: <swath> azsdk-go-azblob/<version> (<platform>)
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
 == Entra ID: filesystem properties
 HEAD https://acct.dfs.core.windows.net/c
   query resource=filesystem
   header Authorization: Bearer tok
   header User-Agent: <swath>
-  header X-Ms-Version: 2026-10-06
+  header X-Ms-Version: 2026-06-06
   body 0 bytes
