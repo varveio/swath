@@ -65,6 +65,8 @@ func TestParseLocationDiagnostic(t *testing.T) {
 		{"https://host/p?sig=SECRET", "[redacted]"},
 		{"s3://UPPER/p", "s3://UPPER/p"},
 		{"s3://UPPER/team@home", "s3://UPPER/team@home"},
+		{"s3:/user:SECRET@bkt", "[redacted]"},
+		{"s3:/bkt/p", "s3:/bkt/p"},
 		{"https://host/p", "https://host/p"},
 	} {
 		_, err := objfile.ParseLocation(c.raw)
