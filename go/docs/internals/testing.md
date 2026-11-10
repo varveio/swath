@@ -390,6 +390,7 @@ only the two named.
 | `SWATH_MINIO_ENDPOINT`, `SWATH_CORPUS_ENDPOINT` | the durable spill campaign | `cmd/swath` | never |
 | `SWATH_GROWTH=1` | the 10,000-part arm of `TestPartCountGrowth` | `internal/listing` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/listing` | never |
+| `SWATH_READER_BENCH_DIR=DIR`, `SWATH_READER_BENCH_ROWS=N`, `SWATH_READER_FIXTURE_OUT=DIR` | the reader benchmarks' dataset; `TestWriteBenchFixture` ([reader benchmarks](#reader-benchmarks)) | `reader` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/listing` | never |
 | `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `cmd/swath/testdata`, `docs/internals/counters.md`, the report schema | `cmd/swath`, `internal/source/s3`, `internal/listing` | never; the comparisons run in the default suite |
 | `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |
@@ -961,6 +962,53 @@ machine are not comparable): download the `go-shapes-summary` artifact and commi
 pull request, from a run of its branch (`gh workflow run nightly.yml --ref BRANCH -f jobs=go-shapes`), and says
 which numbers moved and why. A change that moves a number unintentionally is a regression to fix, not a
 baseline to update.
+
+## Reader benchmarks
+
+The reader's Scan and Stream are measured over a generated `swath/s3-objects/v1` fixture (`go/reader`
+`fixture_test.go`): `writeFixture` streams rows through `local.WriteDir` one 1,024-row batch at a time, so its
+memory is that batch and the part being written whatever the row count, with the lister's Parquet schema
+(`internal/parquetout` `nodeOf` over the S3 schema: key and etag DELTA_BYTE_ARRAY, the other strings
+dictionary then PLAIN, the integers DELTA_BINARY_PACKED) and geometry (1,024-row pages, 8 MiB or 1,000,000-row
+row groups, ZSTD, 128 MiB parts). Its keys are a date-partitioned tree (`top/yyyy/mm/dd/shard=NNN/part-…`, about
+93 bytes, 51 to 117), one directory in eight opening with a folder object; sizes log-normal; ETags random hex,
+5 % multipart; five storage classes, 0.5 % null; checksums on the last 40 %; owner columns null. Nothing is
+committed: the fixture is generated in the test or into a directory. 4,000,000 rows are 20 row groups of 158,000
+to 203,000 rows in 2 parts, 42 bytes a row on disk, written in about 8 s at about 250 MiB resident.
+
+**Default suite.** `TestFixtureFooter` checks a 5,000-row fixture's footer encodings and codecs and reads it back
+in order, its nulls and folder objects present. `TestScanAllocations` holds Scan (Workers 1) and Stream, warm,
+over a 20,000-row fixture to an allocation budget per object (`testing.AllocsPerRun`, deterministic, the same
+under `-race`): `scanAllocBudget` and `streamAllocBudget`, set at about 1.5 times the reader's count before
+the batch-scan work and lowered as allocations are removed. Both run in `go-reader` with the rest of the module.
+
+**Benchmark target.** `BenchmarkReader*` (`bench_test.go`) is the non-race performance tier, run by hand:
+
+| Benchmark | Measures |
+|---|---|
+| `BenchmarkReaderScan/workers={1,4,8}/{noop,touch}/warm`, `…/noop/fresh` | Scan of the whole dataset end to end (plan, Split, scan) at GOMAXPROCS unchanged; `touch` reads each object's key, size, modification time and storage class; `warm` reuses a Dataset that has scanned once untimed, `fresh` opens one inside the timed operation |
+| `BenchmarkReaderStream/{noop,touch}/warm` | Stream, ordered and owning |
+| `BenchmarkReaderPlan/workers={1,4,8,18}/{warm,fresh}` | PlanRanges and Split alone (the setup Scan begins with), and the shards Split made |
+
+Each reports `ns/row`, `allocs/row` and `B/row` (`runtime.MemStats` over the timed loop, every goroutine),
+`gc/op`, and `peak-heap-MiB`, the live heap's peak sampled every millisecond. The dataset is
+`SWATH_READER_BENCH_DIR` (any s3-objects/v1 dataset), else a fixture of `SWATH_READER_BENCH_ROWS` rows
+(default 4,000,000) generated once per process before timing and removed at exit. `TestWriteBenchFixture`
+writes one to keep with `SWATH_READER_FIXTURE_OUT=DIR`:
+
+```bash
+cd go/reader
+SWATH_READER_FIXTURE_OUT=/tmp/fx4m go test -count=1 -run '^TestWriteBenchFixture$' -v .
+SWATH_READER_BENCH_DIR=/tmp/fx4m go test -run '^$' -bench '^BenchmarkReader' -benchtime 3x -count 5 -p 1 . | tee new.txt
+benchstat old.txt new.txt
+```
+
+On a shared host run it through the gates lock (`flock /tmp/swath-gates.lock`), and label every number with
+the revision and the host's load. No CI job runs it yet. As a job it would be: non-race, on a fixed runner
+type, generating the 4,000,000-row fixture outside the timed loop, `-count 5`, retaining the `go test -json`
+output as an artifact and comparing it with a committed baseline from the same runner type; `allocs/row` and
+`B/row` over budget would fail it, timing would only annotate, as the [shape suite](#shape-suite)'s does
+until its baseline holds. The local baseline is in [measurements.md](measurements.md#reader-scan-and-stream-baseline-2026-11-10).
 
 ## Measurements
 

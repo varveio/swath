@@ -1385,6 +1385,62 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - EIO beyond ENOSPC (no fault-injecting filesystem); power-loss ordering.
 - Cold-cache medians of the local walker; `readlink` cost (80 symlinks in `realistic`).
 
+## Reader Scan and Stream baseline, 2026-11-10
+
+The reader before the batch-scan work (`go/reader` at `5220c636` plus the benchmarks alone), so later changes
+compare against it: `BenchmarkReader*` ([testing.md](testing.md#reader-benchmarks)), non-race, `-p 1`, through
+`flock /tmp/swath-gates.lock`, on a shared 4-vCPU Xeon Platinum 8581C (2.30 GHz) with 7 GiB RAM and other
+builds running, GOMAXPROCS 4, Go 1.26.10. **A local baseline, not the acceptance measurement** (18-core arm64):
+times move with the host's load, which is given per table; allocations and bytes per row do not. Scan is end to
+end (plan, Split, scan); `warm` reuses a Dataset that has scanned once, `fresh` opens one per operation.
+
+**Generated fixture** (`writeFixture`, 4,000,000 rows, seed 1): 2 parts, 20 row groups of 157,952 to 202,752
+rows, 42.0 bytes a row on disk, keys 93.5 bytes (51 to 117). `-benchtime 3x`; load average 0.7 at the start,
+7.8 at the end (other builds started during the Stream arms, so the Stream rows and the later Scan rows are
+the least reliable):
+
+| Arm | ns/row | allocs/row | B/row | GC/op | peak heap MiB |
+|---|---:|---:|---:|---:|---:|
+| Scan workers=1 noop warm | 1,265 | 13.06 | 1,411 | 1,553 | 16.5 |
+| Scan workers=1 noop fresh | 1,155 | 13.06 | 1,413 | 1,892 | 11.1 |
+| Scan workers=1 touch warm | 1,156 | 13.06 | 1,411 | 1,646 | 11.6 |
+| Scan workers=4 noop warm | 901 | 13.06 | 1,409 | 539 | 41.7 |
+| Scan workers=4 noop fresh | 894 | 13.06 | 1,410 | 600 | 63.6 |
+| Scan workers=4 touch warm | 615 | 13.06 | 1,409 | 610 | 31.9 |
+| Scan workers=8 noop warm | 610 | 13.05 | 1,409 | 417 | 54.8 |
+| Scan workers=8 noop fresh | 600 | 13.06 | 1,410 | 433 | 46.9 |
+| Scan workers=8 touch warm | 627 | 13.05 | 1,408 | 421 | 50.1 |
+| Stream noop warm | 3,331 | 13.17 | 2,510 | 3,371 | 21.6 |
+| Stream touch warm | 5,394 | 13.17 | 2,510 | 2,741 | 23.4 |
+
+Planning and splitting alone (`BenchmarkReaderPlan`, warm / fresh): 4.0 / 5.1 ms at 1 shard, 5.6 / 7.1 ms at 8,
+10.7 / 14.8 ms at 18 shards (18 made); about 830 / 3,700 allocations an operation: under 1 % of a scan.
+
+**nara** (the SeekParquet conversion of the NARA census listing, 13,540,310 rows, 4 parts, 40 row groups of
+7,537 to 375,700 rows, 24.0 bytes a row on disk, keys 90.2 bytes): `-benchtime 1x`, load average 7.5 to 7.7
+throughout (other builds on every core), so its times are inflated against the fixture's:
+
+| Arm | ns/row | allocs/row | B/row | GC/op | peak heap MiB |
+|---|---:|---:|---:|---:|---:|
+| Scan workers=1 noop warm | 3,306 | 13.07 | 1,328 | 1,744 | 33.7 |
+| Scan workers=1 noop fresh | 3,481 | 13.07 | 1,329 | 2,237 | 29.2 |
+| Scan workers=1 touch warm | 2,393 | 13.07 | 1,327 | 1,677 | 34.8 |
+| Scan workers=4 noop warm | 1,810 | 13.07 | 1,326 | 968 | 50.8 |
+| Scan workers=4 noop fresh | 1,971 | 13.07 | 1,327 | 1,147 | 52.8 |
+| Scan workers=4 touch warm | 1,775 | 13.07 | 1,326 | 972 | 53.3 |
+| Scan workers=8 noop warm | 1,759 | 13.07 | 1,326 | 739 | 72.4 |
+| Scan workers=8 noop fresh | 1,692 | 13.07 | 1,327 | 781 | 83.6 |
+| Scan workers=8 touch warm | 1,587 | 13.07 | 1,326 | 718 | 71.5 |
+| Stream noop warm | 4,476 | 13.28 | 3,861 | 7,699 | 57.3 |
+
+Planning and splitting on nara: 17.6 / 18.5 ms at 1 shard, 22.3 / 32.3 ms at 18. The blockchain conversion
+was not run.
+
+What holds across both, independent of load: every object costs about 13 allocations and 1.3 to 1.4 KB
+allocated in Scan, whatever the workers or callback; Stream allocates as often and about twice the bytes
+(2.5 to 3.9 KB). The default suite's `TestScanAllocations` holds the 20,000-row fixture's 13.1 (Scan) and 13.2
+(Stream) under a budget of 20.
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through
