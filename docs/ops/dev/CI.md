@@ -17,7 +17,7 @@ runners are owned elsewhere and are only summarized here:
 | --- | --- | --- |
 | [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check, `ci-gate` |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
-| [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | rebuild and retest the Java distribution at the tag, then publish, sign and attest |
+| [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
 | [`go-stress.yml`](../../../.github/workflows/go-stress.yml) | dispatch only | repeat one Go test or pattern N times on a chosen runner |
 
@@ -28,10 +28,13 @@ tag must not be published. `site.yml` keeps its checks and its deploy in one fil
 gate is the file itself, not a branch rule someone has to remember. `go-stress.yml` is a tool, not a
 gate: it exists so a suspected flake is measured by repetition instead of being retried until green.
 
-`release.yml` does not trust the `ci.yml` run of the tagged commit. It verifies that the tag is
-an ancestor of `main`, reruns the fast, integration and deep tiers on the tag's SHA, builds once,
-pushes the image by digest, smokes that digest, and only then applies tags and signs. It builds and
-publishes the Java distribution only; no Go job runs there.
+`release.yml` ships the Go implementation; no Java job runs there. It does not trust the `ci.yml`
+run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
+passed `ci.yml` to reach `main`. It verifies that the tag is an ancestor of `main`, reruns `go vet`
+and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
+binaries once into the release archives, builds both images from those archived binaries, pushes
+them by digest, smokes the digests, and only then applies tags and signs.
+[`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
 ## Registry and artifacts
 
@@ -129,7 +132,7 @@ again.
 Deep runs off pull requests. Its tests are schedule-sensitive probe budgets and latency-injecting
 retry and throttle tests that are slow and flaky under contention, so they would block unrelated
 pull requests. The invariants they guard are pinned on every pull request by fast deterministic
-smokes; deep is the timing-realistic confirmation on `main`, nightly and at release. A tag-filtered
+smokes; deep is the timing-realistic confirmation on `main` and nightly. A tag-filtered
 tier that matches nothing reports green, so `scripts/ci/report-test-counts.sh` fails the step when
 the tier ran no test.
 
@@ -270,7 +273,8 @@ generation under this layout is to be measured on the first `main` pushes and re
 ### Other caches
 
 - **Gradle:** `gradle/actions/setup-gradle` with its defaults in `ci.yml` and `nightly.yml`.
-  `release.yml` disables it and builds the tag from a cold cache.
+- **Release:** `release.yml` restores no cache: it sets up Go with `actions/setup-go` directly, its
+  cache off, and builds and tests the tag cold.
 - **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-go`,
   written from `main` only (`docker-check` and `go-build` on a push). A pull request reads
   them and writes nothing: a cache written on a pull request is scoped to that pull request's

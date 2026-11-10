@@ -41,6 +41,42 @@ with GCS).
 build recorded one (`-dirty` if the tree was modified). Every report carries the same in `build`. Keep the
 revision with any run you may need to investigate.
 
+### Release downloads and images
+
+From 0.4 each [GitHub release](https://github.com/varveio/swath/releases) carries one archive per target,
+`swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-arm64.tar.gz` and `-windows-amd64.zip`, each
+holding `swath`, `swath-replay`, `LICENSE` and `NOTICE` in a `swath-X.Y.Z-OS-ARCH/` directory, built as above
+with the release's version and commit stamped; an SPDX SBOM; and `SHA256SUMS`, signed. Verify before running
+([RELEASING.md](../../RELEASING.md#verifying-a-release) has the cosign and attestation commands):
+
+```bash
+tar -xzf swath-X.Y.Z-linux-amd64.tar.gz
+sha256sum --check --ignore-missing SHA256SUMS
+./swath-X.Y.Z-linux-amd64/swath --version    # swath-go X.Y.Z (REVISION)
+```
+
+The same release publishes multi-arch (linux/amd64, linux/arm64) images, built from `Dockerfile.go` with the
+archives' linux binaries:
+
+| Image | Entrypoint | Base |
+|---|---|---|
+| `ghcr.io/varveio/swath` | `/opt/swath/swath` | distroless static (CA certificates for HTTPS, zone data); no shell |
+| `ghcr.io/varveio/swath-replay` | `/opt/swath-replay/swath-replay` ([replay.md](replay.md#container-image)) | `scratch` |
+
+Tags are `X.Y.Z`, `X.Y` and `latest` (and `X` from 1.0); a release candidate publishes only `X.Y.Z-rc.N`. Pin
+the digest for anything that must not move. Both run as `10001:10001` with no home directory, so mount a
+directory that user can write for `-o`, and pass credentials through the environment (or mount a file and
+point the provider's variable at it, such as `AWS_SHARED_CREDENTIALS_FILE`):
+
+```bash
+docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:X.Y.Z \
+  list s3://bucket/prefix/ --anonymous --region us-east-1 -o /out/inventory
+```
+
+`docker build -f Dockerfile.go -t swath:dev .` builds the lister image from a checkout (`--target swath-replay`
+for the replay server); `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the context
+carries no `.git`.
+
 ## Credentials
 
 Use the provider's supported credential sources; do not put secrets in shell history.

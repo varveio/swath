@@ -18,6 +18,8 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
+| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `go/reader`; the four targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
+| Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
@@ -28,14 +30,13 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
-| Java fast tier | unit, property and concurrency tests, instrumentation drift, license gate | PR, main, dispatch; Java change. Release | ubuntu-latest | `ci.yml` `fast-tests`; `release.yml` `fast-tests` |
-| Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change. Release | ubuntu-latest | `ci.yml` `integration-tests`; `release.yml` `integration-tests` |
-| Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly. Release | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf`; `release.yml` `deep-tests` |
+| Java fast tier | unit, property and concurrency tests, instrumentation drift, license gate | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `fast-tests` |
+| Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `integration-tests` |
+| Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf` |
 | Java perf tier | PERF-1, PERF-2, SORT-PERF | nightly; dispatch `jobs=all` or `deep-and-perf` | ubuntu-latest | `nightly.yml` `deep-and-perf` |
 | Java image check | both Java images build for 2 architectures and start offline; nothing is pushed | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `docker-check` |
-| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | release, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | OSV scan | Java jar closures and images against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
-| Release guards | tag SHA and ancestry (`source`), version and release notes (`fast-tests`), assets and signatures (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `fast-tests`, `publish` |
+| Release guards | tag SHA and ancestry, the version's form and the release notes (`source`); the exact asset set, archives, signatures and attestations (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
 | CodeQL (external check) | static analysis; languages and schedule are repository settings | as the setting says (on 2026-11-08: PR, push to `main`, weekly) | GitHub-hosted | code-scanning default setup, not configured in this repository (`gh api repos/varveio/swath/code-scanning/default-setup`); not in `ci-gate` |
 | CodeRabbit (external check) | review comments | pull requests, by the installed app | CodeRabbit | not configured in this repository (no `.coderabbit.yaml`); not in `ci-gate` |
@@ -268,11 +269,16 @@ before and after the change when it fixes a flake, as #300 does.
 
 ### Release
 
-`release.yml` runs on a `v*` tag and is Java-only: `source` (release guard self-tests, tag SHA and `main`
-ancestry), `fast-tests` (`./gradlew verifyReleaseVersion build -PnoIntegration ...` and the license gate),
-`integration-tests`, `deep-tests`, then `publish` (images smoked by digest, assets signed and verified), which runs
-only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`. It
-builds and tests nothing under `go/`; the Go release pipeline is #284.
+`release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
+`main` ancestry, the version read from the tag, the release notes), then side by side `go-tests` (`go vet ./...`
+and `go test -race -count=1 -timeout 40m ./...` unsharded on amd64, then `go vet` and the race tests of
+`go/reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
+build`: `build.sh` for the four targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
+`--version` exactly the tag's version and commit; the archives, an SBOM, `SHA256SUMS`), then `publish` (both
+`Dockerfile.go` images from the archived binaries, smoked by digest, assets and images signed, attested and
+verified), which runs only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`.
+It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: the tag's commit passed them
+to reach `main` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
 ## Flakes
 
