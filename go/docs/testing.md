@@ -251,7 +251,7 @@ There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in C
 [go-licenses](https://github.com/google/go-licenses) (version pinned in the script) over `./cmd/swath` and
 `./cmd/swath-replay` for linux, darwin and windows. It fails when a linked module's license is not recognized
 or is not on its allow-list (the Java build's `config/license/allowed-licenses.json` as SPDX identifiers:
-Apache-2.0, MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
+Apache-2.0, MIT, MIT-0, ISC, BSD-2-Clause, BSD-3-Clause, EPL, CDDL, CC0; no GPL, LGPL or AGPL), or when the three
 targets link different modules. It then writes `THIRD_PARTY_NOTICES`: the module inventory, each module's
 license text, and the Go distribution's license. `Dockerfile.go`'s build stage runs it, so `go-build` gates
 every Go change on it and both images carry the file in `/licenses/`; `release-assets.sh build` runs it, so

@@ -4,7 +4,8 @@
 # First a license gate: every module linked into either command must carry a license that
 # go-licenses classifies and that ALLOWED_LICENSES names, or the script fails. The list is the
 # Java build's allow-list (config/license/allowed-licenses.json) as SPDX identifiers: permissive
-# licenses plus the weak-copyleft EPL and CDDL, no GPL, LGPL or AGPL. Then the notices: an
+# licenses (plus ISC, MIT-equivalent and common among Go modules) and the weak-copyleft EPL and
+# CDDL, no GPL, LGPL or AGPL. Then the notices: an
 # inventory of the linked modules and each one's license text, and the Go distribution's own
 # license, since its runtime and standard library are linked into every binary.
 #
@@ -16,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 GO_LICENSES_VERSION=v2.0.1
-ALLOWED_LICENSES=Apache-2.0,MIT,MIT-0,BSD-2-Clause,BSD-3-Clause,EPL-1.0,EPL-2.0,CDDL-1.0,CDDL-1.1,CC0-1.0
+ALLOWED_LICENSES=Apache-2.0,MIT,MIT-0,ISC,BSD-2-Clause,BSD-3-Clause,EPL-1.0,EPL-2.0,CDDL-1.0,CDDL-1.1,CC0-1.0
 FIRST_PARTY=github.com/varveio/swath/go
 COMMANDS=(./cmd/swath ./cmd/swath-replay)
 GOOSES=(linux darwin windows)
