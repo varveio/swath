@@ -1682,6 +1682,22 @@ over the run (`/usr/bin/time -v`) was 147 MB with the index and 97 MB without. `
 excludes the build, read 879 ms with the index and 157 ms without in the first pair, and 201, 179 and 194 ms
 (on, off, on) in three later starts: the 879 ms was a one-off.
 
+## Go and Java replay servers on converted fixtures (#352), 2026-11-??
+
+**Placeholder: filled from the GCP Batch run of
+[`bench/replay/java-compare.sh`](../../bench/replay/java-compare.sh) before #352 closes; nothing here is
+measured yet.** The run serves the Java replay server each Java-era fixture and the Go server its footer-only
+SeekParquet conversion (the list index on, the default). It will record: the machine, the swath commit and the
+converter commit; each conversion's input and output SHA-256, shared data bytes and `seekparquet validate`
+result; `replaydiff` on the S3, GCS and Azure routes for synthetic-10k, synthetic-1m sorted and rolled and
+evidence-gcs, with only the accepted deviations of [replay-java.md](replay-java.md); a full `swath list` through
+each server and `bench/diffds.py` on every fixture pair, NARA, FourCast and blockchain included; and each
+server's exec-to-healthy time and RSS at readiness per fixture, with the listing's peak RSS (VmHWM) apart. The starts
+are fresh processes with the OS page cache not dropped (cache-uncontrolled, generally warm: the fixtures were
+just written, converted and read), Java's starts before Go's for each fixture. evidence-azure is not in the comparison (the Java sort-fixture
+refuses its names). Capacity is the s3-listing-study replay qualification's (varveio/s3-listing-study#37), not
+measured again here.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's

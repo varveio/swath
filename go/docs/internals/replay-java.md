@@ -206,9 +206,16 @@ go build -o /tmp/replaydiff ./bench/replaydiff
   1,558, walks 285 with `-walk-limit 300`, random 500) with no difference; with the Go server on the native
   dataset (`-go-fixture`) and `-gcs-mask-metadata`, every name, size, time, prefix, status and page boundary
   agreed, and the only differences were the page tokens' bytes (453 pages; each token is bound to its fixture's
-  identity) and the 8 token cases that send the Java server's token to the Go server, which refuses a token of
+  identity) and the 8 token cases that sent the Java server's token to the Go server, which refuses a token of
   another fixture (`invalid_page_token`). `-gcs-mask-metadata` masks `timeCreated` with the other metadata,
-  since the Java server lists no creation time.
+  since the Java server lists no creation time. That run predates the driver's different-fixture mode: with
+  `-go-fixture` the tokens are now compared by effect and the token cases resume each server from its own token,
+  with foreign-token cases that require both servers to refuse the other's token
+  ([the internals page](replay.md#the-gcs-driver-and-the-evidence-replay)).
+- **Different fixtures on the two sides.** The comparison that retires the Java server (#352) serves the Java
+  server a Java-era fixture and the Go server its footer-only SeekParquet conversion, with `-go-fixture`. The S3
+  route needs nothing more (its tokens bind no fixture); the GCS route compares tokens by effect (above); the
+  Azure route compares markers by effect on every run.
 
 ## The conformance suite and the evidence
 
@@ -305,6 +312,19 @@ on both, and nothing in the Go server needed a change for them. `bench/replayloa
   `bench/replay/make-fixtures.sh` sorts the synthetic and evidence captures with the Java `sort-fixture`, and
   the store's fixture tier (`TestJavaWrittenFixtures`) compares each fixture's identity with the Java server's.
   The Azure evidence replay sorts the Java-written `evidence-azure/capture` itself.
+- `bench/replay/java-compare.sh OUT` is the comparison of #352 as one script: it builds the Java distribution,
+  the Go binaries and the footer-only converter (`bench/replay/adoptfixture`, archived at `cd453c59` on
+  `archive/replay-adopt-fixture`, never merged: it imports the legacy reader), writes the make-fixtures fixtures,
+  fetches the study's NARA, FourCast and blockchain Java-era fixtures (their digests checked), converts each
+  fixture and checks every part (input and output SHA-256 against the manifest; the bytes before each footer,
+  located from each file's own Parquet trailer, of equal extent and byte-identical; `seekparquet validate
+  --level full`), runs `replaydiff` on the S3, GCS and Azure routes over the make-fixtures fixtures (the Java
+  server on the Java-era fixture, the Go server with `-go-fixture` on its conversion), lists every fixture in full
+  through each server and compares the two datasets with `bench/diffds.py`, and records each server's start (exec
+  to a 200 from `/healthz`, and RSS then; cache-uncontrolled, generally warm, Java before Go) with the Go list
+  index on. It stops at the first unexplained difference, and passes only with every expected receipt present.
+  The results are in [measurements.md](measurements.md) ("Go and Java replay servers on converted fixtures").
+  It goes with the Java server.
 - `scripts/ci/smoke-replay-container.sh IMAGE FIXTURE` without the third argument, or with `duckdb`, smokes the
   Java replay image; with `sorted` it smokes the Go image ([the user page](swath-replay.md#container-image)). A
   dataset the Java lister wrote without `--sort` is one the Go smoke sorts first.

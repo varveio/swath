@@ -82,7 +82,8 @@ func main() {
 	flag.StringVar(&o.java, "java", "", "the Java swath-replay launcher (JAVA_HOME from the environment)")
 	flag.StringVar(&o.goBin, "go", "", "the Go swath-replay binary")
 	flag.StringVar(&o.fixture, "fixture", "", "the fixture both servers serve")
-	flag.StringVar(&o.goFixture, "go-fixture", "", "a different fixture path for the Go server (e.g. a .tsv dump of the same listing)")
+	flag.StringVar(&o.goFixture, "go-fixture", "", "a different fixture of the same rows for the Go server (a .tsv dump, a SeekParquet conversion); "+
+		"gcs then compares page tokens by effect, each bound to its own fixture")
 	flag.StringVar(&o.protocol, "protocol", "s3", "the route to compare: s3, gcs (both servers get --protocols gcs) or azure (both get --protocols s3,azure)")
 	flag.StringVar(&o.bucket, "bucket", "bucket", "the bucket name")
 	flag.StringVar(&o.javaArgs, "java-args", "--parquet-connections 2", "extra serve flags for the Java server")
@@ -320,6 +321,11 @@ type report struct {
 	// page tokens differ in bytes: a wire difference, reported apart
 	// from the walk's verdict.
 	TokenBytes []string `json:"token_byte_differences,omitempty"`
+	// TokenEffectOnly counts the answers that agree once each GCS page
+	// token or Azure marker is read for its effect, not byte for byte: the
+	// servers serve different fixtures (-go-fixture), and each token or
+	// marker is bound to its own fixture's identity.
+	TokenEffectOnly int `json:"token_effect_only,omitempty"`
 	// Divergences are the requests the Go S3 route answers as live S3
 	// does and the Java server does not (s3_divergences.go): compared on
 	// the Go side, listed with what each server answered.
@@ -448,6 +454,10 @@ type driver struct {
 	mu        sync.Mutex
 	rep       *report
 	refTokens sync.Map // request name -> its reference answer's next token
+	// gotTokens is refTokens for the Go server's answers (the GCS route,
+	// whose token cases resume each server from its own token when the
+	// fixtures differ).
+	gotTokens sync.Map
 	// tokenNames are the names already listed in TokenBytes.
 	tokenNames map[string]bool
 	// countPasses keeps passing results out of the report's list (they
@@ -861,6 +871,9 @@ func (d *driver) summary() []byte {
 	}
 	for _, s := range rep.TokenBytes {
 		fmt.Fprintf(&text, "TOKEN BYTES DIFFER %s\n", s)
+	}
+	if rep.TokenEffectOnly > 0 {
+		fmt.Fprintf(&text, "%d answers agree by token or marker effect only (each is bound to its own fixture)\n", rep.TokenEffectOnly)
 	}
 	for _, s := range rep.Residuals {
 		fmt.Fprintf(&text, "DOCUMENTED RESIDUAL %s\n", s)
