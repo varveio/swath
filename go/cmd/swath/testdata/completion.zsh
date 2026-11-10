@@ -184,7 +184,6 @@ _swath_diag_list() {
         '--no-seed[start from one range, without the delimiter-listing seed]' \
         '--structure=[probes whose folder boundaries splits pivot on]:value:(auto on off)' \
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
-        '--floors[never split a range of 4 pages or fewer, nor leave a child under 2]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
@@ -257,7 +256,6 @@ _swath_diag_count() {
         '--no-seed[start from one range, without the delimiter-listing seed]' \
         '--structure=[probes whose folder boundaries splits pivot on]:value:(auto on off)' \
         '--slow-split[split a range whose pages are slow without waiting for an idle worker]' \
-        '--floors[never split a range of 4 pages or fewer, nor leave a child under 2]' \
         '--sequential[list with one continuation-token chain (no ranges; the reference)]' \
         '--max-keys=[with --sequential, stop after N objects (marked incomplete)]:N: ' \
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \

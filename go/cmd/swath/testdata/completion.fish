@@ -124,7 +124,6 @@ complete -c swath -n '__swath_cmd "diag list" "diag count" "resume"' -l adaptive
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l no-seed -d 'start from one range, without the delimiter-listing seed'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l structure -x -a 'auto on off' -d 'probes whose folder boundaries splits pivot on'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l slow-split -d 'split a range whose pages are slow without waiting for an idle worker'
-complete -c swath -n '__swath_cmd "diag list" "diag count"' -l floors -d 'never split a range of 4 pages or fewer, nor leave a child under 2'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l sequential -d 'list with one continuation-token chain (no ranges; the reference)'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l max-keys -x -d 'with --sequential, stop after N objects (marked incomplete)'
 complete -c swath -n '__swath_cmd "diag list" "diag count"' -l page-size -x -d 'ask for pages of N entries (1 to 1000; default the provider\'s)'

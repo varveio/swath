@@ -149,7 +149,7 @@ func TestByteOrderIsAPrerequisite(t *testing.T) {
 }
 
 // TestPageSize: one configured page size feeds the data and seed requests
-// and the floors. At page sizes 1, 7, 1,000 and 5,000, with full and
+// alike. At page sizes 1, 7, 1,000 and 5,000, with full and
 // short continuing pages, every configuration lists the keyspace exactly;
 // the sequential chain asks ceil(n / page) requests on full pages, and no
 // request asks for more than the page size.
@@ -162,7 +162,7 @@ func TestPageSize(t *testing.T) {
 			for i, opt := range []Options{
 				{Sequential: true},
 				{Workers: 8},
-				{Workers: 8, Seed: true, Floors: true, Structure: StructureOn},
+				{Workers: 8, Seed: true, Structure: StructureOn},
 				{Workers: 8, Seed: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)

@@ -120,8 +120,6 @@ const (
 	cBusyNs
 	cSinkWaitNs
 	cRequeues
-	cSkippedRemainingFloor
-	cSkippedTailFloor
 	cStructureRequests
 	cStructureZero
 	cStructureNoBoundary
@@ -269,8 +267,6 @@ var Counters = table([numCounters]counters.Def{
 	cBusyNs:                       d("busy_ns", counters.Count, "ns", "sum of Expand wall time"),
 	cSinkWaitNs:                   d("sink_wait_ns", counters.Count, "ns", "time Expand spent handing rows to the order stage (backpressure)"),
 	cRequeues:                     d("requeues", counters.Count, "requests", "pages asked again after the client's retries were exhausted (the run never fails on that)"),
-	cSkippedRemainingFloor:        d("split.skipped.remaining_floor", counters.Count, "decisions", "bounded range with at most 4 pages of keys left by its estimate: not split", "floors"),
-	cSkippedTailFloor:             d("split.skipped.tail_floor", counters.Count, "decisions", "the child past the pivot would realize at most 2 pages of keys: not split", "floors"),
 	cStructureRequests:            d("structure.requests", counters.Count, "requests", "delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests", "structure"),
 	cStructureZero:                d("structure.zero_fanout", counters.Count, "probes", "probes that found no folder at any level", "structure"),
 	cStructureNoBoundary:          d("structure.no_boundary", counters.Count, "probes", "probes whose folders all lay outside the range", "structure"),
@@ -351,9 +347,6 @@ func (p *Engine[P]) disabled() []string {
 	}
 	if p.opt.Sequential || p.opt.Structure == StructureOff {
 		off = append(off, "structure")
-	}
-	if p.opt.Sequential || !p.opt.Floors {
-		off = append(off, "floors")
 	}
 	if p.opt.Sequential || !p.opt.Seed || p.opt.Prior != nil {
 		off = append(off, "seed")

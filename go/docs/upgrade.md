@@ -199,7 +199,7 @@ value differs from Java's listing-scope hash), and `stop_source` (under `outcome
 | `swath.steal_reason{PIVOT,midpoint}` | `split.pivot.midpoint`, `split.pivot.reflect` (the anchor reflection, frontier and bounded); a sliver pivot is never taken: `split.sliver_refused` counts the refusals |
 | `swath.steal_reason{PIVOT,extrapolate}` | `split.pivot.density.bounded` + `split.pivot.density.frontier` (the galloped density step) |
 | `swath.steal_reason{STRUCTURE,*}` | `structure.*`; a split on a folder boundary is `split.pivot.structure` |
-| `swath.steal_reason{OWNER_SPLIT,remaining_est_floor}` | `split.skipped.remaining_floor` (only with `swath diag list --floors`); the default gates are `split.skipped.remainder`, `split.skipped.lower_tiny` and `split.skipped.upper_tiny` |
+| `swath.steal_reason{OWNER_SPLIT,remaining_est_floor}` | no Go counterpart (the floors were removed); the admission gates are `split.skipped.remainder`, `split.skipped.lower_tiny` and `split.skipped.upper_tiny` |
 | `swath.steal_reason{CHILD_MASS,empty}` | `child_empty.lower` + `child_empty.upper` |
 | `swath.steal_reason{RETRY,cursor_passed_pivot}`, `swath.split.guard_aborts` | `split.rejected.cursor`, `split.rejected.*` |
 | `swath.steal_reason{OWNER_SPLIT,demand_gated}` | `split.skipped.no_demand` |

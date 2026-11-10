@@ -374,22 +374,22 @@ func (c *clearing) Child(r Range) error {
 // TestFilterLeavesSplitInputs: the page's density and the split's page
 // keys are read before the rows are handed over, so an emitter that drops
 // and clears them (a filter) cannot change the range's observations: the
-// same density and the same pivot as an emitter that keeps them.
+// same remainder estimate (read from the page's density) and the same
+// pivot as an emitter that keeps them.
 func TestFilterLeavesSplitInputs(t *testing.T) {
 	keys := make([]string, 5000)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("k%06d", i)
 	}
 	type result struct {
-		dens     float64
+		rem      float64
 		children []span
 	}
 	expand := func(drop bool) result {
 		var p *Engine[Object]
 		var res result
-		// Floors: the density is maintained only for the tail floor.
-		p, err := newTest(newSorted(keys, false, 1), Options{Workers: 64, PageSize: 100, Floors: true, SplitCoin: func() bool {
-			res.dens = p.running[1].dens.ewma // decide holds the engine's lock
+		p, err := newTest(newSorted(keys, false, 1), Options{Workers: 64, PageSize: 100, SplitCoin: func() bool {
+			res.rem = p.running[1].rem // decide holds the engine's lock
 			return true
 		}})
 		if err != nil {
@@ -405,10 +405,10 @@ func TestFilterLeavesSplitInputs(t *testing.T) {
 		return res
 	}
 	kept, dropped := expand(false), expand(true)
-	if kept.dens <= 0 || len(kept.children) != 2 {
+	if !(kept.rem > 0) || len(kept.children) != 2 {
 		t.Fatalf("no split observed: %+v", kept)
 	}
-	if dropped.dens != kept.dens || !slices.Equal(dropped.children, kept.children) {
-		t.Fatalf("a filter changed the split inputs: density %v, children %v; unfiltered %v, %v", dropped.dens, dropped.children, kept.dens, kept.children)
+	if dropped.rem != kept.rem || !slices.Equal(dropped.children, kept.children) {
+		t.Fatalf("a filter changed the split inputs: remainder %v, children %v; unfiltered %v, %v", dropped.rem, dropped.children, kept.rem, kept.children)
 	}
 }

@@ -118,7 +118,7 @@ func TestAzureEmptyContinuingPages(t *testing.T) {
 }
 
 // TestAzurePageSize: at page sizes 1, 7, 1,000 and 5,000, with full and
-// short responses, sequential, 8 workers, seed with floors and structure,
+// short responses, sequential, 8 workers, seed with structure,
 // and seed: the listing is exact and no request asks for more than the
 // page size.
 func TestAzurePageSize(t *testing.T) {
@@ -130,7 +130,7 @@ func TestAzurePageSize(t *testing.T) {
 			for i, opt := range []keyrange.Options{
 				{Sequential: true},
 				{Workers: 8},
-				{Workers: 8, Seed: true, Floors: true, Structure: keyrange.StructureOn},
+				{Workers: 8, Seed: true, Structure: keyrange.StructureOn},
 				{Workers: 8, Seed: true},
 			} {
 				what := fmt.Sprintf("page=%d short=%v opt %d", page, short, i)
