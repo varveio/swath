@@ -38,7 +38,7 @@ runs:
     - name: Restore the Go module cache (saved at the end of the job)
       id: modcache-main
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.paths.outputs.gomodcache }}
         key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.deps }}
@@ -47,7 +47,7 @@ runs:
 
     - name: Restore the Go module cache
       if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.paths.outputs.gomodcache }}
         key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.paths.outputs.deps }}
@@ -83,7 +83,7 @@ runs:
     - name: Restore the Go build cache (saved at the end of the job)
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       id: buildcache-main
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.paths.outputs.gocache }}
         key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
@@ -93,7 +93,7 @@ runs:
 
     - name: Restore the Go build cache
       if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: ${{ steps.paths.outputs.gocache }}
         key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}-${{ steps.paths.outputs.deps }}-${{ github.sha }}
