@@ -113,7 +113,15 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 		return nil, fmt.Errorf("manifest format %s %d draft %d, want %s %d draft %d", m.Format, m.FormatVersion, m.DraftRevision,
 			seekparquet.Format, seekparquet.FormatVersion, seekparquet.DraftRevision)
 	case m.Source.Kind != loc.Kind || m.Source.Container != loc.Container:
-		return nil, fmt.Errorf("the dataset lists %s (%s %q), the run %s (%s %q)", m.Source.URI, m.Source.Kind, m.Source.Container, loc.Root, loc.Kind, loc.Container)
+		// An older manifest may hold a credential in its root's authority,
+		// which is also its container.
+		shown := func(container string) string {
+			if strings.ContainsAny(container, "@?#") {
+				return "[redacted]"
+			}
+			return container
+		}
+		return nil, fmt.Errorf("the dataset lists %s (%s %q), the run %s (%s %q)", registry.Redact(m.Source.URI), m.Source.Kind, shown(m.Source.Container), registry.Redact(loc.Root), loc.Kind, shown(loc.Container))
 	}
 	pr := &source.Prior{Source: "dataset", Scope: m.Scope.Prefix, Counted: true, Parts: len(m.Parts)}
 	var total int64

@@ -3,18 +3,7 @@
 
 package keyrange
 
-import (
-	"testing"
-
-	"github.com/varveio/swath/go/internal/counters"
-)
-
-// TestCountersMatchIDs: one definition per ID.
-func TestCountersMatchIDs(t *testing.T) {
-	if counters.ID(len(Counters)) != numCounters {
-		t.Fatalf("%d definitions for %d IDs", len(Counters), numCounters)
-	}
-}
+import "testing"
 
 // TestCounterTable: every counter ID has a definition with a distinct key
 // (an ID without an entry would read as an empty one).

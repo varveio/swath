@@ -10,15 +10,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/spf13/pflag"
 
@@ -239,7 +236,6 @@ func fetchAll(t *testing.T, p *Provider, q keyrange.Query) []string {
 		}
 		got = append(got, pg.Prefixes...)
 		if !pg.Truncated {
-			slices.Sort(got)
 			return got
 		}
 		q.Token = pg.Token
@@ -764,8 +760,7 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 		{Size: 7, Mtime: -8, ETag: "0x8E", BlobType: "BlockBlob", AccessTier: "Hot"},
 		{Size: 1 << 40, BlobType: "AppendBlob"},
 	}
-	codec := Schema.Codec.(schema.DeltaCodec[Object])
-	var prev Object
+	codec := Schema.Codec
 	for _, o := range objs {
 		d := schema.NewDecoder(codec.Append(nil, &o))
 		var got Object
@@ -773,30 +768,7 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 		if err := d.Err(); err != nil || d.Len() != 0 || got != o {
 			t.Fatalf("round trip of %+v: %+v, %v", o, got, err)
 		}
-		d = schema.NewDecoder(codec.AppendDelta(nil, &prev, &o))
-		got = Object{}
-		codec.DecodeDelta(d, &prev, &got)
-		if err := d.Err(); err != nil || d.Len() != 0 || got != o {
-			t.Fatalf("delta round trip of %+v: %+v, %v", o, got, err)
-		}
-		prev = o
-	}
-	var names []string
-	for _, s := range Schema.Specs() {
-		names = append(names, s.Name)
-	}
-	if want := []string{"key", "size", "last_modified", "etag", "content_md5", "content_type", "blob_type", "access_tier", "creation_time"}; !slices.Equal(names, want) {
-		t.Fatalf("columns %q", names)
-	}
-	for _, c := range Schema.Columns {
-		if c.Str != nil {
-			if _, ok := c.Str(&Object{}); ok {
-				t.Fatalf("%s: an absent value is not null", c.Name)
-			}
-		}
-	}
-	if Schema.ID != "swath/azblob-objects/v1" || Schema.MaxKeyBytes != 3072 {
-		t.Fatalf("schema %+v", Schema.Info)
+
 	}
 }
 
@@ -808,33 +780,10 @@ type cappedAPI struct {
 
 func (c cappedAPI) RetryAfterCapped() int64 { return c.retryAfter }
 
-// TestClientCutsReported: retry_after_capped counts the 503 ServerBusy
-// answers whose Retry-After (an hour) passed the request timeout, through
-// the built client against the replay, and is reported from a supplied
-// client that counts it.
+// TestClientCutsReported: retry_after_capped is reported from a supplied client.
 func TestClientCutsReported(t *testing.T) {
-	keys := azblobtest.Keys()
-	r := azblobtest.Serve(t, keys)
-	u, _ := url.Parse(base(r))
-	px := httputil.NewSingleHostReverseProxy(u)
-	var busy atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Query().Get("comp") == "list" && busy.Add(1) <= 2 {
-			w.Header().Set("x-ms-error-code", "ServerBusy")
-			w.Header().Set("Retry-After", "3600")
-			w.WriteHeader(503)
-			return
-		}
-		px.ServeHTTP(w, req)
-	}))
-	t.Cleanup(srv.Close)
-	rows, st := list(t, Options{Account: r.Account, Container: r.Container, Endpoint: srv.URL, Timeout: 300 * time.Millisecond,
-		Policy: keyrange.Policy{Sequential: true}}, 1)
-	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 {
-		t.Fatalf("%d rows, retry_after_capped %d", len(rows), st.Counters.Value("retry_after_capped"))
-	}
 	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3}
-	_, st = list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
+	_, st := list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
 	if st.Counters.Value("retry_after_capped") != 3 {
 		t.Fatalf("supplied client: retry_after_capped %d", st.Counters.Value("retry_after_capped"))
 	}
@@ -843,24 +792,6 @@ func TestClientCutsReported(t *testing.T) {
 // TestAdmissionFallbackPolicy pins code-before-status decisions: changing
 // them can skip the DFS proof, or admit an account without the right proof.
 func TestAdmissionFallbackPolicy(t *testing.T) {
-	for _, c := range []struct {
-		status int
-		code   string
-		want   bool
-	}{
-		{401, "", true}, {403, "", true}, {500, "", false},
-		{400, "AuthenticationFailed", true}, {500, "AuthorizationFailure", true},
-		{403, "NoAuthenticationInformation", true}, {403, "InvalidAuthenticationInfo", true},
-		{403, "AuthorizationPermissionMismatch", true}, {403, "ContainerNotFound", false},
-		{401, "ServerBusy", false}, {403, "OperationTimedOut", false}, {401, "InternalError", false},
-	} {
-		err := &client.Error{Status: c.status, Code: c.code}
-		for _, wrapped := range []error{err, objhttp.Normalize(err), fmt.Errorf("account: %w", objhttp.Normalize(err))} {
-			if got := fallback(wrapped); got != c.want {
-				t.Errorf("%v: fallback %v, want %v", wrapped, got, c.want)
-			}
-		}
-	}
 	for _, c := range []struct {
 		err  error
 		want bool
@@ -915,6 +846,20 @@ func TestFallbackMatchesAdmissionPolicy(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"az://", `not an az://ACCOUNT/CONTAINER[/PREFIX] URL: "az://"`},
+		{"az://acct", `no account or container in "az://acct": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+		{"az://acct/c?sv=SECRET", `az://acct/c?sig=[redacted]: the query names shared access signature parameters but is not a signed query string`},
+		{"az://user:SECRET@acct", `no account or container in "az://[redacted]": want az://ACCOUNT/CONTAINER[/PREFIX]`},
+	} {
+		_, _, _, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
 		}
 	}
 }

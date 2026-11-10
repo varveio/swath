@@ -11,20 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varveio/swath/go/internal/source/objhttp"
-)
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 
-// The error codes the classification names (x-ms-error-code).
-const (
-	codeNoAuthentication   = "NoAuthenticationInformation"
-	codeAuthFailed         = "AuthenticationFailed"
-	codeInvalidAuthInfo    = "InvalidAuthenticationInfo"
-	codeAuthorization      = "AuthorizationFailure"
-	codePermissionMismatch = "AuthorizationPermissionMismatch"
-	codeContainerNotFound  = "ContainerNotFound"
-	codeServerBusy         = "ServerBusy"
-	codeOperationTimedOut  = "OperationTimedOut"
-	codeInternalError      = "InternalError"
+	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
 // The headers and values the client sends or reads.
@@ -66,10 +55,6 @@ func (e *Error) Error() string {
 	return s
 }
 
-// RetryAfter is the service's wait before the next attempt
-// (objhttp.RetryAfter).
-func (e *Error) RetryAfter() time.Duration { return e.Wait }
-
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date
 // (relative to now); 0 when absent, malformed, negative or past.
 func retryAfter(v string, now time.Time) time.Duration {
@@ -94,23 +79,23 @@ func retryAfter(v string, now time.Time) time.Duration {
 // Failure keeps Azure's code-sensitive 500 policy. A generic 500 (or 501)
 // is terminal even though other providers retry it.
 func (e *Error) Failure() objhttp.Failure {
-	f := objhttp.Failure{Status: e.Status, Code: e.Code}
+	f := objhttp.Failure{Status: e.Status, Code: e.Code, Wait: e.Wait}
 	switch e.Status {
 	case 408, 429, 502, 503, 504:
 		f.Transient = true
 	case 500:
-		f.Transient = e.Code == codeOperationTimedOut || e.Code == codeInternalError
+		f.Transient = e.Code == string(bloberror.OperationTimedOut) || e.Code == string(bloberror.InternalError)
 	}
-	switch e.Code {
-	case codeNoAuthentication, codeAuthFailed, codeInvalidAuthInfo:
+	switch bloberror.Code(e.Code) {
+	case bloberror.NoAuthenticationInformation, bloberror.AuthenticationFailed, bloberror.InvalidAuthenticationInfo:
 		f.Class = objhttp.ClassAuth
-	case codeAuthorization, codePermissionMismatch:
+	case bloberror.AuthorizationFailure, bloberror.AuthorizationPermissionMismatch:
 		f.Class = objhttp.ClassAccessDenied
-	case codeServerBusy:
+	case bloberror.ServerBusy:
 		f.Throttle = true
-	case codeOperationTimedOut:
+	case bloberror.OperationTimedOut:
 		f.Timeout = true
-	case codeInternalError, codeContainerNotFound:
+	case bloberror.InternalError, bloberror.ContainerNotFound:
 	default:
 		switch e.Status {
 		case 429:

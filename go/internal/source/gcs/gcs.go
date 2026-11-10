@@ -56,11 +56,11 @@ type Options struct {
 func ParseURL(u string) (bucket, prefix string, err error) {
 	rest, ok := strings.CutPrefix(u, "gs://")
 	if !ok || rest == "" {
-		return "", "", fmt.Errorf("not a gs://bucket[/prefix] URL: %q", u)
+		return "", "", fmt.Errorf("not a gs://bucket[/prefix] URL: %q", source.RedactRoot(u))
 	}
 	bucket, prefix, _ = strings.Cut(rest, "/")
 	if bucket == "" {
-		return "", "", fmt.Errorf("no bucket in %q", u)
+		return "", "", fmt.Errorf("no bucket in %q", source.RedactRoot(u))
 	}
 	return bucket, prefix, nil
 }

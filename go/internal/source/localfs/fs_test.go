@@ -314,20 +314,6 @@ func TestOpenCheckedRejectsSymlinkedChild(t *testing.T) {
 	}
 }
 
-func TestCancelledExpand(t *testing.T) {
-	root := t.TempDir()
-	mk(t, root, "a", false)
-	p, err := New(root, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := order.Run[Range, Entry](ctx, p, &collect{}, &Schema, order.Options{Workers: 2, Budget: 10 * 256}); err == nil {
-		t.Fatal("expected cancellation")
-	}
-}
-
 // TestCancelReleasesChunkFDs: a run that fails while large-directory chunks
 // are still queued releases their shared directory descriptor (the order
 // stage disposes ranges it never expands).

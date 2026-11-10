@@ -6,7 +6,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"html"
 	"io"
+	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -15,8 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
@@ -134,6 +140,185 @@ func TestSecretsNeverEchoed(t *testing.T) {
 				}
 				if stderr.Len() == 0 {
 					t.Error("no error on stderr")
+				}
+			})
+		}
+	}
+}
+
+func TestEndpointQuerySecrecy(t *testing.T) {
+	// The escaped form is the one an SDK decodes back into a query and
+	// quotes in its own error.
+	for _, endpoint := range []string{"https://127.0.0.1:1/?sig=SECRET", "https://127.0.0.1:1/%3Fsig=SECRET%0A"} {
+		for _, root := range []string{"s3://bkt", "gs://bkt", "az://acct/ctr"} {
+			for _, eq := range []bool{false, true} {
+				t.Run(root+"/equals="+strconv.FormatBool(eq)+"/escaped="+strconv.FormatBool(strings.Contains(endpoint, "%")), func(t *testing.T) {
+					stderr := captureStderr(t)
+					dir := filepath.Join(t.TempDir(), "ds")
+					report := filepath.Join(t.TempDir(), "report.json")
+					args := append([]string{root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
+					if eq {
+						args = append(args, "--endpoint-url="+endpoint)
+					} else {
+						args = append(args, "--endpoint-url", endpoint)
+					}
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+					var stdout bytes.Buffer
+					if code := exitCode(t, run(ctx, args, &stdout, diagList)); code != exitUsage {
+						t.Errorf("exit %d, want usage %d", code, exitUsage)
+					}
+					check := func(where string, raw []byte) {
+						t.Helper()
+						if bytes.Contains(raw, []byte("SECRET")) {
+							t.Errorf("credential in %s: %s", where, raw)
+						}
+					}
+					check("stderr", stderr.Bytes())
+					check("stdout", stdout.Bytes())
+					raw, err := os.ReadFile(report)
+					if err != nil {
+						t.Fatal(err)
+					}
+					check("report", raw)
+					if _, err := os.Stat(dir); os.IsNotExist(err) {
+						return
+					}
+					if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+						if err != nil {
+							return err
+						}
+						check("output path", []byte(path))
+						if !d.IsDir() {
+							raw, err := os.ReadFile(path)
+							if err != nil {
+								return err
+							}
+							check(path, raw)
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestShowEndpointSecrecy(t *testing.T) {
+	for _, ep := range []string{"https://host/?sig=SECRET", "https://host/#SECRET", "https://user:SECRET@host", "https://clean:9000/path"} {
+		dir := t.TempDir()
+		j, err := journal.Create(dir, journal.Identity{Source: []journal.Field{{Name: "endpoint", Value: ep, Canonical: ep}}}, []string{"list", "s3://bkt", "--endpoint-url", ep})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before, err := journal.Read(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{dir}, {"--journal", dir}} {
+			var out bytes.Buffer
+			if err := show(args, &out); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(out.Bytes(), []byte("SECRET")) {
+				t.Errorf("credential in show: %s", out.Bytes())
+			}
+			if ep == "https://clean:9000/path" && !bytes.Contains(out.Bytes(), []byte(ep)) {
+				t.Errorf("clean endpoint missing in show: %s", out.Bytes())
+			}
+		}
+		after, err := journal.Read(dir)
+		if err != nil || before.Header.Identity.Hash() != after.Header.Identity.Hash() || after.Header.Identity.Source[0].Value != ep || after.Header.Argv[len(after.Header.Argv)-1] != ep {
+			t.Fatalf("show changed stored identity or arguments: %v", err)
+		}
+	}
+}
+
+func TestRootUserinfoSecrecy(t *testing.T) {
+	for i, root := range []string{"s3://user:SECRET@bkt", "gs://user:SECRET@bkt", "az://user:SECRET@acct/ctr", "unknown://user:SECRET@host", "unknown://host/?sig=SECRET", "unknown://host/#SECRET", "s3://bkt?sig=SECRET", "gs://bkt#SECRET", "az://acct?sig=SECRET/ctr"} {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			stderr := captureStderr(t)
+			report := filepath.Join(t.TempDir(), "report.json")
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			var stdout bytes.Buffer
+			if code := exitCode(t, run(ctx, []string{root, "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--report", report}, &stdout, diagList)); code != exitUsage {
+				t.Fatalf("exit %d, want usage", code)
+			}
+			raw, err := os.ReadFile(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, data := range [][]byte{stderr.Bytes(), stdout.Bytes(), raw} {
+				if bytes.Contains(data, []byte("SECRET")) {
+					t.Errorf("credential in output: %s", data)
+				}
+			}
+		})
+	}
+}
+
+// TestSecrecyRunOutputs extends the endpoint and root secrecy above to the
+// outputs a run adds with -vvv, --log-format json and --report -: the
+// request and retry events, the persistent-failure warning, the outcome
+// event and the report on stdout. A refused endpoint or root holds its
+// credential back from all of them; so does an Azure SAS, in the root or
+// --azure-sas-token, sent to an endpoint whose every answer is a 503
+// quoting the request.
+func TestSecrecyRunOutputs(t *testing.T) {
+	persistFor = 300 * time.Millisecond
+	t.Cleanup(func() { persistFor = 10 * time.Second })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ms-error-code", "ServerBusy")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?><Error><Code>ServerBusy</Code><Message>busy: %s</Message></Error>`, html.EscapeString(r.URL.String()))
+	}))
+	t.Cleanup(srv.Close)
+	const sas = "sv=2026-10-06&sig=SECRET"
+	for _, c := range []struct {
+		name     string
+		args     []string
+		requests bool // the run reaches the endpoint
+	}{
+		{"endpoint-query", []string{"s3://bkt", "--anonymous", "--endpoint-url", "https://127.0.0.1:1/?sig=SECRET"}, false},
+		{"endpoint-userinfo", []string{"gs://bkt", "--anonymous", "--endpoint-url=https://user:SECRET@127.0.0.1:1"}, false},
+		{"root-userinfo", []string{"s3://user:SECRET@bkt", "--anonymous"}, false},
+		{"root-sas", []string{"az://acct/ctr?" + sas, "--endpoint-url", srv.URL}, true},
+		{"flag-sas", []string{"az://acct/ctr", "--endpoint-url", srv.URL, "--azure-sas-token", sas}, true},
+	} {
+		for _, format := range []string{logText, logJSON} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				stderr := captureSyncStderr(t)
+				argv := append([]string{"--log-format", format, "-vvv", "list"}, c.args...)
+				argv = append(append(argv, "--stall-timeout", "1s", "--report", "-", "-o", filepath.Join(t.TempDir(), "ds")), unjournaled...)
+				var stdout bytes.Buffer
+				if code := conclude(dispatch(t.Context(), argv, &stdout)); code == exitCompleted {
+					t.Fatalf("exit 0; stderr %q", stderr.String())
+				}
+				for what, b := range map[string][]byte{"stderr": []byte(stderr.String()), "stdout": stdout.Bytes()} {
+					if bytes.Contains(b, []byte("SECRET")) {
+						t.Errorf("%s holds the credential: %s", what, b)
+					}
+				}
+				if !bytes.Contains(stdout.Bytes(), []byte(`"report_version"`)) {
+					t.Errorf("no report on stdout: %s", stdout.Bytes())
+				}
+				if !c.requests {
+					return
+				}
+				for _, ev := range []string{evRequest, evRetry, evWarning, evOutcome} {
+					want := `"event":"` + ev + `"`
+					if format == logText {
+						want = map[string]string{evRequest: "swath: request GET ", evRetry: "swath: attempt 1 ", evWarning: "swath: warning: Azure Blob ", evOutcome: "INCOMPLETE (stuck)"}[ev]
+					}
+					if !strings.Contains(stderr.String(), want) {
+						t.Errorf("no %s event (%q) on stderr: %s", ev, want, stderr.String())
+					}
 				}
 			})
 		}

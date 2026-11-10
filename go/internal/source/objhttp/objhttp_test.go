@@ -164,11 +164,12 @@ func TestAdmissionFeatures(t *testing.T) {
 // waitAnswer is a retryable answer naming its own wait.
 type waitAnswer time.Duration
 
-func (w waitAnswer) Error() string             { return "busy" }
-func (w waitAnswer) Failure() Failure          { return Failure{Transient: true, Throttle: true} }
-func (w waitAnswer) RetryAfter() time.Duration { return time.Duration(w) }
+func (w waitAnswer) Error() string { return "busy" }
+func (w waitAnswer) Failure() Failure {
+	return Failure{Transient: true, Throttle: true, Wait: time.Duration(w)}
+}
 
-// TestRetryAfterWait: a failure carrying the service's wait (RetryAfter)
+// TestRetryAfterWait: a failure carrying the service's wait (Failure.Wait)
 // holds the next attempt at least that long, past a backoff drawn from 1
 // ms; without one the backoff alone applies.
 func TestRetryAfterWait(t *testing.T) {
@@ -286,7 +287,7 @@ func TestCallerCancellationPrecedesCredentialFailure(t *testing.T) {
 }
 
 func TestTextConnectionReset(t *testing.T) {
-	for _, err := range []error{errors.New("read: connection reset by peer"), fmt.Errorf("send: %w", errors.New("connection reset"))} {
+	for _, err := range []error{errors.New("read: connection reset by peer"), fmt.Errorf("send: %w", errors.New("connection reset")), errors.Join(errors.New("read: connection reset by peer"))} {
 		f := Normalize(err)
 		if !Transport(err) || !f.Transient || f.Timeout || f.Throttle || f.Class != ClassOther || !Requeue(&ExhaustedError{Attempts: 2, Err: f}) {
 			t.Fatalf("text-only reset: %+v", f)

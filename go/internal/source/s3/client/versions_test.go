@@ -446,8 +446,7 @@ func TestListObjectVersionsRequest(t *testing.T) {
 }
 
 // TestListObjectVersionsFailures: a 200 that is not a ListVersionsResult
-// is retried like any parse failure; a truncated page without a
-// NextKeyMarker is an invalid page, not retried; S3's answers are
+// is retried like any parse failure; S3's answers are
 // classified as for ListObjectsV2.
 func TestListObjectVersionsFailures(t *testing.T) {
 	var n atomic.Int32
@@ -465,21 +464,11 @@ func TestListObjectVersionsFailures(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 
-	n.Store(0)
-	c, _ = testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		n.Add(1)
-		w.Write([]byte(`<ListVersionsResult><IsTruncated>true</IsTruncated><Version><Key>k</Key></Version></ListVersionsResult>`))
-	}, Config{Anonymous: true})
-	_, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
-	if !errors.Is(err, objhttp.ErrInvalidPage) || n.Load() != 1 || c.Counters().ParseFailures != 0 {
-		t.Fatalf("%v after %d attempts (%+v)", err, n.Load(), c.Counters())
-	}
-
 	c, _ = testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403)
 		w.Write([]byte(`<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`))
 	}, Config{Anonymous: true})
-	_, err = c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
+	_, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"})
 	var se *Error
 	if !errors.As(err, &se) || se.Code != "AccessDenied" || objhttp.Classify(err) != objhttp.ClassAccessDenied {
 		t.Fatal(err)

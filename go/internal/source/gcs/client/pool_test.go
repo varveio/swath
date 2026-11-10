@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"testing"
 
+	"golang.org/x/oauth2/google"
+
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
@@ -39,7 +41,7 @@ func TestServicePoolRoundRobin(t *testing.T) {
 		t.Cleanup(tr.CloseIdleConnections)
 		tr.Proxy = func(*http.Request) (*url.URL, error) { seen <- i; return nil, nil }
 	}
-	c, err := newClient(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true}, librarySearch{}, pool)
+	c, err := newClient(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true}, google.FindDefaultCredentials, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

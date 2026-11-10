@@ -157,7 +157,8 @@ Object stores:
                                 S3: path-style addressing unless --no-s3-path-style; default
                                 AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
                                 URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                                then its first path segment (Azurite). Part of the resume identity.
+                                then its first path segment (Azurite). User information, a query and
+                                a fragment are refused. Part of the resume identity.
       --ca-bundle FILE        trust the certificates in this PEM file besides the system's
                                 For a service behind a private certificate authority. S3: default
                                 AWS_CA_BUNDLE.
@@ -389,7 +390,8 @@ Object stores:
                                 S3: path-style addressing unless --no-s3-path-style; default
                                 AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
                                 URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                                then its first path segment (Azurite). Part of the resume identity.
+                                then its first path segment (Azurite). User information, a query and
+                                a fragment are refused. Part of the resume identity.
       --ca-bundle FILE        trust the certificates in this PEM file besides the system's
                                 For a service behind a private certificate authority. S3: default
                                 AWS_CA_BUNDLE.
@@ -604,7 +606,8 @@ Object stores:
                                 S3: path-style addressing unless --no-s3-path-style; default
                                 AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
                                 URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                                then its first path segment (Azurite). Part of the resume identity.
+                                then its first path segment (Azurite). User information, a query and
+                                a fragment are refused. Part of the resume identity.
       --ca-bundle FILE        trust the certificates in this PEM file besides the system's
                                 For a service behind a private certificate authority. S3: default
                                 AWS_CA_BUNDLE.
@@ -780,7 +783,9 @@ table changes.
   one given for another source (`gs://... --s3-profile`, where GCS takes `--gcs-credentials-file`; an S3 flag on a local
   tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same
   for S3, GCS and Azure Blob and refused for a local tree: `--endpoint-url` (an emulator or a compatible store in
-  place of the provider's own service), `--request-timeout`, `--anonymous`, and the TLS trust flags
+  place of the provider's own service;
+  [endpoint validation](internals/clients.md#endpoint-validation) refuses user information, a query or a
+  fragment), `--request-timeout`, `--anonymous`, and the TLS trust flags
   `--ca-bundle FILE` (PEM certificates trusted besides the system's; for S3 `AWS_CA_BUNDLE` when the flag is
   absent) and `--no-verify-ssl` (no certificate check; it warns on every run that has it, a resume's replay
   included, and the report's `source.stats.no_verify_ssl` is true), beside the range engine's
@@ -1334,7 +1339,7 @@ never zero.
 | `report_version` | 4 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `invocation` | what was asked: `argv` (secret flags and endpoint values that cannot parse or carry user information, a query or a fragment `[redacted]`), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `unreadable` (some entries could not be read: the rows and totals leave them out, exit 0), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 

@@ -132,18 +132,15 @@ func entraEnv(t *testing.T, es *entraServer) Config {
 }
 
 // fixed is an Entra ID source that builds cred, or fails with err.
-type fixed struct {
-	cred azcore.TokenCredential
-	err  error
-}
-
-func (f fixed) credential(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
-	return f.cred, f.err
+func fixed(cred azcore.TokenCredential, err error) entraSource {
+	return func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+		return cred, err
+	}
 }
 
 // withEntra is New's construction with cred as the Entra ID credential.
 func withEntra(cred azcore.TokenCredential) build {
-	return build{bodyCap: MaxBody, entra: fixed{cred: cred}}
+	return build{bodyCap: MaxBody, entra: fixed(cred, nil)}
 }
 
 // newEntraClient builds a client whose Entra ID credential is cred.
@@ -341,10 +338,10 @@ func TestEntraDefaultChain(t *testing.T) {
 	} {
 		t.Run(x.name, func(t *testing.T) {
 			clearEntra(t)
-			b := build{bodyCap: MaxBody, entra: fixed{x.cred, x.buildErr}}
+			b := build{bodyCap: MaxBody, entra: fixed(x.cred, x.buildErr)}
 			if x.cred == nil && x.buildErr == nil {
 				t.Setenv("AZURE_TOKEN_CREDENTIALS", "EnvironmentCredential")
-				b.entra = defaultChain{}
+				b.entra = defaultChain
 			}
 			var listed atomic.Int64
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

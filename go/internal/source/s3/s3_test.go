@@ -76,13 +76,7 @@ func (c *collect) Write(_ context.Context, segs [][]Row) error {
 
 func list(t *testing.T, opt Options, workers int) ([]Row, Stats) {
 	t.Helper()
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
+	s3test.NoCredentials(t)
 	p, err := New(context.Background(), opt)
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +224,21 @@ func TestS3BoundPolicy(t *testing.T) {
 	for _, s := range []string{"a%\x01", "a\x01", "a\x7f", "a\u0085", "a﷐", "a￿", "\xff"} {
 		if AcceptBound(s) {
 			t.Errorf("accepted %q", s)
+		}
+	}
+}
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"s3://", `not an s3://bucket[/prefix] URL: "s3://"`},
+		{"s3:///prefix", `no bucket in "s3:///prefix"`},
+		{"other://user:SECRET@bucket/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket?sig=SECRET/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket#SECRET/path", `not an s3://bucket[/prefix] URL: "other://[redacted]"`},
+	} {
+		_, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
 		}
 	}
 }

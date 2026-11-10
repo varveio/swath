@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,6 +30,9 @@ func TestPoolSize(t *testing.T) {
 				t.Fatal("no TLS session cache")
 			}
 			for _, hc := range pool {
+				if hc.CheckRedirect == nil || hc.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+					t.Fatal("redirects allowed")
+				}
 				tr := hc.Transport.(*http.Transport)
 				t.Cleanup(tr.CloseIdleConnections)
 				if seen[tr] || tr == http.DefaultTransport || tr.MaxIdleConns != 0 || tr.MaxIdleConnsPerHost != 1024 {
@@ -102,28 +104,6 @@ func TestPoolSuppliedClient(t *testing.T) {
 				t.Fatal("supplied TLS settings changed")
 			}
 		})
-	}
-}
-
-func TestPoolRedirectPolicy(t *testing.T) {
-	var followed atomic.Int32
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { followed.Add(1) }))
-	defer other.Close()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
-	}))
-	defer srv.Close()
-	for _, supplied := range []*http.Client{nil, {}} {
-		hc := Pool(1, supplied, nil, nil)[0]
-		resp, err := hc.Get(srv.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusTemporaryRedirect || followed.Load() != 0 {
-			t.Fatalf("status %d, %d redirects followed", resp.StatusCode, followed.Load())
-		}
-		hc.CloseIdleConnections()
 	}
 }
 

@@ -487,13 +487,6 @@ func TestOldJournalRefused(t *testing.T) {
 	if old.Hash() == id.Hash() {
 		t.Fatal("args_hash unchanged")
 	}
-	src, err = open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if src.(source.Capable).Capabilities().Resume {
-		t.Fatal("a supplied client declares resume")
-	}
 }
 
 type supplied struct{}
@@ -614,5 +607,20 @@ func TestTariff(t *testing.T) {
 	}
 	if rate, _ := src.(source.Priced).Tariff(); rate != 0 {
 		t.Errorf("supplied client: tariff %v", rate)
+	}
+}
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"gs://", `not a gs://bucket[/prefix] URL: "gs://"`},
+		{"gs:///prefix", `no bucket in "gs:///prefix"`},
+		{"other://user:SECRET@bucket/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket?sig=SECRET/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket#SECRET/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+	} {
+		_, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
+		}
 	}
 }

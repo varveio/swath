@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -164,23 +163,15 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, trust, nil))
+	return newClient(ctx, cfg, google.FindDefaultCredentials, objhttp.Pool(cfg.Workers, cfg.HTTPClient, trust, nil))
 }
 
 // credentialFinder finds the credentials of a client given none: the
-// client library's Application Default Credentials search (librarySearch), or in
+// client library's Application Default Credentials search, or in
 // tests a fixed answer, so what the client does with each outcome does not
 // depend on the host (on Google Cloud the real search finds the metadata
 // server).
-type credentialFinder interface {
-	find(ctx context.Context, scopes ...string) (*google.Credentials, error)
-}
-
-type librarySearch struct{}
-
-func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Credentials, error) {
-	return google.FindDefaultCredentials(ctx, scopes...)
-}
+type credentialFinder func(ctx context.Context, scopes ...string) (*google.Credentials, error)
 
 // newClient is New with its credential search and its transport pool
 // given.
@@ -216,7 +207,7 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		c.ts = tokensource.NewShared(creds.TokenSource)
 	default:
 		c.source = "application default credentials"
-		creds, err := finder.find(life, readScope)
+		creds, err := finder(life, readScope)
 		if err != nil {
 			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}
@@ -262,17 +253,12 @@ func Endpoint(ep string) (string, error) {
 	if ep == "" {
 		ep = DefaultEndpoint
 	}
-	u, err := url.Parse(ep)
-	switch {
-	case err != nil:
-		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
-	case u.User != nil:
-		return "", errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
-	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
-		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
+	u, err := objhttp.ParseEndpoint(ep, "http(s)://host[:port]/storage/v1/")
+	if err != nil {
+		return "", err
 	}
 	if strings.ContainsAny(u.Path, "{}") {
-		return "", fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep)
+		return "", source.Unsupported(fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep))
 	}
 	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
 		u.Path, u.RawPath = u.Path+"/", p+"/"

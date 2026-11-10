@@ -12,11 +12,14 @@ request timeout, retries and admission.
 Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
 There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
 `Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
-It rejects a nonempty query or fragment in `--endpoint-url`; supply SAS credentials separately. `--anonymous` with
+It applies the shared [endpoint validation](../clients.md#endpoint-validation) to `--endpoint-url`; supply SAS
+credentials separately. `--anonymous` with
 `--azure-sas-token` or a SAS in the root is refused (exit 2), as every provider refuses it beside an explicit
 credential; Azure credentials in the environment (`AZURE_STORAGE_SAS_TOKEN`, `AZURE_STORAGE_KEY`, the Entra ID
 variables) are ignored with the shared one-line warning naming them. `--storage-class` filters on the access
 tier (`access_tier`, the schema's declared storage-class column).
+
+Root parse errors keep clean roots, redact SAS queries and hide credential-bearing authorities.
 
 ## Provider implementation
 
@@ -55,7 +58,7 @@ client: credentials (...)`, exit 1), as S3's and GCS's: admission returns it as 
 Data Lake host, which would need the same token (`TestAdmissionKeepsCredentialFailure`); transient token
 failures are retried per call
 (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
-when no credentials were found. An endpoint with user information is refused (`source` `TestRegisteredEndpointRefusals`). A SAS never
+when no credentials were found. Endpoint admission follows the [shared check](../clients.md#endpoint-validation). A SAS never
 reaches a recorded file: `--azure-sas-token` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azure-sas-token` or `AZURE_STORAGE_SAS_TOKEN`
 (the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that

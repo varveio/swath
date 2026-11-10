@@ -150,7 +150,7 @@ var ErrBodyCap = errors.New("response larger than the body cap")
 // New resolves credentials and builds the transport pool and the SDK
 // clients over it.
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	return newClient(ctx, cfg, build{bodyCap: MaxBody, entra: defaultChain{}})
+	return newClient(ctx, cfg, build{bodyCap: MaxBody, entra: defaultChain})
 }
 
 // build is what New fixes and tests vary: the success body cap and the
@@ -163,13 +163,9 @@ type build struct {
 // entraSource builds the Entra ID credential: azidentity's
 // DefaultAzureCredential (defaultChain), or in tests a fixed one, so what
 // the client does with each outcome does not depend on the host.
-type entraSource interface {
-	credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error)
-}
+type entraSource func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error)
 
-type defaultChain struct{}
-
-func (defaultChain) credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+func defaultChain(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
 	return azidentity.NewDefaultAzureCredential(o)
 }
 
@@ -182,7 +178,11 @@ func newClient(ctx context.Context, cfg Config, b build) (*Client, error) {
 		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	if !accountName.MatchString(cfg.Account) {
-		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", cfg.Account)
+		shown := cfg.Account
+		if strings.ContainsAny(shown, "@?#:") {
+			shown = "[redacted]" // a mistyped root can put a credential here
+		}
+		return nil, fmt.Errorf("account %q: want 3 to 24 lower-case letters and digits", shown)
 	}
 	base, err := baseURL(cfg.Endpoint, cfg.Account)
 	if err != nil {
@@ -227,14 +227,9 @@ func baseURL(endpoint, account string) (*url.URL, error) {
 	if endpoint == "" {
 		return &url.URL{Scheme: "https", Host: account + blobSuffix, Path: "/"}, nil
 	}
-	u, err := url.Parse(endpoint)
-	switch {
-	case err != nil:
-		return nil, errors.New("endpoint: not a URL; want http(s)://host[:port][/path]") // the parse error quotes it
-	case u.User != nil:
-		return nil, errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
-	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "":
-		return nil, fmt.Errorf("endpoint %q: want http(s)://host[:port][/path]", endpoint)
+	u, err := objhttp.ParseEndpoint(endpoint, "http(s)://host[:port][/path]")
+	if err != nil {
+		return nil, err
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + account + "/"
 	u.RawPath = ""
@@ -281,7 +276,7 @@ var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SEC
 // listed; a token endpoint's transient failure is retried.
 func (c *Client) entra(entra entraSource) error {
 	const source = "Entra ID (DefaultAzureCredential)"
-	cred, err := entra.credential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
+	cred, err := entra(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})

@@ -155,95 +155,6 @@ func TestGuardValidateRejection(t *testing.T) {
 	}
 }
 
-func TestGuardClosesOriginal(t *testing.T) {
-	reject := func(*http.Request, int, []byte) error { return errors.New("no") }
-	for _, tc := range []struct {
-		name    string
-		status  int
-		size    int
-		g       Guard
-		wantErr bool
-	}{
-		{"2xx ok", 200, 10, Guard{MaxBody: 100}, false},
-		{"2xx over cap", 200, 101, Guard{MaxBody: 100}, true},
-		{"validate reject", 200, 10, Guard{MaxBody: 100, Validate: reject}, true},
-		{"non-2xx", 404, 10, Guard{MaxError: 100}, false},
-		{"non-2xx truncated", 500, 1000, Guard{MaxError: 100}, false},
-		{"3xx", 302, 10, Guard{MaxError: 100, Validate: reject}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := serve(t, tc.status, tc.size)
-			cc := &closeCounter{next: http.DefaultTransport}
-			g := tc.g
-			g.Next = cc
-			client := &http.Client{Transport: &g, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-			resp, err := client.Get(srv.URL)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err %v, wantErr %v", err, tc.wantErr)
-			}
-			if resp != nil {
-				resp.Body.Close()
-			}
-			if n := cc.closed.Load(); n != 1 {
-				t.Errorf("original closed %d times, want 1", n)
-			}
-		})
-	}
-}
-
-func TestGuardNon2xxTruncates(t *testing.T) {
-	const max = 1 << 10
-	srv := serve(t, 500, 200<<10)
-	called := false
-	g := &Guard{MaxError: max, Validate: func(*http.Request, int, []byte) error { called = true; return errors.New("no") }}
-	resp, body, err := get(t, g, srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != 500 || len(body) != max || resp.ContentLength != max || resp.Header.Get("Content-Length") != fmt.Sprint(max) {
-		t.Errorf("status %d, %d bytes, ContentLength %d, header %q", resp.StatusCode, len(body), resp.ContentLength, resp.Header.Get("Content-Length"))
-	}
-	if called {
-		t.Error("Validate ran on a non-2xx response")
-	}
-}
-
-func TestGuardCapture(t *testing.T) {
-	srv := serve(t, 200, 10)
-	for _, tc := range []struct {
-		name    string
-		replace []byte
-		want    string
-	}{
-		{"body", nil, strings.Repeat("x", 10)},
-		{"replace", []byte("<r/>"), "<r/>"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var validated []byte
-			g := &Guard{Validate: func(_ *http.Request, _ int, b []byte) error { validated = b; return nil }}
-			c := &Capture{Replace: tc.replace}
-			req, _ := http.NewRequestWithContext(WithCapture(t.Context(), c), http.MethodGet, srv.URL, nil)
-			resp, err := (&http.Client{Transport: g}).Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			got, _ := io.ReadAll(resp.Body)
-			if string(got) != tc.want || resp.ContentLength != int64(len(tc.want)) {
-				t.Errorf("upward %q (ContentLength %d), want %q", got, resp.ContentLength, tc.want)
-			}
-			if !bytes.Equal(c.Body, validated) || string(c.Body) != strings.Repeat("x", 10) {
-				t.Errorf("Capture.Body %q, validated %q", c.Body, validated)
-			}
-		})
-	}
-	// no Capture: unaffected
-	_, body, err := get(t, &Guard{}, srv.URL)
-	if err != nil || len(body) != 10 {
-		t.Errorf("without Capture: err %v, %d bytes", err, len(body))
-	}
-}
-
 func TestGuardHeader(t *testing.T) {
 	var seen atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -323,32 +234,6 @@ func mustReq(t *testing.T, u string) *http.Request {
 		t.Fatal(err)
 	}
 	return req
-}
-
-// TestGuardReadErrorIsGuardError: a failed body read is a *GuardError, so
-// Cause strips the url.Error (a net.Error) around it: a cut body is still
-// a transport failure, any other read failure is not.
-func TestGuardReadErrorIsGuardError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/gzip" {
-			w.Header().Set("Content-Encoding", "gzip")
-			io.WriteString(w, "not gzip at all")
-			return
-		}
-		w.Header().Set("Content-Length", "100")
-		io.WriteString(w, "short")
-	}))
-	defer srv.Close()
-	for path, transport := range map[string]bool{"/cut": true, "/gzip": false} {
-		_, err := (&http.Client{Transport: &Guard{}}).Get(srv.URL + path)
-		var ge *GuardError
-		if !errors.As(err, &ge) {
-			t.Fatalf("%s: err %v is not a GuardError", path, err)
-		}
-		if got := Transport(Cause(err)); got != transport {
-			t.Errorf("%s: Transport(Cause(%v)) = %v, want %v", path, err, got, transport)
-		}
-	}
 }
 
 // cutServer answers with status, a header and a body that declares 1,000

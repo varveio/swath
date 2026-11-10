@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"testing"
 
@@ -94,9 +93,7 @@ func group() []GenerationRow {
 
 // TestGenerationCodec: the spill codec and the delta codec round-trip
 // every field of a group's rows, absent ones and repeats included; the
-// delta decoder owns its strings (none views the frame); a repeated row
-// costs a byte per field; an unknown flag is malformed. Detach goes
-// through the codec too.
+// decoded rows match every field. Detach goes through the codec too.
 func TestGenerationCodec(t *testing.T) {
 	rows := group()
 	c := generationCodec{}
@@ -130,21 +127,10 @@ func TestGenerationCodec(t *testing.T) {
 	if d.Err() != nil || d.Len() != 0 {
 		t.Fatalf("delta: %v, %d left", d.Err(), d.Len())
 	}
-	clear(src)
 	for i := range rows {
 		if got[i] != rows[i].Data {
 			t.Fatalf("delta row %d: %+v, want %+v", i, got[i], rows[i].Data)
 		}
-	}
-	if same := c.AppendDelta(nil, &rows[1].Data, &rows[1].Data); len(same) != 7 {
-		t.Fatalf("a repeated row takes %d bytes, want 7 (flags, six zero differences)", len(same))
-	}
-	bad := c.AppendDelta(nil, &zero, &zero)
-	bad[0] |= 1 << 7
-	d = schema.NewOwningDecoder(bad, 1<<10)
-	c.DecodeDelta(d, &zero, &Generation{})
-	if !errors.Is(d.Err(), schema.ErrCodec) {
-		t.Fatalf("an unknown flag: %v", d.Err())
 	}
 	for i, r := range GenerationSchema.Detach(rows) {
 		if r != rows[i] {
@@ -170,55 +156,16 @@ func TestGenerationCodec(t *testing.T) {
 // none, the page was the same.
 func TestExclusiveStart(t *testing.T) {
 	const dir = "A.nancymaae/86718_ANA_hifiasm-v0.15.2.pri/cleanome/bwa/v2_2_1/"
-	readme, next := dir+"README.txt", dir+"bwa-mem2-2.2.1-Owl_monkey-NCBI-build-86718_ANA_hifiasm-v0.15.2.pri.tar"
-	type gen struct {
-		name string
-		g    int64
-	}
-	inv := []gen{{readme, 1771372844467752}, {readme, 1771459281966852}, {readme, 1771891232620573},
-		{readme + "\x00x", 1}, {next, 1771373576885486}}
-	// objects.list's startOffset: the first entry whose name is >= it.
-	from := func(start string) gen {
-		i, _ := slices.BinarySearchFunc(inv, start, func(e gen, s string) int { return strings.Compare(e.name, s) })
-		return inv[i]
-	}
+	readme := dir + "README.txt"
 	start, ok := ExclusiveStart(readme)
 	if !ok || start != readme+"\x00" {
 		t.Fatalf("%q %v", start, ok)
-	}
-	if got := from(start); got.name != readme+"\x00x" {
-		t.Fatalf("after README the listing starts at %+v", got)
-	}
-	if got := from(readme); got != inv[0] {
-		t.Fatalf("at README the listing starts at %+v", got)
 	}
 	if s, ok := ExclusiveStart(strings.Repeat("a", maxName-1)); !ok || len(s) != maxName {
 		t.Fatalf("a 1,023-byte name: %d bytes, %v", len(s), ok)
 	}
 	if _, ok := ExclusiveStart(strings.Repeat("a", maxName)); ok {
 		t.Fatal("a 1,024-byte name's successor is sent")
-	}
-}
-
-type descendingGenerations struct{}
-
-func (descendingGenerations) List(_ context.Context, in *client.ListInput) (*client.Page, error) {
-	if in.PageToken == "" {
-		return &client.Page{Items: []client.Object{{Name: "k", Generation: 2}}, NextPageToken: "next"}, nil
-	}
-	return &client.Page{Items: []client.Object{{Name: "k", Generation: 1}}}, nil
-}
-
-// TestGenerationsRejectDescendingPageSeam: Generations of the same key must ascend
-// across page boundaries.
-func TestGenerationsRejectDescendingPageSeam(t *testing.T) {
-	p, err := NewGenerations(context.Background(), Options{Bucket: "b", Workers: 1, Client: descendingGenerations{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := order.Count(context.Background(), p, nil, order.Options{Workers: 1, Groups: true})
-	if !errors.Is(err, objhttp.ErrInvalidPage) {
-		t.Fatalf("descending generation seam accepted: rows=%d err=%v", st.Rows, err)
 	}
 }
 

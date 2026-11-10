@@ -81,7 +81,7 @@ prior's tiles of `(K, ⊤]` are cut around the certificates (`keyrange.aroundReu
 plain resume tiling). A certificate becomes a reused range that the order stage replays, and no data request
 starts inside its `[max(cs, K), ce)`. A prior confers no coverage: no key range is skipped or certified because
 a prior listed it. Coverage above K comes only from certificates that this run's ledger and files prove, and
-a certificate never depends on a prior. The tests are `keyrange` `TestPriorTilesOnlyGaps` (prior cuts inside
+a certificate never depends on a prior. The tests are `keyrange` `TestReuseTilesAroundSpans`, prior arm (prior cuts inside
 and around spans; without the cut the resume listed every key) and the campaign's `seed-from` arm.
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size

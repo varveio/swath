@@ -4,7 +4,6 @@
 package listing
 
 import (
-	"encoding/json"
 	"os"
 
 	"github.com/varveio/swath/go/internal/source/gcs"
@@ -51,12 +50,4 @@ func readFile(t interface {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func mustJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
 }

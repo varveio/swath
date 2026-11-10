@@ -49,12 +49,6 @@ type Answer interface {
 	Failure() Failure
 }
 
-// RetryAfter carries the service's wait before another attempt.
-type RetryAfter interface {
-	error
-	RetryAfter() time.Duration
-}
-
 // CredentialError is a credential failure: credentials that do not load,
 // or a token or key the provider would not issue. Transient ones (a token
 // endpoint's 5xx, a cut connection, an attempt past the request timeout)
@@ -195,10 +189,6 @@ func Normalize(err error) *Failure {
 	} else if f.Class == "" {
 		f.Class = ClassOther
 	}
-	var ra RetryAfter
-	if errors.As(cause, &ra) {
-		f.Wait = ra.RetryAfter()
-	}
 	return f
 }
 
@@ -271,7 +261,7 @@ type targetKey struct{}
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
 // full-jitter exponential backoff between attempts (or the service's own
-// wait, RetryAfter, when that is longer) and counting retries,
+// wait, Failure.Wait, when that is longer) and counting retries,
 // throttles and timeouts (every throttled or timed-out attempt, the last
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
@@ -629,6 +619,17 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 	put(CSlowStartEnd, l.SlowStartEnd)
 	put(CRateWaits, n.Rate.Waits)
 	put(CRateWaitNs, n.Rate.WaitNs)
+}
+
+// ParseEndpoint refuses credential-bearing URLs before they can be recorded.
+// Errors omit the value; path rules and normalization belong to the provider.
+func ParseEndpoint(raw, form string) (*url.URL, error) {
+	if !source.UnsafeURL(raw) {
+		if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			return u, nil
+		}
+	}
+	return nil, source.Unsupported(fmt.Errorf("endpoint: want %s without user information, a query or a fragment", form))
 }
 
 // CanonicalRoute is the allowlist of equivalent route spellings for

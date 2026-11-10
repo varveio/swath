@@ -246,7 +246,7 @@ func TestADCConfiguredButBroken(t *testing.T) {
 	}
 	// The search is injected, so the outcome does not depend on the host
 	// running the test.
-	_, err := newClient(context.Background(), Config{}, found{err: errors.New("google: could not find default credentials")}, objhttp.Pool(0, nil, nil, nil))
+	_, err := newClient(context.Background(), Config{}, found(nil, errors.New("google: could not find default credentials")), objhttp.Pool(0, nil, nil, nil))
 	var ce *objhttp.CredentialError
 	if !errors.As(err, &ce) || ce.Transient {
 		t.Fatalf("nothing found: err %v, want a credential error (auth)", err)

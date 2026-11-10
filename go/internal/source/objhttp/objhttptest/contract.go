@@ -151,7 +151,7 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 					}
 				}))
 				defer srv.Close()
-				bodies := &bodyCloses{next: http.DefaultTransport}
+				bodies := &BodyCloses{Next: http.DefaultTransport}
 				var hc *http.Client
 				if supplied {
 					hc = &http.Client{Transport: bodies}
@@ -160,7 +160,7 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 					Retry: objhttp.Retry{MaxAttempts: c.attempts, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
 				err := cl.List(context.Background())
 				if supplied {
-					bodies.check(t, int(answered.Load()))
+					bodies.Check(t, int(answered.Load()))
 				}
 				if followed.Load() != 0 || n.Load() != c.want.Attempts {
 					t.Fatalf("%d listing requests, %d redirects followed", n.Load(), followed.Load())
@@ -225,7 +225,7 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 				want = context.DeadlineExceeded
 			}
 			defer cancel()
-			bodies := &bodyCloses{next: http.DefaultTransport}
+			bodies := &BodyCloses{Next: http.DefaultTransport}
 			if !deadline {
 				bodies.afterHeaders = cancel
 			}
@@ -235,7 +235,7 @@ func Contract(t *testing.T, w Wire, build func(Settings) Client) {
 			if !errors.Is(err, want) || objhttp.Classify(err) != objhttp.ClassOther || objhttp.Requeue(err) || got.Attempts != 1 || got.Retries != 0 || got.Timeouts != 0 || got.ParseFailures != 0 {
 				t.Fatalf("error %v, counters %+v", err, got)
 			}
-			bodies.check(t, 1)
+			bodies.Check(t, 1)
 		})
 	}
 	// A limiter of 8 has a 256-answer window (the floor): the 39th throttle
@@ -295,16 +295,16 @@ func mistimed(ran bool, ns int64) bool {
 	return (!ran && ns != 0) || (ran && ns == 0 && !coarseClock)
 }
 
-// bodyCloses observes the original bodies beneath each client's Guard.
-type bodyCloses struct {
-	next         http.RoundTripper
+// BodyCloses observes the original bodies beneath each client's Guard.
+type BodyCloses struct {
+	Next         http.RoundTripper
 	afterHeaders func()
 	mu           sync.Mutex
 	bodies       []*closedBody
 }
 
-func (c *bodyCloses) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := c.next.RoundTrip(req)
+func (c *BodyCloses) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := c.Next.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +318,9 @@ func (c *bodyCloses) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	return resp, nil
 }
-func (c *bodyCloses) check(t *testing.T, want int) {
+
+// Check requires want original bodies, each closed exactly once.
+func (c *BodyCloses) Check(t *testing.T, want int) {
 	t.Helper()
 	c.mu.Lock()
 	defer c.mu.Unlock()

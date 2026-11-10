@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -201,11 +202,11 @@ func acceptSource(src SourceInfo, want WholeSource, id SchemaID) error {
 	case sourceKinds[id] != want.Kind:
 		return semantic(KindCoverage, "source.kind", nil, "%q, but %s is a listing of %q", want.Kind, id, sourceKinds[id])
 	case want.Kind == "local-fs" && want.Container != "":
-		return semantic(KindCoverage, "source.container", nil, "%q: a filesystem has no container", want.Container)
+		return semantic(KindCoverage, "source.container", nil, "%q: a filesystem has no container", shownName(want.Container))
 	case src.Container == nil && want.Container != "":
 		return missing("source.container")
 	case src.Container != nil && *src.Container != want.Container:
-		return semantic(KindCoverage, "source.container", nil, "%q, not %q", *src.Container, want.Container)
+		return semantic(KindCoverage, "source.container", nil, "%q, not %q", shownName(*src.Container), shownName(want.Container))
 	}
 	switch want.Kind {
 	case "s3", "gcs":
@@ -224,8 +225,10 @@ func acceptSource(src SourceInfo, want WholeSource, id SchemaID) error {
 		return semantic(KindCoverage, "source.uri", nil, "empty: the manifest does not identify its source")
 	case want.Kind == "local-fs" && trimSeparator(*src.URI) == trimSeparator(want.URI):
 	case want.Kind != "local-fs" && *src.URI == want.URI:
-	default:
+	case want.Kind == "local-fs": // a path: @, ? and # are name characters
 		return semantic(KindCoverage, "source.uri", nil, "%q, not %q", *src.URI, want.URI)
+	default:
+		return semantic(KindCoverage, "source.uri", nil, "%q, not %q", shown(*src.URI), shown(want.URI))
 	}
 	return nil
 }
@@ -239,3 +242,35 @@ func trimSeparator(root string) string {
 }
 
 func missing(member string) error { return semantic(KindCoverage, member, nil, "absent") }
+
+// shown keeps a clean container or object-store URI in a diagnostic and
+// hides one that holds user information, a query or a fragment where the
+// bucket, account or container belongs: a mistyped root can carry a
+// credential there. A URI's prefix is a literal key and is shown as it is.
+func shown(v string) string {
+	if scheme, rest, ok := strings.Cut(v, "://"); ok {
+		if authority, _, _ := strings.Cut(rest, "/"); strings.ContainsAny(authority, "@?#") {
+			return scheme + "://[redacted]"
+		}
+		// An S3 or GCS root's '?' is key data; any other scheme's query (an
+		// Azure root's is where its shared access signature goes) is hidden.
+		if i := strings.IndexAny(v, "?#"); i >= 0 && scheme != "s3" && scheme != "gs" {
+			return v[:i+1] + "[redacted]"
+		}
+		return v
+	}
+	if strings.ContainsAny(v, "@?#") {
+		return "[redacted]"
+	}
+	return v
+}
+
+// shownName keeps a clean bucket, account or container name and hides one
+// holding user information, a query or a fragment anywhere: a name is never
+// a URI, so nothing in it is key data.
+func shownName(v string) string {
+	if strings.ContainsAny(v, "@?#") {
+		return "[redacted]"
+	}
+	return v
+}

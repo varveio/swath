@@ -25,9 +25,9 @@ import (
 // XML metacharacters, non-ASCII, long keys, dense numeric runs.
 func oracleKeys() []string {
 	keys := []string{"a b", "a+b", "a%2Fb", "a%", "x&y<z>\"'", "é/ü", "日本/語", "\x7f", "~", "long/" + string(bytes.Repeat([]byte("k"), 900))}
-	for i := range 6000 {
+	for i := 0; len(keys) < 12000; i++ {
 		keys = append(keys, fmt.Sprintf("d%02d/sub %d/obj+%06d", i%7, i%3, i))
-		if i%400 == 0 {
+		if i%400 == 0 && len(keys) < 12000 {
 			keys = append(keys, fmt.Sprintf("flat-%05d%%", i))
 		}
 	}
@@ -41,7 +41,7 @@ func oracleKeys() []string {
 func TestDatasetsMatchSDK(t *testing.T) {
 	s3test.NoCredentials(t)
 	b := s3test.Backend(t, oracleKeys(), s3mem.WithTimeSource(&step{t: time.Date(2026, 1, 1, 0, 0, 0, 123456789, time.UTC)}))
-	srvURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 2*time.Millisecond))
+	srvURL := s3test.Serve(t, s3test.Delayed(s3test.Handler(b), 5*time.Millisecond))
 	build := func(s3cfg S3Config, workers int) string {
 		out := filepath.Join(t.TempDir(), "ds")
 		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.FetchOwner, s3cfg.Anonymous = srvURL, true, true, true
@@ -56,10 +56,12 @@ func TestDatasetsMatchSDK(t *testing.T) {
 		cfg     S3Config
 		workers int
 	}{
-		"client sequential":    {S3Config{Policy: keyrange.Policy{Sequential: true}}, 1},
-		"client parallel 4":    {S3Config{}, 4},
-		"client parallel seed": {S3Config{Policy: keyrange.Policy{Seed: true}}, 8},
-		"sdk parallel 4":       {S3Config{Client: sdk}, 4},
+		"client sequential":       {S3Config{Policy: keyrange.Policy{Sequential: true}}, 1},
+		"client parallel 4":       {S3Config{}, 4},
+		"client parallel seed":    {S3Config{Policy: keyrange.Policy{Seed: true}}, 8},
+		"client parallel 16":      {S3Config{}, 16},
+		"client parallel seed 16": {S3Config{Policy: keyrange.Policy{Seed: true}}, 16},
+		"sdk parallel 4":          {S3Config{Client: sdk}, 4},
 	} {
 		sameDataset(t, name, ref, build(tc.cfg, tc.workers))
 	}

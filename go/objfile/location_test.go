@@ -4,6 +4,7 @@
 package objfile_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/varveio/swath/go/objfile"
@@ -43,5 +44,34 @@ func TestParseLocation(t *testing.T) {
 	}
 	if got := (objfile.Location{Scheme: "az", Account: "acct", Container: "ctr", Prefix: "ds/"}).String(); got != "az://acct/ctr/ds/" {
 		t.Errorf("String = %q", got)
+	}
+}
+
+func TestParseLocationSecrecy(t *testing.T) {
+	for _, root := range []string{"s3://bkt/ds", "gs://bkt/ds", "az://acct/ctr/ds"} {
+		scheme, rest, _ := strings.Cut(root, "://")
+		for _, raw := range []string{root + "?sig=SECRET", root + "#SECRET", scheme + "://user:SECRET@" + rest} {
+			if _, err := objfile.ParseLocation(raw); err == nil || strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("%q: error %v; want a refusal without credentials", raw, err)
+			}
+		}
+	}
+}
+
+func TestParseLocationDiagnostic(t *testing.T) {
+	for _, c := range []struct{ raw, shown string }{
+		{"gs://b:SECRET/p", "[redacted]"},
+		{"az://user:SECRET@acct/c", "[redacted]"},
+		{"https://host/p?sig=SECRET", "[redacted]"},
+		{"s3://UPPER/p", "s3://UPPER/p"},
+		{"s3://UPPER/team@home", "s3://UPPER/team@home"},
+		{"s3:/user:SECRET@bkt", "[redacted]"},
+		{"s3:/bkt/p", "s3:/bkt/p"},
+		{"https://host/p", "https://host/p"},
+	} {
+		_, err := objfile.ParseLocation(c.raw)
+		if err == nil || !strings.Contains(err.Error(), `location "`+c.shown+`":`) || strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%q: %v; want location %q without credentials", c.raw, err, c.shown)
+		}
 	}
 }

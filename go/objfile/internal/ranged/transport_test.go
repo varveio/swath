@@ -57,7 +57,7 @@ func TestTransport(t *testing.T) {
 				ContentLength: c.response.contentLength, Uncompressed: c.response.uncompressed,
 				Body: closer{body, &closed}}, nil
 		})
-		req, _ := http.NewRequest(http.MethodGet, "http://store/bkt/obj", nil)
+		req, _ := http.NewRequest(http.MethodGet, "http://user:SECRET@store/bkt/ob%6A?sig=SECRET#SECRET", nil)
 		if c.rng != "" {
 			req.Header.Set("Range", c.rng)
 		}
@@ -67,6 +67,12 @@ func TestTransport(t *testing.T) {
 		}
 		if err == nil && res.StatusCode != c.response.status {
 			t.Errorf("%s: status %d", c.name, res.StatusCode)
+		}
+		if err != nil && !strings.Contains(err.Error(), "GET http://store/bkt/ob%6A:") {
+			t.Errorf("%s: request method and escaped URL missing: %v", c.name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%s: credential in error: %v", c.name, err)
 		}
 		if err != nil && !closed {
 			t.Errorf("%s: refused body not closed", c.name)
@@ -93,7 +99,7 @@ func TestTransportEndsFailedBody(t *testing.T) {
 		h := http.Header{"Content-Range": {"bytes 0-3/10"}}
 		return &http.Response{StatusCode: 206, Header: h, ContentLength: 4, Body: failing{}}, nil
 	})
-	req, _ := http.NewRequest(http.MethodGet, "http://store/bkt/obj", nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://user:SECRET@store/bkt/ob%6A?sig=SECRET#SECRET", nil)
 	req.Header.Set("Range", "bytes=0-3")
 	res, err := Transport(base).RoundTrip(req)
 	if err != nil {

@@ -56,6 +56,9 @@ type pooled interface{ Transports() int }
 // (client.Client: retry_after_capped).
 type capped interface{ RetryAfterCapped() int64 }
 
+var _ capped = (*client.Client)(nil)
+var _ pooled = (*client.Client)(nil)
+
 // Routed is implemented by clients that can name the route a container's
 // requests go to, which resume identity freezes (client.Client). A
 // supplied client that cannot is listed, but the run declines resume.
@@ -110,7 +113,7 @@ const RedactedSAS = "sig=[redacted]"
 // otherwise '?' belongs to the prefix. A SAS query must parse and carry a
 // signature, or the root is refused. Errors never quote the SAS.
 func ParseURL(u string) (account, container, prefix, sas string, err error) {
-	shown := RedactRoot(u)
+	shown := source.RedactRoot(RedactRoot(u))
 	rest, ok := strings.CutPrefix(u, "az://")
 	if !ok || rest == "" {
 		return "", "", "", "", fmt.Errorf("not an az://ACCOUNT/CONTAINER[/PREFIX] URL: %q", shown)

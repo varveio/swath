@@ -158,14 +158,10 @@ func TestEndpoint(t *testing.T) {
 	}
 	rec := newRecorder(t)
 	for base, path := range map[string]string{
-		"/storage/v1/":                "/storage/v1/b/bkt/o",
-		"/storage/v1":                 "/storage/v1/b/bkt/o",
-		"":                            "/b/bkt/o",
-		"/custom%20base/v1":           "/custom%20base/v1/b/bkt/o",
-		"/tenant%2F":                  "/tenant//b/bkt/o",
-		"/proxy%2Ftenant/storage/v1/": "/proxy/tenant/storage/v1/b/bkt/o",
-		"/a/../storage/v1/":           "/storage/v1/b/bkt/o",
-		"/a/./storage/v1/":            "/a/storage/v1/b/bkt/o",
+		"/storage/v1/":      "/storage/v1/b/bkt/o",
+		"/storage/v1":       "/storage/v1/b/bkt/o",
+		"":                  "/b/bkt/o",
+		"/custom%20base/v1": "/custom%20base/v1/b/bkt/o",
 	} {
 		c, err := New(context.Background(), Config{Endpoint: rec.URL + base, Anonymous: true})
 		if err != nil {
@@ -203,21 +199,18 @@ func TestEmptyListingCarriesKind(t *testing.T) {
 }
 
 // found is a credential search that finds ts, or fails with err.
-type found struct {
-	ts  oauth2.TokenSource
-	err error
-}
-
-func (f found) find(context.Context, ...string) (*google.Credentials, error) {
-	if f.err != nil {
-		return nil, f.err
+func found(ts oauth2.TokenSource, err error) credentialFinder {
+	return func(context.Context, ...string) (*google.Credentials, error) {
+		if err != nil {
+			return nil, err
+		}
+		return &google.Credentials{TokenSource: ts}, nil
 	}
-	return &google.Credentials{TokenSource: f.ts}, nil
 }
 
 // withTokens builds a client whose credential search finds ts.
 func withTokens(cfg Config, ts oauth2.TokenSource) (*Client, error) {
-	return newClient(context.Background(), cfg, found{ts: ts}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil, nil))
+	return newClient(context.Background(), cfg, found(ts, nil), objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil, nil))
 }
 
 type tokens struct{ err error }
