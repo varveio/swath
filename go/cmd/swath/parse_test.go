@@ -99,6 +99,10 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"s3://b", "--depth"}, "--depth needs a value (N)"},
 		{[]string{"s3://b", "--max-prefixes", "0"}, `--max-prefixes "0": want a whole number of at least 1`},
 		{[]string{"s3://b", "--max-keys", "-1"}, "--max-keys"},
+		{[]string{"s3://b", "--columns", ""}, `--columns "": an empty name`},
+		{[]string{"s3://b", "--columns", ","}, `--columns ",": an empty name`},
+		{[]string{"s3://b", "--storage-class", ","}, `--storage-class ",": an empty name`},
+		{[]string{"s3://b", "--storage-class=STANDARD,"}, `--storage-class "STANDARD,": an empty name`},
 	} {
 		_, _, err := parseList(c.args, io.Discard, command{count: true, du: true})
 		var sh seeHelp

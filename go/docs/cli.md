@@ -787,7 +787,8 @@ table changes.
   SOURCE that is a file lists as its one row, keyed by its name, with the fields its directory's listing gives
   it (the same tier; a symbolic link as itself, with `link_target`).
   `--columns key,size` (repeatable) prints those columns, by the dataset's names, in the order given, in TSV and
-  JSONL; a name the source's schema lacks is refused with exit 2, the message listing its columns, before any
+  JSONL; an empty name (`--columns ''`, `--columns ,`, here and in `--storage-class`) and a name the source's
+  schema lacks are refused with exit 2 (the latter listing its columns) before any
   request. The table's columns are fixed, so `--columns` is refused with `--format table` and with a dataset;
   on a terminal it makes `auto` TSV.
   - JSONL, one object per line, its members in column order, a null `null`, strings escaped as jq does. A string

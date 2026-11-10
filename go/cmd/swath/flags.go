@@ -94,14 +94,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "columns", Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
 		Usage: "TSV and JSONL: these columns, in order (key,size; repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
-		Value: source.Func(func(v string) error {
-			for _, c := range strings.Split(v, ",") {
-				if c = strings.TrimSpace(c); c != "" {
-					o.columns = append(o.columns, c)
-				}
-			}
-			return nil
-		})})
+		Value: source.Func(names(&o.columns))})
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
 
@@ -128,14 +121,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
 		Long: "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
-		Value: source.Func(func(v string) error {
-			for _, c := range strings.Split(v, ",") {
-				if c = strings.TrimSpace(c); c != "" {
-					o.filter.StorageClasses = append(o.filter.StorageClasses, c)
-				}
-			}
-			return nil
-		})})
+		Value: source.Func(names(&o.filter.StorageClasses))})
 
 	o.partSize, o.rowBudget, o.partInterval, o.stall = listing.DefaultPartSize, listing.DefaultRowBudget, listing.DefaultPartInterval, 10*time.Minute
 	def(source.Flag{Name: "workers", Short: "j", Value: source.Count(&o.workers, 1), Metavar: "N", Group: source.GroupPerformance,
@@ -297,6 +283,22 @@ func (i inverse) Type() string   { return "bool" }
 // or operational flag, or the other spelling of one (undoFlags).
 func mayChange(name string) bool {
 	return slices.Contains(resumeFlags, name) || slices.Contains(resumeFlags, undoName(name))
+}
+
+// names appends a comma list's names to dst; an empty name (--columns '',
+// --storage-class ,) is refused, never read as no restriction.
+func names(dst *[]string) func(string) error {
+	return func(v string) error {
+		var add []string
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.TrimSpace(c); c == "" {
+				return errors.New("an empty name: want NAME[,NAME...]")
+			}
+			add = append(add, c)
+		}
+		*dst = append(*dst, add...)
+		return nil
+	}
 }
 
 // sizeText is n bytes as a user types it: 64MiB, 1GiB, or the bytes.
