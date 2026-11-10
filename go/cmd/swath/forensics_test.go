@@ -202,7 +202,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--report", report, "-o", dir}, io.Discard, false)
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--report", report, "-o", dir}, io.Discard, false)
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("exit %d (%v)", c, err)
 		}
@@ -256,7 +256,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		report := filepath.Join(t.TempDir(), "report.json")
 		start := time.Now()
 		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "1",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "--max-duration", deadline.String(), "--report", report, "-o", dir}, io.Discard, false)
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--max-duration", deadline.String(), "--report", report, "-o", dir}, io.Discard, false)
 		if time.Since(start) < deadline || failedAt.Sub(start) >= deadline {
 			t.Fatalf("the run failed after %s and the command returned after %s: not across the %s deadline",
 				failedAt.Sub(start), time.Since(start), deadline)

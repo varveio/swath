@@ -16,7 +16,7 @@ swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
 | Resource | Flag | Default | What to know |
 |---|---|---|---|
 | Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling. A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
-| Row budget | `--row-budget` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `invocation.row_budget` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
+| Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `invocation.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by the schema's calculated working set and the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
 | Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
@@ -39,16 +39,16 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 
 ### Memory
 
-swath sets no total-memory limit. `--row-budget` bounds the rows buffered for sorted output and, through
+swath sets no total-memory limit. `--sort-buffer` bounds the rows buffered for sorted output and, through
 encoder admission, how many writers run; `GOMEMLIMIT` is a soft target for Go-managed memory, not a limit on
 RSS; an OS or container limit can stop the process when memory cannot be reclaimed. A run holds:
 
-- **Rows in flight, bounded by `--row-budget`:** rows listed ahead of the publish frontier and the
+- **Rows in flight, bounded by `--sort-buffer`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
   not charged, and no range keeps the page it was cut from alive, see
   [ordering](internals/ordering.md#what-a-waiting-range-retains)). When listing ends the tree holds about
   one budget (spill keeps it there), and the segment tail's queues and frames may take one more beside it:
-  about two row budgets in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`).
+  about two sort buffers in all (`resources.drain.segments.tree_bytes` beside `max_held_bytes`).
 - **Pages in flight, outside it:** accepted success bodies are limited to 16 MiB for S3/GCS and
   64 MiB for Azure. These byte limits do not bound the backing buffer capacity or decoded rows and
   strings. Worker requests, seed listings and probes can overlap. Include those allocations, the
@@ -63,7 +63,7 @@ RSS; an OS or container limit can stop the process when memory cannot be reclaim
 - **A `.zst` text file's compressor, outside it:** as many parallel jobs as `--encoders`, about 5 to 13 MiB
   each; lower `--encoders` to lower it. Gzip is one stream. The report's `output.text.compressor` names the
   jobs and why (`jobs_reason`: `cores`, `row_budget`, `encoders` when asked, `gzip`); the rows being
-  formatted for the file are rows in flight, charged to `--row-budget`
+  formatted for the file are rows in flight, charged to `--sort-buffer`
   ([how](internals/run-lifecycle.md#encoder-sizing)).
 - **Spill, on disk:** rows ahead of the frontier past the budget, within `--spill-budget`. On tmpfs (a
   common `/tmp`) spill is memory charged to the host or container but not to the process's RSS: the
@@ -74,8 +74,8 @@ arrive and never orders, buffers or spills them (`resources.features.order` fals
 `swath du` also holds one entry per distinct prefix (about 150 bytes each), capped by `--max-prefixes`.
 
 Read the actual figure from the report's `resources.peak_rss_bytes` on a representative run, and size the
-host from that, not from `--row-budget`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
-sampled every 100 ms) against `invocation.row_budget_bytes` shows how much memory the budget does not see;
+host from that, not from `--sort-buffer`. Beside it, `resources.peak_heap_live_bytes` (the peak live heap,
+sampled every 100 ms) against `invocation.sort_buffer_bytes` shows how much memory the budget does not see;
 `peak_ahead_rows` is the most rows listed and not yet handed on at once (in memory or spilled), and
 `frontier_stuck_max_ns` the longest stretch in which nothing was handed on (a held-up frontier).
 Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it with the CPU times; on another
@@ -164,17 +164,17 @@ time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
 | `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
 | `order.spill_live_bytes` | on a sorted run of a large list, most of the rows listed: today's ordered emission spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) | near `resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
 | `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
-| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--row-budget`; a count holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
+| `order.ahead_rows`, `resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--sort-buffer`; a count holds none | not by itself; read it with `resources.spill.refused`, `budget_wait_ns` and `frontier_stuck_max_ns` |
 | `resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
 | `resources.frontier_stuck_max_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on the campaign's sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
-| `resources.peak_heap_live_bytes` against `invocation.row_budget_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
+| `resources.peak_heap_live_bytes` against `invocation.sort_buffer_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
 | `resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
 | `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
 | `rows` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
 | `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
 | `throttles` | flat | rising steadily: see Throttling |
 | `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
-| `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full row budget |
+| `resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full sort buffer |
 | `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
 | `inflight.p99_ns` against `inflight.p50_ns` (report) | a few times p50 | p99 tens of times p50: a tail of slow attempts (timeouts, a throttled route) |
 | `inflight.latency_overflow` (report) | 0 | above 0: attempts of 18 min 20 s or longer; a percentile among them reads 9223372036854775807, open-ended, not a measured bound |
@@ -403,7 +403,7 @@ and for S3 the delete-marker state, in wire order.
 - **Versioned listing** (`--all-versions`) was checked against an independent serial listing on small public
   buckets (seven S3, one GCS; up to 40,000 versions, pages of 1 to 1,000 entries, interrupted and resumed runs);
   large versioned buckets are unmeasured.
-- **Memory:** `--row-budget` bounds rows in flight, not resident memory (see Sizing).
+- **Memory:** `--sort-buffer` bounds rows in flight, not resident memory (see Sizing).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
   of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
   ([measurements](internals/measurements.md#known-gaps)).

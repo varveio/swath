@@ -159,9 +159,9 @@ Performance:
                                 it throttles at the default.
       --encoders N            Parquet encoders, or a .zst file's compression jobs (default: CPUs)
                                 Lower it to leave cores to other work; the default follows
-                                GOMAXPROCS, the row budget and the descriptor limit. An explicit
+                                GOMAXPROCS, the sort buffer and the descriptor limit. An explicit
                                 count is kept, with a warning when they cannot carry it.
-      --row-budget SIZE       rows held for sorted output; not a total-memory limit
+      --sort-buffer SIZE      bytes buffered for sorted output; not a total-memory limit
                                 Rows listed ahead of the output, the output queues and the
                                 scheduler's metadata. Past it rows spill to disk; with no spill
                                 space listing waits. Request pages, directory reads, writers,
@@ -169,7 +169,7 @@ Performance:
                                 holds about one more, and a larger value admits more encoders.
                                 Default: 1/16 of the least of detected physical memory, the cgroup's
                                 limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected;
-                                invocation.row_budget says which). Raise it when spill is heavy and
+                                invocation.sort_buffer says which). Raise it when spill is heavy and
                                 memory is free; to use less memory lower it with --workers and
                                 --encoders.
       --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)

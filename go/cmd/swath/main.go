@@ -558,7 +558,7 @@ func (t *totalsOut) write(w io.Writer) error {
 
 // runtimeFlags may change on swath resume: they do not change the output
 // (resources, reporting, time limits) ...
-var runtimeFlags = append([]string{"workers", "encoders", "row-budget", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
+var runtimeFlags = append([]string{"workers", "encoders", "sort-buffer", "spill-budget", "spill-reserve", "no-spill-compress", "spill-plain", "part-interval", "report", "max-duration", "stall-timeout", "seed-from"}, termFlags...)
 
 // ... nor do operationalFlags, how requests are authenticated, timed and
 // admitted, which no identity holds: the source and output identity (the

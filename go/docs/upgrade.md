@@ -304,6 +304,9 @@ the list below is the earlier history of the unreleased builds.
   `--memory`; the default was 128 MiB on every host (from 256 MiB of `--memory`) and is now 1/16 of memory, at most
   1 GiB (run report version 5).
   The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes`. A journal that recorded `--memory` is refused on resume.
+- `--row-budget` is `--sort-buffer` in 0.4, the same bytes under a name that says what it buffers (run report
+  version 5: `invocation.sort_buffer_bytes`). A journal that recorded `--row-budget` resumes with its value as
+  `--sort-buffer`; a `--sort-buffer` given to `swath resume` wins.
 - `--spill-max` (now `--spill-budget`) is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
   encoder at full size, at least 1 GiB: 1 GiB at the old 128 MiB row budget, more where a larger default
   admits more encoders) and `--spill-compress` moved to
@@ -339,9 +342,10 @@ of the flags every object store has are gone, one shared flag serving S3, GCS an
 is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
-**Run report: version 5.** Version 5 adds `invocation.row_budget` (how the row budget was chosen: by default
-1/16 of memory, at most 1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`; a
-version 4 reader reads them by ignoring them.
+**Run report: version 5.** Version 5 renames `invocation.row_budget_bytes` to `invocation.sort_buffer_bytes`
+(`--sort-buffer`) and adds `invocation.sort_buffer` (how it was chosen: by default 1/16 of memory, at most
+1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`; a version 4 reader ignores
+the additions and reads the buffer from `sort_buffer_bytes` in place of `row_budget_bytes`.
 
 **Run report: version 4.** Version 4 adds `invocation.narrowing` (whether the includes narrowed the listed
 prefix, or why not; [filters.md](filters.md#what-narrows-the-listing)), `outcome.unreadable` (a local listing skipped
@@ -381,7 +385,7 @@ is the full schema and [reference/run-report.md](reference/run-report.md) its de
 | `output.bytes` (part bytes) | `output.output_bytes`; new beside it `output.object_bytes` (the sizes of the objects the order stage accepted) |
 | `cost.api_calls` | `requests.http_attempts`, with `requests.retries`, `throttles`, `timeouts` beside it; `cost` keeps `cost_usd` and `basis` |
 | `efficiency.api_calls_per_1k_objects` (per row listed after the filters) | `efficiency.http_attempts_per_1k_rows` (per row fetched) |
-| `resources.row_budget_bytes` | removed: `invocation.row_budget_bytes` holds the same value |
+| `resources.row_budget_bytes` | removed: `invocation.row_budget_bytes` holds the same value (`invocation.sort_buffer_bytes` from version 5) |
 | – | `timings.seed_ms`, `drain_ms`, `publication_ms` (phase times; `listing_ms` unchanged) |
 | – | `resources.free_disk_min_bytes` |
 | – | `history` (`interval_ms`, `samples`: at most 300) |

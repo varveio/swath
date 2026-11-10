@@ -157,7 +157,7 @@ does not close a part whose boundary a resume fixed.
 The default `--encoders` is GOMAXPROCS lowered to what the resources carry: one writer's working set and one
 state of the shared codec, priced from the provider's schema
 ([per-schema sizes](parquet-output.md#writer-buffers-and-admission)), each from an allowance equal to
-`--row-budget`, apart from the rows, and the descriptor limit (after the spill readers, the workers'
+`--sort-buffer`, apart from the rows, and the descriptor limit (after the spill readers, the workers'
 connections and a reserve), never fewer than one. An explicit `--encoders N` is kept as given; it bypasses
 default resource admission, with a warning when the resources cannot carry it. For a `.zst` text file the same
 flag is the zstd jobs compressed at once, 16 MiB each from that allowance (no descriptor each); one job is a
@@ -166,7 +166,7 @@ synchronous encoder on the order stage ([running.md](../running.md#memory)). A j
 speed of the 8 MiB default at a seventh of the memory), its output, the overlap the next job takes and its
 encoder: measured at 5 to 13 MiB a job. A file's rows are formatted by `--encoders` goroutines
 (`output.text.formatters`) into one ordered stream; their queued batches are rows in flight, charged to
-`--row-budget`, and the chunks they format are about the same size ([ordering](ordering.md#the-waits)).
+`--sort-buffer`, and the chunks they format are about the same size ([ordering](ordering.md#the-waits)).
 
 ## The request limiter
 

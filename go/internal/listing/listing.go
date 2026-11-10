@@ -472,10 +472,10 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	switch n := admit(cfg); {
 	case asked <= n || cfg.Warn == nil:
 	case cfg.Output.Text != nil:
-		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the row budget; --row-budget %d MiB carries %d",
+		cfg.Warn(fmt.Sprintf("%d encoders (compression jobs) need about %d MiB of compressor memory beside the row budget; --sort-buffer %d MiB carries %d",
 			asked, int64(asked)*textout.JobBytes>>20, cfg.Limits.RowBudget>>20, n))
 	default:
-		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --row-budget %d MiB and the descriptor limit carry %d",
+		cfg.Warn(fmt.Sprintf("%d encoders need about %d MiB of writer memory beside the row budget and %d descriptors; --sort-buffer %d MiB and the descriptor limit carry %d",
 			asked, int64(asked)*cfg.Limits.encoderBytes>>20, asked, cfg.Limits.RowBudget>>20, n))
 	}
 	if t := cfg.Output.Text; t != nil {
@@ -629,7 +629,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 		cfg.Progress = &Progress{} // the history reads it
 	}
 	// One byte budget for rows in flight, shared by the order stage and the
-	// encoders' queues (--row-budget; pages being parsed, codecs and the
+	// encoders' queues (--sort-buffer; pages being parsed, codecs and the
 	// garbage collector are outside it).
 	shared := &order.Shared{}
 	// The final part is durable: listing again could only add a second

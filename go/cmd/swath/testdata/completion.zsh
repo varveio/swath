@@ -22,7 +22,7 @@ _swath_list() {
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
-        '--row-budget=[rows held for sorted output; not a total-memory limit]:SIZE: ' \
+        '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
@@ -149,7 +149,7 @@ _swath_diag_list() {
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
-        '--row-budget=[rows held for sorted output; not a total-memory limit]:SIZE: ' \
+        '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
@@ -170,7 +170,7 @@ _swath_diag_list() {
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--no-journal[publish parts only at the end, without the journal resume needs]' \
-        '--no-spill[wait on the row budget instead of spilling rows to disk]' \
+        '--no-spill[wait on the sort buffer instead of spilling rows to disk]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
@@ -226,7 +226,7 @@ _swath_diag_count() {
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
-        '--row-budget=[rows held for sorted output; not a total-memory limit]:SIZE: ' \
+        '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-size=[target size of a Parquet part]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
@@ -285,7 +285,7 @@ _swath_resume() {
     _arguments \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
-        '--row-budget=[rows held for sorted output; not a total-memory limit]:SIZE: ' \
+        '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \

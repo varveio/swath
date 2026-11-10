@@ -23,8 +23,9 @@ import (
 // for versions schemas the attempt-scoped version classification and
 // distinct keys, and swath du's per-prefix totals (output.totals). 4:
 // invocation.narrowing (the includes' prefix narrowing), outcome.unreadable
-// and requests.failure_warnings. 5: invocation.row_budget (how the row
-// budget was chosen: by default a share of memory), resources.spill.frames
+// and requests.failure_warnings. 5: invocation.row_budget_bytes is
+// invocation.sort_buffer_bytes (--sort-buffer), invocation.sort_buffer
+// (how it was chosen: by default a share of memory), resources.spill.frames
 // and opens.
 const ReportVersion = 5
 
@@ -162,8 +163,8 @@ type Invocation struct {
 	Fields         string    `json:"fields,omitempty"` // the metadata tier, for providers with tiers
 	Workers        int       `json:"workers"`
 	Encoders       int       `json:"encoders"`
-	RowBudgetBytes int64     `json:"row_budget_bytes"`
-	RowBudget      RowBudget `json:"row_budget"` // how row_budget_bytes was chosen
+	RowBudgetBytes int64     `json:"sort_buffer_bytes"` // --sort-buffer
+	RowBudget      RowBudget `json:"sort_buffer"`       // how sort_buffer_bytes was chosen
 	PartSizeBytes  int64     `json:"part_size_bytes"`
 	Prior          *Prior    `json:"prior,omitempty"` // the --seed-from prior the range engine started from
 }
@@ -356,14 +357,14 @@ type Resources struct {
 	// RusageAvailable says whether this platform measured the CPU times and
 	// peak RSS; false leaves them out rather than reporting zeros.
 	RusageAvailable  bool  `json:"rusage_available"`
-	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage (the budget: invocation.row_budget_bytes)
+	MaxBufferedBytes int64 `json:"max_buffered_bytes"` // peak reorder storage (the budget: invocation.sort_buffer_bytes)
 	// FreeDiskMinBytes is the least free space seen on the filesystem the
 	// run writes to (the spill directory's, else the output's), sampled
 	// every second (HistoryEvery); absent for a run that writes nothing.
 	FreeDiskMinBytes *int64 `json:"free_disk_min_bytes,omitempty"`
 	// PeakHeapLiveBytes is the peak live heap while listing (the bytes a
 	// garbage collection marked reachable, sampled every 100 ms): beside
-	// invocation.row_budget_bytes, the memory the budget does not see.
+	// invocation.sort_buffer_bytes, the memory the budget does not see.
 	PeakHeapLiveBytes int64 `json:"peak_heap_live_bytes"`
 	// PeakAheadRows is the most rows listed and not yet handed on at once
 	// (ahead of the publish frontier, in memory or spilled);

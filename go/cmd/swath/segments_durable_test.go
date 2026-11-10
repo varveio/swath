@@ -155,7 +155,7 @@ func TestSegmentsReplayDurableFiles(t *testing.T) {
 		h.ServeHTTP(w, r)
 	}))
 	env := append(os.Environ(), "GOMAXPROCS=4")
-	runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", "12MiB", "--spill-budget", "512MiB"}
+	runtime := []string{"--part-interval=0", "--encoders", "4", "--sort-buffer", "12MiB", "--spill-budget", "512MiB"}
 	args := func(out string, extra ...string) []string {
 		a := []string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32", "--part-size", "16KiB", "-o", out}
 		return append(append(a, runtime...), extra...)

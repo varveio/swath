@@ -29,7 +29,7 @@ in [internals/cli-inventory.md](internals/cli-inventory.md). Readers of the data
 
 - **Always sorted, while listing.** Java writes unsorted parts unless asked for `--sort`, then sorts staged
   runs with a merge at the end. Here every dataset is globally key-sorted, and the order comes from the listing
-  itself: rows wait in a memory budget (`--row-budget`: 1/16 of memory, at most 1 GiB, as Java sized its sort
+  itself: rows wait in a memory budget (`--sort-buffer`: 1/16 of memory, at most 1 GiB, as Java sized its sort
   segments from the heap), and rows listed ahead of the output go to
   disposable spill files under the output (`--spill-budget`, by default up to half the free space). There is
   no merge pass at the end. A large sorted run spills almost every row once, so plan disk for it

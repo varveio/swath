@@ -134,9 +134,9 @@ larger disk, and `swath resume DIR`. A sorted run of a large bucket spills almos
 output's filesystem: size the disk as [production.md](production.md#disk-sizing) says, or cap spill with
 `--spill-budget` (listing then waits instead of spilling).
 
-## Memory is higher than `--row-budget`
+## Memory is higher than `--sort-buffer`
 
-`--row-budget` bounds the rows held between listing and encoding, not the process's memory: pages in flight,
+`--sort-buffer` bounds the rows held between listing and encoding, not the process's memory: pages in flight,
 directories being read, the encoders, the tail after listing and the garbage collector come on top, and swath
 sets no total-memory limit. Read `resources.peak_rss_bytes` in the report of a representative run. To use less,
 lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without

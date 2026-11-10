@@ -77,7 +77,7 @@ func (s *rowlessService) set(m string) {
 
 func (s *rowlessService) args(dir string, extra ...string) []string {
 	return append(append([]string{"gs://bkt", "--endpoint-url", s.url, "--anonymous", "--workers", "1", "--part-size", "4KiB",
-		"--row-budget", "512KiB", "-o", dir}, unjournaled...), extra...)
+		"--sort-buffer", "512KiB", "-o", dir}, unjournaled...), extra...)
 }
 
 // unjournaled is --no-journal where a journaled run is refused (Windows),

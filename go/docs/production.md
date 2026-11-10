@@ -40,10 +40,10 @@ when the report says so.
   output (ordering, spill and one Parquet encoder) is the limit, so more workers do not help there. Raise it
   (128, 256) only on a machine with spare cores and a service that does not throttle. Lower it if the service
   throttles at 64.
-- **`--row-budget`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
+- **`--sort-buffer`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
   and encoding. Memory is the least of physical memory, the cgroup's limit and `GOMEMLIMIT`, and 128 MiB stands
   in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB
-  (`invocation.row_budget`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
+  (`invocation.sort_buffer`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
   spill to disk: a listing whose waiting rows fit in the budget never spills. It is
   not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The measurements
   that follow were taken at a 128 MiB budget, the default before 0.4.0: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
