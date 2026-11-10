@@ -648,7 +648,7 @@ jobs:
           fake=$!
           trap 'kill "$fake"' EXIT
           for _ in $(seq 80); do curl -fs -o /dev/null http://127.0.0.1:19400/smoke && break; sleep 0.25; done
-          "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke -endpoint http://127.0.0.1:19400 -path-style -anonymous \
+          "$RUNNER_TEMP/swath-linux-amd64" list s3://smoke --endpoint-url http://127.0.0.1:19400 --s3-path-style --anonymous \
             -o "$smoke/dataset"
           ../scripts/ci/smoke-replay-container.sh swath-replay-go:ci "$smoke/dataset" sorted
           go run ./bench/replay/capture -rows 2000 -o "$smoke/capture"
