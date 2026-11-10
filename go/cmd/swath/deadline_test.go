@@ -227,7 +227,8 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	report := filepath.Join(notDir, "report.json") // nor the report written
 	s.set("empty")
 	stderr.Reset()
-	err := resume(ctx, []string{dir, "--stall-timeout", "1s", "--max-duration", "2s", "--report", report}, io.Discard)
+	err := resume(ctx, []string{dir, "-v", "--stall-timeout", "1s", "--max-duration", "2s", "--report", report}, io.Discard)
+	conclude(err) // -v: the outcome line
 	if c := exitCode(t, err); c != exitDeadline {
 		t.Fatalf("second attempt: exit %d (%v), want %d", c, err, exitDeadline)
 	}

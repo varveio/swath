@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/textout"
 )
 
@@ -343,12 +345,27 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	stderr := captureStderr(t)
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, &out); err != nil {
+	report := filepath.Join(t.TempDir(), "report.json")
+	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
+	// D7: the entry is named with its cause, and the report says the
+	// totals are short although the listing completed.
 	if !strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
-		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read") {
+		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read: the totals leave them out\n  "+locked+": ") ||
+		!strings.Contains(stderr.String(), "permission denied") {
 		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
+	}
+	var rep listing.Report
+	readJSON(t, report, &rep)
+	if !rep.Outcome.Unreadable || !rep.Outcome.Complete || rep.Outcome.ExitCode != exitCompleted {
+		t.Fatalf("report outcome %+v", rep.Outcome)
+	}
+	// A listing names them too.
+	stderr.Reset()
+	if err := run(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, io.Discard, false); err != nil ||
+		!strings.Contains(stderr.String(), "1 entry could not be read: the output leaves them out\n  "+locked+": ") {
+		t.Fatalf("list: %v, stderr %q", err, stderr.String())
 	}
 	for _, q := range []string{"-q", "-qq"} {
 		stderr.Reset()

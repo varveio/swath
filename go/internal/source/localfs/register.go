@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -94,8 +95,15 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 		return nil, err
 	}
 	p, err := New(root, opt)
-	if err != nil {
-		return nil, fmt.Errorf("root: %w", err)
+	var pe *fs.PathError
+	switch {
+	case errors.As(err, &pe):
+		// Named as given: nosuchdir: no such file or directory.
+		return nil, fmt.Errorf("%s: %w", req.Root, pe.Err)
+	case errors.Is(err, ErrNotDir):
+		return nil, fmt.Errorf("%s: %w", req.Root, ErrNotDir)
+	case err != nil:
+		return nil, err
 	}
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }

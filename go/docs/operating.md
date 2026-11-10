@@ -507,8 +507,8 @@ and for S3 the delete-marker state, in wire order.
    (`auth`, `access_denied`, `throttle`, `timeout`, `parse`, `protocol`, `unsupported`), `no_space`, or
    a `stuck_*` cause. `outcome.unrecorded`, when set, says why `error.json` was not updated.
 2. **`DIR/error.json`**: the same outcome inside the dataset, current only when its `attempt.id` matches the
-   report's. Without a report, only the exit code is current. A refused command that could not record its
-   outcome prints it on stderr as `swath: outcome: {...}`.
+   report's. Without a report, only the exit code is current. A command that could not record its outcome
+   says why on stderr, and prints the outcome as `swath: outcome: {...}` with `-v` (the `outcome` event under `--log-format json`).
 3. **Goroutine dumps.** At a stall, and at a forced exit, every goroutine's stack and the progress counts go
    whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time), else to stderr,
    cut at 1 MiB.

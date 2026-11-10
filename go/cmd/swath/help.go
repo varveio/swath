@@ -425,7 +425,7 @@ var errHelpGroups = errors.New("help groups")
 
 // metavars are the placeholders a flag's value may have, besides an
 // enum's choices (a|b|c).
-var metavars = []string{"N", "SIZE", "DURATION", "TIME", "PATH", "FILE", "DIR", "URL", "REGEX", "GLOB", "NAME", "COMMAND", "TOKEN"}
+var metavars = []string{"N", "SIZE", "DURATION", "TIME", "PATH", "FILE", "DIR", "URL", "REGEX", "GLOB", "NAME", "COMMAND", "TOKEN", "FORMAT"}
 
 // checkHelpGroups reports a flag of f in no help group, one whose
 // placeholder is not one of metavars nor an enum, and one whose short help

@@ -272,10 +272,12 @@ type classified struct {
 func (c *classified) Class() string { return c.class }
 func (c *classified) Unwrap() error { return c.error }
 
-// exitError carries the exit code main uses.
+// exitError carries the exit code main uses, and the outcome it ends with
+// (conclude).
 type exitError struct {
 	error
 	code int
+	out  outcome
 }
 
 func (e *exitError) Unwrap() error { return e.error }
@@ -330,15 +332,14 @@ func settleOutside(dir, seen string, o outcome) (recorded bool, unrecorded strin
 	return why == "", why
 }
 
-// reportUnrecorded puts on stderr, as one JSON line, an outcome that the
-// output's error.json does not hold (another owner's outcome stands there,
-// or the write failed), with the reason.
-func reportUnrecorded(dir string, o outcome, why string) {
+// reportUnrecorded warns that the output's error.json does not hold the
+// outcome (another owner's outcome stands there, or the write failed),
+// with the reason; the report holds it, and -v or --log-format json print
+// it (conclude).
+func reportUnrecorded(dir, why string) {
 	if why != "" {
-		fmt.Fprintf(errOut, "swath: the outcome is not recorded in %s: %s\n", filepath.Join(dir, errorName), why)
+		elog().warn(fmt.Sprintf("the outcome is not recorded in %s: %s", filepath.Join(dir, errorName), why))
 	}
-	b, _ := json.Marshal(o)
-	fmt.Fprintf(errOut, "swath: outcome: %s\n", b)
 }
 
 // diagWait bounds one diagnostic write to stderr: a pipe nobody drains
@@ -397,7 +398,7 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 		select {
 		case ok := <-done:
 			if ok {
-				note(errOut, fmt.Sprintf("swath: goroutine dump written to %s\n", path))
+				elog().warn("goroutine dump written to " + path)
 				return path
 			}
 		case <-time.After(stacksWait):
@@ -406,8 +407,17 @@ func dumpStacks(dir string, pr *listing.Progress, why, detail string, s listing.
 	if len(buf) > stacksMax {
 		buf = append(buf[:stacksMax:stacksMax], "\n... (cut at 1 MiB)"...)
 	}
-	note(errOut, head+string(buf)+"\n")
+	if l := elog(); l.json {
+		l.print(lvWarn, evWarning, "goroutine dump: "+why+" ("+detail+")", stacksFields{string(buf)})
+	} else {
+		note(errOut, head+string(buf)+"\n")
+	}
 	return "stderr"
+}
+
+// stacksFields are a goroutine dump's event under --log-format json.
+type stacksFields struct {
+	Stacks string `json:"stacks"`
 }
 
 // forcedErr is the error of a run forced to exit (it did not stop within
@@ -473,7 +483,7 @@ func forcedAccount(f *forensicTarget, s snapshot, why string) {
 	select {
 	case <-done:
 	case <-time.After(stacksWait):
-		note(errOut, "swath: the forced exit's outcome could not be written in time\n")
+		elog().warn("the forced exit's outcome could not be written in time")
 	}
 }
 

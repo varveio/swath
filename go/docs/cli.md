@@ -47,7 +47,7 @@ marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manife
 there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the
 `--part-interval`, the diagnostic `--no-spill-compress`, `--spill-plain` and `--spill-reserve`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
-`--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
+`--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`, `--log-format`) and the
 operational ones, how requests are
 authenticated, timed and admitted (the shared `--anonymous`, `--request-timeout`, `--no-adaptive-limit`,
 `--adaptive-limit-slow-start` and `--request-rate`, and each provider's credential flags: `--azure-sas-token`,
@@ -239,7 +239,9 @@ Reporting:
       --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
                                Written on failure too, with the outcome and the attempt id. - is
                                refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
+  -v, --verbose              a start line, progress records; -vv, -vvv: the request log
+                               -vv adds each failed request and retry with its cause, -vvv every
+                               request (credentials and tokens redacted).
   -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
                                With -qq the exit code and the reports stand alone.
       --progress             print live progress on stderr (default: on a terminal, without -q, -v)
@@ -256,6 +258,9 @@ Reporting:
                              color the progress line, the statistics and the help (default auto)
                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                forces it.
+      --log-format FORMAT    stderr as text, or json: one JSON object per line (default text)
+                               json: warnings, the start line, progress records, the request log and
+                               the outcome as events, no redrawn line or statistics block.
 
 swath resume --help lists the options a resume may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -402,7 +407,9 @@ Reporting:
       --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
                                Written on failure too, with the outcome and the attempt id. - is
                                refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
+  -v, --verbose              a start line, progress records; -vv, -vvv: the request log
+                               -vv adds each failed request and retry with its cause, -vvv every
+                               request (credentials and tokens redacted).
   -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
                                With -qq the exit code and the reports stand alone.
       --progress             print live progress on stderr (default: on a terminal, without -q, -v)
@@ -419,6 +426,9 @@ Reporting:
                              color the progress line, the statistics and the help (default auto)
                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                forces it.
+      --log-format FORMAT    stderr as text, or json: one JSON object per line (default text)
+                               json: warnings, the start line, progress records, the request log and
+                               the outcome as events, no redrawn line or statistics block.
 
 swath resume --help lists the options a resume may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -574,7 +584,9 @@ Reporting:
       --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
                                Written on failure too, with the outcome and the attempt id. - is
                                refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
+  -v, --verbose              a start line, progress records; -vv, -vvv: the request log
+                               -vv adds each failed request and retry with its cause, -vvv every
+                               request (credentials and tokens redacted).
   -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
                                With -qq the exit code and the reports stand alone.
       --progress             print live progress on stderr (default: on a terminal, without -q, -v)
@@ -591,6 +603,9 @@ Reporting:
                              color the progress line, the statistics and the help (default auto)
                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
                                forces it.
+      --log-format FORMAT    stderr as text, or json: one JSON object per line (default text)
+                               json: warnings, the start line, progress records, the request log and
+                               the outcome as events, no redrawn line or statistics block.
 
 Diagnostics:
       --adaptive-limit-slow-start
@@ -943,9 +958,16 @@ Diagnostics:
   `error.json` unchanged) and the dataset still uncommitted once it holds the lock. An attempt that cannot
   record it (another process owns the output, whose outcome stands; another process completed or replaced the
   run first; a refusal that leaves the directory as it was, such as a directory without a
-  journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, after the
-  reason; the JSON report carries the reason as `outcome.unrecorded`, which is never empty when the outcome is
-  not in `error.json`.
+  journal, where nothing is created, or an unusable output; a failed write) warns of it on stderr with the
+  reason (with `-v` only for a one-line failure, below); the JSON report carries the reason as
+  `outcome.unrecorded`, which is never empty when the outcome is not in `error.json`. The outcome as one JSON
+  line on stderr, `swath: outcome: {...}` before the error line, comes with `-v`; under `--log-format json`
+  it is the `outcome` event (Log events).
+  A refusal or usage error (exit 2), and a failure before any listing request was answered or directory read
+  (a missing directory or bucket, credentials that do not load), print one line on stderr, `swath: MESSAGE`
+  (`swath: nosuchdir: no such file or directory`), and nothing else: no statistics, no `INCOMPLETE`; a usage
+  error adds its `See 'swath CMD --help'.` hint. A stop (a signal, `--max-duration`, `--stall-timeout`, a full
+  disk) and a failure after requests were answered keep the statistics. `--stats` still prints them.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
@@ -1036,16 +1058,64 @@ Diagnostics:
   over a second longer), `N API calls · R per 1k objects · in flight avg A · peak P`, throttles, retries and
   entry errors when any, the estimate, and `files · bytes written · peak RSS`. Without `--stats` it is printed
   for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
-  closed stdout reader; `--no-stats` never. The one-line summary stays on stdout. `-v` (`-vv`, `-vvv`: the same;
-  Go has no finer log levels) prints a start line and shows progress as appended records; `-q` drops warnings
-  and the automatic progress and statistics; `-qq` also drops the final error line (the exit code, `error.json`
-  and `--report` stand). `--color auto|always|never` colors the progress line and the statistics (headline
-  cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless `NO_COLOR` is set and not empty or
-  `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width: `golang.org/x/term`.
+  closed stdout reader; `--no-stats` never. The one-line summary stays on stdout. Verbosity: by default
+  stderr carries warnings and errors; `-v` adds a start line saying where the rows go (`swath: listing SOURCE
+  to stdout`, `to DIR`, `to FILE`, `as totals`, `as a count`, with the attempt id) and shows progress as
+  appended records; `-vv` adds each failed request (no answer, or a status of 400 or more) and each failed
+  attempt of the retry loop (retried, throttled, or the last) with its cause; `-vvv` every request
+  (method, host, path and query with every value but the listing's own parameters, such as `prefix`,
+  redacted, so no SAS, token or credential, then status and latency). `-q` drops warnings and the automatic
+  progress and statistics; `-qq` also drops the final error line (the exit code, `error.json` and `--report`
+  stand). Without `-v`, a request failure that persists is shown: when requests have failed with one
+  transport or service cause (a connection refused, a 503) for 10 s with none answered, one warning names
+  the provider, the endpoint host and the cause (`swath: warning: s3 127.0.0.1:9: connection refused
+  (retrying; 14 attempts)`), and again at most once a minute while it lasts; a run that then ends stuck or
+  at its deadline names the cause in its final error line, and `requests.failure_warnings` in the report
+  counts the warnings. A local listing that could not read entries names up to five of them with their cause,
+  then the count of the rest, and still exits 0; the report's `outcome.unreadable` is then true. On Unix,
+  SIGUSR1 (and SIGINFO, Ctrl-T, on macOS and the BSDs) prints one progress record on stderr in the log
+  format, whatever the progress settings (as GNU dd). `--color auto|always|never` colors the progress line
+  and the statistics (headline cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless
+  `NO_COLOR` is set and not empty or `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width:
+  `golang.org/x/term`.
+- **Log format.** `--log-format text|json` (before or after the command word, and again on `swath resume`)
+  chooses how those lines are written: `text`, the prose above; `json`, one JSON object per line and nothing
+  else, no colour, no redrawn line and no statistics block (the `outcome` event and `--report` stand for it),
+  with progress records appended at `--progress-interval` (30 s by default) whether or not stderr is a
+  terminal, under `-v` or `--progress`. The verbosity flags gate the events as they gate the text, except
+  the `outcome` event, which ends every run and every failure unless `-qq` is given.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces range-engine splits on stderr, one line per split (range id,
   bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation
   and the anchor its upper child carries).
+
+## Log events
+
+Under `--log-format json` each stderr line is one object: `ts` (RFC 3339, UTC, milliseconds), `level`
+(`debug`, `info`, `warn`, `error`), `event`, `attempt` (the attempt id, once a run has one), `msg` (the text
+line's words), then the event's fields:
+
+| Event | Level | Fields |
+|---|---|---|
+| `start` | `info` (`-v`) | `source`, `to` (where the rows go) |
+| `progress` | `info` | the progress snapshot's fields, as `.swath/progress.json` has them (`objects`, `requests`, `duration_ms`, ...) |
+| `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
+| `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (redacted as above), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
+| `retry` | `debug` (`-vv`) | `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
+| `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error) |
+
+Pinned by `TestEventGolden` (`UPDATE=1 go test ./cmd/swath` rewrites this block):
+
+<!-- events:begin -->
+```json
+{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","to":"to stdout"}
+{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"progress","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing · 120,000 objects · 2,000 keys/s (avg 2,000)","objects":120000,"ordered":0,"encoded":0,"parts":0,"verified_bytes":0,"advance":120000,"answered":121,"frontier":121,"empty_chain_pages":0,"throttles":0,"timeouts":0,"rows_retained":0,"requests":122,"retries":1,"inflight":8,"limit":64,"mutex_wait_ms":0,"mutex_max_hold_ms":0,"started_at":"2026-11-10T11:59:00Z","as_of":"2026-11-10T12:00:00Z","duration_ms":60000,"part_age_ms":60000}
+{"ts":"2026-11-10T12:00:00.000Z","level":"warn","event":"warning","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"s3 127.0.0.1:9: connection refused (retrying; 11 attempts)","host":"127.0.0.1:9","cause":"connection refused","attempts":11}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","status":200,"latency_ms":42}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
+{"ts":"2026-11-10T12:00:00.000Z","level":"error","event":"outcome","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
+```
+<!-- events:end -->
 
 ## Run report
 
@@ -1065,7 +1135,7 @@ never zero.
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
-| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
+| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `unreadable` (some entries could not be read: the rows and totals leave them out, exit 0), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 
 **Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
@@ -1115,7 +1185,7 @@ violations; caller cancellation keeps its stop disposition.
 is the one request count: every counted HTTP attempt (pages, probes, client retries, engine requeues).
 `retries` counts retry-loop repetitions, `throttles` counts throttle failures and `timeouts` counts
 timeout failures. Credential waits can fail before HTTP accounting starts, so `retries` and `timeouts`
-can increase with zero `http_attempts`; they are not subsets of the HTTP count. See
+can increase with zero `http_attempts`; they are not subsets of the HTTP count. `failure_warnings` counts the persistent-failure warnings printed on stderr (Terminal). See
 [retry accounting](internals/clients.md#retry-policy-and-accounting). `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint-url` spells it); both `null` on a

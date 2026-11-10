@@ -39,6 +39,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return nil
 	})
+	setLog(o.term, "")
 	if errors.Is(err, pflag.ErrHelp) {
 		resumeUsage(stdout, f, styleFor(stdout, o.term.color, p.longHelp))
 		return err
@@ -65,8 +66,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// if it is still that run once this process holds the lock.
 	seen := journal.Witness(dir)
 	att := newAttempt()
+	setLog(o.term, att.ID)
 	stop := func(err error) error {
-		return refuse(stdout, dir, seen, err, att, o.report, redactArgv(append([]string{"resume"}, args...)))
+		return refuse(stdout, dir, seen, err, att, o.report, redactArgv(append([]string{"resume"}, args...)), o.term.verbose > 0)
 	}
 	if f, _ := textDest(dir); f != "" || dir == "-" || isFile(dir) {
 		// A text run keeps no journal: there is nothing to continue.
@@ -188,11 +190,12 @@ func resumeTarget(o options, dir string) options {
 // a supervisor never acts on a stale one; a committed dataset, a directory
 // without a run, an output another process owns and a run that changed
 // since seen (its journal.Witness) keep theirs, and the outcome goes to
-// stderr. The report (--report, if given) holds it in every case.
+// stderr under -v (verbose). The report (--report, if given) holds it in
+// every case.
 //
 // A dataset already committed and complete is no refusal: the resume
 // exits 0 (idempotent, as Java's), its report saying complete.
-func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report string, argv []string) error {
+func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt, report string, argv []string, verbose bool) error {
 	o := classify(err, nil, dir)
 	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
@@ -205,14 +208,18 @@ func refuse(stdout io.Writer, dir, seen string, err error, att *listing.Attempt,
 	if done {
 		alreadyComplete(stdout, report, dir, &r)
 	} else if recorded, why := settleOutside(dir, seen, o); !recorded {
+		// A refusal is one line on stderr (conclude); -v adds why the
+		// outcome is not in error.json.
 		r.Outcome.Unrecorded = why
-		reportUnrecorded(dir, o, why)
+		if verbose {
+			reportUnrecorded(dir, why)
+		}
 	}
 	rerr := writeReport(report, r, stdout)
 	if done {
 		return rerr
 	}
-	return &exitError{err, o.ExitCode}
+	return &exitError{error: err, code: o.ExitCode, out: o}
 }
 
 // show prints what an output directory holds: a committed dataset or an

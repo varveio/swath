@@ -169,7 +169,7 @@ decision to add it later).
 |---|---|---|---|
 | `--help`, `help` | `--help`, `help`, and `--help` on every command (shared groups first, then provider hints by scheme within each section; limits and performance flags say when to change them) | kept | – |
 | `--version` (five lines) | `--version` (tool, version, revision) | kept | – |
-| `-v`, `-vv`, `-vvv` | `-v` (`-vv`, `-vvv` the same): a start line, progress as appended records | kept (one level) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `-v`, `-vv`, `-vvv` | `-v`: a start line, progress as appended records; `-vv` failed requests and retries with their causes; `-vvv` every request (redacted) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
