@@ -93,6 +93,7 @@ func open(_ context.Context, req registry.Request) (registry.Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("root: %w", err)
 	}
+	p.warn = req.Warn
 	return &opened{Bound: registry.Bind[Range, Entry](p, &Schema), p: p}, nil
 }
 

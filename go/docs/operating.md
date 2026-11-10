@@ -148,6 +148,10 @@ run (resumable; [ordering](internals/ordering.md#spill)).
   64 MiB for Azure. These byte limits do not bound the backing buffer capacity or decoded rows and
   strings. Worker requests, seed listings and probes can overlap. Include those allocations, the
   encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
+- **A local listing's largest directory, outside it:** a listing reads each directory whole to sort it,
+  up to about 140 bytes of peak memory per entry (1M files in one directory: about 140 MiB measured), for each directory read at
+  once. A count (`swath du`, `swath diag count`) does not sort and reads large directories a slab at a
+  time.
   See [body handling](internals/clients.md#what-swath-keeps) and
   [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
