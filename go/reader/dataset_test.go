@@ -547,6 +547,8 @@ func TestMismatchShowsCleanValuesOnly(t *testing.T) {
 		{"az://acct/c?sig=SECRET", "az://acct/c?[redacted]"},
 		{"az://acct/c?%73ig=SECRET&x=100%", "az://acct/c?[redacted]"},
 		{"s3://b/p?literal=100%", "s3://b/p?literal=100%"},
+		{"s3://b/p?mysig=1", "s3://b/p?mysig=1"},
+		{"az://acct/c?sig+=SECRET", "az://acct/c?[redacted]"},
 	} {
 		if got := shown(c.in); got != c.want {
 			t.Errorf("shown(%q) = %q, want %q", c.in, got, c.want)
