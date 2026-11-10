@@ -110,7 +110,7 @@ prints the same type, also for `swath du`, `swath diag count` or a failure, and 
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
 [../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is
 operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
-acceptance, which reads the manifest's coverage ([../dataset.md](../dataset.md#the-swath-extension)).
+the dataset, whose coverage the manifest records ([../dataset.md](../dataset.md#the-swath-extension)).
 
 ## Footer stamps
 
@@ -225,7 +225,7 @@ out/
   .swath/                       private workspace: lock, journal, parts/ (unpublished), spill/, progress.json
 ```
 
-The manifest's fields and the reader's acceptance rule are in [../dataset.md](../dataset.md#the-swath-extension).
+The manifest's fields are in [../dataset.md](../dataset.md#the-swath-extension).
 
 Output safety: the source root is validated first; the output may not be the root or an ancestor of it (by path
 and by dev/inode); a non-empty output is refused unless `--overwrite`, which replaces only a previous dataset of

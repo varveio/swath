@@ -22,8 +22,7 @@ import (
 
 // TestFiltersThroughTheCommand: the filters drop rows before the order
 // stage; repeated includes add up and an exclude vetoes; the manifest's
-// coverage.filters names them (a reader that needs a whole source refuses
-// such a dataset), the report counts the dropped rows, includes sharing a
+// coverage.filters names them, the report counts the dropped rows, includes sharing a
 // literal prefix narrow the listed prefix (the report says whether and
 // why not), and a resume keeps the filters (they are part of the
 // identity: another value is not accepted), a relative time as the time

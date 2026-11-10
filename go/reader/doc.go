@@ -5,50 +5,39 @@
 // swath on top of the SeekParquet module (github.com/varveio/seekparquet/go):
 // the schema ids and their columns (the descriptors swath's producers write
 // from), the manifest's extensions.swath (Metadata), the rows of each
-// schema as typed values decoded from a seekparquet.Row, a Dataset that
-// admits, streams and lists a dataset, and digest validation. The
-// module's types and errors a reader names (Source, Options, Cursor,
-// RefusalError, ErrClosed, ...) are aliases of the module's own.
+// schema as typed values decoded from a seekparquet.Row, and a Dataset that
+// opens, checks, streams and lists a dataset. The module's types and errors
+// a reader names (Source, Options, Cursor, RefusalError, ErrClosed, ...)
+// are aliases of the module's own.
 //
 // Open and OpenDir open a dataset through the module, which reads its
 // manifest and no part, parse its metadata (extensions.swath, whose
-// version must be MetadataVersion) and resolve its schema id.
-// CheckSchema, at admission, checks the manifest's key against the schema
-// id's spec, every part through the module (seekparquet.Dataset.Verify),
-// and every part's columns against the spec. AcceptWholeSource accepts the
-// dataset as a complete, unfiltered listing of the whole of one source.
-// Stream hands on every current object, checking each one's size and
-// modification time; StreamLocal hands on a filesystem's entries
-// (LocalEntry), nulls kept; Scan hands on the current objects under a
-// prefix in batches, from shards of the plan read concurrently
-// (seekparquet.RangePlan.Split); like Page's, its statistics on failure
-// omit the reads of a plan or split that failed. List lists objects or
-// entries by delimiter a page at a time, through the module's delimited
-// listing, checking each as Stream does (Delimiter 0 is the NUL byte);
-// a common prefix carries the row at its exact key, an S3-style folder
-// object or a filesystem's directory row, from the same request.
-// AcceptWholeSource identifies the source by its kind: a bucket by name,
-// an Azure container by name and account (source.uri), a filesystem by
-// its root. Page lists a page with one entry of lookahead for its Next
-// cursor and the totals (Aggregates) of the prefixes it returns; its
-// statistics, on failure, omit the planning reads of a plan that failed.
-// None of them checks the parts' digests or the rows no request decodes.
+// version must be MetadataVersion) and resolve its schema id. Metadata
+// returns what the manifest records: the source, the scope, the coverage
+// (filters such as one_filesystem included) and the publication time. The
+// reader opens and reads; it does not judge a dataset. Whether a partial,
+// filtered or unpublished listing will do, whether it is of the source an
+// application expects, and whether a reopened dataset is the one it saw
+// before are the application's decisions.
 //
-// ValidateDigests, at import, checks that a dataset is swath's from its
-// manifest and that every part declares a SHA-256 its bytes match
-// (seekparquet.Validate at LevelDigest); a validation that is incomplete
-// is an error, never success. The caller then opens the same bytes.
-//
-// AdmitWhole is that sequence, fixed, for a reader attaching a whole
-// listing of current objects: ValidateDigests, Open, CheckSchema,
-// AcceptWholeSource, a current-objects schema and a published_at, closing
-// the Dataset on any failure, and an Identity (the SHA-256 of the manifest
-// bytes opened, and published_at). ReopenWhole reopens it from a sealed
-// source without validating digests again, and refuses another Identity
-// (ErrIdentityMismatch). It opens no part, so a count across a part not yet
-// checked is unknown (nil); a browsing caller runs CheckSchema after
-// ReopenWhole to make the first page's counts exact. IsRefusal tells the errors that refuse the data
-// from the others.
+// CheckSchema checks the manifest's key against the schema id's spec,
+// every part through the module (seekparquet.Dataset.Verify), and every
+// part's columns against the spec. Stream hands on every current object,
+// checking each one's size and modification time; StreamLocal hands on a
+// filesystem's entries (LocalEntry), nulls kept; Scan hands on the current
+// objects under a prefix in batches, from shards of the plan read
+// concurrently (seekparquet.RangePlan.Split); like Page's, its statistics
+// on failure omit the reads of a plan or split that failed. List lists
+// objects or entries by delimiter a page at a time, through the module's
+// delimited listing, checking each as Stream does (Delimiter 0 is the NUL
+// byte); a common prefix carries the row at its exact key, an S3-style
+// folder object or a filesystem's directory row, from the same request.
+// Page lists a page with one entry of lookahead for its Next cursor and
+// the totals (Aggregates) of the prefixes it returns; its statistics, on
+// failure, omit the planning reads of a plan that failed. None of them
+// checks the parts' digests or the rows no request decodes: part digests
+// are checked when a dataset is copied or moved, not when it is read.
+// IsRefusal tells the errors that refuse the data from the others.
 //
 // Totals and Aggregates total the current objects, or a filesystem's
 // entries of every kind and their st_size (entry bytes), under paths and

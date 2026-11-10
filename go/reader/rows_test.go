@@ -91,7 +91,7 @@ func TestDecodeErrors(t *testing.T) {
 		if !errors.Is(err, tc.target) || !errors.As(err, &se) || se.Column != tc.column || se.Row == nil || string(se.Row.Key) != "k" || se.Err == nil {
 			t.Errorf("%s: %v", tc.name, err)
 		}
-		for _, other := range []error{ErrSchema, ErrCoverage, ErrRow} {
+		for _, other := range []error{ErrSchema, ErrMetadata, ErrRow} {
 			if other != tc.target && errors.Is(err, other) {
 				t.Errorf("%s: %v also matches %v", tc.name, err, other)
 			}

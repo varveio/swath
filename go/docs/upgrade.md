@@ -33,15 +33,15 @@ and split into key-disjoint parts, and a manifest that lists them in key order a
 reader reads the parts as a table; a reader that knows the format (the Go module
 `github.com/varveio/seekparquet/go`, which `swath-replay` serves datasets through) seeks a key, reads key
 ranges and lists a prefix with delimiter rollups from the manifest, the footers, the key column's page index
-and a few pages. What swath adds on top (schema ids, `extensions.swath`, acceptance) is in [dataset.md](dataset.md).
+and a few pages. What swath adds on top (schema ids, `extensions.swath`) is in [dataset.md](dataset.md).
 
 ## Dispatch
 
 A reader dispatches on `manifest.json`, before looking for anything else:
 
-| `manifest.json` has | Format | Accepted when |
+| `manifest.json` has | Format | A dataset when |
 |---|---|---|
-| `"format": "seekparquet", "format_version": 0, "draft_revision": 1` | SeekParquet | the manifest is present and its coverage (`extensions.swath.coverage`) satisfies the reader ([Acceptance](#manifest)) |
+| `"format": "seekparquet", "format_version": 0, "draft_revision": 1` | SeekParquet | the manifest is present; its coverage (`extensions.swath.coverage`) records how much the listing reached ([Coverage](#manifest)) |
 | `fileFormat`, `files`, `schemaId` (camelCase) | 1 (Java) | `_SUCCESS` exists, and the run summary covers the target (the legacy rule) |
 | anything else | – | never: not a dataset of either tool |
 
@@ -89,9 +89,9 @@ generic SeekParquet reader still opens them, because it ignores the extension. R
 **Keys are bytes.** Part bounds are the key bytes in standard base64, so a key that is not UTF-8 survives
 JSON; readers decode them and compare bytes ([dataset.md](dataset.md#keys-and-order)).
 
-**Acceptance** moves from `_SUCCESS` and the run summary to the manifest's coverage: the rule is in
-[dataset.md](dataset.md#the-swath-extension). A dataset of another producer may be SeekParquet without a swath
-extension; a reader that needs swath's coverage refuses it.
+**Coverage** moves from `_SUCCESS` and the run summary to the manifest's coverage, described in
+[dataset.md](dataset.md#the-swath-extension); what a partial or filtered listing means for it is the application's
+decision. A dataset of another producer may be SeekParquet without a swath extension.
 
 ## S3 schema
 
@@ -151,8 +151,8 @@ a key's group.
 Format 1 had one version string. Five identifiers now move independently:
 - the SeekParquet format and draft;
 - the schema id, which versions the row contract (columns, key, a row's meaning);
-- `extensions.swath.version`, which versions the extension's own contract (its members and what admission
-  requires), not the rows;
+- `extensions.swath.version`, which versions the extension's own contract (its members and their meaning), not
+  the rows;
 - the writer recipe;
 - the private journal version.
 
@@ -405,9 +405,9 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   `format_version` 0, `draft_revision` 1) is the swath dataset path: require `extensions.swath.version` 1 and take
   swath's fields from `extensions.swath`. Never read `_SUCCESS` or a run summary. A format 1 manifest takes the
   legacy path; any other manifest is refused.
-- **Whole-source acceptance** comes from `extensions.swath`, not from the run summary: the members and the rule are
-  in [dataset.md](dataset.md#the-swath-extension). Also check `source.kind` and the container against what the
-  reader was asked to open.
+- **Coverage and source** come from `extensions.swath`, not from the run summary: the members are in
+  [dataset.md](dataset.md#the-swath-extension). The application decides which listings it takes, and checks
+  `source.kind` and the container against what it was asked to open.
 - **Dispatch on the schema id.** Use the exact registered id (`swath/s3-objects/v1`, `swath/gcs-objects/v1`,
   `swath/azblob-objects/v1`, `swath/local-entries/v1` and the versions ids), with the columns
   [dataset.md](dataset.md#schema-registry) gives it. Its column set is not closed: ignore columns the id does not
@@ -426,9 +426,9 @@ A reader of format 1 (the downstream reader is the reference) changes as follows
   (so a local dataset listed with names only is not readable by it) and a `last_modified` outside the years 1
   to 9999. A local dataset's directory rows are entries whose keys end in `/`.
 - **In Go.** The reader module (`go/reader`, [its README](../reader/README.md)) implements this contract:
-  `CheckSchema` (schema id, key and columns), `AcceptWholeSource` (the coverage and the source: kind, container and URI),
-  `Stream` and `List` (current objects, with the row checks above), and `ValidateDigests` and `ValidateDigestsDir`
-  (every part's SHA-256 against its bytes).
+  `Open` (the manifest, the schema id and the metadata, with the coverage and the source), `CheckSchema` (key and
+  columns), and `Stream` and `List` (current objects, with the row checks above). Judging the coverage and the
+  source is the caller's.
 - **Checking.** `python3 verify.py DIR [REFERENCE_DIR]` validates S3, GCS, Azure Blob or local datasets,
   and can compare the complete rows against an independent dataset. `python3 bench/diffds.py A B` compares whole-row multisets and ordered row
   sequences for both versions schemas, preserving nulls and within-key order; it refuses mismatched or unknown

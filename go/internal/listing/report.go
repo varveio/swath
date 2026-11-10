@@ -27,8 +27,8 @@ import (
 const ReportVersion = 4
 
 // Report is the one run report: run.json beside a committed dataset, and
-// what -json prints, for every provider. It is operational: readers accept
-// a dataset by its manifest, never by this report. It accounts for this
+// what -json prints, for every provider. It is operational: a dataset is
+// read by its manifest, never by this report. It accounts for this
 // invocation (rows it listed, requests it made) separately from the dataset
 // (rows retained from an interrupted run, rows committed). Durations are
 // integers with their unit in the name.

@@ -161,7 +161,6 @@ These integrations still require work outside the provider directory:
 |---|---|
 | `cmd/swath/main.go` | The blank import that registers the provider. The command's spelling guard discovers this roster; it needs no second provider import. |
 | `reader/schema.go` | A public dataset schema specification, including version roles when applicable. A directly declared producer schema can list without reader support. |
-| `reader/metadata.go` | Schema-to-source mapping in `sourceKinds` and identity policy in `acceptSource` / `AcceptWholeSource`. |
 | `reader/rows.go` | Current-object projection in `objectColumns` and any new typed row decoder. |
 | `dataset_schema.py`, `verify.py` | Independent schema and verifier support. |
 | `cmd/swath/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |

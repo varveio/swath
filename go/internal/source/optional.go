@@ -185,7 +185,7 @@ type Report struct {
 	Errors int64  // per-entry problems counted (not fatal)
 	Fields string // the metadata tier collected, if the provider has tiers
 	// Coverage is what the dataset covers; it goes into the manifest,
-	// where readers accept or refuse the dataset.
+	// where applications read it.
 	Coverage Coverage
 }
 

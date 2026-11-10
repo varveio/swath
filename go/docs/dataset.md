@@ -3,7 +3,7 @@
 `swath list ... -o DIR` writes a **swath dataset**: a [SeekParquet](https://github.com/varveio/seekparquet)
 dataset that carries one of swath's registered schema ids and a valid `extensions.swath`. This page owns the
 **swath dataset profile**: the schema ids and their row contracts, the swath extension, what each reader
-operation requires, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
+operation checks, the key semantics a consumer outside `go/reader` must know, and how the profile evolves.
 The SeekParquet specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/6767d1a3/spec/format-1.md),
 at the commit `go/go.mod` pins) owns the format: the manifest's own members, part bounds, footer stamps, key
 order and commit. [`go/reader`](../reader/README.md) is the Go API over this profile;
@@ -26,33 +26,32 @@ A directory (or object-store prefix) is a swath dataset when all of the followin
 A SeekParquet dataset without a registered schema id or without a valid `extensions.swath` is not a swath
 dataset. Any SeekParquet reader can still open it, and generic SeekParquet reads ignore `extensions.swath`
 entirely. A swath dataset can also be partial: a listing stopped by `--max-keys`, or one with filters, is still
-a swath dataset. It just fails whole-source acceptance.
+a swath dataset, and opens and reads like any other.
 
-Being a swath dataset and being acceptable for a purpose are separate questions. They are answered by separate
-operations (the `go/reader` names are given; other readers make the same distinctions):
+The reader opens and reads; it does not judge a dataset. Its operations (the `go/reader` names are given; other
+readers make the same distinctions):
 
 | Operation | What it establishes | Reads |
 |---|---|---|
 | Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format version 0, draft revision 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
 | Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
-| Acceptance (`AcceptWholeSource`) | The listing covers the whole of the named source: the coverage rule in [The swath extension](#the-swath-extension) | the manifest only |
-| Digest validation (`ValidateDigests`, `ValidateDigestsDir`) | Every part declares a SHA-256 that its bytes match | every part's bytes |
 
-`go/reader`'s `AdmitWhole` runs digest validation, identification, validation and whole-source acceptance in that
-order on the same bytes, for a reader attaching a whole listing of current objects, and records the manifest's
-SHA-256 so that a reopen of a sealed source can be checked against it.
+Whether a dataset suits a purpose is the application's decision. The manifest records how the listing ran (its
+source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
+metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it
+expects, and whether a dataset opened again is the one it saw before. Part digests are for checking a dataset
+after it is copied or moved (a planned `swath verify` command, #391), not for reading it.
 
 `Open` alone does not prove a dataset is swath's. A manifest with no `extensions.swath` at all opens
 (`reader.Metadata.Swath` is false, and `swath show` prints "no swath metadata"). An extension that is present
-but has no `version`, or an unsupported one, is refused. Acceptance and digest validation require the extension
-to be present.
+but has no `version`, or an unsupported one, is refused.
 
 The manifest is the authority for which parts belong to the dataset and for its commit: a directory without
 `manifest.json` holds no dataset, and one with it holds exactly the parts it lists, in key order. A part on its
 own is inspectable Parquet, not evidence that a dataset exists, is complete, or was published.
 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
-lists), `run.json` (the run report: operational, written after the commit and never part of acceptance), and
+lists), `run.json` (the run report: operational, written after the commit and never part of the dataset), and
 `.swath/` (the run's private workspace, which readers ignore). The full tree and the publication order are in
 [internals/parquet-output.md](internals/parquet-output.md#publication-gate-and-order).
 
@@ -89,39 +88,33 @@ goes under `extensions`, by namespace. swath writes `extensions.swath` only:
 The seekparquet module (`seekparquet.MarshalManifest`) writes the manifest, and its member order is the
 module's. JSON readers must not depend on that order.
 
-| Member | Meaning | Required by |
+| Member | Meaning | Read by |
 |---|---|---|
 | `version` | The version of this extension's contract: `1`. Written first | every swath read of a manifest that has the extension: identification refuses it absent, `null`, non-integer or any other value ("unsupported swath metadata version"), as do `swath show` and `--seed-from` |
-| `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | `go/reader`'s `AdmitWhole` and `ReopenWhole` (part of the dataset's identity); whole-source acceptance alone (`AcceptWholeSource`) does not require it |
-| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | whole-source acceptance (equal to the caller's kind and to the schema id's); `--seed-from` |
-| `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | whole-source acceptance for `azblob` and `local-fs` (the source's identity), and for `s3` and `gcs` when the caller gives one |
-| `source.container` | The bucket, or the Azure container's name; absent for a filesystem | whole-source acceptance: equal to the caller's container, or, for a bucket, absent or `null` when the caller passes `""`; absent, `null` or `""` for a filesystem; `--seed-from` |
-| `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | whole-source acceptance: `whole` |
-| `scope.prefix` | The prefix, with `prefix`; omitted when empty | not needed for acceptance; `--seed-from` checks it against the run's prefix |
-| `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
-| `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | whole-source acceptance: `completed` |
-| `coverage.skipped_entries` | Entries the listing could not read | whole-source acceptance: `0` |
-| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-file-system`), `no_dirs` (`--no-dirs`) | whole-source acceptance: present and empty |
-| `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative: does not refuse |
-| `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative: does not refuse |
+| `published_at` | When the manifest was written (RFC 3339, UTC). It does not date the source's state | the application; absent is not an error |
+| `source.kind` | `s3`, `gcs`, `azblob` or `local-fs` | the application; `--seed-from` |
+| `source.uri` | What was listed: `s3://bucket/prefix`, `gs://…`, `az://account/container/…`, or the absolute root path | the application: an Azure container's name is unique only within its account, which only `source.uri` records |
+| `source.container` | The bucket, or the Azure container's name; absent for a filesystem | the application; `--seed-from` |
+| `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
+| `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
+| `coverage.complete` | The listing reached the end of its scope | the application |
+| `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | the application |
+| `coverage.skipped_entries` | Entries the listing could not read | the application |
+| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-file-system`), `no_dirs` (`--no-dirs`) | the application |
+| `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |
+| `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
 
-**Whole-source acceptance** identifies the source as its kind does. A bucket (`s3`, `gcs`) is its name in
-`source.container`; `source.uri` is compared only when the caller gives one. An Azure container's name is unique
-only within its account, which only `source.uri` (`az://account/container`) records, so `azblob` requires both
-`source.container` and `source.uri` equal to the caller's, and a caller without a URI is refused. A filesystem has
-no container and is its root: `source.uri` must equal the caller's root, compared byte for byte except that a
-trailing separator on either side is ignored; no mount, symbolic link or case is resolved, and a caller without a
-root is refused. Wherever `source.uri` is compared, an empty one in the manifest is refused: it identifies no
-source. It requires every member listed as required for it. An absent or `null` member refuses
-the dataset, except `source.container` when the caller's container is `""`: a missing `coverage.complete` is never read as `false`, and a missing `filters` is never read as
-empty. `exclusions` are tolerated, so an accepted dataset is the whole source minus what was excluded by design,
-not every entry the source holds. swath publishes the complete result of the live listing it performed; it is not
-a point-in-time snapshot of a source that changes during the run.
+Every member but `version` is optional to a reader: an absent or `null` member is reported as absent (a missing
+`coverage.complete` is never read as `false`, and a missing `filters` is never read as empty), and an application
+that needs one decides what its absence means. A listing with `coverage.complete` true, `stop_reason`
+`completed`, no skipped entries and no filters covers its whole scope minus its `exclusions`, which are left out
+by design. swath publishes the complete result of the live listing it performed; it is not a point-in-time
+snapshot of a source that changes during the run.
 
 Readers ignore members they do not define and keep the raw extension (`reader.Metadata.Manifest`), so an
 informative member can be added under `version` 1. A member of the wrong JSON type is malformed: `go/reader`
-reports it as `KindCoverage`, while an unsupported version is reported as `KindSchema`.
+reports it as `KindMetadata`, while an unsupported version is reported as `KindSchema`.
 
 ## Schema registry
 
@@ -174,7 +167,7 @@ timestamp (`Creation-Time`). As on GCS, `last_modified` moves with metadata-only
 content hash: compare content with `content_md5`, and never compare ETags across stores.
 
 **`swath/local-entries/v1`**: one row per entry below the root, directories included (`--no-dirs` omits them and
-records `no_dirs` in `coverage.filters`, so whole-source acceptance refuses the dataset):
+records `no_dirs` in `coverage.filters`):
 
 | Column | Type | Source |
 |---|---|---|
@@ -258,7 +251,7 @@ a dataset, whether parts are missing, or what the listing covered. Those are the
 |---|---|---|---|
 | SeekParquet `format_version` / `draft_revision` | editorial clarifications | any change to which bytes are accepted or what a query returns | SeekParquet maintainers, through proposal and conformance review |
 | `schema_id` | added nullable, absence-tolerant columns that leave existing rows and columns unchanged; writer layout (row groups, pages, encodings, codecs) | a renamed or removed column, a changed type, signedness, time unit or nullability, a changed key encoding or uniqueness, a changed meaning of a row; type widening is not automatically compatible | swath maintainers, with the consumers |
-| `extensions.swath.version` | added informative members that readers may ignore | a change to an existing member's meaning or to what admission requires. When an older reader could wrongly accept the dataset, the schema id changes too, because older readers ignore members they do not know | swath maintainers |
+| `extensions.swath.version` | added informative members that readers may ignore | a change to an existing member's meaning. When an older application could misread the dataset, the schema id changes too, because older readers ignore members they do not know | swath maintainers |
 | Writer recipe (`parquetout.Recipe`, in the resume identity) | changes that keep its byte-reproduction promise | a change to how a part is reproduced byte for byte | swath writer maintainers |
 | Journal version (private to a run) | changes that existing recovery reads safely | a representation existing recovery cannot read | swath recovery maintainers |
 

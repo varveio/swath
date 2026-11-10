@@ -314,8 +314,8 @@ it. The report's `invocation.prior` names what was used.
 
 ## Reading the output
 
-A reader starts only once `manifest.json` exists, reads the parts it lists (never a glob of `data/`), and
-checks the coverage when it needs the whole source: `coverage.complete` true, `coverage.stop_reason`
+A reader starts only once `manifest.json` exists and reads the parts it lists (never a glob of `data/`). An
+application that needs the whole source checks the coverage: `coverage.complete` true, `coverage.stop_reason`
 `completed`, `coverage.skipped_entries` 0, `coverage.filters` empty and `scope.kind` `whole`
 ([dataset.md](dataset.md#the-swath-extension)). [getting-started.md](getting-started.md#6-query-it-with-duckdb)
 shows a DuckDB query over the manifest's part list. Listed ETags are not portable content hashes; check the

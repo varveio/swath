@@ -12,8 +12,8 @@ import (
 )
 
 // TestReportFilters: --no-dirs leaves the directories' rows out, so the
-// coverage records it among the filters, and a reader that needs the
-// whole tree refuses the dataset; a listing of every entry records none.
+// coverage records it among the filters; a listing of every entry records
+// none.
 func TestReportFilters(t *testing.T) {
 	for _, tc := range []struct {
 		opt  Options

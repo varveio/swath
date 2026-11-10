@@ -27,7 +27,7 @@ and benchmarks): [swath-replay.md](swath-replay.md) (using it), [replay.md](repl
 [replay-java.md](replay-java.md) (its differences from the Java server).
 
 The nested Go modules: [`go/reader`](../../reader/README.md) reads a dataset in Go (schema descriptors, the
-manifest's `extensions.swath`, typed rows, whole-source acceptance and current-object streaming);
+manifest's `extensions.swath`, typed rows and current-object streaming);
 [`go/objfile`](../../objfile/README.md) opens an object in S3, GCS or Azure as a file read by byte range.
 
 The language-neutral contracts in [docs/internals/contracts.md](../../../docs/internals/contracts.md) bind both
