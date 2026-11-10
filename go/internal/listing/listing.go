@@ -111,6 +111,9 @@ type SourceConfig struct {
 	// delimiter seed (--seed-from): a committed dataset directory of the
 	// same source and scope, or a cut file. "" for none.
 	SeedFrom string
+	// Narrowing is how the includes narrowed URI (filter.Narrowed, or why
+	// not; "" without includes): the report's invocation.narrowing.
+	Narrowing string
 }
 
 // OutputConfig is where the dataset goes.
@@ -476,7 +479,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if argv == nil {
 		argv = []string{}
 	}
-	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
+	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
 		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {

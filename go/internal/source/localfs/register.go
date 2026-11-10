@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -23,7 +24,7 @@ import (
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals, CheckFilter: checkFilter,
 		Title: "Local", Example: "/data", Usage: "a local directory or file"})
 }
 
@@ -74,6 +75,20 @@ func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
 func checkTotals(options any, t totals.Options) error {
 	if o, ok := options.(*Options); ok && o.Fields == Names && (t.BytesColumn == totals.AllocatedBytes || t.LinksOnce) {
 		return errors.New("--allocated and --count-links-once read each entry's stat: not with --metadata names")
+	}
+	return nil
+}
+
+// checkFilter refuses filters on what a local tree does not read
+// (registry.Factory.CheckFilter): storage classes ever, sizes and times at
+// the names tier.
+func checkFilter(options any, f *filter.Spec) error {
+	size, mtime, class := f.Reads()
+	switch o, _ := options.(*Options); {
+	case class:
+		return errors.New("--storage-class: a local tree has no storage classes")
+	case (size || mtime) && o != nil && o.Fields == Names:
+		return errors.New("--min-size, --max-size, --modified-since and --modified-until read each entry's stat: not with --metadata names")
 	}
 	return nil
 }

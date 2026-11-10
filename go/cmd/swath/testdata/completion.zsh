@@ -11,11 +11,13 @@ _swath_list() {
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (key,size; repeatable)]:NAME: ' \
         '--overwrite[replace a previous dataset in -o]' \
-        '--include=[keep keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--exclude=[drop keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--min-size=[keep objects (local: entries) of at least this size (1k, 1.5GiB)]:SIZE: ' \
+        '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
+        '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
+        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
-        '--modified-since=[keep objects or entries modified at or after this time (2026-01-01)]:TIME: ' \
+        '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
@@ -76,11 +78,13 @@ _swath_du() {
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
-        '--include=[keep keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--exclude=[drop keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--min-size=[keep objects (local: entries) of at least this size (1k, 1.5GiB)]:SIZE: ' \
+        '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
+        '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
+        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
-        '--modified-since=[keep objects or entries modified at or after this time (2026-01-01)]:TIME: ' \
+        '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
@@ -147,11 +151,13 @@ _swath_diag_list() {
 
 _swath_diag_count() {
     _arguments \
-        '--include=[keep keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--exclude=[drop keys in which this regex (Go RE2) matches anywhere]:REGEX: ' \
-        '--min-size=[keep objects (local: entries) of at least this size (1k, 1.5GiB)]:SIZE: ' \
+        '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
+        '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
+        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
-        '--modified-since=[keep objects or entries modified at or after this time (2026-01-01)]:TIME: ' \
+        '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \

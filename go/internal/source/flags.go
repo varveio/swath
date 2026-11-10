@@ -185,17 +185,68 @@ func (t *textValue) Set(v string) error { *t = textValue(v); return nil }
 func (t *textValue) String() string     { return string(*t) }
 func (t *textValue) Type() string       { return "string" }
 
-// Duration is a duration flag value: Go's syntax (90s, 1h30m), never
-// negative (zero keeps each flag's documented meaning).
+// Duration is a duration flag value (ParseDuration), never negative (zero
+// keeps each flag's documented meaning).
 func Duration(p *time.Duration) pflag.Value { return (*durationValue)(p) }
 
 type durationValue time.Duration
 
 // errDuration is a duration flag's refusal of a value it cannot read.
-var errDuration = errors.New("want a duration such as 90s, 1h30m")
+var errDuration = errors.New("want a duration such as 90s, 1h30m, 2d")
+
+// Days and weeks, the units ParseDuration adds to Go's.
+const (
+	day  = 24 * time.Hour
+	week = 7 * day
+)
+
+// ParseDuration is Go's duration syntax (90s, 1h30m) with d (24h) and w
+// (7d) besides: 2d, 1w, 1d12h, 1.5d.
+func ParseDuration(v string) (time.Duration, error) {
+	if !strings.ContainsAny(v, "dw") {
+		return time.ParseDuration(v)
+	}
+	var total time.Duration
+	for rest := v; rest != ""; {
+		i := strings.IndexFunc(rest, func(r rune) bool { return r != '.' && (r < '0' || r > '9') })
+		if i <= 0 {
+			return 0, fmt.Errorf("invalid duration %q", v)
+		}
+		j := i + strings.IndexFunc(rest[i:], func(r rune) bool { return r == '.' || r >= '0' && r <= '9' })
+		if j < i {
+			j = len(rest)
+		}
+		num, unit := rest[:i], rest[i:j]
+		var d time.Duration
+		switch unit {
+		case "d", "w":
+			u := day
+			if unit == "w" {
+				u = week
+			}
+			f, err := strconv.ParseFloat(num, 64)
+			x := f * float64(u)
+			if err != nil || x >= 1<<63 {
+				return 0, fmt.Errorf("invalid duration %q", v)
+			}
+			d = time.Duration(x)
+		default:
+			var err error
+			if d, err = time.ParseDuration(num + unit); err != nil {
+				return 0, fmt.Errorf("invalid duration %q", v)
+			}
+		}
+		if total+d < total {
+			return 0, fmt.Errorf("invalid duration %q", v)
+		}
+		total += d
+		rest = rest[j:]
+	}
+	return total, nil
+}
 
 func (d *durationValue) Set(v string) error {
-	x, err := time.ParseDuration(v)
+	x, err := ParseDuration(v)
 	switch {
 	case err != nil:
 		return errDuration

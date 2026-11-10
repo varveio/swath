@@ -101,9 +101,10 @@ touching the output. An object store's factory also gives `KeyPrefix(root)`, the
 (each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
 are relative to the root. `WithPrefix(root, prefix)` (S3 and GCS) names another prefix of the same bucket, through
-which an anchored `--include` narrows the listed prefix; Azure has none, and lists its root as given.
+which includes sharing a literal prefix narrow the listed prefix; Azure has none, and lists its root as given.
 `CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` or
-`--count-links-once` with `--metadata names`) before the source opens.
+`--count-links-once` with `--metadata names`) before the source opens, and `CheckFilter` (the local provider)
+filters on values its options do not read (sizes and times with `--metadata names`, storage classes).
 
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router

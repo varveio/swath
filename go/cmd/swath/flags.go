@@ -34,6 +34,11 @@ const (
 // and spill flags are theirs.
 var writing = []string{cmdList, cmdDiagList}
 
+// appendTo is a repeatable flag's value: each value given is added to *p.
+func appendTo(p *[]string) pflag.Value {
+	return source.Func(func(v string) error { *p = append(*p, v); return nil })
+}
+
 // newFlags is the flag set of swath list (diag false) or swath diag list
 // (diag true). Both hold every flag, the diagnostic ones included, so that
 // one given to swath list is refused with a message naming swath diag
@@ -101,18 +106,25 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
 
-	def(source.Flag{Name: "include", Value: source.Text(&o.filter.Include), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "keep keys in which this regex (Go RE2) matches anywhere",
-		Long:  "^ with a literal prefix also narrows the listed prefix where the provider supports prefix narrowing."})
-	def(source.Flag{Name: "exclude", Value: source.Text(&o.filter.Exclude), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "drop keys in which this regex (Go RE2) matches anywhere"})
+	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
+		Usage: "keep keys this glob matches (repeatable: any of them)",
+		Long: "Matched against the key below SOURCE: with a '/' from SOURCE's root (logs/*.gz), without one the last segment at any depth (*.gz). " +
+			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix."})
+	def(source.Flag{Name: "exclude", Value: appendTo(&o.filter.Exclude), Metavar: "GLOB", Group: source.GroupFilters,
+		Usage: "drop keys this glob matches (repeatable; beats any include)"})
+	def(source.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
+		Usage: "keep keys in which this regex (Go RE2) matches anywhere (repeatable)",
+		Long:  "Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
+	def(source.Flag{Name: "exclude-regex", Value: appendTo(&o.filter.ExcludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
+		Usage: "drop keys in which this regex (Go RE2) matches anywhere (repeatable)"})
 	def(source.Flag{Name: "min-size", Value: source.Text(&o.filter.MinSize), Metavar: "SIZE", Group: source.GroupFilters,
-		Usage: "keep objects (local: entries) of at least this size (1k, 1.5GiB)"})
+		Usage: "keep objects (local: entries) of at least this size (1K, 1.5GiB)",
+		Long:  "Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal), any case."})
 	def(source.Flag{Name: "max-size", Value: source.Text(&o.filter.MaxSize), Metavar: "SIZE", Group: source.GroupFilters,
 		Usage: "keep objects or entries of at most this size"})
 	def(source.Flag{Name: "modified-since", Value: source.Text(&o.filter.Since), Metavar: "TIME", Group: source.GroupFilters,
-		Usage: "keep objects or entries modified at or after this time (2026-01-01)",
-		Long:  "An offset or Z; UTC without one."})
+		Usage: "keep objects or entries modified at or after TIME (2026-01-01, 7d)",
+		Long:  "An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names."})
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",

@@ -98,6 +98,9 @@ type Factory struct {
 	// CheckTotals, if set, refuses per-prefix totals (swath du) that the
 	// provider's options value cannot give, before the source is opened.
 	CheckTotals func(options any, t totals.Options) error
+	// CheckFilter, if set, refuses filters on columns the provider's
+	// options do not fill (filter.Spec.Reads), before the source is opened.
+	CheckFilter func(options any, f *filter.Spec) error
 	// WithPrefix, if set, returns root naming the key prefix prefix
 	// instead of its own (KeyPrefix): an anchored --include narrows the
 	// listed prefix through it. Without it the root is listed as given.

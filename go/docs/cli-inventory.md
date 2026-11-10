@@ -30,9 +30,9 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--include REGEX` | `--include` (Go RE2, found anywhere; `^literal` also narrows the listed prefix on S3 and GCS; Azure filters rows without prefix narrowing); `coverage.filters` records each filter | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--exclude REGEX` | `--exclude` (Go RE2) | kept (RE2, not Java regex) | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--min-size SIZE` | `--min-size` (Java's units) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--include REGEX` | `--include-regex` (Go RE2, found anywhere, repeatable); `--include GLOB` is a glob (repeatable); includes sharing a literal prefix narrow the listed prefix on S3 and GCS; `coverage.filters` records each rule | renamed (RE2, not Java regex); globs added | 2026-11-10 (owner: globs under `--include`, the regex kept under `--include-regex`) |
+| `--exclude REGEX` | `--exclude-regex` (Go RE2, repeatable); `--exclude GLOB` is a glob | renamed; globs added | 2026-11-10 (owner: as `--include`) |
+| `--min-size SIZE` | `--min-size` (`KB`, `MB` decimal, unlike Java; `K`, `KiB` binary) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--max-size SIZE` | `--max-size` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |

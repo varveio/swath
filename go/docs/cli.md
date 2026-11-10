@@ -114,14 +114,23 @@ Output:
       --overwrite            replace a previous dataset in -o
 
 Filters:
-      --include REGEX        keep keys in which this regex (Go RE2) matches anywhere
-                               ^ with a literal prefix also narrows the listed prefix where the
-                               provider supports prefix narrowing.
-      --exclude REGEX        drop keys in which this regex (Go RE2) matches anywhere
-      --min-size SIZE        keep objects (local: entries) of at least this size (1k, 1.5GiB)
+      --include GLOB         keep keys this glob matches (repeatable: any of them)
+                               Matched against the key below SOURCE: with a '/' from SOURCE's root
+                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                               \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                               Any include, glob or regex, keeps a key. ^ with a literal prefix
+                               narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                               KB, MB, GB, TB (decimal), any case.
       --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after this time (2026-01-01)
-                               An offset or Z; UTC without one.
+      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                               before the run started, recorded as the time it names.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                In any case; an object without one is in none. Azure Blob: the access
@@ -316,14 +325,23 @@ Output:
                                with it is accepted.
 
 Filters:
-      --include REGEX        keep keys in which this regex (Go RE2) matches anywhere
-                               ^ with a literal prefix also narrows the listed prefix where the
-                               provider supports prefix narrowing.
-      --exclude REGEX        drop keys in which this regex (Go RE2) matches anywhere
-      --min-size SIZE        keep objects (local: entries) of at least this size (1k, 1.5GiB)
+      --include GLOB         keep keys this glob matches (repeatable: any of them)
+                               Matched against the key below SOURCE: with a '/' from SOURCE's root
+                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                               \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                               Any include, glob or regex, keeps a key. ^ with a literal prefix
+                               narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                               KB, MB, GB, TB (decimal), any case.
       --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after this time (2026-01-01)
-                               An offset or Z; UTC without one.
+      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                               before the run started, recorded as the time it names.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                In any case; an object without one is in none. Azure Blob: the access
@@ -499,14 +517,23 @@ Examples:
   swath diag count s3://bucket/logs/ --sequential
 
 Filters:
-      --include REGEX        keep keys in which this regex (Go RE2) matches anywhere
-                               ^ with a literal prefix also narrows the listed prefix where the
-                               provider supports prefix narrowing.
-      --exclude REGEX        drop keys in which this regex (Go RE2) matches anywhere
-      --min-size SIZE        keep objects (local: entries) of at least this size (1k, 1.5GiB)
+      --include GLOB         keep keys this glob matches (repeatable: any of them)
+                               Matched against the key below SOURCE: with a '/' from SOURCE's root
+                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                               \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                               Any include, glob or regex, keeps a key. ^ with a literal prefix
+                               narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                               KB, MB, GB, TB (decimal), any case.
       --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after this time (2026-01-01)
-                               An offset or Z; UTC without one.
+      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                               before the run started, recorded as the time it names.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                In any case; an object without one is in none. Azure Blob: the access
@@ -671,9 +698,11 @@ table changes.
 ## Semantics worth stating
 
 - **Sizes** (`--part-size`, `--row-budget`, `--spill-budget`, `--spill-reserve`, `--min-size`, `--max-size`) have
-  one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
-  or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
-  not `1.3b`).
+  one syntax: a decimal number and an optional unit, in any case: `B` or none bytes, `K`, `M`, `G`, `T` and `KiB`,
+  `MiB`, `GiB`, `TiB` binary, `KB`, `MB`, `GB`, `TB` decimal (`64MB` is 64,000,000 bytes, `64M` 64 MiB), coming to a
+  whole number of bytes (`1.5G`, not `1.3B`).
+- **Durations** (every `DURATION` flag) are Go's (`90s`, `1h30m`) with `d` (24h) and `w` (7d) besides (`2d`,
+  `1d12h`).
 - **Provider flags** (`S3:`, `GCS:`, `Azure Blob:` and `local:` in the list) apply to their own sources only:
   one given for another source (`gs://... --s3-profile`, where GCS takes `--gcs-credentials-file`; an S3 flag on a local
   tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same
@@ -865,26 +894,43 @@ table changes.
 - **`--no-dirs`** (local sources): directories are walked but their rows are not written. A dataset's
   `coverage.filters` holds `no_dirs`, so a reader that needs the whole tree refuses it, as it refuses a filtered
   one.
-- **Filters** (Java's seven): `--include REGEX` and `--exclude REGEX` keep or drop keys in which the expression
-  matches anywhere (a substring search, as Java's `find`), `--min-size` and `--max-size` keep sizes within the
-  inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
-  `--modified-until` keep modification times within the inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00`
-  or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
-  A,B` (repeatable) keeps the listed classes (case-insensitive; a row without a class is dropped), the S3 or GCS
-  storage class and the Azure Blob access tier (`Hot`, `Cool`, `Cold`, `Archive`). They apply to every row: on a local tree,
-  directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not the requests
-  made, with one exception on S3 and GCS: an `--include` anchored at the start with a literal (`^logs/2026/`)
-  narrows the listed prefix to it (the same rows, fewer requests; `invocation.source` names the narrowed root).
-  Azure applies the filter to rows but does not narrow the listing prefix. The
+- **Filters.** `--include GLOB` and `--exclude GLOB` keep or drop keys a glob matches; `--include-regex REGEX` and
+  `--exclude-regex REGEX` keep or drop keys in which the expression matches anywhere in the full key (a substring
+  search). Each is repeatable, and a row is kept when there is no include or any include, glob or regex, matches,
+  and no exclude matches (an exclude always wins), in whatever order they are given. A glob matches the whole of
+  the key below SOURCE (the source's prefix up to its last `/`: `s3://b/logs/20` matches below `logs/`; a local
+  tree's path relative to its root); rows still print full keys. A glob with a `/` is anchored there (`logs/*.gz`;
+  a leading `/` only anchors: `/a.txt`), one without matches the last segment at any depth (`*.gz` keeps
+  `a/b/c.gz`), and a key ending in `/` (a directory's row) matches as its name. `*` and `?` never cross `/`, `**`
+  is any number of whole segments and only a segment of its own (`a/**/b`, `**/x`, `logs/**`), `[abc]`, `[a-z]`
+  and `[!a-z]` are one character (never `/`), `{a,b}` is either (not nested), `\c` is `c`; an empty or
+  malformed pattern is refused (exit 2). A glob filters rows, not the walk: `--exclude node_modules` drops that
+  directory's row, `--exclude '**/node_modules/**'` what is below it. `--min-size` and `--max-size` keep sizes
+  within the inclusive bounds, `--modified-since` and `--modified-until` keep modification times within the
+  inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00` or with `Z` or an offset; UTC without one; or a duration
+  before the run started, `7d`, which the run records as the time it names, so a resume keeps the bound; a row
+  without a time is kept, as Java's), `--storage-class A,B` (repeatable) keeps the listed classes
+  (case-insensitive; a row without a class is dropped): the S3 or GCS storage class, or the Azure Blob access
+  tier (`Hot`, `Cool`, `Cold`, `Archive`). A filter on a value the source does not read is refused before the run (exit 2): sizes and
+  times with `--metadata names`, storage classes on a local tree. They apply to every row: on a local tree,
+  directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not
+  the requests made, with one exception on S3 and GCS: when every include has a literal prefix (an anchored glob's
+  up to its first wildcard, a regex's `^literal`), the longest prefix common to them narrows the listed prefix
+  (`--include 'logs/2026/*' --include-regex '^logs/2025/'` lists `logs/202`; the same rows, fewer requests;
+  `invocation.source` names the narrowed root). A glob without `/` or a regex without `^literal` turns it off;
+  excludes never change it. The report's `invocation.narrowing` says what happened: `narrowed`,
+  `include_without_prefix`, `no_longer_prefix` (the common prefix does not extend the source's) or
+  `provider_lists_root` (Azure and local trees filter rows but do not narrow the listing). The
   dropped rows are counted in `output.rows_filtered` (`rows_emitted` is what passed; `rows_fetched` both). The filters are part of the
   resume identity (and of `args_hash`): a resume keeps them and refuses others. A filtered dataset says so in its
-  manifest: `coverage.filters` holds Java's descriptions (`include=…`, `exclude=…`, `min_size=…`, `max_size=…`,
+  manifest: `coverage.filters` holds one description a rule (`include=…`, `include_regex=…`, `exclude=…`,
+  `exclude_regex=…`, each flag's patterns sorted and once each, then `min_size=…`, `max_size=…`,
   `modified_after=…`, `modified_before=…`, `storage_class=…`), and a reader that needs the whole source refuses a
   dataset whose `coverage.filters` is not empty ([dataset.md](dataset.md#the-swath-extension)). **Regular expressions are Go's RE2,
   not Java's:** the common syntax is the same, but backreferences (`\1`), lookahead and lookbehind, possessive
   quantifiers and atomic groups do not exist and are refused (exit 2); `\Z` is not supported (`\z` is), and
-  some character-class and Unicode-property details differ. RE2 runs in time linear in the key, so no pattern
-  can stall a listing.
+  some character-class and Unicode-property details differ. RE2 runs in time linear in the key, globs included,
+  so no pattern can stall a listing.
 - **S3 modes.** The default is the parallel core, seeded: before any range lists, delimiter listings of the
   folder hierarchy (the top level up to 4 pages, levels narrower than `--workers` descended up to 4 deep, at
   most 64 requests in at most 6 serial waves) tile the scope, or a resumed scope after its last published key.
@@ -1135,7 +1181,7 @@ table changes.
 ## Run report
 
 <!-- report:begin -->
-One schema (`listing.Report`, `report_version` 3) for `run.json` beside a committed dataset, `--report FILE`,
+One schema (`listing.Report`, `report_version` 4) for `run.json` beside a committed dataset, `--report FILE`,
 and what `--report -` prints. It is operational: readers accept a dataset by its manifest, never by
 this report. The schema is pinned by `internal/listing/testdata/report-schema.golden` (`TestReportSchemaGolden`;
 a change bumps `report_version` and is listed in [upgrade.md](upgrade.md#run-report-and-counters)), and
@@ -1146,10 +1192,10 @@ never zero.
 
 | Field | Meaning |
 |---|---|
-| `report_version` | 3 |
+| `report_version` | 4 |
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
-| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
+| `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 
