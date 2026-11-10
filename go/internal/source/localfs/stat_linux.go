@@ -65,18 +65,6 @@ func dtypeOf(k Kind) uint8 {
 	return unix.DT_UNKNOWN
 }
 
-func fillStat(r *Entry, s *unix.Stat_t) {
-	r.Kind = kindOfMode(s.Mode)
-	r.Size = s.Size
-	r.Mode = s.Mode & 0o7777
-	r.UID, r.GID, r.Nlink = s.Uid, s.Gid, uint32(s.Nlink)
-	r.Inode, r.Dev, r.Blocks = int64(s.Ino), int64(s.Dev), s.Blocks*512
-	r.Mtime = schema.Micros(s.Mtim.Unix())
-	r.Ctime = schema.Micros(s.Ctim.Unix())
-	r.Atime = schema.Micros(s.Atim.Unix())
-	r.Present |= HasStat
-}
-
 func fillStatx(r *Entry, s *unix.Statx_t) {
 	r.Kind = kindOfMode(uint32(s.Mode))
 	r.Size = int64(s.Size)

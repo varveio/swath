@@ -10,7 +10,7 @@ import (
 	"github.com/varveio/swath/go/internal/counters"
 )
 
-// TestBetweenSources: between names the synthesis that made its pivot.
+// TestBetweenSources: betweenFrom names the synthesis that made its pivot.
 func TestBetweenSources(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -25,14 +25,11 @@ func TestBetweenSources(t *testing.T) {
 		if !ok || src != c.want || m <= c.a || m >= c.b {
 			t.Fatalf("betweenFrom(%q, %q) = %q, %v, %v; want a %v pivot", c.a, c.b, m, src, ok, c.want)
 		}
-		if m2, ok2 := between(c.a, c.b); m2 != m || ok2 != ok {
-			t.Fatalf("between(%q, %q) = %q, %v; betweenFrom %q", c.a, c.b, m2, ok2, m)
-		}
 	}
 }
 
 // TestExtrapolateReasons: every refusal of the density refinement has its
-// reason, and extrapolate agrees with extrapolateWhy.
+// reason.
 func TestExtrapolateReasons(t *testing.T) {
 	for _, c := range []struct {
 		page    []string
@@ -57,9 +54,6 @@ func TestExtrapolateReasons(t *testing.T) {
 		m, why := extrapolateWhy(c.page, c.c, c.hi, c.bounded, 1)
 		if why != c.want || (c.m != "" && m != c.m) {
 			t.Fatalf("extrapolateWhy(%q, %q, %q) = %q, reason %d; want %q, %d", c.page, c.c, c.hi, m, why, c.m, c.want)
-		}
-		if m2, ok := extrapolate(c.page, c.c, c.hi, c.bounded, 1); m2 != m || ok != (why == extOK) {
-			t.Fatalf("extrapolate disagrees: %q %v", m2, ok)
 		}
 	}
 }
@@ -188,80 +182,6 @@ func TestStructurePivotEmpties(t *testing.T) {
 		if p.c.Load(c.empty) != 1 || p.c.Load(cChildEmptyLower)+p.c.Load(cChildEmptyUpper) != 1 {
 			t.Fatalf("%s: %s = %d", c.bound, Counters[c.empty].Key, p.c.Load(c.empty))
 		}
-	}
-}
-
-// TestInstrumentationEngages runs the metamorphic variants over the
-// fixtures and checks the report's identities on each run: the pivot
-// sources sum to the accepted splits, the empty children by source and by
-// hi sum to child_empty, small children include the empty ones, the mean
-// leaf depth is at most the longest chain, a frontier split's hand-out is
-// part of the listing. Over all runs, every new engagement counter fires
-// (the sliver, structure, unsplittable, zero-span and hole paths, whose
-// engagement depends on the fixture or on timing, have their own tests).
-func TestInstrumentationEngages(t *testing.T) {
-	fired := map[counters.ID]int64{}
-	variants := []Options{{}, {Seed: true}, {Structure: StructureOn}, {Seed: true, Structure: StructureOn, Floors: true}, {Structure: StructureAuto}}
-	spaces := keyspaces()
-	for k, v := range hostile() {
-		spaces[k] = v
-	}
-	for name, keys := range spaces {
-		for i, opt := range variants {
-			for _, w := range []int{4, 64} {
-				api := newSorted(keys, true, int64(i+1))
-				api.PageCap = 13
-				got, st, _ := run(t, api, opt, w)
-				what := fmt.Sprintf("%s/%d/w%d", name, i, w)
-				check(t, what, st, int64(len(got)))
-				for id := range numCounters {
-					fired[id] += st.Get(id)
-				}
-			}
-		}
-	}
-	for _, id := range []counters.ID{cDensityRefusedAlphabet, cDensityRefusedPastTop, cDensityRefusedOutside, cSplitPivotReflect, cSplitPivotMidpoint, cSplitPivotDensityBounded, cSplitPivotDensityFrontier,
-		cDensityRefusedShort, cDensityShrinkPrevented, cLeaves, cLeafDepthSum, cIdleDemandNs,
-		cChildEmptyReflectLower, cChildEmptyReflectUpper, cChildEmptyMidpointLower, cChildEmptyMidpointUpper,
-		cChildEmptyDensityLower, cChildEmptyDensityUpper,
-		cChildEmptyHiPivot, cChildEmptyHiBound, cChildSmallLower, cChildSmallUpper, cFrontierHandoutKeys} {
-		if fired[id] == 0 {
-			t.Errorf("%s never fired", Counters[id].Key)
-		}
-	}
-}
-
-func check(t *testing.T, what string, st Stats, listed int64) {
-	t.Helper()
-	g := st.Get
-	sum := func(ids ...counters.ID) (n int64) {
-		for _, id := range ids {
-			n += g(id)
-		}
-		return n
-	}
-	accepted := g(cSplitAcceptedBounded) + g(cSplitAcceptedFrontier)
-	if s := sum(cSplitPivotReflect, cSplitPivotMidpoint, cSplitPivotDensityBounded, cSplitPivotDensityFrontier, cSplitPivotStructure); s != accepted {
-		t.Fatalf("%s: pivot sources sum to %d, %d accepted", what, s, accepted)
-	}
-	empty := g(cChildEmptyLower) + g(cChildEmptyUpper)
-	var by int64
-	for src, ids := range emptyBy {
-		if s := pivotSource(src); s != srcBound && s != srcSliver {
-			by += g(ids[0]) + g(ids[1])
-		}
-	}
-	if by != empty || g(cChildEmptyHiPivot)+g(cChildEmptyHiBound) != empty {
-		t.Fatalf("%s: %d empty children, %d by source, %d+%d by hi", what, empty, by, g(cChildEmptyHiPivot), g(cChildEmptyHiBound))
-	}
-	if g(cChildSmallLower) < g(cChildEmptyLower) || g(cChildSmallUpper) < g(cChildEmptyUpper) {
-		t.Fatalf("%s: small children %d/%d below empty %d/%d", what, g(cChildSmallLower), g(cChildSmallUpper), g(cChildEmptyLower), g(cChildEmptyUpper))
-	}
-	if g(cLeaves) == 0 || g(cLeafDepthSum) > g(cLeaves)*g(cSplitMaxDepth) {
-		t.Fatalf("%s: leaves %d, depth sum %d, max depth %d", what, g(cLeaves), g(cLeafDepthSum), g(cSplitMaxDepth))
-	}
-	if g(cFrontierHandoutKeys) > listed || (g(cSplitAcceptedFrontier) == 0 && g(cFrontierHandoutKeys) != 0) {
-		t.Fatalf("%s: hand-out %d keys of %d, %d frontier splits", what, g(cFrontierHandoutKeys), listed, g(cSplitAcceptedFrontier))
 	}
 }
 

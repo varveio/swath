@@ -5,7 +5,11 @@
 
 package localfs
 
-import "golang.org/x/sys/unix"
+import (
+	"golang.org/x/sys/unix"
+
+	"github.com/varveio/swath/go/internal/schema"
+)
 
 func kindOfMode(m uint32) Kind {
 	switch m & unix.S_IFMT {
@@ -25,4 +29,16 @@ func kindOfMode(m uint32) Kind {
 		return KindBlockDevice
 	}
 	return KindUnknown
+}
+
+func fillStat(r *Entry, s *unix.Stat_t) {
+	r.Kind = kindOfMode(uint32(s.Mode))
+	r.Size = s.Size
+	r.Mode = uint32(s.Mode) & 0o7777
+	r.UID, r.GID, r.Nlink = s.Uid, s.Gid, uint32(s.Nlink)
+	r.Inode, r.Dev, r.Blocks = int64(s.Ino), int64(s.Dev), s.Blocks*512
+	r.Mtime = schema.Micros(s.Mtim.Unix())
+	r.Ctime = schema.Micros(s.Ctim.Unix())
+	r.Atime = schema.Micros(s.Atim.Unix())
+	r.Present |= HasStat
 }

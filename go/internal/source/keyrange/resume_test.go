@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/order"
 )
@@ -118,4 +119,15 @@ func TestBoundVetoOnEveryRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// safePrefix is the longest prefix of s made of safe scalars. It sorts at
+// or before s, so it is a usable start-after for listing from s.
+func safePrefix(s string) string {
+	for i, r := range s {
+		if r == utf8.RuneError || !isSafe(int(r)) {
+			return s[:i]
+		}
+	}
+	return s
 }

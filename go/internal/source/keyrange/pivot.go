@@ -17,9 +17,9 @@ import (
 // The rule is on what is synthesized, not on what is copied (I12): a pivot
 // is a prefix copied from one of its input keys, up to the scalar it
 // changes or appends ('%' included, when a real key holds it), followed by
-// safe scalars. between, forwardReflect and capFallback copy such a prefix
+// safe scalars. betweenFrom, forwardReflect and capFallback copy such a prefix
 // (forwardReflect("", "a%1") copies "a%" from the cursor: "a%c") and add
-// one safe scalar; extrapolate reads '%' as a digit of the page's alphabet
+// one safe scalar; extrapolateWhy reads '%' as a digit of the page's alphabet
 // and, where its target's first new character would be '%', snaps it up to
 // the next safe byte. So a pivot holds '%' only where a surrounding key does.
 
@@ -73,17 +73,6 @@ func SafeKey(s string) bool {
 		}
 	}
 	return true
-}
-
-// safePrefix is the longest prefix of s made of safe scalars. It sorts at
-// or before s, so it is a usable start-after for listing from s.
-func safePrefix(s string) string {
-	for i, r := range s {
-		if r == utf8.RuneError || !isSafe(int(r)) {
-			return s[:i]
-		}
-	}
-	return s
 }
 
 // idx/cp map scalars to a dense index without surrogates and back.
@@ -170,17 +159,11 @@ func with(base []int, cp int) []int {
 	return append(append(make([]int, 0, len(base)+1), base...), cp)
 }
 
-// between returns a safe key m with a < m < b (valid UTF-8, at most 1024
-// bytes), or ok=false when only a control or non-character sliver lies
+// betweenFrom returns a safe key m with a < m < b (valid UTF-8, at most
+// 1024 bytes), or ok=false when only a control or non-character sliver lies
 // between them. a must be < b and valid UTF-8; b need not be (validCeil).
-func between(a, b string) (string, bool) {
-	m, _, ok := betweenFrom(a, b)
-	return m, ok
-}
-
-// betweenFrom is between with the synthesis that made m: srcMidpoint for a
-// safe scalar between the keys' first difference, srcSliver for a + " " or
-// capFallback (a pivot just above a).
+// The synthesis is srcMidpoint for a safe scalar between the keys' first
+// difference, srcSliver for a + " " or capFallback (a pivot just above a).
 func betweenFrom(a, b string) (string, pivotSource, bool) {
 	if !utf8.ValidString(a) {
 		return "", srcBound, false
@@ -348,22 +331,7 @@ func validCeil(b string) (string, bool) {
 	return "", false
 }
 
-// extrapolate picks a pivot from the observed key density. Keys are read as
-// numbers in the alphabet seen on the last page (its distinct bytes, all
-// safe ASCII or '%', plus an end-of-string digit below them, which
-// preserves order); the page spanned (first, c], and the target is
-// c + span·jump, capped at the midpoint of (c, hi] for a bounded range. The
-// target is cut just after its first character that differs from c; that
-// character is synthesized, so a '%' there is snapped up to '&', the next
-// safe byte (still above c's byte there, which sorts below '%'). ok=false
-// when the alphabet is not safe ASCII or '%', or the result is not a key
-// strictly inside (c, hi); the caller then uses between/forwardReflect.
-func extrapolate(page []string, c, hi string, bounded bool, jump int64) (string, bool) {
-	m, why := extrapolateWhy(page, c, hi, bounded, jump)
-	return m, why == extOK
-}
-
-// extReason is why extrapolate refused (extOK: it did not).
+// extReason is why extrapolateWhy refused (extOK: it did not).
 type extReason uint8
 
 const (
@@ -376,7 +344,16 @@ const (
 	extOutside            // the key is not a safe key strictly inside (c, hi)
 )
 
-// extrapolateWhy is extrapolate with the reason for a refusal.
+// extrapolateWhy picks a pivot from the observed key density. Keys are read as
+// numbers in the alphabet seen on the last page (its distinct bytes, all
+// safe ASCII or '%', plus an end-of-string digit below them, which
+// preserves order); the page spanned (first, c], and the target is
+// c + span·jump, capped at the midpoint of (c, hi] for a bounded range. The
+// target is cut just after its first character that differs from c; that
+// character is synthesized, so a '%' there is snapped up to '&', the next
+// safe byte (still above c's byte there, which sorts below '%'). It refuses
+// an alphabet outside safe ASCII or '%', or a result that is not a key
+// strictly inside (c, hi); the caller then uses betweenFrom/forwardReflect.
 func extrapolateWhy(page []string, c, hi string, bounded bool, jump int64) (string, extReason) {
 	if len(page) < 2 {
 		return "", extShort

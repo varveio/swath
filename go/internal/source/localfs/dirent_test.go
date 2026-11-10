@@ -6,6 +6,7 @@ package localfs
 import (
 	"bytes"
 	"encoding/binary"
+	"slices"
 	"testing"
 )
 
@@ -27,24 +28,12 @@ func TestParseDirents(t *testing.T) {
 	if err := parseDirents(buf, func(ino uint64, typ uint8, name []byte) { got = append(got, string(name)) }); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"file", "dir", "日本"}; !equal(got, want) {
+	if want := []string{"file", "dir", "日本"}; !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}
 	if err := parseDirents(buf[:len(buf)-3], func(uint64, uint8, []byte) {}); err == nil {
 		t.Fatal("truncated buffer accepted")
 	}
-}
-
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func FuzzParseDirents(f *testing.F) {

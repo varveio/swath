@@ -165,19 +165,22 @@ func TestFencesHoldTheContract(t *testing.T) {
 	}
 }
 
-// TestReuseTilesAroundSpans: a resume handed reused certificates emits one
-// replay range per span, at its position, and lists only the gaps (the
-// seed sends no first data page from K, seed.first_page_skipped_reuse): the
-// listed rows are exactly those of (K, ⊤] outside the spans, no data
-// request starts inside a span's [cs, ce), and the gaps and replay ranges
-// together tile (K, ⊤] (spans below K start at K).
+// TestReuseTilesAroundSpans: plain, delimiter-seeded and prior-seeded
+// startups list exactly (K, ⊤] outside the reused spans, whose replay
+// ranges and live gaps tile (K, ⊤]. No data request starts inside a span's
+// [max(cs, K), ce). The delimiter seed skips its first data page on reuse;
+// prior cuts, including those inside spans, never confer coverage.
 func TestReuseTilesAroundSpans(t *testing.T) {
 	var keys []string
 	for i := range 6000 {
 		keys = append(keys, fmt.Sprintf("d%02d/sub%d/obj%06d", i%7, i%3, i))
 	}
 	slices.Sort(keys)
-	for _, seed := range []bool{false, true} {
+	var cuts []source.Cut
+	for i := 499; i < len(keys); i += 500 {
+		cuts = append(cuts, source.Cut{Key: keys[i], Rows: 500})
+	}
+	for _, startup := range []string{"plain", "seed", "prior"} {
 		for _, kIdx := range []int{-1, 100, 2500} {
 			k := ""
 			if kIdx >= 0 {
@@ -189,6 +192,7 @@ func TestReuseTilesAroundSpans(t *testing.T) {
 				spans = spans[1:]
 			}
 			api := newSorted(keys, true, 1)
+			seed := startup == "seed"
 			opt := Options{Seed: seed, SeedFirstPage: seed, Workers: 4} // the first data page probe as the CLI sends it
 			if k != "" {
 				opt.Resume = &Resume{After: k}
@@ -196,6 +200,11 @@ func TestReuseTilesAroundSpans(t *testing.T) {
 			p, err := newTest(api, opt)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if startup == "prior" {
+				if err := p.SeedFrom(&source.Prior{Source: "cuts", Unscoped: true, Cuts: cuts, Counted: true}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			p.Reuse(spans)
 			var rows []string
@@ -215,7 +224,7 @@ func TestReuseTilesAroundSpans(t *testing.T) {
 					want = append(want, x)
 				}
 			}
-			what := fmt.Sprintf("seed=%v K=%q", seed, k)
+			what := fmt.Sprintf("%s K=%q", startup, k)
 			if !slices.Equal(rows, want) {
 				t.Fatalf("%s: listed %d rows, want %d", what, len(rows), len(want))
 			}
@@ -237,78 +246,5 @@ func TestReuseTilesAroundSpans(t *testing.T) {
 			}
 			api.Unlock()
 		}
-	}
-}
-
-// TestPriorTilesOnlyGaps: a resume seeded from a prior (--seed-from) with
-// reused certificates tiles only the live gaps. The prior's cuts, some
-// inside the spans, never confer coverage: the listed rows are exactly
-// those of (K, ⊤] outside the spans, one replay range stands at each span,
-// and no data request starts inside a span's [max(cs, K), ce).
-func TestPriorTilesOnlyGaps(t *testing.T) {
-	var keys []string
-	for i := range 6000 {
-		keys = append(keys, fmt.Sprintf("d%02d/sub%d/obj%06d", i%7, i%3, i))
-	}
-	slices.Sort(keys)
-	var cuts []source.Cut
-	for i := 499; i < len(keys); i += 500 {
-		cuts = append(cuts, source.Cut{Key: keys[i], Rows: 500})
-	}
-	for _, kIdx := range []int{-1, 100, 2500} {
-		k := ""
-		if kIdx >= 0 {
-			k = keys[kIdx]
-		}
-		spans := []source.Span{{Lo: keys[50], Hi: keys[900]}, {Lo: keys[3000], Hi: keys[3400]}, {Lo: keys[5000], HiOpen: true}}
-		if kIdx >= 900 {
-			spans = spans[1:]
-		}
-		api := newSorted(keys, true, 1)
-		opt := Options{Workers: 4}
-		if k != "" {
-			opt.Resume = &Resume{After: k}
-		}
-		p, err := newTest(api, opt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := p.SeedFrom(&source.Prior{Source: "cuts", Unscoped: true, Cuts: cuts, Counted: true}); err != nil {
-			t.Fatal(err)
-		}
-		p.Reuse(spans)
-		var rows []string
-		var replay []Range
-		drive(t, p, p.Root(), k, &rows, &replay)
-		in := func(x string) bool {
-			for _, s := range spans {
-				if x > s.Lo && (s.HiOpen || x <= s.Hi) {
-					return true
-				}
-			}
-			return false
-		}
-		var want []string
-		for _, x := range keys {
-			if x > k && !in(x) {
-				want = append(want, x)
-			}
-		}
-		what := fmt.Sprintf("K=%q", k)
-		if !slices.Equal(rows, want) {
-			t.Fatalf("%s: listed %d rows, want %d", what, len(rows), len(want))
-		}
-		if len(replay) != len(spans) {
-			t.Fatalf("%s: %d replay ranges for %d spans", what, len(replay), len(spans))
-		}
-		api.Lock()
-		for _, start := range api.Starts {
-			for _, s := range spans {
-				if start >= max(s.Lo, k) && (s.HiOpen || start < s.Hi) {
-					t.Fatalf("%s: a data request starts at %q inside (%q, %q]", what, start, s.Lo, s.Hi)
-				}
-			}
-		}
-		api.Unlock()
 	}
 }

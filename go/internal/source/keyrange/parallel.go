@@ -532,7 +532,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 					c = out.Rows[n-1].Key
 				}
 				out.Rows = out.Rows[n:]
-				if p.d.Groups && p.d.Detach != nil {
+				if p.d.Groups {
 					out.Rows = p.d.Detach(out.Rows)
 				}
 				p.c.Add(cOverfetchKeys, int64(n))
@@ -555,7 +555,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			// above it or the chain's end: hi's group may continue.
 			done = reached || !truncated
 			keptRows := out.Rows[:kept]
-			if kept < len(out.Rows) && p.d.Detach != nil {
+			if kept < len(out.Rows) {
 				keptRows = p.d.Detach(keptRows)
 			}
 			rows, c, _ = p.take(&grp, keptRows, done, c)
