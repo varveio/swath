@@ -914,6 +914,26 @@ The two TSV files were byte-identical (`cmp`), in both measurements. The Arrow a
 discarded overlap included. The CPU saved is the XML decoder's per-element work: the Arrow decoder reads typed
 columns.
 
+### Azure page size (2026-11-10)
+
+`swath diag count --anonymous` against the public `azureopendatastorage/citydatacontainer`, Arrow listing, 64 workers on a
+4-vCPU GCP VM, main at `4121c6fd`, alternating runs. "Decoded" is `list_format.arrow_items`; "overlap" is `order_overlap_rows`,
+rows read past a span's end and discarded (rows handed to a sibling are not counted).
+
+| Listing | Page | Decoded | Overlap | Attempts | Wall s | CPU s | Peak RSS MB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `Crime/` (468,557 blobs) | 5,000 | 1,266,821 / 1,271,822 | 787,645 / 792,645 | 288 / 289 | 3.84 / 4.96 | 3.34 / 3.64 | 266 / 514 |
+| `Crime/` | 1,000 | 672,192 | 180,761 | 709 | 2.81 | 2.49 | 177 |
+| `Crime/` | 500 | 636,199 | 138,395 | 1,337 | 3.98 | 2.61 | 127 |
+| whole container (1,840,967 blobs) | 5,000 | 4,285,291 / 4,150,688 | 1,376,343 / 1,272,315 | 915 / 888 | 14.34 / 11.51 | 12.63 / 12.26 | 331 / 365 |
+| whole container | 1,000 | 2,759,935 / 2,737,864 | 448,737 / 422,093 | 2,818 / 2,794 | 6.66 / 6.19 | 9.50 / 9.20 | 153 / 165 |
+
+The seed cuts these listings into spans smaller than a 5,000-entry page, and a span reads until its first non-member, so
+most of each span's last page was discarded. At 1,000 the whole container listed in about half the wall time with a quarter
+less CPU and half the memory, for three times the requests (List Blobs is billed per request). 500 adds requests without
+saving more. The default became 1,000, which matches S3's and GCS's page caps. `EndBefore` (#226) would end each span at the
+service and make large pages cheap again; revisit the default if it lands.
+
 ## Local filesystem walker
 
 Trees are synthetic (`bench/gen_tree.py`, seed 20261105): `realistic` is 971,927 non-directory entries and

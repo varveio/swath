@@ -375,14 +375,22 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 	return p, own, nil
 }
 
+// defaultPageSize is the page a range asks for unless the policy sets one:
+// 1,000, not the service's 5,000 (client.MaxPageSize). A range reads until
+// its first non-member, so a range smaller than a page discards the rest of
+// that page; at 5,000 most rows read were discarded, and 1,000 halved the
+// wall time of a 1.84M-blob listing for three times the requests
+// (measurements.md, Azure page size).
+const defaultPageSize = 1000
+
 // engineOptions is the range engine's options for p: pages of
-// client.MaxPageSize unless the policy asks for smaller ones.
+// defaultPageSize unless the policy asks for another size.
 func (p *Provider) engineOptions(own bool) keyrange.Options {
 	opt := p.opt
 	eo := opt.Policy.Options()
 	eo.Prefix, eo.Workers, eo.ClientOff = opt.Prefix, opt.Workers, opt.Admission.Off(own)
 	if eo.PageSize <= 0 {
-		eo.PageSize = client.MaxPageSize
+		eo.PageSize = defaultPageSize
 	}
 	return eo
 }
