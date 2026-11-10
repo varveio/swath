@@ -25,10 +25,11 @@ GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
 ./swath --version        # swath-go VERSION (REVISION)
 ```
 
-`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Revision=REV'` with REV the
-checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its commit). A plain
-`go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
-git worktree may lack (`--version` then shows none).
+`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Version=VER -X
+…buildinfo.Revision=REV'` with VER `$SWATH_VERSION` (the release workflow sets its tag's `X.Y.Z`; empty
+otherwise) and REV the checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its
+commit). A plain `go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp,
+which a build in a git worktree may lack (`--version` then shows none).
 
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
 on every Go change without `-race` on macOS (arm64) and Windows (amd64), and with `-race` on Linux: `internal/listing`
@@ -36,9 +37,45 @@ and `cmd/swath` on arm64, the other packages on amd64; a nightly run races the w
 ([testing](testing.md#continuous-integration)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
-`--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
+`--version` prints the tool name, the version (the release's `X.Y.Z`, `devel` for a source build) and the VCS revision when the
 build recorded one (`-dirty` if the tree was modified). Every report carries the same in `build`. Keep the
 revision with any run you may need to investigate.
+
+### Release downloads and images
+
+From 0.4 each [GitHub release](https://github.com/varveio/swath/releases) carries one archive per target,
+`swath-X.Y.Z-linux-amd64.tar.gz`, `-linux-arm64.tar.gz`, `-darwin-arm64.tar.gz` and `-windows-amd64.zip`, each
+holding `swath`, `swath-replay`, `LICENSE` and `NOTICE` in a `swath-X.Y.Z-OS-ARCH/` directory, built as above
+with the release's version and commit stamped; an SPDX SBOM; and `SHA256SUMS`, signed. Verify before running
+([RELEASING.md](../../RELEASING.md#verifying-a-release) has the cosign and attestation commands):
+
+```bash
+tar -xzf swath-X.Y.Z-linux-amd64.tar.gz
+sha256sum --check --ignore-missing SHA256SUMS
+./swath-X.Y.Z-linux-amd64/swath --version    # swath-go X.Y.Z (REVISION)
+```
+
+The same release publishes multi-arch (linux/amd64, linux/arm64) images, built from `Dockerfile.go` with the
+archives' linux binaries:
+
+| Image | Entrypoint | Base |
+|---|---|---|
+| `ghcr.io/varveio/swath` | `/opt/swath/swath` | distroless static (CA certificates for HTTPS, zone data); no shell |
+| `ghcr.io/varveio/swath-replay` | `/opt/swath-replay/swath-replay` ([replay.md](replay.md#container-image)) | `scratch` |
+
+Tags are `X.Y.Z`, `X.Y` and `latest` (and `X` from 1.0); a release candidate publishes only `X.Y.Z-rc.N`. Pin
+the digest for anything that must not move. Both run as `10001:10001` with no home directory, so mount a
+directory that user can write for `-o`, and pass credentials through the environment (or mount a file and
+point the provider's variable at it, such as `AWS_SHARED_CREDENTIALS_FILE`):
+
+```bash
+docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:X.Y.Z \
+  list s3://bucket/prefix/ --anonymous --region us-east-1 -o /out/inventory
+```
+
+`docker build -f Dockerfile.go -t swath:dev .` builds the lister image from a checkout (`--target swath-replay`
+for the replay server); `--build-arg SWATH_REVISION="$(git rev-parse HEAD)"` stamps the commit, as the context
+carries no `.git`.
 
 ## Credentials
 
@@ -150,6 +187,11 @@ run (resumable; [ordering](internals/ordering.md#spill)).
   encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
   See [body handling](internals/clients.md#what-swath-keeps) and
   [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
+- **A local listing's largest directory, outside it:** a listing reads each directory whole to sort it,
+  for each directory read at once; the names and keys grow with their lengths (1M files in one directory,
+  names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`, `swath diag count`) does not
+  sort, and on Linux reads large directories a slab at a time; the portable engine (macOS, Windows) reads
+  each directory whole for a count too.
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
   (default GOMAXPROCS, lowered to what 16 MiB each of an allowance equal to `--row-budget` carries; one
   job compresses synchronously on the order stage). A job is a 4 MiB input section (four 1 MiB windows:

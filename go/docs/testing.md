@@ -18,25 +18,26 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
+| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `go/reader`; the four targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
+| Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, full (`bench/shapes`, 88 arms) | about 2M keys per shape behind the fake's service behaviors: output key for key; numbers against a baseline, annotated | nightly; dispatch `jobs=all` or `go-shapes` | ubuntu-latest | `nightly.yml` `go-shapes` |
 | Cross-OS default tier, linux/arm64 | `go vet` and the whole suite without `-race`; [platform skips](#cross-os) | PR, main, dispatch; Go change | ubuntu-24.04-arm | `ci.yml` `go-xos (ubuntu-24.04-arm)` |
 | Cross-OS default tier, macOS | the same on macOS; not on pull requests ([cross-OS](#cross-os)) | main, dispatch; Go change. Nightly; dispatch `jobs=all` or `go-xos-macos` | macos-latest (arm64) | `ci.yml` `go-xos (macos-latest)`; `nightly.yml` `go-xos-macos` |
 | Cross-OS default tier, Windows | the same on Windows; not on pull requests ([cross-OS](#cross-os)) | main, dispatch; Go change. Nightly; dispatch `jobs=all` or `go-xos-windows` | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest)`; `nightly.yml` `go-xos-windows` |
-| Builds and the Go replay image | static builds for 4 targets, the version stamp, the journal's Windows test compile, the image for 2 architectures and its two smokes | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-build` |
+| Builds and the Go images | static builds for 4 targets, the version stamp, the journal's Windows test compile, the lister and replay images for 2 architectures and their smokes | PR, main, dispatch; Go change | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on fixtures the Java replay writes | PR, main, dispatch; its own, wider change detection | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
-| Java fast tier | unit, property and concurrency tests, instrumentation drift, license gate | PR, main, dispatch; Java change. Release | ubuntu-latest | `ci.yml` `fast-tests`; `release.yml` `fast-tests` |
-| Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change. Release | ubuntu-latest | `ci.yml` `integration-tests`; `release.yml` `integration-tests` |
-| Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly. Release | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf`; `release.yml` `deep-tests` |
+| Java fast tier | unit, property and concurrency tests, instrumentation drift, license gate | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `fast-tests` |
+| Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `integration-tests` |
+| Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf` |
 | Java perf tier | PERF-1, PERF-2, SORT-PERF | nightly; dispatch `jobs=all` or `deep-and-perf` | ubuntu-latest | `nightly.yml` `deep-and-perf` |
-| Java image check | both Java images build for 2 architectures and start | PR; Java change | ubuntu-latest | `ci.yml` `docker-check` |
-| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | main with a Java change, dispatch. Release, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `ci.yml` `docker-publish`; `release.yml` `publish` |
+| Java image check | both Java images build for 2 architectures and start offline; nothing is pushed | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `docker-check` |
 | OSV scan | Java jar closures and images against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
-| Release guards | tag SHA and ancestry (`source`), version and release notes (`fast-tests`), assets and signatures (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `fast-tests`, `publish` |
+| Release guards | tag SHA and ancestry, the version's form and the release notes (`source`); the exact asset set, archives, signatures and attestations (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
 | CodeQL (external check) | static analysis; languages and schedule are repository settings | as the setting says (on 2026-11-08: PR, push to `main`, weekly) | GitHub-hosted | code-scanning default setup, not configured in this repository (`gh api repos/varveio/swath/code-scanning/default-setup`); not in `ci-gate` |
 | CodeRabbit (external check) | review comments | pull requests, by the installed app | CodeRabbit | not configured in this repository (no `.coderabbit.yaml`); not in `ci-gate` |
@@ -80,10 +81,10 @@ of the `keyrange` laws. CI never passes `-short`.
 
 `ci.yml` `changes` diffs the pull request's base (or the push's previous commit) against `HEAD`:
 
-- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.replay-go` or its ignore file,
-  `scripts/ci/smoke-replay-container.sh`, `scripts/ci/go-race-shards.sh`, or the SeekParquet conformance scripts
+- **Go change:** a path under `go/`, `.github/workflows/ci.yml`, `.github/actions/setup-go/`, `Dockerfile.go` or its ignore file,
+  `scripts/ci/smoke-container.sh`, `scripts/ci/smoke-replay-container.sh`, `scripts/ci/go-race-shards.sh`, or the SeekParquet conformance scripts
   (`scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py`).
-- **Java change:** any path outside `go/`, `Dockerfile.replay-go*`, and the named root prose files
+- **Java change:** any path outside `go/`, `Dockerfile.go*`, and the named root prose files
   `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md`.
   Other docs (including fixtures), scripts and build inputs still run Java.
 
@@ -91,7 +92,7 @@ A dispatch, or a diff with no base, sets both. Every job still runs and only ski
 change, `go-race` and `go-xos` each run one `off` leg on ubuntu-latest, so no arm64, macOS or Windows runner is
 queued), so on a pull
 request `ci-gate` sees each job as `success` and treats `skipped` as a failure; off pull requests `skipped`
-passes (`docker-check` is PR-only). `ci-gate` needs `changes`, `fast-tests`,
+passes. `ci-gate` needs `changes`, `fast-tests`,
 `integration-tests`, `docker-check`, `go-lint`, `go-race`, `go-nonrace`, `go-build`, `go-objfile`, `go-reader`,
 `go-xos` and `go-fixtures`. `go-fixtures` keeps its own detection: its inputs add the Java replay modules
 (`swath-replay`, `swath-core`, `swath-model`), the shared Gradle build files and wrapper, and the provider
@@ -104,7 +105,7 @@ evidence archive and expectations under `docs/` ([replay.md](replay.md#continuou
 | `go-lint` | `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a Go change, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
-| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); the Go replay image and its smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); the Go lister and replay images (`Dockerfile.go`) and their smokes ([replay.md](replay.md#continuous-integration)) | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`go/objfile`, `go/reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the four targets | ubuntu-latest |
 | `go-xos (OS)` | `go vet ./...` and `go test -count=1 -timeout 25m ./...` without `-race` (slow on macOS; the Windows race detector needs cgo). The `changes` job picks the legs: linux/arm64 on every Go change, Windows and macOS on main and dispatch; without a Go change, a single `go-xos (off)` leg whose steps skip | ubuntu-24.04-arm; windows-latest (amd64) and macos-latest (arm64) off pull requests |
 | `go-fixtures` | `./gradlew :swath-replay:installDist`, `bench/replay/make-fixtures.sh`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
@@ -272,11 +273,16 @@ before and after the change when it fixes a flake, as #300 does.
 
 ### Release
 
-`release.yml` runs on a `v*` tag and is Java-only: `source` (release guard self-tests, tag SHA and `main`
-ancestry), `fast-tests` (`./gradlew verifyReleaseVersion build -PnoIntegration ...` and the license gate),
-`integration-tests`, `deep-tests`, then `publish` (images smoked by digest, assets signed and verified), which runs
-only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`. It
-builds and tests nothing under `go/`; the Go release pipeline is #284.
+`release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
+`main` ancestry, the version read from the tag, the release notes), then side by side `go-tests` (`go vet ./...`
+and `go test -race -count=1 -timeout 40m ./...` unsharded on amd64, then `go vet` and the race tests of
+`go/reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
+build`: `build.sh` for the four targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
+`--version` exactly the tag's version and commit; the archives, an SBOM, `SHA256SUMS`), then `publish` (both
+`Dockerfile.go` images from the archived binaries, smoked by digest, assets and images signed, attested and
+verified), which runs only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`.
+It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: the tag's commit passed them
+to reach `main` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
 ## Flakes
 
@@ -341,12 +347,13 @@ processors).
 
 ## Live runs
 
-No workflow lists a Go run against a real bucket. Live listings, production-corpus sweeps and recordings are
-launched by hand on cloud batch hosts from the maintainers' tooling, never on a schedule; results that are
-kept go to [measurements.md](measurements.md) with the run, date and command. The replay server's live matrix
-is recorded once and replayed offline ([replay server oracle](#replay-server-oracle)). The one automatic
-real-bucket listing in CI is the Java image smoke, `scripts/ci/smoke-container.sh`, an anonymous listing of a
-small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
+Live listings, production-corpus sweeps and recordings are launched by hand on cloud batch hosts from the
+maintainers' tooling, never on a schedule; results that are kept go to [measurements.md](measurements.md) with
+the run, date and command. The replay server's live matrix is recorded once and replayed offline ([replay
+server oracle](#replay-server-oracle)). The one automatic real-bucket listing is the image smoke,
+`scripts/ci/smoke-container.sh`, an anonymous listing of a small public prefix: of the Go release image in
+`release.yml` `publish` (against the pushed digest); `go-build` runs the same smoke offline,
+against `bench/s3fake`.
 
 ## Invariant tests
 

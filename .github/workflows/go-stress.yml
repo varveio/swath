@@ -112,6 +112,7 @@ jobs:
           name: go-stress-${{ runner.os }}-${{ runner.arch }}
           path: ${{ runner.temp }}/go-stress.json
           if-no-files-found: ignore
+          retention-days: 30
 
       - name: Fail if any test failed
         run: exit "${status:-1}"

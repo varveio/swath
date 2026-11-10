@@ -76,6 +76,8 @@ class PolicyTests(unittest.TestCase):
                 (['go/internal/x.go', 'CHANGELOG.md'], 'false', 'true'),
                 (['README.md', 'SECURITY.md'], 'false', 'false'),
                 (['docs/fixtures.json'], 'true', 'false'),
+                (['Dockerfile.go'], 'false', 'true'),
+                (['scripts/ci/smoke-container.sh'], 'true', 'true'),
                 (['docs/README.md'], 'true', 'false'),
                 (['CHANGELOG.md.java'], 'true', 'false'),
                 (['build.gradle.kts'], 'true', 'false'),

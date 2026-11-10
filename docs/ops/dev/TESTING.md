@@ -109,26 +109,27 @@ code emits.
 
 ## When CI runs each tier
 
-A **Java change** is any changed path outside `go/` and `Dockerfile.replay-go*` (`ci.yml` `changes`), so a
+A **Java change** is any changed path outside `go/` and `Dockerfile.go*` (`ci.yml` `changes`), so a
 documentation or script change counts; a pull request that changes only the Go port runs these jobs with
 their steps skipped. A manual dispatch of `ci.yml` sets both change flags and runs every job a dispatch is
-eligible for (`docker-check` is pull-request-only).
+eligible for.
 
 | Tier | Command | Pull request push | Merge to `main` | Nightly (07:00 UTC) | Release tag `v*` |
 | --- | --- | --- | --- | --- | --- |
-| Fast, drift guard, license gate | `./gradlew build -PnoIntegration ...`, `check-instrumentation-drift.sh`, `checkLicense` | `ci.yml` `fast-tests` (Java change) | `ci.yml` `fast-tests` (Java change) | — | `release.yml` `fast-tests` |
-| Integration | `./gradlew test -PonlyIntegration` | `ci.yml` `integration-tests` (Java change) | `ci.yml` `integration-tests` (Java change) | — | `release.yml` `integration-tests` |
-| Deep and the `kill -9` ITs | `./gradlew test -Pdeep -PtestMaxParallelForks=1`; `HardCrashSigkillResume{Process,Matrix}IT` with `-Dswath.it.sigkill=true` | — | `ci.yml` `deep-tests` (Java change) | `nightly.yml` `deep-and-perf` | `release.yml` `deep-tests` |
+| Fast, drift guard, license gate | `./gradlew build -PnoIntegration ...`, `check-instrumentation-drift.sh`, `checkLicense` | `ci.yml` `fast-tests` (Java change) | `ci.yml` `fast-tests` (Java change) | — | — |
+| Integration | `./gradlew test -PonlyIntegration` | `ci.yml` `integration-tests` (Java change) | `ci.yml` `integration-tests` (Java change) | — | — |
+| Deep and the `kill -9` ITs | `./gradlew test -Pdeep -PtestMaxParallelForks=1`; `HardCrashSigkillResume{Process,Matrix}IT` with `-Dswath.it.sigkill=true` | — | `ci.yml` `deep-tests` (Java change) | `nightly.yml` `deep-and-perf` | — |
 | Perf | `./gradlew test -PonlyPerf` | — | — | `nightly.yml` `deep-and-perf` | — |
-| Image build check | multi-arch `docker build`, `--help` smoke | `ci.yml` `docker-check` (Java change) | — | — | — |
-| Image smoke and publish | `scripts/ci/smoke-container.sh` (a public bucket, anonymous), `smoke-replay-container.sh` | — | `ci.yml` `docker-publish` (Java change) | — | `release.yml` `publish` (public repository and `PUBLIC_RELEASE_ENABLED`) |
+| Image build check | multi-arch `docker build`, offline `--version` and `--help` smoke, no push | `ci.yml` `docker-check` (Java change) | `ci.yml` `docker-check` (Java change) | — | — |
 | OSV scan | `scripts/ci/osv-scan.sh` | — | — | `nightly.yml` `osv-scan` | — |
 
 All run on `ubuntu-latest`. `ci-gate`, the one required check, needs `fast-tests`, `integration-tests` and
-`docker-check`; `deep-tests` gates `docker-publish` instead. The nightly jobs run with no path filter;
+`docker-check`; `deep-tests` runs off pull requests and is not in it. Only releases push images
+([CI architecture](CI.md#registry-and-artifacts)). The nightly jobs run with no path filter;
 `gh workflow run nightly.yml -f jobs=deep-and-perf` (or `osv-scan`) runs one on demand, and the Go
 `go-race-nightly` job runs with every dispatch. In `ci.yml` and `nightly.yml`, `report-test-counts.sh` after each deep, `kill -9` and perf step fails
-the job when the tier executed no test; `release.yml` `deep-tests` has no such check.
+the job when the tier executed no test. No Java tier runs at release: `release.yml` ships the Go
+implementation ([`RELEASING.md`](../../../RELEASING.md#what-gates-a-release)).
 
 ### Before pushing an engine change
 

@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
 	"slices"
 	"strconv"
@@ -28,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/replay/javanum"
 	"github.com/varveio/swath/go/internal/replay/latency"
 	"github.com/varveio/swath/go/internal/replay/server"
@@ -35,10 +35,6 @@ import (
 	"github.com/varveio/swath/go/internal/replay/store"
 	"github.com/varveio/swath/go/internal/replay/store/memstore"
 )
-
-// revision is the commit the binary was built from, set at link time by
-// go/build.sh (-ldflags -X main.revision=...).
-var revision string
 
 // usageError is a bad command line: exit 2.
 type usageError struct{ error }
@@ -107,31 +103,14 @@ Run "swath-replay serve -h" for the serve flags.
 `)
 }
 
+// version is this binary's build (internal/buildinfo: the version and
+// revision go/build.sh links in) under this command's name.
 func version() string {
-	v, rev := "devel", revision
-	if info, ok := debug.ReadBuildInfo(); ok {
-		if info.Main.Version != "" && info.Main.Version != "(devel)" {
-			v = info.Main.Version
-		}
-		if rev == "" {
-			dirty := false
-			for _, s := range info.Settings {
-				switch s.Key {
-				case "vcs.revision":
-					rev = s.Value
-				case "vcs.modified":
-					dirty = s.Value == "true"
-				}
-			}
-			if rev != "" && dirty {
-				rev += "-dirty"
-			}
-		}
+	b := buildinfo.Read()
+	if b.Revision == "" {
+		return "swath-replay-go " + b.Version
 	}
-	if rev == "" {
-		return "swath-replay-go " + v
-	}
-	return "swath-replay-go " + v + " (" + rev + ")"
+	return "swath-replay-go " + b.Version + " (" + b.Revision + ")"
 }
 
 // sortFixture sorts an unsorted capture into a SeekParquet fixture. The

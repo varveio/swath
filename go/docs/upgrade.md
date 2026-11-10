@@ -320,9 +320,9 @@ dataset format: the flag-by-flag mapping is [from-java.md](from-java.md) and
 is finished with Java or started over; `swath resume` reads only this tool's journal. The current flags are
 the generated help in [cli.md](cli.md#flags).
 
-The binary reports its version (`swath --version`, the report's `build.version`) from the Go module build
-information: a binary built from a source checkout reads `devel`, and the revision it was built from is
-`build.revision`.
+The binary reports its version (`swath --version`, the report's `build.version`): a release binary or image
+reads the release's `X.Y.Z`, a binary built from a source checkout reads `devel`, and the revision it was built
+from is `build.revision`.
 
 **If you built from `main` before 0.4.** The Go port was on `main` (from `a2efe16e`) before it was released,
 without a version and without a compatibility promise. Against those builds, 0.4 renames or moves these flags
