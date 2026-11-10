@@ -2,6 +2,7 @@
 """Exercise cache deletion boundaries and the actual change/matrix shell in ci.yml."""
 import json
 import importlib.util
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -155,11 +156,21 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual((rows['go'], rows['objfile'], rows['reader']), ('true', 'true', 'false'))
             result, rows = run(PR_LABELS='[{"name":"ci:full"}]')
             self.assertEqual(rows['full'], 'true')
-            # Deleted build constraints still escalate the selected module.
+            # Adding, editing a constrained body, or deleting a build constraint
+            # must escalate even when the filename has no platform suffix.
             (cwd / 'go/source.go').write_text('//go:build linux\n\npackage objfile\n')
             subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'constraint'], cwd=temp, check=True)
             self.assertEqual(run()[1]['platforms'], 'true')
+            constrained_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
+            (cwd / 'go/source.go').write_text('//go:build linux\n\npackage changed\n')
+            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'constrained body'], cwd=temp, check=True)
+            self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
+            (cwd / 'go/source.go').write_text('package changed\n')
+            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'remove constraint'], cwd=temp, check=True)
+            self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
             (cwd / 'go/go.mod').write_text('module example/go\ngo 1.27.0\n')
             subprocess.run(['git', 'add', 'go/go.mod'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'toolchain'], cwd=temp, check=True)
@@ -169,6 +180,18 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(rows, {})
             self.assertEqual(run(BASE='')[1]['full'], 'true')
+            # Go ignores fixture module declarations; binary/non-UTF-8 fixture
+            # contents and filenames still select their enclosing module.
+            fixture = cwd / 'go/objfile/testdata/sample'
+            fixture.mkdir(parents=True)
+            (fixture / 'go.mod').write_text('module example/fixture\n')
+            raw_name = os.fsdecode(b'latin-\xff.txt')
+            (fixture / raw_name).write_bytes(b'fixture\xff\n')
+            subprocess.run(['git', 'add', 'go/objfile/testdata'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'fixtures'], cwd=temp, check=True)
+            result, rows = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(rows['objfile'], 'true')
             # A new nested module cannot silently miss every existing job.
             (cwd / 'go/new').mkdir()
             (cwd / 'go/new/go.mod').write_text('module example/new\n')
@@ -198,17 +221,43 @@ class PolicyTests(unittest.TestCase):
                 self.assertEqual({row['scope'] for row in matrix}, {scope})
 
     def test_full_gate_refuses_partial_or_failed_validation(self):
-        selection = dict.fromkeys(('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms'), 'true')
-        for result, omitted, expected in [('success', None, 0), ('failure', None, 1),
-                                           ('skipped', None, 1), ('cancelled', None, 1),
-                                           *[('success', key, 1) for key in selection]]:
-            selected = dict(selection)
-            if omitted:
-                selected[omitted] = 'false'
-            run = subprocess.run(['bash', '-c', run_step('Full Go validation passed')],
-                                 env=dict(os.environ, RESULT=result, SELECTION=json.dumps(selected)),
-                                 capture_output=True)
-            self.assertEqual(run.returncode == 0, expected == 0, (result, omitted))
+        flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms')
+        selection = dict.fromkeys(flags, 'true')
+        selection['go_shards'] = subprocess.check_output(
+            [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
+        xos = [dict(os=os_name, runner=os_name, scope='full')
+               for os_name in ('macos-latest', 'windows-latest', 'ubuntu-24.04-arm')]
+        selection['go_xos'] = json.dumps(xos)
+
+        def check(selected, result='success'):
+            return subprocess.run(['bash', '-c', run_step('Full Go validation passed')], cwd=ROOT,
+                                  env=dict(os.environ, NEEDS=json.dumps({'go-race': {'result': result}}),
+                                           SELECTION=json.dumps(selected)), capture_output=True).returncode
+
+        self.assertEqual(check(selection), 0)
+        for result in ['failure', 'skipped', 'cancelled']:
+            self.assertNotEqual(check(selection, result), 0)
+        for omitted in flags:
+            self.assertNotEqual(check(dict(selection, **{omitted: 'false'})), 0, omitted)
+        for bad_matrix in [xos[:2], [dict(row, scope='extra') for row in xos],
+                           [dict(row, runner='ubuntu-latest') for row in xos]]:
+            self.assertNotEqual(check(dict(selection, go_xos=json.dumps(bad_matrix))), 0)
+        self.assertNotEqual(check(dict(selection, go_shards='[]')), 0)
+
+        # A new Go job cannot be omitted from either aggregate unnoticed.
+        go_jobs = set(re.findall(r'^  (go-[a-z-]+):$', WORKFLOW, re.M)) - {'go-full-gate'}
+        for gate in ['ci-gate', 'go-full-gate']:
+            section = WORKFLOW.split('  ' + gate + ':\n', 1)[1]
+            needs = set(re.search(r'needs: \[(.*?)\]', section)[1].split(', '))
+            self.assertTrue(go_jobs <= needs, (gate, go_jobs - needs))
+
+        with tempfile.NamedTemporaryFile() as summary:
+            for result in ['success', 'skipped', 'failure', 'cancelled']:
+                run = subprocess.run(['bash', '-c', run_step('Every gating job passed')],
+                                     env=dict(os.environ, GITHUB_STEP_SUMMARY=summary.name,
+                                              NEEDS=json.dumps({'go-test': {'result': result}})),
+                                     capture_output=True)
+                self.assertEqual(run.returncode == 0, result == 'success')
 
 
 if __name__ == '__main__':

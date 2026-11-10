@@ -68,13 +68,16 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 The `source` job verifies tag SHA and main ancestry, then independently requires a successful
 **`go-full-gate`** from that exact commit's `ci.yml` main push run. This gate certifies all Go modules,
-race shards, non-race checks, platforms, cross-builds, images and replay fixtures. Being on main or
+race shards, non-race checks, platforms, cross-builds, images and replay fixtures; it is independent
+of the legacy Java jobs. Being on main or
 having a green PR is insufficient. The verifier selects the newest run and its current attempt;
 it rejects skipped/failed gates and does not accept a PR or manual dispatch in place of main.
 
-If main CI is pending, release waits up to ten minutes. If the gate is failed, missing after that
-wait, or predates this qualification mechanism, release stops before building/publishing. Fix or
-rerun main CI at the tagged commit, then rerun the release workflow. A successful later commit does
+Only a SHA that was the head of a main push can qualify. An intermediate commit in a multi-commit
+push, or a PR branch commit merely reachable through a merge, has no qualifying push run: release
+the validated pushed main head instead. If its main CI is pending, release waits up to ten minutes. If the gate is failed, missing after that
+wait, or predates this qualification mechanism, release stops before building/publishing. For an existing qualifying main run, fix or rerun its failed checks, then rerun release. A commit
+without a qualifying push run must be replaced by a validated pushed main head. A successful later commit does
 not qualify an earlier tag. The release token needs read-only Actions access to verify this result.
 
 With full validation established, release does not repeat that whole platform matrix. It checks

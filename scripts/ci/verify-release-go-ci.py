@@ -24,7 +24,7 @@ def qualification(repo, sha, api=gh_pages):
                 f'?event=push&branch=main&head_sha={sha}&per_page=100')
     runs = [run for page in pages for run in page['workflow_runs']
             if run['head_sha'] == sha and run['head_branch'] == 'main'
-            and run['event'] == 'push' and run['path'] == '.github/workflows/ci.yml'
+            and run['event'] == 'push'
             and run['head_repository']['full_name'] == repo]
     if not runs:
         return None
@@ -63,8 +63,9 @@ def main():
                 return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise Rejected('full Go validation is missing or pending; wait for the main CI '
-                               'go-full-gate and rerun this release workflow')
+                raise Rejected('full Go validation is missing or pending. The tag must name a '
+                               'commit that was a pushed main head and has a successful go-full-gate. '
+                               'If its main CI is pending, wait and rerun this release workflow')
             print(f'Waiting for full Go validation of {args.sha}', flush=True)
             time.sleep(min(15, remaining))
     except (Rejected, subprocess.CalledProcessError, KeyError, ValueError) as error:

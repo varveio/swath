@@ -27,6 +27,7 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertIn('/42/attempts/2/jobs?', endpoint)
                 return [{'jobs': jobs if jobs is not None else [self.gate]}]
             self.assertIn(f'event=push&branch=main&head_sha={SHA}', endpoint)
+            self.assertIn('/actions/workflows/ci.yml/runs?', endpoint)
             # Exercise pagination: the candidate need not be in the first page.
             return [{'workflow_runs': []},
                     {'workflow_runs': runs if runs is not None else [self.run]}]
@@ -37,10 +38,9 @@ class ReleaseGateTests(unittest.TestCase):
         self.run['status'] = 'in_progress'  # unrelated Java deep tier may still run
         self.assertEqual(self.check(), self.run['html_url'])
 
-    def test_wrong_sha_event_branch_workflow_or_repository_does_not_qualify(self):
+    def test_wrong_sha_event_branch_or_repository_does_not_qualify(self):
         for key, value in [('head_sha', 'b' * 40), ('event', 'pull_request'),
                            ('event', 'workflow_dispatch'), ('head_branch', 'feature'),
-                           ('path', '.github/workflows/other.yml'),
                            ('head_repository', {'full_name': 'fork/swath'})]:
             with self.subTest(key=key, value=value):
                 run = dict(self.run, **{key: value})

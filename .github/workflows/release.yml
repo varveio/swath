@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: public-release-${{ github.repository }}
@@ -16,6 +15,9 @@ jobs:
   source:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:

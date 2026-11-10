@@ -68,6 +68,9 @@ func TestDataset(t *testing.T) {
 	err := local.WriteDir(ctx, dir, schema, &rowReader{rows: all}, local.DatasetOptions{
 		Part:      write.PartOptions{Key: seekparquet.Key{Column: "key", Unique: true}, SchemaID: "objfile/test", RowGroupRows: 500, PageRows: 100},
 		PartBytes: 4 << 10,
+		// This is a reader fixture, not a publication-durability test. Keep the
+		// read/verify/range/list checks on platforms without directory sync too.
+		AllowUnsynced: true,
 	})
 	if err != nil {
 		t.Fatal(err)

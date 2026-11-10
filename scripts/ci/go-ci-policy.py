@@ -30,6 +30,11 @@ ROOT_PROSE = {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'CONTRIBUTING.md',
 MODULES = {'go': 'go/go.mod', 'reader': 'go/reader/go.mod', 'objfile': 'go/objfile/go.mod'}
 
 
+def fixture_module(path):
+    return any(part in {'testdata', 'vendor'} or part.startswith(('.', '_'))
+               for part in Path(path).parts[1:-1])
+
+
 def select(paths, event, *, force_full=False, unknown=False, build_tags=False, toolchain=False):
     out = dict.fromkeys(('java', 'go', 'reader', 'objfile', 'fixtures', 'images',
                          'platforms', 'full'), False)
@@ -51,7 +56,7 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
             else:
                 out['go'] = True
             if path.endswith('/go.mod') and path not in {
-                    'go/go.mod', 'go/reader/go.mod', 'go/objfile/go.mod'}:
+                    'go/go.mod', 'go/reader/go.mod', 'go/objfile/go.mod'} and not fixture_module(path):
                 out['full'] = True  # a new module needs explicit ownership
             if (PLATFORM_FILE.search(path) or path.startswith(PLATFORM_PATHS)
                     or path.endswith(('/go.mod', '/go.sum'))):
@@ -104,18 +109,32 @@ def detect(event, base, labels):
     paths, build_tags, toolchain = [], False, False
     if not unknown:
         # Missing/unreadable git history is an error, never an empty successful selection.
-        paths = git('diff', '--no-renames', '--name-only', '-z', base, 'HEAD').decode().split('\0')[:-1]
-        diff = git('diff', '--no-renames', '--unified=0', base, 'HEAD', '--', 'go/').decode()
+        paths = git('diff', '--no-renames', '--name-only', '-z', base, 'HEAD').decode(errors='surrogateescape').split('\0')[:-1]
+        diff = git('diff', '--no-renames', '--unified=0', base, 'HEAD', '--', 'go/').decode(errors='replace')
         changed_lines = [line[1:] for line in diff.splitlines()
                          if line[:1] in {'+', '-'} and not line.startswith(('+++', '---'))]
         build_tags = any(re.match(r'\s*//\s*(go:build|\+build)\b', line) for line in changed_lines)
+        # A body-only edit in a constrained file is platform-sensitive too. Read
+        # both revisions so deletion or removal of the constraint cannot hide it.
+        for path in paths:
+            if path.startswith('go/') and path.endswith('.go'):
+                for revision in (base, 'HEAD'):
+                    file = subprocess.run(['git', 'show', f'{revision}:{path}'],
+                                          capture_output=True, text=True, errors='replace')
+                    if file.returncode == 0:
+                        build_tags |= any(re.match(r'\s*//\s*(go:build|\+build)\b', line)
+                                          for line in file.stdout.splitlines()[:40])
         toolchain = any(re.match(r'(?:go\s+\d|toolchain\s+go\d)', line) for line in changed_lines)
-    tracked = set(git('ls-files', 'go/go.mod', 'go/**/go.mod').decode().splitlines())
+    tracked = {path for path in git('ls-files', '-z', 'go/go.mod', 'go/**/go.mod')
+               .decode(errors='surrogateescape').split('\0') if path and not fixture_module(path)}
     if tracked != set(MODULES.values()):
         raise RuntimeError('Go modules changed: update CI module ownership and jobs before merging')
     outputs = select(paths, event, force_full='ci:full' in labels, unknown=unknown,
                      build_tags=build_tags, toolchain=toolchain)
-    return dependants(outputs, {key: Path(path).read_text() for key, path in MODULES.items()})
+    outputs = dependants(outputs, {key: Path(path).read_text() for key, path in MODULES.items()})
+    if outputs['go'] and any(path.endswith(('/go.mod', '/go.sum')) for path in paths):
+        outputs['images'] = True
+    return outputs
 
 
 def main():

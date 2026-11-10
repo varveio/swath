@@ -112,18 +112,20 @@ input-selection mistakes.
 
 ### Full validation and releases
 
-`go-full-gate` runs on main/dispatch after `ci-gate`; it requires the latter's success and every Go
-selection to be enabled. Main runs retain independent concurrency groups, so a newer merge cannot
+`go-full-gate` depends directly on every Go job on main/dispatch. It requires every job to pass, every
+Go selection to be enabled, the full race-shard matrix and exactly the three full platform legs.
+Regression tests require both aggregates to include every Go job. Main runs retain independent concurrency groups, so a newer merge cannot
 cancel the older commit's qualification. A red main run must be fixed or reverted; green PR checks do
 not qualify a release.
 
 [`verify-release-go-ci.py`](../../../scripts/ci/verify-release-go-ci.py) requires that job's success
 from the **newest main push run and its current attempt**, in `ci.yml` in this repository, at the
 **exact tagged SHA**. PR/dispatch runs, another SHA, a skipped/missing gate, and stale successes are
-not substitutes. A pending/missing main run is given up to ten minutes; then release fails with a
-message to wait for main and rerun. A completed failed gate fails immediately. The guard uses read-only
-Actions access and does not dispatch builds or publish anything. Java's unrelated deep job need not
-finish after full Go qualification has passed.
+not substitutes. Only a commit that was the head of a main push can qualify; an intermediate
+commit in a multi-commit push or a PR branch commit merely reachable through a merge has no such run.
+Tag the validated pushed main head instead. A pending/missing main run is given up to ten minutes; then release fails with a
+message explaining the eligibility rule and how to wait for pending CI. A completed failed gate fails immediately. The guard uses read-only
+Actions access and does not dispatch builds or publish anything. Java jobs do not qualify a Go release and need not finish before full Go qualification passes.
 
 ## Why this PR scope
 

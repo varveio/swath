@@ -70,17 +70,21 @@ load_packages() {
 # The ordinary PR cross-architecture leg need not rerun the heavy arm64 race
 # packages. Derive its complement from the same table, including future shards.
 arm64_extra() {
-  local row covered= result
+  local row packages covered= other= result
   for row in "${table[@]}"; do
+    if [ -z "$(field "$row" 3)" ]; then
+      packages=$(rest_packages)
+    else
+      packages=$(expand "$(field "$row" 3)")
+    fi
     if [ "$(field "$row" 2)" = "$arm" ]; then
-      # A remainder shard with no selector could move to arm64 too.
-      if [ -z "$(field "$row" 3)" ]; then
-        covered+="$(rest_packages)"$'\n'
-      else
-        covered+="$(expand "$(field "$row" 3)")"$'\n'
-      fi
+      covered+="$packages"$'\n'
+    else
+      other+="$packages"$'\n'
     fi
   done
+  # If a split package ever spans architectures, keep its full arm64 supplement.
+  covered=$(comm -23 <(sed '/^$/d' <<<"$covered" | sort -u) <(sed '/^$/d' <<<"$other" | sort -u))
   result=$(comm -23 <(sort -u <<<"$ALL") <(sed '/^$/d' <<<"$covered" | sort -u))
   [ -n "$result" ] || { echo '::error::no arm64 complement; update the xos matrix' >&2; return 1; }
   printf '%s\n' "$result"
@@ -300,6 +304,9 @@ self_test() {
   table=("x $amd ./a -" "rest $arm - -")
   got=$(arm64_extra)
   if [ "$got" != "./a" ]; then echo "self-test: rest arm64 complement is '$got'"; fail=1; fi
+  table=("s $arm ./a ^TestX\$" "s-rest $amd ./a -" "rest $amd - -")
+  got=$(arm64_extra | paste -sd' ' -)
+  if [ "$got" != "./a ./a/b ./ab ./c ./d" ]; then echo "self-test: mixed-architecture complement is '$got'"; fail=1; fi
   if [ "$fail" = 0 ]; then echo "self-test: ok"; fi
   return "$fail"
 }

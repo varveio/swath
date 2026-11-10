@@ -913,17 +913,25 @@ jobs:
   # A release checks this job in the main push run of its exact SHA. Unlike the
   # PR gate, success here certifies every Go module, platform and packaging tier.
   go-full-gate:
-    needs: [changes, ci-gate]
+    needs: [changes, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
       - name: Full Go validation passed
         env:
-          RESULT: ${{ needs.ci-gate.result }}
+          NEEDS: ${{ toJSON(needs) }}
           SELECTION: ${{ toJSON(needs.changes.outputs) }}
         run: |
           set -euo pipefail
-          test "$RESULT" = success
-          jq -e '(.full == "true") and (.go == "true") and (.reader == "true") and
+          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS"
+          shards=$(./scripts/ci/go-race-shards.sh --matrix)
+          jq -e --argjson shards "$shards" '
+            (.full == "true") and (.go == "true") and (.reader == "true") and
             (.objfile == "true") and (.fixtures == "true") and (.images == "true") and
-            (.platforms == "true")' <<<"$SELECTION"
+            (.platforms == "true") and (.go_shards | fromjson == $shards) and
+            (.go_xos | fromjson |
+              (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm", "windows-latest"] and
+              all(.[]; .scope == "full" and .runner == .os))' <<<"$SELECTION"

@@ -97,10 +97,10 @@ keys do not create dependency edges. Changing an independent module's dependenci
 unrelated modules. Module dependency changes do request all platform tests for the selected modules;
 main/reader dependency changes also request image builds.
 
-Platform filenames/assembly, changed build constraints, and the journal, local-filesystem, Parquet
+Platform filenames/assembly, edits to files with build constraints (at either revision), and the journal, local-filesystem, Parquet
 and ordering packages request the full platform suite for selected modules. Packaging inputs request
 image builds and platform tests. A maintainer can add **`ci:full`** to run every Go tier before merge;
-label changes reevaluate selection. These heuristics cannot prove a change is platform-independent.
+all label events reevaluate selection, so an unrelated label change also replaces the current PR run. These heuristics cannot prove a change is platform-independent.
 Full main validation covers the configurations an ordinary PR defers.
 
 Every push to **main** and every manual **dispatch** selects all Go modules, platforms, fixtures and
@@ -111,8 +111,9 @@ Java retains its positive source/build/fixture filter ([CI architecture](../../d
 
 Each job still runs, but an unaffected job skips its work and succeeds. `ci-gate` rejects failed,
 cancelled **and skipped jobs on every event**. Matrix jobs emit a single cheap `off` leg when no
-work is selected. Main/dispatch additionally emit **`go-full-gate`** only after `ci-gate` passes
-and all Go selections are true. Release requires that qualification from the main push run of its
+work is selected. Main/dispatch additionally emit **`go-full-gate`** only after every Go job passes, all Go
+selections are true, and both expanded matrices match full validation. This Go-specific gate
+does not depend on the Java jobs. Release requires that qualification from the main push run of its
 exact commit; a green PR or mere ancestry in main is insufficient.
 
 ### Go jobs per push
@@ -245,6 +246,10 @@ the platform behavior as its reason, never silently:
   Linux only.
 
 macOS runs the crash, durable and kill matrices without `-race`.
+
+The object-file S3 dataset test creates an unsynced local fixture when directory sync is unavailable.
+It tests remote reading, verification, ranges and listing, not durable publication; those assertions
+still run on Windows. Application publication/durability behavior is unchanged.
 
 ### Nightly
 
