@@ -390,6 +390,7 @@ only the two named.
 | `SWATH_MINIO_ENDPOINT`, `SWATH_CORPUS_ENDPOINT` | the durable spill campaign | `cmd/swath` | never |
 | `SWATH_GROWTH=1` | the 10,000-part arm of `TestPartCountGrowth` | `internal/listing` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/listing` | never |
+| `SWATH_READER_BENCH_ROWS=N` | the reader benchmarks' fixture size, default 4,000,000 ([reader benchmarks](#reader-benchmarks)) | `reader` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/listing` | never |
 | `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `cmd/swath/testdata`, `docs/internals/counters.md`, the report schema | `cmd/swath`, `internal/source/s3`, `internal/listing` | never; the comparisons run in the default suite |
 | `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |
@@ -961,6 +962,41 @@ machine are not comparable): download the `go-shapes-summary` artifact and commi
 pull request, from a run of its branch (`gh workflow run nightly.yml --ref BRANCH -f jobs=go-shapes`), and says
 which numbers moved and why. A change that moves a number unintentionally is a regression to fix, not a
 baseline to update.
+
+## Reader benchmarks
+
+The reader's Scan and Stream are measured over a generated `swath/s3-objects/v1` fixture (`go/reader`
+`fixture_test.go`); nothing is committed. `writeFixture` streams rows through `local.WriteDir` one 1,024-row
+batch at a time, so it holds that batch, the part being written and one manifest entry a part, never the
+whole listing. It uses the lister's Parquet schema (`internal/parquetout` `nodeOf` over the S3 schema: key and
+etag DELTA_BYTE_ARRAY, the other strings dictionary then PLAIN, the integers DELTA_BINARY_PACKED) and geometry
+(1,024-row pages, 8 MiB or 1,000,000-row row groups, ZSTD, 128 MiB parts). Its keys are a date-partitioned
+tree (`top/yyyy/mm/dd/shard=NNN/part-…`), one directory in eight opening with a folder object; sizes
+log-normal; ETags random hex, 5 % multipart; five storage classes, 0.5 % null; checksums on the last 40 % of
+rows; owner columns null. The rows depend only on the row count and the seed.
+
+**Default suite.** `TestFixtureFooter` checks a 5,000-row fixture's footer encodings and codecs and reads it
+back in key order, its nulls and folder objects present. `TestScanAllocations` holds Scan (Workers 1, warm,
+no-op callback) over a 20,000-row fixture to `scanAllocBudget` allocations an object (`testing.AllocsPerRun`),
+a ceiling to lower as allocations are removed. Both run in `go-reader` with the rest of the module.
+
+**Benchmarks.** `BenchmarkReaderScan/workers={1,4,8}` (end to end: plan, Split and scan, GOMAXPROCS unchanged)
+and `BenchmarkReaderStream` read the whole fixture with a no-op callback, on a Dataset opened and read once
+before the timed loop. Each reports the standard ns/op, B/op and allocs/op, `rows/op` (divide by it for a
+per-row cost) and `ns/row` from the benchmark's elapsed time, and fails unless the callback saw exactly
+`rows/op` objects in every operation. The fixture has `SWATH_READER_BENCH_ROWS` rows (default 4,000,000), is
+generated once per process before timing and removed at exit. They are not race tests and no CI job runs them:
+
+```bash
+cd go/reader
+go test -run '^$' -bench '^BenchmarkReader' -benchtime 3x -count 5 -p 1 . | tee new.txt   # 4,000,000 rows
+SWATH_READER_BENCH_ROWS=50000 go test -run '^$' -bench '^BenchmarkReader' -benchtime 2x -p 1 .  # smoke
+benchstat old.txt new.txt
+```
+
+On a shared host run them through the gates lock (`flock /tmp/swath-gates.lock`) and record the revision and
+the host's load with the numbers. Recorded results are in
+[measurements.md](measurements.md#reader-scan-and-stream-baseline-2026-11-10).
 
 ## Measurements
 
