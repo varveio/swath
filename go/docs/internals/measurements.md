@@ -1414,6 +1414,43 @@ of `pq.baseline`, `pq.highbytes`, `pq.punct_siblings`): `main` 15.32 s, the bran
 `WriteRows` (runs 42525290072 / 42525288025) the `pq.*` arms took 29.0 s against 36.0 (+24.3 %) and the
 listing-only arms moved +0.9 %. One core hashes SHA-256 at 1,504 MiB/s and MD5 at 692.
 
+## Listing index on a wide prefix, 2026-11-10
+
+`swath-replay serve` with `--list-index` on and off (the [listing index](swath-replay.md)), one server at a time,
+on the dev VM: 4 vCPU (Xeon Platinum 8581C @ 2.30 GHz), 7 GiB RAM, Linux 7.0, shared, load average about 4 during the runs. Build
+`8eb53c04` (branch `go/replay-list-index`, seekparquet `go` at `6acba1a0`), default flags otherwise. Fixture: a
+SeekParquet conversion of an `aws-public-blockchain` recording, 143 million keys, 3.0 GB, 371 row groups (a
+private working copy; not in the repository). Each request was sent once, in the order below, by a Python
+client over loopback; times are client wall clock, a single sample each.
+
+| Request (S3 `list-type=2`) | Entries | on | off |
+|---|---|---|---|
+| `delimiter=/&prefix=v1.1/stellar/parquet/pubnet/v1/`, page 1 | 1,000 prefixes | 43.3 ms | 118.8 ms |
+| the same, pages 2 and 3 (continuation tokens) | 1,000 each | 1.8, 1.8 ms | 81.4, 80.8 ms |
+| the same, page 4 | 984 | 1.8 ms | 80.9 ms |
+| `delimiter=/` | 2 prefixes, 3 keys | 7.5 ms | 1.7 ms |
+| `delimiter=/&prefix=v1.1/` | 5, 1 | 1.8 ms | 1.6 ms |
+| `delimiter=/&prefix=v1.0/` | 2, 1 | 1.6 ms | 1.4 ms |
+| `delimiter=/&prefix=v1.1/stellar/` | 2 | 0.8 ms | 0.6 ms |
+| `max-keys=1000` | 1,000 keys | 2.6 ms | 2.3 ms |
+| `max-keys=1000&prefix=v1.1/stellar/parquet/pubnet/v1/`, pages 1 and 2 | 1,000 each | 14.2, 9.3 ms | 2.9, 5.4 ms |
+
+All eleven response bodies were byte-identical on and off (`cmp`). The milliseconds-long rows are single samples on
+a loaded host and do not separate the arms; the stellar pages do. Over the eight rollups the server answered,
+`delimiter.skipscan.decoded_key_rows` averaged 2,560 key values per rollup with the index (max 5,120) and
+512,112 without (max 1,026,048); `page_reseeks` 0.6 against 479; `delimiter.index.skips` counted 3,984 and
+`delimiter.index.declines{dense_page}` 11 (no other declines). The build:
+
+```
+swath_replay list_index state=built max_bytes=67108864 workers=4 groups_indexed=371 groups_skipped=0 groups_failed=0 parts_failed=0 pages=139818 entries=8288 bytes=1173440 budget_exhausted=false has_index=true seconds=9.391
+```
+
+It adds 9.4 s before the startup line (every key page decoded once; 12.3 and 12.6 s in two more starts
+minutes later) and retains 1.1 MiB. Peak RSS over the run (`/usr/bin/time -v`) was 147 MB with the index and
+97 MB without. `index.load.latency`, which excludes the build, read 879 ms with the index and 157 ms without
+in the measured pair, and 201, 179 and 194 ms (on, off, on) in the three later starts: the 879 ms was a
+one-off.
+
 ## SeekParquet conformance
 
 2026-11-08, the switch to SeekParquet ([testing.md](testing.md#seekparquet-conformance) says how it runs; CI's
