@@ -1,0 +1,221 @@
+# swath resume
+
+swath resume continues an interrupted dataset run with the command its journal recorded.
+
+## Synopsis
+
+```text
+swath resume DIR [OPTIONS]
+```
+
+## Description
+
+A dataset run of an object store (`swath list s3://..., gs://... or az://... -o DIR`) records its command in a
+journal under `DIR/.swath/` and publishes parts as it goes. When it stops before committing (a signal,
+`--max-duration`, `--stall-timeout`, a full disk, a crash), `swath resume DIR` keeps every published part,
+checks each against the journal (size and SHA-256), and lists from after the last published key:
+
+```text
+$ swath list s3://bkt/logs/ -o logs.parquet ...
+^C  INCOMPLETE (interrupted) — resume: swath resume logs.parquet
+  1,000 objects in 6.0s · 167 keys/s
+  60 API calls · in flight avg 0.07 · peak 1
+  1 part · 3.19 KiB written · peak RSS 44.9 MiB
+swath: stopped by interrupt
+$ swath resume logs.parquet
+  59,000 objects in 19.6s · 3,006 keys/s
+  153 API calls · in flight avg 0.11 · peak 1
+  4 parts · 111 KiB written · peak RSS 69.3 MiB
+$ swath resume logs.parquet
+logs.parquet is already complete: nothing to resume
+```
+
+[`swath show DIR`](swath-show.md) prints where a resume will continue before you run it.
+
+Rows listed but not yet in a published part are listed again, except those a validated spill file still
+holds ([running.md](../running.md#stopping-and-resuming)).
+
+The source, the route (endpoint, addressing, region), the filters, the schema and the part size are fixed for
+the run. Only the options below may be given again; the last value wins. A switch the run was started with is
+undone by its other spelling: `--no-anonymous` undoes `--anonymous`, `--adaptive-limit` undoes
+`--no-adaptive-limit`. Any other option is a usage error:
+
+```text
+$ swath resume logs.parquet --part-size 1MiB
+swath: --part-size is fixed for the run and cannot change on resume (see 'swath resume --help')
+See 'swath resume --help'.
+```
+
+Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in `AZURE_STORAGE_SAS_TOKEN`) or
+`--s3-bearer-token-command` must be given it again.
+
+A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
+exit 0. Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
+judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
+resumes, and a text file `rows.tsv` is refused as text output.
+
+## Options
+
+<!-- flags:begin -->
+```text
+Object stores:
+      --anonymous             send no credentials (a public bucket or container)
+                                Ignores any configured. Without it a source with no usable
+                                credentials fails (auth) before listing.
+      --ca-bundle FILE        trust the certificates in this PEM file besides the system's
+                                For a service behind a private certificate authority. S3: default
+                                AWS_CA_BUNDLE.
+      --no-verify-ssl         do not verify the service's TLS certificate (warns)
+                                For a test endpoint only. A resume replays it, and warns again.
+      --no-anonymous          undo a recorded --anonymous
+      --verify-ssl            undo a recorded --no-verify-ssl
+
+S3:
+      --s3-profile NAME       the shared config profile to take credentials and region from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS).
+      --s3-bearer-token-command COMMAND
+                              a shell command printing a bearer token, sent instead of SigV4
+                                For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
+                                swath resume needs it again.
+      --s3-bearer-token-refresh-interval DURATION
+                              run --s3-bearer-token-command again after this long (default 45m)
+
+GCS:
+      --gcs-credentials-file FILE
+                              a service-account or authorized-user JSON file (default: ADC)
+                                Without it, Application Default Credentials.
+
+Azure Blob:
+      --azure-sas-token TOKEN
+                              a shared access signature (a query string); never recorded
+                                Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
+                                none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra
+                                ID (DefaultAzureCredential). Give it again to swath resume.
+
+Performance:
+  -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
+                                Raise it (128, 256) for a large listing the service does not
+                                throttle: listing waits on round trips, not the CPU; lower it when
+                                it throttles at the default.
+      --encoders N            Parquet encoders, or a .zst file's compression jobs (default: CPUs)
+                                Lower it to leave cores to other work; the default follows
+                                GOMAXPROCS, the row budget and the descriptor limit. An explicit
+                                count is kept, with a warning when they cannot carry it.
+      --row-budget SIZE       rows held between listing and encoding (default 128MiB)
+                                Not a cap on resident memory. Raise it when resources.budget_wait_ns
+                                is large or spill is heavy and memory allows; lower it on a small
+                                host (the peak RSS is a few times it).
+      --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
+                                Set it when the output filesystem is shared or small. Past it, or at
+                                the reserve, listing waits instead of spilling.
+      --part-interval DURATION
+                              close a part with rows after this long, full or not (default 30s)
+                                0: by size only. Lower it to close parts sooner on a slow listing
+                                (it bounds how long rows wait in an open part, not how much a resume
+                                repeats: a closed part still publishes in order); 0 for part
+                                boundaries independent of timing.
+      --seed-from PATH        start from a previous listing's key distribution, not the seed
+                                A committed dataset of the same source and scope, or a cut file (one
+                                key per line, ascending bytewise, optionally TAB and the keys
+                                expected since the previous cut); the engine still splits
+                                adaptively.
+
+Limits:
+      --max-duration DURATION
+                              stop the run after this long (exit 124); 0: no limit
+                                Give every unattended run one. Only a dataset run of an object store
+                                (one with a journal) resumes where it stopped; text output and swath
+                                du run again.
+      --stall-timeout DURATION
+                              stop as stuck after this long without progress (exit 75) (default 10m)
+                                0: never. Raise it for a service that is slow to answer for minutes
+                                at a time. Only a dataset run of an object store (one with a
+                                journal) resumes where it stopped.
+      --request-timeout DURATION
+                              per-request timeout; a request over it is retried (default 30s)
+                                Raise it for a slow endpoint or emulator whose pages take longer to
+                                answer.
+      --request-rate N        cap every HTTP attempt at N per second (0: no cap)
+                                Set it to stay under a request quota shared with other clients.
+                                Refused when the spacing exceeds half --stall-timeout.
+      --no-adaptive-limit     do not lower concurrency when the service throttles requests
+                                Turn it off (with --request-rate) when a run crawls under sustained
+                                throttling with the limit near 1. Without it each of the --workers
+                                listing workers waits on one page at a time, and seed listings and
+                                structure probes run beside them.
+      --adaptive-limit        undo a recorded --no-adaptive-limit
+
+Reporting:
+      --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
+                                Written on failure too, with the outcome and the attempt id; not for
+                                a command line that does not parse (an unknown flag, a bad value). A
+                                directory, or a name whose directory does not exist, is refused
+                                before listing; a report that cannot be written at the end fails the
+                                command (exit 1). - is refused where stdout carries rows.
+  -v, --verbose               a start line, progress records; -vv, -vvv: the request log
+                                -vv adds each failed request and retry with its cause, -vvv every
+                                request (credentials and tokens redacted).
+  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+                                With -qq the exit code and the reports stand alone.
+      --progress              show progress on stderr (default: a terminal that rows do not share)
+                                Not by default with -q or -v (which appends progress records), nor
+                                while rows go to the same terminal.
+      --no-progress           no live progress on stderr
+      --progress-interval DURATION
+                              how often progress is printed (at least 1s); implies --progress
+                                Default 1s while the line redraws on a terminal, 30s for appended
+                                records.
+      --stats                 print the end-of-run statistics on stderr
+                                Default: for runs over 1.5 s, runs that write output, and runs that
+                                do not complete; not with -q, nor after a closed downstream pipe.
+      --no-stats              no end-of-run statistics on stderr
+      --color auto|always|never
+                              color the progress line, the statistics and the help (default auto)
+                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
+                                forces it.
+      --log-format text|json  stderr as text, or json: one JSON object per line (default text)
+                                json: warnings, the start line, progress records, the request log
+                                and the outcome as events, no redrawn line or statistics block.
+```
+<!-- flags:end -->
+
+## Examples
+
+Continue an interrupted run:
+
+```bash
+swath resume logs.parquet
+```
+
+Continue it with more workers, a deadline and a fresh report path:
+
+```bash
+swath resume logs.parquet --workers 128 --max-duration 1h --report /var/log/swath/attempt-2.json
+```
+
+Continue a run whose SAS token is not recorded:
+
+```bash
+swath resume container.parquet --azure-sas-token "$SAS"
+```
+
+## Exit status
+
+The codes of [`swath list`](swath-list.md#exit-status). 2 also when the directory holds no interrupted run, or
+when the environment resolves another route than the run's (another region or endpoint): the directory is
+left as it was. 0 when the dataset is already complete. See [reference/exit-codes.md](../reference/exit-codes.md).
+
+## Environment
+
+The provider's credential variables ([sources.md](../sources.md)); a resume reads them again.
+
+## Files
+
+`DIR/.swath/journal` (the recorded command and the published parts; `swath show DIR --journal` prints it) and
+`DIR/error.json` (the last attempt's outcome).
+
+## See also
+
+[swath-list](swath-list.md), [swath-show](swath-show.md), [running.md](../running.md#stopping-and-resuming),
+[reference/exit-codes.md](../reference/exit-codes.md)

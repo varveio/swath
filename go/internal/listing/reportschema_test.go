@@ -85,10 +85,10 @@ func TestReportSchemaGolden(t *testing.T) {
 	}
 }
 
-// TestReportSchemaDoc: docs/cli.md's run report section names every field
+// TestReportSchemaDoc: docs/reference/run-report.md's run report section names every field
 // of the report's schema (by its last path element).
 func TestReportSchemaDoc(t *testing.T) {
-	b, err := os.ReadFile("../../docs/cli.md")
+	b, err := os.ReadFile("../../docs/reference/run-report.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,14 +96,14 @@ func TestReportSchemaDoc(t *testing.T) {
 	i := strings.Index(doc, "<!-- report:begin -->")
 	j := strings.Index(doc, "<!-- report:end -->")
 	if i < 0 || j < i {
-		t.Fatal("docs/cli.md lacks the report markers")
+		t.Fatal("docs/reference/run-report.md lacks the report markers")
 	}
 	section := doc[i:j]
 	for _, p := range reportPaths() {
 		path, _, _ := strings.Cut(p, " ")
 		parts := strings.Split(strings.ReplaceAll(path, "[]", ""), ".")
 		if leaf := parts[len(parts)-1]; !strings.Contains(section, "`"+leaf+"`") {
-			t.Errorf("report field %s is not in docs/cli.md's run report section", path)
+			t.Errorf("report field %s is not in docs/reference/run-report.md's run report section", path)
 		}
 	}
 }

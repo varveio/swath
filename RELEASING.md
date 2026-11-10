@@ -89,7 +89,7 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
   license gate: `go/notices.sh` fails on a linked module whose license go-licenses does not
   recognize or that is not on its allow-list (the Java build's, as SPDX identifiers), or when
   the targets link different modules
-  ([license gate](go/docs/testing.md#license-gate));
+  ([license gate](go/docs/internals/testing.md#license-gate));
 - `publish`, before any tag exists: both images' `--version` against the pushed digests,
   the image smoke (`scripts/ci/smoke-container.sh`: an anonymous listing of a
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's

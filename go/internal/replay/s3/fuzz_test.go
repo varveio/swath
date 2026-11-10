@@ -19,7 +19,7 @@ import (
 
 const tokenAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
-// FuzzToken holds the token contract (docs/replay.md, "The S3 route"):
+// FuzzToken holds the token contract (docs/internals/swath-replay.md, "The S3 route"):
 // DecodeToken never panics and answers every string that is not a token
 // with the one 400 InvalidArgument; an accepted string is the token's only
 // spelling (EncodeToken of what it decoded to is the string); a boundary

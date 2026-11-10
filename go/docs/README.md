@@ -1,43 +1,35 @@
-# Go documentation
+# swath documentation
 
-This documentation describes the unreleased Go implementation on main. The latest
-published release is Java v0.3.2. Go will replace Java at release.
+These pages describe the Go implementation on main, which is not released yet; the latest published release
+is the Java v0.3.2 ([its docs](https://github.com/varveio/swath/tree/v0.3.2/docs)).
 
-- **First run:** [guide.md](guide.md), with local summaries, object-store text listings,
-  dataset output and source-specific limits.
+**Start**
 
-Shared object-store authentication and request controls are in [operating.md](operating.md#object-store-requests);
-provider pages linked there describe each provider's support and differences.
+- [getting-started.md](getting-started.md): build swath, total a directory, list a public prefix, write and
+  query a dataset, interrupt and resume a run.
+- [install.md](install.md): build from source, verify the binary, platforms.
 
-Who reads what. Each page owns its facts; the others link to it.
+**Use**
 
-- **Operator** (schedules and watches runs): [operators.md](operators.md), then [operating.md](operating.md)
-  for the full reference and [cli.md](cli.md) for every flag, exit code and report field.
-- **Coming from the Java CLI:** [from-java.md](from-java.md), then [cli-inventory.md](cli-inventory.md) (every
-  Java option against this tool) and [upgrade.md](upgrade.md) (from the Java layout to the swath dataset, for Java users and for readers).
-- **Reading or integrating a dataset** (any language): [dataset.md](dataset.md), the swath dataset profile: what
-  a swath dataset is, the schema ids and their columns, `extensions.swath`, key order and evolution.
-- **Contributor**, in reading order: [architecture.md](architecture.md),
-  [internals/contracts.md](internals/contracts.md), [internals/ordering.md](internals/ordering.md) (the order
-  stage, its budget, waits and spill), [internals/providers.md](internals/providers.md) (the provider contract,
-  registry and capabilities, with a page per provider, [internals/clients.md](internals/clients.md) for the list
-  clients and [internals/range-engine.md](internals/range-engine.md) for the range engine), [internals/parquet-output.md](internals/parquet-output.md),
-  [internals/durability.md](internals/durability.md) (journal and resume),
-  [internals/counters.md](internals/counters.md), [internals/dependencies.md](internals/dependencies.md),
-  [testing.md](testing.md).
-- **The replay server** (`cmd/swath-replay`: a recorded listing served through the S3, GCS and Azure APIs for
-  tests and benchmarks): [replay.md](replay.md).
-- **Reading a dataset in Go** (`go/reader`, a nested module, the Go API over [dataset.md](dataset.md): the schema
-  descriptors, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and opening, schema checks, whole-source
-  acceptance and current-object streaming): [../reader/README.md](../reader/README.md).
-- **Reading a dataset from an object store** (`go/objfile`, a nested module: an object opened as a file read by
-  byte range, one version pinned, over S3, GCS or Azure): [../objfile/README.md](../objfile/README.md).
-- **Reviewer:** [internals/contracts.md](internals/contracts.md) (what is promised and which test holds it),
-  [measurements.md](measurements.md) (the evidence, by run and date), [testing.md](testing.md).
+- [sources.md](sources.md): S3 and S3-compatible stores, GCS, Azure Blob and local trees: URLs, credentials,
+  permissions, endpoints.
+- [output.md](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
+  a dataset.
+- [filters.md](filters.md): globs, regular expressions, sizes, times and storage classes.
+- [dataset.md](dataset.md): the swath dataset: its schemas, manifest and coverage, for anyone who reads one.
+- [running.md](running.md): sizing, watching, throttling, stopping and resuming, refreshing an inventory,
+  versions, known limits. [production.md](production.md) is the short checklist for scheduled runs.
+- [troubleshooting.md](troubleshooting.md): symptom, cause, fix.
 
-The root [README.md](../../README.md) introduces the Go implementation. The root
-[Java algorithm](../../docs/internals/algorithms.md),
-[Java architecture](../../docs/internals/architecture.md) and historical
-[Java v0.3.2 field guide](https://swath.varve.io/field-guide/) describe the Java engine.
-Use [release-tagged Java docs](https://github.com/varveio/swath/tree/v0.3.2/docs) for that release. The
-language-neutral contracts in [docs/internals/contracts.md](../../docs/internals/contracts.md) bind both.
+**Reference**
+
+- Commands: [swath](commands/swath.md), [swath list](commands/swath-list.md), [swath du](commands/swath-du.md),
+  [swath resume](commands/swath-resume.md), [swath show](commands/swath-show.md),
+  [swath completion](commands/swath-completion.md).
+- [Exit codes](reference/exit-codes.md), [run report and progress file](reference/run-report.md),
+  [log events](reference/log-events.md).
+
+**Coming from Java**: [from-java.md](from-java.md) (the command line) and [upgrade.md](upgrade.md) (the dataset
+and report changes).
+
+Contributors, reviewers and readers of the Go packages: [internals/README.md](internals/README.md).

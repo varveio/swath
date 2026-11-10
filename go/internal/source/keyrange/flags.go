@@ -57,7 +57,7 @@ var Group = &source.FlagGroup{
 // policy toggles, comparison modes and the limiter's slow start are
 // diagnostic (swath diag list): they exist to run an experiment. The
 // limiter switch and the request rate are on swath list too: they are how
-// an operator answers a service that throttles (docs/operating.md).
+// an operator answers a service that throttles (docs/running.md).
 func Flags(f *pflag.FlagSet, diag bool) *Common {
 	// The command's defaults: the seed tiles the scope (--no-seed skips
 	// it), structure probes engage on their evidence (StructureAuto), and

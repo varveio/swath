@@ -8,7 +8,7 @@ _swath_source() {
 _swath_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
-        '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
@@ -78,7 +78,7 @@ _swath_du() {
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \
         '--max-inodes=[local: the most hard-linked files to remember]:N: ' \
-        '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
         '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
@@ -135,7 +135,7 @@ _swath_du() {
 _swath_diag_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
-        '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
@@ -212,7 +212,7 @@ _swath_diag_list() {
 _swath_diag_count() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
-        '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
+        '--format=[on stdout: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \

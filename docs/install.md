@@ -24,8 +24,8 @@ docker run --rm ghcr.io/varveio/swath:0.3.2 --version
 `--version` prints the swath version and commit; use its output for support requests and
 reproduction reports. A stable tagged release also publishes a rolling `X.Y` tag and
 `latest`; prefer the exact `X.Y.Z` tag shown above for reproducible examples, and prefer
-the immutable digest over any tag for reproducible automation. See [Tags &
-versioning](packaging-and-docker.md#tags--versioning) for the full tag policy.
+the immutable digest over any tag for reproducible automation. See [Container
+images (GHCR)](packaging-and-docker.md#6-container-images-ghcr) for the full tag policy.
 
 The image supports `linux/amd64` and `linux/arm64` and runs as non-root UID 10001. The
 [getting-started guide](getting-started.md) shows writable output mounts for Linux, macOS,

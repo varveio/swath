@@ -26,7 +26,7 @@ codec pool, the column concurrency, the geometry and `created_by`, and keeps the
 | Key column index | one-page indexes stamped `BoundaryOrder = ASCENDING` (the module's `ascendingKey` adapter); multi-page indexes untouched | older Java readers reject a one-page index with `UNORDERED`; the downstream reader and current Java accept both. Built through parquet-go's public indexer factory, not by rewriting footers. |
 | `etag` | `DELTA_BYTE_ARRAY` | ETags are unique hex: a dictionary never pays. parquet-mr (Java swath) tries a dictionary and falls back to `DELTA_BYTE_ARRAY`; writing delta directly matches its result and is 2–3 % smaller per dataset than dictionary-then-PLAIN. |
 | Other byte arrays | `RLE_DICTIONARY`, 8 KiB dictionary limit per chunk | storage class, owner and checksum columns repeat. |
-| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](../measurements.md#output-identity-with-the-java-tool)). |
+| Other integers | `DELTA_BINARY_PACKED` | parquet-mr writes a dictionary and switches to delta mid-chunk when it overflows; parquet-go can only fall back to PLAIN. On buckets with few distinct timestamps (noaa-normals-pds) that leaves Go's `last_modified` about 40 % larger than Java's, the main part of a 3–7 % dataset size gap ([measurements](measurements.md#output-identity-with-the-java-tool)). |
 | Booleans | `PLAIN` | |
 | Pages | v2, 1024 rows, page-header statistics off | served geometry: point lookups decode one 1024-row page (SeekParquet GEO-1 recommends at most 1,024 key rows a page). The column index carries page bounds; header statistics would duplicate them. |
 | Column index bounds | exact for every column: each page's minimum and maximum (the module's writer, no shortening) | Parquet's bounds, and SeekParquet RG-5, require a true upper bound. parquet-go shortens a long maximum by incrementing its last kept byte, which leaves one whose kept bytes are all `0xFF` below the value. Exact bounds therefore matter for long filesystem paths and link targets. `TestKeyLimits` (a 1,025-byte `0xFF` link target) and `TestFooterOnlyChange` check exact bounds. |
@@ -73,7 +73,7 @@ After listing, the allowance adds 1 MiB per worker: at 64 workers the calculated
 writer (−5 %), 1,907 against 2,166 with four (−12 %); through the module's row intake (`WriteRows`, which
 checks and copies every row) it was 803 and 914. What remains is the module's key check (KEY-3, each key
 compared with the one before it, on the page's goroutine before the columns go parallel). The digest is not
-the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. The shape suite's Parquet arms show no difference beyond runner noise ([measurements](../measurements.md#the-seekparquet-modules-part-writer-2026-11-08)).
+the cost: SHA-256 hashes the encoded bytes, about 1 % of the profile. The shape suite's Parquet arms show no difference beyond runner noise ([measurements](measurements.md#the-seekparquet-modules-part-writer-2026-11-08)).
 
 ## Byte identity
 
@@ -108,7 +108,7 @@ runs on one path.
 Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 4); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
-[../cli.md](../cli.md#run-report) (pinned by `internal/listing/testdata/report-schema.golden`). It is
+[../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is
 operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
 acceptance, which reads the manifest's coverage ([../dataset.md](../dataset.md#the-swath-extension)).
 
@@ -144,7 +144,7 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 
-The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
+The same rows therefore produce the same parts, byte for byte, for any `--workers` and `--encoders`, unless the
 part interval cuts (below).
 
 After listing, the order stage may write the rest as segments: consecutive parts opened in order and written
@@ -173,7 +173,7 @@ the report counts such cuts (`resources.part_time_cuts`); with none, or with the
 point under 260 ms old at a 200 ms interval, against 1.96 s by size only). A resume that must reproduce a
 claimed part ([durability.md](durability.md#the-journal)) closes that ordinal at the claimed part's row count
 (`Options.Cut`) whatever the interval. The command sets it with
-`--part-interval` ([../cli.md](../cli.md)). Each part is
+`--part-interval` ([../commands/swath-list.md](../commands/swath-list.md)). Each part is
 written by its own goroutine and zstd encoder from a bounded channel; at most `Encoders` parts are open.
 
 **Group mode** (`schema.Info.Groups`: a versions listing). A part never ends inside a key's rows: the journal
@@ -247,11 +247,11 @@ its `manifest.json` exists; delete a generation only when no reader uses it.
 
 - **SeekParquet readers** (the Go module `github.com/varveio/seekparquet/go`, which `swath-replay` uses) open the
   dataset by its manifest and stamps and seek through the key column's page index; the CI conformance step
-  checks this writer's datasets against the format's reference validator ([../testing.md](../testing.md#seekparquet-conformance)).
+  checks this writer's datasets against the format's reference validator ([testing.md](testing.md#seekparquet-conformance)).
 - **The downstream reader** dispatches on the manifest's format, accepts whole-bucket coverage from the
   manifest's swath extension, and reads the SeekParquet stamps and each schema id's columns
   ([../upgrade.md](../upgrade.md#what-a-reader-of-the-java-layout-changes)); the recorded probe
-  ([measurements](../measurements.md#downstream-reader-compatibility)) predates SeekParquet.
+  ([measurements](measurements.md#downstream-reader-compatibility)) predates SeekParquet.
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 

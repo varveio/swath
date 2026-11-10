@@ -96,7 +96,7 @@ func s3Walk(t *testing.T, s *Server, query string) []string {
 }
 
 // TestLocalRecordingOnTheS3Route serves a recording of a local tree on the
-// S3 route and requires each Contents element as docs/replay.md's route
+// S3 route and requires each Contents element as docs/internals/swath-replay.md's route
 // table states it: the key, the modification time in milliseconds and
 // the size mapped; the ETag the placeholder swath-s3-synthetic-v1 and the
 // StorageClass STANDARD, which S3 lists every object with; no Owner with

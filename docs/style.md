@@ -132,12 +132,15 @@ Java; Go has separate owners because its implementation and dataset contract dif
 | Fact | Owner |
 | --- | --- |
 | Product promise, fit and release status | root `README.md` |
-| Go first successful workflow | `go/docs/guide.md` |
-| Go flags and output behavior | `go/docs/cli.md` and installed Go CLI help |
-| Go operations and recovery | `go/docs/operating.md` |
+| Go first successful workflow | `go/docs/getting-started.md` |
+| Go commands and options | `go/docs/commands/` (options generated from the flag table) and installed Go CLI help |
+| Go output formats and filters | `go/docs/output.md`, `go/docs/filters.md` |
+| Go sources, credentials and endpoints | `go/docs/sources.md` |
+| Go exit codes, run report and log events | `go/docs/reference/` |
+| Go operations and recovery | `go/docs/running.md` |
 | Go schemas and dataset layout | `go/docs/dataset.md` |
 | Go engine and providers | `go/docs/internals/` |
-| Go dated measurements | `go/docs/measurements.md` |
+| Go dated measurements | `go/docs/internals/measurements.md` |
 | Java first successful workflow | `docs/getting-started.md` |
 | Output and resume choices | `docs/usage.md` |
 | Credentials, IAM, endpoints, and cost | `docs/operating.md` |

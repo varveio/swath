@@ -1,7 +1,7 @@
 # Measurements
 
 The measurements the other docs and the pull request cite, each with its configuration and the harness that
-reproduces it. Scripts are in [`../bench/`](../bench/); how to build the replay oracle and the fakes is in
+reproduces it. Scripts are in [`../../bench/`](../../bench/); how to build the replay oracle and the fakes is in
 [testing.md](testing.md).
 
 **Host.** Unless a section says otherwise: 4 vCPU (Intel Xeon @ 2.10 GHz), 15 GiB RAM, ext4 on a virtio disk,
@@ -10,7 +10,7 @@ seen in `vmstat`), so **compare absolute times only within one table**; each tab
 one session. Ratios held across sessions.
 
 **Commands as run.** Commands and flags are quoted as the build of the day took them. Since report version 2
-and the command-line cleanup ([upgrade.md](upgrade.md#command-line)): `swath list --count-only` is
+and the command-line cleanup ([../upgrade.md](../upgrade.md#command-line)): `swath list --count-only` is
 `swath diag count` (`swath count` from 2026-11-07 to 2026-11-09); `--seed`, `--seed=false`, `--limiter-slow-start`, `--spill-plain` and `--spill-compress`
 are `swath diag list` (or `swath diag count`) flags, and the
 seed is on by default, so `--seed` alone is the default; `--spill-max` is `--spill-budget`; the report's
@@ -33,7 +33,7 @@ Every comparison was row-identical on the 13 canonical columns, with identical m
 |---|---:|
 | Live buckets, Go listing directly against the Java recording of the same bucket | 21 |
 | Synthetic fixtures served by replay (10k keys; 1,000,020 keys from `bench/gen_fixture_1m.py`), each in 5 Go modes (sequential, 4 and 8 workers, with and without `--seed`) | 2 × 5 |
-| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([upgrade.md](upgrade.md)) | 2 |
+| Java listing a Go dataset served by replay's sorted mode (1 part and 6 parts); historical: run on format-1 Go output, before format 2, which Java's reader does not read ([../upgrade.md](../upgrade.md)) | 2 |
 
 The 21 live buckets are noaa-normals-pds, noaa-nws-fourcastnetgfs-pds, real-changesets and 18 open buckets
 chosen for the Java policy features they engage (among them noaa-eri-pds and pansurg-curation-raw-open-data),
@@ -42,7 +42,7 @@ from 1,018 to 13.9 M objects.
 **Size.** Go datasets are 0.4–6.9 % larger than Java's after writing `etag` as `DELTA_BYTE_ARRAY` (1M fixture
 1.050 → 1.027 of Java's size; noaa-normals-pds 1.089 → 1.069). The rest is `last_modified` on buckets with few
 distinct timestamps: parquet-go cannot switch from dictionary to delta mid-chunk as parquet-mr does
-([internals/parquet-output.md](internals/parquet-output.md)).
+([parquet-output.md](parquet-output.md)).
 
 **Reproduce:** [testing.md, "Replay oracle"](testing.md#replay-oracle), then
 `python3 bench/diffds.py JAVA_DATASET GO_DATASET` (`--ts-ms` when one side was listed directly).
@@ -510,7 +510,7 @@ followed. In the earlier Java seed measurement, a serial 256-probe descent spent
 
 The keyfake S3 fake (`keyfake-static`, 50 ms a page, ListObjectsV2, path-style, anonymous) on 4 shared cores,
 64 workers, `--count-only`, 3 interleaved repetitions, median; before is `go/engine` at `2cb204c2`, after adds
-the admission gates and the remainder rank ([range-engine.md](internals/range-engine.md)).
+the admission gates and the remainder rank ([range-engine.md](range-engine.md)).
 The synthetic lists follow the shapes of the sweep's worst small lists: `mogreps` 1.04M objects flat at the
 root (`prods_op_mogreps-g_YYYYMMDD_RR_MM_TTT.nc`), `urma` 1.77M under 18,400 day folders
 (`akurma.YYYYMMDD/akurma.tHHz.<product>.grb2`), `zarr` 1.26M zarr chunks seven levels down under two top
@@ -765,13 +765,13 @@ Google's generated client 3.1 µs and 10,132. Reproduce:
 | with Google's generated GCS client linked instead | 26,124,450 |
 
 The protobuf upgrade that came with GCS removed 3.0 MB stripped; GCS itself added 0.7 MB. Cross-builds:
-[`../build.sh`](../build.sh).
+[`../../build.sh`](../../build.sh).
 
 ### SDK-backed clients (2026-11-09)
 
 Clients built with `-tags swath_sdkclient`, measured on branches `exp/measure-preview` (S3) and
 `exp/gcs-sdkclient` (GCS). Synthetic inputs; the numbers describe those runs. Since then the SDK-backed clients
-are the only clients ([clients.md](internals/clients.md)) and the build tag, `SWATH_S3_DECODER` and the
+are the only clients ([clients.md](clients.md)) and the build tag, `SWATH_S3_DECODER` and the
 hand-rolled clients are gone; the numbers stand as measured, and the arms named "default" and "hand-rolled"
 below describe the clients that were replaced.
 
@@ -1022,7 +1022,7 @@ that copies retained bounds and adds `order.Count`:
 The TSV is byte-identical before and after, and every count is 3,000,000. With the seed on (the default) the
 count-only run peaked at 438 MiB before and 97 MiB after. The ordered run's remaining RSS is the budget's rows
 (157 MiB live against the 128 MiB budget) and the garbage collector's headroom. The in-repository guard is
-`TestRetainedBoundsDoNotPinPages` (synthetic: `scalefake`, 400,000 keys, [ordering](internals/ordering.md#what-a-waiting-range-retains)).
+`TestRetainedBoundsDoNotPinPages` (synthetic: `scalefake`, 400,000 keys, [ordering](ordering.md#what-a-waiting-range-retains)).
 
 ## Text sink, 2026-11-07
 
@@ -1251,7 +1251,7 @@ query lists `1950census/43290879-Alabama/…-0001.jpg` first, yet `start-after=1
 `start-after=` that stored key both return `KeyCount=0 IsTruncated=false`.
 
 swath trusts a page that is not truncated as the end of its range
-([range-engine.md](internals/range-engine.md)), so the campaign's MinIO fixture
+([range-engine.md](range-engine.md)), so the campaign's MinIO fixture
 is a list without that shape.
 
 ## Drain tail: read-ahead and segments, 2026-11-07/08
@@ -1368,7 +1368,7 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   plain TSV row on nbm; the filters, the progress display, bearer tokens and row rotation have not. No consumer
   of the report (the cloud importer included) has read the new fields.
 - **Platforms.** Windows refuses journaled runs (no directory sync,
-  [internals/durability.md](internals/durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
+  [durability.md](durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
   loss is untested.
 - **Scale.** Runs of hours and listings past a billion keys are unmeasured. The largest runs are key lists of
   up to 593M keys through the fake and one live bucket of 1.09 billion objects at 256 and 1,024 workers
@@ -1449,11 +1449,11 @@ uniform, so the grouped rows' `kind` column is encoded differently: 2,264 agains
 The generic digests are the same on darwin/arm64 and linux/arm64 (CI), and on linux/amd64 with
 `GODEBUG=cpu.avx2=off` or `-tags purego`. `-tags noasm`, which removes klauspost/compress's assembly, leaves the
 AVX2 digests unchanged. The test now pins a golden per path
-([internals/parquet-output.md](internals/parquet-output.md#byte-identity)).
+([parquet-output.md](parquet-output.md#byte-identity)).
 
 ## Downstream reader compatibility
 
-The changes in [upgrade.md](upgrade.md) were applied to a scratch copy of the downstream reader. It accepts a
+The changes in [../upgrade.md](../upgrade.md) were applied to a scratch copy of the downstream reader. It accepts a
 format-2 dataset by the manifest's coverage (whole bucket, fails closed), dispatches on the manifest's
 `format` first, and reads every schema id and the `swath.profile` stamp. Probe on a 20,000-key synthetic fake
 bucket (open, stream, list one prefix):
@@ -1468,7 +1468,7 @@ bucket (open, stream, list one prefix):
 The reader's own tests pass in the patched copy. `bench/diffds.py` finds the format-2 and format-1 datasets of
 the same listing identical through its projection; format 2 is 2.2 % smaller. A local dataset is not a bucket
 dataset; the reader dispatches on the schema id and reads every provider's datasets
-([upgrade.md, "What a reader of the Java layout changes"](upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
+([upgrade.md, "What a reader of the Java layout changes"](../upgrade.md#what-a-reader-of-the-java-layout-changes)). The Java tool's reader does not read format 2, by design.
 
 ## CI: Go caches, race shards and cross-OS legs, 2026-11-09
 

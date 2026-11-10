@@ -469,7 +469,7 @@
     <a class="brand" href="https://varve.io"><b>VARVE</b> / OPEN SOURCE</a>
     <nav aria-label="Primary">
       <a href="#quickstart">Get started</a>
-      <a href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Guide</a>
+      <a href="https://github.com/varveio/swath/blob/main/go/docs/getting-started.md">Guide</a>
       <a href="https://github.com/varveio/swath/blob/main/go/docs/README.md">Docs</a>
       <a href="https://github.com/varveio/swath">GitHub ↗</a>
     </nav>
@@ -484,7 +484,7 @@
         <p class="fit-note"><strong>This page describes the unreleased Go implementation on main.</strong> The latest published release is Java v0.3.2; its downloads do not provide the Go commands below.</p>
         <div class="cta">
           <a class="button primary" href="#quickstart">Build and try locally →</a>
-          <a class="button" href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Read the Go guide</a>
+          <a class="button" href="https://github.com/varveio/swath/blob/main/go/docs/getting-started.md">Read the Go guide</a>
         </div>
         <div class="fit-grid" aria-label="When to use swath">
           <div class="fit"><span class="k">Live listing</span><p>Use swath when you need a current listing or inventory of a large tree, bucket, or container.</p></div>
@@ -501,7 +501,7 @@
           <p><strong>846 seconds</strong> for a separate sorted Parquet inventory run.</p>
           <p>Both used 1,024 workers on one 32-vCPU <code>n4-highcpu-32</code> VM with a 400 GB disk in GCP <code>us-east1</code>, listing <code>sentinel-cogs</code> anonymously in AWS <code>us-west-2</code>.</p>
           <p>These are individual runs on one S3 bucket, not a throughput promise for other sources or machines. The count-only run did not write an inventory.</p>
-          <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/measurements.md">Commands, configuration, and measurements →</a>
+          <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/internals/measurements.md">Commands, configuration, and measurements →</a>
         </div>
       </aside>
     </section>
@@ -512,7 +512,7 @@
         <h2 id="quickstart-title">Build the Go preview.</h2>
         <p>These commands build unreleased code from main, not the Java v0.3.2 release. You need Git and Go 1.26 or later; the module selects its Go toolchain.</p>
         <p><code>du</code> reports apparent file sizes by default. Local <code>--allocated</code> and <code>--count-links-once</code> options select allocated bytes and count hard-linked files once where platform metadata supports them. Mounted filesystems work through their local paths.</p>
-        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/guide.md">Go guide →</a>
+        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/getting-started.md">Go guide →</a>
       </div>
       <div class="guide-sketch">
         <pre><code>git clone https://github.com/varveio/swath.git
@@ -533,7 +533,7 @@ cd swath/go
         <pre><code>./swath list s3://bucket/prefix/
 ./swath list gs://bucket/prefix/
 ./swath list az://account/container/prefix/</code></pre>
-        <p><a href="https://github.com/varveio/swath/blob/main/go/docs/operating.md">Provider scope and credentials</a></p>
+        <p><a href="https://github.com/varveio/swath/blob/main/go/docs/sources.md">Provider scope and credentials</a></p>
       </article>
       <article class="benefit">
         <h2>Summarize sizes</h2>
@@ -557,7 +557,7 @@ cd swath/go
         <p class="section-label">Interrupted inventories</p>
         <h2 id="resume-title">Resume a cloud dataset.</h2>
         <p>Eligible journaled S3, GCS, and Azure dataset runs can resume after interruption. Local scans and text output cannot resume. Windows refuses durable journal and resume operations.</p>
-        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/operators.md">Output and recovery details →</a>
+        <a class="text-link" href="https://github.com/varveio/swath/blob/main/go/docs/running.md">Output and recovery details →</a>
       </div>
       <div class="guide-sketch">
         <pre><code>./swath resume /tmp/swath-cloud-inventory</code></pre>

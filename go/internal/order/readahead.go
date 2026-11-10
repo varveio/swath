@@ -37,7 +37,7 @@ const (
 	// aheadReads caps the frames being read at once: each holds a
 	// descriptor for the read (MaxSpillReaders counts them for descriptor
 	// admission) and a zstd decoder; eight decoders outrun one drainer
-	// (measurements: go/docs/measurements.md).
+	// (measurements: go/docs/internals/measurements.md).
 	aheadReads = 8
 	// aheadFrames caps the frames planned and not yet taken: enough to
 	// keep aheadReads reads going while the drainer takes the frames read

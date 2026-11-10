@@ -1,8 +1,8 @@
 # Running swath in production
 
-A short guide for whoever schedules and watches swath. The full reference is [operating.md](operating.md);
-every flag is in [cli.md](cli.md). Numbers below are observations on the stated runs
-([measurements.md](measurements.md)), not limits or promises.
+A short guide for whoever schedules and watches swath. The full reference is [running.md](running.md);
+every option is in the [command reference](commands/swath.md). Numbers below are observations on the stated runs
+([internals/measurements.md](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
 
@@ -14,7 +14,7 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
-  point readers at it once its `manifest.json` exists ([operating.md](operating.md#overwrite-and-refresh)).
+  point readers at it once its `manifest.json` exists ([running.md](running.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset (warm start, below). Leave it out on the first night.
 - `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
@@ -67,7 +67,7 @@ Five fields to check in the `--report` file of a sorted listing of a million key
 
 | Field | Normal |
 |---|---|
-| `outcome.class` | `completed` (exit 0), with `outcome.complete` true |
+| `outcome.class` | `completed` (exit 0), with `outcome.complete` true; for the whole source, also the dataset's coverage ([check](getting-started.md#5-check-that-it-is-complete)) |
 | `efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
 | `resources.spill.refused` | 0 |
 | `resources.budget_wait_ns` | 0 or close to it |
@@ -95,38 +95,34 @@ if it happens again.
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
 `limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
 shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--no-adaptive-limit --request-rate N` ([operating.md](operating.md#throttling)).
+sustained throttling, use `--no-adaptive-limit --request-rate N` ([running.md](running.md#throttling)).
 
 ## Resume after a kill
 
-`swath resume DIR` continues an S3 or GCS run after a signal, a crash, an OOM kill or a full disk. A local
+`swath resume DIR` continues an S3, GCS or Azure Blob dataset run after a signal, a crash, an OOM kill or a full disk. A local
 directory listing keeps no journal and starts over.
 
 - **Kept:** every published part, verified by size and SHA-256 before listing continues. Verification read
   247 to 376 MiB/s with a cold page cache and 511 MiB/s warm on a 4-vCPU VM
-  ([measurements](measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
+  ([measurements](internals/measurements.md#recovery-and-part-count)), so 10,000 parts of 64 MiB take roughly 30 to 45
   minutes.
-- **Listed again:** everything after the last published key. On a large sorted run that is most of the
-  listing: a kill at 40 % listed 90 to 100 % of the keys again on every list of 20M keys or more (candidate 3,
-  `c48ea228`, run `cand3`), because the output waits for the leftmost range while the rest is spilled.
+- **Replayed:** the rows of every certified spill file the stopped run sealed (key intervals listed ahead of
+  the output), read back from `DIR/.swath/spill/durable/` instead of listed again.
+- **Listed again:** the keys after the last published key that no certified file holds. The report's
+  `resources.spill.durable.resume` says what was reused (`replayed_rows`, `gaps`, `requests_saved_est`);
+  [running.md](running.md#stopping-and-resuming) owns the rules.
 
-The resume replays the recorded command. Only the resource, reporting and request flags may change
-([cli.md](cli.md)). Give each attempt a fresh `--report` path.
+The resume replays the recorded command. Only the resource, reporting and request options may change
+([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
 
 ## Where things are
 
-```text
-DIR/data/part-NNNNN.parquet   the parts, in key order
-DIR/manifest.json             the commit: readers start only once it exists
-DIR/run.json                  the run report, after the commit
-DIR/error.json                the outcome of an attempt that did not complete
-DIR/.swath/                   lock, journal, parts being published, spill/, progress.json
-```
-
-Spill lives under `DIR/.swath/spill/`, on the output's filesystem, and is removed when the run ends. A text
-file's spill goes in a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/`. Text on stdout spills under
-`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the
-run warns at start.
+The output directory's layout is in [swath-list](commands/swath-list.md#files). Spill lives under
+`DIR/.swath/spill/`, on the output's filesystem: disposable spill is removed by the next run, and certified
+spill (`spill/durable/`) is kept after a stop for the resume and removed when the dataset commits
+([running.md](running.md#stopping-and-resuming)); text on stdout spills under
+`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the run
+warns at start.
 
 ## Disk sizing
 

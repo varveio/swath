@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Raw-HTTP reproducer of the MinIO empty-page finding (go/docs/measurements.md, "Durable spill"): a
+# Raw-HTTP reproducer of the MinIO empty-page finding (go/docs/internals/measurements.md, "Durable spill"): a
 # ListObjectsV2 with a start-after inside a prefix that holds keys answers an empty page marked not
 # truncated. Signed requests by curl alone (SigV4), no swath and no SDK.
 #

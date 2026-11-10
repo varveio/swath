@@ -11,15 +11,19 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/filter"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 func TestRun(t *testing.T) {
@@ -119,41 +123,67 @@ func TestSize(t *testing.T) {
 	}
 }
 
-// TestCLIDocFlags keeps docs/cli.md's flag list generated from the flag set:
-// run with UPDATE=1 to rewrite it.
+// TestCLIDocFlags keeps each command page's option list (docs/commands/)
+// and the diagnostic options (docs/internals/diagnostics.md) generated
+// from the flag set, as --help prints them: run with UPDATE=1 to rewrite
+// them.
 func TestCLIDocFlags(t *testing.T) {
-	var b bytes.Buffer
-	for i, cmd := range []command{{}, {count: true, du: true}, {diag: true}, {diag: true, count: true}} {
-		if i > 0 {
-			b.WriteString("\n")
+	groups := func(diag bool, keep func(*pflag.Flag) bool) string {
+		var b strings.Builder
+		writeGroups(&b, newFlags(&options{}, diag), docStyle, keep)
+		return strings.TrimPrefix(b.String(), "\n")
+	}
+	var global []*pflag.Flag
+	newFlags(&options{}, false).VisitAll(func(fl *pflag.Flag) {
+		if slices.Contains(globalFlags, fl.Name) {
+			global = append(global, fl)
 		}
-		fmt.Fprintf(&b, "$ swath %s --help\n", cmd.name())
-		usage(&b, newFlags(&options{}, cmd.diag), cmd, docStyle)
+	})
+	var root strings.Builder
+	writeFlags(&root, global, docStyle, column(global))
+	diagnostic := func(fl *pflag.Flag) bool { return groupOf(fl) == source.GroupDiagnostics }
+	for _, b := range []struct{ path, marker, text string }{
+		{"commands/swath.md", "flags", root.String()},
+		{"commands/swath-list.md", "flags", groups(false, func(fl *pflag.Flag) bool { return shown(fl, command{}) })},
+		{"commands/swath-du.md", "flags", groups(false, func(fl *pflag.Flag) bool { return shown(fl, command{count: true, du: true}) })},
+		{"commands/swath-resume.md", "flags", groups(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && !diagnostic(fl) })},
+		{"internals/diagnostics.md", "diag-list", groups(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true}) })},
+		{"internals/diagnostics.md", "diag-count", groups(true, func(fl *pflag.Flag) bool { return shown(fl, command{diag: true, count: true}) && diagnostic(fl) })},
+		{"internals/diagnostics.md", "diag-resume", groups(true, func(fl *pflag.Flag) bool { return mayChange(fl.Name) && diagnostic(fl) })},
+	} {
+		if strings.Contains(b.text, " \t") {
+			t.Fatalf("the usage has a space before a tab (git diff --check flags it in docs/%s)", b.path)
+		}
+		docBlock(t, "../../docs/"+b.path, b.marker, "text", b.text)
 	}
-	if strings.Contains(b.String(), " \t") {
-		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
-	}
-	const begin, end = "<!-- flags:begin -->\n", "<!-- flags:end -->"
-	readme, err := os.ReadFile("../../docs/cli.md")
+}
+
+// docBlock keeps the block between path's "<!-- marker:begin -->" and
+// "<!-- marker:end -->" lines equal to text, fenced as lang: UPDATE=1
+// rewrites it, else a stale block fails the test.
+func docBlock(t *testing.T, path, marker, lang, text string) {
+	t.Helper()
+	begin, end := "<!-- "+marker+":begin -->\n", "<!-- "+marker+":end -->"
+	doc, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(readme)
+	s := string(doc)
 	i, j := strings.Index(s, begin), strings.Index(s, end)
 	if i < 0 || j < i {
-		t.Fatal("docs/cli.md lacks the flags markers")
+		t.Fatalf("%s lacks the %s markers", path, marker)
 	}
-	want := s[:i+len(begin)] + "```text\n" + b.String() + "```\n" + s[j:]
+	want := s[:i+len(begin)] + "```" + lang + "\n" + text + "```\n" + s[j:]
 	if want == s {
 		return
 	}
 	if os.Getenv("UPDATE") != "" {
-		if err := os.WriteFile("../../docs/cli.md", []byte(want), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	t.Fatal("docs/cli.md flag list is stale; run UPDATE=1 go test ./cmd/swath")
+	t.Errorf("%s: the %s block is stale; run UPDATE=1 go test ./cmd/swath", path, marker)
 }
 
 // TestRefusedRunLeavesOwnerMetadata: a run refused because another process

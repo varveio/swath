@@ -71,9 +71,9 @@ replay.
 The same schedule also runs, opt-in, against MinIO and against production key lists, through the real
 binary: SIGKILLs at the durable steps, after a part record, mid recovery replay, with unsynced state lost,
 and at 40 % and 70 % of the keys. Each resume is checked for oracle equality, reconciliation, and that no
-data request starts inside a replayed certificate ([testing.md](../testing.md#durable-spill-campaign-opt-in)).
+data request starts inside a replayed certificate ([testing.md](testing.md#durable-spill-campaign-opt-in)).
 The results, and the full-scale Batch runs (64 lists of 20 to 150 million keys, killed at 40 % and 70 %), are
-in [measurements.md](../measurements.md#durable-spill).
+in [measurements.md](measurements.md#durable-spill).
 
 **Priors and certificates.** A prior (`--seed-from`: a previous dataset's or a cut file's keys used as seed
 tiles), like `--seed`, only shapes the tiling of the live gaps. On a resume with reused certificates the
@@ -148,7 +148,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
 
 ## Resume
 
-`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../cli.md](../cli.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below ([../cli.md](../cli.md))):
+`swath resume DIR` (it replays the command recorded in the journal header; only the runtime and operational flags that the generated usage in [../commands/swath-resume.md](../commands/swath-resume.md) lists (from `runtimeFlags` and `operationalFlags`, which `swath resume --help` prints; `--adaptive-limit-slow-start` among them) may be given again, the last value winning; the source and output identity stays frozen, so an override that resolves another route is refused by the identity check below):
 
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
@@ -215,8 +215,8 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    endpoint, path or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), recorded as the endpoint and compared byte for byte
    past the scheme and host case, or the run declines resume. Workers, encoders,
-   row budget and credentials may change; so may the seed for a library caller (`-seed` is not part of
-   the identity), but the CLI's `swath resume` replays the recorded `--seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
+   row budget and credentials may change; so may the seed for a library caller (the seed is not part of
+   the identity), but the CLI's `swath resume` replays the recorded `--no-seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
    lock is taken, for the run or for a refusal's settlement, an existing `.swath/` must be a directory and an
@@ -244,7 +244,7 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    part of a torn last record is set aside (the journal, below), and only then are the temporary parts removed.
    Verification reads every retained part in full and checks SHA-256, so it costs O(dataset bytes).
    Throughput depends on disk/cache behavior and CPU SHA support; measurements belong in
-   [measurements.md](../measurements.md). The read stops when the run is stopped (a signal, `--max-duration`) and
+   [measurements.md](measurements.md). The read stops when the run is stopped (a signal, `--max-duration`) and
    before recovery renames or removes anything, and its bytes count as progress (`progress.json`
    `verified_bytes`, included in `advance`), so the stall watchdog does not stop a long verification
    (`TestRecoveryVerificationIsCancellableAndReported`).
@@ -267,7 +267,7 @@ A journaled run that fails with an ordinary error (not a crash) leaves its tempo
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
 `swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `completed`, the
 report saying `complete`; idempotent, as Java's), partial coverage exits 1 (`incomplete`); on a directory without a journal (an empty
-workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `-overwrite`.
+workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `--overwrite`.
 
 ## The outcome of an attempt
 

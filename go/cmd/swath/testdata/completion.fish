@@ -55,7 +55,7 @@ complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resum
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l help -s h -d 'print help'
 complete -c swath -n '__swath_cmd ""' -l version -s V -d 'print the version'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l output -s o -r -F -d 'a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)'
-complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l format -x -a 'auto table tsv jsonl' -d 'text rows: auto is the table on a terminal, TSV otherwise'
+complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l format -x -a 'auto table tsv jsonl' -d 'on stdout: auto is the table on a terminal, TSV otherwise'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l columns -x -d 'TSV and JSONL: these columns, in order (repeatable)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count"' -l overwrite -d 'replace a previous dataset in -o'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l include -x -d 'keep keys this glob matches (repeatable: any of them)'

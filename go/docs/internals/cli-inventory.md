@@ -1,9 +1,9 @@
 # Java CLI inventory
 
 Every option, output mode, exit code, report field class and documented guarantee of the Java `swath` CLI
-(`swath-cli`, [docs/cli.md](../../docs/cli.md), [docs/usage.md](../../docs/usage.md),
-[docs/metrics-and-observability.md](../../docs/metrics-and-observability.md)) against this tool
-([cli.md](cli.md), [upgrade.md](upgrade.md)). Dates are owner decisions.
+(`swath-cli`, [docs/cli.md](../../../docs/cli.md), [docs/usage.md](../../../docs/usage.md),
+[docs/metrics-and-observability.md](../../../docs/metrics-and-observability.md)) against this tool
+([../commands/swath.md](../commands/swath.md), [../upgrade.md](../upgrade.md)). Dates are owner decisions.
 
 Legend (the Decision column records implementation dates and reasons for omitting Java features): **kept** (same name and meaning, differences noted), **renamed** (to the Go name given),
 **removed** (with the recorded decision and its date, or "no decision recorded"), **deferred** (a recorded
@@ -22,7 +22,7 @@ decision to add it later).
 | `--fetch-owner` | `--s3-fetch-owner` | renamed | – |
 | `--bearer-token-command CMD` | `--s3-bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--s3-bearer-token-refresh-interval` (45 m; one refresh in flight) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](operating.md#credentials) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
+| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](../sources.md#credentials-on-every-object-store) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
@@ -37,7 +37,7 @@ decision to add it later).
 | `--modified-since DATE` | `--modified-since` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--modified-until DATE` | `--modified-until` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--storage-class CLASS[,CLASS]` | `--storage-class` | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](cli.md) and [schema registry](dataset.md#schema-registry) |
+| Current objects only; versions not listed | current objects by default; `--all-versions` adds S3 versions/delete markers or GCS generations | extended | implemented in Go; [current CLI](../commands/swath-list.md) and [schema registry](../dataset.md#schema-registry) |
 
 ## Output formats and datasets
 
@@ -65,7 +65,7 @@ decision to add it later).
 | `symlink.txt` part list | none; the manifest lists the parts | removed | not ported, 2026-11-06: no value now |
 | `manifest.json` (format 1, camelCase) | `manifest.json` format 2 with `coverage`; SeekParquet with `extensions.swath.coverage` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | `.swath-state.json` | `.swath/` workspace (`lock`, `journal`, `parts/`, `spill/`) | renamed | – |
-| Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1` for current S3 objects; source- and mode-specific schemas include S3 versions and GCS generations | renamed | [current schema registry](dataset.md#schema-registry); no reserved version columns in current-object schemas |
+| Schema `swath/canonical`, 13 columns | `swath/s3-objects/v1` for current S3 objects; source- and mode-specific schemas include S3 versions and GCS generations | renamed | [current schema registry](../dataset.md#schema-registry); no reserved version columns in current-object schemas |
 | Footer stamps `swath.sort.*` | standard `sorting_columns`, `swath.profile*`, `swath.index_bound_bytes`, `swath.schema_id`; then `seekparquet.*` | renamed | dataset format 2, 2026-11-05; SeekParquet, 2026-11-08 |
 | Non-empty output without ownership evidence refused; symlinked paths refused | non-empty `-o` directory refused unless `--overwrite`, which replaces only this tool's previous dataset; every write by pathname checks the output's identity | kept | – |
 | One run per output at a time | output lock; journaled output refused on Windows | kept | – |
@@ -95,7 +95,7 @@ decision to add it later).
 | `--checkpoint none` | `swath diag list --no-journal` | renamed | – |
 | `--restart` | none; `--overwrite` starts over an interrupted run | renamed | – |
 | `--overwrite`, `--force` | `--overwrite` | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](operating.md#stopping-and-resuming) replaces the earlier prefix-only description |
+| Finalized parts kept exactly once; the unfinished tail of each range re-listed from its durable cursor | published parts retained; validated durable spill reused where supported, remaining gaps re-listed | changed | [current recovery contract](../running.md#stopping-and-resuming) replaces the earlier prefix-only description |
 | Resume refuses a changed identity (target, filters, output, run shape) | refuses a changed route or writer recipe (exit 2, `refused`); a flag outside the runtime and operational lists is exit 2 | kept | – |
 | Resume accepts every free operational option | accepts the listed runtime and operational flags only | kept (narrower) | – |
 | Resume of a completed dataset exits 0 | exit 0, class `completed`, report `complete` true (partial coverage: 1, `incomplete`) | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `b62ddbb`) |
@@ -117,8 +117,8 @@ decision to add it later).
 |---|---|---|---|
 | `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
-| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | the adaptive limit (default on) adapts concurrency to sustained throttling and recovery; `--no-adaptive-limit` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
-| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
+| Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | the adaptive limit (default on) adapts concurrency to sustained throttling and recovery; `--no-adaptive-limit` removes the limit. [Request admission](clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
+| Slow start from 4, doubling per second | `swath diag list --adaptive-limit-slow-start` enables an experimental ramp, off by default; [request admission](clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
 | Thief splits (`steals`) | owner-only splits | removed | owner-only splits, 2026-11-05; not ported, 2026-11-06: no value now |
 
 ## Observability and reports
@@ -127,10 +127,10 @@ decision to add it later).
 |---|---|---|---|
 | `--report PATH` | `--report FILE` (written when the attempt ends, on failure too) | kept | – |
 | `_swath_summary.json`, updated during the run | `run.json`, written after the commit | renamed | own report shape, Java fields not kept, 2026-11-05 and 2026-11-06 |
-| `--stats` / `--no-stats` (stderr summary) | `--stats` / `--no-stats`: Java's block on stderr with Java's gating; the one-line summary stays on stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--stats` / `--no-stats` (stderr summary) | `--stats` / `--no-stats`: Java's block on stderr with Java's gating; stdout carries no summary (`swath list -o` prints nothing there) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--progress` / `--no-progress` (stderr) | `--progress` / `--no-progress`: one record redrawn on a terminal, appended elsewhere, from the snapshot `progress.json` is written from | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--progress-interval DURATION` | `--progress-interval` (1 s redrawing, 30 s appended; floor 1 s) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `list_run_summary` log line (`-v`) | the one-line text report | renamed | – |
+| `list_run_summary` log line (`-v`) | the `swath: outcome: {...}` line of a failure with `-v` (the `outcome` event under `--log-format json`) and the run report | renamed | – |
 | `--metrics-endpoint URL`, `SWATH_OTLP_ENDPOINT` | none | removed | no OTLP export, 2026-11-05; not ported, 2026-11-06: no value now |
 | `--no-metrics` | none | removed | no OTLP export, 2026-11-05 |
 | Report: `schema_version` | `report_version` | renamed | – |
@@ -144,7 +144,7 @@ decision to add it later).
 | Report: `error_class` | `outcome.cause` | renamed | – |
 | Report: `stop_source` | `outcome.stop_source` (`sigint`, `sigterm`, `liveness_watchdog`, `timebox`, `+forced_exit`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | Report: `engine_flags` | `resources.features` | renamed | – |
-| Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [upgrade.md](upgrade.md)) | renamed | no Java names, 2026-11-05 |
+| Report: `recovered_errors`, `engine`, `seed`, `meters` | `source.stats.counters` (Go names; mapping in [../upgrade.md](../upgrade.md)) | renamed | no Java names, 2026-11-05 |
 | Report: `cost`, `efficiency` | `requests` (`http_attempts`: Java's `cost.api_calls`; `retries`, `throttles`, `timeouts`), `cost` (`cost_usd`, `basis`; null on a custom endpoint and for Azure Blob), `efficiency` (`keys_per_sec`, `http_attempts_per_1k_rows`) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one request count, report version 2, 2026-11-07 (owner: the cleanest CLI surface) |
 | Report: `sort` | none (spill: `resources.spill`) | removed | staging not ported, 2026-11-05 |
 | Report: `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | none | removed | own report shape, 2026-11-06; not ported, 2026-11-06: no value now (the diagnostic evidence block) |
@@ -174,7 +174,7 @@ decision to add it later).
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
 | `--tune seed.mode=none\|shallow` | `swath diag list --no-seed` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
-| none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [internals/range-engine.md](internals/range-engine.md)) |
+| none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [range-engine.md](range-engine.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
 | `--trace PATH` (JSONL run trace) | none; `SWATH_SPLIT_TRACE` traces S3 splits | removed | not ported, 2026-11-06: no value now (the diagnostic evidence block) |
 | Bare `swath s3://…` is an error that suggests `swath list` | usage error, exit 2, prints the command list | kept | – |

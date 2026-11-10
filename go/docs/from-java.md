@@ -2,25 +2,26 @@
 
 For someone who has run the Java `swath` CLI. Go is unreleased on main and will replace
 Java at release; Java v0.3.2 remains the latest published distribution. Build Go from
-source using the [Go guide](guide.md). The binaries currently have different launchers
+source using [getting-started.md](getting-started.md). The binaries currently have different launchers
 and output contracts. Every
 Java option, output mode, exit code and report field, with its Go counterpart and the decision behind it, is
-in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dataset.md](dataset.md) (the swath dataset) and [upgrade.md](upgrade.md) (what changed from the Java layout).
+in [internals/cli-inventory.md](internals/cli-inventory.md). Readers of the dataset should read [dataset.md](dataset.md) (the swath dataset) and [upgrade.md](upgrade.md) (what changed from the Java layout).
 
 ## What stays the same
 
-- **Sources.** `s3://bucket[/prefix]` on general-purpose buckets, with the same credential chain, `--profile`,
-  `--region`, S3-compatible endpoints and bearer tokens for GCS's XML API. This tool adds native `gs://`
+- **Sources.** `s3://bucket[/prefix]` on general-purpose buckets, with the same credential chain, profiles
+  (`--s3-profile`), regions (`--s3-region`), S3-compatible endpoints (`--endpoint-url`) and bearer tokens for
+  GCS's XML API (`--s3-bearer-token-command`). This tool adds native `gs://`
   through the GCS JSON API, `az://account/container[/prefix]` for Azure Blob flat namespaces,
   and local or mounted directory trees.
 - **Output.** Object-store text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file
-  (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Local `list` requires
-  dataset output; local `du` summaries go directly to stdout. Java's filters are kept: its regular expressions are
+  (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Every source, a local
+  tree included, lists as text rows or into a dataset; `swath du` prints totals on stdout. Java's filters are kept: its regular expressions are
   `--include-regex` and `--exclude-regex` (Go's RE2, not Java's), `--include` and `--exclude` take globs, every
   filter is repeatable, and a size's `MB` is decimal (`M` and `MiB` binary).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
   Local scans and text output cannot resume. Windows currently refuses journaled object-store runs
-  and resume ([platform limits](operating.md#known-limits)). The exit codes keep their meaning:
+  and resume ([platform limits](running.md#known-limits)). The exit codes keep their meaning:
   0, 1, 2, 74, 75, 124, 130 and 143.
 - **Controls.** `--max-duration`, `--request-rate`, `--report`, `--progress`, `--stats`, `-v` and `-q`.
 
@@ -31,17 +32,17 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
   itself: rows wait in a memory budget (`--row-budget`, 128 MiB), and rows listed ahead of the output go to
   disposable spill files under the output (`--spill-budget`, by default up to half the free space). There is
   no merge pass at the end. A large sorted run spills almost every row once, so plan disk for it
-  ([operators.md](operators.md#disk-sizing)).
+  ([production.md](production.md#disk-sizing)).
 - **The durable prefix.** A resume keeps published parts and continues after the last published key.
   Validated durable spill can preserve additional work where supported; gaps are listed again.
   This differs from Java's per-range checkpoints. It does not promise to retain every row already
-  fetched ([recovery details](operating.md#stopping-and-resuming)).
+  fetched ([recovery details](running.md#stopping-and-resuming)).
 - **The dataset.** `manifest.json` installed last is the commit (not `_SUCCESS`). Schemas are source-
   and mode-specific: current objects, local entries, S3 versions and GCS generations have different
   fields ([dataset.md](dataset.md)). Java's reader does not read this format ([upgrade.md](upgrade.md)).
 - **The request limiter.** Java cuts concurrency on every throttle; Go uses a recent-answer window and
   at most one cut per round trip. S3, GCS and Azure Blob share the controller, with provider-specific throttle
-  signals. See [request controls and tuning](operating.md#throttling).
+  signals. See [request controls and tuning](running.md#throttling).
 - **The seed.** Before ranges list, delimiter requests tile the bucket at its folders, in parallel waves, and
   the first wave also fetches the first data page, so a one-page bucket lists in one round trip. The seed is on
   by default. `--seed-from PATH` starts from a previous dataset instead.
@@ -53,12 +54,12 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 
 ## Flags
 
-The flags kept, renamed and removed are in [cli-inventory.md](cli-inventory.md). The most common ones:
-`--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` is
-`--endpoint`, `--parquet-part-size` is `--part-size` (64 MiB by default, Java's was 256 MB), and
+The flags kept, renamed and removed are in [internals/cli-inventory.md](internals/cli-inventory.md). The most common ones:
+`--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` keeps its
+name, `--profile` and `--region` are `--s3-profile` and `--s3-region`, `--parquet-part-size` is `--part-size` (64 MiB by default, Java's was 256 MB), and
 `--format parquet --sort -o DIR` is simply `-o DIR`. Object stores share `--anonymous`,
-`--endpoint` and `--request-timeout`; provider-specific credentials and limits are described in the
-[operating reference](operating.md#object-store-requests).
+`--endpoint-url` and `--request-timeout`; provider-specific credentials and limits are described in
+[sources.md](sources.md).
 
 ## The run report
 
@@ -67,7 +68,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 | Java | This tool |
 |---|---|
-| `schema_version` | `report_version` (3) |
+| `schema_version` | `report_version` (4) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.object_bytes` (object sizes); the dataset's own size is `output.output_bytes` |
@@ -78,7 +79,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 Java's engine, seed and meter blocks have no counterpart. The engine's counters are under
 `source.stats.counters` with their own names ([internals/counters.md](internals/counters.md)). The full schema
-is under "Run report" in [cli.md](cli.md).
+is [reference/run-report.md](reference/run-report.md).
 
 ## What is not here
 
@@ -88,7 +89,7 @@ is under "Run report" in [cli.md](cli.md).
   Go does support `--all-versions` for S3 versions and delete markers and GCS live and noncurrent
   generations, under their own schemas. The Java release does not implement these modes.
 - **Java's thief splits, unsorted Parquet (`--no-sort`), the SQLite checkpoint, OTLP metrics, partitioned
-  text datasets and `--tune`.** Each decision and its reason is in [cli-inventory.md](cli-inventory.md).
+  text datasets and `--tune`.** Each decision and its reason is in [internals/cli-inventory.md](internals/cli-inventory.md).
 
 ## Measured against Java
 
@@ -100,4 +101,4 @@ replayed recordings it was 3.5x to 13.5x faster (`recordings1`, 2026-11-07). On 
 heap against 2.2 GB RSS (`cogslive2`, 2026-11-07). That run was bound by the single Parquet part being written
 after listing ended. The caveats: the fake and replay runs measure the engine's coordination, not S3; most
 arms ran once; and the live run was cross-cloud, from GCP us-east1 to a bucket in AWS us-west-2. The tables
-are in [measurements.md](measurements.md).
+are in [internals/measurements.md](internals/measurements.md).
