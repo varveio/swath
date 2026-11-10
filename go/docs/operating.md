@@ -287,10 +287,10 @@ OOM kill loses nothing durable: the journal is crash-safe and the resume reconci
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
 value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
 `--spill-reserve`, `--spill-compress` and `--spill-plain`, `--part-interval`, `--report-format`, `--report`,
-`--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and `--profile`,
-`--anonymous`, `--request-timeout`, `--gcs-credentials`, `--gcs-request-timeout`,
-`--limiter`, `--limiter-slow-start`, `--request-rate`, `--bearer-token-command`, `--bearer-token-refresh-interval`
-(`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
+`--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and the operational ones: the shared
+`--anonymous`, `--request-timeout`, `--limiter`, `--limiter-slow-start` and `--request-rate`, and each
+provider's credential flags (`--azblob-sas`, `--gcs-credentials`, `--profile`, `--bearer-token-command`,
+`--bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 

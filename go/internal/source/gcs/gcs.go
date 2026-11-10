@@ -31,14 +31,6 @@ type counted interface{ Counters() client.Counters }
 // pool (client.Client).
 type pooled interface{ Transports() int }
 
-// live is implemented by clients that count their attempts live
-// (source.Requested).
-type live interface{ Live() objhttp.Live }
-
-// answering is implemented by clients that count the requests their
-// service answered (source.Live).
-type answering interface{ Answered() int64 }
-
 // Options configure a listing.
 type Options struct {
 	Bucket          string
@@ -77,36 +69,6 @@ func ParseURL(u string) (bucket, prefix string, err error) {
 	return bucket, prefix, nil
 }
 
-// Faults are the throttle answers and attempt timeouts so far
-// (source.Faulted); 0 for a supplied client that does not count them.
-func (p *provider[P]) Faults() (throttles, timeouts int64) {
-	if c, ok := p.client.(counted); ok {
-		n := c.Counters()
-		return n.Throttles, n.Timeouts
-	}
-	return 0, 0
-}
-
-// Requests is the client's live request account (source.Requested); zero
-// for a supplied client that does not count it.
-func (p *provider[P]) Requests() source.Requests {
-	if c, ok := p.client.(live); ok {
-		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
-			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
-	}
-	return source.Requests{}
-}
-
-// Answered is the requests the service answered usably (source.Live); 0
-// for a supplied client that does not count them.
-func (p *provider[P]) Answered() int64 {
-	if c, ok := p.client.(answering); ok {
-		return c.Answered()
-	}
-	return 0
-}
-
 // Stats are the provider's part of the run report.
 type Stats struct {
 	Anonymous   bool              `json:"anonymous"`
@@ -125,10 +87,11 @@ type GenerationsProvider = provider[Generation]
 // provider is a GCS listing with payload P.
 type provider[P any] struct {
 	*keyrange.Engine[P]
-	opt       Options
-	client    API
-	anonymous bool
-	creds     string
+	objhttp.Activity // the client's, observed once it is chosen
+	opt              Options
+	client           API
+	anonymous        bool
+	creds            string
 }
 
 // Range is the engine's range.
@@ -216,6 +179,7 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		p.client = c
 		p.creds, p.anonymous = c.Credentials()
 	}
+	p.Activity = objhttp.Observe(p.client)
 	return p, own, nil
 }
 
@@ -262,10 +226,14 @@ const maxName = 1024
 
 var requeue = objhttp.Requeue
 
-// Restart continues after a journaled run's last published key.
-func (p *provider[P]) Restart(after string) {
+// Restart continues after a journaled run's last published key, from
+// the normal start-up: one range (after, ⊤], split as on a fresh run
+// (source.Resumable). It records the resume in the provider's options and
+// the engine's.
+func (p *provider[P]) Restart(after string) error {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
+	return nil
 }
 
 // Stats snapshots the counters.

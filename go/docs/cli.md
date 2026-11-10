@@ -43,9 +43,9 @@ the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-budget`, 
 `--part-interval`, the diagnostic `--spill-compress`, `--spill-plain` and `--spill-reserve`, `--report-format`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
 `--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
 operational ones, how requests are
-authenticated, timed and admitted (`--profile`, `--anonymous`, `--request-timeout`,
-`--gcs-credentials`, `--gcs-request-timeout`, `--limiter`, `--limiter-slow-start`, `--request-rate`,
-`--bearer-token-command`, `--bearer-token-refresh-interval`), may be given again (the last value
+authenticated, timed and admitted (the shared `--anonymous`, `--request-timeout`, `--limiter`,
+`--limiter-slow-start` and `--request-rate`, and each provider's credential flags: `--azblob-sas`,
+`--gcs-credentials`, `--bearer-token-command`, `--profile`, `--bearer-token-refresh-interval`), may be given again (the last value
 wins: `--anonymous=false` undoes a recorded `--anonymous`); anything else is a usage error. The source and output
 identity stays frozen: a resume whose overrides resolve another route (a profile with another region, say) is
 refused by the identity check. `swath resume` on a committed dataset with complete coverage has nothing to do
@@ -87,10 +87,28 @@ Source and output:
         the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
+  --endpoint URL
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
-  --endpoint URL
-        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   --path-style
         S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   --profile profile
@@ -107,28 +125,6 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
-  --all-versions
-        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
-  --gcs-endpoint URL
-        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  --gcs-credentials file
-        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
-  --gcs-user-project project
-        GCS: bill a requester-pays bucket's requests to this project
-  --azblob-endpoint URL
-        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
-  --azblob-sas TOKEN
-        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
-  --azblob-flat
-        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
-  --metadata tier
-        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
-  --no-dirs
-        local: omit kind=DIR rows
-  --no-link-target
-        local: do not read symlink targets
-  --one-filesystem
-        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
@@ -176,21 +172,15 @@ Limits:
   --stall-timeout duration
         stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
         change it: raise it for a service that is slow to answer for minutes at a time
+  --request-timeout duration
+        requests: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow endpoint or emulator (an S3-compatible store, fake-gcs-server, Azurite) whose pages take longer to answer
   --request-rate N
         requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
         change it: set it to stay under a request quota shared with other clients
   --limiter
         requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
         change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
-  --request-timeout duration
-        S3: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow S3-compatible store whose pages take longer to answer
-  --gcs-request-timeout duration
-        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow GCS endpoint or emulator
-  --azblob-request-timeout duration
-        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow Azure endpoint or Azurite
 
 Output and reporting:
   --report file
@@ -216,7 +206,7 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-sas, azblob-request-timeout (operational) may change.
+anonymous, request-timeout, limiter, limiter-slow-start, request-rate, azblob-sas, gcs-credentials, bearer-token-command, profile, bearer-token-refresh-interval (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath du --help
@@ -232,10 +222,28 @@ Source and output:
         the rows on stdout: auto, table, tsv or jsonl (auto: the table on a terminal, TSV otherwise); swath list -o FILE: the file's name says its format instead
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
+  --endpoint URL
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
-  --endpoint URL
-        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   --path-style
         S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   --profile profile
@@ -252,28 +260,6 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
-  --all-versions
-        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
-  --gcs-endpoint URL
-        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  --gcs-credentials file
-        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
-  --gcs-user-project project
-        GCS: bill a requester-pays bucket's requests to this project
-  --azblob-endpoint URL
-        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
-  --azblob-sas TOKEN
-        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
-  --azblob-flat
-        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
-  --metadata tier
-        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
-  --no-dirs
-        local: omit kind=DIR rows
-  --no-link-target
-        local: do not read symlink targets
-  --one-filesystem
-        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
@@ -303,21 +289,15 @@ Limits:
   --stall-timeout duration
         stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
         change it: raise it for a service that is slow to answer for minutes at a time
+  --request-timeout duration
+        requests: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow endpoint or emulator (an S3-compatible store, fake-gcs-server, Azurite) whose pages take longer to answer
   --request-rate N
         requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
         change it: set it to stay under a request quota shared with other clients
   --limiter
         requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
         change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
-  --request-timeout duration
-        S3: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow S3-compatible store whose pages take longer to answer
-  --gcs-request-timeout duration
-        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow GCS endpoint or emulator
-  --azblob-request-timeout duration
-        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow Azure endpoint or Azurite
 
 Per-prefix totals:
   --depth, -d N
@@ -357,7 +337,7 @@ Output and reporting:
 
 swath resume DIR continues an interrupted run with its recorded command; only
 workers, encoders, row-budget, spill-budget, spill-reserve, spill-compress, spill-plain, part-interval, report-format, report, max-duration, stall-timeout, seed-from, progress, no-progress, progress-interval, stats, no-stats, v, vv, vvv, q, qq, color (runtime) and
-profile, anonymous, request-timeout, gcs-credentials, gcs-request-timeout, limiter, limiter-slow-start, request-rate, bearer-token-command, bearer-token-refresh-interval, azblob-sas, azblob-request-timeout (operational) may change.
+anonymous, request-timeout, limiter, limiter-slow-start, request-rate, azblob-sas, gcs-credentials, bearer-token-command, profile, bearer-token-refresh-interval (operational) may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 
 $ swath diag list --help
@@ -404,10 +384,28 @@ usage: swath diag count SOURCE [flags]
 Source and output:
   --anonymous
         credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing
+  --endpoint URL
+        store: endpoint URL in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity
+  --all-versions
+        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
+  --metadata tier
+        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
+  --no-dirs
+        local: omit kind=DIR rows
+  --no-link-target
+        local: do not read symlink targets
+  --one-filesystem
+        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
+  --azblob-sas TOKEN
+        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
+  --azblob-flat
+        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
+  --gcs-credentials file
+        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
+  --gcs-user-project project
+        GCS: bill a requester-pays bucket's requests to this project
   --region string
         S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)
-  --endpoint URL
-        S3: endpoint URL of an S3-compatible store (path-style addressing unless --path-style=false)
   --path-style
         S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)
   --profile profile
@@ -424,28 +422,6 @@ Source and output:
         S3: use the dual-stack (IPv6) endpoint
   --fetch-owner
         S3: fill owner_id and owner_display_name
-  --all-versions
-        list every version of every key, not only the current objects: S3 versions and delete markers (ListObjectVersions; needs s3:ListBucketVersions; schema swath/s3-versions/v1), GCS generations, live and noncurrent (versions=true; schema swath/gcs-generations/v1); a key's rows are consecutive and never split across parts
-  --gcs-endpoint URL
-        GCS: JSON API base URL (default https://storage.googleapis.com/storage/v1/)
-  --gcs-credentials file
-        GCS: service-account or authorized-user JSON file (default: Application Default Credentials)
-  --gcs-user-project project
-        GCS: bill a requester-pays bucket's requests to this project
-  --azblob-endpoint URL
-        Azure Blob: blob service URL replacing https://ACCOUNT.blob.core.windows.net (Azurite, the replay server); the account is then its first path segment
-  --azblob-sas TOKEN
-        Azure Blob: shared access signature TOKEN (a query string; never recorded: give it again to swath resume); else a SAS in the root's query, else AZURE_STORAGE_SAS_TOKEN; with none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID (DefaultAzureCredential); --anonymous sends none
-  --azblob-flat
-        Azure Blob: assert a flat namespace where the account will not tell (Get Account Information and the Data Lake host's Filesystem Get Properties both refused or silent); a hierarchical namespace they report still refuses; frozen for resume and shown in the report
-  --metadata tier
-        local: metadata tier per entry: names (no stat), stat, statx (adds birth_time; Linux) (default stat)
-  --no-dirs
-        local: omit kind=DIR rows
-  --no-link-target
-        local: do not read symlink targets
-  --one-filesystem
-        local: list a directory on another filesystem than the root (a mount point) but do not walk it, as du -x and find -xdev
   --include regex
         keep keys in which this regex (Go RE2 syntax) matches anywhere; ^ with a literal prefix also narrows the listed prefix
   --exclude regex
@@ -475,21 +451,15 @@ Limits:
   --stall-timeout duration
         stop the run as stuck after this long without progress (exit 75; resumable); 0: never (default 10m0s)
         change it: raise it for a service that is slow to answer for minutes at a time
+  --request-timeout duration
+        requests: per-request timeout; a request that exceeds it is retried (default 30s)
+        change it: raise it for a slow endpoint or emulator (an S3-compatible store, fake-gcs-server, Azurite) whose pages take longer to answer
   --request-rate N
         requests: cap every HTTP attempt (pages, probes, retries, requeues) at N per second, after the limiter's permit; refused when the spacing exceeds half --stall-timeout; 0: no cap
         change it: set it to stay under a request quota shared with other clients
   --limiter
         requests: adaptive concurrency: throttle answers lower the requests in flight (x0.7, at most once per round trip, while 15 % or more of the recent answers are throttles), growth returns one per second while under 7.5 % are; false: no limit: each of the --workers listing workers waits on one page at a time, and seed listings and structure probes run beside them (default true)
         change it: turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1
-  --request-timeout duration
-        S3: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow S3-compatible store whose pages take longer to answer
-  --gcs-request-timeout duration
-        GCS: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow GCS endpoint or emulator
-  --azblob-request-timeout duration
-        Azure Blob: per-request timeout; a request that exceeds it is retried (default 30s)
-        change it: raise it for a slow Azure endpoint or Azurite
 
 Output and reporting:
   --report file
@@ -539,13 +509,15 @@ Diagnostics:
   one syntax, Java's: a decimal number and an optional unit, `b`, `k`/`kb`/`kib`, `m`/`mb`/`mib`, `g`/`gb`/`gib`
   or `t`/`tb`/`tib`, in any case and all binary (`64MB` is 64 MiB), coming to a whole number of bytes (`1.5g`,
   not `1.3b`).
-- **Provider flags** (`S3:`, `GCS:` and `Azure Blob:` in the list, and the range-engine flags the object stores
-  share) apply to their own sources only: one given for another source (`gs://... --profile`, where GCS takes
-  `--gcs-credentials`; `--endpoint` against `--gcs-endpoint` or `--azblob-endpoint`; an S3 flag on a local tree)
-  is refused (exit 2) rather than ignored.
-- **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--azblob-endpoint URL` replaces
+- **Provider flags** (`S3:`, `GCS:`, `Azure Blob:` and `local:` in the list) apply to their own sources only:
+  one given for another source (`gs://... --profile`, where GCS takes `--gcs-credentials`; an S3 flag on a local
+  tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same
+  for S3, GCS and Azure Blob and refused for a local tree: `--endpoint` (an emulator or a compatible store in
+  place of the provider's own service), `--request-timeout` and `--anonymous`, beside the range engine's
+  (`--all-versions`, `--limiter`, `--request-rate` and the diagnostic policy flags).
+- **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--endpoint URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
-  `--azblob-endpoint http://127.0.0.1:10000`). Credentials: `--anonymous`, else a SAS (`--azblob-sas`, the
+  `--endpoint http://127.0.0.1:10000`). Credentials: `--anonymous`, else a SAS (`--azblob-sas`, the
   root's query when it names a SAS parameter, or `AZURE_STORAGE_SAS_TOKEN`), else an account key
   (`AZURE_STORAGE_KEY`), else Entra ID (`DefaultAzureCredential`). A SAS is never recorded or shown (the root is
   redacted to `?sig=[redacted]` in the terminal, the journal and the report): `swath resume` must be given one
@@ -1035,7 +1007,7 @@ is the one request count: every HTTP attempt sent (pages, probes, client retries
 `throttles` and `timeouts` are attempts among them repeated after a retryable failure, answered with a throttle,
 and past the per-request timeout. `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
-`--gcs-endpoint` spells it); both `null` on a
+`--endpoint` spells it); both `null` on a
 custom endpoint, whose tariff is unknown. `keys_per_sec` is `rows_emitted` over `listing_ms`;
 `http_attempts_per_1k_rows` is `http_attempts` per 1,000 `rows_fetched` (`null` without a row). Latency
 percentiles and in-flight time are the provider's counters (`source.stats.counters.values` `inflight.p50_ns`,

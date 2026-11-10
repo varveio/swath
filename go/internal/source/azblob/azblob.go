@@ -58,14 +58,6 @@ type pooled interface{ Transports() int }
 // (client.Client: retry_after_capped).
 type capped interface{ RetryAfterCapped() int64 }
 
-// live is implemented by clients that count their attempts live
-// (source.Requested).
-type live interface{ Live() objhttp.Live }
-
-// answering is implemented by clients that count the requests their
-// service answered (source.Live).
-type answering interface{ Answered() int64 }
-
 // Routed is implemented by clients that can name the route a container's
 // requests go to, which resume identity freezes (client.Client). A
 // supplied client that cannot is listed, but the run declines resume.
@@ -179,36 +171,6 @@ func RedactRoot(arg string) string {
 	return arg
 }
 
-// Faults are the throttle answers and attempt timeouts so far
-// (source.Faulted); 0 for a supplied client that does not count them.
-func (p *Provider) Faults() (throttles, timeouts int64) {
-	if c, ok := p.client.(counted); ok {
-		n := c.Counters()
-		return n.Throttles, n.Timeouts
-	}
-	return 0, 0
-}
-
-// Requests is the client's live request account (source.Requested); zero
-// for a supplied client that does not count it.
-func (p *Provider) Requests() source.Requests {
-	if c, ok := p.client.(live); ok {
-		l := c.Live()
-		return source.Requests{Attempts: l.Attempts, Retries: l.Retries, Throttles: l.Throttles, Timeouts: l.Timeouts, Inflight: l.Inflight,
-			InflightMax: l.InflightMax, InflightNs: l.InflightNs, Limit: int64(l.Limit)}
-	}
-	return source.Requests{}
-}
-
-// Answered is the requests the service answered usably (source.Live); 0
-// for a supplied client that does not count them.
-func (p *Provider) Answered() int64 {
-	if c, ok := p.client.(answering); ok {
-		return c.Answered()
-	}
-	return 0
-}
-
 // Stats are the provider's part of the run report.
 type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
@@ -223,12 +185,13 @@ type Stats struct {
 // Provider is the range engine bound to List Blobs.
 type Provider struct {
 	*keyrange.Engine[Object]
-	opt       Options
-	client    API
-	anonymous bool
-	creds     string
-	route     string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
-	namespace string // how admission found the namespace flat (Stats.Namespace)
+	objhttp.Activity // the client's, observed once it is chosen
+	opt              Options
+	client           API
+	anonymous        bool
+	creds            string
+	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
+	namespace        string // how admission found the namespace flat (Stats.Namespace)
 	// loose serves a fetch outside any Expand (none in the engine today);
 	// its idle chains are evicted past order.MaxChains.
 	loose *order.Adapter
@@ -394,6 +357,7 @@ func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 	if r, ok := p.client.(Routed); ok {
 		p.route = r.Route(opt.Container)
 	}
+	p.Activity = objhttp.Observe(p.client)
 	return p, own, nil
 }
 
@@ -444,10 +408,14 @@ func AcceptBound(s string) bool {
 
 var requeue = objhttp.Requeue
 
-// Restart continues after a journaled run's last published key.
-func (p *Provider) Restart(after string) {
+// Restart continues after a journaled run's last published key, from
+// the normal start-up: one range (after, ⊤], split as on a fresh run
+// (source.Resumable). It records the resume in the provider's options and
+// the engine's.
+func (p *Provider) Restart(after string) error {
 	p.opt.Resume = &Resume{After: after}
 	p.Engine.Restart(after)
+	return nil
 }
 
 // Stats snapshots the counters.

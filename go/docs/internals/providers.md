@@ -43,7 +43,13 @@ type Provider[R, P any] interface {
 ```
 
 `P` is the provider's row payload (`fs.Entry`, `s3.Object`), bound to columns by its `schema.Schema[P]`, which
-lives beside the provider.
+lives beside the provider. A provider with a versions listing (`--all-versions`) binds a versions schema id
+(`schema.Bind`) and declares nothing more: the spec in `go/reader` names the schema's version roles (version ID,
+latest or deleted-at, delete marker; `reader.VersionSpec`), and the text output, versions counts and per-prefix
+totals read the rows through them (`schema.BindVersions`), never through the provider or its registration. A new
+versions schema adds its spec there with its roles: a future Azure one would declare its string identifier and
+an explicit latest boolean, and no delete-marker role unless its rows are delete markers (neither a snapshot nor
+a soft-deleted blob is one).
 
 A range is a provider-defined value. `Expand` emits its content in ascending key order: every key of a child's
 subtree sorts after everything emitted before the child and before everything emitted after it. `Expand` may
@@ -54,19 +60,53 @@ stop, including any error returned by the emitter (cancellation or a failed sink
 ## Registry and optional interfaces
 
 A provider registers a `registry.Factory` from `init`: its URL scheme (`s3`; the empty scheme takes local
-paths), its flag group (`Flags(fs, diag, shared) any` returns the provider's options value, filled by the
-parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. A provider on the range engine names the
-engine's shared flag group (`Shared: keyrange.FlagGroup`, `SharedFlags`: the policy flags `--seed`,
-`--structure`, `--floors`, `--sequential`, `--max-keys` and the admission flags
-`--limiter`, `--limiter-slow-start`, `--request-rate`; all but `--limiter` and `--request-rate` diagnostic,
-registered with `diag` only): the command registers each named group once and
-passes its value (`*keyrange.Common`: a `keyrange.Policy` and an `objhttp.Admission`) to every provider that
-names it. The command imports providers only for that
-registration and passes the options value for the root's scheme as `listing.Config.Source.Options`, opaque to the
-pipeline. `Open` validates the root without touching the output. An object store's factory also gives
-`KeyPrefix(root)`, the key prefix the root names (each provider's `ParseURL`): `swath du` counts its depth from it
-up to its last `/` (`logs/2026/0` from `logs/2026/`), taken from the root as given, before an `--include` narrows
-it; without one (local paths) keys are relative to the root.
+paths), its own flags (`Flags(fs, diag, shared) any` returns the provider's options value, filled by the
+parse), `Defaults`, and `Open(ctx, Request) (Source, error)`. Beside its flags it declares what the command
+would otherwise know by name: `Usage` (the root form in the help's SOURCE line), `Secrets` (flags never
+recorded, with the environment variable that may stand in on resume), `Operational` (its flags a resume may
+change: how requests are authenticated; secrets are operational without being listed) and `Hints` (every flag
+it registers, in help order, as `source.Hint{Flag, When}`: a flag with a `When` text is shown under the help's
+Limits with that advice, a diagnostic one under the diagnostics, any other under Source and output). The S3
+factory, for one:
+
+```go
+registry.Register(registry.Factory{Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+	Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+	Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
+	Operational: []string{"profile", "bearer-token-refresh-interval"},
+	Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, ...},
+	Usage: "s3://bucket[/prefix]", ...})
+```
+
+**Shared flag groups.** Flags several providers take alike are a `source.FlagGroup` the providers name in
+`Shared`: the command registers each group once (`registry.Groups`, in the order the factories by scheme first
+name them), passes its value to every provider that names it (`source.SharedValues`, keyed by the group's
+address, so two groups never alias by name; a provider reads it with `source.Shared[T]`, which panics on a group
+it did not name or a value of another type: a programming error, not a dropped flag), and records each of its flags as
+owned by those providers, so it is accepted for any of their roots and refused for any other (a local tree).
+A group declares its own `Operational` flags, `Hints` and `URLs` (flags whose value a recorded command line
+redacts when it carries user information, `registry.RedactArgv`) once, not per provider. Two groups exist.
+The store group (`source.StoreGroup`, value `*source.Store`), which S3, GCS and Azure Blob name: `--endpoint`
+(the provider's own service replaced; part of each provider's resume identity, `endpoint` with its canonical
+route), `--request-timeout` (default 30 s) and `--anonymous` (the only way a request goes unauthenticated); the
+last two are operational. The range engine's (`keyrange.Group`, value `*keyrange.Common`: a `keyrange.Policy`,
+an `objhttp.Admission` and `--all-versions`): the policy flags `--seed`, `--structure`, `--slow-split`,
+`--floors`, `--sequential`, `--max-keys`, `--page-size` and the admission flags `--limiter`,
+`--limiter-slow-start`, `--request-rate`; all but `--limiter`, `--request-rate` and `--all-versions` diagnostic,
+registered with `diag` only. A provider's own flags keep its prefix (`--gcs-credentials`, `--azblob-sas`; S3's
+are unprefixed, the Java tool's names). Each provider's `Open` reads the group values into its options. A test
+or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
+
+The command imports providers only for that registration and passes the options value for the root's scheme as
+`listing.Config.Source.Options`, opaque to the pipeline; it names no provider, scheme or provider flag
+(`TestImportBoundary`; `TestCommandNamesNoProvider` in `cmd/swath` is a tripwire on such spellings in its source: each constant string expression the type checker evaluates there, not values built at run time, [testing.md](../testing.md)). `Open` validates the root without
+touching the output. An object store's factory also gives `KeyPrefix(root)`, the key prefix the root names
+(each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
+`logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
+are relative to the root. `WithPrefix(root, prefix)` (S3 and GCS) names another prefix of the same bucket, through
+which an anchored `--include` narrows the listed prefix; Azure has none, and lists its root as given.
+`CheckTotals` (the local provider) refuses per-prefix totals its options cannot give (`--allocated` or
+`--count-links-once` with `--metadata names`) before the source opens.
 
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router
@@ -80,6 +120,22 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | `Capable` | per-instance capabilities (`Resume`): an instance may decline what its type implements | `Resume` | `Resume` | – |
 | `Excluder` | leaves an output directory inside its root out, after the output is prepared | – | – | yes |
 | `Reporter` | its stats under its name in the summary, a text line, error count, metadata tier, and for a remote source its `Coverage` (target, filters, complete, stop reason) and `Activity` for swath's run summary | `s3`, coverage | `azblob`, coverage | `listing` |
+
+The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
+(`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
+(`SeedFrom`), `Reusing` (`Reuse`) and `Fencing` (`Fences`). A provider on the range engine has them all, and they
+are listed once, as `keyrange.Registered` (with `Listed`): its opened source embeds that interface set to the
+provider, beside the `registry.Bound` of the same provider, so the methods are promoted and nothing else of the
+provider is (not its `Root`, `Expand`, `Stats`, `Options` or counter `Set`); a provider that lacks one fails to
+compile there, where an absent method would otherwise silently turn its capability off. The provider, not its
+`Engine`, satisfies it: `Restart` also records the resume in the provider's options, and `Answered`, `Requests` and
+`Faults` are its client's, read through an `objhttp.Activity` the provider embeds, observed once the client is
+chosen (each part reads zero where a supplied client does not count it). What an object store's `register.go`
+writes is then its flags, `open` (the options, the provider, the opened struct), and the provider's own methods:
+`Locator`, `Identity`, `Capabilities` (whether this instance can resume), `Report`, `Tariff` where it has one,
+and a `var _` block asserting the opened type's whole set per row type (`registry.Source`, `keyrange.Registered`,
+`Identified`, `Capable`, `Reporter`, `Priced`). `internal/source` `TestRegisteredSources` opens each provider
+through `registry.Lookup` and checks the interfaces and capabilities.
 
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
 like every run with an output. `swath resume` on it is an error.

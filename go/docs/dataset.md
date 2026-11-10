@@ -227,7 +227,9 @@ This section is for consumers that read the parts without `go/reader`: DuckDB, P
   generation, live only when `time_deleted` is null, and a name may have no live generation. A filter (`--min-size`,
   `--include`, ...) can remove a key's latest version, so in a filtered dataset none of those positional inferences
   hold. The current objects are `is_latest AND NOT is_delete_marker` (S3) or `time_deleted IS NULL` (GCS), row by
-  row.
+  row. The reader module's spec names these roles for each versions schema (`SchemaSpec.Versions`: version ID,
+  latest or deleted-at, delete marker; [../reader/README.md](../reader/README.md#version-roles)), and swath's own
+  text output, version counts and per-prefix totals read the rows through it.
 - **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
   SQL scan does not promise stored order. To keep a group's order, read the parts in manifest order and number the
   rows as read (DuckDB: `read_parquet` with `file_row_number = true`, then order by the part's position in the

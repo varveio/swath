@@ -22,14 +22,21 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open,
-		Secrets: []registry.Secret{{Flag: "bearer-token-command"}}, Usage: "s3://bucket[/prefix]"})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Secrets:     []registry.Secret{{Flag: "bearer-token-command"}},
+		Operational: []string{"profile", "bearer-token-refresh-interval"},
+		Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, {Flag: "request-payer"},
+			{Flag: "bearer-token-command"}, {Flag: "bearer-token-refresh-interval"}, {Flag: "fips"}, {Flag: "dualstack"}, {Flag: "fetch-owner"}},
+		Usage: "s3://bucket[/prefix]"})
 }
 
-// flagged is the S3 flag group's value: the S3 options and the range
-// engine's policy and HTTP admission, whose flags every engine provider shares.
+// flagged is the S3 flag group's value: the S3 options, the store group's
+// values and the range engine's policy and HTTP admission, whose flags
+// every engine provider shares.
 type flagged struct {
 	Options
+	store        *source.Store
 	common       *keyrange.Common
 	pathStyleSet bool // --path-style given (else on with a custom endpoint, as Java's)
 	refreshSet   bool // --bearer-token-refresh-interval given
@@ -57,21 +64,15 @@ func (b boolFunc) Set(s string) error {
 	return nil
 }
 
-// sharedFlags registers the range engine's flag group (keyrange.Flags).
-func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
-
 func defaults() any { return &flagged{} }
 
-// flags registers the S3 flag group and the shared engine flags; the
+// flags registers the S3 flag group beside the shared groups' values; the
 // returned value is filled when the flag set is parsed.
-func flags(f *flag.FlagSet, diag bool, shared any) any {
-	common, _ := shared.(*keyrange.Common)
-	o := &flagged{common: common}
-	f.StringVar(&o.Endpoint, "endpoint", "", "S3: endpoint `URL` of an S3-compatible store (path-style addressing unless --path-style=false)")
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.Region, "region", "", "S3: region (default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1)")
 	f.StringVar(&o.Profile, "profile", "", "S3: shared config `profile` (default: the AWS SDK chain: environment, AWS_PROFILE or default, SSO, web identity, IMDS)")
 	f.BoolVar(&o.RequestPayer, "request-payer", false, "S3: accept the request charges of a requester-pays bucket (x-amz-request-payer: requester)")
-	f.DurationVar(&o.Timeout, "request-timeout", 30*time.Second, "S3: per-request timeout; a request that exceeds it is retried")
 	f.Var(boolFunc{&o.PathStyle, &o.pathStyleSet}, "path-style", "S3: path-style addressing (default: on with --endpoint, as Java's --force-path-style)")
 	f.StringVar(&o.BearerCommand, "bearer-token-command", "", "S3: shell `command` whose stdout is a bearer token, sent instead of SigV4 signatures (GCS's XML API: 'gcloud auth print-access-token'); never recorded, so swath resume needs it again")
 	f.Func("bearer-token-refresh-interval", "S3: run --bearer-token-command again after this `duration` (default 45m)", func(v string) error {
@@ -97,8 +98,11 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
+		if o.store != nil {
+			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+		}
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
+			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
 		if !o.pathStyleSet && opt.Endpoint != "" {
 			opt.PathStyle = true // Java's default for a custom endpoint
@@ -120,18 +124,19 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionsSchema), p: p, root: req.Root}, nil
+		return &opened[Version]{Bound: registry.Bind[Range, Version](p, &VersionsSchema), Registered: p, p: p, root: req.Root}, nil
 	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p, root: req.Root}, nil
 }
 
 // opened is the S3 provider as the pipeline sees it.
 type opened[P any] struct {
 	registry.Bound[P]
+	keyrange.Registered
 	p    *provider[P]
 	root string
 }
@@ -139,19 +144,6 @@ type opened[P any] struct {
 func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "s3", Root: o.root, Container: o.p.opt.Bucket}
 }
-
-func (o *opened[P]) Listed() int64 { return o.p.Listed() }
-
-func (o *opened[P]) Answered() int64 { return o.p.Answered() }
-
-// Frontier is the engine's key-space progress (source.Advancing).
-func (o *opened[P]) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
-
-// Requests is the live request account (source.Requested).
-func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
-
-// SeedTime is the engine's seed time (source.SeedTimed).
-func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
 // (source.Priced): only on the provider's own service; a custom endpoint
@@ -162,12 +154,6 @@ func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
 	}
 	return 0, ""
 }
-
-func (o *opened[P]) Faults() (throttles, timeouts int64) { return o.p.Faults() }
-
-// Contention is the engine's decision-mutex wait and longest hold
-// (source.Contended).
-func (o *opened[P]) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
 
 func (o *opened[P]) target() string {
 	t := "s3://" + o.p.opt.Bucket
@@ -237,36 +223,27 @@ func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && identified)
 }
 
-// Restart continues after the last published key, from the normal
-// start-up: one range (after, ⊤], split as on a fresh run.
-func (o *opened[P]) Restart(after string) error {
-	o.p.Restart(after)
-	return nil
-}
-
-// SeedFrom starts the listing from a prior's cuts instead of the seed
-// (source.Seeded, --seed-from).
-func (o *opened[P]) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
-
-// Reuse lists around a resume's reused coverage certificates
-// (source.Reusing): the engine replays them, lists the gaps.
-func (o *opened[P]) Reuse(spans []source.Span) { o.p.Reuse(spans) }
-
-// Fences reports the engine's coverage fences (source.Fencing).
-func (o *opened[P]) Fences() bool { return o.p.Fences() }
-
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("s3", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
+// The registered source's whole method set (keyrange.Registered: the ten
+// optional interfaces a range-engine provider gives the pipeline); a
+// capability whose method went missing would silently be off.
 var (
-	_ source.Identified = (*opened[Object])(nil)
-	_ source.Resumable  = (*opened[Object])(nil)
-	_ source.Seeded     = (*opened[Object])(nil)
-	_ source.Reusing    = (*opened[Object])(nil)
-	_ source.Capable    = (*opened[Object])(nil)
-	_ source.Reporter   = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Object])(nil)
+	_ keyrange.Registered = (*opened[Object])(nil)
+	_ source.Identified   = (*opened[Object])(nil)
+	_ source.Capable      = (*opened[Object])(nil)
+	_ source.Reporter     = (*opened[Object])(nil)
+	_ source.Priced       = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Version])(nil)
+	_ keyrange.Registered = (*opened[Version])(nil)
+	_ source.Identified   = (*opened[Version])(nil)
+	_ source.Capable      = (*opened[Version])(nil)
+	_ source.Reporter     = (*opened[Version])(nil)
+	_ source.Priced       = (*opened[Version])(nil)
 )
 
 // classify names the class of an S3 failure (client.Classify) for the
@@ -284,4 +261,13 @@ func classify(err error) string {
 func keyPrefix(root string) (string, error) {
 	_, prefix, err := ParseURL(root)
 	return prefix, err
+}
+
+// withPrefix is root naming prefix instead (registry.Factory.WithPrefix).
+func withPrefix(root, prefix string) string {
+	bucket, _, err := ParseURL(root)
+	if err != nil {
+		return root
+	}
+	return "s3://" + bucket + "/" + prefix
 }

@@ -113,6 +113,9 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	default:
 		return stop(fmt.Errorf("resume: the journal in %s records no command (written by an older build): finish it with that build or start over", dir))
 	}
+	if name := unknownFlag(all, base); name != "" {
+		return stop(usageError{fmt.Errorf("resume: the run in %s was recorded with %s, which this build does not take (renamed or removed): finish it with the build that started it, or start over with swath list --overwrite", dir, dashed(name))})
+	}
 	// The recorded command without --overwrite (the output is resumed, not
 	// replaced), then the overrides, then the directory as given (it may
 	// have moved).
@@ -152,6 +155,33 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// --spill-compress), and a recorded swath list command holds none
 	// that could change meaning.
 	return runWith(ctx, command{diag: true}, cmd, stdout, argv, true, att)
+}
+
+// unknownFlag is the first flag in args that f does not define ("" if
+// none): a recorded command from a build whose flags were since renamed or
+// removed. It walks args as parseList parses them: the value of a flag
+// given as a separate argument is skipped, and "--" ends the flags only
+// until the argument after it (SOURCE), after which flags parse again.
+func unknownFlag(f *flag.FlagSet, args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			i++ // SOURCE, whatever it looks like
+			continue
+		}
+		if len(a) < 2 || a[0] != '-' {
+			continue
+		}
+		name, _, eq := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		fl := f.Lookup(name)
+		if fl == nil {
+			return name
+		}
+		if b, ok := fl.Value.(interface{ IsBoolFlag() bool }); !eq && !(ok && b.IsBoolFlag()) {
+			i++
+		}
+	}
+	return ""
 }
 
 // resumeUsage prints swath resume's help: the flags it takes again.

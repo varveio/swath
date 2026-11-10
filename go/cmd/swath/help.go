@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/varveio/swath/go/internal/registry"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // helpFlag is one flag in the help: its name, its stacked forms (-vv,
@@ -31,59 +34,73 @@ type helpGroup struct {
 
 // helpGroups is the list commands' help, every flag of swath diag list in
 // exactly one group (TestHelpGroupsCoverFlags); the diagnostic group is
-// printed by swath diag list --help only.
-var helpGroups = []helpGroup{
-	{"Source and output", []helpFlag{
-		{name: "o"},
-		{name: "overwrite"},
-		{name: "format"},
-		{name: "anonymous"}, {name: "region"}, {name: "endpoint"}, {name: "path-style"},
-		{name: "profile"}, {name: "request-payer"}, {name: "bearer-token-command"}, {name: "bearer-token-refresh-interval"},
-		{name: "fips"}, {name: "dualstack"}, {name: "fetch-owner"}, {name: "all-versions"},
-		{name: "gcs-endpoint"}, {name: "gcs-credentials"}, {name: "gcs-user-project"},
-		{name: "azblob-endpoint"}, {name: "azblob-sas"}, {name: "azblob-flat"},
-		{name: "metadata"}, {name: "no-dirs"}, {name: "no-link-target"}, {name: "one-filesystem"},
-		{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
-		{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},
-		{name: "seed-from"},
-	}},
-	{"Performance", []helpFlag{
-		{name: "workers", when: "raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default"},
-		{name: "row-budget", when: "raise it when resources.budget_wait_ns is large or spill is heavy and memory allows; lower it on a small host (the peak RSS is a few times it)"},
-		{name: "spill-budget", when: "set it when the output filesystem is shared or small: the default takes up to half its free space"},
-		{name: "encoders", when: "lower it to leave cores to other work; the default already follows the cores and the row budget"},
-		{name: "part-size", when: "smaller parts for readers that load whole parts, larger for fewer files on a very large listing"},
-		{name: "part-interval", when: "lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing"},
-		{name: "part-rotation-max-rows", when: "set it when readers want parts of a bounded row count; it is frozen for resume"},
-	}},
-	{"Limits", []helpFlag{
-		{name: "max-duration", when: "give every unattended run one; a stopped object-store run resumes where it stopped"},
-		{name: "stall-timeout", when: "raise it for a service that is slow to answer for minutes at a time"},
-		{name: "request-rate", when: "set it to stay under a request quota shared with other clients"},
-		{name: "limiter", when: "turn it off (with --request-rate) when a run crawls under sustained throttling with the limit near 1"},
-		{name: "request-timeout", when: "raise it for a slow S3-compatible store whose pages take longer to answer"},
-		{name: "gcs-request-timeout", when: "raise it for a slow GCS endpoint or emulator"},
-		{name: "azblob-request-timeout", when: "raise it for a slow Azure endpoint or Azurite"},
-	}},
-	{totalsGroup, []helpFlag{
-		{name: "depth", stacked: []string{"d"}}, {name: "allocated"}, {name: "count-links-once"},
-		{name: "max-prefixes", when: "raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted"},
-		{name: "max-inodes", when: "raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)"},
-	}},
-	{"Output and reporting", []helpFlag{
-		{name: "report"}, {name: "report-format"},
-		{name: "progress"}, {name: "no-progress"}, {name: "progress-interval"},
-		{name: "stats"}, {name: "no-stats"},
-		{name: "v", stacked: []string{"vv", "vvv"}}, {name: "q", stacked: []string{"qq"}},
-		{name: "color"},
-	}},
-	{diagnosticGroup, []helpFlag{
-		{name: "seed"}, {name: "structure"}, {name: "slow-split"}, {name: "floors"}, {name: "sequential"}, {name: "max-keys"}, {name: "page-size"},
-		{name: "limiter-slow-start"},
-		{name: "spill-plain"}, {name: "spill-compress"}, {name: "spill-reserve"}, {name: "no-spill"},
-		{name: "no-journal"},
-	}},
-}
+// printed by swath diag list --help only. The command's own flags are
+// placed here; the shared flag groups' and the providers' come from their
+// hints (source.Hint), groups first, then providers by scheme: a
+// diagnostic flag under the diagnostics, a flag with a when under the
+// limits, any other with the source.
+var helpGroups = sync.OnceValue(func() []helpGroup {
+	var sourceFlags, limits, diagnostics []helpFlag
+	place := func(hints []source.Hint) {
+		for _, h := range hints {
+			hf := helpFlag{name: h.Flag, when: h.When}
+			switch {
+			case diagOnly()[h.Flag]:
+				diagnostics = append(diagnostics, hf)
+			case h.When != "":
+				limits = append(limits, hf)
+			default:
+				sourceFlags = append(sourceFlags, hf)
+			}
+		}
+	}
+	for _, g := range registry.Groups() {
+		place(g.Hints)
+	}
+	for _, f := range registry.Factories() {
+		place(f.Hints)
+	}
+	return []helpGroup{
+		{"Source and output", slices.Concat([]helpFlag{
+			{name: "o"},
+			{name: "overwrite"},
+			{name: "format"},
+		}, sourceFlags, []helpFlag{
+			{name: "include"}, {name: "exclude"}, {name: "min-size"}, {name: "max-size"},
+			{name: "modified-since"}, {name: "modified-until"}, {name: "storage-class"},
+			{name: "seed-from"},
+		})},
+		{"Performance", []helpFlag{
+			{name: "workers", when: "raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default"},
+			{name: "row-budget", when: "raise it when resources.budget_wait_ns is large or spill is heavy and memory allows; lower it on a small host (the peak RSS is a few times it)"},
+			{name: "spill-budget", when: "set it when the output filesystem is shared or small: the default takes up to half its free space"},
+			{name: "encoders", when: "lower it to leave cores to other work; the default already follows the cores and the row budget"},
+			{name: "part-size", when: "smaller parts for readers that load whole parts, larger for fewer files on a very large listing"},
+			{name: "part-interval", when: "lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing"},
+			{name: "part-rotation-max-rows", when: "set it when readers want parts of a bounded row count; it is frozen for resume"},
+		}},
+		{"Limits", slices.Concat([]helpFlag{
+			{name: "max-duration", when: "give every unattended run one; a stopped object-store run resumes where it stopped"},
+			{name: "stall-timeout", when: "raise it for a service that is slow to answer for minutes at a time"},
+		}, limits)},
+		{totalsGroup, []helpFlag{
+			{name: "depth", stacked: []string{"d"}}, {name: "allocated"}, {name: "count-links-once"},
+			{name: "max-prefixes", when: "raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted"},
+			{name: "max-inodes", when: "raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)"},
+		}},
+		{"Output and reporting", []helpFlag{
+			{name: "report"}, {name: "report-format"},
+			{name: "progress"}, {name: "no-progress"}, {name: "progress-interval"},
+			{name: "stats"}, {name: "no-stats"},
+			{name: "v", stacked: []string{"vv", "vvv"}}, {name: "q", stacked: []string{"qq"}},
+			{name: "color"},
+		}},
+		{diagnosticGroup, slices.Concat(diagnostics, []helpFlag{
+			{name: "spill-plain"}, {name: "spill-compress"}, {name: "spill-reserve"}, {name: "no-spill"},
+			{name: "no-journal"},
+		})},
+	}
+})
 
 // diagnosticGroup is the heading of the flags only swath diag takes.
 const diagnosticGroup = "Diagnostics"
@@ -178,7 +195,7 @@ func usage(w io.Writer, f *flag.FlagSet, cmd command) {
 		fmt.Fprintln(w, "  file; no -o, or -o -, text rows on stdout")
 	}
 	fmt.Fprintln(w, "  SOURCE is "+sourceForms())
-	for _, g := range helpGroups {
+	for _, g := range helpGroups() {
 		// swath diag list --help adds the diagnostic group to swath list
 		// --help; swath diag count, with no plain form, prints every group.
 		if g.title == diagnosticGroup && !cmd.diag || cmd.diag && !cmd.count && g.title != diagnosticGroup {
@@ -245,7 +262,7 @@ var errHelpGroups = errors.New("help groups")
 func checkHelpGroups(f *flag.FlagSet) error {
 	seen := map[string]string{}
 	var problems []string
-	for _, g := range helpGroups {
+	for _, g := range helpGroups() {
 		for _, h := range g.flags {
 			for _, n := range append([]string{h.name}, h.stacked...) {
 				if prev, ok := seen[n]; ok {

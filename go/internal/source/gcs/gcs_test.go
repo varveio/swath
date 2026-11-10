@@ -490,14 +490,17 @@ func (supplied) List(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{}, nil
 }
 
-// TestEngineFlagsShared: GCS takes the range engine's flag group the
-// command registered once and passed to it, and opens with the parsed
-// policy.
+// TestEngineFlagsShared: GCS takes the store's and the range engine's flag
+// groups the command registered once and passed to it, and opens with the
+// parsed values.
 func TestEngineFlagsShared(t *testing.T) {
+	pf, err := registry.Lookup("gs://bkt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
-	other := keyrange.Flags(f, true)
-	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-structure", "-anonymous", "-gcs-endpoint", "http://127.0.0.1:1/storage/v1/"}); err != nil {
+	v := pf.RegisterFlags(f, true)
+	if err := f.Parse([]string{"-seed", "-structure", "-anonymous", "-endpoint", "http://127.0.0.1:1/storage/v1/", "-request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2})
@@ -505,8 +508,8 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened[Object]).p
-	if !other.Policy.Seed || !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous {
-		t.Fatalf("policy not shared: %+v", p.opt)
+	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Endpoint != "http://127.0.0.1:1/storage/v1/" || p.opt.Timeout.Seconds() != 7 {
+		t.Fatalf("shared flags not applied: %+v", p.opt)
 	}
 }
 

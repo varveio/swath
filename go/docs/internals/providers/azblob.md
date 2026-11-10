@@ -11,7 +11,7 @@ order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below)
 A success body is capped at 64 MiB, the memory one in-flight response may hold: a listing page past it fails the
 request (`client.ErrBodyCap`, not retried, not asked again with fewer entries; Azure answers at most 5,000 entries,
 far below it). The root is `az://ACCOUNT/CONTAINER[/PREFIX]`;
-`--azblob-endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
+the shared `--endpoint URL` replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, the replay server), the
 account then being the endpoint's first path segment (`http://127.0.0.1:10000` serves
 `http://127.0.0.1:10000/ACCOUNT/CONTAINER`). Credentials, in precedence: `--anonymous` (shared with S3 and GCS, and the only way a request goes
 unauthenticated); a SAS from
@@ -50,7 +50,7 @@ the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) Wh
 which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
 account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
-with the configured account, no port and no path; with any other `--azblob-endpoint` there is no such host and
+with the configured account, no port and no path; with any other `--endpoint` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
 passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). (3)
 Anything else (a refusal or a missing header there too, another failure, no Data Lake host) is unknown and refuses,

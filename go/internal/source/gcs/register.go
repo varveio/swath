@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"time"
 
 	"github.com/varveio/swath/go/internal/parquetout"
 	"github.com/varveio/swath/go/internal/registry"
@@ -18,30 +17,30 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, Flags: flags, Shared: keyrange.FlagGroup, SharedFlags: sharedFlags, Defaults: defaults, Open: open, Usage: "gs://bucket[/prefix]"})
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: classify, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
+		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Operational: []string{"gcs-credentials"},
+		Hints:       []source.Hint{{Flag: "gcs-credentials"}, {Flag: "gcs-user-project"}},
+		Usage:       "gs://bucket[/prefix]"})
 }
 
-// flagged is the GCS flag group's value: the GCS options and the range
-// engine's policy and HTTP admission, whose flags every engine provider shares.
+// flagged is the GCS flag group's value: the GCS options, the store
+// group's values and the range engine's policy and HTTP admission, whose
+// flags every engine provider shares.
 type flagged struct {
 	Options
+	store  *source.Store
 	common *keyrange.Common
 }
 
-// sharedFlags registers the range engine's flag group (keyrange.Flags).
-func sharedFlags(f *flag.FlagSet, diag bool) any { return keyrange.Flags(f, diag) }
-
 func defaults() any { return &flagged{} }
 
-// flags registers the GCS flag group and the shared engine flags. The GCS
-// flags are prefixed: one flag set serves every provider.
-func flags(f *flag.FlagSet, diag bool, shared any) any {
-	common, _ := shared.(*keyrange.Common)
-	o := &flagged{common: common}
-	f.StringVar(&o.Endpoint, "gcs-endpoint", "", "GCS: JSON API base `URL` (default "+client.DefaultEndpoint+")")
+// flags registers the GCS flag group beside the shared groups' values.
+// The GCS flags are prefixed: one flag set serves every provider.
+func flags(f *flag.FlagSet, diag bool, shared source.SharedValues) any {
+	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
 	f.StringVar(&o.CredentialsFile, "gcs-credentials", "", "GCS: service-account or authorized-user JSON `file` (default: Application Default Credentials)")
 	f.StringVar(&o.UserProject, "gcs-user-project", "", "GCS: bill a requester-pays bucket's requests to this `project`")
-	f.DurationVar(&o.Timeout, "gcs-request-timeout", 30*time.Second, "GCS: per-request timeout; a request that exceeds it is retried")
 	return o
 }
 
@@ -54,8 +53,11 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	switch o := req.Options.(type) {
 	case *flagged: // the command line
 		opt = o.Options
+		if o.store != nil {
+			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+		}
 		if o.common != nil {
-			opt.Policy, opt.Admission, opt.AllVersions, opt.Anonymous = o.common.Policy, o.common.Admission, o.common.AllVersions, o.common.Anonymous
+			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
 	case *Options: // a library caller
 		opt = *o
@@ -68,17 +70,18 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &opened[Generation]{Bound: registry.Bind[Range, Generation](p, &GenerationSchema), p: p, root: req.Root}, nil
+		return &opened[Generation]{Bound: registry.Bind[Range, Generation](p, &GenerationSchema), Registered: p, p: p, root: req.Root}, nil
 	}
 	p, err := New(ctx, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), p: p, root: req.Root}, nil
+	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p, root: req.Root}, nil
 }
 
 type opened[P any] struct {
 	registry.Bound[P]
+	keyrange.Registered
 	p    *provider[P]
 	root string
 }
@@ -86,19 +89,6 @@ type opened[P any] struct {
 func (o *opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "gcs", Root: o.root, Container: o.p.opt.Bucket}
 }
-
-func (o *opened[P]) Listed() int64 { return o.p.Listed() }
-
-func (o *opened[P]) Answered() int64 { return o.p.Answered() }
-
-// Frontier is the engine's key-space progress (source.Advancing).
-func (o *opened[P]) Frontier() (advanced, emptyChained int64) { return o.p.Frontier() }
-
-// Requests is the live request account (source.Requested).
-func (o *opened[P]) Requests() source.Requests { return o.p.Requests() }
-
-// SeedTime is the engine's seed time (source.SeedTimed).
-func (o *opened[P]) SeedTime() (time.Duration, bool) { return o.p.SeedTime() }
 
 // Tariff is the reference list rate the report labels its estimate with
 // (source.Priced): only on the provider's own service, however its
@@ -112,12 +102,6 @@ func (o *opened[P]) Tariff() (usdPer1k float64, basis string) {
 	}
 	return 0, ""
 }
-
-func (o *opened[P]) Faults() (throttles, timeouts int64) { return o.p.Faults() }
-
-// Contention is the engine's decision-mutex wait and longest hold
-// (source.Contended).
-func (o *opened[P]) Contention() (wait, maxHold time.Duration) { return o.p.Contention() }
 
 func (o *opened[P]) target() string {
 	t := "gs://" + o.p.opt.Bucket
@@ -157,34 +141,27 @@ func (o *opened[P]) Capabilities() source.Capabilities {
 	return keyrange.Capabilities(o.p.opt.Sequential, o.p.opt.MaxKeys == 0 && o.p.opt.Client == nil)
 }
 
-func (o *opened[P]) Restart(after string) error {
-	o.p.Restart(after)
-	return nil
-}
-
-// SeedFrom starts the listing from a prior's cuts instead of the seed
-// (source.Seeded, --seed-from).
-func (o *opened[P]) SeedFrom(pr *source.Prior) error { return o.p.SeedFrom(pr) }
-
-// Reuse lists around a resume's reused coverage certificates
-// (source.Reusing): the engine replays them, lists the gaps.
-func (o *opened[P]) Reuse(spans []source.Span) { o.p.Reuse(spans) }
-
-// Fences reports the engine's coverage fences (source.Fencing).
-func (o *opened[P]) Fences() bool { return o.p.Fences() }
-
 func (o *opened[P]) Report() source.Report {
 	st := o.p.Stats()
 	return keyrange.Report("gcs", o.target(), o.p.opt.Prefix, &st, st.Counters)
 }
 
+// The registered source's whole method set (keyrange.Registered: the ten
+// optional interfaces a range-engine provider gives the pipeline); a
+// capability whose method went missing would silently be off.
 var (
-	_ source.Identified = (*opened[Object])(nil)
-	_ source.Resumable  = (*opened[Object])(nil)
-	_ source.Seeded     = (*opened[Object])(nil)
-	_ source.Reusing    = (*opened[Object])(nil)
-	_ source.Capable    = (*opened[Object])(nil)
-	_ source.Reporter   = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Object])(nil)
+	_ keyrange.Registered = (*opened[Object])(nil)
+	_ source.Identified   = (*opened[Object])(nil)
+	_ source.Capable      = (*opened[Object])(nil)
+	_ source.Reporter     = (*opened[Object])(nil)
+	_ source.Priced       = (*opened[Object])(nil)
+	_ registry.Source     = (*opened[Generation])(nil)
+	_ keyrange.Registered = (*opened[Generation])(nil)
+	_ source.Identified   = (*opened[Generation])(nil)
+	_ source.Capable      = (*opened[Generation])(nil)
+	_ source.Reporter     = (*opened[Generation])(nil)
+	_ source.Priced       = (*opened[Generation])(nil)
 )
 
 // classify names the class of a GCS failure (client.Classify) for the
@@ -202,4 +179,13 @@ func classify(err error) string {
 func keyPrefix(root string) (string, error) {
 	_, prefix, err := ParseURL(root)
 	return prefix, err
+}
+
+// withPrefix is root naming prefix instead (registry.Factory.WithPrefix).
+func withPrefix(root, prefix string) string {
+	bucket, _, err := ParseURL(root)
+	if err != nil {
+		return root
+	}
+	return "gs://" + bucket + "/" + prefix
 }

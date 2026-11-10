@@ -84,8 +84,14 @@ type Info struct {
 	// Groups: rows may repeat a key, as consecutive rows forming one key
 	// group in the producer's within-key order (a versions listing). False
 	// for current-object schemas: every key is unique and strictly
-	// ascending.
+	// ascending. Grouping is the ordering property only: a versions
+	// schema groups, but grouped rows need not be versions.
 	Groups bool
+	// Versions names the columns carrying a versions schema's roles
+	// (version ID, latest or deleted-at, delete marker), the reader
+	// spec's; zero for rows that are not versions. Consumers interpret
+	// the rows through BindVersions, never by column name.
+	Versions reader.VersionSpec
 }
 
 // Schema is a producer's row schema: the key column, then Columns in
@@ -131,8 +137,8 @@ type DeltaCodec[P any] interface {
 	DecodeDelta(d *Decoder, prev, p *P)
 }
 
-// Bind returns s as the schema id's: its ID, key type, key cap and
-// grouping, and its columns' names, types and nullability are the reader
+// Bind returns s as the schema id's: its ID, key type, key cap, grouping
+// and version roles, and its columns' names, types and nullability are the reader
 // module's spec of id, so producers and readers share one description.
 // s.Columns are the spec's columns in order, each with the accessor its
 // type takes (Str for strings and binary, Int for integers and times, Bool)
@@ -144,7 +150,7 @@ func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
 	if !ok || len(spec.Columns) != len(s.Columns) {
 		panic(fmt.Sprintf("schema %s: %d columns, the spec has %d", id, len(s.Columns), len(spec.Columns)))
 	}
-	s.ID, s.Key, s.MaxKeyBytes, s.Groups = string(id), spec.Key.Type, spec.MaxKeyBytes, !spec.UniqueKeys
+	s.ID, s.Key, s.MaxKeyBytes, s.Groups, s.Versions = string(id), spec.Key.Type, spec.MaxKeyBytes, !spec.UniqueKeys, spec.Versions
 	s.Columns = append([]Column[P](nil), s.Columns...)
 	for i, c := range spec.Columns {
 		col := &s.Columns[i]
@@ -161,6 +167,9 @@ func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
 		if !takes {
 			panic(fmt.Sprintf("schema %s: column %s: its accessor does not read its type", id, c.Name))
 		}
+	}
+	if _, err := BindVersions(&s); err != nil {
+		panic(err.Error())
 	}
 	return s
 }

@@ -307,10 +307,8 @@ func TestRecordedEndpointUserinfo(t *testing.T) {
 	cfg.Argv = []string{"list", "gs://bkt",
 		"--endpoint", "http://private-user:private-password@s3.example/",
 		"--endpoint=http://private-user:private-password@s3.example/",
-		"--gcs-endpoint", "http://private-user:private-password@gcs.example/",
-		"--gcs-endpoint=http://private-user:private-password@gcs.example/",
-		"--azblob-endpoint", "http://private-user:private-password@azure.example/",
-		"--azblob-endpoint=http://private-user:private-password@azure.example/"}
+		"-endpoint", "http://private-user:private-password@gcs.example/",
+		"-endpoint=http://private-user:private-password@gcs.example/"}
 	original := strings.Join(cfg.Argv, " ")
 	rep, err := Run(context.Background(), cfg)
 	if err != nil {

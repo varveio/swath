@@ -705,7 +705,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 	if versions.Enabled {
 		n, live, distinct := versions.Versions.Load(), versions.Live.Load(), ost.DistinctKeys
 		a.sum.Output.Versions, a.sum.Output.LiveObjects, a.sum.Output.DistinctKeys = &n, &live, &distinct
-		if versions.S3 {
+		if versions.HasDeleteMarkers {
 			markers := versions.DeleteMarkers.Load()
 			a.sum.Output.DeleteMarkers = &markers
 		} else {

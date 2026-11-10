@@ -229,7 +229,7 @@ The Java CLI's options, exit codes and report fields against this tool: [cli-inv
 
 **Changes between Go builds.** Before the first release a build makes no compatibility promise to an
 earlier one: `swath resume` replays the recorded command with this build's flags, and a flag this build no
-longer has is refused (exit 2, the flag parser's unknown-flag error); finish such a run with the build that
+longer has is refused (exit 2, naming the flag); finish such a run with the build that
 started it, or start over. The last renames before 0.4 are in [Changes from 0.3 to 0.4](#changes-from-03-to-04);
 the list below is the earlier history of the unreleased builds.
 - Anonymity is explicit: requests go unauthenticated only with `--anonymous`, one flag for S3, GCS and Azure
@@ -240,8 +240,8 @@ the list below is the earlier history of the unreleased builds.
   may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
   with "(a public bucket needs --anonymous)".
-- An endpoint URL with user information (`http://user:password@host/`, through `--endpoint`,
-  `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
+- An endpoint URL with user information (`http://user:password@host/`, through `--endpoint`, then
+  also `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
   its password recorded in the journal identity; give credentials through the provider's own configuration.
 - S3 journals written by an earlier build do not resume. The S3 resume identity now records the listing's inputs
   as given (the endpoint, empty for AWS's own, the region, path-style, FIPS and dual-stack) in place of the
@@ -249,7 +249,7 @@ the list below is the earlier history of the unreleased builds.
   is touched (`cannot resume: endpoint was (not recorded)`), whatever the region or endpoint; the interrupted
   dataset is left as it was. Finish the run with the build that started it, or start it over with `--overwrite`.
 - GCS listings use Google's generated JSON API client only, and a GCS journal records the endpoint
-  (`--gcs-endpoint` as the client sends to it) where it recorded the resolved route (`ENDPOINT/b/BUCKET/o`).
+  (`--endpoint`, then `--gcs-endpoint`, as the client sends to it) where it recorded the resolved route (`ENDPOINT/b/BUCKET/o`).
   A GCS run interrupted under an earlier build does not resume, even with unchanged flags: `swath resume`
   refuses it with `cannot resume: endpoint was (not recorded), now …`, and the run report's `args_hash` of a
   GCS run differs from an earlier build's. Finish such a run with the build that started it, or start it over
@@ -317,7 +317,11 @@ finished with it or started over): `--output` is `-o`; `--force` is `--overwrite
 `swath diag count` (it refuses the output flags with exit 2; the builds of `main` from 2026-11-07 to 2026-11-09
 called it `swath count`, and `swath count` is now an unknown command: `swath du` totals a source, `swath diag
 count` measures its listing); `--seed=false` and `--limiter-slow-start` moved to `swath diag list`, and `swath
-list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
+list` and `swath du` refuse every diagnostic flag with a message naming `swath diag`; the GCS and Azure copies
+of the flags every object store has are gone, one shared flag serving S3, GCS and Azure Blob alike:
+`--gcs-endpoint` and `--azblob-endpoint` are `--endpoint`, `--gcs-request-timeout` and
+`--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
+is refused naming it. New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
 
 **Run report: version 3.** Version 3 adds fields, and a version 2 reader reads version 3 by ignoring them; one

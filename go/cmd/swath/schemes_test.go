@@ -30,7 +30,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 	gcs := gcstest.Bucket(t, keys, 0)
 	schemes := map[string][]string{
 		"s3":  {"s3://bkt", "--endpoint", s3url, "--path-style", "--anonymous"},
-		"gcs": {"gs://bkt", "--gcs-endpoint", gcs, "--anonymous"},
+		"gcs": {"gs://bkt", "--endpoint", gcs, "--anonymous"},
 	}
 	type report struct {
 		Invocation struct{ Workers int }

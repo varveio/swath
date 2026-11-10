@@ -10,7 +10,7 @@
 //	go run ./bench/scalefake -addr 127.0.0.1:19500 -keys 1000000000 -fanout 32,32,32,8 -skew 1
 //	go run ./bench/scalefake -key-file keys.txt -latency 50ms -fail503 0.01 -slow d/000=500ms
 //	swath list s3://bkt --endpoint http://127.0.0.1:19500 --path-style --anonymous --region us-east-1 -o OUT
-//	swath list gs://bkt --gcs-endpoint http://127.0.0.1:19500/storage/v1/ --anonymous -o OUT
+//	swath list gs://bkt --endpoint http://127.0.0.1:19500/storage/v1/ --anonymous -o OUT
 //
 // GET /__scalefake/stats is the accounting (requests, pages, keys and
 // prefixes served, throttled, in flight now and at peak, the busy time

@@ -193,14 +193,24 @@ func TestCappedRunCannotResume(t *testing.T) {
 	}
 }
 
-// TestEngineFlagsShared: S3 takes the range engine's flag group the command
-// registered once and passed to it, and opens with the parsed policy.
+// factory is the registered S3 factory.
+func factory(t *testing.T) registry.Factory {
+	t.Helper()
+	f, err := registry.Lookup("s3://bkt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// TestEngineFlagsShared: S3 takes the store's and the range engine's flag
+// groups the command registered once and passed to it, and opens with the
+// parsed values.
 func TestEngineFlagsShared(t *testing.T) {
 	s3test.NoCredentials(t)
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
-	other := keyrange.Flags(f, true)
-	v := flags(f, true, other)
-	if err := f.Parse([]string{"-seed", "-floors", "-anonymous", "-endpoint", "http://127.0.0.1:1"}); err != nil {
+	v := factory(t).RegisterFlags(f, true)
+	if err := f.Parse([]string{"-seed", "-floors", "-anonymous", "-endpoint", "http://127.0.0.1:1", "-request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})
@@ -208,13 +218,13 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened[Object]).p
-	if !other.Policy.Seed || !p.opt.Seed || !p.opt.Floors || !p.opt.Anonymous || !p.Options().Floors {
-		t.Fatalf("policy not shared: %+v", p.opt.Policy)
+	if !p.opt.Seed || !p.opt.Floors || !p.opt.Anonymous || !p.Options().Floors || p.opt.Endpoint != "http://127.0.0.1:1" || p.opt.Timeout.Seconds() != 7 {
+		t.Fatalf("shared flags not applied: %+v", p.opt)
 	}
 	// Defaults (no flags parsed) hold the engine's defaults. Anonymous is set
 	// so the client builds without credentials (none are configured here).
 	o := defaults().(*flagged)
-	o.common = &keyrange.Common{Anonymous: true}
+	o.store = &source.Store{Anonymous: true}
 	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2})
 	if err != nil || src.(*opened[Object]).p.opt.Seed {
 		t.Fatalf("defaults: %v", err)

@@ -55,3 +55,36 @@ func TestSchema(t *testing.T) {
 		t.Errorf("columns a part may lack: %q", absent)
 	}
 }
+
+// TestVersionSpecs: the versions schemas name their role columns, each a
+// column of the schema with the type and nullability its role takes; the
+// current-object schemas name none.
+func TestVersionSpecs(t *testing.T) {
+	want := map[SchemaID]VersionSpec{
+		S3VersionsV1:     {ID: "version_id", Latest: "is_latest", DeleteMarker: "is_delete_marker"},
+		GCSGenerationsV1: {ID: "generation", DeletedAt: "time_deleted"},
+	}
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzblobObjectsV1, LocalV1} {
+		s, _ := Schema(id)
+		if s.Versions != want[id] {
+			t.Errorf("%s: versions %+v, want %+v", id, s.Versions, want[id])
+		}
+		if s.Versions == (VersionSpec{}) {
+			continue
+		}
+		if s.UniqueKeys {
+			t.Errorf("%s: a versions schema with unique keys", id)
+		}
+		if c, ok := s.Column(s.Versions.ID); !ok || c.Type != TypeString && c.Type != TypeInt64 {
+			t.Errorf("%s: id %+v", id, c)
+		}
+		for _, name := range []string{s.Versions.Latest, s.Versions.DeleteMarker} {
+			if c, ok := s.Column(name); name != "" && (!ok || c.Type != TypeBool || !c.Required) {
+				t.Errorf("%s: %s %+v", id, name, c)
+			}
+		}
+		if c, ok := s.Column(s.Versions.DeletedAt); s.Versions.DeletedAt != "" && (!ok || c.Type != TypeTimestampMicros || c.Required) {
+			t.Errorf("%s: deleted at %+v", id, c)
+		}
+	}
+}
