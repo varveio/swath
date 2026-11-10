@@ -127,8 +127,7 @@ type spiller[P any] struct {
 	// included): each frame written (an append), a reader, a frame read at
 	// an offset, a trailer read, a seal and a recovered certificate's
 	// replay. A resume's validation of the recorded certificates, before
-	// the run, opens each once and is not counted (resume.accepted plus
-	// rejected).
+	// the run, is not counted.
 	opens         atomic.Int64
 	logical       atomic.Int64 // schema.LogicalBytes of the rows written
 	decodeRefused atomic.Int64 // frames refused at read for decoding past their bound

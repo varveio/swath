@@ -43,9 +43,10 @@ func cgroupMemory() int64 {
 // every mount whose view holds the process's cgroup, each directory from
 // that cgroup up to the mount point may set a limit, and the least of them
 // all wins. A mount whose view does not hold it (the cgroup outside the
-// mount's root, as a cgroup namespace's "/.." shows a cgroup above it)
-// gives its own limits only. "max" and a v1 limit at or past 2^62 (its
-// unlimited sentinel, rounded to the page size) are none.
+// mount's root, as a cgroup namespace's "/.." shows a cgroup above it) is
+// skipped: its root may be a sibling's, whose limit does not constrain the
+// process. "max" and a v1 limit at or past 2^62 (its unlimited sentinel,
+// rounded to the page size) are none.
 func cgroupLimit(cgroup, mountinfo string, read func(string) ([]byte, error)) int64 {
 	var least int64
 	for _, line := range strings.Split(cgroup, "\n") {
@@ -68,7 +69,7 @@ func cgroupLimit(cgroup, mountinfo string, read func(string) ([]byte, error)) in
 		for _, m := range cgroupMounts(mountinfo, v2) {
 			rel, ok := mountRel(cgPath, m.root)
 			if !ok {
-				rel = "/"
+				continue
 			}
 			for dir := path.Join(m.point, rel); ; dir = path.Dir(dir) {
 				if b, err := read(path.Join(dir, file)); err == nil {

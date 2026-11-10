@@ -42,7 +42,10 @@ const (
 )
 
 // RowBudget is how invocation.row_budget_bytes was chosen, and the memory
-// limits found when the run started (0: none found).
+// limits found when the run started: physical and cgroup 0 (absent) when
+// none was found; the Go limit absent when none is set, and 0 a limit.
+// MemoryBytes is absent when it is 0: BoundBy then says whether that is a
+// GOMEMLIMIT of 0 or no limit at all.
 type RowBudget struct {
 	Reason string `json:"reason"`
 	// MemoryBytes is the least of the limits below, the memory the default
