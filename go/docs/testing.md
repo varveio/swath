@@ -242,7 +242,7 @@ cache, and the build cache of `go-race (rest)` (`go-race-nightly`), `go-xos` on 
 `osv-scan` is the Go dependency scan: osv-scanner reads the Go version and module list embedded in each image's
 binary (the archives carry the same binaries), so it covers the standard library and every linked module, and
 no test-only one. The image policy (`scripts/ci/osv-image-policy.py`) fails on any advisory that is not an
-Ubuntu package's or an argued exception in `config/osv/osv-scanner.toml` (which lists Java findings only).
+Ubuntu package's or an argued exception in `config/osv/osv-scanner.toml` (Java findings, and Go module advisories against a package the binaries do not link).
 There is no weekly Go job, no Go fuzzing, `SWATH_PERF` or `govulncheck` run in CI.
 
 ### License gate
