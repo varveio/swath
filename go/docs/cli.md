@@ -773,7 +773,9 @@ table changes.
   its one value, the owner two columns), integers exact, unsigned columns (`uid`, `inode`, `dev`) unsigned,
   booleans `true` and `false`, every time column in UTC with six fraction digits
   (`2023-11-14T22:13:20.000000Z`). A null is not an empty string and not zero. Every source prints text rows,
-  a local tree too (`swath list /data`; with `--metadata names` the fields it does not read are null).
+  a local tree too (`swath list /data`; with `--metadata names` the fields it does not read are null). A local
+  SOURCE that is a file lists as its one row, keyed by its name, with the fields its directory's listing gives
+  it (the same tier; a symbolic link as itself, with `link_target`).
   `--columns key,size` (repeatable) prints those columns, by the dataset's names, in the order given, in TSV and
   JSONL; a name the source's schema lacks is refused with exit 2, the message listing its columns, before any
   request. The table's columns are fixed, so `--columns` is refused with `--format table` and with a dataset;

@@ -267,22 +267,37 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 }
 
 // expandFile lists a root that is not a directory: its one row, keyed by
-// its name, from the stat that follows a link at the root as New's does.
-// The statx tier's birth time is not read for it.
+// its name, read as its directory's listing reads the entry: at the run's
+// tier, a symbolic link as itself (New's stat followed it only to find
+// that it does not name a directory).
 func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
-	fi, err := os.Stat(p.root)
+	row := Row{Key: filepath.Base(p.root)}
+	var err error
+	switch fi := fs.FileInfo(nil); {
+	case p.opt.Fields == Names:
+		if fi, err = os.Lstat(p.root); err == nil {
+			row.Data.Kind = kindOf(fi.Mode().Type())
+		}
+	case p.native:
+		err = statPath(p.root, p.opt.Fields, &row.Data)
+	default:
+		if fi, err = os.Lstat(p.root); err == nil {
+			fromFileInfo(&row.Data, fi)
+		}
+	}
 	if err != nil {
 		st.note(&st.StatErrors, p.root, err)
 		return nil
 	}
-	row := Row{Key: filepath.Base(p.root)}
-	if p.opt.Fields == Names {
-		row.Data.Kind = kindOf(fi.Mode().Type())
-	} else {
-		fromFileInfo(&row.Data, fi)
-		st.Bytes += row.Data.Size
+	if row.Data.Kind == KindSymlink && p.opt.LinkTarget && p.opt.Fields != Names {
+		if t, err := os.Readlink(p.root); err == nil {
+			row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink
+		} else {
+			st.note(&st.ReadlinkErrors, p.root, err)
+		}
 	}
 	st.Files++
+	st.Bytes += row.Data.Size
 	return e.Rows([]Row{row})
 }
 

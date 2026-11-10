@@ -38,8 +38,8 @@ func statEntry(dir *os.File, d fs.DirEntry, r *Entry) error {
 	return nil
 }
 
-// fillSys fills the stat fields an os.FileInfo carries on darwin (the
-// root's, read by New).
+// fillSys fills the stat fields an os.FileInfo carries on darwin, birth
+// time included, as statEntry does.
 func fillSys(r *Entry, fi fs.FileInfo) {
 	s, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -52,4 +52,8 @@ func fillSys(r *Entry, fi fs.FileInfo) {
 	r.Atime = schema.Micros(s.Atimespec.Unix())
 	r.Mode = uint32(s.Mode) & 0o7777
 	r.Present |= HasStat
+	if s.Birthtimespec.Sec != 0 || s.Birthtimespec.Nsec != 0 {
+		r.Btime = schema.Micros(s.Birthtimespec.Unix())
+		r.Present |= HasBtime
+	}
 }

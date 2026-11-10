@@ -408,6 +408,10 @@ func (p *Provider) emitChunks(fd int, r Range, sc *scratch, e source.Emitter[Ran
 	return nil
 }
 
+// statPath fills r from one stat of path at tier f, as statInto stats a
+// directory's entry: a symbolic link as itself.
+func statPath(path string, f Fields, r *Entry) error { return statAt(unix.AT_FDCWD, path, f, r) }
+
 // statInto stats ents (sorted) relative to fd into one row slab, dropping
 // entries that vanished, failed or changed type since they were listed.
 func (p *Provider) statInto(ctx context.Context, fd int, path string, names, keys []byte, ents []entry, st *Stats) ([]Row, error) {
