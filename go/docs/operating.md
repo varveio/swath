@@ -22,7 +22,7 @@ cd go
 ./build.sh -o swath                                   # static, stripped, the revision stamped
 GOOS=linux  GOARCH=arm64 ./build.sh -o swath-linux-arm64
 GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
-./swath --version        # swath-go VERSION (REVISION)
+./swath --version        # swath VERSION (REVISION)
 ```
 
 `build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Version=VER -X
@@ -53,7 +53,7 @@ above with the release's version and commit stamped; an SPDX SBOM; and `SHA256SU
 ```bash
 tar -xzf swath-X.Y.Z-linux-amd64.tar.gz
 sha256sum --check --ignore-missing SHA256SUMS
-./swath-X.Y.Z-linux-amd64/swath --version    # swath-go X.Y.Z (REVISION)
+./swath-X.Y.Z-linux-amd64/swath --version    # swath X.Y.Z (REVISION)
 ```
 
 The same release publishes multi-arch (linux/amd64, linux/arm64) images, built from `Dockerfile.go` with the
