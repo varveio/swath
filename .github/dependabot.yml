@@ -15,8 +15,10 @@
 # per ecosystem per week is reviewable; muted automation is not.
 version: 2
 updates:
+  # "/" covers .github/workflows only; the composite actions under .github/actions pin their
+  # own actions (setup-go, cache) and need their directories named to be bumped at all.
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
       day: monday
