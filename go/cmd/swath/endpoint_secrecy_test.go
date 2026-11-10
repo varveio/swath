@@ -271,7 +271,7 @@ func TestRootUserinfoSecrecy(t *testing.T) {
 // --azure-sas-token, sent to an endpoint whose every answer is a 503
 // quoting the request.
 func TestSecrecyRunOutputs(t *testing.T) {
-	persistFor = 300 * time.Millisecond
+	persistFor = 0 // the first failed request warns: no race with the stall timeout
 	t.Cleanup(func() { persistFor = 10 * time.Second })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-ms-error-code", "ServerBusy")
@@ -294,7 +294,11 @@ func TestSecrecyRunOutputs(t *testing.T) {
 		for _, format := range []string{logText, logJSON} {
 			t.Run(c.name+"/"+format, func(t *testing.T) {
 				stderr := captureSyncStderr(t)
-				argv := append([]string{"--log-format", format, "-vvv", "list"}, c.args...)
+				cmd := []string{"list"}
+				if len(unjournaled) > 0 {
+					cmd = []string{"diag", "list"} // --no-journal is a diagnostic flag
+				}
+				argv := append(append([]string{"--log-format", format, "-vvv"}, cmd...), c.args...)
 				argv = append(append(argv, "--stall-timeout", "1s", "--report", "-", "-o", filepath.Join(t.TempDir(), "ds")), unjournaled...)
 				var stdout bytes.Buffer
 				if code := conclude(dispatch(t.Context(), argv, &stdout)); code == exitCompleted {

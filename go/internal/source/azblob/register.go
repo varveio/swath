@@ -24,7 +24,7 @@ func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azure-sas-token", Env: EnvSAS}},
-		FromURL: fromURL, Title: "Azure Blob", Example: "az://account/container", Usage: "az://account/container[/prefix]"})
+		FromURL: fromURL, Title: "Azure Blob", Example: "az://account/container", Usage: "az://account/container[/prefix] (or https://account.blob.core.windows.net/container[/prefix])"})
 }
 
 // flagged is the Azure flag group's value: the Azure options, the store
