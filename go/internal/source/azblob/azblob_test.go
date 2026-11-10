@@ -218,8 +218,60 @@ func (p *pages) List(_ context.Context, in *client.ListInput) (*client.ListOutpu
 	return &out, nil
 }
 
-// TestHighBounds: fetch maps blobs to rows and prefixes to Prefixes.
+// fetchAll drains q through p.fetch, as the engine's chain would.
+func fetchAll(t *testing.T, p *Provider, q keyrange.Query) []string {
+	t.Helper()
+	a := p.adapter()
+	defer a.Release()
+	ctx := context.WithValue(context.Background(), adapterKey{}, a)
+	var got []string
+	for {
+		pg, err := p.fetch(ctx, &q)
+		if err != nil {
+			t.Fatalf("%+v: %v", q, err)
+		}
+		for _, r := range pg.Rows {
+			got = append(got, r.Key)
+		}
+		got = append(got, pg.Prefixes...)
+		if !pg.Truncated {
+			return got
+		}
+		q.Token = pg.Token
+	}
+}
+
+// TestHighBounds: a cursor, a bound or a scope at a name at U+E000 and
+// above, which the staged refusal used to refuse, lists exactly the keys
+// after the cursor and up to the bound, in byte order, through fetch over
+// the replay's Azure route; and fetch maps blobs to rows, prefixes to
+// Prefixes.
 func TestHighBounds(t *testing.T) {
+	keys := azblobtest.Keys()
+	r := azblobtest.Serve(t, keys)
+	opt := replayOptions(r)
+	opt.Anonymous, opt.Workers = true, 1
+	p, err := New(context.Background(), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []keyrange.Query{
+		{After: "p\U0001f600", Max: 7},
+		{After: "a", Through: "pｚ", Bounded: true, Max: 7},
+		{After: "a", Through: "pｚ", Max: 7}, // unbounded: Through ignored
+		{Prefix: "r\U00010000", Max: 2},
+		{Prefix: "n1/n2/n3/", After: "n1/n2/n3/p\U00010000", Max: 5000},
+	} {
+		var want []string
+		for _, k := range keys {
+			if strings.HasPrefix(k, q.Prefix) && k > q.After && (!q.Bounded || k <= q.Through) {
+				want = append(want, k)
+			}
+		}
+		if got := fetchAll(t, p, q); !slices.Equal(got, want) {
+			t.Fatalf("%+v: %d keys, want %d", q, len(got), len(want))
+		}
+	}
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "a", Size: 3, BlobType: "PageBlob"}, {Name: "b/", Prefix: true},
 		{Name: "c"}}}}}
 	sp, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c, Workers: 1})

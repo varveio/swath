@@ -100,7 +100,9 @@ func TestMetamorphicLaws(t *testing.T) {
 		keys := spaces[name]
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
 		for i, v := range variants {
-			if testing.Short() && i%3 != 0 {
+			// Short mode keeps every third variant and the forced structural
+			// pivots, whose counter identities nothing else checks there.
+			if testing.Short() && i%3 != 0 && v.opt.Structure != StructureOn {
 				continue
 			}
 			api := newSorted(keys, v.short, int64(i+1))

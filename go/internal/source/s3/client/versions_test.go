@@ -411,6 +411,40 @@ func FuzzParseVersions(f *testing.F) {
 	})
 }
 
+// TestListObjectVersionsRequest: the request carries versions,
+// encoding-type=url and its markers, read back exactly by the server;
+// max-keys is left to the server default unless set; version-id-marker is
+// refused without a key marker.
+func TestListObjectVersionsRequest(t *testing.T) {
+	var raw atomic.Value
+	page := capture(t, "null-pair")
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw.Store(r.URL.RawQuery)
+		w.Write(page)
+	}, Config{Anonymous: true})
+	const key = "a b+c%/é&=?<>"
+	for _, c2 := range []struct {
+		in   VersionsInput
+		want url.Values
+	}{
+		{VersionsInput{Bucket: "b"}, url.Values{"versions": {""}, "encoding-type": {"url"}}},
+		{VersionsInput{Bucket: "b", Prefix: "p/" + key, Delimiter: "/", KeyMarker: key, VersionIDMarker: "null", MaxKeys: 7},
+			url.Values{"versions": {""}, "encoding-type": {"url"}, "prefix": {"p/" + key}, "delimiter": {"/"},
+				"key-marker": {key}, "version-id-marker": {"null"}, "max-keys": {"7"}}},
+	} {
+		if _, err := c.ListObjectVersions(context.Background(), &c2.in); err != nil {
+			t.Fatal(err)
+		}
+		q := raw.Load().(string)
+		if got, err := url.ParseQuery(q); err != nil || !reflect.DeepEqual(got, c2.want) {
+			t.Errorf("%+v: query %s, want %v", c2.in, q, c2.want)
+		}
+	}
+	if _, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b", VersionIDMarker: "v"}); err == nil {
+		t.Fatal("a version-id marker without a key marker was sent")
+	}
+}
+
 // TestListObjectVersionsFailures: a 200 that is not a ListVersionsResult
 // is retried like any parse failure; S3's answers are
 // classified as for ListObjectsV2.
