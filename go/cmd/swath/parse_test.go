@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // TestGNUParsing: short flags bundle and take attached values, long flags
@@ -448,5 +450,36 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 	}
 	if err := dispatch(context.Background(), []string{"show", t.TempDir(), "--color", "sometimes"}, io.Discard); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--color") {
 		t.Errorf("show --color sometimes: %v", err)
+	}
+}
+
+// TestShortHelp: -h is the usage, the one-line description, the examples
+// and the groups a first run needs (shortGroups), each flag's description
+// on one line at 100 columns, then the line naming --help for the rest;
+// list -h stays under 60 lines.
+func TestShortHelp(t *testing.T) {
+	for _, cmd := range []command{{}, {count: true, du: true}, {diag: true, count: true}} {
+		var o options
+		f := newFlags(&o, cmd.diag)
+		var b bytes.Buffer
+		usage(&b, f, cmd, helpStyle{width: maxHelpWidth})
+		out := b.String()
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if !cmd.count && len(lines) >= 60 {
+			t.Errorf("%s -h: %d lines", cmd.name(), len(lines))
+		}
+		if !strings.HasSuffix(out, fmt.Sprintf(shortTail, cmd.name())) || strings.Contains(out, source.GroupPerformance+":") {
+			t.Errorf("%s -h:\n%s", cmd.name(), out)
+		}
+		f.VisitAll(func(fl *pflag.Flag) {
+			if shown(fl, cmd) && slices.Contains(shortGroups, groupOf(fl)) && !strings.Contains(out, source.Described(fl).Usage) {
+				t.Errorf("%s -h: --%s's description wraps or is missing", cmd.name(), fl.Name)
+			}
+		})
+		for _, l := range lines {
+			if len(l) > maxHelpWidth {
+				t.Errorf("%s -h: line over %d columns: %q", cmd.name(), maxHelpWidth, l)
+			}
+		}
 	}
 }

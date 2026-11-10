@@ -80,7 +80,8 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 		Usage: "no warnings, no automatic progress or statistics (-qq: no errors)",
 		Long:  "With -qq the exit code and the reports stand alone."})
 	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
-		Usage: "print live progress on stderr (default: on a terminal, without -q, -v)"})
+		Usage: "show progress on stderr (default: a terminal that rows do not share)",
+		Long:  "Not by default with -q or -v (which appends progress records), nor while rows go to the same terminal."})
 	source.Define(f, source.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
 	source.Define(f, source.Flag{Name: "progress-interval", Value: source.Duration(&t.interval), Metavar: "DURATION", Group: g,
 		Usage: "how often progress is printed (at least 1s); implies --progress",

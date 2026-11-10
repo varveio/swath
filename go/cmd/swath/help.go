@@ -220,6 +220,7 @@ func writeGroups(b *strings.Builder, f *pflag.FlagSet, s helpStyle, keep func(*p
 type commandHelp struct {
 	usage    []string // the usage lines, without "swath "
 	about    string
+	detail   string // after about, in the long form only
 	examples []string
 }
 
@@ -233,6 +234,10 @@ func (h commandHelp) write(b *strings.Builder, s helpStyle) {
 	}
 	b.WriteString("\n")
 	s.para(b, 0, h.about)
+	if s.long && h.detail != "" {
+		b.WriteString("\n")
+		s.para(b, 0, h.detail)
+	}
 	if len(h.examples) > 0 {
 		s.heading(b, "Examples")
 		for _, e := range h.examples {
@@ -260,39 +265,55 @@ func examples() (stores []string, local string) {
 
 // helpOf is the help text of a list command.
 func helpOf(cmd command) commandHelp {
-	src := "SOURCE is " + sourceForms() + "."
+	src := "SOURCE is " + sourceForms() + "; an Azure Blob URL, https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX]."
 	stores, local := examples()
 	a, b := stores[0], stores[min(1, len(stores)-1)]
 	switch {
 	case cmd.count && cmd.diag:
 		return commandHelp{usage: []string{"diag count SOURCE [OPTIONS]"},
-			about:    "List SOURCE and count its rows and object bytes, writing nothing, to measure the listing: rows are counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and resources. " + src,
+			about:    "Count SOURCE's rows and object bytes, writing nothing, to measure the listing.",
+			detail:   "Rows are counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and resources. " + src,
 			examples: []string{"swath diag count " + a, "swath diag count " + a + " --sequential"}}
 	case cmd.diag:
 		return commandHelp{usage: []string{"diag list SOURCE [OPTIONS]"},
-			about:    "Every swath list option (swath list --help), and the diagnostic ones below: they exist to run an experiment or a comparison, not to operate the tool. " + src,
+			about:    "Every swath list option (swath list --help), and the diagnostic ones below.",
+			detail:   "They exist to run an experiment or a comparison, not to operate the tool. " + src,
 			examples: []string{"swath diag list " + a + " -o ds --no-seed", "swath diag list " + a + " -o ds --page-size 100"}}
 	case cmd.du:
 		return commandHelp{usage: []string{"du SOURCE [OPTIONS]"},
-			about:    "Total SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's down to N levels below SOURCE, a parent including its children, as du. On stdout: a table on a terminal (the total last), TSV otherwise or with --format jsonl (the total first, at Depth 0). Bytes are the objects' sizes as listed, not storage or billing. " + src,
+			about: "Total SOURCE's objects (a local tree's files), bytes and newest time, per prefix with -d N.",
+			detail: "-d N totals each prefix down to N levels below SOURCE, a parent including its children, as du. A table on a terminal puts the total last; " +
+				"pipes default to TSV, --format jsonl selects JSONL, and both put the total first, at depth 0. Bytes are the objects' sizes as listed, not storage or billing. " + src,
 			examples: []string{"swath du " + a, "swath du -d 1 " + local, "swath du " + b + " --format jsonl"}}
 	}
 	return commandHelp{usage: []string{"list SOURCE [OPTIONS]", "ls SOURCE [OPTIONS]"},
-		about:    "List SOURCE: into a sorted Parquet dataset with -o DIR, as text rows into -o NAME.tsv or NAME.jsonl (optionally .gz or .zst), or as text rows on stdout without -o. " + src,
+		about:    "Recursively list every entry below SOURCE: text rows on stdout, or an inventory with -o.",
+		detail:   "-o DIR writes a sorted Parquet dataset, -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) text rows into that file. " + src,
 		examples: []string{"swath list " + a + " -o logs.parquet", "swath list " + a + " | head", "swath list " + b + " -o rows.jsonl.zst"}}
 }
+
+// shortGroups are the groups a list command's short help (-h) shows; the
+// rest wait for --help (shortTail).
+var shortGroups = []string{source.GroupTotals, source.GroupOutput, source.GroupFilters, source.GroupStores}
+
+// shortTail closes a list command's short help.
+const shortTail = "Provider, performance, limit and reporting options: swath %s --help\n"
 
 // usage prints a list command's help: its synopsis, examples and its
 // flags by group.
 func usage(w io.Writer, f *pflag.FlagSet, cmd command, s helpStyle) {
 	var b strings.Builder
 	helpOf(cmd).write(&b, s)
-	writeGroups(&b, f, s, func(fl *pflag.Flag) bool { return shown(fl, cmd) })
-	if !cmd.diag {
+	short := !s.long && !(cmd.diag && !cmd.count) // swath diag list -h: its diagnostic options
+	writeGroups(&b, f, s, func(fl *pflag.Flag) bool {
+		return shown(fl, cmd) && (!short || slices.Contains(shortGroups, groupOf(fl)))
+	})
+	switch {
+	case short:
+		fmt.Fprintf(&b, "\n"+shortTail, cmd.name())
+	case !cmd.diag:
 		b.WriteString("\nswath resume --help lists the options a resume may change.\n")
-		if s.long {
-			b.WriteString("Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.\n")
-		}
+		b.WriteString("Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.\n")
 	}
 	fmt.Fprint(w, b.String())
 }
@@ -426,7 +447,7 @@ var errHelpGroups = errors.New("help groups")
 
 // metavars are the placeholders a flag's value may have, besides an
 // enum's choices (a|b|c).
-var metavars = []string{"N", "SIZE", "DURATION", "TIME", "PATH", "FILE", "DIR", "URL", "REGEX", "GLOB", "NAME", "COMMAND", "TOKEN", "FORMAT"}
+var metavars = []string{"N", "SIZE", "DURATION", "TIME", "PATH", "FILE", "DIR", "URL", "REGEX", "GLOB", "NAME", "NAME[,NAME...]", "COMMAND", "TOKEN", "FORMAT"}
 
 // checkHelpGroups reports a flag of f in no help group, one whose
 // placeholder is not one of metavars nor an enum, and one whose short help

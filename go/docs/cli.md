@@ -11,9 +11,11 @@ swath completion bash|zsh|fish            print a shell completion script
 swath version, swath -V, --version        print swath VERSION (REVISION)
 ```
 
-`swath --help` prints that summary; `swath help COMMAND` is `swath COMMAND --help`. On every command `-h`
-prints its flags one line each, `--help` adds each flag's further text (when to change it, its constraints);
-both go to stdout and exit 0. Flags are parsed GNU-style: short flags bundle (`-vq`) and take attached values
+`swath --help` prints that summary; `swath help COMMAND` is `swath COMMAND --help`. On `list`, `du` and
+`diag count`, `-h` is the short form: the usage, a one-line description, the examples and the Totals, Output,
+Filters and Object stores options, one line each, then a line naming `--help`; `--help` adds the description's
+detail, every other option group and each option's further text (when to change it, its constraints). Both go
+to stdout and exit 0. Flags are parsed GNU-style: short flags bundle (`-vq`) and take attached values
 (`-d1`, `-oPATH`), long ones take `--name value` or `--name=value`, flags and operands interleave, `--` ends the
 flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--include -verbose`, is a value). `-v`, `-q`, `--color` and `--log-format` are taken
 by every command (`show` and `completion` too), before or after the command word; a command line refused
@@ -93,9 +95,12 @@ $ swath list --help
 Usage: swath list SOURCE [OPTIONS]
        swath ls SOURCE [OPTIONS]
 
-List SOURCE: into a sorted Parquet dataset with -o DIR, as text rows into -o NAME.tsv or NAME.jsonl
-(optionally .gz or .zst), or as text rows on stdout without -o. SOURCE is a local directory or file,
-az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
+Recursively list every entry below SOURCE: text rows on stdout, or an inventory with -o.
+
+-o DIR writes a sorted Parquet dataset, -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) text rows
+into that file. SOURCE is a local directory or file, az://account/container[/prefix],
+gs://bucket[/prefix] or s3://bucket[/prefix]; an Azure Blob URL,
+https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
 
 Examples:
   swath list s3://bucket/logs/ -o logs.parquet
@@ -109,7 +114,8 @@ Output:
                               text rows: auto is the table on a terminal, TSV otherwise
                                 With -o FILE the file's name says the format; a --format that agrees
                                 with it is accepted.
-      --columns NAME          TSV and JSONL: these columns, in order (key,size; repeatable)
+      --columns NAME[,NAME...]
+                              TSV and JSONL: these columns, in order (repeatable)
                                 By the dataset's column names; a name the source's schema lacks is
                                 refused, listing its columns. Not with the table or a dataset; on a
                                 terminal the rows are then TSV.
@@ -121,11 +127,15 @@ Filters:
                                 (logs/*.gz), without one the last segment at any depth (*.gz). * and
                                 ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
                                 \c. Includes sharing a literal prefix narrow the listed prefix.
+                                Filters keep or drop rows; they do not prune the walk.
       --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                                Any include, glob or regex, keeps a key. ^ with a literal prefix
-                                narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Matched as --include is. dir/ drops a directory's own row, dir/**
+                                the rows below it; the walk still lists them.
+      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
+                                The full key, SOURCE's object-store prefix included (a glob matches
+                                the key below SOURCE). Any include, glob or regex, keeps a key. ^
+                                with a literal prefix narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the full key (repeatable)
       --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
                                 Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
                                 KB, MB, GB, TB (decimal), any case.
@@ -134,7 +144,8 @@ Filters:
                                 An offset or Z; UTC without one. A duration (7d, 12h) is that long
                                 before the run started, recorded as the time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
-      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+      --storage-class NAME[,NAME...]
+                              keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                 In any case; an object without one is in none. Azure Blob: the
                                 access tier (Hot, Cool, Cold, Archive).
 
@@ -152,10 +163,10 @@ Object stores:
                                 AWS_CA_BUNDLE.
       --no-verify-ssl         do not verify the service's TLS certificate (warns)
                                 For a test endpoint only. A resume replays it, and warns again.
-      --all-versions          list every version of every key, not only the current objects
+      --all-versions          S3 and GCS: list every version, S3 delete markers too (not Azure Blob)
                                 S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                                generations, live and noncurrent. A key's rows are consecutive and
-                                never split across parts.
+                                generations, live and noncurrent. Refused on Azure Blob. A key's
+                                rows are consecutive and never split across parts.
 
 S3:
       --s3-region NAME        the bucket's region
@@ -243,13 +254,15 @@ Performance:
 
 Limits:
       --max-duration DURATION
-                              stop the run after this long (exit 124, resumable); 0: no limit
-                                Give every unattended run one; a stopped object-store run resumes
-                                where it stopped.
+                              stop the run after this long (exit 124); 0: no limit
+                                Give every unattended run one. Only a dataset run of an object store
+                                (one with a journal) resumes where it stopped; text output and swath
+                                du run again.
       --stall-timeout DURATION
                               stop as stuck after this long without progress (exit 75) (default 10m)
                                 0: never. Raise it for a service that is slow to answer for minutes
-                                at a time.
+                                at a time. Only a dataset run of an object store (one with a
+                                journal) resumes where it stopped.
       --request-timeout DURATION
                               per-request timeout; a request over it is retried (default 30s)
                                 Raise it for a slow endpoint or emulator whose pages take longer to
@@ -257,7 +270,7 @@ Limits:
       --request-rate N        cap every HTTP attempt at N per second (0: no cap)
                                 Set it to stay under a request quota shared with other clients.
                                 Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+      --no-adaptive-limit     do not lower concurrency when the service throttles requests
                                 Turn it off (with --request-rate) when a run crawls under sustained
                                 throttling with the limit near 1. Without it each of the --workers
                                 listing workers waits on one page at a time, and seed listings and
@@ -275,7 +288,9 @@ Reporting:
                                 request (credentials and tokens redacted).
   -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
-      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --progress              show progress on stderr (default: a terminal that rows do not share)
+                                Not by default with -q or -v (which appends progress records), nor
+                                while rows go to the same terminal.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress
@@ -299,11 +314,14 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 $ swath du --help
 Usage: swath du SOURCE [OPTIONS]
 
-Total SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's
-down to N levels below SOURCE, a parent including its children, as du. On stdout: a table on a
-terminal (the total last), TSV otherwise or with --format jsonl (the total first, at Depth 0). Bytes
-are the objects' sizes as listed, not storage or billing. SOURCE is a local directory or file,
-az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
+Total SOURCE's objects (a local tree's files), bytes and newest time, per prefix with -d N.
+
+-d N totals each prefix down to N levels below SOURCE, a parent including its children, as du. A
+table on a terminal puts the total last; pipes default to TSV, --format jsonl selects JSONL, and
+both put the total first, at depth 0. Bytes are the objects' sizes as listed, not storage or
+billing. SOURCE is a local directory or file, az://account/container[/prefix], gs://bucket[/prefix]
+or s3://bucket[/prefix]; an Azure Blob URL,
+https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
 
 Examples:
   swath du s3://bucket/logs/
@@ -341,11 +359,15 @@ Filters:
                                 (logs/*.gz), without one the last segment at any depth (*.gz). * and
                                 ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
                                 \c. Includes sharing a literal prefix narrow the listed prefix.
+                                Filters keep or drop rows; they do not prune the walk.
       --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                                Any include, glob or regex, keeps a key. ^ with a literal prefix
-                                narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Matched as --include is. dir/ drops a directory's own row, dir/**
+                                the rows below it; the walk still lists them.
+      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
+                                The full key, SOURCE's object-store prefix included (a glob matches
+                                the key below SOURCE). Any include, glob or regex, keeps a key. ^
+                                with a literal prefix narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the full key (repeatable)
       --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
                                 Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
                                 KB, MB, GB, TB (decimal), any case.
@@ -354,7 +376,8 @@ Filters:
                                 An offset or Z; UTC without one. A duration (7d, 12h) is that long
                                 before the run started, recorded as the time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
-      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+      --storage-class NAME[,NAME...]
+                              keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                 In any case; an object without one is in none. Azure Blob: the
                                 access tier (Hot, Cool, Cold, Archive).
 
@@ -372,10 +395,10 @@ Object stores:
                                 AWS_CA_BUNDLE.
       --no-verify-ssl         do not verify the service's TLS certificate (warns)
                                 For a test endpoint only. A resume replays it, and warns again.
-      --all-versions          list every version of every key, not only the current objects
+      --all-versions          S3 and GCS: list every version, S3 delete markers too (not Azure Blob)
                                 S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                                generations, live and noncurrent. A key's rows are consecutive and
-                                never split across parts.
+                                generations, live and noncurrent. Refused on Azure Blob. A key's
+                                rows are consecutive and never split across parts.
 
 S3:
       --s3-region NAME        the bucket's region
@@ -439,13 +462,15 @@ Performance:
 
 Limits:
       --max-duration DURATION
-                              stop the run after this long (exit 124, resumable); 0: no limit
-                                Give every unattended run one; a stopped object-store run resumes
-                                where it stopped.
+                              stop the run after this long (exit 124); 0: no limit
+                                Give every unattended run one. Only a dataset run of an object store
+                                (one with a journal) resumes where it stopped; text output and swath
+                                du run again.
       --stall-timeout DURATION
                               stop as stuck after this long without progress (exit 75) (default 10m)
                                 0: never. Raise it for a service that is slow to answer for minutes
-                                at a time.
+                                at a time. Only a dataset run of an object store (one with a
+                                journal) resumes where it stopped.
       --request-timeout DURATION
                               per-request timeout; a request over it is retried (default 30s)
                                 Raise it for a slow endpoint or emulator whose pages take longer to
@@ -453,7 +478,7 @@ Limits:
       --request-rate N        cap every HTTP attempt at N per second (0: no cap)
                                 Set it to stay under a request quota shared with other clients.
                                 Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+      --no-adaptive-limit     do not lower concurrency when the service throttles requests
                                 Turn it off (with --request-rate) when a run crawls under sustained
                                 throttling with the limit near 1. Without it each of the --workers
                                 listing workers waits on one page at a time, and seed listings and
@@ -471,7 +496,9 @@ Reporting:
                                 request (credentials and tokens redacted).
   -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
-      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --progress              show progress on stderr (default: a terminal that rows do not share)
+                                Not by default with -q or -v (which appends progress records), nor
+                                while rows go to the same terminal.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress
@@ -495,9 +522,12 @@ Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
 $ swath diag list --help
 Usage: swath diag list SOURCE [OPTIONS]
 
-Every swath list option (swath list --help), and the diagnostic ones below: they exist to run an
-experiment or a comparison, not to operate the tool. SOURCE is a local directory or file,
-az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
+Every swath list option (swath list --help), and the diagnostic ones below.
+
+They exist to run an experiment or a comparison, not to operate the tool. SOURCE is a local
+directory or file, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]; an
+Azure Blob URL, https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is
+az://ACCOUNT/CONTAINER[/PREFIX].
 
 Examples:
   swath diag list s3://bucket/logs/ -o ds --no-seed
@@ -527,10 +557,12 @@ Diagnostics:
 $ swath diag count --help
 Usage: swath diag count SOURCE [OPTIONS]
 
-List SOURCE and count its rows and object bytes, writing nothing, to measure the listing: rows are
-counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and resources.
-SOURCE is a local directory or file, az://account/container[/prefix], gs://bucket[/prefix] or
-s3://bucket[/prefix].
+Count SOURCE's rows and object bytes, writing nothing, to measure the listing.
+
+Rows are counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and
+resources. SOURCE is a local directory or file, az://account/container[/prefix],
+gs://bucket[/prefix] or s3://bucket[/prefix]; an Azure Blob URL,
+https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
 
 Examples:
   swath diag count s3://bucket/logs/
@@ -542,11 +574,15 @@ Filters:
                                 (logs/*.gz), without one the last segment at any depth (*.gz). * and
                                 ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
                                 \c. Includes sharing a literal prefix narrow the listed prefix.
+                                Filters keep or drop rows; they do not prune the walk.
       --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                                Any include, glob or regex, keeps a key. ^ with a literal prefix
-                                narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Matched as --include is. dir/ drops a directory's own row, dir/**
+                                the rows below it; the walk still lists them.
+      --include-regex REGEX   keep keys this RE2 regex matches anywhere in the full key (repeatable)
+                                The full key, SOURCE's object-store prefix included (a glob matches
+                                the key below SOURCE). Any include, glob or regex, keeps a key. ^
+                                with a literal prefix narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys this RE2 regex matches anywhere in the full key (repeatable)
       --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
                                 Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
                                 KB, MB, GB, TB (decimal), any case.
@@ -555,7 +591,8 @@ Filters:
                                 An offset or Z; UTC without one. A duration (7d, 12h) is that long
                                 before the run started, recorded as the time it names.
       --modified-until TIME   keep objects or entries modified at or before this time
-      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+      --storage-class NAME[,NAME...]
+                              keep objects in these storage classes (STANDARD,GLACIER; repeatable)
                                 In any case; an object without one is in none. Azure Blob: the
                                 access tier (Hot, Cool, Cold, Archive).
 
@@ -573,10 +610,10 @@ Object stores:
                                 AWS_CA_BUNDLE.
       --no-verify-ssl         do not verify the service's TLS certificate (warns)
                                 For a test endpoint only. A resume replays it, and warns again.
-      --all-versions          list every version of every key, not only the current objects
+      --all-versions          S3 and GCS: list every version, S3 delete markers too (not Azure Blob)
                                 S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                                generations, live and noncurrent. A key's rows are consecutive and
-                                never split across parts.
+                                generations, live and noncurrent. Refused on Azure Blob. A key's
+                                rows are consecutive and never split across parts.
 
 S3:
       --s3-region NAME        the bucket's region
@@ -640,13 +677,15 @@ Performance:
 
 Limits:
       --max-duration DURATION
-                              stop the run after this long (exit 124, resumable); 0: no limit
-                                Give every unattended run one; a stopped object-store run resumes
-                                where it stopped.
+                              stop the run after this long (exit 124); 0: no limit
+                                Give every unattended run one. Only a dataset run of an object store
+                                (one with a journal) resumes where it stopped; text output and swath
+                                du run again.
       --stall-timeout DURATION
                               stop as stuck after this long without progress (exit 75) (default 10m)
                                 0: never. Raise it for a service that is slow to answer for minutes
-                                at a time.
+                                at a time. Only a dataset run of an object store (one with a
+                                journal) resumes where it stopped.
       --request-timeout DURATION
                               per-request timeout; a request over it is retried (default 30s)
                                 Raise it for a slow endpoint or emulator whose pages take longer to
@@ -654,7 +693,7 @@ Limits:
       --request-rate N        cap every HTTP attempt at N per second (0: no cap)
                                 Set it to stay under a request quota shared with other clients.
                                 Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+      --no-adaptive-limit     do not lower concurrency when the service throttles requests
                                 Turn it off (with --request-rate) when a run crawls under sustained
                                 throttling with the limit near 1. Without it each of the --workers
                                 listing workers waits on one page at a time, and seed listings and
@@ -672,7 +711,9 @@ Reporting:
                                 request (credentials and tokens redacted).
   -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
                                 With -qq the exit code and the reports stand alone.
-      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --progress              show progress on stderr (default: a terminal that rows do not share)
+                                Not by default with -q or -v (which appends progress records), nor
+                                while rows go to the same terminal.
       --no-progress           no live progress on stderr
       --progress-interval DURATION
                               how often progress is printed (at least 1s); implies --progress

@@ -91,8 +91,8 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
 		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "text rows: auto is the table on a terminal, TSV otherwise",
 		Long: "With -o FILE the file's name says the format; a --format that agrees with it is accepted."})
-	def(source.Flag{Name: "columns", Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
-		Usage: "TSV and JSONL: these columns, in order (key,size; repeatable)",
+	def(source.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: source.GroupOutput, Commands: writing,
+		Usage: "TSV and JSONL: these columns, in order (repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
 		Value: source.Func(names(&o.columns))})
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
@@ -101,14 +101,15 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",
 		Long: "Matched against the key below SOURCE: with a '/' from SOURCE's root (logs/*.gz), without one the last segment at any depth (*.gz). " +
-			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix."})
+			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix. Filters keep or drop rows; they do not prune the walk."})
 	def(source.Flag{Name: "exclude", Value: appendTo(&o.filter.Exclude), Metavar: "GLOB", Group: source.GroupFilters,
-		Usage: "drop keys this glob matches (repeatable; beats any include)"})
+		Usage: "drop keys this glob matches (repeatable; beats any include)",
+		Long:  "Matched as --include is. dir/ drops a directory's own row, dir/** the rows below it; the walk still lists them."})
 	def(source.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "keep keys in which this regex (Go RE2) matches anywhere (repeatable)",
-		Long:  "Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
+		Usage: "keep keys this RE2 regex matches anywhere in the full key (repeatable)",
+		Long:  "The full key, SOURCE's object-store prefix included (a glob matches the key below SOURCE). Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
 	def(source.Flag{Name: "exclude-regex", Value: appendTo(&o.filter.ExcludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
-		Usage: "drop keys in which this regex (Go RE2) matches anywhere (repeatable)"})
+		Usage: "drop keys this RE2 regex matches anywhere in the full key (repeatable)"})
 	def(source.Flag{Name: "min-size", Value: source.Text(&o.filter.MinSize), Metavar: "SIZE", Group: source.GroupFilters,
 		Usage: "keep objects (local: entries) of at least this size (1K, 1.5GiB)",
 		Long:  "Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal), any case."})
@@ -119,7 +120,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "An offset or Z; UTC without one. A duration (7d, 12h) is that long before the run started, recorded as the time it names."})
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
-	def(source.Flag{Name: "storage-class", Metavar: "NAME", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
+	def(source.Flag{Name: "storage-class", Metavar: "NAME[,NAME...]", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
 		Long:  "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
 		Value: source.Func(names(&o.filter.StorageClasses))})
 
@@ -150,11 +151,11 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively."})
 
 	def(source.Flag{Name: "max-duration", Value: source.Duration(&o.maxDuration), Metavar: "DURATION", Group: source.GroupLimits,
-		Usage: "stop the run after this long (exit 124, resumable); 0: no limit",
-		Long:  "Give every unattended run one; a stopped object-store run resumes where it stopped."})
+		Usage: "stop the run after this long (exit 124); 0: no limit",
+		Long:  "Give every unattended run one. Only a dataset run of an object store (one with a journal) resumes where it stopped; text output and swath du run again."})
 	def(source.Flag{Name: "stall-timeout", Value: source.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: source.GroupLimits,
 		Usage: "stop as stuck after this long without progress (exit 75)",
-		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time."})
+		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 
 	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",

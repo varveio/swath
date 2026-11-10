@@ -9,17 +9,17 @@ _swath_list() {
     _arguments \
         '(-o --output)'{-o+,--output=}'[a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)]:PATH:_files' \
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
-        '--columns=[TSV and JSONL: these columns, in order (key,size; repeatable)]:NAME: ' \
+        '--columns=[TSV and JSONL: these columns, in order (repeatable)]:NAME[,NAME...]: ' \
         '--overwrite[replace a previous dataset in -o]' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
-        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
+        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--row-budget=[rows held between listing and encoding]:SIZE: ' \
@@ -28,12 +28,12 @@ _swath_list() {
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--part-rotation-max-rows=[also close a part at N rows (0: by size and --part-interval only)]:N: ' \
         '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
-        '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
+        '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
+        '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
         '--stats[print the end-of-run statistics on stderr]' \
@@ -45,9 +45,9 @@ _swath_list() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[list every version of every key, not only the current objects]' \
+        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
-        '--no-adaptive-limit[turn off the adaptive concurrency limit that throttle answers lower]' \
+        '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -81,21 +81,21 @@ _swath_du() {
         '--format=[text rows: auto is the table on a terminal, TSV otherwise]:value:(auto table tsv jsonl)' \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
-        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
+        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
-        '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
+        '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
+        '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
         '--stats[print the end-of-run statistics on stderr]' \
@@ -107,9 +107,9 @@ _swath_du() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[list every version of every key, not only the current objects]' \
+        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
-        '--no-adaptive-limit[turn off the adaptive concurrency limit that throttle answers lower]' \
+        '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--metadata=[what is read per entry (statx adds birth_time; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind DIR)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
@@ -155,21 +155,21 @@ _swath_diag_count() {
     _arguments \
         '--include=[keep keys this glob matches (repeatable: any of them)]:GLOB: ' \
         '--exclude=[drop keys this glob matches (repeatable; beats any include)]:GLOB: ' \
-        '--include-regex=[keep keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
-        '--exclude-regex=[drop keys in which this regex (Go RE2) matches anywhere (repeatable)]:REGEX: ' \
+        '--include-regex=[keep keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
+        '--exclude-regex=[drop keys this RE2 regex matches anywhere in the full key (repeatable)]:REGEX: ' \
         '--min-size=[keep objects (local: entries) of at least this size (1K, 1.5GiB)]:SIZE: ' \
         '--max-size=[keep objects or entries of at most this size]:SIZE: ' \
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
-        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME: ' \
+        '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
         '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
         '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
-        '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
+        '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
+        '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
         '--stats[print the end-of-run statistics on stderr]' \
@@ -181,9 +181,9 @@ _swath_diag_count() {
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
-        '--all-versions[list every version of every key, not only the current objects]' \
+        '--all-versions[S3 and GCS: list every version, S3 delete markers too (not Azure Blob)]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
-        '--no-adaptive-limit[turn off the adaptive concurrency limit that throttle answers lower]' \
+        '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \
         '--no-seed[start from one range, without the delimiter-listing seed]' \
         '--structure=[probes whose folder boundaries splits pivot on]:value:(auto on off)' \
@@ -222,12 +222,12 @@ _swath_resume() {
         '--spill-budget=[cap on spill (default: half the output filesystem'\''s free space)]:SIZE: ' \
         '--part-interval=[close a part with rows after this long, full or not]:DURATION: ' \
         '--seed-from=[start from a previous listing'\''s key distribution, not the seed]:PATH:_files' \
-        '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
+        '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
         '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
-        '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
+        '--progress[show progress on stderr (default: a terminal that rows do not share)]' \
         '--no-progress[no live progress on stderr]' \
         '--progress-interval=[how often progress is printed (at least 1s); implies --progress]:DURATION: ' \
         '--stats[print the end-of-run statistics on stderr]' \
@@ -242,7 +242,7 @@ _swath_resume() {
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
-        '--no-adaptive-limit[turn off the adaptive concurrency limit that throttle answers lower]' \
+        '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
         '--adaptive-limit-slow-start[start the limit at 4 in flight, doubling each second to --workers]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--gcs-credentials-file=[a service-account or authorized-user JSON file (default: ADC)]:FILE:_files' \
