@@ -211,8 +211,8 @@ func TestProjection(t *testing.T) {
 		want string
 	}{
 		{textout.Config{Format: textout.TSV, Columns: []string{"key", "Size"}},
-			`text output: no column "Size" in swath/s3-objects/v1 (its columns: key, size, last_modified, etag, storage_class, owner_id, owner_display_name, checksum_algorithm, checksum_type)`},
-		{textout.Config{Format: textout.JSONL, Columns: []string{"key", "key"}}, `text output: column "key" named twice`},
+			`no column "Size" in swath/s3-objects/v1 (its columns: key, size, last_modified, etag, storage_class, owner_id, owner_display_name, checksum_algorithm, checksum_type)`},
+		{textout.Config{Format: textout.JSONL, Columns: []string{"key", "key"}}, `column "key" named twice`},
 		{textout.Config{Format: textout.Table, Columns: []string{"key"}}, "text output: the table's columns are fixed"},
 	} {
 		var buf bytes.Buffer

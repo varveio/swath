@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,23 @@ func hasScheme(path string) bool {
 //
 // With -o FILE a --format that agrees with the file's name is accepted,
 // one that does not is refused, as is --format with a dataset directory.
+// --columns chooses TSV or JSONL columns: refused with the table and with a
+// dataset, and auto on a terminal is then TSV.
 func resolveOutput(o *options, stdoutTTY bool) (*textout.Config, error) {
+	c, err := resolveText(o, stdoutTTY && len(o.columns) == 0)
+	switch {
+	case err != nil || len(o.columns) == 0:
+		return c, err
+	case c == nil:
+		return nil, fmt.Errorf("--columns: -o %s is a dataset directory, which holds every column; the columns are chosen for TSV and JSONL", o.out)
+	case c.Format == textout.Table:
+		return nil, errors.New("--columns: the table's columns are fixed; the columns are chosen for --format tsv or jsonl")
+	}
+	c.Columns = o.columns
+	return c, nil
+}
+
+func resolveText(o *options, stdoutTTY bool) (*textout.Config, error) {
 	toStdout := o.out == "" || o.out == "-"
 	switch {
 	case o.countOnly: // swath du and swath diag count write no rows (placement refuses -o; du's --format is resolveTotals')
@@ -117,6 +134,9 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	default:
 		return fmt.Errorf("--format %q: want auto, table, tsv or jsonl", o.format)
 	}
+	if o.sortBy != sortName && o.sortBy != sortSize {
+		return fmt.Errorf("--sort %q: want name or size", o.sortBy)
+	}
 	origin, err := keyOrigin(root)
 	if err != nil {
 		return err
@@ -130,7 +150,7 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			return err
 		}
 	}
-	o.totals = &totalsOut{format: format, tally: totals.New(opt)}
+	o.totals = &totalsOut{format: format, bySize: o.sortBy == sortSize, tally: totals.New(opt)}
 	return nil
 }
 

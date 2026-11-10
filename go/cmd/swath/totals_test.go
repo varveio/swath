@@ -102,11 +102,11 @@ func TestDu(t *testing.T) {
 		return at.In(time.Local).Format(time.DateTime)
 	}
 	wantTable := "" +
-		"Size  Files  Dirs  LastModified (local)  Path\n" +
-		" 7 B      2     1  " + local(newest) + "   a/\n" +
-		" 1 B      1     0  " + local(older) + "   c/\n" +
-		" 0 B      0     0                        e/\n" +
-		" 9 B      4     4  " + local(newest) + "   (total)\n"
+		"size  files  dirs  last_modified (local)  path\n" +
+		" 7 B      2     1  " + local(newest) + "    a/\n" +
+		" 1 B      1     0  " + local(older) + "    c/\n" +
+		" 0 B      0     0                         e/\n" +
+		" 9 B      4     4  " + local(newest) + "    (total)\n"
 	if out.String() != wantTable {
 		t.Fatalf("table\n%s\nwant\n%s", out.String(), wantTable)
 	}
@@ -120,6 +120,60 @@ func TestDu(t *testing.T) {
 	if err := runCount(context.Background(), []string{root, "--no-stats"}, &out); err != nil || !strings.HasPrefix(out.String(), "files=4 dirs=4 ") ||
 		!strings.Contains(out.String(), "rows=8 object_bytes=9 ") { // the files' bytes: a directory's own size is no object's
 		t.Fatalf("%v %q", err, out.String())
+	}
+}
+
+// TestDuFile: a file is a local source, as du and ls take one: du gives its
+// one total row, list its one row, keyed by its name.
+func TestDuFile(t *testing.T) {
+	root, at := depthTree(t)
+	file := filepath.Join(root, "a", "g")
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+		out.String() != "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t0\t2\t0\t"+at.Format("2006-01-02T15:04:05.000000Z")+"\t\n" {
+		t.Fatalf("du: %v %q", err, out.String())
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{file, "--columns", "key,size,kind", "--no-stats"}, &out, false); err != nil || out.String() != "key\tsize\tkind\ng\t2\tFILE\n" {
+		t.Fatalf("list: %v %q", err, out.String())
+	}
+}
+
+// TestDuSortSize: --sort size orders the prefixes below each parent by
+// size, the largest first, each prefix's own below it and the total in its
+// place (last in the table, first in TSV); another order is refused.
+func TestDuSortSize(t *testing.T) {
+	root, _ := depthTree(t)
+	if err := os.WriteFile(filepath.Join(root, "c", "big"), make([]byte, 20), 0o644); err != nil { // c/ the largest, after a/ by name
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for l := range strings.Lines(out.String()) {
+		f := strings.Fields(l)
+		order = append(order, f[len(f)-1])
+	}
+	if got := strings.Join(order, " "); got != "path c/ a/ a/b/ e/ (total)" {
+		t.Fatalf("table by size: %s", got)
+	}
+	out.Reset()
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var prefixes []string
+	for l := range strings.Lines(out.String()) {
+		f := strings.Split(strings.TrimSuffix(l, "\n"), "\t")
+		prefixes = append(prefixes, f[0]+":"+f[len(f)-1])
+	}
+	if got := strings.Join(prefixes, " "); got != "depth:prefix 0: 1:c/ 1:a/ 1:e/" {
+		t.Fatalf("tsv by size: %s", got)
+	}
+	var u usageError
+	if err := runDu(context.Background(), []string{root, "--sort", "big"}, &out); !errors.As(err, &u) {
+		t.Fatalf("--sort big: %v", err)
 	}
 }
 
@@ -148,7 +202,7 @@ func TestDuUnsized(t *testing.T) {
 	for format, want := range map[string]string{
 		"tsv":   "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t4\t4\t0\t4\t\\N\t\n1\t2\t1\t0\t2\t\\N\ta/\n1\t1\t0\t0\t1\t\\N\tc/\n1\t0\t0\t0\t0\t\\N\te/\n",
 		"jsonl": `{"depth":0,"prefix":"","objects":4,"dirs":4,"size":0,"unsized":4,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"a/","objects":2,"dirs":1,"size":0,"unsized":2,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"c/","objects":1,"dirs":0,"size":0,"unsized":1,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"unsized":0,"last_modified":null}` + "\n",
-		"table": "Size  Files  Dirs  LastModified (local)  Path\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n   -      4     4                        (total)\n",
+		"table": "size  files  dirs  last_modified (local)  path\n   -      2     1                         a/\n   -      1     0                         c/\n 0 B      0     0                         e/\n   -      4     4                         (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -177,7 +231,7 @@ func TestDuJSONL(t *testing.T) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.Contains(out.String(), "  Objects  LastModified (local)") {
+	if err := runDu(context.Background(), append(src, "--format", "table", "--no-stats"), &out); err != nil || !strings.HasPrefix(out.String(), " size  objects  last_modified (local)  prefix\n") {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }

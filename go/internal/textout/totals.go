@@ -33,18 +33,14 @@ const (
 	FieldLastModified  = "last_modified"
 )
 
-// The table's headings: a local tree's objects are files under paths, and
-// the table's times are the reader's local time.
+// The table's headings are the fields' names, as the rows table's are the
+// schema's, but for what people read differently: a local tree's objects
+// are files under paths, and the times are the reader's local time
+// (headingLocalTime).
 const (
-	headingSize      = "Size"
-	headingObjects   = "Objects"
-	headingFiles     = "Files"
-	headingDirs      = "Dirs"
-	headingAllocated = "Allocated"
-	headingModified  = "LastModified (local)"
-	headingPrefix    = "Prefix"
-	headingPath      = "Path"
-	headingTotal     = "(total)" // the total row's prefix in the table
+	headingFiles = "files"
+	headingPath  = "path"
+	headingTotal = "(total)" // the total row's prefix in the table
 )
 
 // TotalsLayout is what the totals' rows hold besides the prefix, objects,
@@ -189,15 +185,12 @@ func (l TotalsLayout) sizeField() string {
 type tableWidths struct{ size, objects, dirs int }
 
 // timeWidth is the table's time column, as wide as the heading.
-const timeWidth = max(len(tableTime), len(headingModified))
+const timeWidth = max(len(tableTime), len(headingLocalTime))
 
 func widths(l TotalsLayout, rows []totals.Prefix) tableWidths {
-	w := tableWidths{size: len(headingSize), objects: len(headingFiles), dirs: len(headingDirs)}
-	if l.Allocated {
-		w.size = len(headingAllocated)
-	}
+	w := tableWidths{size: len(l.sizeField()), objects: len(headingFiles), dirs: len(FieldDirs)}
 	if !l.Local {
-		w.objects = len(headingObjects)
+		w.objects = len(FieldObjects)
 	}
 	var num [24]byte
 	for i := range rows {
@@ -210,20 +203,17 @@ func widths(l TotalsLayout, rows []totals.Prefix) tableWidths {
 }
 
 func (w tableWidths) header(b []byte, l TotalsLayout) []byte {
-	size, objects, prefix := headingSize, headingObjects, headingPrefix
-	if l.Allocated {
-		size = headingAllocated
-	}
+	size, objects, prefix := l.sizeField(), FieldObjects, FieldPrefix
 	if l.Local {
 		objects, prefix = headingFiles, headingPath
 	}
 	b = appendPadded(b, []byte(size), w.size)
 	b = appendPadded(append(b, "  "...), []byte(objects), w.objects)
 	if l.Local {
-		b = appendPadded(append(b, "  "...), []byte(headingDirs), w.dirs)
+		b = appendPadded(append(b, "  "...), []byte(FieldDirs), w.dirs)
 	}
-	b = append(b, "  "+headingModified...)
-	for range timeWidth - len(headingModified) {
+	b = append(b, "  "+headingLocalTime...)
+	for range timeWidth - len(headingLocalTime) {
 		b = append(b, ' ')
 	}
 	return append(append(b, "  "...), prefix+"\n"...)
@@ -277,6 +267,10 @@ func appendPrefixSize(b []byte, r *totals.Prefix) []byte {
 
 // iecUnits are the binary units a table's sizes are given in.
 var iecUnits = [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+
+// Size is n bytes for people to read, appendIEC's form: the tables', and
+// every size the command prints on the terminal.
+func Size(n int64) string { return string(appendIEC(nil, n)) }
 
 // appendIEC appends a size for reading, the tables' one form: bytes below
 // 1 KiB, else at most three significant digits in binary units (5.88 MiB,

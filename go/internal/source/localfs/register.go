@@ -24,7 +24,7 @@ import (
 // The local filesystem takes roots without a scheme.
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
-		Title: "Local", Example: "/data", Usage: "a local directory"})
+		Title: "Local", Example: "/data", Usage: "a local directory or file"})
 }
 
 // workersPerCPU and maxWorkers bound the default --workers for a local tree:

@@ -163,8 +163,14 @@ func main() {
 // exits 0 (a supervisor must not take it as complete), and the provider
 // names the class of its errors.
 func classifyRun(ctx context.Context, dir string, provider func(error) string, sum listing.Report, err error) (error, outcome) {
-	if err == nil && dir != "" && !sum.Outcome.Complete {
+	var pe *textout.ProjectionError
+	switch {
+	case err == nil && dir != "" && !sum.Outcome.Complete:
 		err = errIncomplete
+	case errors.As(err, &pe):
+		// Found when the schema is bound, before the listing's first
+		// request: a usage error, as at parse time.
+		err = usageError{fmt.Errorf("--columns: %w", pe)}
 	}
 	if err != nil && provider != nil {
 		if c := provider(err); c != "" {
@@ -495,8 +501,10 @@ type options struct {
 	spillPlain             bool
 	sources                map[string]any      // each provider's options value, by scheme
 	owners                 map[string][]string // a provider flag's name: the schemes it applies to
+	allVersions            *bool               // --all-versions (nil without a provider on the range engine)
 	term                   termOptions
 	format                 string
+	columns                []string        // --columns
 	text                   *textout.Config // resolved: a text run's destination
 	filter                 filter.Spec
 	partMaxRows            int64
@@ -506,20 +514,32 @@ type options struct {
 	// their output, resolved.
 	depth, maxPrefixes, maxInodes int
 	allocated, linksOnce          bool
+	sortBy                        string // --sort: sortName or sortSize
 	totals                        *totalsOut
 }
 
+// swath du's --sort orders.
+const (
+	sortName = "name"
+	sortSize = "size"
+)
+
 // totalsOut is where swath du writes its prefix rows: stdout, in format
-// (textout's TSV, JSONL or Table).
+// (textout's TSV, JSONL or Table), by size when bySize (totals.SortBySize).
 type totalsOut struct {
 	format string
+	bySize bool
 	tally  *totals.Tally
 }
 
 // write writes the tally's rows to w.
 func (t *totalsOut) write(w io.Writer) error {
 	l := textout.TotalsLayout{Allocated: t.tally.Options().BytesColumn == totals.AllocatedBytes, Local: t.tally.Dirs()}
-	return textout.WriteTotals(w, t.format, l, t.tally.Result())
+	rows := t.tally.Result()
+	if t.bySize {
+		totals.SortBySize(rows)
+	}
+	return textout.WriteTotals(w, t.format, l, rows)
 }
 
 // runtimeFlags may change on swath resume: they do not change the output
@@ -844,7 +864,10 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			settled = true
 		}
 	}
-	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir, rowNoun(pf.Scheme == "")) // the empty scheme is a local path
+	// The empty scheme is a local path. stdout carries rows to a reader on
+	// the same screen: swath list's text there, and swath du's table.
+	n := rowNouns(pf.Scheme == "", o.allVersions != nil && *o.allVersions)
+	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir, n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)

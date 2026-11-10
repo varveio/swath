@@ -85,7 +85,7 @@ large. `resources.free_disk_min_bytes` is close to `resources.spill.reserve_byte
 the output, or a larger `--spill-budget` when the filesystem has the room. An interrupted run resumes with the
 new value: `swath resume DIR --spill-budget 200GiB`.
 
-**A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `objects`
+**A stuck frontier.** `resources.frontier_stuck_max_ns` is seconds to minutes. In `progress.json`, `rows`
 rises while `encoded` and `parts` stay flat and `part_age_ms` grows. One range at the front of the output is
 slow: a slow, retried or hung request. Check `inflight.p99_ns` against `inflight.p50_ns` and the retries in
 the report's `source.stats.counters.values`. After `--stall-timeout` (10 min) of no progress the run stops

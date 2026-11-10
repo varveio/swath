@@ -11,12 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
@@ -111,6 +114,117 @@ func TestClosedReaderExitsZero(t *testing.T) {
 	readJSON(t, report, &rep)
 	if rep.Outcome.Status != "stopped" || rep.Outcome.ExitCode != 0 || rep.Outcome.Complete || rep.Outcome.StopReason != "downstream_closed" || rep.Output.Text.Rows >= int64(len(keys)) {
 		t.Fatalf("report %+v", rep)
+	}
+}
+
+// TestColumns: --columns prints the named columns in the order given, in
+// TSV and JSONL, and on a terminal's stdout TSV rather than the table; a
+// name the schema lacks is a usage error listing the source's columns,
+// before any request; the table and a dataset refuse it.
+func TestColumns(t *testing.T) {
+	keys := []string{"a", "bb"}
+	var requests atomic.Int64
+	h := s3test.Handler(s3test.Backend(t, keys))
+	src := []string{"s3://bkt", "--anonymous", "--endpoint-url", s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		h.ServeHTTP(w, r)
+	}))}
+	var out bytes.Buffer
+	if err := run(context.Background(), append(src, "--columns", "size,key"), &out, false); err != nil || out.String() != "size\tkey\n1\ta\n2\tbb\n" {
+		t.Fatalf("tsv: %v %q", err, out.String())
+	}
+	out.Reset()
+	if err := run(context.Background(), append(src, "--columns=key", "--columns", "size", "--format", "jsonl"), &out, false); err != nil ||
+		out.String() != `{"key":"a","size":1}`+"\n"+`{"key":"bb","size":2}`+"\n" {
+		t.Fatalf("jsonl: %v %q", err, out.String())
+	}
+	terminal := stdoutTerminal
+	stdoutTerminal = func() bool { return true }
+	t.Cleanup(func() { stdoutTerminal = terminal })
+	out.Reset()
+	if err := run(context.Background(), append(src, "--columns", "key"), &out, false); err != nil || out.String() != "key\na\nbb\n" {
+		t.Fatalf("on a terminal: %v %q", err, out.String())
+	}
+	before := requests.Load()
+	err := run(context.Background(), append(src, "--columns", "key,Size", "--no-stats"), &out, false)
+	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), `--columns: no column "Size" in swath/s3-objects/v1 (its columns: key, size, last_modified, etag`) {
+		t.Fatalf("unknown column: %v", err)
+	}
+	if n := requests.Load() - before; n != 0 {
+		t.Fatalf("an unknown column sent %d requests", n)
+	}
+	var u usageError
+	for _, args := range [][]string{{"--columns", "key", "--format", "table"}, {"--columns", "key", "-o", filepath.Join(t.TempDir(), "ds")}} {
+		if err := run(context.Background(), append(src, args...), &out, false); !errors.As(err, &u) || !strings.HasPrefix(err.Error(), "--columns: ") {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+// TestLocalTextEndToEnd: a local tree prints as text rows, to stdout and to a
+// .tsv or .jsonl file, under the local schema's names; with --metadata
+// names the fields it does not read are null in TSV and JSONL and blank in
+// the table. A run with -o prints nothing on stdout.
+func TestLocalTextEndToEnd(t *testing.T) {
+	root, _ := depthTree(t)
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{root, "--no-stats"}, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "key\tsize\tlast_modified\tkind\t") || len(lines) != 9 || !strings.HasPrefix(lines[1], "a/\t") ||
+		!strings.HasPrefix(lines[3], "a/b/f\t5\t2026-01-02T04:04:05.000000Z\tFILE\t") {
+		t.Fatalf("stdout %q", lines)
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"rows.tsv", "rows.jsonl"} {
+		out.Reset()
+		file := filepath.Join(dir, name)
+		if err := run(context.Background(), []string{root, "-o", file, "--no-stats"}, &out, false); err != nil || out.Len() != 0 {
+			t.Fatalf("%s: %v, stdout %q", name, err, out.String())
+		}
+		b, _ := os.ReadFile(file)
+		if want := map[string]string{"rows.tsv": "key\tsize\t", "rows.jsonl": `{"key":"a/","size":`}[name]; !strings.HasPrefix(string(b), want) || strings.Count(string(b), "\n") < 8 {
+			t.Fatalf("%s: %.120q", name, b)
+		}
+	}
+	for format, want := range map[string]string{
+		"tsv":   "a/b/f\t\\N\t\\N\tFILE\t",
+		"jsonl": `{"key":"a/b/f","size":null,"last_modified":null,"kind":"FILE",`,
+		"table": "                                 FILE  a/b/f\n",
+	} {
+		out.Reset()
+		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
+			t.Errorf("%s names: %v\n%s", format, err, out.String())
+		}
+	}
+	out.Reset()
+	if err := run(context.Background(), []string{root, "-o", filepath.Join(dir, "ds"), "--stats"}, &out, false); err != nil || out.Len() != 0 {
+		t.Fatalf("dataset: %v, stdout %q", err, out.String())
+	}
+}
+
+// TestNoProgressAmongRows: with stdout a terminal that carries rows, the
+// automatic progress line stays off; --progress still draws it.
+func TestNoProgressAmongRows(t *testing.T) {
+	h := s3test.Handler(s3test.Backend(t, []string{"a", "b"}))
+	src := []string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--endpoint-url", s3test.Serve(t, s3test.Delayed(h, 1500*time.Millisecond))}
+	stdout, stderr := stdoutTerminal, stderrTerminal
+	stdoutTerminal, stderrTerminal = func() bool { return true }, func() (bool, int) { return true, 120 }
+	t.Cleanup(func() { stdoutTerminal, stderrTerminal = stdout, stderr })
+	for _, forced := range []bool{false, true} {
+		errs := captureStderr(t)
+		args := src
+		if forced {
+			args = append(slices.Clone(src), "--progress")
+		}
+		var out bytes.Buffer
+		if err := run(context.Background(), args, &out, false); err != nil {
+			t.Fatal(err)
+		}
+		if drawn := strings.Contains(errs.String(), "listing · "); drawn != forced || !strings.Contains(out.String(), "  a\n") {
+			t.Errorf("--progress %v: stderr %q, stdout %q", forced, errs.String(), out.String())
+		}
 	}
 }
 

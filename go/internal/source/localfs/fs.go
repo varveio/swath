@@ -142,28 +142,25 @@ type Provider struct {
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
+	file     bool // the root is not a directory (expandFile)
 	mu       sync.Mutex
 	stats    Stats
 }
 
 var _ source.Provider[Range, Entry] = (*Provider)(nil)
 
-// ErrNotDir is returned by New when the root is not a directory.
-var ErrNotDir = errors.New("not a directory")
-
-// New validates root and returns a provider for it.
+// New validates root and returns a provider for it. A root that is not a
+// directory (a file, as du and ls take one) lists as its one entry, keyed
+// by its name.
 func New(root string, opt Options) (*Provider, error) {
 	fi, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
-	if !fi.IsDir() {
-		return nil, fmt.Errorf("%s: %w", root, ErrNotDir)
-	}
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
-	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable}
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir()}
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err
@@ -199,7 +196,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	}
 	var st Stats
 	var err error
-	if p.native {
+	if p.file {
+		err = p.expandFile(e, &st)
+	} else if p.native {
 		err = p.expandNative(ctx, r, e, &st)
 	} else {
 		err = p.expandPortable(ctx, r, e, &st)
@@ -261,6 +260,26 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		}
 	}
 	return e.Rows(rows[start:])
+}
+
+// expandFile lists a root that is not a directory: its one row, keyed by
+// its name, from the stat that follows a link at the root as New's does.
+// The statx tier's birth time is not read for it.
+func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
+	fi, err := os.Stat(p.root)
+	if err != nil {
+		st.note(&st.StatErrors, p.root, err)
+		return nil
+	}
+	row := Row{Key: filepath.Base(p.root)}
+	if p.opt.Fields == Names {
+		row.Data.Kind = kindOf(fi.Mode().Type())
+	} else {
+		fromFileInfo(&row.Data, fi)
+		st.Bytes += row.Data.Size
+	}
+	st.Files++
+	return e.Rows([]Row{row})
 }
 
 func sortRows(rows []Row) {
