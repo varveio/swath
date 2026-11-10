@@ -16,7 +16,9 @@ listing sends requests the provider may charge for; the run report estimates the
 
 Without `--anonymous`, swath uses the provider's credentials and stops before listing (exit 1, cause `auth`)
 when there are none or they do not load. It never falls back to unsigned requests: a public bucket or
-container needs `--anonymous`, which sends no credentials whatever the environment holds.
+container needs `--anonymous`, which sends no credentials whatever the environment holds. The error is one
+line naming the credential source and the cause's first line; `-v` shows the whole cause
+([troubleshooting](troubleshooting.md#credentials-could-not-be-loaded)).
 
 `--anonymous` beside an explicit credential (`--s3-profile`, `--s3-bearer-token-command`,
 `--gcs-credentials-file`, `--azure-sas-token`, a SAS in the source URL) is refused with exit 2. Credentials
@@ -149,7 +151,9 @@ role that includes it.
 `AZURE_STORAGE_KEY` (Shared Key); else Entra ID through the Azure SDK's default chain (environment, workload
 identity, managed identity, the Azure CLI and Developer CLI logins). A SAS is never recorded or shown: the
 source is shown as `?sig=[redacted]`, and a resume needs the SAS again, by `--azure-sas-token` or
-`AZURE_STORAGE_SAS_TOKEN`.
+`AZURE_STORAGE_SAS_TOKEN`. A SAS holds only its own fields: one that also names a request parameter swath sets
+(`comp`, `restype`, `prefix`, `marker` or another List Blobs parameter, in any case) is refused at startup with
+exit 2, naming the parameter, before any request.
 
 **Endpoint.** `--endpoint-url URL` replaces `https://ACCOUNT.blob.core.windows.net`, and the account is then
 its first path segment (Azurite: `--endpoint-url http://127.0.0.1:10000`).

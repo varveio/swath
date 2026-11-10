@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
@@ -1039,7 +1040,12 @@ func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
 	var le *totals.LimitError
-	var ce interface{ CredentialRefused() bool } // objhttp.CredentialError
+	var ce interface { // objhttp.CredentialError
+		CredentialRefused() bool
+		CredentialSource() string
+		CredentialDiscovered() bool
+		Unwrap() error
+	}
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -1064,9 +1070,84 @@ func explain(err error) error {
 	case errors.As(err, &ce) && ce.CredentialRefused():
 		// No credentials, or none that load: swath never falls back to
 		// anonymous requests on its own.
-		return fmt.Errorf("%w (a public bucket needs --anonymous)", err)
+		line := credentialLine(ce.CredentialSource(), ce.Unwrap().Error(), ce.CredentialDiscovered(), elog().shows(lvInfo))
+		return &credentialRefusal{error: err, line: line}
 	}
 	return err
+}
+
+// credentialRefusal is a credential failure that will not pass, shown as
+// its line (credentialLine). The whole cause (an SDK's chain report, a
+// token endpoint's answer) is the outcome's message, which -v shows
+// (conclude).
+type credentialRefusal struct {
+	error
+	line string
+}
+
+func (e *credentialRefusal) Error() string { return e.line }
+
+func (e *credentialRefusal) Unwrap() error { return e.error }
+
+// causeCap bounds the cause's first line in a credential refusal's line,
+// in runes.
+const causeCap = 200
+
+// credentialLine is a refused credential's line: its source and its
+// cause's first line that is not blank (capped at causeCap), control
+// characters in either escaped; the --anonymous advice when swath was
+// searching for credentials on its own (discovered), not when one was
+// configured; and, without -v (verbose), that -v shows what the line
+// leaves out (lines before or after it, or past the cap), when it leaves
+// something out.
+func credentialLine(source, cause string, discovered, verbose bool) string {
+	lines := strings.Split(strings.ReplaceAll(cause, "\r", "\n"), "\n")
+	first, more := "", false
+	for i, l := range lines {
+		if first = strings.TrimSpace(l); first != "" {
+			more = i > 0 || strings.TrimSpace(strings.Join(lines[i+1:], "")) != ""
+			break
+		}
+	}
+	if r := []rune(first); len(r) > causeCap {
+		first, more = strings.TrimSpace(string(r[:causeCap]))+"...", true
+	}
+	msg := "could not obtain credentials (" + escapeControl(source) + ")"
+	if first != "" {
+		msg += ": " + escapeControl(first)
+	}
+	var advice []string
+	if discovered {
+		advice = append(advice, "for public storage use --anonymous")
+	}
+	if more && !verbose {
+		advice = append(advice, "-v shows the details")
+	}
+	if len(advice) == 0 {
+		return msg
+	}
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	a := strings.Join(advice, "; ")
+	return msg + " " + strings.ToUpper(a[:1]) + a[1:]
+}
+
+// escapeControl writes each control character of s as its Go escape (\n,
+// \x1b), so the text stays on one line and draws nothing.
+func escapeControl(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			b.WriteString(strings.Trim(strconv.QuoteRune(r), "'"))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // profile starts the CPU profile and arranges the allocation profile, the

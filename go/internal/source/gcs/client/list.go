@@ -74,7 +74,7 @@ func (c *Client) attempt(ctx context.Context, in *ListInput) (*Page, error) {
 	}
 	h := call.Header()
 	h.Set("User-Agent", buildinfo.UserAgent()+" "+googleapi.UserAgent)
-	tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
+	tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.discovered, c.cfg.RequestTimeout, transientToken)
 	if err != nil {
 		return nil, err
 	}

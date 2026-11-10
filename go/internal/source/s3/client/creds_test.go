@@ -344,3 +344,73 @@ func TestCredentialChainTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestCredentialDiscovered: a credential failure is Discovered (the
+// command's --anonymous advice) only where the default chain searched on
+// its own: an empty chain, and a refresh of what it found. A profile (the
+// flag or AWS_PROFILE), keys in the environment, a bearer token command,
+// a configuration that does not load (an AWS_RETRY_MODE that does not
+// parse) and a refresh of a profile's credentials are configured.
+func TestCredentialDiscovered(t *testing.T) {
+	discovered := func(t *testing.T, err error) bool {
+		t.Helper()
+		var ce *objhttp.CredentialError
+		if !errors.As(err, &ce) {
+			t.Fatalf("%v: not a credential failure", err)
+		}
+		return ce.Discovered
+	}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		cfg  Config
+		want bool
+	}{
+		{"empty chain", nil, Config{}, true},
+		{"AWS_PROFILE", map[string]string{"AWS_PROFILE": "nosuch"}, Config{}, false},
+		{"--s3-profile", nil, Config{Profile: "nosuch"}, false},
+		{"keys, bad retry mode", map[string]string{"AWS_ACCESS_KEY_ID": "AK", "AWS_SECRET_ACCESS_KEY": "s", "AWS_RETRY_MODE": "bogus"}, Config{}, false},
+		{"bearer, bad retry mode", map[string]string{"AWS_RETRY_MODE": "bogus"}, Config{Bearer: NewBearerToken("echo tok", 0)}, false},
+		{"bad retry mode alone", map[string]string{"AWS_RETRY_MODE": "bogus"}, Config{}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			isolate(t, t.TempDir())
+			for _, k := range []string{"AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY", "AWS_SECRET_KEY"} {
+				t.Setenv(k, "")
+			}
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			c.cfg.Region = "us-east-1"
+			if _, err := loadAuth(context.Background(), c.cfg); discovered(t, err) != c.want {
+				t.Errorf("%v: discovered %v, want %v", err, !c.want, c.want)
+			}
+		})
+	}
+	// A refresh keeps the selected path's bit: the environment's web
+	// identity is found by the chain, a profile's keys are configured.
+	refusal := aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+		return aws.Credentials{}, errors.New("refused")
+	})
+	dir := t.TempDir()
+	isolate(t, dir)
+	token := filepath.Join(dir, "token")
+	os.WriteFile(token, []byte("jwt"), 0o600)
+	os.WriteFile(filepath.Join(dir, "credentials"), []byte("[work]\naws_access_key_id = AKWORK\naws_secret_access_key = s\n"), 0o600)
+	webIdentitySTS(t, 0, 0, "")
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", token)
+	t.Setenv("AWS_ROLE_ARN", "arn:aws:iam::111111111111:role/runner")
+	for _, c := range []struct {
+		profile string
+		want    bool
+	}{{"", true}, {"work", false}} {
+		a, err := loadAuth(context.Background(), Config{Region: "us-east-1", Profile: c.profile})
+		if err != nil {
+			t.Fatalf("profile %q: %v", c.profile, err)
+		}
+		a.credentials = refusal
+		if _, _, err := a.ready(context.Background()); discovered(t, err) != c.want {
+			t.Errorf("profile %q: a refused refresh is discovered %v, want %v", c.profile, !c.want, c.want)
+		}
+	}
+}

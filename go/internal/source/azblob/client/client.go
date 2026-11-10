@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -71,6 +72,7 @@ type Config struct {
 	Anonymous bool
 	// SAS is a shared access signature, a query string with or without a
 	// leading '?', appended to every request and kept out of every error.
+	// One that names a request parameter (operationParams) is refused.
 	SAS string
 	// SharedKey is the account key (base64): the SDK signs requests.
 	SharedKey      string
@@ -247,9 +249,18 @@ func (c *Client) credentials(entra entraSource) error {
 	case cfg.SAS != "":
 		c.sas = strings.TrimPrefix(cfg.SAS, "?")
 		c.source = "shared access signature"
-		if _, err := url.ParseQuery(c.sas); err != nil || c.sas == "" {
+		q, err := url.ParseQuery(c.sas)
+		if err != nil || c.sas == "" {
 			// the parse error would quote the signature
 			return &objhttp.CredentialError{Source: c.source, Err: errors.New("not a query string")}
+		}
+		for _, name := range slices.Sorted(maps.Keys(q)) {
+			if p, ok := operationParams[strings.ToLower(name)]; ok {
+				// Appended to every request, it would repeat a parameter
+				// swath sends (the SDK puts the selectors in the path) or
+				// change what is listed.
+				return source.Unsupported(fmt.Errorf("the shared access signature names %s, a request parameter swath sets itself; give a SAS without it", p))
+			}
 		}
 		c.sasKey = sasParams(c.sas)
 	case cfg.SharedKey != "":
@@ -263,11 +274,29 @@ func (c *Client) credentials(entra entraSource) error {
 	return nil
 }
 
+// operationParams are the query parameters of the requests swath sends
+// (List Blobs, Get Account Information, and resource on the Data Lake
+// host), by lower-case name: a SAS that names one is refused.
+var operationParams = func() map[string]string {
+	m := map[string]string{}
+	for _, p := range []string{"comp", "restype", "prefix", "delimiter", "marker", "maxresults", "startFrom", "endBefore",
+		"include", "showonly", "timeout", "resource"} {
+		m[strings.ToLower(p)] = p
+	}
+	return m
+}()
+
 // entraVars are the environment variables by which DefaultAzureCredential
 // is configured (environment, workload identity and managed identity
 // credentials, and its own selector): Anonymous ignores them (anonymousNote).
 var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CLIENT_CERTIFICATE_PATH",
 	"AZURE_USERNAME", "AZURE_FEDERATED_TOKEN_FILE", "IDENTITY_ENDPOINT", "MSI_ENDPOINT", "AZURE_TOKEN_CREDENTIALS"}
+
+// entraDiscovered marks Entra ID failures as the SDK's own search
+// (objhttp.CredentialError.Discovered): DefaultAzureCredential is used only
+// when no credential is configured, and its tokens are the only ones the
+// client waits for.
+const entraDiscovered = true
 
 // entra sets up Entra ID through DefaultAzureCredential, its chain as the
 // SDK builds it (environment, workload identity, managed identity, the
@@ -276,13 +305,13 @@ var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SEC
 // first request with azidentity's own error (class auth), and nothing is
 // listed; a token endpoint's transient failure is retried.
 func (c *Client) entra(entra entraSource) error {
-	const source = "Entra ID (DefaultAzureCredential)"
+	const source = "Entra ID, DefaultAzureCredential"
 	cred, err := entra(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
 	if err != nil {
-		return &objhttp.CredentialError{Source: source, Err: err}
+		return &objhttp.CredentialError{Source: source, Discovered: entraDiscovered, Err: err}
 	}
 	c.ts, c.source = c.shared(cred), source
 	return nil
@@ -487,7 +516,7 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	req.Header.Set(headerVersion, Version)
 	req.Header.Set(headerUserAgent, buildinfo.UserAgent())
 	if c.ts != nil {
-		tok, err := objhttp.WaitToken(actx, c.ts, c.source, c.cfg.RequestTimeout, transientToken)
+		tok, err := objhttp.WaitToken(actx, c.ts, c.source, entraDiscovered, c.cfg.RequestTimeout, transientToken)
 		if err != nil {
 			return nil, err
 		}

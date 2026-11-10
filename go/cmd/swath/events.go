@@ -244,6 +244,9 @@ func conclude(err error) int {
 	default:
 		o = outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: err.Error()}
 	}
+	if cr := (*credentialRefusal)(nil); errors.As(err, &cr) && !l.shows(lvInfo) {
+		o.Message = cr.Error() // the cause is -v's
+	}
 	if l.quiet >= 2 {
 		return o.ExitCode
 	}

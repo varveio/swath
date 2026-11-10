@@ -41,6 +41,7 @@ type auth struct {
 	anonymous   bool
 	bearer      *tokensource.Shared // --s3-bearer-token-command: sent instead of a signature
 	note        string              // a one-time warning for the user, or ""
+	discovered  bool                // the chain found the credentials on its own (discovers)
 }
 
 // loadAuth resolves the region and credentials. With Anonymous (and only
@@ -90,11 +91,12 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	}
 	ac, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		// A profile that does not exist, a role without its token: the
-		// configuration names credentials it cannot give (class auth).
+		// A profile that does not exist, a role without its token, a
+		// setting that does not parse: the configuration names credentials
+		// it cannot give (class auth), which no search found.
 		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: err}
 	}
-	a := &auth{region: cfg.Region, note: anonymousNote(cfg)}
+	a := &auth{region: cfg.Region, note: anonymousNote(cfg), discovered: discovers(cfg)}
 	if a.region == "" {
 		a.region = ac.Region // the environment's or the profile's, else us-east-1
 	}
@@ -107,7 +109,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		a.anonymous, a.source = true, "anonymous"
 		return a, nil
 	case ac.Credentials == nil:
-		return nil, &objhttp.CredentialError{Source: "AWS configuration", Err: errors.New("no credential provider")}
+		return nil, &objhttp.CredentialError{Source: "AWS configuration", Discovered: a.discovered, Err: errors.New("no credential provider")}
 	}
 	src, tf := "AWS default chain", tokenFile(ac)
 	if cfg.Profile != "" {
@@ -125,7 +127,7 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 		// the credentials.
 		return nil, context.Cause(ctx)
 	case err != nil:
-		return nil, &objhttp.CredentialError{Source: src, Err: err}
+		return nil, &objhttp.CredentialError{Source: src, Discovered: a.discovered, Err: err}
 	}
 	a.credentials, a.source = ac.Credentials, c.Source
 	return a, nil
@@ -206,6 +208,23 @@ func partialEnvCredentials() string {
 	return ""
 }
 
+// discovers reports that the default chain searches for credentials on its
+// own (objhttp.CredentialError.Discovered): no bearer token command, no
+// profile (--s3-profile, AWS_PROFILE, AWS_DEFAULT_PROFILE) and no keys in
+// the environment.
+func discovers(cfg Config) bool {
+	if cfg.Bearer != nil || cfg.Profile != "" {
+		return false
+	}
+	for _, v := range []string{"AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY",
+		"AWS_SECRET_KEY", "AWS_SESSION_TOKEN"} {
+		if os.Getenv(v) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // credentialVars are the environment variables that give the AWS SDK's
 // chain a credential: Anonymous ignores them (anonymousNote).
 var credentialVars = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
@@ -237,7 +256,7 @@ func (a *auth) ready(ctx context.Context) (token string, creds aws.Credentials, 
 	}
 	creds, err = a.credentials.Retrieve(ctx)
 	if err != nil {
-		return "", creds, &objhttp.CredentialError{Source: a.source, Transient: transientRefresh(err),
+		return "", creds, &objhttp.CredentialError{Source: a.source, Discovered: a.discovered, Transient: transientRefresh(err),
 			Timeout: errors.Is(err, context.DeadlineExceeded), Err: err}
 	}
 	return "", creds, nil

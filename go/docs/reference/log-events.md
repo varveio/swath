@@ -21,7 +21,7 @@ Each object has `ts` (RFC 3339, UTC, milliseconds), `level` (`debug`, `info`, `w
 | `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
 | `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (the listing's own query parameters, such as `prefix`, as sent; every other parameter, name and value, shown as `[redacted]`), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
 | `retry` | `debug` (`-vv`) | `host` and `path` (the attempt's request, redacted as a `request` event's), `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
-| `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error) |
+| `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error; without `-v`, a credential refusal's one line: [troubleshooting](../troubleshooting.md#credentials-could-not-be-loaded)) |
 
 The verbosity options gate the events as they gate the text lines: `start` needs `-v`, `request` events `-vv`
 or `-vvv`, and progress records `-v` or `--progress`; they come every `--progress-interval` (30 seconds by

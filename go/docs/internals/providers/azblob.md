@@ -67,7 +67,14 @@ failures are retried per call
 when no credentials were found. Endpoint admission follows the [shared check](../clients.md#endpoint-validation). A SAS never
 reaches a recorded file: `--azure-sas-token` is a secret flag (recorded as `[redacted]`), the root's query is recorded
 as `?sig=[redacted]`, and a resume of either needs a SAS again, from `--azure-sas-token` or `AZURE_STORAGE_SAS_TOKEN`
-(the command's `secretEnv` lets the variable stand in for the flag). Errors carry no SAS: answers that
+(the command's `secretEnv` lets the variable stand in for the flag). The SAS is appended to every request, and
+since azblob v1.8 the SDK puts the operation selectors (`restype`, `comp`) in the request path rather than
+setting them on the query, so a SAS that held one would send it twice. The client refuses, when it is built and
+before any request, a SAS naming any parameter of swath's requests (`operationParams`: the List Blobs and Get
+Account Information parameters and the Data Lake host's `resource`), by decoded name in any case and whatever
+its value; the refusal is `source.Unsupported` (exit 2) and names the parameter, never a value. With
+`--anonymous` the SAS is ignored, unchecked (`TestSASReservedParameters`, `TestAzblobSASReservedParameter`).
+Errors carry no SAS: answers that
 quote the query, redirect targets, transport errors and the SDK decoder's errors are scrubbed of every parameter
 the SAS names, found by name wherever the SDK sorted it into the query and however it is encoded (as sent,
 decoded, escaped again), its value replaced and the rest of the text kept; a 400's parsed query drops the SAS's
