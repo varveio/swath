@@ -35,9 +35,9 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     after the engine's.
 
 The engine's options are the scope prefix, `Sequential`, `Seed`, `Prior` (set by `SeedFrom`, below), `Structure` (`StructureOff`, `StructureAuto`, `StructureOn`),
-`Floors`, `Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size: the engine fallback
+`Workers`, `MaxKeys`, `Resume` and `PageSize`, the nominal page size: the engine fallback
 is 1,000 (S3/GCS); Azure selects 5,000 before construction. Data and seed requests ask for it,
-structure probes for no more, and the floors count pages of it. The
+and structure probes for no more. The
 engine sorts and deduplicates each page's common prefixes (`prefixes_normalized`), so a provider need not.
 A continuing structure probe (a provider may cut pages short) is a partial
 sample whatever its length (its furthest folder is the pivot). Its tests (`internal/source/keyrange`) run on a fake listing
@@ -249,22 +249,6 @@ Counters `split.slow.max_range_latency_ns`, `split.slow.run_latency_ns`. Measure
 too little to adopt: the slow folder still peels a few pages per split, as the pivot policy hands out what an
 idle worker can take, not half a folder whose end no page shows.
 
-**Floors** (Java swath's owner-split gate chain; off by default, `swath diag list --floors` turns them on;
-[measurements](../measurements.md#policy-switches)).
-Two gates on bounded ranges, read from a position estimate rather than a request (Java swath's default
-rate-anchored sensor, `RateAnchoredEstimator`): the keys left are `max(keys listed, 1 page) × g`, where `g`,
-clamped to [1/4, 16], is the remaining span over the consumed span read as base-256 fractions (12 bytes) past
-the byte where the cursor diverges from `lo`; where the cursor shares more with `lo` than `hi` does, the window
-is that shared subtree, with ceiling 1. A cursor at `hi` leaves 0. So a range clears the remaining floor after
-at most 16 pages listed, however deep its keys' shared prefix.
-- *Remaining floor:* a range with at most 4 pages (4,000 keys) left is not split. Counted per full page,
-  before demand (`split.skipped.remaining_floor`).
-- *Child-tail floor:* the child past the pivot must realize more than 2 pages. It is credited with
-  `remaining × max(1/16, min(1, ρ) − f)`, where `f` is the pivot's fraction of the remaining span (same frame) and `ρ`
-  the ratio of the trailing page density (EWMA, weight 0.3 on the newest page) to the range's average; a
-  thinning keyspace (`ρ < 1`) shrinks the credited tail (`split.skipped.tail_floor`).
-The open frontier's remainder is unbounded, so neither gate applies to it.
-
 **Structure probes** (on their evidence by default; `swath diag list --structure=on` probes every range in a
 folder, `--structure=off`, or `=false`, none; a library caller's zero `Options` has none). A page's density is
 leaf-local and the anchor reflection overshoots into gaps between sparse folder names, so neither can place a
@@ -357,7 +341,7 @@ cuts, tiles, expected keys, the prior's error per tile); splits (considered, acc
 frontier, rejected per guard clause, skipped for no demand, outranked, or by an admission
 gate), each accepted
 split's pivot source, the density refinement's refusals by reason; `child_empty.{lower,upper}` and by pivot
-source and kind of `hi`; small children; depth; unsplittable ranges; the floors' skips; structure probes and
+source and kind of `hi`; small children; depth; unsplittable ranges; structure probes and
 their pivots; `max_active`, `max_queued`, `mean_active`; busy, idle-with-demand and sink-wait time.
 
 **Reading a split chain from the report.** Every accepted split counts one pivot source:

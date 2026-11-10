@@ -161,7 +161,7 @@ func TestInclusiveProviderMatchesKeyspace(t *testing.T) {
 		for i, opt := range []Options{
 			{Workers: 8},
 			{Workers: 16, Seed: true, Structure: StructureOn},
-			{Workers: 4, Seed: true, Floors: true},
+			{Workers: 4, Seed: true},
 		} {
 			for _, vetoed := range []bool{false, true} {
 				f := &inclusive{keys: want, bounded: i != 2, pageCap: 7 + 6*i}
@@ -258,7 +258,7 @@ func TestBoundsStableAcrossTokenChain(t *testing.T) {
 	for i, opt := range []Options{
 		{Workers: 8},
 		{Workers: 16, Seed: true, Structure: StructureOn},
-		{Workers: 4, Seed: true, Floors: true, Resume: &Resume{After: keys[len(keys)/3]}},
+		{Workers: 4, Seed: true, Resume: &Resume{After: keys[len(keys)/3]}},
 		{Workers: 1, Sequential: true},
 	} {
 		for _, incl := range []bool{false, true} {

@@ -210,7 +210,7 @@ func TestEngineFlagsShared(t *testing.T) {
 	s3test.NoCredentials(t)
 	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	v := factory(t).RegisterFlags(f, true)
-	if err := f.Parse([]string{"--floors", "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "7s"}); err != nil {
+	if err := f.Parse([]string{"--slow-split", "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
 	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})
@@ -218,7 +218,7 @@ func TestEngineFlagsShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := src.(*opened[Object]).p
-	if !p.opt.Seed || !p.opt.Floors || !p.opt.Anonymous || !p.Options().Floors || p.opt.Endpoint != "http://127.0.0.1:1" || p.opt.Timeout.Seconds() != 7 {
+	if !p.opt.Seed || !p.opt.SlowSplit || !p.opt.Anonymous || !p.Options().SlowSplit || p.opt.Endpoint != "http://127.0.0.1:1" || p.opt.Timeout.Seconds() != 7 {
 		t.Fatalf("shared flags not applied: %+v", p.opt)
 	}
 	// Defaults (no flags parsed) hold the engine's defaults. Anonymous is set

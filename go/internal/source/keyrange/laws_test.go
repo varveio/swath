@@ -32,8 +32,7 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 // TestMetamorphicLaws: the listing is invariant to the page size, to the
 // range decomposition (seed on and off, 1, 4 and 64 workers, forced random
 // splits, a resume), to the memory budget and to the policy toggles (the
-// floors, the seed and its descent, structure probes). One
-// table, over the fixture keyspaces and the hostile ones; the reference is
+// seed and its descent, structure probes). One table, over the fixture keyspaces and the hostile ones; the reference is
 // the sorted keyspace itself. Eligible parallel runs also check the
 // report's split, child, leaf-depth and hand-out identities; every
 // engagement counter without a targeted test fires across the matrix.
@@ -64,13 +63,11 @@ func TestMetamorphicLaws(t *testing.T) {
 		{name: "w16/budget=20", workers: 16, budget: 20},
 		{name: "w16/budget=1M", workers: 16, budget: 1 << 20},
 		{name: "w16/seed/short", opt: Options{Seed: true}, workers: 16, budget: 500, short: true},
-		{name: "w64/floors/page=13", opt: Options{Floors: true}, workers: 64, budget: 500, pageCap: 13},
-		{name: "w16/seed/floors/short", opt: Options{Seed: true, Floors: true}, workers: 16, budget: 500, short: true},
 		{name: "w64/seed/page=13", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 13},
 		{name: "w16/structure/short", opt: Options{Structure: StructureOn}, workers: 16, budget: 500, short: true},
 		{name: "w64/structure-on-frontier", opt: Options{Structure: StructureAuto}, workers: 64, budget: 500},
 		{name: "w8/structure-auto/forced-splits/page=7", opt: Options{Structure: StructureAuto}, workers: 8, budget: 500, coin: true, pageCap: 7},
-		{name: "w32/seed/structure/floors/page=7", opt: Options{Seed: true, Structure: StructureOn, Floors: true}, workers: 32, budget: 500, pageCap: 7},
+		{name: "w32/seed/structure/page=7", opt: Options{Seed: true, Structure: StructureOn}, workers: 32, budget: 500, pageCap: 7},
 		// Pages of 3 make the seed paginate and descend in several waves.
 		{name: "w64/seed-descent", opt: Options{Seed: true}, workers: 64, budget: 500, pageCap: 3},
 		{name: "w16/seed-descent/resume", opt: Options{Seed: true}, workers: 16, budget: 500, pageCap: 3, coin: true, resume: true},

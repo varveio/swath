@@ -48,7 +48,7 @@ func TestHelpGroupsCoverFlags(t *testing.T) {
 func TestMovedFlagsNameDiag(t *testing.T) {
 	src := localSource(t)
 	moved := map[string]string{
-		"--no-seed": "s3", "--structure=off": "s3", "--floors": "s3", "--sequential": "s3", "--max-keys=5": "s3",
+		"--no-seed": "s3", "--structure=off": "s3", "--sequential": "s3", "--max-keys=5": "s3",
 		"--adaptive-limit-slow-start": "s3", "--spill-plain": "", "--no-spill-compress": "", "--spill-reserve=1GiB": "",
 		"--no-spill": "", "--no-journal": "",
 	}

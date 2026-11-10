@@ -22,7 +22,7 @@ import (
 // provider's flags registered on one flag set, selects S3 or GCS by the
 // source's scheme, and each provider gets its own defaults and the shared
 // engine flags: by default 64 workers whatever the CPU count, the seed (seed.prefixes counted), splits on,
-// the limiter on, no structure probes or floors; swath diag list --no-seed reaches the
+// the limiter on, no structure probes; swath diag list --no-seed reaches the
 // selected provider, and swath list refuses it (a diagnostic flag).
 func TestBothSchemesThroughTheCommand(t *testing.T) {
 	keys := gcstest.Keys(3000)
@@ -63,7 +63,7 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		}
 		return r
 	}
-	defaults := map[string]bool{"floors": false, "groups": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_split": false, "slow_start": false,
+	defaults := map[string]bool{"groups": false, "limiter": true, "max_keys": false, "request_rate": false, "resume": false, "slow_split": false, "slow_start": false,
 		"seed": true, "seed_from": false, "split": true, "structure": true}
 	for name, src := range schemes {
 		r := runJSON(false, src...)

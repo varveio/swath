@@ -172,7 +172,7 @@ decision to add it later).
 | `-v`, `-vv`, `-vvv` | `-v`: a start line, progress as appended records; `-vv` failed requests and retries with their causes; `-vvv` every request (redacted) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `-q`, `--quiet` | `-q` (no warnings, no automatic progress or statistics); `-qq` also no error line | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features); one name per flag 2026-11-07 (owner: no aliases) |
 | `--color auto\|always\|never` | `--color auto\|always\|never` (`NO_COLOR`, `TERM=dumb`, `CLICOLOR_FORCE`) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--floors`, `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
+| `--engine-toggle NAME=VALUE` (hidden) | `swath diag list` with `--structure=auto\|on\|off`, `--sequential`, `--max-keys`, `--no-spill` | renamed | policies behind switches, 2026-11-05 |
 | `--tune seed.mode=none\|shallow` | `swath diag list --no-seed` (the seed is on by default) | renamed | moved to `swath diag` 2026-11-07 (owner: the cleanest CLI surface) |
 | none (proposed as `--seed hints`, never built) | `--seed-from PATH`: start from a previous dataset's (or a cut file's) key distribution instead of the seed | added | 2026-11-07 (warm start; [internals/range-engine.md](internals/range-engine.md)) |
 | `--tune KEY=VALUE` (other non-sort keys) | none | removed | not ported, 2026-11-06: no value now (`summary.interval`; `parquet.writers` belongs to the unsorted dataset; `engine.readahead`) |
