@@ -6,6 +6,7 @@ name: localfs-bench-xos
 on:
   push:
     branches: [bench/localfs-xos]
+    paths: [go/bench/xos-bench.sh, go/bench/xos_arms.py, .github/workflows/localfs-bench-xos.yml]
   workflow_dispatch:
     inputs:
       ref_a:
