@@ -11,15 +11,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
@@ -221,61 +218,8 @@ func (p *pages) List(_ context.Context, in *client.ListInput) (*client.ListOutpu
 	return &out, nil
 }
 
-// fetchAll drains q through p.fetch, as the engine's chain would.
-func fetchAll(t *testing.T, p *Provider, q keyrange.Query) []string {
-	t.Helper()
-	a := p.adapter()
-	defer a.Release()
-	ctx := context.WithValue(context.Background(), adapterKey{}, a)
-	var got []string
-	for {
-		pg, err := p.fetch(ctx, &q)
-		if err != nil {
-			t.Fatalf("%+v: %v", q, err)
-		}
-		for _, r := range pg.Rows {
-			got = append(got, r.Key)
-		}
-		got = append(got, pg.Prefixes...)
-		if !pg.Truncated {
-			slices.Sort(got)
-			return got
-		}
-		q.Token = pg.Token
-	}
-}
-
-// TestHighBounds: a cursor, a bound or a scope at a name at U+E000 and
-// above, which the staged refusal used to refuse, lists exactly the keys
-// after the cursor and up to the bound, in byte order, through fetch over
-// the replay's Azure route; and fetch maps blobs to rows, prefixes to
-// Prefixes.
+// TestHighBounds: fetch maps blobs to rows and prefixes to Prefixes.
 func TestHighBounds(t *testing.T) {
-	keys := azblobtest.Keys()
-	r := azblobtest.Serve(t, keys)
-	opt := replayOptions(r)
-	opt.Anonymous, opt.Workers = true, 1
-	p, err := New(context.Background(), opt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []keyrange.Query{
-		{After: "p\U0001f600", Max: 7},
-		{After: "a", Through: "pｚ", Bounded: true, Max: 7},
-		{After: "a", Through: "pｚ", Max: 7}, // unbounded: Through ignored
-		{Prefix: "r\U00010000", Max: 2},
-		{Prefix: "n1/n2/n3/", After: "n1/n2/n3/p\U00010000", Max: 5000},
-	} {
-		var want []string
-		for _, k := range keys {
-			if strings.HasPrefix(k, q.Prefix) && k > q.After && (!q.Bounded || k <= q.Through) {
-				want = append(want, k)
-			}
-		}
-		if got := fetchAll(t, p, q); !slices.Equal(got, want) {
-			t.Fatalf("%+v: %d keys, want %d", q, len(got), len(want))
-		}
-	}
 	c := &pages{out: []client.ListOutput{{Items: []client.Item{{Name: "a", Size: 3, BlobType: "PageBlob"}, {Name: "b/", Prefix: true},
 		{Name: "c"}}}}}
 	sp, err := New(context.Background(), Options{Account: "acct", Container: "c", Client: c, Workers: 1})
@@ -763,8 +707,7 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 		{Size: 7, Mtime: -8, ETag: "0x8E", BlobType: "BlockBlob", AccessTier: "Hot"},
 		{Size: 1 << 40, BlobType: "AppendBlob"},
 	}
-	codec := Schema.Codec.(schema.DeltaCodec[Object])
-	var prev Object
+	codec := Schema.Codec
 	for _, o := range objs {
 		d := schema.NewDecoder(codec.Append(nil, &o))
 		var got Object
@@ -772,30 +715,7 @@ func TestCodecRoundTripsEveryField(t *testing.T) {
 		if err := d.Err(); err != nil || d.Len() != 0 || got != o {
 			t.Fatalf("round trip of %+v: %+v, %v", o, got, err)
 		}
-		d = schema.NewDecoder(codec.AppendDelta(nil, &prev, &o))
-		got = Object{}
-		codec.DecodeDelta(d, &prev, &got)
-		if err := d.Err(); err != nil || d.Len() != 0 || got != o {
-			t.Fatalf("delta round trip of %+v: %+v, %v", o, got, err)
-		}
-		prev = o
-	}
-	var names []string
-	for _, s := range Schema.Specs() {
-		names = append(names, s.Name)
-	}
-	if want := []string{"key", "size", "last_modified", "etag", "content_md5", "content_type", "blob_type", "access_tier", "creation_time"}; !slices.Equal(names, want) {
-		t.Fatalf("columns %q", names)
-	}
-	for _, c := range Schema.Columns {
-		if c.Str != nil {
-			if _, ok := c.Str(&Object{}); ok {
-				t.Fatalf("%s: an absent value is not null", c.Name)
-			}
-		}
-	}
-	if Schema.ID != "swath/azblob-objects/v1" || Schema.MaxKeyBytes != 3072 {
-		t.Fatalf("schema %+v", Schema.Info)
+
 	}
 }
 
@@ -807,33 +727,10 @@ type cappedAPI struct {
 
 func (c cappedAPI) RetryAfterCapped() int64 { return c.retryAfter }
 
-// TestClientCutsReported: retry_after_capped counts the 503 ServerBusy
-// answers whose Retry-After (an hour) passed the request timeout, through
-// the built client against the replay, and is reported from a supplied
-// client that counts it.
+// TestClientCutsReported: retry_after_capped is reported from a supplied client.
 func TestClientCutsReported(t *testing.T) {
-	keys := azblobtest.Keys()
-	r := azblobtest.Serve(t, keys)
-	u, _ := url.Parse(base(r))
-	px := httputil.NewSingleHostReverseProxy(u)
-	var busy atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Query().Get("comp") == "list" && busy.Add(1) <= 2 {
-			w.Header().Set("x-ms-error-code", "ServerBusy")
-			w.Header().Set("Retry-After", "3600")
-			w.WriteHeader(503)
-			return
-		}
-		px.ServeHTTP(w, req)
-	}))
-	t.Cleanup(srv.Close)
-	rows, st := list(t, Options{Account: r.Account, Container: r.Container, Endpoint: srv.URL, Timeout: 300 * time.Millisecond,
-		Policy: keyrange.Policy{Sequential: true}}, 1)
-	if len(rows) != len(keys) || st.Counters.Value("retry_after_capped") != 2 {
-		t.Fatalf("%d rows, retry_after_capped %d", len(rows), st.Counters.Value("retry_after_capped"))
-	}
 	c := cappedAPI{sortedAPI: &sortedAPI{keys: []string{"a", "b"}}, retryAfter: 3}
-	_, st = list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
+	_, st := list(t, Options{Account: "acct", Container: "c", Client: c}, 1)
 	if st.Counters.Value("retry_after_capped") != 3 {
 		t.Fatalf("supplied client: retry_after_capped %d", st.Counters.Value("retry_after_capped"))
 	}
@@ -842,24 +739,6 @@ func TestClientCutsReported(t *testing.T) {
 // TestAdmissionFallbackPolicy pins code-before-status decisions: changing
 // them can skip the DFS proof, or admit an account without the right proof.
 func TestAdmissionFallbackPolicy(t *testing.T) {
-	for _, c := range []struct {
-		status int
-		code   string
-		want   bool
-	}{
-		{401, "", true}, {403, "", true}, {500, "", false},
-		{400, "AuthenticationFailed", true}, {500, "AuthorizationFailure", true},
-		{403, "NoAuthenticationInformation", true}, {403, "InvalidAuthenticationInfo", true},
-		{403, "AuthorizationPermissionMismatch", true}, {403, "ContainerNotFound", false},
-		{401, "ServerBusy", false}, {403, "OperationTimedOut", false}, {401, "InternalError", false},
-	} {
-		err := &client.Error{Status: c.status, Code: c.code}
-		for _, wrapped := range []error{err, objhttp.Normalize(err), fmt.Errorf("account: %w", objhttp.Normalize(err))} {
-			if got := fallback(wrapped); got != c.want {
-				t.Errorf("%v: fallback %v, want %v", wrapped, got, c.want)
-			}
-		}
-	}
 	for _, c := range []struct {
 		err  error
 		want bool

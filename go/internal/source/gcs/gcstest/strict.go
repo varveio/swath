@@ -29,7 +29,7 @@ import (
 // tokens to their request may answer. With empty set, every empty-th page
 // is an empty page with a token (the API documents them); with short set,
 // nonempty pages are cut short at varying lengths; cap lowers the page
-// size limit; shortIf cuts the selected requests' pages to one entry.
+// size limit.
 // Every object carries the full metadata resource, sizes and generations
 // as strings, as on the wire, and every response carries the envelope's
 // kind (storage#objects) unless a fields selector leaves it out.
@@ -38,9 +38,6 @@ type Strict struct {
 	Empty int64
 	Short bool
 	Cap   int
-	// ShortIf, when set, cuts the pages of the requests it selects to one
-	// entry (a service may cut any page short).
-	ShortIf func(url.Values) bool
 	// Delay is waited before each answer.
 	Delay time.Duration
 	// Lean sends objects with only name, size, updated, generation and
@@ -89,9 +86,7 @@ func (f *Strict) Serve(t testing.TB) string {
 	return srv.URL + Path
 }
 
-// Requests is the number of requests received; Last the last request's
-// query.
-func (f *Strict) Requests() int64 { return f.requests.Load() }
+// Last is the last request's query.
 func (f *Strict) Last() url.Values {
 	q, _ := f.last.Load().(url.Values)
 	return q
@@ -188,9 +183,6 @@ func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.Short {
 		limit = 1 + int(serial)%limit
-	}
-	if f.ShortIf != nil && f.ShortIf(q) {
-		limit = 1
 	}
 	var items []any
 	var prefixes []string

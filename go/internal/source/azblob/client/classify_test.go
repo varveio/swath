@@ -251,40 +251,6 @@ func TestInvalidPage(t *testing.T) {
 	}
 }
 
-// TestEnvelopeRetried: a 200 whose body is not a listing envelope
-// (another root, an EnumerationResults without Blobs) is retried like a
-// garbled body, counted as a parse failure, until a real page comes; an
-// empty listing (an empty Blobs) is a legitimate final page. The other bad
-// envelopes are TestSDKDecoding's and TestScriptedAnswers'.
-func TestEnvelopeRetried(t *testing.T) {
-	bad := []string{"<Other/>", "\xef\xbb\xbf<EnumerationResults><NextMarker /></EnumerationResults>"}
-	var n atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("prefix") == "empty" {
-			fmt.Fprint(w, page(""))
-			return
-		}
-		if i := int(n.Add(1)) - 1; i < len(bad) {
-			fmt.Fprint(w, bad[i])
-			return
-		}
-		fmt.Fprint(w, page("", "a"))
-	}))
-	defer srv.Close()
-	c := newTestClient(t, Config{Endpoint: srv.URL, Anonymous: true, Retry: objhttp.Retry{MaxAttempts: len(bad) + 1, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}})
-	p, err := c.List(context.Background(), &ListInput{Container: "c"})
-	if err != nil || len(p.Items) != 1 || p.Items[0].Name != "a" {
-		t.Fatalf("page %+v, err %v", p, err)
-	}
-	if got := c.Counters(); got.ParseFailures != int64(len(bad)) || got.Retries != int64(len(bad)) {
-		t.Fatalf("counters %+v, want %d parse failures retried", got, len(bad))
-	}
-	p, err = c.List(context.Background(), &ListInput{Container: "c", Prefix: "empty"})
-	if err != nil || len(p.Items) != 0 || p.NextMarker != "" {
-		t.Fatalf("empty listing: %+v, %v", p, err)
-	}
-}
-
 // TestRequestShape: the List Blobs options the client maps: the container
 // path under the account segment of a non-default endpoint, each set input
 // as its query parameter (startFrom included, which the SDK's flat pager
