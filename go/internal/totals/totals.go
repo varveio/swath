@@ -439,6 +439,52 @@ func (t *Tally) Result() []Prefix {
 	return out
 }
 
+// SortBySize reorders rows in Result's order (each prefix before the
+// prefixes below it) so that the rows below one parent come by size, the
+// largest first, the prefix in byte order on a tie, and a prefix of unknown
+// size (not Sized) after the sized ones; each row's own rows still follow
+// it, and the total stays first.
+func SortBySize(rows []Prefix) {
+	kids := make([][]int, len(rows)+1) // by row; the last for the rows without a parent
+	top := len(rows)
+	var stack []int
+	for i := range rows {
+		for len(stack) > 0 && rows[stack[len(stack)-1]].Depth >= rows[i].Depth {
+			stack = stack[:len(stack)-1]
+		}
+		parent := top
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		kids[parent] = append(kids[parent], i)
+		stack = append(stack, i)
+	}
+	bigger := func(a, b int) int {
+		x, y := &rows[a], &rows[b]
+		switch {
+		case x.Sized() != y.Sized():
+			if x.Sized() {
+				return -1
+			}
+			return 1
+		case x.Sized() && x.Bytes != y.Bytes:
+			return cmp.Compare(y.Bytes, x.Bytes)
+		}
+		return cmp.Compare(x.Prefix, y.Prefix)
+	}
+	out := make([]Prefix, 0, len(rows))
+	var emit func(int)
+	emit = func(n int) {
+		slices.SortFunc(kids[n], bigger)
+		for _, i := range kids[n] {
+			out = append(out, rows[i])
+			emit(i)
+		}
+	}
+	emit(top)
+	copy(rows, out)
+}
+
 // Stats is the tally's account; like Result, call it after the last
 // Flush.
 func (t *Tally) Stats() Stats {

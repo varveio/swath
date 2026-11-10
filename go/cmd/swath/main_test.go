@@ -62,7 +62,8 @@ func TestRun(t *testing.T) {
 
 // TestShowDataset: swath show names a committed dataset's layers, the
 // SeekParquet format and draft, the swath schema id and the swath metadata
-// version, before its coverage.
+// version, before its coverage, and counts its parts and rows in English
+// (1 part, 1 row).
 func TestShowDataset(t *testing.T) {
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
@@ -78,7 +79,7 @@ func TestShowDataset(t *testing.T) {
 	}
 	lines := strings.Split(shown.String(), "\n")
 	want := "dataset " + out + ": SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1"
-	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") {
+	if lines[0] != want || !strings.HasPrefix(lines[3], "coverage complete=true stop=completed") || !strings.HasPrefix(lines[4], "1 part, 1 row, ") {
 		t.Fatalf("show:\n%s\nwant first line %q", shown.String(), want)
 	}
 }

@@ -416,3 +416,18 @@ func TestInodeCap(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// TestSortBySize: below each parent the largest first, ties by prefix,
+// unknown sizes last; a row's own rows stay under it and the total first.
+func TestSortBySize(t *testing.T) {
+	rows := []Prefix{{Prefix: "", Bytes: 100}, {Prefix: "a/", Depth: 1, Bytes: 10}, {Prefix: "a/x/", Depth: 2, Bytes: 1}, {Prefix: "a/y/", Depth: 2, Bytes: 9},
+		{Prefix: "b/", Depth: 1, Bytes: 50}, {Prefix: "c/", Depth: 1, Bytes: 10}, {Prefix: "d/", Depth: 1, Bytes: 99, Unsized: 1}, {Prefix: "e/", Depth: 1}}
+	SortBySize(rows)
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Prefix)
+	}
+	if want := []string{"", "b/", "a/", "a/y/", "a/x/", "c/", "e/", "d/"}; !slices.Equal(got, want) {
+		t.Fatalf("order %q, want %q", got, want)
+	}
+}

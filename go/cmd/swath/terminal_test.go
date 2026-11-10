@@ -21,16 +21,18 @@ import (
 
 func snap() listing.ProgressSnapshot {
 	usd := 0.0125
-	return listing.ProgressSnapshot{Objects: 1234567, Retained: 1000, Parts: 3, Requests: 2500, Inflight: 17, DurationMs: 10_000,
+	return listing.ProgressSnapshot{Rows: 1234567, Retained: 1000, Parts: 3, Requests: 2500, Inflight: 17, DurationMs: 10_000,
 		StartedAt: time.Unix(1, 0), CostUSD: &usd, CostRatePer1kUSD: 0.005}
 }
 
 // TestProgressRecord: Java's listing record (phase, objects with the
-// recovered rows apart, live and average rates, in flight, elapsed, API
-// calls, the labelled estimate), its trailing fields dropped whole to fit
-// a terminal, and colour only when asked.
+// recovered rows apart, live and average rates, the parts of a dataset, in
+// flight, elapsed, API calls, the labelled estimate), its trailing fields
+// dropped whole to fit a terminal, and colour only when asked. The rate
+// takes the rows' noun; a run without a dataset shows no parts.
 func TestProgressRecord(t *testing.T) {
-	parts := progressParts(snap(), 75*time.Second, 2000, "objects")
+	store := rowNouns(false, false)
+	parts := progressParts(snap(), 75*time.Second, 2000, store, true)
 	want := []string{"listing", "1,234,567 objects (+1,000 recovered)", "2,000 keys/s (avg 123,457)", "3 parts", "17 in flight",
 		"1m15s elapsed", "2,500 API calls", "~$0.013 (est. @ $0.005/1k LIST)"}
 	if strings.Join(parts, "|") != strings.Join(want, "|") {
@@ -50,9 +52,34 @@ func TestProgressRecord(t *testing.T) {
 		t.Fatalf("coloured frame %q", c)
 	}
 	v := snap()
-	v.Objects, v.Requests, v.Verified = 0, 0, 5_000_000
-	if p := progressParts(v, time.Second, 0, "objects"); p[0] != "verifying" || p[1] != "5.0 MB verified" {
+	v.Rows, v.Requests, v.Verified = 0, 0, 5_000_000
+	if p := progressParts(v, time.Second, 0, store, true); p[0] != "verifying" || p[1] != "4.77 MiB verified" {
 		t.Fatalf("verification record %q", p)
+	}
+	v = snap()
+	v.Parts = 1
+	if p := progressParts(v, time.Second, 0, store, true); p[3] != "1 part" {
+		t.Fatalf("one part: %q", p)
+	}
+	local := progressParts(snap(), time.Second, 2000, rowNouns(true, false), false)
+	if local[1] != "1,234,567 entries (+1,000 recovered)" || local[2] != "2,000 entries/s (avg 123,457)" || local[3] != "17 in flight" {
+		t.Fatalf("local text run: %q", local)
+	}
+	if p := progressParts(snap(), time.Second, 2000, rowNouns(false, true), false); p[1] != "1,234,567 rows (+1,000 recovered)" || p[2] != "2,000 rows/s (avg 123,457)" {
+		t.Fatalf("versions: %q", p)
+	}
+}
+
+// TestAllVersionsNouns: the command sees --all-versions, which names the
+// terminal's rows (rowNouns).
+func TestAllVersionsNouns(t *testing.T) {
+	var o options
+	f := newFlags(&o, false)
+	if o.allVersions == nil || *o.allVersions {
+		t.Fatal("--all-versions unseen or on by default")
+	}
+	if err := f.Parse([]string{"--all-versions"}); err != nil || !*o.allVersions {
+		t.Fatalf("%v: --all-versions unseen", err)
 	}
 }
 
@@ -89,27 +116,31 @@ func TestProgressRedrawAndAppend(t *testing.T) {
 func TestProgressGating(t *testing.T) {
 	type c struct {
 		opt          termOptions
-		tty          bool
+		tty, rows    bool
 		width        int
 		term         string
 		show, redraw bool
 	}
 	on, off := tri{true, true}, tri{true, false}
 	for i, tc := range []c{
-		{termOptions{}, true, 80, "xterm", true, true},
-		{termOptions{}, false, 0, "", false, false},
-		{termOptions{quiet: 1}, true, 80, "xterm", false, false},
-		{termOptions{verbose: 1}, true, 80, "xterm", true, false},
-		{termOptions{progress: on}, false, 0, "", true, false},
-		{termOptions{progress: on, quiet: 1}, true, 80, "xterm", true, true},
-		{termOptions{progress: off}, true, 80, "xterm", false, false},
-		{termOptions{interval: 5 * time.Second}, false, 0, "", true, false},
-		{termOptions{}, true, 80, "dumb", true, false},
-		{termOptions{}, true, 20, "xterm", true, false},
+		{termOptions{}, true, false, 80, "xterm", true, true},
+		{termOptions{}, false, false, 0, "", false, false},
+		{termOptions{quiet: 1}, true, false, 80, "xterm", false, false},
+		{termOptions{verbose: 1}, true, false, 80, "xterm", true, false},
+		{termOptions{progress: on}, false, false, 0, "", true, false},
+		{termOptions{progress: on, quiet: 1}, true, false, 80, "xterm", true, true},
+		{termOptions{progress: off}, true, false, 80, "xterm", false, false},
+		{termOptions{interval: 5 * time.Second}, false, false, 0, "", true, false},
+		{termOptions{}, true, false, 80, "dumb", true, false},
+		{termOptions{}, true, false, 20, "xterm", true, false},
+		// stdout a terminal of rows: no automatic progress among them;
+		// --progress still draws it.
+		{termOptions{}, true, true, 80, "xterm", false, false},
+		{termOptions{progress: on}, true, true, 80, "xterm", true, true},
 	} {
 		// A redraw also needs escape sequences to act on stderr: on Windows
 		// a console, which a test's stderr is not.
-		show, redraw := progressPrefs(tc.opt, tc.tty, tc.width, tc.term)
+		show, redraw := progressPrefs(tc.opt, tc.tty, tc.rows, tc.width, tc.term)
 		if tc.redraw && !enableVT() {
 			tc.redraw = false
 		}
@@ -159,18 +190,30 @@ func TestStatsBlock(t *testing.T) {
 		Requests:   &listing.Requests{HTTPAttempts: 2000},
 		Cost:       &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
 		Efficiency: &listing.Efficiency{KeysPerSec: 166_667, HTTPAttemptsPer1kRows: &per}}
-	got := statsLines(r, false, "objects")
-	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · 1.50 per 1k objects · in flight avg 0.00 · peak 0",
-		"~$0.010 (est. @ $0.005/1k LIST)", "2 files · 3.5 MB written · peak RSS 200.0 MB"}
+	store := rowNouns(false, false)
+	got := statsLines(r, false, store)
+	want := []string{"2,000,000 objects in 12.3s · 166,667 keys/s · 14.0s total", "2,000 API calls · in flight avg 0.00 · peak 0",
+		"~$0.010 (est. @ $0.005/1k LIST)", "2 parts · 3.34 MiB written · peak RSS 191 MiB"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if l := statsLines(r, false, rowNoun(true)); !strings.HasPrefix(l[0], "2,000,000 entries in ") { // a local tree's rows
+	if l := statsLines(r, false, rowNouns(true, false)); !strings.HasPrefix(l[0], "2,000,000 entries in 12.3s · 166,667 entries/s") { // a local tree's rows
 		t.Fatalf("local headline %q", l[0])
+	}
+	// What swath wrote: one part, or one text file.
+	one := *r
+	one.Output.PartsWritten, one.Output.RowsEmitted, one.Requests = 1, 1, &listing.Requests{HTTPAttempts: 1}
+	if l := statsLines(&one, false, store); !strings.HasPrefix(l[0], "1 object in ") || l[1] != "1 API call · in flight avg 0.00 · peak 0" ||
+		l[3] != "1 part · 3.34 MiB written · peak RSS 191 MiB" {
+		t.Fatalf("one part %q", l)
+	}
+	one.Output.Text = &listing.TextOutput{Destination: "out.tsv", Bytes: 2048}
+	if l := statsLines(&one, false, store); l[len(l)-1] != "1 file · 2.00 KiB written · peak RSS 191 MiB" {
+		t.Fatalf("a text file %q", l)
 	}
 	r.Outcome = listing.Outcome{Class: "deadline", ExitCode: exitDeadline, Resumable: true}
 	r.Invocation.Out = "/data/ds"
-	if l := statsLines(r, false, "objects"); l[0] != "INCOMPLETE (deadline) — resume: swath resume /data/ds" {
+	if l := statsLines(r, false, store); l[0] != "INCOMPLETE (deadline) — resume: swath resume /data/ds" {
 		t.Fatalf("disposition %q", l[0])
 	}
 	short := &listing.Report{Timings: listing.Timings{SessionMs: 100}}

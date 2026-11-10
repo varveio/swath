@@ -777,7 +777,7 @@ func pipeline(ctx context.Context, cfg Config, sum Report, src registry.Source, 
 // sample is the run's progress now, for the history.
 func (a *attempt) sample() Sample {
 	p := a.cfg.Progress.Snapshot()
-	v := Sample{RowsFetched: p.Objects, RowsEmitted: p.Ordered, RowsDurable: a.retained.Load(),
+	v := Sample{RowsFetched: p.Rows, RowsEmitted: p.Ordered, RowsDurable: a.retained.Load(),
 		HTTPAttempts: p.Requests, Inflight: p.Inflight, Limit: p.Limit}
 	if r := a.jr.ackedRows(); r > 0 {
 		v.RowsDurable = r

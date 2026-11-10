@@ -94,7 +94,7 @@ func TestTotalsPartlySized(t *testing.T) {
 	for format, want := range map[string]string{
 		TSV:   "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t2\t0\t7\t1\t\\N\t\n",
 		JSONL: `{"depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"unsized":1,"last_modified":null}` + "\n",
-		Table: "Size  Files  Dirs  LastModified (local)  Path\n   -      2     0                        (total)\n",
+		Table: "size  files  dirs  last_modified (local)  path\n   -      2     0                         (total)\n",
 	} {
 		var b bytes.Buffer
 		if err := WriteTotals(&b, format, TotalsLayout{Local: true}, rows); err != nil || b.String() != want {
@@ -140,7 +140,7 @@ func TestTotalsOrder(t *testing.T) {
 		f := strings.Fields(l)
 		prefixes = append(prefixes, f[len(f)-1])
 	}
-	if got := strings.Join(prefixes, " "); got != "Prefix logs/a/ logs/a/b/ logs/c/ (total)" || !slices.Equal(displaced, before) {
+	if got := strings.Join(prefixes, " "); got != "prefix logs/a/ logs/a/b/ logs/c/ (total)" || !slices.Equal(displaced, before) {
 		t.Fatalf("table order %q", got)
 	}
 }
@@ -153,8 +153,8 @@ func TestTotalsTableLocalTime(t *testing.T) {
 	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.FixedZone("X", 2*3600)}, rows); err != nil {
 		t.Fatal(err)
 	}
-	want := "Size  Objects  LastModified (local)  Prefix\n" +
-		" 1 B        1  1970-01-01 02:00:00   (total)\n"
+	want := "size  objects  last_modified (local)  prefix\n" +
+		" 1 B        1  1970-01-01 02:00:00    (total)\n"
 	if b.String() != want {
 		t.Fatalf("%q\nwant %q", b.String(), want)
 	}

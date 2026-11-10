@@ -20,7 +20,7 @@ command word. An unknown flag is a usage error naming the nearest flag (`unknown
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
 (`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`) is the source `az://ACCOUNT/CONTAINER[/PREFIX]`.
 
-SOURCE is a local directory, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `az://account/container[/prefix]`. `swath list` writes a dataset to `-o DIR`
+SOURCE is a local directory or file, `s3://bucket[/prefix]`, `gs://bucket[/prefix]` or `az://account/container[/prefix]`. `swath list` writes a dataset to `-o DIR`
 ([internals/parquet-output.md](internals/parquet-output.md)), text rows to a file or stdout (**Text output**
 below). `swath du` and `swath diag count` only list and count, writing no rows (rows are counted as they arrive,
 never ordered, buffered or spilled: [internals/ordering.md](internals/ordering.md#counting-without-order)); they
@@ -91,7 +91,7 @@ Usage: swath list SOURCE [OPTIONS]
        swath ls SOURCE [OPTIONS]
 
 List SOURCE: into a sorted Parquet dataset with -o DIR, as text rows into -o NAME.tsv or NAME.jsonl
-(optionally .gz or .zst), or as text rows on stdout without -o. SOURCE is a local directory,
+(optionally .gz or .zst), or as text rows on stdout without -o. SOURCE is a local directory or file,
 az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
 
 Examples:
@@ -106,6 +106,10 @@ Output:
                              text rows: auto is the table on a terminal, TSV otherwise
                                With -o FILE the file's name says the format; a --format that agrees
                                with it is accepted.
+      --columns NAME         TSV and JSONL: these columns, in order (key,size; repeatable)
+                               By the dataset's column names; a name the source's schema lacks is
+                               refused, listing its columns. Not with the table or a dataset; on a
+                               terminal the rows are then TSV.
       --overwrite            replace a previous dataset in -o
 
 Filters:
@@ -266,7 +270,7 @@ Usage: swath du SOURCE [OPTIONS]
 Total SOURCE's objects (a local tree's files), bytes and newest time, and with -d N each prefix's
 down to N levels below SOURCE, a parent including its children, as du. On stdout: a table on a
 terminal (the total last), TSV otherwise or with --format jsonl (the total first, at Depth 0). Bytes
-are the objects' sizes as listed, not storage or billing. SOURCE is a local directory,
+are the objects' sizes as listed, not storage or billing. SOURCE is a local directory or file,
 az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
 
 Examples:
@@ -281,6 +285,10 @@ Totals:
                                st_blocks x 512, as du; a directory's own blocks are not counted.
       --count-links-once     local: count a file with several hard links once, as du does
                                Under the first of its names in byte order.
+      --sort name|size       order prefixes by name, or by size, largest first (default name)
+                               By size the prefixes below each parent are ordered, each still above
+                               its own; the total keeps its place (last in the table, first in TSV
+                               and JSONL), and a prefix of unknown size comes last.
       --max-prefixes N       fail rather than hold more than N distinct prefixes (default 1000000)
                                Raise it for a deep --depth over a wide tree when memory allows
                                (about 150 bytes a prefix); it bounds memory, never the objects
@@ -427,7 +435,7 @@ $ swath diag list --help
 Usage: swath diag list SOURCE [OPTIONS]
 
 Every swath list option (swath list --help), and the diagnostic ones below: they exist to run an
-experiment or a comparison, not to operate the tool. SOURCE is a local directory,
+experiment or a comparison, not to operate the tool. SOURCE is a local directory or file,
 az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix].
 
 Examples:
@@ -460,7 +468,7 @@ Usage: swath diag count SOURCE [OPTIONS]
 
 List SOURCE and count its rows and object bytes, writing nothing, to measure the listing: rows are
 counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and resources.
-SOURCE is a local directory, az://account/container[/prefix], gs://bucket[/prefix] or
+SOURCE is a local directory or file, az://account/container[/prefix], gs://bucket[/prefix] or
 s3://bucket[/prefix].
 
 Examples:
@@ -658,7 +666,12 @@ Diagnostics:
   not by position. Values are as the schema stores them (S3's `etag` without its quotes, `checksum_algorithm`
   its one value, the owner two columns), integers exact, unsigned columns (`uid`, `inode`, `dev`) unsigned,
   booleans `true` and `false`, every time column in UTC with six fraction digits
-  (`2023-11-14T22:13:20.000000Z`). A null is not an empty string and not zero.
+  (`2023-11-14T22:13:20.000000Z`). A null is not an empty string and not zero. Every source prints text rows,
+  a local tree too (`swath list /data`; with `--metadata names` the fields it does not read are null).
+  `--columns key,size` (repeatable) prints those columns, by the dataset's names, in the order given, in TSV and
+  JSONL; a name the source's schema lacks is refused with exit 2, the message listing its columns, before any
+  request. The table's columns are fixed, so `--columns` is refused with `--format table` and with a dataset;
+  on a terminal it makes `auto` TSV.
   - JSONL, one object per line, its members in column order, a null `null`, strings escaped as jq does. A string
     or binary value that is not UTF-8 (a local name's bytes) is `NAME_base64`, its exact bytes in standard
     base64, in place of `NAME` (`key_base64`, `link_target_base64`); no column name ends in `_base64`.
@@ -696,7 +709,7 @@ Diagnostics:
   again. `output.text` in the report names the format, destination, compression, rows and bytes.
 - **Per-prefix totals** (`swath du SOURCE [-d N]`, every source): how much is under a bucket, a prefix or a
   directory, and under each prefix down to N levels, as `du` (and `mc du`, `gsutil du`, `s5cmd du`) for buckets and
-  directories alike. Depth counts from SOURCE: from the prefix it names up to its last `/` (`s3://b/logs/2026/`
+  directories alike; a local file is a source too, its one total row. Depth counts from SOURCE: from the prefix it names up to its last `/` (`s3://b/logs/2026/`
   from `logs/2026/`, `s3://b/logs` from the bucket's top; a local tree from its root), before an `--include`
   narrows the listed prefix. A prefix of depth k is a key up to and including the k-th `/` after that, and the
   total is depth 0. For the total and each prefix of depth 1 to N, `swath du` prints the objects under it, the
@@ -714,19 +727,21 @@ Diagnostics:
 
   Rows go to stdout in `--format` `auto` (the table on a terminal, TSV otherwise), `table`, `tsv` or `jsonl`. TSV
   and JSONL are sorted by prefix in byte order, the total first and a parent before its children; the table keeps
-  that order for the other rows and puts the total last. Each row includes everything below it (the total
+  that order for the other rows and puts the total last. `--sort size` (`name`, the default, is that order) orders
+  the prefixes below each parent by size, the largest first, the prefix on a tie and a prefix of unknown size
+  last, each still above the prefixes below it; the total keeps its place, in every format. Each row includes everything below it (the total
   includes every row), so add up rows of one depth only, never across depths: the depth-1 rows together leave
   out the objects directly under SOURCE, and all rows together count an object once per level it is under. The
-  table is for reading: a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below
-  1 KiB), a local tree's files counted as `Files` under `Path`, the newest time to the second in the reader's local time (as
-  `ls -l` and `du --time`; `TZ` chooses it), the prefix last, as `du` prints its paths, and the total last, named
-  `(total)`, as `du` and `wc` end on theirs:
+  table is for reading: a heading of the fields' names, as the rows table's, sizes in binary units to three
+  significant digits (`5.88 MiB`; bytes below 1 KiB), a local tree's files counted as `files` under `path`, the
+  newest time to the second in the reader's local time (as `ls -l` and `du --time`; `TZ` chooses it), the prefix
+  last, as `du` prints its paths, and the total last, named `(total)`, as `du` and `wc` end on theirs:
 
   ```text
-      Size  Files  Dirs  LastModified (local)  Path
-   695 KiB     73    11  2026-11-09 02:44:49   bench/
-   429 KiB     48     2  2026-11-09 13:03:32   cmd/
-  5.88 MiB    681    97  2026-11-09 13:03:32   (total)
+      size  files  dirs  last_modified (local)  path
+   695 KiB     73    11  2026-11-09 02:44:49    bench/
+   429 KiB     48     2  2026-11-09 13:03:32    cmd/
+  5.88 MiB    681    97  2026-11-09 13:03:32    (total)
   ```
 
   TSV and JSONL are for programs and are the same for every source: exact bytes and the times of text rows
@@ -737,8 +752,8 @@ Diagnostics:
   (`jq 'select(.depth == 0) | .size'`; `jq 'select(.depth == 1)'` for the children). The total's `prefix` is
   SOURCE's prefix up to its last `/` (empty for a whole bucket or a local tree, so a TSV total line ends with an
   empty field: split TSV at tabs, `awk -F'\t'` or `cut`, never at runs of blanks). The fields say objects for a
-  local tree's files too, so a script reads every source with the same names; only the table says `Files` and
-  `Path`. `size` is the bytes of the objects that had a size, and `unsized` counts the files that had none
+  local tree's files too, so a script reads every source with the same names; only the table says `files` and
+  `path`. `size` is the bytes of the objects that had a size, and `unsized` counts the files that had none
   (`--metadata names` reads no sizes), as `rclone size --json`'s `sizeless`: a size with `unsized` above 0 leaves
   those files out, and the table shows it as `-`. A time is null when no object under the prefix had one: `\N`
   in TSV, `null` in JSONL, blank in the table. TSV takes text rows' grammar, so any name round-trips; in JSONL a
@@ -1000,7 +1015,7 @@ Diagnostics:
 
   | Field | Meaning |
   |---|---|
-  | `objects` | rows listed so far (a local tree's entries, directories included) |
+  | `rows` | rows listed so far (a local tree's entries, directories included; with `--all-versions`, versions and delete markers) |
   | `ordered`, `encoded` | rows handed to the encoders, rows written into parts |
   | `parts` | parts published |
   | `verified_bytes` | a resume's bytes of retained parts checked so far |
@@ -1011,7 +1026,7 @@ Diagnostics:
   | `throttles`, `timeouts` | throttle failures; timeout failures, including credential waits before HTTP accounting starts |
   | `part_age_ms` | time since the last part was published (or since the start): publication age, not the age of the rows a resume would list again |
   | `mutex_wait_ms`, `mutex_max_hold_ms` | the range engine's decision mutex: summed wait, longest hold |
-  | `rows_retained` | rows a resume kept from the interrupted run (not in `objects`) |
+  | `rows_retained` | rows a resume kept from the interrupted run (not in `rows`) |
   | `requests`, `retries` | HTTP attempts; retry-loop repetitions, including credential-wait failures before HTTP accounting starts ([accounting](internals/clients.md#retry-policy-and-accounting)) |
   | `inflight`, `limit` | attempts in flight now; the adaptive limiter's current limit (0 without one) |
   | `cost_usd`, `cost_rate_per_1k_usd` | `requests` at the service's reference list rate, and that rate (absent without a known tariff, including Azure Blob and custom endpoints) |
@@ -1023,20 +1038,27 @@ Diagnostics:
   values unless given again.
 - **Terminal** (Java's stderr surface). A live progress record on stderr, from the snapshot the progress file
   is written from: the phase (`starting`, `verifying` with a resume's bytes checked, `listing`), objects listed
-  (a local tree's entries: `N entries`; with `+N recovered`: rows a resume kept), live and average keys/s, parts published, requests in flight,
+  (`N objects`; a local tree's `N entries`, `N rows` with `--all-versions`; with `+N recovered`: rows a resume
+  kept), the live and average rate in the same noun (`keys/s` for a store, `entries/s`, `rows/s`), the parts
+  published (a dataset run's), requests in flight,
   elapsed time since the command began, API calls and, on a known tariff, the labeled estimate; no percentage
   or ETA (a listing has no honest denominator), no key text. On a terminal it is redrawn in place (carriage
   return, `ESC[2K`; on Windows after enabling virtual-terminal processing, else plain lines), its trailing
   fields dropped whole to fit the width, every second; elsewhere it is appended as plain lines every 30 s.
-  Shown by default when stderr is a terminal and neither `-q` nor `-v` is given; `--progress` forces it,
+  Shown by default when stderr is a terminal, neither `-q` nor `-v` is given and stdout is not a terminal that
+  carries rows (`swath list` without `-o`, `swath du`: the two share the screen, as aws, rclone and fd show no
+  progress there); `--progress` forces it,
   `--no-progress` suppresses it, `--progress-interval D` (at least 1 s) sets the cadence and implies it.
   Warnings written while the line is drawn erase it and repaint it after. At the end, `--stats` prints Java's
   block on stderr: a disposition (`INCOMPLETE (class)` with `resume: swath resume DIR` for a resumable stop; a
-  refused run prints only this line), `N objects in T · K keys/s` (`N entries` for a local tree; with the whole invocation's time when it is
-  over a second longer), `N API calls · R per 1k objects · in flight avg A · peak P`, throttles, retries and
-  entry errors when any, the estimate, and `files · bytes written · peak RSS`. Without `--stats` it is printed
+  refused run prints only this line), `N objects in T · K keys/s` (the progress record's nouns; with the whole
+  invocation's time when it is over a second longer), `N API calls · in flight avg A · peak P` (the calls per
+  1,000 rows are the report's `efficiency.http_attempts_per_1k_rows`), throttles, retries and entry errors when
+  any, the estimate, and what was written: `N parts` (Parquet) or `1 file` (a `.tsv` or `.jsonl` output), the
+  bytes written and the peak RSS, every size in binary units (`3.7 KiB`, as the tables). Without `--stats` it is printed
   for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
-  closed stdout reader; `--no-stats` never. The one-line summary stays on stdout. `-v` (`-vv`, `-vvv`: the same;
+  closed stdout reader; `--no-stats` never. stdout carries rows or nothing: outside `swath diag count` no
+  account is printed there (a program reads `--report`). `-v` (`-vv`, `-vvv`: the same;
   Go has no finer log levels) prints a start line and shows progress as appended records; `-q` drops warnings
   and the automatic progress and statistics; `-qq` also drops the final error line (the exit code, `error.json`
   and `--report` stand). `--color auto|always|never` colors the progress line and the statistics (headline

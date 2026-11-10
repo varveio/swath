@@ -17,6 +17,7 @@ import (
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/totals"
 )
 
@@ -69,6 +70,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "count-links-once", Value: source.Switch(&o.linksOnce), Group: source.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links once, as du does",
 		Long:  "Under the first of its names in byte order."})
+	o.sortBy = sortName
+	def(source.Flag{Name: "sort", Value: source.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: source.GroupTotals, Commands: []string{cmdDu},
+		Usage: "order prefixes by name, or by size, largest first",
+		Long:  "By size the prefixes below each parent are ordered, each still above its own; the total keeps its place (last in the table, first in TSV and JSONL), and a prefix of unknown size comes last."})
 	def(source.Flag{Name: "max-prefixes", Value: source.Count(&o.maxPrefixes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxPrefixes),
 		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "fail rather than hold more than N distinct prefixes",
 		Long: "Raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted."})
@@ -82,6 +87,17 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
 		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "text rows: auto is the table on a terminal, TSV otherwise",
 		Long: "With -o FILE the file's name says the format; a --format that agrees with it is accepted."})
+	def(source.Flag{Name: "columns", Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+		Usage: "TSV and JSONL: these columns, in order (key,size; repeatable)",
+		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
+		Value: source.Func(func(v string) error {
+			for _, c := range strings.Split(v, ",") {
+				if c = strings.TrimSpace(c); c != "" {
+					o.columns = append(o.columns, c)
+				}
+			}
+			return nil
+		})})
 	def(source.Flag{Name: "overwrite", Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
 
@@ -196,6 +212,9 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 		for _, fl := range groupFlags[g] {
 			source.SetGroup(fl, source.GroupStores)
 		}
+	}
+	if c, ok := shared[keyrange.Group].(*keyrange.Common); ok {
+		o.allVersions = &c.AllVersions // the terminal's nouns (rowNouns)
 	}
 	for _, p := range registry.Factories() {
 		named := source.SharedValues{}

@@ -63,9 +63,16 @@ type column[P any] struct {
 	key                    bool
 }
 
+// ProjectionError refuses a projection (Config.Columns) the schema cannot
+// give: the caller's to fix, found before any row is listed.
+type ProjectionError struct{ msg string }
+
+func (e *ProjectionError) Error() string { return e.msg }
+
 // NewSink binds o to schema s; a TSV output gets its header line here. It
 // refuses a projection (Config.Columns) that names a column s lacks, or
-// names one twice, listing s's columns, before any row is written.
+// names one twice, listing s's columns, before any row is written
+// (ProjectionError).
 func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 	vers, err := schema.BindVersions(s)
 	if err != nil {
@@ -101,10 +108,10 @@ func NewSink[P any](o *Out, s *schema.Schema[P]) (*Sink[P], error) {
 		for i, n := range o.cfg.Columns {
 			j := slices.Index(names, n)
 			if j < 0 {
-				return nil, fmt.Errorf("text output: no column %q in %s (its columns: %s)", n, s.ID, strings.Join(names, ", "))
+				return nil, &ProjectionError{fmt.Sprintf("no column %q in %s (its columns: %s)", n, s.ID, strings.Join(names, ", "))}
 			}
 			if slices.Contains(o.cfg.Columns[:i], n) {
-				return nil, fmt.Errorf("text output: column %q named twice", n)
+				return nil, &ProjectionError{fmt.Sprintf("column %q named twice", n)}
 			}
 			k.cols = append(k.cols, all[j])
 		}

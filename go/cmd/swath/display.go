@@ -17,6 +17,7 @@ import (
 
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/source"
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record
@@ -195,18 +196,12 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%dh%02dm", s/3600, (s%3600)/60)
 }
 
-// byteText is Java's decimal byte text: 512 B, 1.5 MB.
-func byteText(n int64) string {
-	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
-	v, u := float64(n), 0
-	for v >= 1000 && u < len(units)-1 {
-		v /= 1000
-		u++
+// plural is the noun for n of it: one or many.
+func plural[N int | int64](n N, one, many string) string {
+	if n == 1 {
+		return one
 	}
-	if u == 0 {
-		return count(n) + " B"
-	}
-	return fmt.Sprintf("%.1f %s", v, units[u])
+	return many
 }
 
 // costText is Java's labelled estimate.
@@ -250,42 +245,54 @@ func frame(parts []string, width int, p palette) string {
 	return b.String()
 }
 
-// rowNoun is what the terminal calls a source's rows: a local tree's are
-// entries (its files, directories and other kinds), an object store's
-// objects.
-func rowNoun(local bool) string {
-	if local {
-		return "entries"
+// nouns are what the terminal calls a source's rows and their rate: a
+// local tree's are entries (its files, directories and other kinds), an
+// object store's objects, listed in keys a second; with --all-versions an
+// object store's are rows (versions and delete markers).
+type nouns struct{ row, rows, rate string }
+
+func rowNouns(local, versions bool) nouns {
+	switch {
+	case local:
+		return nouns{"entry", "entries", "entries/s"}
+	case versions:
+		return nouns{"row", "rows", "rows/s"}
 	}
-	return "objects"
+	return nouns{"object", "objects", "keys/s"}
 }
 
+// of is n rows, counted and named.
+func (n nouns) of(rows int64) string { return count(rows) + " " + plural(rows, n.row, n.rows) }
+
 // progressParts is one record's fields, most important first: the phase,
-// its counters (rows called noun), then elapsed time, API calls and the
-// estimate. No percentage or ETA: a listing has no honest denominator. No
-// key text.
-func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, noun string) []string {
+// its counters (rows called by n; the parts published, for a run that
+// writes a dataset), then elapsed time, API calls and the estimate. No
+// percentage or ETA: a listing has no honest denominator. No key text.
+func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, n nouns, dataset bool) []string {
 	phase := "listing"
 	switch {
 	case s.StartedAt.IsZero():
 		phase = "starting"
-	case s.Verified > 0 && s.Objects == 0 && s.Requests == 0:
+	case s.Verified > 0 && s.Rows == 0 && s.Requests == 0:
 		phase = "verifying"
 	}
 	parts := []string{phase}
 	if phase == "verifying" {
-		parts = append(parts, byteText(s.Verified)+" verified")
+		parts = append(parts, textout.Size(s.Verified)+" verified")
 	} else {
-		objects := count(s.Objects) + " " + noun
+		rows := n.of(s.Rows)
 		if s.Retained > 0 {
-			objects += " (+" + count(s.Retained) + " recovered)"
+			rows += " (+" + count(s.Retained) + " recovered)"
 		}
 		avg := 0.0
 		if s.DurationMs > 0 {
-			avg = float64(s.Objects) * 1000 / float64(s.DurationMs)
+			avg = float64(s.Rows) * 1000 / float64(s.DurationMs)
 		}
-		parts = append(parts, objects, fmt.Sprintf("%s keys/s (avg %s)", count(int64(live+0.5)), count(int64(avg+0.5))),
-			count(s.Parts)+" parts", count(s.Inflight)+" in flight")
+		parts = append(parts, rows, fmt.Sprintf("%s %s (avg %s)", count(int64(live+0.5)), n.rate, count(int64(avg+0.5))))
+		if dataset {
+			parts = append(parts, count(s.Parts)+" "+plural(s.Parts, "part", "parts"))
+		}
+		parts = append(parts, count(s.Inflight)+" in flight")
 	}
 	parts = append(parts, elapsed(session)+" elapsed", count(s.Requests)+" API calls")
 	if s.CostUSD != nil && s.Requests > 0 && s.CostRatePer1kUSD > 0 {
@@ -304,7 +311,8 @@ type display struct {
 	pal      palette
 	interval time.Duration
 	started  time.Time // the invocation's start: the elapsed time shown
-	noun     string    // the rows' name (rowNoun)
+	noun     nouns
+	dataset  bool // the run writes a dataset: its parts are shown
 
 	samples chan listing.ProgressSnapshot
 	stopped chan struct{}
@@ -320,10 +328,12 @@ type display struct {
 // progressPrefs decides whether a run shows live progress and how, as
 // Java's: an explicit --progress/--no-progress decides; an explicit
 // --progress-interval opts in; otherwise on when stderr is a terminal and
-// neither -q nor -v is given. -v alone shows it as appended records (the
-// verbose log surface). Lines redraw only on a terminal of usable width
-// whose TERM is not dumb.
-func progressPrefs(t termOptions, tty bool, width int, termEnv string) (show, redraw bool) {
+// neither -q nor -v is given, and stdout is not a terminal that carries
+// rows (rows): the two share the screen, and a redrawn line would land
+// among the rows. -v alone shows it as appended records (the verbose log
+// surface). Lines redraw only on a terminal of usable width whose TERM is
+// not dumb.
+func progressPrefs(t termOptions, tty, rows bool, width int, termEnv string) (show, redraw bool) {
 	switch {
 	case t.progress.set:
 		show = t.progress.on
@@ -332,7 +342,7 @@ func progressPrefs(t termOptions, tty bool, width int, termEnv string) (show, re
 	case t.verbose > 0:
 		show = t.quiet == 0
 	default:
-		show = tty && t.quiet == 0
+		show = tty && t.quiet == 0 && !rows
 	}
 	redraw = show && tty && termEnv != "dumb" && width >= minUsableWidth && t.verbose == 0 && enableVT()
 	return show, redraw
@@ -351,8 +361,8 @@ func progressInterval(t termOptions, redraw bool) time.Duration {
 	return max(d, time.Second)
 }
 
-func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun string) *display {
-	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun,
+func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun nouns, dataset bool) *display {
+	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun, dataset: dataset,
 		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
 	d.done.Add(1)
 	go d.loop()
@@ -398,12 +408,12 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 	}
 	live := 0.0
 	if !d.prevAt.IsZero() && now.After(d.prevAt) {
-		live = float64(s.Objects-d.prevObj) / now.Sub(d.prevAt).Seconds()
+		live = float64(s.Rows-d.prevObj) / now.Sub(d.prevAt).Seconds()
 	} else if s.DurationMs > 0 {
-		live = float64(s.Objects) * 1000 / float64(s.DurationMs)
+		live = float64(s.Rows) * 1000 / float64(s.DurationMs)
 	}
-	d.last, d.prevObj, d.prevAt = now, s.Objects, now
-	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun)
+	d.last, d.prevObj, d.prevAt = now, s.Rows, now
+	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun, d.dataset)
 	if d.redraw {
 		d.out.frame(frame(parts, d.width(), d.pal))
 	} else {
@@ -506,7 +516,7 @@ var resumableStops = map[string]bool{"interrupted": true, "terminated": true, "d
 // disposition for a run that did not complete, the headline (objects,
 // time, keys/s), the request economy, faults when any, the estimate, and
 // the output.
-func statsLines(r *listing.Report, brokenPipe bool, noun string) []string {
+func statsLines(r *listing.Report, brokenPipe bool, n nouns) []string {
 	var lines []string
 	o := r.Outcome
 	switch {
@@ -532,23 +542,20 @@ func statsLines(r *listing.Report, brokenPipe bool, noun string) []string {
 	} else if r.Timings.ListingMs > 0 {
 		kps = float64(r.Output.RowsEmitted) * 1000 / float64(r.Timings.ListingMs)
 	}
-	head := count(r.Output.RowsEmitted) + " " + noun + " in " + elapsed(run) + sep + count(int64(kps+0.5)) + " keys/s"
+	head := n.of(r.Output.RowsEmitted) + " in " + elapsed(run) + sep + count(int64(kps+0.5)) + " " + n.rate
 	if session-run > time.Second {
 		head += sep + elapsed(session) + " total"
 	}
 	lines = append(lines, head)
 	q := r.Live()
 	if r.Requests != nil {
-		per := 0.0
-		if r.Efficiency != nil && r.Efficiency.HTTPAttemptsPer1kRows != nil {
-			per = *r.Efficiency.HTTPAttemptsPer1kRows
-		}
 		avg := 0.0
 		if ms := r.Timings.ListingMs; ms > 0 {
 			avg = float64(q.InflightNs) / float64(ms*1e6)
 		}
-		lines = append(lines, fmt.Sprintf("%s API calls%s%.2f per 1k objects%sin flight avg %.2f%speak %s",
-			count(r.Requests.HTTPAttempts), sep, per, sep, avg, sep, count(q.InflightMax)))
+		n := r.Requests.HTTPAttempts
+		lines = append(lines, fmt.Sprintf("%s %s%sin flight avg %.2f%speak %s",
+			count(n), plural(n, "API call", "API calls"), sep, avg, sep, count(q.InflightMax)))
 	}
 	if q.Throttles > 0 || q.Retries > 0 || o.EntryErrors > 0 {
 		lines = append(lines, "throttled "+count(q.Throttles)+sep+"retried "+count(q.Retries)+sep+"errors "+count(o.EntryErrors))
@@ -557,23 +564,17 @@ func statsLines(r *listing.Report, brokenPipe bool, noun string) []string {
 		lines = append(lines, costText(*c.CostUSD, c.Basis.RatePer1kUSD))
 	}
 	var out []string
-	files := int64(r.Output.PartsWritten + r.Output.PartsRetained)
 	written := r.Output.OutputBytes
 	if t := r.Output.Text; t != nil && t.Destination != "-" {
-		files, written = 1, t.Bytes
-	}
-	if files > 0 {
-		f := " files"
-		if files == 1 {
-			f = " file"
-		}
-		out = append(out, count(files)+f)
+		out, written = append(out, "1 file"), t.Bytes
+	} else if parts := int64(r.Output.PartsWritten + r.Output.PartsRetained); parts > 0 {
+		out = append(out, count(parts)+" "+plural(parts, "part", "parts"))
 	}
 	if written > 0 {
-		out = append(out, byteText(written)+" written")
+		out = append(out, textout.Size(written)+" written")
 	}
 	if rss := r.Resources.PeakRSSBytes; rss != nil && *rss > 0 {
-		out = append(out, "peak RSS "+byteText(*rss))
+		out = append(out, "peak RSS "+textout.Size(*rss))
 	}
 	if len(out) > 0 {
 		lines = append(lines, strings.Join(out, sep))
@@ -606,12 +607,13 @@ type termUI struct {
 	disp  *display
 	prev  io.Writer // errOut before the run
 	coord *stderrCoord
-	noun  string // the rows' name (rowNoun)
+	noun  nouns
 }
 
 // startTerminal resolves the terminal preferences for a run and starts its
-// progress display; -v prints a start line.
-func startTerminal(t termOptions, att *listing.Attempt, src, out, noun string) *termUI {
+// progress display; -v prints a start line. rows says stdout is a terminal
+// that carries the run's rows (progressPrefs).
+func startTerminal(t termOptions, att *listing.Attempt, src, out string, noun nouns, rows bool) *termUI {
 	tty, width := stderrTerminal()
 	tt := &termUI{opt: t, pal: palette(colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun}
 	if t.verbose > 0 && t.quiet == 0 {
@@ -621,7 +623,7 @@ func startTerminal(t termOptions, att *listing.Attempt, src, out, noun string) *
 		}
 		note(errOut, fmt.Sprintf("swath: listing %s to %s (attempt %s)\n", src, dest, att.ID))
 	}
-	show, redraw := progressPrefs(t, tty, width, os.Getenv("TERM"))
+	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
 		return tt
 	}
@@ -633,7 +635,7 @@ func startTerminal(t termOptions, att *listing.Attempt, src, out, noun string) *
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun)
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun, out != "")
 	return tt
 }
 
