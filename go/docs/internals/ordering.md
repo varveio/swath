@@ -77,7 +77,7 @@ those children's keys (`TestFailedRangeStopsTheStream` forces that window with `
 
 ## The budget
 
-`Options.Budget` is a byte budget, `--row-budget`, for rows in flight: by default 1/16 of the least detected memory
+`Options.Budget` is a byte budget, `--sort-buffer`, for rows in flight: by default 1/16 of the least detected memory
 limit (physical, cgroup, `GOMEMLIMIT`), between 128 KiB and 1 GiB (`listing.rowBudgetFor`). A row counts its value (`schema.Row[P]`, the
 key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
 counting them approximates the arena they keep alive. That holds only while most of a page is handed on: a row
@@ -150,7 +150,7 @@ held-up first range) bounds the peak live heap by the budget and the pages in fl
 holds the smallest peak of three runs to that bound: the sampled live heap reads high for one sample when a
 collection lands at a burst, while a pinned page shows in every run.
 
-**What `--row-budget` is not.** It is not a cap on the process's resident memory. It bounds rows and
+**What `--sort-buffer` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response buffers and decoded pages
 ([body limits and allocations](clients.md#what-swath-keeps), probes included), arena slack (a surviving string keeps its page's allocation alive, which the row count only
 approximates), compression scratch (a pooled spill encoder per concurrent writer, about 1.5 MiB each with its 1 MiB
@@ -158,7 +158,7 @@ window), open spill readers (at most 8 × 64 KiB) and the drainer's reused read 
 largest delta frame replayed), the writers' pooled frame buffers, the encoders' writers (budgeted
 at `parquetout.EncoderBytes` each, apart from it: below) and the garbage collector's
 headroom. The envelope that has been measured: `TestDelayedFrontierPlateaus` (synthetic, above) grows the heap
-by about 15 MiB at the smallest `--row-budget`; RSS at 512 workers with 1 KiB keys has not been measured.
+by about 15 MiB at the smallest `--sort-buffer`; RSS at 512 workers with 1 KiB keys has not been measured.
 
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
 a floor of one: as many encoders as fit in an allowance equal to the row budget, kept apart from it,
@@ -455,7 +455,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   workers are as many as that fits in the budget, less what the encoders' queues already hold
   (`budgetWorkers`), and one only leaves the tail serial (`row_budget`). The report names what decided
   (`workers_by`) and both sides (`per_worker_bytes`, `free_bytes`): when `workers_by` is `row_budget`, a
-  `--row-budget` larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders
+  `--sort-buffer` larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders
   and cores allow. Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
   cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
@@ -506,7 +506,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   parts are the uninterrupted run's, byte for byte (`TestSIGKILLInSegments`).
 - **Memory.** When listing ends the tree holds about the row budget (spill keeps it there), and its rows stay
   until the drain ends; the serial drain adds a frame and its part's 16-batch queue on top. What the segments
-  add beside the tree stays within one more `--row-budget`: the encoders' queues (`Shared`: every part's
+  add beside the tree stays within one more `--sort-buffer`: the encoders' queues (`Shared`: every part's
   batches from the moment they are queued until its encoder has written them, what the serial drain left in
   the continued part's queue included) and the units the workers have read or gathered and not yet written. The workers are sized
   to it when planned (above), so each holds its share; a worker still reserves a unit's budget bytes before it

@@ -111,6 +111,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	if i := slices.IndexFunc(base, func(a string) bool { return a == "--" || !strings.HasPrefix(a, "--") }); i >= 0 {
 		flags, operand = base[:i], base[i:]
 	}
+	flags = renameRecorded(flags)
 	if name := unknownFlag(f, flags); name != "" {
 		return stop(usageError{fmt.Errorf("resume: the run in %s was recorded with --%s, which this build does not take (renamed or removed): finish it with the build that started it, or start over with swath list --overwrite", dir, name)})
 	}
@@ -152,6 +153,31 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	// --no-spill-compress), and a recorded swath list command holds none
 	// that could change meaning.
 	return runWith(ctx, command{diag: true}, cmd, stdout, argv, true, att)
+}
+
+// renamedFlags are the flags renamed since a journal could record them,
+// by the name recorded: the same flag and value under a new spelling, so
+// a resume replays the recorded value under the new name. A flag whose
+// value changed meaning (--memory N is --sort-buffer N/2) is not here: its
+// journal is refused.
+var renamedFlags = map[string]string{"row-budget": "sort-buffer"}
+
+// renameRecorded is the canonical recorded flags (--name=value, --name)
+// with each renamed flag under its new name (renamedFlags). The journal
+// keeps the command as it was recorded.
+func renameRecorded(flags []string) []string {
+	out := make([]string, len(flags))
+	for i, a := range flags {
+		name, v, eq := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if to, ok := renamedFlags[name]; ok {
+			a = "--" + to
+			if eq {
+				a += "=" + v
+			}
+		}
+		out[i] = a
+	}
+	return out
 }
 
 // unknownFlag is the first of the canonical flags (--name=value, --name)

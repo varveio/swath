@@ -5,7 +5,7 @@
 usage: scale_table.py [--series] [--rss-slack MiB] [--nodes-per-worker N] [--age-slack S] OUTDIR...
 
 Plateau gates (each PASS, FAIL or n/a when the run has too few samples):
-  rss     peak RSS (the report's peak_rss_bytes, else the sampled VmHWM) <= 2 x --row-budget + RSS_SLACK (default
+  rss     peak RSS (the report's peak_rss_bytes, else the sampled VmHWM) <= 2 x --sort-buffer + RSS_SLACK (default
           1024 MiB), and the last third's sampled max <= 1.10 x the middle third's + 64 MiB (no late growth)
   nodes   peak outstanding nodes <= NODES_PER_WORKER (default 64) x workers, and the last third's max <=
           1.5 x the middle third's + workers
@@ -70,7 +70,7 @@ def check(r, a):
     inv, res, out = rep["invocation"], rep["resources"], rep["output"]
     # The RSS gate allows twice the row budget: rows plus as much again for
     # encoders, parsing and the collector.
-    workers, mem = inv["workers"], 2 * inv["row_budget_bytes"]
+    workers, mem = inv["workers"], 2 * inv.get("sort_buffer_bytes", inv.get("row_budget_bytes"))  # report v5, v4
     committed = rep["outcome"]["status"] == "committed"
     rows = out["rows_committed"] or out.get("rows_emitted", out.get("rows_listed"))  # report v2, v1
     wall = rep["timings"]["wall_ms"] / 1000

@@ -148,7 +148,7 @@ lists reader, verifier, test and dependency touch points outside the provider di
 
 ## Memory
 
-One `--row-budget`: a byte budget for rows in flight, shared by the order stage's buffers and the encoders'
+One `--sort-buffer`: a byte budget for rows in flight, shared by the order stage's buffers and the encoders'
 queues. Pages being parsed, the encoders' writers (admitted separately), codecs and the garbage collector are
 outside it. A waiting range's bounds are copies, so a queued range never keeps the page it was cut from alive.
 A dry run buffers no rows. See [ordering.md](ordering.md) for what may exceed the

@@ -84,7 +84,7 @@ func TestMovedFlagsNameDiag(t *testing.T) {
 		}
 	}
 	// The flags that stayed on swath list are not diagnostic.
-	for _, n := range []string{"workers", "row-budget", "spill-budget", "encoders", "part-size", "seed-from", "no-adaptive-limit", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-rotation-max-rows"} {
+	for _, n := range []string{"workers", "sort-buffer", "spill-budget", "encoders", "part-size", "seed-from", "no-adaptive-limit", "request-rate", "max-duration", "stall-timeout", "part-interval", "part-rotation-max-rows"} {
 		if diagOnly()[n] {
 			t.Errorf("--%s is diagnostic", n)
 		}
@@ -104,7 +104,7 @@ func takes(name, cmd string) bool {
 // totals, and the totals' flags are swath du's.
 func TestCountRefusesOutputFlags(t *testing.T) {
 	src := localSource(t)
-	for _, fl := range []string{"-o=x", "--overwrite", "--part-size=1MiB", "--row-budget=1MiB", "--spill-budget=1GiB", "--encoders=2"} {
+	for _, fl := range []string{"-o=x", "--overwrite", "--part-size=1MiB", "--sort-buffer=1MiB", "--spill-budget=1GiB", "--encoders=2"} {
 		var buf bytes.Buffer
 		err := runDu(context.Background(), []string{src, fl}, &buf)
 		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "has no meaning for swath du, which writes totals") || !strings.Contains(err.Error(), "swath list takes it") {

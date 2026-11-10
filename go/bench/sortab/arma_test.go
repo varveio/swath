@@ -80,7 +80,7 @@ func init() {
 // Limits are the execution limits both arms share.
 type Limits struct {
 	Workers  int   `json:"workers"`
-	Memory   int64 `json:"memory"`    // arm A runs at --row-budget memory/2; arm B sorts within memory/4
+	Memory   int64 `json:"memory"`    // arm A runs at --sort-buffer memory/2; arm B sorts within memory/4
 	Encoders int   `json:"encoders"`  // Parquet encoders
 	PartSize int64 `json:"part_size"` // target bytes per part
 	// SpillMax caps A's live spill bytes (negative: none). B's sorted runs

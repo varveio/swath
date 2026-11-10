@@ -129,10 +129,10 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
 	def(source.Flag{Name: "encoders", Value: source.Count(&o.encoders, 1), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
 		Usage: "Parquet encoders, or a .zst file's compression jobs (default: CPUs)",
-		Long:  "Lower it to leave cores to other work; the default follows GOMAXPROCS, the row budget and the descriptor limit. An explicit count is kept, with a warning when they cannot carry it."})
-	def(source.Flag{Name: "row-budget", Value: &o.rowBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
-		Usage: "rows held for sorted output; not a total-memory limit",
-		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, the tail after listing holds about one more, and a larger value admits more encoders. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.row_budget says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
+		Long:  "Lower it to leave cores to other work; the default follows GOMAXPROCS, the sort buffer and the descriptor limit. An explicit count is kept, with a warning when they cannot carry it."})
+	def(source.Flag{Name: "sort-buffer", Value: &o.rowBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
+		Usage: "bytes buffered for sorted output; not a total-memory limit",
+		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, the tail after listing holds about one more, and a larger value admits more encoders. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; invocation.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
 	def(source.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
 		Usage: "cap on spill (default: half the output filesystem's free space)",
 		Long:  "Set it when the output filesystem is shared or small. Past it, or at the reserve, listing waits instead of spilling."})
@@ -173,7 +173,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		def(source.Flag{Name: "no-journal", Value: source.Switch(&o.noJournal), Commands: []string{cmdDiagList},
 			Usage: "publish parts only at the end, without the journal resume needs"})
 		def(source.Flag{Name: "no-spill", Value: source.Switch(&o.noSpill), Commands: []string{cmdDiagList},
-			Usage: "wait on the row budget instead of spilling rows to disk"})
+			Usage: "wait on the sort buffer instead of spilling rows to disk"})
 		def(source.Flag{Name: "spill-reserve", Value: &o.spillReserve, Metavar: "SIZE", Commands: []string{cmdDiagList},
 			Usage: "free space spill leaves on its filesystem (0: derived)",
 			Long:  "Derived: one part per encoder, at least 1 GiB."})

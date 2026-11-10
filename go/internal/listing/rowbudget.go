@@ -26,7 +26,7 @@ const (
 
 // Why the row budget is what it is (RowBudget.Reason).
 const (
-	BudgetExplicit = "explicit"          // --row-budget (Limits.RowBudget) was given
+	BudgetExplicit = "explicit"          // --sort-buffer (Limits.RowBudget) was given
 	BudgetShare    = "capacity_fraction" // 1/16 of memory
 	BudgetCap      = "cap"               // 1/16 of memory was past maxAutoRowBudget
 	BudgetMinimum  = "minimum"           // 1/16 of memory was below minRowBudget
@@ -41,7 +41,7 @@ const (
 	MemoryGoLimit  = "go_memory_limit" // GOMEMLIMIT (runtime/debug.SetMemoryLimit)
 )
 
-// RowBudget is how invocation.row_budget_bytes was chosen, and the memory
+// RowBudget is how invocation.sort_buffer_bytes was chosen, and the memory
 // limits found when the run started: physical and cgroup 0 (absent) when
 // none was found; the Go limit absent when none is set, and 0 a limit.
 // MemoryBytes is absent when it is 0: BoundBy then says whether that is a

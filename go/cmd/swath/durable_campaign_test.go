@@ -353,7 +353,7 @@ func campaign(t *testing.T, fx campaignFixture) {
 	partSize := "2MiB"
 	listArgsSized := func(out, size string, runtime []string) []string {
 		a := append([]string{"diag", "list"}, src...) // diag: --spill-reserve
-		a = append(a, "--part-size", size, "--row-budget", "1MiB", "--spill-budget", "256MiB", "--report", "-", "-o", out)
+		a = append(a, "--part-size", size, "--sort-buffer", "1MiB", "--spill-budget", "256MiB", "--report", "-", "-o", out)
 		return append(a, runtime...)
 	}
 	listArgs := func(out string, runtime []string) []string { return listArgsSized(out, partSize, runtime) }

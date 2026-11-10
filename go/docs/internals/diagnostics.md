@@ -32,7 +32,7 @@ Diagnostics:
       --no-spill-compress   write spill frames uncompressed (not zstd level 1)
       --spill-plain         write spill frames without delta coding (a comparison arm)
       --no-journal          publish parts only at the end, without the journal resume needs
-      --no-spill            wait on the row budget instead of spilling rows to disk
+      --no-spill            wait on the sort buffer instead of spilling rows to disk
       --spill-reserve SIZE  free space spill leaves on its filesystem (0: derived)
                               Derived: one part per encoder, at least 1 GiB.
       --adaptive-limit-slow-start
@@ -105,7 +105,7 @@ Diagnostics:
   page size asked for ([range-engine.md](range-engine.md)).
 - **`--adaptive-limit-slow-start`** starts the request limit at 4 in flight and doubles it each second up to
   `--workers` ([clients.md](clients.md#request-admission)).
-- **Spill.** `--no-spill` turns spill off (listing waits on the row budget instead); `--spill-reserve` sets the
+- **Spill.** `--no-spill` turns spill off (listing waits on the sort buffer instead); `--spill-reserve` sets the
   free space spill leaves on its filesystem (derived by default: one part per encoder at full size, at least
   1 GiB); `--no-spill-compress` writes the frames uncompressed (by default zstd level 1 runs over the
   delta-coded frames); `--spill-plain` writes each key and payload whole instead of delta-coding them, the

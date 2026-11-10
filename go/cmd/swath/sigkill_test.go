@@ -47,7 +47,7 @@ func TestSIGKILLResume(t *testing.T) {
 	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, s3test.Keys(6000, 11))), 20*time.Millisecond))
 	args := func(out string, extra ...string) []string {
 		return append([]string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "8",
-			"--part-size", "4KiB", "--row-budget", "512KiB", "-o", out}, extra...)
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "-o", out}, extra...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -130,7 +130,7 @@ func TestSIGKILLAtEveryPoint(t *testing.T) {
 	// The hostile corpus: names at U+E000 and above listed through the
 	// byte-order adapter, its pairs on both sides of the filler.
 	azh := azblobtest.Serve(t, azblobtest.Keys())
-	common := []string{"--workers", "8", "--part-size", "4KiB", "--row-budget", "512KiB"}
+	common := []string{"--workers", "8", "--part-size", "4KiB", "--sort-buffer", "512KiB"}
 	// unsplit: the first occurrences the seeded arms never reach (their
 	// ranges are a page each; the s3-unseeded and azblob-unseeded arms
 	// cross split).
@@ -268,7 +268,7 @@ func TestSIGKILLDurableSpill(t *testing.T) {
 	runtime := []string{"--part-interval=0"}
 	args := func(out string) []string {
 		return append([]string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32",
-			"--part-size", "6KiB", "--row-budget", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
+			"--part-size", "6KiB", "--sort-buffer", "128KiB", "--spill-budget", "64MiB", "-o", out}, runtime...)
 	}
 	ref := filepath.Join(t.TempDir(), "ref")
 	if out, err := exec.Command(bin, args(ref)...).CombinedOutput(); err != nil {
@@ -400,7 +400,7 @@ func TestSIGKILLInSegments(t *testing.T) {
 		name, budget string
 		spilled      bool // the segments read spill frames
 	}{{"memory", "96MiB", false}, {"spill", "12MiB", true}} {
-		runtime := []string{"--part-interval=0", "--encoders", "4", "--row-budget", arm.budget}
+		runtime := []string{"--part-interval=0", "--encoders", "4", "--sort-buffer", arm.budget}
 		args := func(out string, extra ...string) []string {
 			a := []string{"list", "s3://bkt", "--endpoint-url", url, "--s3-path-style", "--anonymous", "--workers", "32",
 				"--part-size", "16KiB", "-o", out}
