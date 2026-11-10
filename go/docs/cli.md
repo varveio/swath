@@ -744,7 +744,9 @@ table changes.
   (`ACCOUNT.dfs.core.windows.net`, which answers anonymous callers; asked only for the default endpoint).
   A hierarchical-namespace account is refused before any listing request (exit 2, cause `unsupported`), as is
   `--all-versions`; so is one whose namespace neither answer gives, unless `--azure-assume-flat` asserts it flat (the
-  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). Names at U+E000 and above, which
+  assertion is frozen for resume and shown in the report's `namespace`, `asserted`). A signed caller that Get Account
+  Information refuses (a SAS that fails authentication, 401 or 403) fails as that refusal, cause `auth` or
+  `access_denied` (exit 1), as on any request, unless `--azure-assume-flat` is given. Names at U+E000 and above, which
   Azure lists in UTF-16 order, are listed in byte order like every other provider's, through a reordering adapter
   whose cost shows in the report's `order_*` counters
   ([internals/providers/azblob.md](internals/providers/azblob.md)).

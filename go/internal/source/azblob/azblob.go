@@ -263,8 +263,9 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
 // false passes and true refuses; (3) anything else is unknown, which
 // refuses unless Options.Flat asserts a flat namespace. Credentials that
-// could not be had are that failure (class auth), as on any later request:
-// the Data Lake host would need the same.
+// could not be had, or that the service refused (a signed caller's 401 or
+// 403), are that failure (class auth or access denied), as on any later
+// request: the Data Lake host would need the same.
 func (p *Provider) admit(ctx context.Context) error {
 	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
@@ -292,18 +293,34 @@ func (p *Provider) admit(ctx context.Context) error {
 		if p.opt.Warn != nil {
 			p.opt.Warn(fmt.Sprintf("Azure Blob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
 		}
+	case !p.unsigned() && refused(err):
+		// Credentials the service rejected: what any request would meet.
+		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	default:
 		return source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
 }
 
+// unsigned says requests go anonymous, which Get Account Information
+// refuses (401) whatever the namespace.
+func (p *Provider) unsigned() bool {
+	if c, ok := p.client.(interface{ Credentials() (string, bool) }); ok {
+		_, anonymous := c.Credentials()
+		return anonymous
+	}
+	return p.anonymous
+}
+
 // fallback: Get Account Information was refused or answered without the
 // header, so the Data Lake host may tell.
 func fallback(err error) bool {
-	if errors.Is(err, client.ErrHNSUnknown) {
-		return true
-	}
+	return errors.Is(err, client.ErrHNSUnknown) || refused(err)
+}
+
+// refused: the service refused the caller (class auth or access denied, by
+// Azure's status and code).
+func refused(err error) bool {
 	if errors.Is(err, source.ErrUnsupported) {
 		return false
 	}

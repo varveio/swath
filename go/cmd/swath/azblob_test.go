@@ -194,10 +194,10 @@ func TestAzblobSASFlagThenEnvironment(t *testing.T) {
 	noSecret(t, "resumed", stderr, out)
 }
 
-// TestAzblobAdmissionRefusalRecordsNoSAS: a run refused at admission (Get
-// Account Information refused, no Data Lake host on a custom endpoint)
-// with -v and --report records the root without its SAS, even though the
-// source never opened; so does a root whose SAS query does not parse.
+// TestAzblobAdmissionRefusalRecordsNoSAS: a run whose SAS Get Account
+// Information refuses at admission (access denied, exit 1, before the
+// source opened) with -v and --report records the root without its SAS;
+// so does a root whose SAS query does not parse.
 func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 	stderr := captureStderr(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,9 +209,9 @@ func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
 		err := run(context.Background(), []string{root, "--endpoint-url", srv.URL, "-v", "--report", report, "-o", out}, io.Discard, false)
-		// The admission refusal is exit 2; a root that does not parse fails
-		// at open, as any malformed root does.
-		if c := exitCode(t, err); c == exitCompleted || strings.Contains(root, "sv=") && c != exitUsage {
+		// The refused SAS is exit 1, as on any request; a root that does
+		// not parse fails at open, as any malformed root does.
+		if c := exitCode(t, err); c == exitCompleted || strings.Contains(root, "sv=") && c != exitFatal {
 			t.Fatalf("%s: exit %d (%v)", azblob.RedactRoot(root), c, err)
 		}
 		if strings.Contains(err.Error(), "SECRET") {
