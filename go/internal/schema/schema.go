@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -96,6 +97,10 @@ type Info struct {
 	// spec's; zero for rows that are not versions. Consumers interpret
 	// the rows through BindVersions, never by column name.
 	Versions reader.VersionSpec
+	// StorageClass names the column holding an object's storage class
+	// (Azure Blob's access tier), the one --storage-class filters on; ""
+	// for a schema without one.
+	StorageClass string
 }
 
 // Schema is a producer's row schema: the key column, then Columns in
@@ -174,6 +179,9 @@ func Bind[P any](id reader.SchemaID, s Schema[P]) Schema[P] {
 	}
 	if _, err := BindVersions(&s); err != nil {
 		panic(err.Error())
+	}
+	if s.StorageClass != "" && !slices.ContainsFunc(s.Columns, func(c Column[P]) bool { return c.Name == s.StorageClass && c.Str != nil }) {
+		panic(fmt.Sprintf("schema %s: no string column %s holds the storage class", id, s.StorageClass))
 	}
 	return s
 }

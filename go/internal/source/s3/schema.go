@@ -32,7 +32,7 @@ type Row = schema.Row[Object]
 // the owner columns are null unless --s3-fetch-owner, the checksum columns are
 // null when S3 omits them, etag and storage_class when it does.
 var Schema = schema.Bind(reader.S3ObjectsV1, schema.Schema[Object]{
-	Info: schema.Info{Name: "swath_listing"},
+	Info: schema.Info{Name: "swath_listing", StorageClass: "storage_class"},
 	Columns: []schema.Column[Object]{
 		{Int: func(o *Object) (int64, bool) { return o.Size, true }},
 		{Int: func(o *Object) (int64, bool) { return o.Mtime, true }},

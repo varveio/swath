@@ -16,7 +16,7 @@ type obj struct {
 	class       string
 }
 
-var sch = &schema.Schema[obj]{Info: schema.Info{ID: "t", Key: schema.String}, Columns: []schema.Column[obj]{
+var sch = &schema.Schema[obj]{Info: schema.Info{ID: "t", Key: schema.String, StorageClass: "storage_class"}, Columns: []schema.Column[obj]{
 	{Spec: schema.Spec{Name: "size"}, Int: func(o *obj) (int64, bool) { return o.size, true }},
 	{Spec: schema.Spec{Name: "last_modified"}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
 	{Spec: schema.Spec{Name: "storage_class"}, Str: func(o *obj) (string, bool) { return o.class, o.class != "" }},
