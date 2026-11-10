@@ -6,7 +6,7 @@
 namespaces, versions, snapshots and deleted blobs are unsupported. Namespace admission is
 required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
 an account reported as hierarchical.
-[Shared object-store controls](../../running.md#object-store-requests) cover authentication,
+[Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
 Azure applies anchored `--include` filters to rows without narrowing the listing prefix.

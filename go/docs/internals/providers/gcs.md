@@ -4,7 +4,7 @@
 
 `gs://bucket[/prefix]` uses the native JSON API for current objects, or live and noncurrent
 generations with `--all-versions`. Soft-deleted objects are outside its listing scope.
-[Shared object-store controls](../../running.md#object-store-requests) cover authentication,
+[Shared object-store controls](../../sources.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
 An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a

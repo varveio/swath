@@ -1,143 +1,216 @@
-# swath guide
+# Getting started
 
-This guide covers listing a source, printing directory or prefix totals, and writing a
-saved inventory. Start with the command you need, then check authentication and the
-source-specific limits below.
+This walk-through goes from a source checkout to a queried inventory: a local directory first, which needs no
+cloud account, then a public S3 prefix, then a run that is interrupted and resumed.
 
-> **Unreleased Go implementation on main.** The latest published release is the
-> S3-focused Java v0.3.2. Build Go from source for this guide. Go will replace Java at
-> release; the [Java release docs](https://github.com/varveio/swath/tree/v0.3.2/docs)
-> describe different flags, output and recovery.
+swath reads listing metadata only. It never downloads or changes object contents. The Go implementation is
+not released yet; the latest published release is the Java v0.3.2, whose command line and output differ
+([from-java.md](from-java.md)).
 
-## Build and start locally
-
-From a checkout, with Go 1.26 and the toolchain selected by `go/go.mod`:
+## 1. Build and check the binary
 
 ```bash
-cd go
+git clone https://github.com/varveio/swath.git
+cd swath/go
 ./build.sh -o swath
 ./swath --version
-./swath du /data -d 2
 ```
 
-Replace `/data` with a directory to inspect. Later examples use `swath` on your PATH;
-use `./swath` if you are still in the build directory. A local or mounted filesystem
-needs no cloud account. `-d 2` prints totals down to two levels below the root.
+```text
+swath devel (11ae90e42babcd159d52e8f492460802b9e0816c)
+```
 
-Sizes default to apparent bytes in listed metadata. For local sources, `--allocated`
-uses allocated bytes and `--count-links-once` counts hard-linked files once, where the
-platform supplies the required metadata. `--one-file-system` keeps a local walk on the
-root's filesystem where supported. See [CLI details](commands/swath.md) for metadata tiers,
-unsupported combinations and missing-size reporting.
+`devel` marks a build from a checkout; the hash is the commit. The examples below call `swath`: put the binary
+on your `PATH`, or write `./swath`. [install.md](install.md) has the requirements and other platforms.
 
-## List and summarize
-
-Print the objects in a small public prefix:
+## 2. Total a local directory
 
 ```bash
-swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
-  --anonymous --s3-region us-east-1
+swath du -d 1 photos
 ```
 
-Use the same source with `du` for prefix totals, or select machine-readable output:
+```text
+    size  files  dirs  last_modified (local)  path
+ 410 KiB      2     1  2026-03-01 10:00:00    2025/
+48.8 KiB      1     0  2026-11-02 09:30:00    2026/
+ 459 KiB      4     3  2026-11-02 09:30:00    (total)
+```
+
+Each row totals everything below it, as `du` does: the files, the directories, their bytes and the newest
+time. `-d 1` stops one level down; without it you get the total alone. In a pipe the same rows are TSV, for
+scripts ([output.md](output.md#du-rows)).
+
+## 3. List a public prefix
 
 ```bash
-swath du s3://bucket/prefix/ -d 2 --format jsonl
-swath list s3://bucket/prefix/ -o objects.tsv.zst
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous | head -5
 ```
 
-Replace `bucket/prefix/` with your source and configure the appropriate credentials.
-Cloud listings make provider requests and may incur charges. `du` does not write an
-inventory. Text listing is available for every source, local trees included. Filters select the output, and do not generally eliminate the underlying
-listing work. Prefix narrowing and filter semantics are in [cli.md](commands/swath.md).
+`--anonymous` sends no credentials, which a public bucket needs: without it swath looks for your AWS
+credentials and stops if there are none. Closing the pipe early ends the run with exit 0.
 
-## Save and read an inventory
+In a pipe the rows are TSV: a header line, then one row per object, `key` first, in ascending byte order of the
+key. From a test bucket, the lines look like this:
 
-Keep the output outside the tree being scanned and use a new or empty destination:
+```text
+key	size	last_modified	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
+logs/2026/00/app-00000.log.gz	1000	2026-01-01T00:00:00.000000Z	00000000000000000000000000000000	GLACIER	\N	\N	\N	\N
+logs/2026/00/app-00001.log.gz	1007	2026-01-01T00:00:00.000000Z	00000000000000000000000000000001	STANDARD	\N	\N	\N	\N
+logs/2026/00/app-00002.log.gz	1014	2026-01-01T00:00:00.000000Z	00000000000000000000000000000002	STANDARD	\N	\N	\N	\N
+logs/2026/00/app-00003.log.gz	1021	2026-01-01T00:00:00.000000Z	00000000000000000000000000000003	STANDARD	\N	\N	\N	\N
+```
+
+`\N` is null. On a terminal, without `| head`, the rows are a table instead; `--format jsonl` gives JSON
+lines, and `-o rows.tsv.zst` a compressed file ([output.md](output.md)).
+
+## 4. Write a dataset
 
 ```bash
-swath list /data -o /tmp/swath-inventory
-swath show /tmp/swath-inventory
+swath list photos -o photos.parquet
+swath show photos.parquet
 ```
 
-A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that commits
-them, in the SeekParquet format, with one of swath's schema ids and valid swath metadata.
-The [dataset profile](dataset.md) documents the schemas, manifest and coverage contract.
-`swath show` displays a summary of a dataset or interrupted run; it is not a query engine.
+```text
+  7 entries in 0.0s · 438 entries/s
+  1 part · 3.74 KiB written · peak RSS 31.3 MiB
+dataset photos.parquet: SeekParquet format 0 draft 1, swath schema swath/local-entries/v1, swath metadata version 1
+key key unique=true, published 2026-11-10T12:50:07Z
+source /tmp/swath-docs-check/photos, scope whole ""
+coverage complete=true stop=completed skipped=0 filters=0 exclusions=0
+1 part, 7 rows, 3832 bytes, keys "2025/" .. "notes.txt"
+```
 
-For a committed dataset whose coverage you have checked, use the exact part list from
-`manifest.json` with an external query engine. Read optional columns by name across parts
-(`read_parquet([...], union_by_name = true)` in DuckDB). Do not glob the output directory:
-unfinished or leftover files are not necessarily part of the dataset. The
-[reader requirements](dataset.md#keys-and-order) explain schema, ordering and
-coverage checks for DuckDB, Python and other consumers.
+A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that commits them, in the
+SeekParquet format, with one of swath's registered schema ids and valid swath metadata
+([the swath dataset profile](dataset.md)). The manifest is written last: until it exists, the directory is not
+a dataset. `coverage complete=true` with `filters=0` says the dataset holds the whole tree as listed.
 
-Local datasets contain directory rows unless `--no-dirs` was used, so a row count is not
-necessarily a file count. Cloud and local schemas differ; check the dataset profile
-before choosing columns.
+The output directory must be new or empty, and outside the tree you list. A local tree's rows include its
+directories (`kind` `DIR`), so the dataset holds 7 rows for 4 files.
 
-## Choose a source
+## 5. Check that it is complete
 
-| Source | Input and authentication | Scope |
-| --- | --- | --- |
-| Local and mounted filesystem | A directory path; the OS mount and its permissions | Files and directories; direct summaries or dataset output. No local scan resume. Not a native NFS or SMB client. |
-| Amazon S3 | `s3://bucket/prefix/`; AWS credential chain, `--s3-profile`, or `--anonymous` | General-purpose buckets. `--all-versions` includes versions and delete markers. No directory buckets. |
-| Google Cloud Storage | `gs://bucket/prefix/`; Application Default Credentials, `--gcs-credentials-file`, or `--anonymous` | Current objects, or live and noncurrent generations with `--all-versions`. |
-| Azure Blob Storage | `az://account/container/prefix/`; Azure credentials or `--anonymous` | Current blobs in a confirmed flat namespace. No hierarchical namespace or Azure version listing. |
-
-Authentication: [credentials](running.md#credentials). Shared timeouts, retries and request controls:
-[object-store requests](running.md#object-store-requests).
-Azure credential precedence and namespace checks: [Azure provider](internals/providers/azblob.md).
-Use `--azure-assume-flat` only when you know the account has a flat namespace and the provider
-cannot confirm it. S3-compatible endpoints need their own compatibility checks.
-
-## Operate a large scan
-
-Before a long run, check source permissions, request cost, free disk and the output
-schema. Start with the defaults; increase concurrency only with measurements. Memory,
-spill disk, encoder and request budgets are covered in the
-[production checklist](production.md) and [operating reference](running.md).
-
-Eligible journaled S3, GCS and Azure Blob dataset scans can continue after interruption:
+A program that needs the whole source reads the manifest's coverage first:
 
 ```bash
-swath resume /path/to/interrupted-inventory
+duckdb -c "SELECT extensions.swath.coverage.complete AS complete,
+                  len(extensions.swath.coverage.filters) AS filters
+           FROM read_json('photos.parquet/manifest.json')"
 ```
 
-Local scans and text output cannot resume. Windows currently refuses journaled
-object-store scans and `resume` because directory sync is unavailable. A resume retains
-durable parts, may reuse validated durable spill where supported, and can repeat work
-beyond the recovery point. Keep the original compatible build and source identity.
-See [stopping and resuming](running.md#stopping-and-resuming) before retrying a failed run.
+```text
+┌──────────┬─────────┐
+│ complete │ filters │
+│ boolean  │  int64  │
+├──────────┼─────────┤
+│ true     │       0 │
+└──────────┴─────────┘
+```
 
-A live walk or multi-request listing is not an atomic snapshot. A resumed run can retain
-observations from the earlier attempt. Filters, skipped entries, entry errors and
-coverage affect whether a dataset represents the whole source. Read the manifest and
-run report rather than treating a written directory as proof of a complete scan.
+## 6. Query it with DuckDB
 
-## Compose a workflow
+Read the parts the manifest lists, not a glob of the directory: a directory can hold parts of a run that has
+not committed.
 
-An inventory can feed SQL or Python analysis, migration planning, or a comparison with
-an earlier listing. Versioned listings supply S3 versions and delete markers or GCS
-generations for external inspection. swath does not perform the transfer or recovery.
+```bash
+duckdb -c "
+  SET VARIABLE parts = (SELECT list('photos.parquet/' || p.path)
+                        FROM (SELECT unnest(parts) AS p FROM read_json('photos.parquet/manifest.json')));
+  SELECT kind, count(*) AS entries, sum(size) AS bytes
+  FROM read_parquet(getvariable('parts'), union_by_name = true)
+  GROUP BY kind ORDER BY kind;"
+```
 
-Periodic comparisons, expected-file checks and archive catalogs need additional code for
-scheduling, comparisons, rules and retention. Metadata presence and size alone do not
-validate a backup or provide full file-integrity monitoring. Parquet is not a direct
-`rclone --files-from` input: a handoff must generate and test a compatible path list.
+```text
+┌─────────┬─────────┬────────┐
+│  kind   │ entries │ bytes  │
+│ varchar │  int64  │ int128 │
+├─────────┼─────────┼────────┤
+│ DIR     │       3 │  12288 │
+│ FILE    │       4 │ 470003 │
+└─────────┴─────────┴────────┘
+```
 
-swath produces listings, inventories and basic summaries. Varve records context and
-makes storage explorable; check the receiving application's supported schemas before
-feeding it a dataset.
+`union_by_name = true` reads optional columns by name across parts. A local tree's `key` is binary, since file
+names need not be UTF-8: `decode(key)` reads it as text. An object store's `key` is text. The columns of each
+source are in the [schema registry](dataset.md#schema-registry).
 
-## Understand the implementation
+## 7. Interrupt and resume a run
 
-The [architecture](internals/architecture.md), [range engine](internals/range-engine.md),
-[provider contract](internals/providers.md), [ordering](internals/ordering.md) and
-[durability](internals/durability.md) describe Go. Backends have different listing and
-ordering semantics. The [measurements](internals/measurements.md) identify each workload, build,
-machine and output mode, including the separate billion-object S3 count and inventory runs.
+A dataset run of an object store keeps a journal in the output directory and publishes parts as it goes, so it
+can be continued after a stop. Start one, and press Ctrl-C after a few seconds (`--request-rate 5` slows it down
+so that there is time to):
 
-The [historical Java field guide](https://swath.varve.io/field-guide/) describes Java
-v0.3.2, including its different splitting, sorting and checkpoint model. Use the Go
-references above for current Go mechanics.
+```bash
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous -o stofs.parquet --request-rate 5
+```
+
+swath stops gracefully, keeps what it published and the journal, exits with code 130, and says how to
+continue. From a run on a test bucket:
+
+```text
+^C  INCOMPLETE (interrupted) — resume: swath resume stofs.parquet
+  0 objects in 8.0s · 0 keys/s
+  40 API calls · in flight avg 0.01 · peak 1
+  peak RSS 38.2 MiB
+swath: stopped by interrupt
+```
+
+`swath show` prints the recorded command and where a resume will continue; `swath resume` continues with the
+recorded command. A resume may change the resource and request options, here dropping the rate cap:
+
+```bash
+swath show stofs.parquet
+swath resume stofs.parquet --request-rate 0
+```
+
+```text
+...
+no part committed; swath resume lists from the start
+  60,000 objects in 0.2s · 306,122 keys/s
+  223 API calls · in flight avg 31.39 · peak 62
+  1 part · 105 KiB written · peak RSS 77.8 MiB
+```
+
+This run was stopped before its first part was published, so the resume listed from the start. A longer run
+closes a part that holds rows every 30 seconds (`--part-interval`) and publishes the parts in key order, and a
+resume keeps every published part and lists only after the last one: [swath-resume](commands/swath-resume.md) shows such a run. Resuming a complete
+dataset does nothing and exits 0. Local trees and text output keep no journal: an interrupted one is run again.
+
+## 8. List a private bucket
+
+Leave out `--anonymous`. swath takes credentials from the AWS SDK's usual chain: environment variables, the
+shared config and credentials files, SSO, web identity, container and instance roles. Name a profile and the
+bucket's region if they are not your defaults:
+
+```bash
+swath list s3://my-bucket/prefix/ -o my-inventory --s3-profile analytics --s3-region eu-west-1
+```
+
+The listing needs `s3:ListBucket` on the bucket, nothing on the objects. A request to the wrong region fails
+with an error that names the right one. GCS (`gs://`) and Azure Blob (`az://`) work the same way with their own
+credentials: [sources.md](sources.md).
+
+## Cost and consistency
+
+Each listing request returns up to 1,000 keys, and providers charge per request. A run sends about one request
+per 1,000 keys, plus the requests that divide the work between workers and any retries. The run report counts
+them (`requests.http_attempts`) and, on AWS S3 and GCS, estimates their cost at the provider's reference list
+rate (`cost.cost_usd`):
+
+```bash
+swath list s3://my-bucket -o my-inventory --report attempt-1.json
+jq '.requests.http_attempts, .cost.cost_usd' attempt-1.json
+```
+
+If a recent S3 Inventory report already exists, querying it costs less than any live listing.
+
+swath publishes the complete result of the live listing it performed. It is not a point-in-time snapshot of a
+bucket that changes during the run: an object added or removed while swath lists may or may not appear.
+
+## Next
+
+- [running.md](running.md): size, watch, schedule and resume large runs.
+- [output.md](output.md) and [filters.md](filters.md): text formats, totals, and selecting rows.
+- [commands/swath.md](commands/swath.md): every command and option.
+- [troubleshooting.md](troubleshooting.md) when a command fails.

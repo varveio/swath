@@ -78,7 +78,7 @@ This small public NOAA prefix needs no cloud account:
 
 Object-store listings go to the terminal or a pipe as text. GCS and Azure Blob use the
 same `list` command with their own source and authentication options. Cloud listings make
-provider requests and may incur charges; read the [operating guide](go/docs/running.md)
+provider requests and may incur charges; read the [running guide](go/docs/running.md)
 before a large or requester-pays scan.
 
 ### Keep an inventory
@@ -88,8 +88,7 @@ before a large or requester-pays scan.
 ./swath show /tmp/swath-inventory
 ```
 
-The destination must be new or empty and should be outside the tree being scanned. Local
-listings require a dataset destination. `swath show` prints its summary, not SQL results.
+The destination must be new or empty and should be outside the tree being scanned. `swath show` prints its summary, not SQL results.
 A swath dataset is a directory of sorted Parquet parts and a `manifest.json` that commits
 them, in the [SeekParquet format](https://github.com/varveio/seekparquet), with a swath
 schema and metadata ([dataset profile](go/docs/dataset.md)). Read it with DuckDB, Python
@@ -98,7 +97,7 @@ or another Parquet tool, after checking coverage and schema.
 ## Output and resume
 
 - `swath du` prints directory or prefix totals as a terminal table, TSV or JSONL.
-- Object-store `list` can print rows or write TSV/JSONL files, optionally compressed.
+- `list` can print rows or write TSV/JSONL files, optionally compressed, for every source.
 - Dataset output is globally key-sorted Parquet, with a manifest and coverage information.
 - `swath resume DIR` continues eligible interrupted S3, GCS or Azure Blob dataset scans.
   It retains durable work and may repeat listing beyond the durable recovery point.
@@ -107,7 +106,7 @@ swath reads listing metadata and does not change source contents. A live walk or
 multi-request listing is not an atomic storage snapshot. Check coverage, filters,
 entry errors and freshness before treating the result as a whole-source inventory.
 The [Go guide](go/docs/getting-started.md) explains these choices; the
-[operating reference](go/docs/running.md) owns recovery and resource limits.
+[running guide](go/docs/running.md) owns recovery and resource limits.
 
 ## When to use it
 
@@ -124,8 +123,9 @@ supported schemas rather than assuming every swath dataset is accepted.
 
 ## Documentation
 
-- **Start:** [Go guide](go/docs/getting-started.md), [build and verify](go/docs/running.md#install-and-verify).
-- **Use:** [command reference](go/docs/commands/swath.md), [operating guide](go/docs/running.md),
+- **Start:** [getting started](go/docs/getting-started.md), [install](go/docs/install.md).
+- **Use:** [command reference](go/docs/commands/swath.md), [sources](go/docs/sources.md),
+  [output](go/docs/output.md), [running guide](go/docs/running.md),
   [production checklist](go/docs/production.md).
 - **Read the output:** [swath dataset profile](go/docs/dataset.md).
 - **Understand:** [architecture](go/docs/internals/architecture.md), [providers](go/docs/internals/providers.md),

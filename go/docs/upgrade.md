@@ -249,7 +249,7 @@ the list below is the earlier history of the unreleased builds.
   unknown flag). A source with no usable credentials, an empty AWS chain, no Application Default Credentials,
   or an Entra ID chain that finds none, stops the run before listing. Credential failures have
   cause `auth`, during Azure namespace admission too (a SAS the service refuses there: `auth` or
-  `access_denied`) ([credentials](running.md#credentials)). Give `--anonymous` for a public bucket or container
+  `access_denied`) ([credentials](sources.md#credentials-on-every-object-store)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
   `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
   with "(a public bucket needs --anonymous)".

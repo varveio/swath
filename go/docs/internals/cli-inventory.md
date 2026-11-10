@@ -22,7 +22,7 @@ decision to add it later).
 | `--fetch-owner` | `--s3-fetch-owner` | renamed | – |
 | `--bearer-token-command CMD` | `--s3-bearer-token-command` (S3 client: `Authorization: Bearer`, fail closed, never recorded; a resume without it is refused with a message) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--bearer-token-refresh-interval` (45 m) | `--s3-bearer-token-refresh-interval` (45 m; one refresh in flight) | renamed | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](../running.md#credentials) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
+| Credential-chain failure fails the run | missing or unusable credentials stop listing; requests go unsigned only with `--anonymous`. See [credentials](../sources.md#credentials-on-every-object-store) for the Azure admission exception to `auth` | kept | 2026-11-09: the Go port's automatic anonymity for an empty chain removed, as Java |
 | Source `s3://bucket[/prefix]`, path taken literally | the same; also local/mounted directories, native `gs://bucket[/prefix]` and Azure flat namespaces at `az://account/container[/prefix]` | kept | – |
 | S3 directory buckets refused before the first request | refused before any request (a name ending in `--x-s3`), exit 2, class `refused` | kept | restored 2026-11-06 (owner principle: keep what Java had for a production reason, `3ccb1a8`) |
 
@@ -127,10 +127,10 @@ decision to add it later).
 |---|---|---|---|
 | `--report PATH` | `--report FILE` (written when the attempt ends, on failure too) | kept | – |
 | `_swath_summary.json`, updated during the run | `run.json`, written after the commit | renamed | own report shape, Java fields not kept, 2026-11-05 and 2026-11-06 |
-| `--stats` / `--no-stats` (stderr summary) | `--stats` / `--no-stats`: Java's block on stderr with Java's gating; the one-line summary stays on stdout | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
+| `--stats` / `--no-stats` (stderr summary) | `--stats` / `--no-stats`: Java's block on stderr with Java's gating; stdout carries no summary (`swath list -o` prints nothing there) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--progress` / `--no-progress` (stderr) | `--progress` / `--no-progress`: one record redrawn on a terminal, appended elsewhere, from the snapshot `progress.json` is written from | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
 | `--progress-interval DURATION` | `--progress-interval` (1 s redrawing, 30 s appended; floor 1 s) | kept | ported 2026-11-06 (owner: restore the cheap Java CLI features) |
-| `list_run_summary` log line (`-v`) | the one-line text report | renamed | – |
+| `list_run_summary` log line (`-v`) | the `swath: outcome: {...}` line of a failure with `-v` (the `outcome` event under `--log-format json`) and the run report | renamed | – |
 | `--metrics-endpoint URL`, `SWATH_OTLP_ENDPOINT` | none | removed | no OTLP export, 2026-11-05; not ported, 2026-11-06: no value now |
 | `--no-metrics` | none | removed | no OTLP export, 2026-11-05 |
 | Report: `schema_version` | `report_version` | renamed | – |

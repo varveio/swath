@@ -435,7 +435,7 @@ against `bench/s3fake`.
 | provider constructor and bounds wiring | `source/s3` `TestVersionsConstructorRefusals`; `source/gcs` `TestGenerationsConstructorRefusal`, `TestListInputBounds` (current/generation bound mapping and one omitted-end counter per request); `source/s3/client` and `source/azblob/client` `TestEndpointRefusal` checks direct client endpoint refusal |
 | journal | `journal` `TestJournalRoundTripAndTornTail`, `TestCheck` (identity table: pipeline fields, and source fields added, dropped, changed or respelled) |
 | overwrite safety | `dataset` `TestPrepareNeverDeletesTheTree`, `TestReplaceRemovesOnlyOwnEntries` |
-| command surface and report schema | `cmd/swath` `TestCLIDocFlags` (the option blocks of docs/commands/ and docs/internals/diagnostics.md are the generated `--help` groups of each command), `TestEventGolden` (docs/reference/log-events.md's events), `TestHelpGroupsCoverFlags` (every flag in exactly one help group; the Diagnostics group is exactly the flags `swath list` refuses), `TestMovedFlagsNameDiag` (each flag moved to `swath diag` is refused on `swath list` and `swath du` with exit 2 naming `swath diag`, accepted by `swath diag list`), `TestCountRefusesOutputFlags`, `TestCount`, `TestOldNamesRejected` (the names of the builds of `main` before 0.4 and Java's, `--output`, `--force`, `--endpoint-url`, `--quiet`, `--spill-max`, `--count-only`, and `--concurrency`, are unknown flags, exit 2), `TestEveryHelpExitsZero`; `listing` `TestReportSchemaGolden` (`testdata/report-schema.golden`: every JSON path of the run report), `TestReportSchemaDoc` (docs/reference/run-report.md names every field), `TestProgressSchemaDoc` (and every progress.json field), `TestHistoryBounded` |
+| command surface and report schema | `cmd/swath` `TestCLIDocFlags` (the option blocks of docs/commands/ and docs/internals/diagnostics.md are the generated `--help` groups of each command), `TestEventGolden` (docs/reference/log-events.md's events), `TestHelpGroupsCoverFlags` (every flag in exactly one help group; the Diagnostics group is exactly the flags `swath list` refuses), `TestMovedFlagsNameDiag` (each flag moved to `swath diag` is refused on `swath list` and `swath du` with exit 2 naming `swath diag`, accepted by `swath diag list`), `TestCountRefusesOutputFlags`, `TestCount`, `TestOldNamesRejected` (the names of the builds of `main` before 0.4 and Java's, `--concurrency`, `--spill-max`, `--force`, `--count-only`, `--endpoint`, `--report-format`, `--one-filesystem`, `--limiter`, `--region` and `--azblob-sas`, are unknown flags, exit 2), `TestEveryHelpExitsZero`; `listing` `TestReportSchemaGolden` (`testdata/report-schema.golden`: every JSON path of the run report), `TestReportSchemaDoc` (docs/reference/run-report.md names every field), `TestProgressSchemaDoc` (and every progress.json field), `TestHistoryBounded` |
 
 ## Oracles
 
@@ -522,7 +522,7 @@ until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 1; done
 
 # 5. List it with the Go tool and compare.
 cd go && go build -o /tmp/swath ./cmd/swath
-/tmp/swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style -anonymous -o /tmp/go-ds
+/tmp/swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style --anonymous -o /tmp/go-ds
 python3 bench/diffds.py /data/rec/noaa-normals-pds /tmp/go-ds       # identical: true
 python3 verify.py /tmp/go-ds                                         # the swath dataset, read by DuckDB
 ```
@@ -629,7 +629,7 @@ each is a flag of the command and a field of `scalefake.Options` for in-process 
 
 ```bash
 go run ./bench/scalefake -key-file keys.txt -addr 127.0.0.1:19500 -latency 50ms -fail503 0.01 -slow d/000=500ms &
-./swath list s3://bkt --endpoint-url http://127.0.0.1:19500 --s3-path-style --anonymous --s3-region us-east-1 --count-only
+./swath diag count s3://bkt --endpoint-url http://127.0.0.1:19500 --s3-path-style --anonymous --s3-region us-east-1
 curl -s 127.0.0.1:19500/__scalefake/stats   # requests, pages, keys, throttled, in flight
 ```
 
@@ -672,7 +672,7 @@ whole, not streamed, and `Plan.MaxBody` bounds what is buffered: a longer upstre
 ```bash
 go run ./bench/faultproxy -target http://127.0.0.1:19090 -listen 127.0.0.1:19091 \
   -window throttle:10s-25s:0.5 -window latency:0s-:0.2:300ms -timeline storm.tsv &
-./swath list s3://BUCKET --endpoint-url http://127.0.0.1:19091 --s3-path-style -anonymous -o /tmp/ds
+./swath list s3://BUCKET --endpoint-url http://127.0.0.1:19091 --s3-path-style --anonymous -o /tmp/ds
 kill %1   # writes storm.tsv and prints the totals
 ```
 
