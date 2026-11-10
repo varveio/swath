@@ -39,7 +39,7 @@ binaries once into the release archives, builds both images from those archived 
 them by digest, smokes the digests, and only then applies tags and signs.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
-[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions, Gradle, Docker base images (the Java Dockerfiles and `Dockerfile.go`) and the three Go modules current, with one weekly pull request per configured directory grouping its minor and patch updates (major updates arrive one per pull request). It does not raise the `toolchain` line of `go/go.mod`, so the golang image digest in `Dockerfile.go` and that line move together by hand.
+[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Gradle, Docker base images (the Java Dockerfiles and `Dockerfile.go`) and the three Go modules current, with one weekly pull request per configured directory grouping its minor and patch updates (major updates arrive one per pull request). It does not raise the `toolchain` line of `go/go.mod`, so the golang image digest in `Dockerfile.go` and that line move together by hand.
 
 ## Registry and artifacts
 

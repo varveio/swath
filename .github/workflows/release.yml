@@ -81,7 +81,7 @@ jobs:
       - name: Assert exact tag SHA checkout
         run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
 
-      # actions/setup-go@v6
+      # actions/setup-go@v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go/go.mod
@@ -144,7 +144,7 @@ jobs:
       - name: Assert exact tag SHA checkout
         run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
 
-      # actions/setup-go@v6
+      # actions/setup-go@v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go/go.mod
