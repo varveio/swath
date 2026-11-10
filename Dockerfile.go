@@ -52,7 +52,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY go/ ./
 ARG GOFLAGS=
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    ./notices.sh /out/THIRD_PARTY_NOTICES
+    mkdir -p /out && ./notices.sh /out/THIRD_PARTY_NOTICES
 ARG TARGETOS
 ARG TARGETARCH
 ARG SWATH_VERSION=
