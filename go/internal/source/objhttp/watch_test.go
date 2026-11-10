@@ -55,7 +55,7 @@ func TestWatch(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(seen) != 2 || seen[0].Status != 503 || seen[1].Status != 200 || seen[0].Method != http.MethodGet || seen[0].URL.Path != "/b" || seen[1].Latency <= 0 {
+	if len(seen) != 2 || seen[0].Status != 503 || seen[1].Status != 200 || seen[0].Method != http.MethodGet || seen[0].URL.Path != "/b" || seen[1].Latency < 0 { // 0 on a coarse clock (Windows)
 		t.Fatalf("exchanges %+v", seen)
 	}
 	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Status != 503 || failures[0].Class != string(ClassOther) {
