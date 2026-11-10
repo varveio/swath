@@ -26,18 +26,24 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
-// recorder serves an empty objects envelope and records each request.
+// recorder serves an empty objects envelope and records each request and
+// its body's length.
 type recorder struct {
 	*httptest.Server
-	mu   sync.Mutex
-	reqs []*http.Request
+	mu     sync.Mutex
+	reqs   []*http.Request
+	bodies []int
 }
 
 func newRecorder(t *testing.T) *recorder {
 	r := &recorder{}
 	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		n, err := io.Copy(io.Discard, req.Body)
+		if err != nil {
+			t.Error(err)
+		}
 		r.mu.Lock()
-		r.reqs = append(r.reqs, req)
+		r.reqs, r.bodies = append(r.reqs, req), append(r.bodies, int(n))
 		r.mu.Unlock()
 		fmt.Fprint(w, `{"kind":"storage#objects"}`)
 	}))

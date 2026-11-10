@@ -1,0 +1,267 @@
+== anonymous, virtual-host: objects
+GET https://bkt.s3.us-east-1.amazonaws.com/
+  query encoding-type=url
+  query list-type=2
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== anonymous, virtual-host: objects, every option
+GET https://bkt.s3.us-east-1.amazonaws.com/
+  query delimiter=%2F
+  query encoding-type=url
+  query fetch-owner=true
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query start-after=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3Fx
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== anonymous, virtual-host: objects, continuing
+GET https://bkt.s3.us-east-1.amazonaws.com/
+  query continuation-token=1%2Ftok%2B%3D%3D
+  query encoding-type=url
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2F
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== anonymous, virtual-host: versions
+GET https://bkt.s3.us-east-1.amazonaws.com/
+  query encoding-type=url
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== anonymous, virtual-host: versions, every option
+GET https://bkt.s3.us-east-1.amazonaws.com/
+  query delimiter=%2F
+  query encoding-type=url
+  query key-marker=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query max-keys=7
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query version-id-marker=null
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== access key, virtual-host: objects
+GET https://bkt.s3.eu-west-1.amazonaws.com/
+  query encoding-type=url
+  query list-type=2
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/eu-west-1/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  body 0 bytes
+== access key, virtual-host: objects, every option
+GET https://bkt.s3.eu-west-1.amazonaws.com/
+  query delimiter=%2F
+  query encoding-type=url
+  query fetch-owner=true
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query start-after=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3Fx
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/eu-west-1/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  body 0 bytes
+== access key, virtual-host: objects, continuing
+GET https://bkt.s3.eu-west-1.amazonaws.com/
+  query continuation-token=1%2Ftok%2B%3D%3D
+  query encoding-type=url
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2F
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/eu-west-1/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  body 0 bytes
+== access key, virtual-host: versions
+GET https://bkt.s3.eu-west-1.amazonaws.com/
+  query encoding-type=url
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/eu-west-1/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  body 0 bytes
+== access key, virtual-host: versions, every option
+GET https://bkt.s3.eu-west-1.amazonaws.com/
+  query delimiter=%2F
+  query encoding-type=url
+  query key-marker=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query max-keys=7
+  query prefix=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query version-id-marker=null
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/eu-west-1/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  body 0 bytes
+== session, path-style, requester pays: objects
+GET https://s3.us-west-2.amazonaws.com/bkt
+  query encoding-type=url
+  query list-type=2
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/us-west-2/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date;x-amz-request-payer;x-amz-security-token, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  header X-Amz-Request-Payer: requester
+  header X-Amz-Security-Token: session-token-example
+  body 0 bytes
+== session, path-style, requester pays: objects, every option
+GET https://s3.us-west-2.amazonaws.com/bkt
+  query delimiter=%2F
+  query encoding-type=url
+  query fetch-owner=true
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query start-after=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3Fx
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/us-west-2/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date;x-amz-request-payer;x-amz-security-token, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  header X-Amz-Request-Payer: requester
+  header X-Amz-Security-Token: session-token-example
+  body 0 bytes
+== session, path-style, requester pays: objects, continuing
+GET https://s3.us-west-2.amazonaws.com/bkt
+  query continuation-token=1%2Ftok%2B%3D%3D
+  query encoding-type=url
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2F
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/us-west-2/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date;x-amz-request-payer;x-amz-security-token, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  header X-Amz-Request-Payer: requester
+  header X-Amz-Security-Token: session-token-example
+  body 0 bytes
+== session, path-style, requester pays: versions
+GET https://s3.us-west-2.amazonaws.com/bkt
+  query encoding-type=url
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/us-west-2/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date;x-amz-request-payer;x-amz-security-token, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  header X-Amz-Request-Payer: requester
+  header X-Amz-Security-Token: session-token-example
+  body 0 bytes
+== session, path-style, requester pays: versions, every option
+GET https://s3.us-west-2.amazonaws.com/bkt
+  query delimiter=%2F
+  query encoding-type=url
+  query key-marker=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query max-keys=7
+  query prefix=p%2Fa%20b%2Bc%25%2F%C3%A9%26%3D%3F
+  query version-id-marker=null
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/<date>/us-west-2/s3/aws4_request, SignedHeaders=amz-sdk-invocation-id;amz-sdk-request;host;x-amz-content-sha256;x-amz-date;x-amz-request-payer;x-amz-security-token, Signature=<signature>
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  header X-Amz-Date: <date>
+  header X-Amz-Request-Payer: requester
+  header X-Amz-Security-Token: session-token-example
+  body 0 bytes
+== bearer, custom endpoint: objects
+GET https://s3.example/base/bkt
+  query encoding-type=url
+  query list-type=2
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: Bearer tok
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== bearer, custom endpoint: objects, every option
+GET https://s3.example/base/bkt
+  query delimiter=%2F
+  query encoding-type=url
+  query fetch-owner=true
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query start-after=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3Fx
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: Bearer tok
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== bearer, custom endpoint: objects, continuing
+GET https://s3.example/base/bkt
+  query continuation-token=1%2Ftok%2B%3D%3D
+  query encoding-type=url
+  query list-type=2
+  query max-keys=7
+  query prefix=p%2F
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: Bearer tok
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== bearer, custom endpoint: versions
+GET https://s3.example/base/bkt
+  query encoding-type=url
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: Bearer tok
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
+== bearer, custom endpoint: versions, every option
+GET https://s3.example/base/bkt
+  query delimiter=%2F
+  query encoding-type=url
+  query key-marker=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query max-keys=7
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9%26%3D%3F
+  query version-id-marker=null
+  query versions=
+  header Amz-Sdk-Invocation-Id: <uuid>
+  header Amz-Sdk-Request: attempt=1; max=1
+  header Authorization: Bearer tok
+  header User-Agent: <swath> aws-sdk-go-v2/<version> ua/2.1 os/<platform> lang/go#<version> md/GOOS#<platform> md/GOARCH#<platform> api/s3#<version>
+  header X-Amz-Content-Sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  body 0 bytes
