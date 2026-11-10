@@ -51,21 +51,17 @@ Notable changes per release. The full human summary for the current release is i
   `*int64`, nil when an entry has no size (`--metadata names`). `Dataset.Scan` scans the current objects under a
   prefix with several goroutines (`ScanRequest{Prefix, Workers, Stats}`), in batches. `Totals` of an Azure
   dataset no longer panics on an exact blob (it read `storage_class`; the access tier is `access_tier`).
-- Go port: `--no-dirs` is recorded in a local dataset's `coverage.filters` (`no_dirs`), so a reader that needs
-  the whole tree refuses it.
+- Go port: `--no-dirs` is recorded in a local dataset's `coverage.filters` (`no_dirs`).
 - Go port: `go/objfile` pins objects across opens and restarts (`Pin`, `Restore`, `Pinned.Snapshot`: versioned
   JSON of each opened name's size and identity, restored sealed to those names and refused for another scope),
   parses dataset roots (`ParseLocation`: `s3://`, `gs://`, `az://ACCOUNT/CONTAINER`) and opens one with each
   provider's default credentials (`objfile/remote.Open`). Every ranged read now checks the offset the store served,
   and the GCS client `remote.Open` builds also checks the requests the SDK's reader sends on its own: a read returns
   exactly the requested bytes or fails.
-- Go port: `go/reader` adds `AdmitWhole` and `AdmitWholeDir`, which admit a whole current-object listing in one
-  fixed order (digests, schema, coverage, a current-objects schema, `published_at`) and return its `Identity`
-  (the manifest's SHA-256 and `published_at`); `ReopenWhole` and `ReopenWholeDir`, which reopen it from a sealed
-  source and refuse another identity (`ErrIdentityMismatch`); `IsRefusal`; and `Dataset.Page`, a listing page
-  with its next cursor and its prefixes' totals. `AcceptWholeSource` takes a `WholeSource{Kind, Container, URI}`
-  and identifies an Azure container by its account and a filesystem by its root (`source.uri`), and requires the
-  schema id to be of the source's kind.
+- Go port: `go/reader` opens and reads; it does not judge a dataset. `Open` exposes the manifest's source, scope
+  and coverage through `Metadata()`, and the application decides what to do with them; part digests are not
+  checked on read. `IsRefusal` tells the data's refusals from other errors, and `Dataset.Page` is a listing page
+  with its next cursor and its prefixes' totals.
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
   accounts (`--azure-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.

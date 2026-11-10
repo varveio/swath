@@ -68,8 +68,8 @@ func TestParseMetadata(t *testing.T) {
 	} {
 		_, err := ParseMetadata(manifestWith(ext))
 		var se *SemanticError
-		if !errors.Is(err, ErrCoverage) || errors.Is(err, ErrSchema) || !errors.As(err, &se) || se.Err == nil {
-			t.Errorf("%s: %v, want a coverage error with its cause", ext, err)
+		if !errors.Is(err, ErrMetadata) || errors.Is(err, ErrSchema) || !errors.As(err, &se) || se.Err == nil {
+			t.Errorf("%s: %v, want a metadata error with its cause", ext, err)
 		}
 	}
 }
@@ -87,7 +87,7 @@ func TestParseMetadataVersion(t *testing.T) {
 		`{"swath": {"version": 1.0}}`,
 	} {
 		_, err := ParseMetadata(manifestWith(ext))
-		if !errors.Is(err, ErrSchema) || errors.Is(err, ErrCoverage) || !strings.Contains(err.Error(), "unsupported swath metadata version") {
+		if !errors.Is(err, ErrSchema) || errors.Is(err, ErrMetadata) || !strings.Contains(err.Error(), "unsupported swath metadata version") {
 			t.Errorf("%s: %v, want an unsupported swath metadata version (schema) error", ext, err)
 		}
 	}

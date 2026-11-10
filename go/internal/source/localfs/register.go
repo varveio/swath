@@ -210,13 +210,13 @@ func (o *opened) Report() source.Report {
 		cov.Exclusions = append(cov.Exclusions, k)
 	}
 	if o.p.opt.OneFilesystem {
-		// The tree is listed only as far as its filesystem reaches: a
-		// reader that needs the whole tree refuses it, as a filtered one.
+		// The tree is listed only as far as its filesystem reaches; the
+		// manifest records it so an application can tell.
 		cov.Filters = append(cov.Filters, oneFilesystemFilter)
 	}
 	if o.p.opt.NoDirs {
-		// The directories' rows are left out: a reader that needs every
-		// entry refuses the dataset, as a filtered one.
+		// The directories' rows are left out; the manifest records it so
+		// an application can tell.
 		cov.Filters = append(cov.Filters, noDirsFilter)
 	}
 	return source.Report{Name: "local", Stats: &st, Errors: st.Errors(), Fields: o.p.opt.Fields.String(), Coverage: cov,

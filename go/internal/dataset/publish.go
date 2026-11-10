@@ -105,7 +105,7 @@ func Check(parts []Part, rows int64) error {
 }
 
 // Manifest is manifest.json, the dataset's commit record and the only file
-// a reader needs to accept it: a SeekParquet manifest (the version, the
+// a reader needs to open it: a SeekParquet manifest (the version, the
 // schema id, the key declaration and the ordered parts with their exact
 // bounds) whose swath extension says what was listed (source, scope), how
 // much of it (coverage) and when it was published. Each part carries its

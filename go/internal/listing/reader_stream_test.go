@@ -21,10 +21,10 @@ import (
 	"github.com/varveio/swath/go/reader"
 )
 
-// admitDataset writes rows with this build's writer and opens the dataset through
-// the reader module, which must admit it as swath wrote it: its schema
-// checked, and accepted as the whole of its source.
-func admitDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []schema.Row[P], maxRows int64) *reader.Dataset {
+// openDataset writes rows with this build's writer and opens the dataset
+// through the reader module: its schema checked, and its metadata the
+// source, scope and coverage the writer recorded.
+func openDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []schema.Row[P], maxRows int64) *reader.Dataset {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
 	writeSeekFixture(t, dir, kind, s, rows, maxRows)
@@ -36,8 +36,11 @@ func admitDataset[P any](t *testing.T, s *schema.Schema[P], kind string, rows []
 	if err := d.CheckSchema(context.Background()); err != nil {
 		t.Fatalf("%s: check schema: %v", s.ID, err)
 	}
-	if err := d.AcceptWholeSource(reader.WholeSource{Kind: kind, URI: "fixture://" + filepath.Base(dir)}); err != nil {
-		t.Fatalf("%s: accept: %v", s.ID, err)
+	m := d.Metadata()
+	if !m.Swath || m.PublishedAt == nil || *m.Source.Kind != kind || *m.Source.URI != "fixture://"+filepath.Base(dir) ||
+		*m.Scope.Kind != "whole" || !*m.Coverage.Complete || *m.Coverage.StopReason != "completed" ||
+		*m.Coverage.SkippedEntries != 0 || m.Coverage.Filters == nil || len(m.Coverage.Filters) != 0 {
+		t.Fatalf("%s: metadata %+v, coverage %+v", s.ID, m, m.Coverage)
 	}
 	return d
 }
@@ -74,7 +77,7 @@ func TestReaderStreamsS3Objects(t *testing.T) {
 		}
 		rows = append(rows, s3.Row{Key: fmt.Sprintf("p/%05d", i), Data: o})
 	}
-	d := admitDataset(t, &s3.Schema, "s3", rows, 1000)
+	d := openDataset(t, &s3.Schema, "s3", rows, 1000)
 	if n := len(d.Metadata().Manifest.Parts); n != 3 {
 		t.Fatalf("%d parts, want 3", n)
 	}
@@ -107,7 +110,7 @@ func TestReaderStreamsGCSObjects(t *testing.T) {
 	older := gcs.Schema
 	older.Columns = slices.DeleteFunc(slices.Clone(older.Columns), func(c schema.Column[gcs.Object]) bool { return c.Name == "time_created" })
 	for _, s := range []*schema.Schema[gcs.Object]{&gcs.Schema, &older} {
-		got, err := streamAll(admitDataset(t, s, "gcs", rows, 0))
+		got, err := streamAll(openDataset(t, s, "gcs", rows, 0))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +128,7 @@ func TestReaderStreamsLocalEntries(t *testing.T) {
 		{Key: "d/\xff", Data: localfs.Entry{Kind: localfs.KindFile, Size: 3, Present: localfs.HasSize}},
 		{Key: "e", Data: localfs.Entry{Kind: localfs.KindUnknown}},
 	}
-	d := admitDataset(t, &localfs.Schema, "local-fs", rows, 0)
+	d := openDataset(t, &localfs.Schema, "local-fs", rows, 0)
 	var got []reader.LocalEntry
 	if err := d.StreamLocal(context.Background(), func(e reader.LocalEntry) error {
 		got = append(got, e)
@@ -150,11 +153,11 @@ func TestReaderStreamsLocalEntries(t *testing.T) {
 // TestReaderRefusesVersionsStream: the versions schemas pass admission,
 // and Stream refuses them: their rows are history, not current objects.
 func TestReaderRefusesVersionsStream(t *testing.T) {
-	s3d := admitDataset(t, &s3.VersionsSchema, "s3", []s3.VersionRow{
+	s3d := openDataset(t, &s3.VersionsSchema, "s3", []s3.VersionRow{
 		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 1}, VersionID: "v2", IsLatest: true}},
 		{Key: "k", Data: s3.Version{Object: s3.Object{Size: 2}, VersionID: "v1"}},
 	}, 0)
-	gcsd := admitDataset(t, &gcs.GenerationSchema, "gcs", []gcs.GenerationRow{
+	gcsd := openDataset(t, &gcs.GenerationSchema, "gcs", []gcs.GenerationRow{
 		{Key: "n", Data: gcs.Generation{Object: gcs.Object{Size: 1, Generation: 1}, TimeDeleted: 2}},
 	}, 0)
 	for _, d := range []*reader.Dataset{s3d, gcsd} {

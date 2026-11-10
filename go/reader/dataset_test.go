@@ -155,87 +155,34 @@ func semanticAt(t *testing.T, err error, kind Kind, column string) *SemanticErro
 	return se
 }
 
-func TestAcceptWholeSource(t *testing.T) {
-	local := func(uri string) func(map[string]any) {
-		return func(e map[string]any) { e["source"] = map[string]any{"kind": "local-fs", "uri": uri} }
+// TestOpenRecordsCoverage: a partial, filtered listing with no publication
+// time opens through the manifest alone, and Metadata hands on how the
+// listing ran for the application to judge.
+func TestOpenRecordsCoverage(t *testing.T) {
+	ext := swathExtension()
+	delete(ext, "published_at")
+	ext["source"] = map[string]any{"kind": "local-fs", "uri": "/data"}
+	ext["scope"] = map[string]any{"kind": "prefix", "prefix": "d/"}
+	ext["coverage"] = map[string]any{"complete": false, "stop_reason": "max_keys", "skipped_entries": 3,
+		"exclusions": []string{}, "filters": []string{"one_filesystem"}, "snapshot": false}
+	s := spec{id: LocalV1, key: s3Spec().key, ext: ext}
+	rows := make([]localRow, len(localTree))
+	for i, e := range localTree {
+		rows[i] = localRow{Key: []byte(e.key), Kind: e.kind, Size: ptr(e.size)}
 	}
-	azure := func(e map[string]any) {
-		e["source"] = map[string]any{"kind": "azblob", "uri": "az://acct1/c", "container": "c"}
+	dir := writeGeometry(t, s, rows[:3], 2, 2)
+	appendPart(t, dir, writeGeometry(t, s, rows[3:], 2, 2))
+
+	d, src := openSource(t, dir)
+	if opens, _ := src.taken(); !reflect.DeepEqual(opens, []string{seekparquet.ManifestName}) {
+		t.Fatalf("opened %q, want the manifest alone", opens)
 	}
-	s3 := WholeSource{Kind: "s3", Container: "b"}
-	for _, tc := range []struct {
-		name  string
-		noExt bool
-		id    SchemaID // "": S3ObjectsV1
-		edit  func(ext map[string]any)
-		want  WholeSource
-		field string // "" accepts
-	}{
-		{name: "whole bucket", want: s3},
-		{name: "whole bucket, its URI", want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}},
-		{name: "another bucket URI", want: WholeSource{Kind: "s3", Container: "b", URI: "s3://c"}, field: "source.uri"},
-		{name: "no exclusions, snapshot absent", edit: func(e map[string]any) {
-			c := e["coverage"].(map[string]any)
-			delete(c, "exclusions")
-			delete(c, "snapshot")
-		}, want: s3},
-		{name: "filesystem", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data"}},
-		{name: "filesystem, trailing separator asked", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data/"}},
-		{name: "filesystem, trailing separator recorded", id: LocalV1, edit: local("/data/"), want: WholeSource{Kind: "local-fs", URI: "/data"}},
-		{name: "another root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data2"}, field: "source.uri"},
-		{name: "a root inside", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data/sub"}, field: "source.uri"},
-		{name: "filesystem without a root", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs"}, field: "source.uri"},
-		{name: "filesystem recording no root", id: LocalV1, edit: local(""), want: WholeSource{Kind: "local-fs", URI: "/"}, field: "source.uri"},
-		{name: "bucket recording no URI", edit: func(e map[string]any) { e["source"].(map[string]any)["uri"] = "" }, want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}, field: "source.uri"},
-		{name: "filesystem with a container", id: LocalV1, edit: local("/data"), want: WholeSource{Kind: "local-fs", Container: "b", URI: "/data"}, field: "source.container"},
-		{name: "filesystem recording a container", id: LocalV1, edit: func(e map[string]any) {
-			e["source"] = map[string]any{"kind": "local-fs", "uri": "/data", "container": "b"}
-		}, want: WholeSource{Kind: "local-fs", URI: "/data"}, field: "source.container"},
-		{name: "azure container", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c", URI: "az://acct1/c"}},
-		{name: "azure container of another account", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c", URI: "az://acct2/c"}, field: "source.uri"},
-		{name: "azure container without its account", id: AzblobObjectsV1, edit: azure, want: WholeSource{Kind: "azblob", Container: "c"}, field: "source.uri"},
-		{name: "schema id of another kind", edit: local("/data"), want: WholeSource{Kind: "local-fs", URI: "/data"}, field: "source.kind"},
-		{name: "missing extension", noExt: true, want: s3, field: "extensions.swath"},
-		{name: "source kind", want: WholeSource{Kind: "gcs", Container: "b"}, field: "source.kind"},
-		{name: "source absent", edit: func(e map[string]any) { delete(e, "source") }, want: s3, field: "source.kind"},
-		{name: "container", want: WholeSource{Kind: "s3", Container: "other"}, field: "source.container"},
-		{name: "container absent", edit: func(e map[string]any) { delete(e["source"].(map[string]any), "container") }, want: s3, field: "source.container"},
-		{name: "uri absent", edit: func(e map[string]any) { delete(e["source"].(map[string]any), "uri") }, want: WholeSource{Kind: "s3", Container: "b", URI: "s3://b"}, field: "source.uri"},
-		{name: "prefix scope", edit: func(e map[string]any) { e["scope"] = map[string]any{"kind": "prefix", "prefix": "logs/"} }, want: s3, field: "scope.kind"},
-		{name: "scope absent", edit: func(e map[string]any) { delete(e, "scope") }, want: s3, field: "scope.kind"},
-		{name: "coverage incomplete", edit: func(e map[string]any) { e["coverage"].(map[string]any)["complete"] = false }, want: s3, field: "coverage.complete"},
-		{name: "coverage absent", edit: func(e map[string]any) { delete(e, "coverage") }, want: s3, field: "coverage.complete"},
-		{name: "stopped", edit: func(e map[string]any) { e["coverage"].(map[string]any)["stop_reason"] = "signal" }, want: s3, field: "coverage.stop_reason"},
-		{name: "stop reason absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "stop_reason") }, want: s3, field: "coverage.stop_reason"},
-		{name: "skipped entries", edit: func(e map[string]any) { e["coverage"].(map[string]any)["skipped_entries"] = 3 }, want: s3, field: "coverage.skipped_entries"},
-		{name: "skipped entries absent", edit: func(e map[string]any) { delete(e["coverage"].(map[string]any), "skipped_entries") }, want: s3, field: "coverage.skipped_entries"},
-		{name: "filters", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = []string{"--include *.log"} }, want: s3, field: "coverage.filters"},
-		{name: "filters null", edit: func(e map[string]any) { e["coverage"].(map[string]any)["filters"] = nil }, want: s3, field: "coverage.filters"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := s3Spec()
-			if tc.id != "" {
-				s.id = tc.id
-			}
-			switch {
-			case tc.noExt:
-				s.ext = nil
-			case tc.edit != nil:
-				tc.edit(s.ext)
-			}
-			d := openDir(t, writeDataset[s3Row](t, s, nil))
-			err := d.AcceptWholeSource(tc.want)
-			if tc.field == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			semanticAt(t, err, KindCoverage, tc.field)
-			if !errors.Is(err, ErrCoverage) {
-				t.Fatalf("%v is not ErrCoverage", err)
-			}
-		})
+	m := d.Metadata()
+	c := m.Coverage
+	if !m.Swath || m.PublishedAt != nil || *m.Source.Kind != "local-fs" || *m.Scope.Kind != "prefix" || *m.Scope.Prefix != "d/" ||
+		*c.Complete || *c.StopReason != "max_keys" || *c.SkippedEntries != 3 || !reflect.DeepEqual(c.Filters, []string{"one_filesystem"}) ||
+		len(m.Manifest.Parts) != 2 {
+		t.Fatalf("metadata %+v, coverage %+v", m, c)
 	}
 }
 
@@ -486,30 +433,6 @@ func TestStreamRefusalUnchanged(t *testing.T) {
 	}
 }
 
-// TestDigestCorruption: Open, CheckSchema and Stream do not check digests;
-// a part whose bytes changed but not its size fails the module's digest
-// validation over the same directory.
-func TestDigestCorruption(t *testing.T) {
-	dir := writeDataset(t, s3Spec(), s3Rows(5))
-	part := filepath.Join(dir, "data", "part-00000.parquet")
-	raw, err := os.ReadFile(part)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw[len(raw)/2] ^= 0xff
-	if err := os.WriteFile(part, raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	report, err := seekparquet.ValidateDir(context.Background(), dir, seekparquet.ValidateOptions{Level: seekparquet.LevelDigest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	lr, _ := report.Level(seekparquet.LevelDigest)
-	if lr.Result != seekparquet.Failed || lr.Failure.Code != seekparquet.CodeDigestMismatch || lr.At.Part != "data/part-00000.parquet" {
-		t.Fatalf("digest level %+v", lr)
-	}
-}
-
 // TestCheckSchemaReadsTheVerifiedPart: CheckSchema checks the columns of the
 // part file the module verified and reads, not of a file put at its path
 // since: a part whose last_modified is not a timestamp, replaced after
@@ -530,44 +453,4 @@ func TestCheckSchemaReadsTheVerifiedPart(t *testing.T) {
 		t.Fatal(err)
 	}
 	semanticAt(t, d.CheckSchema(ctx), KindSchema, "last_modified")
-}
-
-// A mismatch names both sides; a container or URI that holds user
-// information, a query or a fragment where the bucket belongs is hidden,
-// whichever side it is on, and clean values and literal prefixes are shown.
-func TestMismatchShowsCleanValuesOnly(t *testing.T) {
-	for _, c := range []struct{ in, want string }{
-		{"clean", "clean"},
-		{"u:SECRET@b", "[redacted]"},
-		{"b?sig=SECRET", "[redacted]"},
-		{"s3://b/p", "s3://b/p"},
-		{"s3://b/p?literal#key@x", "s3://b/p?literal#key@x"},
-		{"s3://u:SECRET@b/p", "s3://[redacted]"},
-		{"az://acct?sig=SECRET/c", "az://[redacted]"},
-		{"az://acct/c?sig=SECRET", "az://acct/c?[redacted]"},
-		{"az://acct/c?%73ig=SECRET&x=100%", "az://acct/c?[redacted]"},
-		{"s3://b/p?literal=100%", "s3://b/p?literal=100%"},
-		{"s3://b/p?mysig=1", "s3://b/p?mysig=1"},
-		{"https://host/p?sig=SECRET", "https://host/p?[redacted]"},
-		{"https://host/p#token=SECRET", "https://host/p#[redacted]"},
-		{"s3://b/p#literal", "s3://b/p#literal"},
-		{"az://acct/c?sig+=SECRET", "az://acct/c?[redacted]"},
-	} {
-		if got := shown(c.in); got != c.want {
-			t.Errorf("shown(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestShownNameHidesCredentialsAnywhere(t *testing.T) {
-	for _, c := range []struct{ in, want string }{
-		{"bucket", "bucket"},
-		{"https://host/p?sig=SECRET", "[redacted]"},
-		{"u:SECRET@b", "[redacted]"},
-		{"b#SECRET", "[redacted]"},
-	} {
-		if got := shownName(c.in); got != c.want {
-			t.Errorf("shownName(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
 }

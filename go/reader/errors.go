@@ -19,10 +19,9 @@ const (
 	// the operation reads (a versions schema has no current objects), or
 	// extensions.swath's version is not one this module reads.
 	KindSchema Kind = "schema"
-	// KindCoverage: the manifest's extensions.swath is malformed, does
-	// not record a listing of the whole source (AcceptWholeSource), or has
-	// no published_at (AdmitWhole).
-	KindCoverage Kind = "coverage"
+	// KindMetadata: the manifest's extensions.swath is malformed (a
+	// member of another type than swath writes).
+	KindMetadata Kind = "metadata"
 	// KindRow: a row holds a value its schema forbids (a null in a required
 	// column), or an object a current-object reader refuses (Stream).
 	KindRow Kind = "row"
@@ -30,12 +29,11 @@ const (
 
 // SemanticError is a dataset that is valid SeekParquet but not what swath's
 // schema or metadata says it is. errors.Is matches it against ErrSchema,
-// ErrCoverage and ErrRow by Kind.
+// ErrMetadata and ErrRow by Kind.
 type SemanticError struct {
 	Kind Kind
-	// Column names the column at fault (KindSchema, KindRow), or the
-	// member of extensions.swath at fault (KindCoverage: "source.kind",
-	// "coverage.filters"), "" when none does.
+	// Column names the column at fault (KindSchema, KindRow), "" when
+	// none does.
 	Column string
 	// Row is the row at fault (KindRow, and KindSchema found decoding a
 	// row), nil otherwise.
@@ -46,7 +44,7 @@ type SemanticError struct {
 // The kinds as targets for errors.Is.
 var (
 	ErrSchema   = &SemanticError{Kind: KindSchema}
-	ErrCoverage = &SemanticError{Kind: KindCoverage}
+	ErrMetadata = &SemanticError{Kind: KindMetadata}
 	ErrRow      = &SemanticError{Kind: KindRow}
 )
 
@@ -67,7 +65,7 @@ func (e *SemanticError) Error() string {
 func (e *SemanticError) Unwrap() error { return e.Err }
 
 // Is reports whether target is a SemanticError of the same kind with no
-// cause of its own (ErrSchema, ErrCoverage, ErrRow).
+// cause of its own (ErrSchema, ErrMetadata, ErrRow).
 func (e *SemanticError) Is(target error) bool {
 	t, ok := target.(*SemanticError)
 	return ok && t.Err == nil && t.Column == "" && t.Row == nil && t.Kind == e.Kind
@@ -82,9 +80,9 @@ func notCurrent(id SchemaID) error {
 	return semantic(KindSchema, "", nil, "%s holds versions, not current objects", id)
 }
 
-// IsRefusal reports whether err, or an error it wraps, refuses the
-// dataset as data: a *SemanticError, a *RefusalError, ErrMissingDigest or
-// ErrIdentityMismatch. Every other error is false: an *UnsupportedError
+// IsRefusal reports whether err, or an error it wraps, refuses what was
+// read as data: a *SemanticError or a *RefusalError. Every other error is
+// false: an *UnsupportedError
 // (a valid dataset using a feature the module does not read, inspectable
 // with errors.As), ErrClosed, ErrInvalidRequest, ErrLimitExceeded, the
 // context's, and the filesystem's and storage's. False does not mean
@@ -93,5 +91,5 @@ func notCurrent(id SchemaID) error {
 func IsRefusal(err error) bool {
 	var se *SemanticError
 	var re *RefusalError
-	return errors.As(err, &se) || errors.As(err, &re) || errors.Is(err, ErrMissingDigest) || errors.Is(err, ErrIdentityMismatch)
+	return errors.As(err, &se) || errors.As(err, &re)
 }

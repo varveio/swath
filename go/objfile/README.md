@@ -132,8 +132,9 @@ bucket or account and container, a custom endpoint, the root prefix), so a snaps
 store; `remote.Store.Scope` is one, and holds no credentials. Restore reads version 1 only: a change to the
 format is a new version number, which an older objfile refuses, with no fallback.
 
-A snapshot proves the files that were opened, nothing more: that it holds every file a dataset needs is
-established by the reader that opened them (admission), not by objfile. `Pinned` has no `OpenSized`, whose
+A snapshot proves the files that were opened, nothing more: that it holds every file a dataset needs is the
+application's to establish, by opening every one of them (`reader.Dataset.CheckSchema` opens every part), not
+objfile's. `Pinned` has no `OpenSized`, whose
 Object learns its identity only at its first read. Compose it outermost:
 `objfile.Pin(objfile.Root(objfile.Limit(o, n), prefix), scope)`.
 

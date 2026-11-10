@@ -15,7 +15,7 @@ type (
 	SourceFile = seekparquet.SourceFile
 	// ContextBinder is a SourceFile whose reads a context can bound.
 	ContextBinder = seekparquet.ContextBinder
-	// Options configures Open, OpenDir and digest validation.
+	// Options configures Open and OpenDir.
 	Options = seekparquet.Options
 	// Limits bounds what a dataset can make the reader allocate.
 	Limits = seekparquet.Limits

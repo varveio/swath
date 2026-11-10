@@ -13,7 +13,7 @@ import (
 )
 
 // CheckSchema checks that the dataset is what its schema id says, for a
-// reader admitting it, before any query. The manifest's key column and its
+// caller that wants every part checked before a query. The manifest's key column and its
 // key uniqueness must be the spec's, so a dataset whose keys repeat (a
 // versions listing) never passes as one of current objects, whose keys
 // the module then holds strictly ascending. Then the module checks every
@@ -21,7 +21,7 @@ import (
 // the schema id, key column, and the first key page of each row group),
 // and CheckSchema reads each part's columns from the footer the module
 // checked and reads the part through (seekparquet.Dataset.Columns), so
-// what it admits is what later reads decode: every column of the
+// what it checks is what later reads decode: every column of the
 // spec is a top-level, non-repeated column of the spec's physical and
 // logical type, stored REQUIRED where the spec requires a value, and
 // present unless the spec says a part may lack it. Columns the spec does
@@ -31,8 +31,7 @@ import (
 // column and the part; the module's refusals (*seekparquet.RefusalError)
 // and storage errors are returned unchanged. It reads nothing beyond
 // Verify's reads: neither the values (Stream checks the
-// rows it reads) nor the parts' digests (seekparquet.Validate at
-// LevelDigest) are checked.
+// rows it reads) nor the parts' digests are checked.
 func (d *Dataset) CheckSchema(ctx context.Context) error {
 	if err := d.checkKey(); err != nil {
 		return err
