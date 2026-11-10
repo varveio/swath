@@ -14,7 +14,7 @@ on:
         default: a93035d26dd0c25ceed434a97143f15f8f43c6e1  # main: #389 + #390
       ref_b:
         description: swath ref B (after)
-        default: 849999ed3e5820914052c1c2f84bb4994801c5e8  # go/localfs-count-stream
+        default: 3e8494ecbf07ce3578b8650d00e0515fd6db3e65  # go/localfs-count-stream: slabs with chunk hand-off
       trees:
         default: huge realistic manybig
 
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {repository: varveio/swath, ref: "${{ inputs.ref_a || 'a93035d26dd0c25ceed434a97143f15f8f43c6e1' }}", path: swath-a}
       - uses: actions/checkout@v4
-        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || '849999ed3e5820914052c1c2f84bb4994801c5e8' }}", path: swath-b}
+        with: {repository: varveio/swath, ref: "${{ inputs.ref_b || '3e8494ecbf07ce3578b8650d00e0515fd6db3e65' }}", path: swath-b}
       - uses: actions/setup-go@v5
         with: {go-version-file: swath-b/go/go.mod, cache: false}
       - name: build
