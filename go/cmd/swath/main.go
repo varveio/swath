@@ -898,7 +898,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// The empty scheme is a local path. stdout carries rows to a reader on
 	// the same screen: swath list's text there, and swath du's table.
 	n := rowNouns(pf.Scheme == "", o.versions())
-	tt := startTerminal(o.term, att, registry.Redact(root), startDest(o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
+	tt := startTerminal(o.term, att, startOf(registry.Redact(root), o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
 	defer watchRequests(fw)() // removed before stderr is restored
 	status := func() { tt.status(cfg.Progress.Snapshot()) }

@@ -1297,22 +1297,22 @@ line's words), then the event's fields:
 
 | Event | Level | Fields |
 |---|---|---|
-| `start` | `info` (`-v`) | `source`, `to` (where the rows go) |
+| `start` | `info` (`-v`) | `source`, `mode` (what the run writes: `rows` on stdout, a text `file`, a `dataset`, `totals`, or a `count`), `destination` (the path, `stdout`, or absent for a count) |
 | `progress` | `info` | the progress snapshot's fields, as `.swath/progress.json` has them (`rows`, `requests`, `duration_ms`, ...) |
 | `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
 | `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (redacted as above), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
-| `retry` | `debug` (`-vv`) | `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
+| `retry` | `debug` (`-vv`) | `host` and `path` (the attempt's request, redacted as a `request` event's), `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
 | `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error) |
 
 Pinned by `TestEventGolden` (`UPDATE=1 go test ./cmd/swath` rewrites this block):
 
 <!-- events:begin -->
 ```json
-{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","to":"to stdout"}
+{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","mode":"rows","destination":"stdout"}
 {"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"progress","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing · 120,000 objects · 2,000 keys/s (avg 2,000)","rows":120000,"ordered":0,"encoded":0,"parts":0,"verified_bytes":0,"advance":120000,"answered":121,"frontier":121,"empty_chain_pages":0,"throttles":0,"timeouts":0,"rows_retained":0,"requests":122,"retries":1,"inflight":8,"limit":64,"mutex_wait_ms":0,"mutex_max_hold_ms":0,"started_at":"2026-11-10T11:59:00Z","as_of":"2026-11-10T12:00:00Z","duration_ms":60000,"part_age_ms":60000}
 {"ts":"2026-11-10T12:00:00.000Z","level":"warn","event":"warning","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"S3 127.0.0.1:9: connection refused (retrying; 11 attempts)","host":"127.0.0.1:9","cause":"connection refused","attempts":11}
 {"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","status":200,"latency_ms":42}
-{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted] failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
 {"ts":"2026-11-10T12:00:00.000Z","level":"error","event":"outcome","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
 ```
 <!-- events:end -->

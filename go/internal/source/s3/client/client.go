@@ -214,7 +214,7 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*Page, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) {
 		return attempt(c, ctx, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
@@ -242,7 +242,7 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*VersionPage, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*VersionPage, error) {
 		return attempt(c, ctx, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err

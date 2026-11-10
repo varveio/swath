@@ -184,7 +184,7 @@ func TestRetryAfterWait(t *testing.T) {
 		var n Counters
 		var times []time.Time
 		start := time.Now()
-		_, err := Do(context.Background(), r, &n, func() (int, error) {
+		_, err := Do(context.Background(), r, &n, func(context.Context) (int, error) {
 			times = append(times, time.Now())
 			if len(times) == 1 {
 				return 0, c.err
@@ -216,7 +216,7 @@ func TestNormalizedFailureShared(t *testing.T) {
 	a := new(observedAnswer)
 	l := NewLimiter(8)
 	var counts Counters
-	_, err := Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &counts, func() (int, error) { return 0, a })
+	_, err := Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &counts, func(context.Context) (int, error) { return 0, a })
 	var f *Failure
 	var ex *ExhaustedError
 	if !errors.As(err, &f) || !errors.As(err, &ex) || ex.Err != f || Normalize(err) != f || Normalize(f) != f ||
@@ -275,7 +275,7 @@ func TestCallerCancellationPrecedesCredentialFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var counts Counters
-	_, err := Do(ctx, Retry{MaxAttempts: 3, Limiter: NewLimiter(8)}, &counts, func() (int, error) {
+	_, err := Do(ctx, Retry{MaxAttempts: 3, Limiter: NewLimiter(8)}, &counts, func(context.Context) (int, error) {
 		cancel()
 		return 0, &CredentialError{Transient: true, Timeout: true, Err: context.DeadlineExceeded}
 	})

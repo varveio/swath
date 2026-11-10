@@ -39,8 +39,12 @@ func TestWatch(t *testing.T) {
 	var c Counters
 	r := Retry{BaseBackoff: time.Millisecond}
 	r.Defaults()
-	_, err := Do(context.Background(), r, &c, func() (int, error) {
-		resp, err := hc.Get(srv.URL + "/b?prefix=a")
+	_, err := Do(context.Background(), r, &c, func(ctx context.Context) (int, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/b?prefix=a", nil)
+		if err != nil {
+			return 0, err
+		}
+		resp, err := hc.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -58,7 +62,8 @@ func TestWatch(t *testing.T) {
 	if len(seen) != 2 || seen[0].Status != 503 || seen[1].Status != 200 || seen[0].Method != http.MethodGet || seen[0].URL.Path != "/b" || seen[1].Latency < 0 { // 0 on a coarse clock (Windows)
 		t.Fatalf("exchanges %+v", seen)
 	}
-	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Status != 503 || failures[0].Class != string(ClassOther) {
+	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Status != 503 || failures[0].Class != string(ClassOther) ||
+		failures[0].URL == nil || failures[0].URL.Path != "/b" || failures[0].URL.Query().Get("prefix") != "a" {
 		t.Fatalf("failures %+v", failures)
 	}
 }

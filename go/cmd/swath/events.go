@@ -147,39 +147,61 @@ func marshal(v any) []byte {
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
 }
 
-// startFields are a start event's: the source and where its rows go.
+// The start event's modes: what a run writes.
+const (
+	modeRows    = "rows"    // text rows on stdout
+	modeFile    = "file"    // text rows into a file
+	modeDataset = "dataset" // a dataset directory
+	modeTotals  = "totals"  // swath du's totals on stdout
+	modeCount   = "count"   // nothing: swath diag count
+)
+
+// startFields are a start event's: the source, what the run writes (mode)
+// and where (destination: a path, "stdout", or none).
 type startFields struct {
-	Source string `json:"source"`
-	To     string `json:"to"`
+	Source      string `json:"source"`
+	Mode        string `json:"mode"`
+	Destination string `json:"destination,omitempty"`
+}
+
+// words are where the rows go as the text start line says it.
+func (f startFields) words() string {
+	switch f.Mode {
+	case modeTotals:
+		return "as totals"
+	case modeCount:
+		return "as a count"
+	}
+	return "to " + f.Destination
 }
 
 // start prints the start line (-v): the source, where its rows go (to
 // stdout, to DIR, to FILE, as totals, as a count) and the attempt.
-func (l *eventLog) start(src, to string) {
+func (l *eventLog) start(f startFields) {
 	if !l.shows(lvInfo) {
 		return
 	}
-	msg := "listing " + src + " " + to
+	msg := "listing " + f.Source + " " + f.words()
 	if l.json {
-		l.print(lvInfo, evStart, msg, startFields{src, to})
+		l.print(lvInfo, evStart, msg, f)
 		return
 	}
 	note(errOut, "swath: "+msg+" (attempt "+l.attempt+")\n")
 }
 
-// startDest is where a run's rows go, as the start line says it.
-func startDest(o options, dir string) string {
+// startOf is a run's start event: src, and what it writes where.
+func startOf(src string, o options, dir string) startFields {
 	switch {
 	case o.totals != nil:
-		return "as totals"
+		return startFields{src, modeTotals, "stdout"}
 	case o.countOnly:
-		return "as a count"
+		return startFields{src, modeCount, ""}
 	case o.text != nil && o.text.Path == "":
-		return "to stdout"
+		return startFields{src, modeRows, "stdout"}
 	case o.text != nil:
-		return "to " + o.text.Path
+		return startFields{src, modeFile, o.text.Path}
 	}
-	return "to " + dir
+	return startFields{src, modeDataset, dir}
 }
 
 // progress prints a progress record: the snapshot's fields after msg,
@@ -393,8 +415,11 @@ func (l *eventLog) request(e source.Exchange) {
 	l.print(lvDebug, evRequest, fmt.Sprintf("request %s %s%s: %s (%s)", f.Op, f.Host, f.Path, what, e.Latency.Round(time.Millisecond)), f)
 }
 
-// retryFields are a retry event's.
+// retryFields are a retry event's: the request's host and path (redacted
+// as a request event's) match it to its request event.
 type retryFields struct {
+	Host   string `json:"host,omitempty"`
+	Path   string `json:"path,omitempty"`
 	Try    int    `json:"try"` // the call's attempt, from 1 (attempt is the run's id)
 	Class  string `json:"class"`
 	Status int    `json:"status,omitempty"`
@@ -413,11 +438,16 @@ func (l *eventLog) retry(f source.Failed) {
 	if f.Cause != nil {
 		r.Cause = f.Cause.Error()
 	}
+	on := ""
+	if f.URL != nil {
+		r.Host, r.Path = f.URL.Host, requestPath(f.URL)
+		on = " " + r.Host + r.Path
+	}
 	next := "not retried"
 	if f.Retry {
 		next = "retrying in " + f.Wait.Round(time.Millisecond).String()
 	}
-	l.print(lvDebug, evRetry, fmt.Sprintf("attempt %d failed (%s): %s; %s", f.Attempt, r.Class, r.Cause, next), r)
+	l.print(lvDebug, evRetry, fmt.Sprintf("attempt %d%s failed (%s): %s; %s", f.Attempt, on, r.Class, r.Cause, next), r)
 }
 
 // watchRequests installs the request log and the persistent-failure

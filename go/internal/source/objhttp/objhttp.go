@@ -20,6 +20,7 @@ import (
 	"math/bits"
 	"math/rand/v2"
 	"net"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -253,12 +254,19 @@ func (r *Retry) Defaults() {
 	}
 }
 
-// failed tells the watch (source.SetWatch), if any, of a failed attempt.
-func failed(n int, f *Failure, retry bool, wait time.Duration) {
+// failed tells the watch (source.SetWatch), if any, of a failed attempt
+// and the request it sent last (t).
+func failed(n int, f *Failure, retry bool, wait time.Duration, t *target) {
 	if w := source.Watching(); w != nil && w.Failed != nil {
-		w.Failed(source.Failed{Attempt: n, Class: string(f.Class), Status: f.Status, Code: f.Code, Cause: f.Cause, Retry: retry, Wait: wait})
+		w.Failed(source.Failed{Attempt: n, Class: string(f.Class), Status: f.Status, Code: f.Code, Cause: f.Cause, Retry: retry, Wait: wait, URL: t.url.Load()})
 	}
 }
+
+// target is the URL of the request an attempt sent last: Do hands it to
+// the attempt on its context, and the Guard sets it.
+type target struct{ url atomic.Pointer[url.URL] }
+
+type targetKey struct{}
 
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
@@ -268,11 +276,14 @@ func failed(n int, f *Failure, retry bool, wait time.Duration) {
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
 // during a backoff. The caller's cancellation ends it at once. A watch
-// (source.SetWatch) is told of each failed attempt and whether it is retried.
-func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
+// (source.SetWatch) is told of each failed attempt, its request (the
+// attempt sends on the context it is given) and whether it is retried.
+func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func(ctx context.Context) (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
-		v, admitted, f := admit(ctx, r, attempt)
+		t := &target{}
+		actx := context.WithValue(ctx, targetKey{}, t)
+		v, admitted, f := admit(ctx, r, func() (T, error) { return attempt(actx) })
 		if f == nil {
 			c.answered.Add(1)
 			return v, nil
@@ -296,7 +307,7 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 			c.parseFailures.Add(1)
 		}
 		if !f.Transient || n >= r.MaxAttempts {
-			failed(n, f, false, 0)
+			failed(n, f, false, 0, t)
 			if f.Transient {
 				return zero, &ExhaustedError{Attempts: n, Err: f}
 			}
@@ -306,13 +317,13 @@ func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, err
 		d := min(r.MaxBackoff, r.BaseBackoff<<min(n-1, 30))
 		wait := rand.N(d) + 1
 		wait = max(wait, f.Wait)
-		failed(n, f, true, wait)
-		t := time.NewTimer(wait)
+		failed(n, f, true, wait, t)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			t.Stop()
+			timer.Stop()
 			return zero, Normalize(ctx.Err())
-		case <-t.C:
+		case <-timer.C:
 		}
 	}
 }

@@ -28,7 +28,7 @@ func TestRateCapsAttempts(t *testing.T) {
 				for i := range calls {
 					first := true
 					_, err := Do(context.Background(), Retry{MaxAttempts: 3, Limiter: lim, Rate: r, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond}, &c,
-						func() (int, error) {
+						func(context.Context) (int, error) {
 							attempts.Add(1)
 							n := now.Add(1)
 							defer now.Add(-1)

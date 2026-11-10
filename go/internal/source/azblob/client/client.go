@@ -446,7 +446,7 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (bool, error) {
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
 		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err

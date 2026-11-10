@@ -320,7 +320,7 @@ func TestLimiterPanicReturnsPermit(t *testing.T) {
 				t.Fatal("the attempt's panic was swallowed")
 			}
 		}()
-		_, _ = Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &c, func() (int, error) { panic("attempt") })
+		_, _ = Do(context.Background(), Retry{MaxAttempts: 1, Limiter: l}, &c, func(context.Context) (int, error) { panic("attempt") })
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

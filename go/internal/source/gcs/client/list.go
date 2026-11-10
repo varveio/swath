@@ -24,7 +24,7 @@ import (
 // List sends one objects.list request per attempt, retrying retryable
 // failures (objhttp.Do).
 func (c *Client) List(ctx context.Context, in *ListInput) (*Page, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func() (*Page, error) { return c.attempt(ctx, in) })
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) { return c.attempt(ctx, in) })
 }
 
 // selector is the partial-response selector a listing sends (versions: a

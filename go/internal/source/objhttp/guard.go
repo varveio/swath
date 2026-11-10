@@ -116,6 +116,10 @@ func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 		u := *req.URL
 		c.URL = &u
 	}
+	if t, _ := req.Context().Value(targetKey{}).(*target); t != nil {
+		u := *req.URL
+		t.url.Store(&u)
+	}
 	if g.Header != nil {
 		req = req.Clone(req.Context()) // the caller's request is not ours to change
 		if err := g.Header(req); err != nil {

@@ -34,6 +34,7 @@ type Failed struct {
 	Cause   error
 	Retry   bool
 	Wait    time.Duration
+	URL     *url.URL // the attempt's request (nil: none was sent)
 }
 
 // Watch receives every client's exchanges and failed attempts,

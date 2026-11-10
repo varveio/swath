@@ -70,7 +70,7 @@ func TestEventGolden(t *testing.T) {
 	t.Cleanup(func() { logClock = time.Now })
 	setLog(termOptions{verbose: 3, logFormat: logJSON}, "5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f")
 	l := elog()
-	l.start("s3://bucket/logs/", "to stdout")
+	l.start(startFields{"s3://bucket/logs/", modeRows, "stdout"})
 	l.progress(listing.ProgressSnapshot{Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
 		StartedAt: at.Add(-time.Minute), AsOf: at, DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
 	w := newFailureWatch("S3")
@@ -81,7 +81,7 @@ func TestEventGolden(t *testing.T) {
 	sas, _ := url.Parse("https://acct.blob.core.windows.net/c?restype=container&comp=list&prefix=logs%2F&marker=TOKEN&sv=2022-11-02&sig=SECRET")
 	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
 	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
-		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate.")})
+		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate."), URL: sas})
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
@@ -253,7 +253,7 @@ func TestVerbosity(t *testing.T) {
 	stderr := captureSyncStderr(t)
 	start := regexp.MustCompile(`(?m)^swath: listing gs://bkt to stdout \(attempt [0-9a-f]{32}\)$`)
 	failed := regexp.MustCompile(`(?m)^swath: request GET 127\.0\.0\.1:\d+/storage/v1/b/bkt/o\?\S*: 503 \(`)
-	retry := regexp.MustCompile(`(?m)^swath: attempt 1 failed \(\w+\): .*; retrying in `)
+	retry := regexp.MustCompile(`(?m)^swath: attempt 1 \S+/storage/v1/b/bkt/o\S* failed \(\w+\): .*; retrying in `)
 	answered := regexp.MustCompile(`(?m)^swath: request GET 127\.0\.0\.1:\d+/storage/v1/b/bkt/o\?\S*: 200 \(`)
 	for _, c := range []struct {
 		flag                           string

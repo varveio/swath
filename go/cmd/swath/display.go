@@ -667,14 +667,14 @@ type termUI struct {
 // rows says stdout is a terminal that carries the run's rows
 // (progressPrefs). Under --log-format json nothing is redrawn or coloured:
 // progress records are appended events.
-func startTerminal(t termOptions, att *listing.Attempt, src, to string, dataset bool, noun nouns, rows bool) *termUI {
+func startTerminal(t termOptions, att *listing.Attempt, start startFields, dataset bool, noun nouns, rows bool) *termUI {
 	tty, width := stderrTerminal()
 	json := t.logFormat == logJSON
 	if json {
 		tty, width = false, 0
 	}
 	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started}
-	elog().start(src, to)
+	elog().start(start)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
 		return tt
