@@ -99,6 +99,7 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	s := newRowlessService(t)
 	for _, tc := range []struct {
 		name  string
@@ -167,6 +168,7 @@ func TestForcedExitAfterCommit(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	t.Parallel()
 	s := newRowlessService(t)
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
@@ -296,6 +298,7 @@ func TestForcedExitAtCommit(t *testing.T) {
 // waited for that lock before arming it and never exited (eighth review).
 func TestForcedExitBackstopFirst(t *testing.T) {
 	bin := buildSwath(t)
+	t.Parallel()
 	s := newRowlessService(t)
 	s.set("hung")
 	dir := filepath.Join(t.TempDir(), "ds")
