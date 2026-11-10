@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"reflect"
 	"slices"
@@ -508,6 +509,7 @@ func TestConcurrentClient(t *testing.T) {
 	}
 	ep := replayServer(t, keys)
 	target, _ := url.Parse(ep)
+	rp := httputil.NewSingleHostReverseProxy(target)
 	var n atomic.Int64
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Query().Get("comp") == "list" && n.Add(1)%7 == 0 {
@@ -515,17 +517,8 @@ func TestConcurrentClient(t *testing.T) {
 			echoError(w, req, 503, "ServerBusy")
 			return
 		}
-		out, err := http.DefaultTransport.RoundTrip(withHost(req, target))
-		if err != nil {
-			w.WriteHeader(502)
-			return
-		}
-		defer out.Body.Close()
-		for k, v := range out.Header {
-			w.Header()[k] = v
-		}
-		w.WriteHeader(out.StatusCode)
-		io.Copy(w, out.Body)
+
+		rp.ServeHTTP(w, req)
 	}))
 	t.Cleanup(proxy.Close)
 	sdk, err := New(context.Background(), Config{Endpoint: proxy.URL, Account: replayAccount, Anonymous: true, Workers: 32,
@@ -582,14 +575,6 @@ func TestConcurrentClient(t *testing.T) {
 	if sdk.Counters().Retries == 0 || sdk.Counters().Throttles == 0 {
 		t.Fatalf("retries %d, throttles %d: the faults were not met", sdk.Counters().Retries, sdk.Counters().Throttles)
 	}
-}
-
-// withHost is req addressed to target, for a forwarding proxy.
-func withHost(req *http.Request, target *url.URL) *http.Request {
-	out := req.Clone(req.Context())
-	out.RequestURI = ""
-	out.URL.Scheme, out.URL.Host, out.Host = target.Scheme, target.Host, target.Host
-	return out
 }
 
 func TestEndpointRefusal(t *testing.T) {

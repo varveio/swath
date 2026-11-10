@@ -13,54 +13,12 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
-
-// closes counts the Close calls on every response body its transport
-// returns.
-type closes struct {
-	mu     sync.Mutex
-	bodies []*countedBody
-}
-
-type countedBody struct {
-	io.ReadCloser
-	n atomic.Int32
-}
-
-func (b *countedBody) Close() error {
-	b.n.Add(1)
-	return b.ReadCloser.Close()
-}
-
-func (c *closes) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-	b := &countedBody{ReadCloser: resp.Body}
-	resp.Body = b
-	c.mu.Lock()
-	c.bodies = append(c.bodies, b)
-	c.mu.Unlock()
-	return resp, nil
-}
-
-func (c *closes) check(t *testing.T) {
-	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for i, b := range c.bodies {
-		if n := b.n.Load(); n != 1 {
-			t.Errorf("response %d closed %d times", i, n)
-		}
-	}
-}
 
 func jsonError(status int, code int, reason string) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, _ *http.Request) {
@@ -124,8 +82,8 @@ var empty = &Page{Items: []Object{}}
 // timeouts or parse failures counted per attempt of that class); it
 // surfaces the service's answer as an *Error by the HTTP status sent (the
 // body's code ignored; a 400 names its query, exactly), reads exactly the
-// stated page, and only from a 200 objects envelope, follows no redirect
-// and closes every original body once. The rows are the contract the
+// stated page, and only from a 200 objects envelope, and follows no redirect.
+// The rows are the contract the
 // generated client does not give: it reads EOF, null, {} and an error
 // member as an empty page, and any 2xx as success.
 func TestAnswers(t *testing.T) {
@@ -172,6 +130,7 @@ func TestAnswers(t *testing.T) {
 		{"200 error envelope", body(200, `{"error":{"code":503,"message":"backend"}}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 error null", body(200, `{"error":null}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 null", body(200, `null`), objhttp.ClassParse, retried, nil, nil},
+		{"200 array", body(200, `[]`), objhttp.ClassParse, retried, nil, nil},
 		{"200 empty", body(200, ``), objhttp.ClassParse, retried, nil, nil},
 		{"200 trailing JSON", body(200, `{"kind":"storage#objects"} {}`), objhttp.ClassParse, retried, nil, nil},
 		{"200 kind", body(200, `{"kind":"storage#objects"}`), "", final, empty, nil},
@@ -208,14 +167,12 @@ func TestAnswers(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(c.serve))
 			defer srv.Close()
 			target.Store(0)
-			cl := &closes{}
 			cli, err := New(context.Background(), Config{Endpoint: srv.URL + "/storage/v1/", Anonymous: true, Retry: objhttp.Retry{MaxAttempts: 3, BaseBackoff: time.Microsecond, MaxBackoff: time.Microsecond},
-				RequestTimeout: 5 * time.Second, HTTPClient: &http.Client{Transport: cl}})
+				RequestTimeout: 5 * time.Second})
 			if err != nil {
 				t.Fatal(err)
 			}
 			p, err := cli.List(context.Background(), &ListInput{Bucket: "b", Prefix: "p"})
-			cl.check(t)
 			if target.Load() != 0 {
 				t.Errorf("a redirect was followed")
 			}

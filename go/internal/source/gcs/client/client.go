@@ -158,23 +158,15 @@ type Client struct {
 // Application Default Credentials search) are a *objhttp.CredentialError, and
 // nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+	return newClient(ctx, cfg, google.FindDefaultCredentials, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
 }
 
 // credentialFinder finds the credentials of a client given none: the
-// client library's Application Default Credentials search (librarySearch), or in
+// client library's Application Default Credentials search, or in
 // tests a fixed answer, so what the client does with each outcome does not
 // depend on the host (on Google Cloud the real search finds the metadata
 // server).
-type credentialFinder interface {
-	find(ctx context.Context, scopes ...string) (*google.Credentials, error)
-}
-
-type librarySearch struct{}
-
-func (librarySearch) find(ctx context.Context, scopes ...string) (*google.Credentials, error) {
-	return google.FindDefaultCredentials(ctx, scopes...)
-}
+type credentialFinder func(ctx context.Context, scopes ...string) (*google.Credentials, error)
 
 // newClient is New with its credential search and its transport pool
 // given.
@@ -210,7 +202,7 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 		c.ts = tokensource.NewShared(creds.TokenSource)
 	default:
 		c.source = "application default credentials"
-		creds, err := finder.find(life, readScope)
+		creds, err := finder(life, readScope)
 		if err != nil {
 			return nil, &objhttp.CredentialError{Source: c.source, Err: err}
 		}

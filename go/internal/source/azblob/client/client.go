@@ -150,7 +150,7 @@ var ErrBodyCap = errors.New("response larger than the body cap")
 // New resolves credentials and builds the transport pool and the SDK
 // clients over it.
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	return newClient(ctx, cfg, build{bodyCap: MaxBody, entra: defaultChain{}})
+	return newClient(ctx, cfg, build{bodyCap: MaxBody, entra: defaultChain})
 }
 
 // build is what New fixes and tests vary: the success body cap and the
@@ -163,13 +163,9 @@ type build struct {
 // entraSource builds the Entra ID credential: azidentity's
 // DefaultAzureCredential (defaultChain), or in tests a fixed one, so what
 // the client does with each outcome does not depend on the host.
-type entraSource interface {
-	credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error)
-}
+type entraSource func(*azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error)
 
-type defaultChain struct{}
-
-func (defaultChain) credential(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
+func defaultChain(o *azidentity.DefaultAzureCredentialOptions) (azcore.TokenCredential, error) {
 	return azidentity.NewDefaultAzureCredential(o)
 }
 
@@ -276,7 +272,7 @@ var entraVars = []string{"AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SEC
 // listed; a token endpoint's transient failure is retried.
 func (c *Client) entra(entra entraSource) error {
 	const source = "Entra ID (DefaultAzureCredential)"
-	cred, err := entra.credential(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
+	cred, err := entra(&azidentity.DefaultAzureCredentialOptions{ClientOptions: azcore.ClientOptions{
 		// Each token exchange is one attempt: the listing's retry loop
 		// repeats it, not azcore's.
 		Transport: c.tokenHTTP(), Retry: policy.RetryOptions{MaxRetries: -1}}})
