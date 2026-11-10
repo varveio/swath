@@ -124,6 +124,9 @@ type Options struct {
 	// Prefetch configures the window cache in front of Rows; the zero
 	// value is on with the defaults.
 	Prefetch Prefetch
+	// ListIndex configures the "/" listing index built at open over a
+	// SeekParquet dataset; the zero value builds it with the defaults.
+	ListIndex ListIndex
 }
 
 // Metadata describes an opened fixture for the startup line and metrics.
@@ -142,6 +145,8 @@ type Metadata struct {
 	// dataset, "swath/canonical" for a Java-era fixture. Projections are
 	// chosen by it, never by the columns present.
 	SchemaID string
+	// ListIndex reports the list index build (Options.ListIndex).
+	ListIndex ListIndexBuild
 }
 
 // DefaultReaders is the default concurrent page-decode bound:

@@ -112,6 +112,50 @@ func TestSortFixtureThenServe(t *testing.T) {
 	}
 }
 
+// TestListIndexLineFollowsTheStartupLine: serving a SeekParquet dataset,
+// the startup line stays the first key=value line on stderr and the
+// list_index line, with the build's stats, comes next; --list-index=false
+// reports the index off.
+func TestListIndexLineFollowsTheStartupLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signals")
+	}
+	obj := legacytest.Object
+	capture := writeCapture(t, []legacytest.Row{obj("logs/a/1", 1), obj("logs/a/2", 2), obj("logs/b/1", 3), obj("z", 4)})
+	output := filepath.Join(t.TempDir(), "sorted")
+	if _, stderr, code := subcommand(t, "sort-fixture", "--capture", capture, "--output="+output); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	for _, tc := range []struct {
+		flag string
+		want *regexp.Regexp
+	}{
+		{"--list-index=true", regexp.MustCompile(`^swath_replay list_index state=built max_bytes=67108864 workers=[1-9][0-9]* ` +
+			`groups_indexed=[0-9]+ groups_skipped=[0-9]+ groups_failed=0 parts_failed=0 pages=[1-9][0-9]* entries=[0-9]+ bytes=[0-9]+ ` +
+			`budget_exhausted=false has_index=(true|false) seconds=[0-9]+\.[0-9]{3}$`)},
+		{"--list-index=false", regexp.MustCompile(`^swath_replay list_index state=off max_bytes=0 workers=0 .* seconds=0\.000$`)},
+	} {
+		cmd := exec.Command(os.Args[0], "serve", "--fixture", output, "--bucket", "bkt", "--port", "0", tc.flag)
+		cmd.Env = append(os.Environ(), "SWATH_REPLAY_TEST_MAIN=1")
+		errPipe, _ := cmd.StderrPipe()
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		lines := bufio.NewScanner(errPipe)
+		var got []string
+		for len(got) < 2 && lines.Scan() {
+			if strings.Contains(lines.Text(), "=") {
+				got = append(got, lines.Text())
+			}
+		}
+		cmd.Process.Kill()
+		cmd.Wait()
+		if len(got) != 2 || !strings.HasPrefix(got[0], "swath_replay endpoint=") || !tc.want.MatchString(got[1]) {
+			t.Errorf("%s: first key=value lines %q", tc.flag, got)
+		}
+	}
+}
+
 // TestSortFixtureRefusals: a refusal is one line on stderr carrying the
 // sorter's message, exit 1, and nothing on stdout; a bad command line is
 // exit 2.

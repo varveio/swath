@@ -70,6 +70,8 @@ word.
 | `--parquet-connections` | `0` | concurrent fixture page decodes; `0` is `max(8, min(32, GOMAXPROCS))` |
 | `--prefetch-window-rows` | `12500` | the rows a walk's window cache fill ramps to (below); `0` turns the cache off |
 | `--prefetch-max-windows` | `192` | the windows the cache holds, at most this many times `--prefetch-window-rows` rows; `0` turns it off |
+| `--list-index` | `true` | build the `/` listing index of a SeekParquet dataset at startup (below); `false` serves without it. A Java-era fixture or a key list has none |
+| `--list-index-max-bytes` | 64 MiB | the memory the listing index retains at most (the seekparquet module's default); row groups past it are listed without it |
 | `--inject-latency SPEC` | off | target latency by request shape (below) |
 | `--latency-jitter F` | `0` | jitter fraction in [0, 1), drawn from the request so a repeated request gets the same delay |
 | `--latency-scale N` | `1` | divide every injected delay by N (compressed time); needs `--inject-latency` |
@@ -87,6 +89,27 @@ word.
 
 The durations take `500ms`, `10s` or ISO-8601 (`PT10S`). A bad value is a usage error (exit 2) naming the
 flag; a fixture that cannot be opened exits 1.
+
+**The listing index.** A `/`-delimited listing resumes after each common prefix at the prefix's successor, and
+without an index it decodes the key page it lands on, and often the page before, for every prefix it emits: a
+page of 1,000 common prefixes over directories that each span several key pages decodes 1,000 or more key pages.
+Over a SeekParquet dataset, `serve` first builds the seekparquet module's list boundary index
+(`Dataset.BuildListIndex`): every key page is decoded once, up to `GOMAXPROCS` (at most 8) row groups at a time,
+recording where each run of keys under one directory starts, within the `--list-index-max-bytes` budget. A
+delimited listing then skips a directory through the index and decodes a handful of key pages per page of
+prefixes. The entries are the same with or without it. Row groups past the budget, pages with more than eight
+directory changes, and runs whose end the index cannot pin exactly are read as before, each counted by reason in
+`delimiter.index.declines`. A build that fails is reported and the server serves without the index; the build's
+time is not in `index.load.latency`. After the startup line, unchanged and still the first `key=value` line,
+`serve` prints one line with the build's outcome (`state` is `built`, `off`, `unsupported` for a fixture that is
+not a SeekParquet dataset, or `failed`, followed by `error="..."`; `has_index` is whether any row group was
+indexed), for example:
+
+```
+swath_replay list_index state=built max_bytes=67108864 workers=4 groups_indexed=371 groups_skipped=0 groups_failed=0 parts_failed=0 pages=139818 entries=8288 bytes=1173440 budget_exhausted=false has_index=true seconds=9.391
+```
+
+[measurements.md](measurements.md#listing-index-on-a-wide-prefix-2026-11-10) has its effect on a wide prefix.
 
 When both ports are bound the server prints one line to stderr, `key=value` pairs in a fixed order:
 
@@ -425,6 +448,8 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
 | `parquet.queries.in_flight`, `parquet.queries.peak` | from startup | reads holding one of the `--parquet-connections` slots, now and at most. One pool serves every read, so the peak is at most the flag |
 | `delimiter.path{path}` | on first use | `rollup` or `walk` for an S3 delimiter page |
 | `delimiter.skipscan.row_group_opens`, `.whole_group_shortcuts`, `.decoded_key_rows`, `.page_reseeks` | from startup | the `/` skip-scan's key cursors opened, groups emitted from routing keys alone, and per rollup the key values decoded and the page-index reseeks; over a SeekParquet dataset, the seekparquet module's per-request counts (`ReadStats`: row groups opened, groups skipped, keys decoded, page-index seeks). A key cursor stays open on its group for the whole rollup and decodes whole key pages |
+| `delimiter.index.skips`, `.declines{reason}` | from startup | common prefixes rollups skipped through the listing index (above), and the skips it declined by `missing_group` (a row group it omits: over budget, flat or unreadable), `dense_page` (more than eight directory changes) and `unsafe_run` (a run whose end it cannot pin exactly); a declined skip decodes key pages as without the index. Zero without one |
+| `delimiter.index.build.groups{outcome}`, `.build.pages`, `.build.latency`, `.entries`, `.bytes`, `.max_bytes`, `.budget_exhausted` | from startup | the listing index build: row groups `indexed`, `skipped` and `failed`, key pages decoded, its duration, entries and bytes retained, the budget, and `1` when the budget ran out. Zero without one |
 | `handle_cache.opens`, `.evictions`, `.waits`, `.open`, `.peak`, `.limit` | from startup | every part is read through one descriptor cache: first opens and reopens after eviction, evictions, and reads that waited for a descriptor as counters; descriptors open, at most, and the limit (half the soft descriptor limit, at most 4,096) as gauges |
 | `sortfixture.build.latency`, `sortfixture.output.bytes` | from startup, zero | recorded by `sort-fixture`, never by a server |
 | `prefetch.window.hit`, `.window.miss{reason}`, `.window.fill`, `.fill.rows`, `.anchor{event}`, `.window.ramp_ceiling_rows`, `.window.eviction`, `.window.row_budget_eviction`, `.window.selection{reason}`, `.window.join{reason}`, `.window.uncached{reason}`, `.windows.live`, `.anchors.live`, `.rows.live` | while the window cache is on (the counters without a reason tag, the anchors' three events and the gauges from startup) | the window cache (above): reads answered from windows; misses by `continuation` or `cold`; each fill's time and the rows it asked for; continuation anchors `registered`, `claimed`, `evicted_before_claim` and a claimed one's ramp ceiling; windows evicted, and those the row bound forced; how a read was served (`single_exact_bound`, `single_contained_bound`, `two_window_join`, `insufficient`, `no_cover`); a declined join's reason; `request_exceeds_window`, `rounded_exceeds_row_budget`, `window_exceeds_row_budget`; and the windows, anchors and rows held |
@@ -445,7 +470,7 @@ meters: read the process from `/proc` and its limits from `/runtime-attestation`
   ```
 
 - **The startup line** has its keys in a fixed order (`TestServeEndToEnd`); `fixture_identity` is also in the
-  payload's `serving` object.
+  payload's `serving` object. The `list_index` line follows it (`TestListIndexLineFollowsTheStartupLine`).
 - **Refusals** are typed: `serving.refused{reason}` for the fixture, `response.admission.refused{protocol,reason}`
   for admission, and the `x-swath-replay-error` header on the answer.
 - **At shutdown** the server logs no summary of its meters; scrape `/metrics` before stopping it to keep them.

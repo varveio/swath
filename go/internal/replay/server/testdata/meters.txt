@@ -2,8 +2,21 @@
 # order. Derived from the Java server's scrape after the same mix over the synthetic-10k fixture (all three
 # routes), less the meters with no Go counterpart (swath.replay.sort.progress,
 # swath.replay.delimiter.reader_pool.*, and the jvm.*, process.* and system.* meters), plus the
-# swath.replay.handle_cache.* meters of the Go reader's descriptor cache. docs/internals/replay-java.md (the meters
-# side by side) lists each difference.
+# swath.replay.handle_cache.* meters of the Go reader's descriptor cache and the swath.replay.delimiter.index.* meters
+# of the SeekParquet list index. docs/internals/replay-java.md (the meters side by side) lists each difference.
+swath.replay.delimiter.index.budget_exhausted gauge {}
+swath.replay.delimiter.index.build.groups gauge {"outcome":"failed"}
+swath.replay.delimiter.index.build.groups gauge {"outcome":"indexed"}
+swath.replay.delimiter.index.build.groups gauge {"outcome":"skipped"}
+swath.replay.delimiter.index.build.latency timer {}
+swath.replay.delimiter.index.build.pages gauge {}
+swath.replay.delimiter.index.bytes gauge {}
+swath.replay.delimiter.index.declines counter {"reason":"dense_page"}
+swath.replay.delimiter.index.declines counter {"reason":"missing_group"}
+swath.replay.delimiter.index.declines counter {"reason":"unsafe_run"}
+swath.replay.delimiter.index.entries gauge {}
+swath.replay.delimiter.index.max_bytes gauge {}
+swath.replay.delimiter.index.skips counter {}
 swath.replay.delimiter.path counter {"path":"rollup"}
 swath.replay.delimiter.path counter {"path":"walk"}
 swath.replay.delimiter.skipscan.decoded_key_rows distribution {}

@@ -20,6 +20,12 @@ type meteredStore interface {
 	Files() *legacy.FileCache
 }
 
+// listIndexedStore is a store that builds the "/" list index at open
+// (store.Sorted).
+type listIndexedStore interface {
+	ListIndex() store.ListIndexBuild
+}
+
 // prefetchingStore is a store with a window cache (store.Sorted).
 type prefetchingStore interface {
 	PrefetchStats() (store.PrefetchStats, bool)
@@ -65,6 +71,35 @@ func (s *Server) initPrefetchMeters(st prefetchingStore) store.PrefetchMeters {
 	}
 }
 
+// initListIndexMeters publishes the list index build's stats, zero for a
+// store that built none.
+func (s *Server) initListIndexMeters() {
+	r := s.reg
+	var b store.ListIndexBuild
+	if st, ok := s.cfg.Store.(listIndexedStore); ok {
+		b = st.ListIndex()
+	}
+	latency := r.Get(metrics.DelimiterIndexBuildLatency)
+	if b.State == store.ListIndexBuilt || b.State == store.ListIndexFailed {
+		latency.Record(b.Stats.Duration)
+	}
+	gauge := func(d metrics.Def, v int64, tags ...string) {
+		r.SetGauge(d, func() float64 { return float64(v) }, tags...)
+	}
+	gauge(metrics.DelimiterIndexBuildGroups, b.Stats.GroupsIndexed, "indexed")
+	gauge(metrics.DelimiterIndexBuildGroups, b.Stats.GroupsSkipped, "skipped")
+	gauge(metrics.DelimiterIndexBuildGroups, b.Stats.GroupsFailed, "failed")
+	gauge(metrics.DelimiterIndexBuildPages, b.Stats.Pages)
+	gauge(metrics.DelimiterIndexEntries, b.Stats.Entries)
+	gauge(metrics.DelimiterIndexBytes, b.Stats.Bytes)
+	gauge(metrics.DelimiterIndexMaxBytes, b.MaxBytes)
+	var exhausted int64
+	if b.Stats.BudgetExhausted {
+		exhausted = 1
+	}
+	gauge(metrics.DelimiterIndexBudgetExhausted, exhausted)
+}
+
 // initStoreMeters creates the fixture and store meters and connects the
 // store's measurements to them. They exist from startup, so a scrape tells
 // a store that has not read from one that is not metered.
@@ -87,12 +122,21 @@ func (s *Server) initStoreMeters() {
 	shortcuts := r.Get(metrics.DelimiterSkipScanWholeGroupShortcuts)
 	decoded := r.Get(metrics.DelimiterSkipScanDecodedKeyRows)
 	reseeks := r.Get(metrics.DelimiterSkipScanPageReseeks)
-	rollup := func(stats legacy.Stats) {
+	indexSkips := r.Get(metrics.DelimiterIndexSkips)
+	missingGroup := r.Get(metrics.DelimiterIndexDeclines, "missing_group")
+	densePage := r.Get(metrics.DelimiterIndexDeclines, "dense_page")
+	unsafeRun := r.Get(metrics.DelimiterIndexDeclines, "unsafe_run")
+	rollup := func(stats store.RollupStats) {
 		opens.Add(stats.GroupsOpened)
 		shortcuts.Add(stats.GroupShortcuts)
 		decoded.Observe(float64(stats.KeysDecoded))
 		reseeks.Observe(float64(stats.Reseeks))
+		indexSkips.Add(stats.ListIndex.Skips)
+		missingGroup.Add(stats.ListIndex.MissingGroup)
+		densePage.Add(stats.ListIndex.DensePage)
+		unsafeRun.Add(stats.ListIndex.UnsafeRun)
 	}
+	s.initListIndexMeters()
 	var prefetch store.PrefetchMeters
 	if c, cached := s.cfg.Store.(prefetchingStore); ok && cached {
 		if _, on := c.PrefetchStats(); on {

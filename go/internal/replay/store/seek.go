@@ -29,12 +29,12 @@ import (
 var ErrRepeatedKeys = errors.New("replay does not serve datasets with repeated keys yet")
 
 // reader is a fixture's sorted reader: the legacy core over a Java-era
-// fixture (*legacy.Reader), or seekReader over a SeekParquet
+// fixture (legacyReader), or seekReader over a SeekParquet
 // dataset. Both take the legacy core's requests and return its rows.
 type reader interface {
 	Read(ctx context.Context, rng legacy.Range, stats *legacy.Stats) ([]legacy.Row, error)
 	Scan(ctx context.Context, rng legacy.Range, stats *legacy.Stats, sink legacy.ColumnSink) error
-	RollupRead(ctx context.Context, rl legacy.Rollup, stats *legacy.Stats) ([]legacy.Entry, error)
+	RollupRead(ctx context.Context, rl legacy.Rollup, stats *RollupStats) ([]legacy.Entry, error)
 	FirstKeys() [][]byte
 	Columns() []string
 	Parts() int
@@ -43,7 +43,7 @@ type reader interface {
 	Close() error
 }
 
-var _ reader = (*legacy.Reader)(nil)
+var _ reader = legacyReader{}
 
 // manifestHead is the part of a manifest that tells the formats apart.
 type manifestHead struct {
@@ -64,7 +64,8 @@ func isSeekParquet(dir string) bool {
 // seekReader serves a SeekParquet dataset through the seekparquet module:
 // its range reads and its delimited listing. Keys must be unique
 // (ErrRepeatedKeys). A read's page work is the module's per-request
-// seekparquet.ReadStats, added to the read's legacy.Stats (count).
+// seekparquet.ReadStats, added to the read's legacy.Stats (count), and a
+// rollup's use of the list index to its RollupStats (countIndex).
 type seekReader struct {
 	d       *seekparquet.Dataset
 	root    *os.Root
@@ -288,7 +289,7 @@ func (r *seekReader) Scan(ctx context.Context, rng legacy.Range, stats *legacy.S
 // continues after that prefix (a prefix cursor): the only common prefix at
 // or before the start that a later key can roll up to is the start's own,
 // and every key under it is skipped with it.
-func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *legacy.Stats) ([]legacy.Entry, error) {
+func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *RollupStats) ([]legacy.Entry, error) {
 	if rl.Limit <= 0 {
 		return nil, nil
 	}
@@ -325,7 +326,7 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *le
 	lookup := seekparquet.KeyRange(from, limit, columns...)
 	lookup.Stats = &st
 	group, err := r.d.Range(ctx, lookup)
-	count(stats, &st)
+	count(&stats.Stats, &st)
 	if err != nil {
 		return nil, err
 	}
@@ -351,11 +352,12 @@ func (r *seekReader) RollupRead(ctx context.Context, rl legacy.Rollup, stats *le
 // list runs req and appends its entries to lead; a common prefix lead
 // ends with is not repeated, and the result keeps at most the request's
 // limit of entries after lead's rows.
-func (r *seekReader) list(ctx context.Context, req seekparquet.List, lead []legacy.Entry, stats *legacy.Stats) ([]legacy.Entry, error) {
+func (r *seekReader) list(ctx context.Context, req seekparquet.List, lead []legacy.Entry, stats *RollupStats) ([]legacy.Entry, error) {
 	var st seekparquet.ReadStats
 	req.Stats = &st
 	entries, err := r.d.List(ctx, req)
-	count(stats, &st)
+	count(&stats.Stats, &st)
+	countIndex(&stats.ListIndex, &st)
 	if err != nil {
 		return nil, err
 	}
