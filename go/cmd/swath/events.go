@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -134,10 +135,68 @@ func (l *eventLog) line(level, event, msg string, fields any) string {
 		b = str(b, "attempt", l.attempt)
 	}
 	b = str(b, "msg", scrub(msg))
-	if f := []byte(scrub(string(marshal(fields)))); len(f) > 2 && f[0] == '{' {
+	if f := scrubValues(marshal(fields)); len(f) > 2 && f[0] == '{' {
 		return string(append(append(b, ','), f[1:]...)) + "\n"
 	}
 	return string(append(b, '}')) + "\n"
+}
+
+// scrubValues is the JSON object b with scrub applied to each string
+// value, its keys, numbers, literals and structure as they are; b as it
+// is if it does not decode.
+func scrubValues(b []byte) []byte {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var out bytes.Buffer
+	type level struct{ object, key bool } // key: the next string is a key
+	var stack []level
+	sep := func() {
+		if n := len(stack); n > 0 && out.Len() > 0 {
+			if last := out.Bytes()[out.Len()-1]; last != '{' && last != '[' && last != ':' {
+				out.WriteByte(',')
+			}
+		}
+	}
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return out.Bytes()
+		}
+		if err != nil {
+			return b
+		}
+		switch v := tok.(type) {
+		case json.Delim:
+			switch v {
+			case '{', '[':
+				sep()
+				out.WriteByte(byte(v))
+				stack = append(stack, level{object: v == '{', key: v == '{'})
+				continue
+			default:
+				out.WriteByte(byte(v))
+				stack = stack[:len(stack)-1]
+			}
+		case string:
+			sep()
+			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
+				out.Write(marshal(v))
+				out.WriteByte(':')
+				stack[n-1].key = false
+				continue
+			}
+			out.Write(marshal(scrub(v)))
+		case json.Number:
+			sep()
+			out.WriteString(v.String())
+		default: // bool, nil
+			sep()
+			out.Write(marshal(v))
+		}
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].key = true
+		}
+	}
 }
 
 // marshal is v as JSON, with & < > as they are (a query, a path).
@@ -262,7 +321,7 @@ func conclude(err error) int {
 	}
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
-		noteFinal(errOut, scrub(fmt.Sprintf("swath: outcome: %s\n", b)))
+		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", scrubValues(b)))
 	}
 	noteFinal(errOut, "swath: "+scrub(err.Error())+"\n")
 	var sh seeHelp
@@ -467,18 +526,10 @@ func watchRequests(w *failureWatch) (stop func()) {
 	return func() { source.SetWatch(nil) }
 }
 
-// shownQuery are the query parameters whose values a request line shows:
-// where and how much a listing asks for, never a token or a credential (an
-// Azure SAS, a continuation token), whose values are redacted.
+// shownQuery are the query parameters a request line shows: where and how
+// much a listing asks for. Any other (a token, a credential, an Azure SAS,
+// a continuation token) is [redacted], name and value.
 var shownQuery = []string{"comp", "delimiter", "endOffset", "include", "list-type", "max-keys", "maxResults", "maxresults", "prefix", "restype", "start-after", "startOffset", "versions"}
-
-// plainName says a query parameter's name is a name: at most 32 letters,
-// digits, '-' and '_'.
-func plainName(k string) bool {
-	return len(k) > 0 && len(k) <= 32 && !strings.ContainsFunc(k, func(r rune) bool {
-		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '-' || r == '_')
-	})
-}
 
 // requestPath is a request's path and query as the request log shows it.
 func requestPath(u *url.URL) string {
@@ -498,17 +549,12 @@ func requestPath(u *url.URL) string {
 		if i == 0 {
 			sep = "?"
 		}
-		name := url.QueryEscape(k)
-		if !slices.Contains(shownQuery, k) && !plainName(k) {
-			name = redacted // a name that is no name (a malformed SAS) may carry one
-		}
 		for _, v := range q[k] {
-			if !slices.Contains(shownQuery, k) {
-				v = redacted
+			if slices.Contains(shownQuery, k) {
+				b.WriteString(sep + url.QueryEscape(k) + "=" + url.QueryEscape(v))
 			} else {
-				v = url.QueryEscape(v)
+				b.WriteString(sep + redacted) // name and value: a malformed SAS (?zSECRET) is all name
 			}
-			b.WriteString(sep + name + "=" + v)
 			sep = "&"
 		}
 	}

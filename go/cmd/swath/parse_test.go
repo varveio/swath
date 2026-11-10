@@ -474,7 +474,11 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 	}
 	// The format is read as the parser reads the flags: a value is a
 	// value, -- ends them, the last one wins; every early refusal (a
-	// one-dash name, an unknown flag) is reported in it.
+	// one-dash name, an unknown flag) is reported in it. The rule's two
+	// edges, not defects: after -- everything is an operand, so
+	// swath -- oops --log-format json reports in text; and for a command
+	// line that does not parse (--bogus show --output --log-format json)
+	// the format is best effort, either is acceptable (not tested).
 	for _, c := range []struct {
 		args []string
 		json bool
@@ -488,6 +492,7 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 		{[]string{"--bogus", "list", src, "--log-format", "json"}, true},
 		{[]string{"diag", "oops", "--log-format", "json"}, true},
 		{[]string{"oops", "--log-format", "json"}, true},
+		{[]string{"--", "oops", "--log-format", "json"}, false},
 	} {
 		stderr := captureStderr(t)
 		t.Cleanup(func() { logs.Store(nil) })

@@ -274,7 +274,10 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 	// A refusal here (a bad root flag, an unknown command or diag form)
 	// is reported in the format the whole command line asks for, read
 	// with every command's flags (newFlags with the diagnostic ones takes
-	// them all), so that a value is skipped as a value.
+	// them all), so that a value is skipped as a value. By rule, a
+	// --log-format after -- is an operand (swath -- oops --log-format
+	// json reports in text), and for a line that does not parse
+	// (--bogus show --output --log-format json) the format is best effort.
 	if flags, _ := argFlags(newFlags(&options{}, true), args, true); askedFormat(flags) != "" {
 		t.logFormat = askedFormat(flags)
 	}

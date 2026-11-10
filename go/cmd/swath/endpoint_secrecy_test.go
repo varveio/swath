@@ -6,6 +6,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -399,5 +401,57 @@ func TestPlaceAndSecretFlagsNeverEchoed(t *testing.T) {
 	})
 	if n == 0 {
 		t.Fatal("no place or secret flag in the table")
+	}
+}
+
+// TestScrubWholeValues: the backstop replaces a place or secret value
+// given only where a message quotes it whole, by its shown form, and only
+// in string values: every event stays valid JSON with its keys and
+// literals whatever the value (false, true, null, 0, exit_code,
+// resumable). A part of a value is left alone ("no such file" stays with
+// a query of "file"), scrubbing twice changes nothing more, and a value
+// shown as it is (-o a, --report -) is never replaced.
+func TestScrubWholeValues(t *testing.T) {
+	t.Cleanup(func() { hidden.mu.Lock(); hidden.pairs = nil; hidden.mu.Unlock() })
+	given := func(t *testing.T, args ...string) {
+		hidden.mu.Lock()
+		hidden.pairs = nil
+		hidden.mu.Unlock()
+		if _, err := parseFlags(newFlags(&options{}, true), cmdDiagList, append(args, "az://acct/c"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range []string{"false", "true", "null", "0", "exit_code", "resumable"} {
+		given(t, "--azure-sas-token", v)
+		stderr := captureStderr(t)
+		setLog(termOptions{logFormat: logJSON}, "a")
+		elog().warn("a " + v + " b")
+		conclude(&exitError{error: errors.New("open " + v + ": denied"), code: exitFatal,
+			out: outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: "open " + v + ": denied"}})
+		logs.Store(nil)
+		for line := range strings.Lines(stderr.String()) {
+			var e map[string]any
+			if err := json.Unmarshal([]byte(line), &e); err != nil {
+				t.Fatalf("%s: not JSON: %s", v, line)
+			}
+			if !strings.Contains(fmt.Sprint(e["msg"]), redacted) {
+				t.Errorf("%s: msg %q", v, e["msg"])
+			}
+			if e["event"] == evOutcome && (e["resumable"] != false || e["exit_code"] != float64(exitFatal) || e["message"] != "open "+redacted+": denied") {
+				t.Errorf("%s: outcome %s", v, line)
+			}
+		}
+	}
+	given(t, "--azure-sas-token", "false")
+	if got := scrub("false, falsehood, false"); got != redacted+", falsehood, "+redacted || scrub(got) != got {
+		t.Errorf("whole words only, once: %q", got)
+	}
+	given(t, "--ca-bundle", "https://h/?file")
+	if got := scrub("CA bundle: open https://h/?file: no such file or directory"); got != "CA bundle: open https://[redacted]: no such file or directory" {
+		t.Errorf("a part of the value replaced: %q", got)
+	}
+	given(t, "-o", "a", "--report", "-")
+	if got := scrub("a report - a"); got != "a report - a" {
+		t.Errorf("a value shown as it is was replaced: %q", got)
 	}
 }

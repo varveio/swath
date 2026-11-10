@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/pflag"
 
@@ -521,63 +523,68 @@ func askedFormat(flags []argFlag) string {
 	return v
 }
 
-// hidden are the parts of place and secret values given on command lines
-// in this process that their shown form leaves out (shownValue): what
-// scrub takes out of any message, an error that quotes a value as it was
-// used (open PATH: ...) among them.
+// hidden are the place and secret values given on command lines in this
+// process whose shown form (shownValue) differs from them, each with that
+// form: what scrub puts in their place in a message that quotes one as it
+// was used (open VALUE: ...).
 var hidden struct {
 	mu    sync.Mutex
-	parts []string // longest first
+	pairs [][2]string // value, shown form; longest value first
 }
 
-// minHidden is the shortest part scrub replaces: a shorter one would cut
-// into ordinary words.
-const minHidden = 4
-
-// remember notes the parts of fl's value that its shown form hides.
+// remember notes fl's value when its shown form hides some of it.
 func remember(fl *pflag.Flag, value string) {
 	shown := shownValue(fl, value)
-	if shown == value {
+	if shown == value || value == "" {
 		return
-	}
-	parts := []string{value}
-	if source.Described(fl).Shown == source.ShownPlace {
-		// A place's userinfo, query and fragment, which an error may
-		// quote apart from the rest (a path made absolute).
-		if _, rest, ok := strings.Cut(value, "://"); ok {
-			authority, _, _ := strings.Cut(rest, "/")
-			if i := strings.LastIndex(authority, "@"); i >= 0 {
-				parts = append(parts, authority[:i])
-			}
-		}
-		if _, q, ok := strings.Cut(value, "?"); ok {
-			q, frag, _ := strings.Cut(q, "#")
-			parts = append(parts, q, frag)
-		} else if _, frag, ok := strings.Cut(value, "#"); ok {
-			parts = append(parts, frag)
-		}
 	}
 	hidden.mu.Lock()
 	defer hidden.mu.Unlock()
-	for _, p := range parts {
-		if len(p) >= minHidden && !slices.Contains(hidden.parts, p) {
-			hidden.parts = append(hidden.parts, p)
-		}
+	if !slices.Contains(hidden.pairs, [2]string{value, shown}) {
+		hidden.pairs = append(hidden.pairs, [2]string{value, shown})
+		slices.SortFunc(hidden.pairs, func(a, b [2]string) int { return len(b[0]) - len(a[0]) })
 	}
-	slices.SortFunc(hidden.parts, func(a, b string) int { return len(b) - len(a) })
 }
 
-// scrub is s without the hidden parts of the place and secret values
-// given (remember): the backstop for a message that quotes one as it was
-// used, applied where an outcome or an event is settled.
+// scrub is a message (a free-text value: never serialized output) with
+// every whole occurrence of a remembered value, one not inside a longer
+// word, replaced by its shown form. A part of a value is left alone, and
+// so is a shown form already there: scrubbing twice changes nothing more.
 func scrub(s string) string {
 	hidden.mu.Lock()
 	defer hidden.mu.Unlock()
-	for _, p := range hidden.parts {
-		s = strings.ReplaceAll(s, p, redacted)
+	for _, p := range hidden.pairs {
+		parts := strings.Split(s, p[1]) // a shown form already there stays
+		for i, part := range parts {
+			parts[i] = replaceWhole(part, p[0], p[1])
+		}
+		s = strings.Join(parts, p[1])
 	}
 	return s
 }
+
+// replaceWhole replaces each occurrence of v in s that no letter or digit
+// adjoins.
+func replaceWhole(s, v, with string) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, v)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		before, _ := utf8.DecodeLastRuneInString(s[:i])
+		after, _ := utf8.DecodeRuneInString(s[i+len(v):])
+		if i > 0 && wordRune(before) || i+len(v) < len(s) && wordRune(after) {
+			b.WriteString(s[:i+len(v)])
+		} else {
+			b.WriteString(s[:i] + with)
+		}
+		s = s[i+len(v):]
+	}
+}
+
+func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
 
 // shownValue is fl's value as a recorded or reported command line, or an
 // error, shows it: by its table entry (source.Flag.Shown).

@@ -19,12 +19,12 @@ to stdout and exit 0. Flags are parsed GNU-style: short flags bundle (`-vq`) and
 (`-d1`, `-oPATH`), long ones take `--name value` or `--name=value`, flags and operands interleave, `--` ends the
 flags, and a long name with one dash (`-depth`) is refused (a flag's value, `--include -verbose`, is a value). `-v`, `-q`, `--color` and `--log-format` are taken
 by every command (`show` and `completion` too), before or after the command word; a command line refused
-before `--log-format` is read still reports in the format it names. An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
+before `--log-format` is read still reports in the format it names (one after `--` is an operand; for a line
+that does not parse, the format is best effort). An unknown flag is a usage error naming the nearest flag (`unknown flag --region (did you mean
 --s3-region?)`) and the help to read; an error never repeats a typed value it cannot tell from a credential
 (an unknown flag's value, a SAS in `-o` or an extra argument), and a message that quotes a place or secret flag's
-value as it was used (a CA bundle, seed or credentials file it could not read) shows it redacted, on stderr, in
-the events, the report and `error.json`; the request log shows a query parameter whose name is no plain name
-redacted, name and value. A default-on switch is turned off by `--no-NAME`; the help never shows
+value whole, as it was used (a CA bundle, seed or credentials file it could not read), shows it as the recorded
+command does, on stderr, in the events, the report and `error.json` (in their string values only). A default-on switch is turned off by `--no-NAME`; the help never shows
 `=false`. A URL scheme is matched in any case (`S3://b`), and an Azure Blob service URL
 (`https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`) is the source `az://ACCOUNT/CONTAINER[/PREFIX]`.
 
@@ -1269,8 +1269,8 @@ table changes.
   appended records (not when stdout is a terminal that carries rows, unless `--progress` is given, as for the
   automatic line); `-vv` adds each failed request (no answer, or a status of 400 or more) and each failed
   attempt of the retry loop (retried, throttled, or the last) with its cause; `-vvv` every request
-  (method, host, path and query with every value but the listing's own parameters, such as `prefix`,
-  redacted, so no SAS, token or credential, then status and latency). `-q` drops warnings and the automatic
+  (method, host, path and query with every parameter but the listing's own, such as `prefix`, shown as
+  `[redacted]`, name and value, so no SAS, token or credential, then status and latency). `-q` drops warnings and the automatic
   progress and statistics; `-qq` also drops the final error line (the exit code, `error.json` and `--report`
   stand). Without `-v`, a request failure that persists is shown: when requests have failed with one
   transport or service cause (a connection refused, a 503) for 10 s with none answered, one warning names
@@ -1322,8 +1322,8 @@ Pinned by `TestEventGolden` (`UPDATE=1 go test ./cmd/swath` rewrites this block)
 {"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","mode":"rows","destination":"stdout"}
 {"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"progress","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing · 120,000 objects · 2,000 keys/s (avg 2,000)","rows":120000,"ordered":0,"encoded":0,"parts":0,"verified_bytes":0,"advance":120000,"answered":121,"frontier":121,"empty_chain_pages":0,"throttles":0,"timeouts":0,"rows_retained":0,"requests":122,"retries":1,"inflight":8,"limit":64,"mutex_wait_ms":0,"mutex_max_hold_ms":0,"started_at":"2026-11-10T11:59:00Z","as_of":"2026-11-10T12:00:00Z","duration_ms":60000,"part_age_ms":60000}
 {"ts":"2026-11-10T12:00:00.000Z","level":"warn","event":"warning","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"S3 127.0.0.1:9: connection refused (retrying; 11 attempts)","host":"127.0.0.1:9","cause":"connection refused","attempts":11}
-{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","status":200,"latency_ms":42}
-{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted] failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]","status":200,"latency_ms":42}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 acct.blob.core.windows.net/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted] failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","host":"acct.blob.core.windows.net","path":"/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
 {"ts":"2026-11-10T12:00:00.000Z","level":"error","event":"outcome","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
 ```
 <!-- events:end -->

@@ -295,12 +295,16 @@ func TestVerbosity(t *testing.T) {
 // token).
 func TestRequestPathRedacted(t *testing.T) {
 	u, _ := url.Parse("https://acct.blob.core.windows.net/c?restype=container&comp=list&prefix=a%2Fb&marker=TOKEN&sv=2022-11-02&sig=SECRET&se=2030")
-	want := "/c?comp=list&marker=[redacted]&prefix=a%2Fb&restype=container&se=[redacted]&sig=[redacted]&sv=[redacted]"
+	want := "/c?comp=list&[redacted]&prefix=a%2Fb&restype=container&[redacted]&[redacted]&[redacted]"
 	if got := requestPath(u); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 	if got := requestPath(&url.URL{Path: "/b"}); got != "/b" {
 		t.Fatalf("no query: %s", got)
+	}
+	// A malformed SAS is all name: nothing of it shows.
+	if got := requestPath(&url.URL{Path: "/c", RawQuery: "comp=list&zTESTSECRET"}); got != "/c?comp=list&[redacted]" {
+		t.Fatalf("malformed SAS: %s", got)
 	}
 }
 
