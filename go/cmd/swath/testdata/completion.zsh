@@ -31,7 +31,7 @@ _swath_list() {
         '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
-        '(-v --verbose)'{-v,--verbose}'[a start line, and progress as appended records]' \
+        '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
         '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
         '--no-progress[no live progress on stderr]' \
@@ -39,6 +39,7 @@ _swath_list() {
         '--stats[print the end-of-run statistics on stderr]' \
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
+        '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -92,7 +93,7 @@ _swath_du() {
         '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
-        '(-v --verbose)'{-v,--verbose}'[a start line, and progress as appended records]' \
+        '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
         '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
         '--no-progress[no live progress on stderr]' \
@@ -100,6 +101,7 @@ _swath_du() {
         '--stats[print the end-of-run statistics on stderr]' \
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
+        '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -165,7 +167,7 @@ _swath_diag_count() {
         '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
-        '(-v --verbose)'{-v,--verbose}'[a start line, and progress as appended records]' \
+        '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
         '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
         '--no-progress[no live progress on stderr]' \
@@ -173,6 +175,7 @@ _swath_diag_count() {
         '--stats[print the end-of-run statistics on stderr]' \
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
+        '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--anonymous[send no credentials (a public bucket or container)]' \
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
@@ -222,7 +225,7 @@ _swath_resume() {
         '--max-duration=[stop the run after this long (exit 124, resumable); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
         '--report=[write the run report (JSON) to FILE, or - for stdout, at the end]:FILE:_files' \
-        '(-v --verbose)'{-v,--verbose}'[a start line, and progress as appended records]' \
+        '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
         '--progress[print live progress on stderr (default: on a terminal, without -q, -v)]' \
         '--no-progress[no live progress on stderr]' \
@@ -230,6 +233,7 @@ _swath_resume() {
         '--stats[print the end-of-run statistics on stderr]' \
         '--no-stats[no end-of-run statistics on stderr]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
+        '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '--no-spill-compress[write spill frames uncompressed (not zstd level 1)]' \
         '--spill-plain[write spill frames without delta coding (a comparison arm)]' \
         '--spill-reserve=[free space spill leaves on its filesystem (0: derived)]:SIZE: ' \
@@ -273,9 +277,10 @@ _swath() {
     local context state state_descr line
     typeset -A opt_args
     _arguments -C \
-        '(-v --verbose)'{-v,--verbose}'[a start line, and progress as appended records]' \
+        '(-v --verbose)'{-v,--verbose}'[a start line, progress records; -vv, -vvv: the request log]' \
         '(-q --quiet)'{-q,--quiet}'[no warnings, no automatic progress or statistics (-qq: no errors)]' \
         '--color=[color the progress line, the statistics and the help]:value:(auto always never)' \
+        '--log-format=[stderr as text, or json: one JSON object per line]:value:(text json)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '(-V --version)'{-V,--version}'[print the version]' \
         '1:command:->command' \

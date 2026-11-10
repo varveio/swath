@@ -326,7 +326,9 @@ is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes t
 are delta coded and zstd compressed by default.
 
 **Run report: version 4.** Version 4 adds `invocation.narrowing` (whether the includes narrowed the listed
-prefix, or why not; [cli.md](cli.md#semantics-worth-stating)); a version 3 reader reads it by ignoring it.
+prefix, or why not; [cli.md](cli.md#semantics-worth-stating)), `outcome.unreadable` (a local listing skipped
+entries it could not read) and `requests.failure_warnings` (the persistent-failure warnings printed); a
+version 3 reader reads them by ignoring them.
 
 **Run report: version 3.** Version 3 adds fields, and a version 2 reader reads version 3 by ignoring them; one
 meaning is narrowed, a local tree's `output.object_bytes` (the last item):

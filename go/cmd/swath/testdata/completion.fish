@@ -11,7 +11,7 @@ function __swath_key
             continue
         end
         switch $t
-            case --color
+            case --color --log-format
                 set skip 1
             case '-*'
             case '*'
@@ -48,9 +48,10 @@ complete -c swath -n '__swath_cmd "help"' -a 'list ls du resume show diag comple
 complete -c swath -n '__swath_cmd "diag"' -a 'list count'
 complete -c swath -n '__swath_cmd "completion"' -a 'bash zsh fish'
 
-complete -c swath -n '__swath_cmd "" "list" "du" "diag count" "resume"' -l verbose -s v -d 'a start line, and progress as appended records'
+complete -c swath -n '__swath_cmd "" "list" "du" "diag count" "resume"' -l verbose -s v -d 'a start line, progress records; -vv, -vvv: the request log'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag count" "resume"' -l quiet -s q -d 'no warnings, no automatic progress or statistics (-qq: no errors)'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag count" "resume"' -l color -x -a 'auto always never' -d 'color the progress line, the statistics and the help'
+complete -c swath -n '__swath_cmd "" "list" "du" "diag count" "resume"' -l log-format -x -a 'text json' -d 'stderr as text, or json: one JSON object per line'
 complete -c swath -n '__swath_cmd "" "list" "du" "diag list" "diag count" "resume" "show"' -l help -s h -d 'print help'
 complete -c swath -n '__swath_cmd ""' -l version -s V -d 'print the version'
 complete -c swath -n '__swath_cmd "list"' -l output -s o -r -F -d 'a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)'

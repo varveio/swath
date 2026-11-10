@@ -205,25 +205,27 @@ func TestLocalTextEndToEnd(t *testing.T) {
 }
 
 // TestNoProgressAmongRows: with stdout a terminal that carries rows, the
-// automatic progress line stays off; --progress still draws it.
+// automatic progress line and -v's appended records stay off; --progress
+// still draws them.
 func TestNoProgressAmongRows(t *testing.T) {
 	h := s3test.Handler(s3test.Backend(t, []string{"a", "b"}))
-	src := []string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--endpoint-url", s3test.Serve(t, s3test.Delayed(h, 1500*time.Millisecond))}
+	// A 4 s stall timeout samples progress every second, within the run.
+	src := []string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--stall-timeout", "4s", "--endpoint-url", s3test.Serve(t, s3test.Delayed(h, 1500*time.Millisecond))}
 	stdout, stderr := stdoutTerminal, stderrTerminal
 	stdoutTerminal, stderrTerminal = func() bool { return true }, func() (bool, int) { return true, 120 }
 	t.Cleanup(func() { stdoutTerminal, stderrTerminal = stdout, stderr })
-	for _, forced := range []bool{false, true} {
+	for _, tc := range []struct {
+		extra  []string
+		forced bool
+	}{{nil, false}, {[]string{"--progress"}, true}, {[]string{"-v"}, false}, {[]string{"-v", "--progress"}, true}} {
 		errs := captureStderr(t)
-		args := src
-		if forced {
-			args = append(slices.Clone(src), "--progress")
-		}
+		args := append(slices.Clone(src), tc.extra...)
 		var out bytes.Buffer
 		if err := run(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}
-		if drawn := strings.Contains(errs.String(), "listing · "); drawn != forced || !strings.Contains(out.String(), "  a\n") {
-			t.Errorf("--progress %v: stderr %q, stdout %q", forced, errs.String(), out.String())
+		if drawn := strings.Contains(errs.String(), "listing · "); drawn != tc.forced || !strings.Contains(out.String(), "  a\n") {
+			t.Errorf("%v: stderr %q, stdout %q", tc.extra, errs.String(), out.String())
 		}
 	}
 }

@@ -59,20 +59,22 @@ type termOptions struct {
 	interval        time.Duration
 	verbose, quiet  int
 	color           string
+	logFormat       string // --log-format: logText or logJSON
 }
 
 // termFlags are the terminal flags' names: runtime flags, which swath resume
 // accepts again.
-var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "verbose", "quiet", "color"}
+var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "verbose", "quiet", "color", "log-format"}
 
 // globalFlags are the terminal flags also taken before the command word
 // (swath -v list ...).
-var globalFlags = []string{"verbose", "quiet", "color"}
+var globalFlags = []string{"verbose", "quiet", "color", "log-format"}
 
 func (t *termOptions) register(f *pflag.FlagSet) {
 	g := source.GroupReporting
 	source.Define(f, source.Flag{Name: "verbose", Short: "v", Value: source.Counter(&t.verbose), Group: g,
-		Usage: "a start line, and progress as appended records"})
+		Usage: "a start line, progress records; -vv, -vvv: the request log",
+		Long:  "-vv adds each failed request and retry with its cause, -vvv every request (credentials and tokens redacted)."})
 	source.Define(f, source.Flag{Name: "quiet", Short: "q", Value: source.Counter(&t.quiet), Group: g,
 		Usage: "no warnings, no automatic progress or statistics (-qq: no errors)",
 		Long:  "With -qq the exit code and the reports stand alone."})
@@ -90,6 +92,10 @@ func (t *termOptions) register(f *pflag.FlagSet) {
 	source.Define(f, source.Flag{Name: "color", Value: source.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
 		Usage: "color the progress line, the statistics and the help",
 		Long:  "auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it."})
+	t.logFormat = logText
+	source.Define(f, source.Flag{Name: "log-format", Value: source.Text(&t.logFormat), Metavar: logText + "|" + logJSON, Default: logText, Group: g,
+		Usage: "stderr as text, or json: one JSON object per line",
+		Long:  "json: warnings, the start line, progress records, the request log and the outcome as events, no redrawn line or statistics block."})
 }
 
 func (t *termOptions) validate() error {
@@ -97,6 +103,9 @@ func (t *termOptions) validate() error {
 	case "auto", "always", "never":
 	default:
 		return fmt.Errorf("--color %q: want auto, always or never", t.color)
+	}
+	if t.logFormat != logText && t.logFormat != logJSON {
+		return fmt.Errorf("--log-format %q: want text or json", t.logFormat)
 	}
 	if t.interval < 0 {
 		return fmt.Errorf("--progress-interval %s: negative", t.interval)
@@ -329,10 +338,10 @@ type display struct {
 // Java's: an explicit --progress/--no-progress decides; an explicit
 // --progress-interval opts in; otherwise on when stderr is a terminal and
 // neither -q nor -v is given, and stdout is not a terminal that carries
-// rows (rows): the two share the screen, and a redrawn line would land
-// among the rows. -v alone shows it as appended records (the verbose log
-// surface). Lines redraw only on a terminal of usable width whose TERM is
-// not dumb.
+// rows (rows): the two share the screen, and a line would land among the
+// rows. -v alone shows it as appended records (the verbose log surface),
+// under the same rows rule. Lines redraw only on a terminal of usable width
+// whose TERM is not dumb.
 func progressPrefs(t termOptions, tty, rows bool, width int, termEnv string) (show, redraw bool) {
 	switch {
 	case t.progress.set:
@@ -340,7 +349,7 @@ func progressPrefs(t termOptions, tty, rows bool, width int, termEnv string) (sh
 	case t.interval > 0:
 		show = true
 	case t.verbose > 0:
-		show = t.quiet == 0
+		show = t.quiet == 0 && !rows
 	default:
 		show = tty && t.quiet == 0 && !rows
 	}
@@ -414,6 +423,10 @@ func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
 	}
 	d.last, d.prevObj, d.prevAt = now, s.Rows, now
 	parts := progressParts(s, now.Sub(d.started), max(live, 0), d.noun, d.dataset)
+	if l := elog(); l.json {
+		l.progress(s, strings.Join(parts, sep))
+		return
+	}
 	if d.redraw {
 		d.out.frame(frame(parts, d.width(), d.pal))
 	} else {
@@ -602,27 +615,29 @@ func writeStats(w io.Writer, lines []string, pal palette, hasDisposition bool) {
 // termUI is one run's stderr surface: the progress display (nil when
 // off) and the statistics' preferences.
 type termUI struct {
-	opt   termOptions
-	pal   palette
-	disp  *display
-	prev  io.Writer // errOut before the run
-	coord *stderrCoord
-	noun  nouns
+	opt     termOptions
+	pal     palette
+	disp    *display
+	prev    io.Writer // errOut before the run
+	coord   *stderrCoord
+	noun    nouns
+	dataset bool      // the run writes a dataset (its progress shows parts)
+	began   time.Time // the invocation's start
 }
 
 // startTerminal resolves the terminal preferences for a run and starts its
-// progress display; -v prints a start line. rows says stdout is a terminal
-// that carries the run's rows (progressPrefs).
-func startTerminal(t termOptions, att *listing.Attempt, src, out string, noun nouns, rows bool) *termUI {
+// progress display; -v prints a start line, saying where the rows go (to).
+// rows says stdout is a terminal that carries the run's rows
+// (progressPrefs). Under --log-format json nothing is redrawn or coloured:
+// progress records are appended events.
+func startTerminal(t termOptions, att *listing.Attempt, src, to string, dataset bool, noun nouns, rows bool) *termUI {
 	tty, width := stderrTerminal()
-	tt := &termUI{opt: t, pal: palette(colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun}
-	if t.verbose > 0 && t.quiet == 0 {
-		dest := out
-		if dest == "" {
-			dest = "(no dataset)"
-		}
-		note(errOut, fmt.Sprintf("swath: listing %s to %s (attempt %s)\n", src, dest, att.ID))
+	json := t.logFormat == logJSON
+	if json {
+		tty, width = false, 0
 	}
+	tt := &termUI{opt: t, pal: palette(!json && colorEnabled(t.color, os.LookupEnv, tty)), prev: errOut, noun: noun, dataset: dataset, began: att.Started}
+	elog().start(src, to)
 	show, redraw := progressPrefs(t, tty, rows, width, os.Getenv("TERM"))
 	if !show {
 		return tt
@@ -635,17 +650,33 @@ func startTerminal(t termOptions, att *listing.Attempt, src, out string, noun no
 		_, w := stderrTerminal()
 		return w
 	}
-	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun, out != "")
+	tt.disp = newDisplay(tt.coord, redraw, widthNow, tt.pal, progressInterval(t, redraw), att.Started, noun, dataset)
 	return tt
 }
 
-// stats prints the end-of-run block when the preferences call for it.
+// stats prints the end-of-run block when the preferences call for it;
+// under --log-format json the outcome event stands for it.
 func (tt *termUI) stats(r *listing.Report, brokenPipe bool) {
-	if tt == nil || !showStats(tt.opt, r, brokenPipe) {
+	if tt == nil || elog().json || !showStats(tt.opt, r, brokenPipe) {
 		return
 	}
 	lines := statsLines(r, brokenPipe, tt.noun)
 	writeStats(errOut, lines, tt.pal, brokenPipe || r.Outcome.ExitCode != exitCompleted || r.Outcome.Class == "incomplete")
+}
+
+// status prints one progress record of s now, whatever the display's
+// gating, in the log's format (SIGUSR1, SIGINFO).
+func (tt *termUI) status(s listing.ProgressSnapshot) {
+	avg := 0.0
+	if s.DurationMs > 0 {
+		avg = float64(s.Rows) * 1000 / float64(s.DurationMs)
+	}
+	parts := progressParts(s, time.Since(tt.began), avg, tt.noun, tt.dataset)
+	if l := elog(); l.json {
+		l.progress(s, strings.Join(parts, sep))
+		return
+	}
+	note(errOut, frame(parts, 0, tt.pal)+"\n")
 }
 
 // close restores stderr.

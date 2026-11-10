@@ -137,6 +137,9 @@ func TestProgressGating(t *testing.T) {
 		// --progress still draws it.
 		{termOptions{}, true, true, 80, "xterm", false, false},
 		{termOptions{progress: on}, true, true, 80, "xterm", true, true},
+		// -v's appended records follow the same rule.
+		{termOptions{verbose: 1}, true, true, 80, "xterm", false, false},
+		{termOptions{verbose: 1, progress: on}, true, true, 80, "xterm", true, false},
 	} {
 		// A redraw also needs escape sequences to act on stderr: on Windows
 		// a console, which a test's stderr is not.

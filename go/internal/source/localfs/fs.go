@@ -91,6 +91,10 @@ func (s *Stats) Errors() int64 {
 	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe
 }
 
+// ErrorSamples are the first entries the listing could not read, each
+// "path: cause": the command names them on stderr.
+func (s *Stats) ErrorSamples() []string { return s.Samples }
+
 const maxSamples = 8
 
 func (s *Stats) note(counter *int64, path string, err error) {

@@ -100,7 +100,8 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	}
 	os.WriteFile(jpath, intact, 0o644)
 
-	// Another process owns the output: its outcome stays, ours is on stderr.
+	// Another process owns the output: its outcome stays, ours is in the
+	// report and, with -v, on stderr.
 	os.WriteFile(errorFile, []byte("owner"), 0o644)
 	lock, err := journal.TakeLock(dir)
 	if err != nil {
@@ -113,9 +114,11 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	}{{"broken ADC", broken, `"cause":"auth"`}, {"locked", good, "another process owns the output"}} {
 		t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", step.adc)
 		stderr.Reset()
-		if resume(ctx, []string{dir}, io.Discard) == nil {
+		err := resume(ctx, []string{"-v", dir}, io.Discard)
+		if err == nil {
 			t.Fatalf("%s: a resume ran over another owner", step.name)
 		}
+		conclude(err) // -v: the outcome line, then the error
 		if b, _ := os.ReadFile(errorFile); string(b) != "owner" {
 			t.Fatalf("%s: the competing owner's error.json became %q", step.name, b)
 		}
@@ -132,7 +135,9 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", broken)
 	stderr.Reset()
 	var out bytes.Buffer
-	if c := code(resume(ctx, []string{dir, "--report", "-"}, &out)); c != exitFatal {
+	err = resume(ctx, []string{"-v", dir, "--report", "-"}, &out)
+	conclude(err)
+	if c := code(err); c != exitFatal {
 		t.Fatalf("failed write: exit %d", c)
 	}
 	var rep listing.Report
@@ -148,7 +153,7 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	// The same through a refusal before the run.
 	os.WriteFile(jpath, append(append([]byte(nil), intact...), 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0), 0o644)
 	stderr.Reset()
-	if resume(ctx, []string{dir}, io.Discard) == nil || !strings.Contains(stderr.String(), "is not recorded") {
+	if resume(ctx, []string{"-v", dir}, io.Discard) == nil || !strings.Contains(stderr.String(), "is not recorded") {
 		t.Fatalf("failed write on a refusal: stderr %q", stderr.String())
 	}
 	os.WriteFile(jpath, intact, 0o644)
@@ -288,7 +293,7 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 			})
 			report := filepath.Join(t.TempDir(), "report.json")
 			done := make(chan error, 1)
-			go func() { done <- resume(ctx, []string{dir, "--report", report}, io.Discard) }()
+			go func() { done <- resume(ctx, []string{"-v", dir, "--report", report}, io.Discard) }()
 			select {
 			case <-paused:
 			case err := <-done:
@@ -309,7 +314,12 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 			want := dirTree(t, dir)
 			stderr.Reset()
 			close(cont)
-			if c := exitCode(t, <-done); c != exitFatal {
+			err := <-done
+			// The other process's run set this process's log: back to the
+			// resume's -v, which prints the outcome line before the error.
+			setLog(termOptions{verbose: 1, logFormat: logText}, "")
+			conclude(err)
+			if c := exitCode(t, err); c != exitFatal {
 				t.Fatalf("%s: exit %d", name, c)
 			}
 			if got := dirTree(t, dir); !maps.Equal(want, got) {
@@ -471,7 +481,7 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 	empty := t.TempDir()
 	for _, c := range []struct{ dir, why string }{{done, listing.UnrecordedComplete}, {empty, listing.UnrecordedNoRun}} {
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := dispatch(ctx, []string{"resume", "--report", report, c.dir}, io.Discard)
+		err := dispatch(ctx, []string{"resume", "-v", "--report", report, c.dir}, io.Discard)
 		if (err == nil) != (c.dir == done) {
 			t.Fatalf("resume of %s: %v", c.dir, err)
 		}

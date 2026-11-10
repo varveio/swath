@@ -57,9 +57,6 @@ const shutdownGrace = 15 * time.Second
 // timeout. main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
 
-// silentErrors is -qq: main does not print the command's error.
-var silentErrors atomic.Bool
-
 // forensics is the running attempt, for the goroutine dump and the
 // outcome written at a forced exit.
 var forensics atomic.Pointer[forensicTarget]
@@ -112,11 +109,11 @@ func main() {
 				if ok {
 					exit.Store(int64(s.out.ExitCode)) // the run's classification stands
 				}
-				note(errOut, fmt.Sprintf("swath: still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)\n", why, shutdownGrace))
+				elog().warn(fmt.Sprintf("still stopping (%s) after %s; exiting (an interrupted journaled run can be resumed)", why, shutdownGrace))
 				if ok {
 					forcedAccount(f, s, why)
 				} else {
-					note(errOut, "swath: the run's result could not be read in time; no outcome is written\n")
+					elog().warn("the run's result could not be read in time; no outcome is written")
 				}
 				dumpStacks(f.dir, f.pr, "forced-exit", why, f.pr.Snapshot())
 				os.Exit(int(exit.Load()))
@@ -135,27 +132,11 @@ func main() {
 			exitAfterGrace(code, sig.String())
 		}
 	}()
+	statusOnSignal()
 	testHooks()
-	err := dispatch(ctx, os.Args[1:], os.Stdout)
-	if err == nil || errors.Is(err, pflag.ErrHelp) {
-		return
+	if code := conclude(dispatch(ctx, os.Args[1:], os.Stdout)); code != exitCompleted {
+		os.Exit(code)
 	}
-	if !silentErrors.Load() { // -qq: the exit code and the reports stand alone
-		fmt.Fprintln(os.Stderr, "swath:", err)
-		var sh seeHelp
-		if errors.As(err, &sh) {
-			fmt.Fprintln(os.Stderr, sh.see())
-		}
-	}
-	var u usageError
-	var ee *exitError
-	switch {
-	case errors.As(err, &ee):
-		os.Exit(ee.code)
-	case errors.As(err, &u):
-		os.Exit(exitUsage)
-	}
-	os.Exit(exitFatal)
 }
 
 // classifyRun is the terminal classification of a run's result: a
@@ -230,7 +211,7 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 		if r.Attempt != nil {
 			id = r.Attempt.ID
 		}
-		fmt.Fprintf(errOut, "swath: the report of attempt %s is not written to %s: %v\n", id, path, err)
+		elog().warn(fmt.Sprintf("the report of attempt %s is not written to %s: %v", id, path, err))
 	}
 	return nil
 }
@@ -239,10 +220,11 @@ func writeReport(path string, r listing.Report, stdout io.Writer) error {
 // scheme, say): the report (--report) holds its outcome.
 func stopEarly(report string, argv []string, dir string, att *listing.Attempt, err error) error {
 	o := classify(err, nil, "")
+	o.Attempt = att
 	r := listing.Unstarted(argv, dir, att, err)
 	account(&r.Outcome, o)
 	_ = writeReport(report, r, nil)
-	return &exitError{err, o.ExitCode}
+	return &exitError{error: err, code: o.ExitCode, out: o}
 }
 
 // errText refuses swath resume of a text run.
@@ -269,6 +251,7 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return nil
 	})
+	setLog(t, "")
 	switch {
 	case errors.Is(err, pflag.ErrHelp):
 		rootHelp(stdout, styleFor(stdout, t.color, p.longHelp))
@@ -714,6 +697,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 	f := newFlags(&o, cmd.diag)
 	o.countOnly, o.du = cmd.count, cmd.du
 	p, err := parseFlags(f, cmd.name(), args, nil)
+	setLog(o.term, "")
 	if errors.Is(err, pflag.ErrHelp) {
 		usage(stdout, f, cmd, styleFor(stdout, o.term.color, p.longHelp))
 		return o, "", err
@@ -795,7 +779,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		return usageError{errText}
 	}
 	toStdout := o.text != nil && o.text.Path == ""
-	silentErrors.Store(o.term.quiet >= 2)
+	setLog(o.term, att.ID)
 	argv := recorded
 	if argv == nil {
 		argv = o.argv
@@ -814,16 +798,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		Argv:    argv,
 		Attempt: att,
 		Filter:  &o.filter,
-		Warn:    func(m string) { note(errOut, "swath: warning: "+m+"\n") },
+		Warn:    func(m string) { elog().warn(m) },
 	}
 	if t := o.totals; t != nil {
 		// swath du's rows are its output: written once the count is
 		// complete, before the run's end and outcome are settled.
 		cfg.Totals = t.tally
 		cfg.Deliver = func(context.Context) error { return t.write(stdout) }
-	}
-	if o.term.quiet > 0 {
-		cfg.Warn = func(string) {}
 	}
 	if !o.countOnly && o.text == nil {
 		cfg.Output.Dir = o.out
@@ -853,6 +834,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		defer stopGrace()
 	}
 	cfg.Progress = &listing.Progress{}
+	fw := newFailureWatch(pf.Title)
 	term := &terminal{ctx: ctx, dir: cfg.Output.Dir, provider: pf.Classify, att: att}
 	forensics.Store(&forensicTarget{ctx: ctx, dir: cfg.Output.Dir, pr: cfg.Progress, report: o.report, argv: argv, att: att, t: term})
 	// One terminal result (terminal): the classification is applied to the
@@ -865,6 +847,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 			// report says the listing did not reach its end.
 			err = nil
 			r.Outcome.Status, r.Outcome.Complete, r.Outcome.StopReason, r.Outcome.Error = listing.StatusStopped, false, listing.StopDownstreamClosed, ""
+		}
+		if r.Requests != nil {
+			r.Requests.FailureWarnings = fw.warnings.Load()
 		}
 		term.account(r, err)
 	}
@@ -881,8 +866,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	// The empty scheme is a local path. stdout carries rows to a reader on
 	// the same screen: swath list's text there, and swath du's table.
 	n := rowNouns(pf.Scheme == "", o.allVersions != nil && *o.allVersions)
-	tt := startTerminal(o.term, att, registry.Redact(root), cfg.Output.Dir, n, (toStdout || o.totals != nil) && stdoutTerminal())
+	tt := startTerminal(o.term, att, registry.Redact(root), startDest(o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
+	defer watchRequests(fw)() // removed before stderr is restored
+	status := func() { tt.status(cfg.Progress.Snapshot()) }
+	statusNow.Store(&status)
+	defer statusNow.Store(nil)
 	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, cfg.Warn, tt.disp)
 	sum, err := listing.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
@@ -890,14 +879,45 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	tt.disp.stop()
 	stopProfile()
 	err, out := term.classify(sum, err)
-	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, settled, unrecorded, tt)
+	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
+	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+}
+
+// runEnd is what finishList knows of a run besides its report: settled
+// says error.json holds its outcome, unrecorded why not; started that a
+// listing request was answered or a directory read; failing the
+// persistent request failure outstanding at its end (failureWatch).
+type runEnd struct {
+	settled    bool
+	unrecorded string
+	started    bool
+	failing    string
+}
+
+// oneLine says a failed run's stderr is its error line alone (D1, D4 of
+// the CLI review): a refusal or usage error (exit 2), or a failure before
+// any listing request was answered or directory read, other than a stop
+// (a signal, the deadline, the stall timeout, a full disk), whose
+// statistics stand.
+func oneLine(sum listing.Report, out outcome, started bool) bool {
+	switch {
+	case out.ExitCode == exitCompleted:
+		return false
+	case out.ExitCode == exitUsage:
+		return true
+	case started || resumableStops[out.Class] || sum.Output.RowsFetched+sum.Output.RowsRetained > 0:
+		return false
+	}
+	return true
 }
 
 // finishList is a list command's terminal settlement after its run: the
 // accounts derived from the frozen outcome out (the report, -json, the
 // outcome on stderr when error.json does not hold it) and the error main
-// exits with. settled says error.json holds it; unrecorded why not.
-func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, settled bool, unrecorded string, tt *termUI) error {
+// exits with.
+func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err error, out outcome, end runEnd, tt *termUI) error {
+	settled, unrecorded := end.settled, end.unrecorded
+	brief := oneLine(sum, out, end.started)
 	if err != nil && out.ExitCode == exitCompleted {
 		// A resume that found the run committed by another process
 		// meanwhile: nothing to do, as swath resume on a committed dataset.
@@ -915,7 +935,9 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 		if unrecorded == "" {
 			unrecorded = "stopped before owning the output"
 		}
-		reportUnrecorded(dir, out, unrecorded)
+		if !brief || o.term.verbose > 0 {
+			reportUnrecorded(dir, unrecorded)
+		}
 	}
 	account(&sum.Outcome, out)
 	if errors.Is(err, listing.ErrComplete) {
@@ -924,26 +946,22 @@ func finishList(stdout io.Writer, o options, dir string, sum listing.Report, err
 	sum.Outcome.Unrecorded = unrecorded
 	// The report goes out on failure too: its outcome names the error.
 	rerr := writeReport(o.report, sum, stdout)
-	tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
+	if !brief || o.term.stats.set {
+		tt.stats(&sum, sum.Outcome.StopReason == listing.StopDownstreamClosed)
+	}
+	// Entries left out say so, whatever the statistics' gating.
+	reportUnreadable(&sum, o.du)
 	switch {
 	case err != nil:
-		return &exitError{explain(err), out.ExitCode}
+		err = explain(err)
+		if end.failing != "" && (out.Class == listing.ClassStuck || out.Class == listing.ClassDeadline) {
+			err = fmt.Errorf("%w; every request was failing: %s", err, end.failing)
+		}
+		return &exitError{error: err, code: out.ExitCode, out: out}
 	case o.report == "-":
 		return rerr // stdout carries the report
-	case !o.countOnly:
-		return nil // stdout carries the rows, or nothing: the data went to -o; --stats prints the account on stderr
-	}
-	if o.du {
-		// stdout carried the rows (Deliver). Totals that leave entries
-		// out say so, whatever the statistics' gating.
-		if n := sum.Errors(); n > 0 && o.term.quiet == 0 {
-			what := "entries"
-			if n == 1 {
-				what = "entry"
-			}
-			note(errOut, fmt.Sprintf("swath: warning: %s %s could not be read (the report's source counters say why): the totals leave them out\n", count(n), what))
-		}
-		return nil
+	case !o.countOnly || o.du:
+		return nil // stdout carries the rows (swath du's: Deliver), or nothing: the data went to -o; --stats prints the account on stderr
 	}
 	if r := sum.SourceReport(); r != nil && r.Brief != "" {
 		fmt.Fprint(stdout, r.Brief, " ")

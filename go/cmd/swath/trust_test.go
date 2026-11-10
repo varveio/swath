@@ -103,6 +103,28 @@ func TestTrustFlags(t *testing.T) {
 			if err != nil || stats["no_verify_ssl"] != true || strings.Count(stderr, source.NoVerifyWarning) != 1 {
 				t.Fatalf("--no-verify-ssl: %v; stats %v, stderr %q", err, stats, stderr)
 			}
+			// The request log watches the trusted transport, and the
+			// warning is a log event: under json, stderr is JSON lines only.
+			for _, trust := range [][]string{{"--ca-bundle", bundle}, {"--no-verify-ssl"}} {
+				_, stderr, err := list(append(trust, "-vvv", "--log-format", "json")...)
+				if err != nil {
+					t.Fatalf("%v: %v", trust, err)
+				}
+				events := map[string]int{}
+				for _, l := range strings.Split(strings.TrimSpace(stderr), "\n") {
+					var e struct{ Event, Msg string }
+					if json.Unmarshal([]byte(l), &e) != nil {
+						t.Fatalf("%v: stderr line %q is not JSON", trust, l)
+					}
+					events[e.Event]++
+					if e.Msg == source.NoVerifyWarning {
+						events["no_verify"]++
+					}
+				}
+				if events["request"] == 0 || (trust[0] == "--no-verify-ssl") != (events["no_verify"] == 1) {
+					t.Fatalf("%v: events %v, stderr %q", trust, events, stderr)
+				}
+			}
 			if r.env != "" {
 				t.Setenv(r.env, bundle)
 				if _, _, err := list(); err != nil {

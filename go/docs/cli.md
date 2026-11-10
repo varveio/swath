@@ -48,7 +48,7 @@ marks (`_SUCCESS` beside `data/`, a `schemaId` manifest) and other tools' manife
 there rather than writing its target). `swath resume DIR` replays the command the journal recorded; only
 the runtime flags (`--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the
 `--part-interval`, the diagnostic `--no-spill-compress`, `--spill-plain` and `--spill-reserve`, `--report`, `--max-duration`, `--stall-timeout`, `--seed-from`, and the terminal flags
-`--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`) and the
+`--progress`, `--no-progress`, `--progress-interval`, `--stats`, `--no-stats`, `-v`, `-q`, `--color`, `--log-format`) and the
 operational ones, how requests are
 authenticated, timed and admitted (the shared `--anonymous`, `--request-timeout`, `--no-adaptive-limit`,
 `--adaptive-limit-slow-start` and `--request-rate`, and each provider's credential flags: `--azure-sas-token`,
@@ -101,186 +101,192 @@ Examples:
   swath list gs://bucket -o rows.jsonl.zst
 
 Output:
-  -o, --output PATH          a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
-                               A trailing / names a directory whatever its name.
+  -o, --output PATH           a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)
+                                A trailing / names a directory whatever its name.
       --format auto|table|tsv|jsonl
-                             text rows: auto is the table on a terminal, TSV otherwise
-                               With -o FILE the file's name says the format; a --format that agrees
-                               with it is accepted.
-      --columns NAME         TSV and JSONL: these columns, in order (key,size; repeatable)
-                               By the dataset's column names; a name the source's schema lacks is
-                               refused, listing its columns. Not with the table or a dataset; on a
-                               terminal the rows are then TSV.
-      --overwrite            replace a previous dataset in -o
+                              text rows: auto is the table on a terminal, TSV otherwise
+                                With -o FILE the file's name says the format; a --format that agrees
+                                with it is accepted.
+      --columns NAME          TSV and JSONL: these columns, in order (key,size; repeatable)
+                                By the dataset's column names; a name the source's schema lacks is
+                                refused, listing its columns. Not with the table or a dataset; on a
+                                terminal the rows are then TSV.
+      --overwrite             replace a previous dataset in -o
 
 Filters:
-      --include GLOB         keep keys this glob matches (repeatable: any of them)
-                               Matched against the key below SOURCE: with a '/' from SOURCE's root
-                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
-                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
-                               \c. Includes sharing a literal prefix narrow the listed prefix.
-      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                               Any include, glob or regex, keeps a key. ^ with a literal prefix
-                               narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
-      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
-                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
-                               KB, MB, GB, TB (decimal), any case.
-      --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
-                               before the run started, recorded as the time it names.
-      --modified-until TIME  keep objects or entries modified at or before this time
-      --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
-                               In any case; an object without one is in none. Azure Blob: the access
-                               tier (Hot, Cool, Cold, Archive).
+      --include GLOB          keep keys this glob matches (repeatable: any of them)
+                                Matched against the key below SOURCE: with a '/' from SOURCE's root
+                                (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                                ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                                \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Any include, glob or regex, keeps a key. ^ with a literal prefix
+                                narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                                Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                                KB, MB, GB, TB (decimal), any case.
+      --max-size SIZE         keep objects or entries of at most this size
+      --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                                An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                                before the run started, recorded as the time it names.
+      --modified-until TIME   keep objects or entries modified at or before this time
+      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                                In any case; an object without one is in none. Azure Blob: the
+                                access tier (Hot, Cool, Cold, Archive).
 
 Object stores:
-      --anonymous            send no credentials (a public bucket or container)
-                               Ignores any configured. Without it a source with no usable
-                               credentials fails (auth) before listing.
-      --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style; default
-                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
-                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                               then its first path segment (Azurite). Part of the resume identity.
-      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
-                               For a service behind a private certificate authority. S3: default
-                               AWS_CA_BUNDLE.
-      --no-verify-ssl        do not verify the service's TLS certificate (warns)
-                               For a test endpoint only. A resume replays it, and warns again.
-      --all-versions         list every version of every key, not only the current objects
-                               S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                               generations, live and noncurrent. A key's rows are consecutive and
-                               never split across parts.
+      --anonymous             send no credentials (a public bucket or container)
+                                Ignores any configured. Without it a source with no usable
+                                credentials fails (auth) before listing.
+      --endpoint-url URL      the service URL in place of the provider's own (emulators, MinIO)
+                                S3: path-style addressing unless --no-s3-path-style; default
+                                AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                                URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                                then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE        trust the certificates in this PEM file besides the system's
+                                For a service behind a private certificate authority. S3: default
+                                AWS_CA_BUNDLE.
+      --no-verify-ssl         do not verify the service's TLS certificate (warns)
+                                For a test endpoint only. A resume replays it, and warns again.
+      --all-versions          list every version of every key, not only the current objects
+                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
+                                generations, live and noncurrent. A key's rows are consecutive and
+                                never split across parts.
 
 S3:
-      --s3-region NAME       the bucket's region
-                               Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
-                               us-east-1.
-      --s3-profile NAME      the shared config profile to take credentials and region from
-                               Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO,
-                               web identity, IMDS).
-      --s3-requester-pays    accept the request charges of a requester-pays bucket
-      --s3-path-style        address the bucket in the path (default with --endpoint-url)
-      --no-s3-path-style     address the bucket in the host name, also with --endpoint-url
+      --s3-region NAME        the bucket's region
+                                Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
+                                us-east-1.
+      --s3-profile NAME       the shared config profile to take credentials and region from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS).
+      --s3-requester-pays     accept the request charges of a requester-pays bucket
+      --s3-path-style         address the bucket in the path (default with --endpoint-url)
+      --no-s3-path-style      address the bucket in the host name, also with --endpoint-url
       --s3-bearer-token-command COMMAND
-                             a shell command printing a bearer token, sent instead of SigV4
-                               For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
-                               swath resume needs it again.
+                              a shell command printing a bearer token, sent instead of SigV4
+                                For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
+                                swath resume needs it again.
       --s3-bearer-token-refresh-interval DURATION
-                             run --s3-bearer-token-command again after this long (default 45m)
-      --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
-                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
-                               would select nothing.
-      --s3-dualstack         use the dual-stack (IPv6) endpoint
-                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
-                               where it would select nothing.
-      --s3-fetch-owner       fill owner_id and owner_display_name
+                              run --s3-bearer-token-command again after this long (default 45m)
+      --s3-fips               use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                                Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where
+                                it would select nothing.
+      --s3-dualstack          use the dual-stack (IPv6) endpoint
+                                Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                                where it would select nothing.
+      --s3-fetch-owner        fill owner_id and owner_display_name
 
 GCS:
       --gcs-credentials-file FILE
-                             a service-account or authorized-user JSON file (default: ADC)
-                               Without it, Application Default Credentials.
+                              a service-account or authorized-user JSON file (default: ADC)
+                                Without it, Application Default Credentials.
       --gcs-billing-project NAME
-                             bill a requester-pays bucket's requests to this project
+                              bill a requester-pays bucket's requests to this project
 
 Azure Blob:
       --azure-sas-token TOKEN
-                             a shared access signature (a query string); never recorded
-                               Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
-                               none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID
-                               (DefaultAzureCredential). Give it again to swath resume.
-      --azure-assume-flat    assume a flat namespace where the account will not tell
-                               For when Get Account Information and the Data Lake host's Filesystem
-                               Get Properties are both refused or silent; a hierarchical namespace
-                               they report still refuses. Frozen for resume and shown in the report.
+                              a shared access signature (a query string); never recorded
+                                Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
+                                none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra
+                                ID (DefaultAzureCredential). Give it again to swath resume.
+      --azure-assume-flat     assume a flat namespace where the account will not tell
+                                For when Get Account Information and the Data Lake host's Filesystem
+                                Get Properties are both refused or silent; a hierarchical namespace
+                                they report still refuses. Frozen for resume and shown in the
+                                report.
 
 Local:
       --metadata names|stat|statx
-                             what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs              omit the directories' rows (kind DIR)
-      --no-link-target       do not read symbolic links' targets
-      --one-file-system      do not walk into a mount point below the root, as du -x
+                              what is read per entry (statx adds birth_time; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind DIR)
+      --no-link-target        do not read symbolic links' targets
+      --one-file-system       do not walk into a mount point below the root, as du -x
 
 Performance:
-  -j, --workers N            listing workers (default 64; a local tree: 4 per CPU, at most 64)
-                               Raise it (128, 256) for a large listing the service does not
-                               throttle: listing waits on round trips, not the CPU; lower it when it
-                               throttles at the default.
-      --encoders N           Parquet encoders, or a .zst file's compression jobs (default: CPUs)
-                               Lower it to leave cores to other work; the default follows
-                               GOMAXPROCS, the row budget and the descriptor limit. An explicit
-                               count is kept, with a warning when they cannot carry it.
-      --row-budget SIZE      rows held between listing and encoding (default 128MiB)
-                               Not a cap on resident memory. Raise it when resources.budget_wait_ns
-                               is large or spill is heavy and memory allows; lower it on a small
-                               host (the peak RSS is a few times it).
-      --spill-budget SIZE    cap on spill (default: half the output filesystem's free space)
-                               Set it when the output filesystem is shared or small. Past it, or at
-                               the reserve, listing waits instead of spilling.
-      --part-size SIZE       target size of a Parquet part (default 64MiB)
-                               Smaller parts for readers that load whole parts, larger for fewer
-                               files on a very large listing.
+  -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
+                                Raise it (128, 256) for a large listing the service does not
+                                throttle: listing waits on round trips, not the CPU; lower it when
+                                it throttles at the default.
+      --encoders N            Parquet encoders, or a .zst file's compression jobs (default: CPUs)
+                                Lower it to leave cores to other work; the default follows
+                                GOMAXPROCS, the row budget and the descriptor limit. An explicit
+                                count is kept, with a warning when they cannot carry it.
+      --row-budget SIZE       rows held between listing and encoding (default 128MiB)
+                                Not a cap on resident memory. Raise it when resources.budget_wait_ns
+                                is large or spill is heavy and memory allows; lower it on a small
+                                host (the peak RSS is a few times it).
+      --spill-budget SIZE     cap on spill (default: half the output filesystem's free space)
+                                Set it when the output filesystem is shared or small. Past it, or at
+                                the reserve, listing waits instead of spilling.
+      --part-size SIZE        target size of a Parquet part (default 64MiB)
+                                Smaller parts for readers that load whole parts, larger for fewer
+                                files on a very large listing.
       --part-interval DURATION
-                             close a part with rows after this long, full or not (default 30s)
-                               0: by size only. Lower it to close parts sooner on a slow listing (it
-                               bounds how long rows wait in an open part, not how much a resume
-                               repeats: a closed part still publishes in order); 0 for part
-                               boundaries independent of timing.
+                              close a part with rows after this long, full or not (default 30s)
+                                0: by size only. Lower it to close parts sooner on a slow listing
+                                (it bounds how long rows wait in an open part, not how much a resume
+                                repeats: a closed part still publishes in order); 0 for part
+                                boundaries independent of timing.
       --part-rotation-max-rows N
-                             also close a part at N rows (0: by size and --part-interval only)
-                               Set it when readers want parts of a bounded row count; it is fixed
-                               for the run.
-      --seed-from PATH       start from a previous listing's key distribution, not the seed
-                               A committed dataset of the same source and scope, or a cut file (one
-                               key per line, ascending bytewise, optionally TAB and the keys
-                               expected up to it); the engine still splits adaptively.
+                              also close a part at N rows (0: by size and --part-interval only)
+                                Set it when readers want parts of a bounded row count; it is fixed
+                                for the run.
+      --seed-from PATH        start from a previous listing's key distribution, not the seed
+                                A committed dataset of the same source and scope, or a cut file (one
+                                key per line, ascending bytewise, optionally TAB and the keys
+                                expected up to it); the engine still splits adaptively.
 
 Limits:
       --max-duration DURATION
-                             stop the run after this long (exit 124, resumable); 0: no limit
-                               Give every unattended run one; a stopped object-store run resumes
-                               where it stopped.
+                              stop the run after this long (exit 124, resumable); 0: no limit
+                                Give every unattended run one; a stopped object-store run resumes
+                                where it stopped.
       --stall-timeout DURATION
-                             stop as stuck after this long without progress (exit 75) (default 10m)
-                               0: never. Raise it for a service that is slow to answer for minutes
-                               at a time.
+                              stop as stuck after this long without progress (exit 75) (default 10m)
+                                0: never. Raise it for a service that is slow to answer for minutes
+                                at a time.
       --request-timeout DURATION
-                             per-request timeout; a request over it is retried (default 30s)
-                               Raise it for a slow endpoint or emulator whose pages take longer to
-                               answer.
-      --request-rate N       cap every HTTP attempt at N per second (0: no cap)
-                               Set it to stay under a request quota shared with other clients.
-                               Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit    turn off the adaptive concurrency limit that throttle answers lower
-                               Turn it off (with --request-rate) when a run crawls under sustained
-                               throttling with the limit near 1. Without it each of the --workers
-                               listing workers waits on one page at a time, and seed listings and
-                               structure probes run beside them.
+                              per-request timeout; a request over it is retried (default 30s)
+                                Raise it for a slow endpoint or emulator whose pages take longer to
+                                answer.
+      --request-rate N        cap every HTTP attempt at N per second (0: no cap)
+                                Set it to stay under a request quota shared with other clients.
+                                Refused when the spacing exceeds half --stall-timeout.
+      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+                                Turn it off (with --request-rate) when a run crawls under sustained
+                                throttling with the limit near 1. Without it each of the --workers
+                                listing workers waits on one page at a time, and seed listings and
+                                structure probes run beside them.
 
 Reporting:
-      --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
-                               Written on failure too, with the outcome and the attempt id. - is
-                               refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
-  -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
-                               With -qq the exit code and the reports stand alone.
-      --progress             print live progress on stderr (default: on a terminal, without -q, -v)
-      --no-progress          no live progress on stderr
+      --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
+                                Written on failure too, with the outcome and the attempt id. - is
+                                refused where stdout carries rows.
+  -v, --verbose               a start line, progress records; -vv, -vvv: the request log
+                                -vv adds each failed request and retry with its cause, -vvv every
+                                request (credentials and tokens redacted).
+  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+                                With -qq the exit code and the reports stand alone.
+      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --no-progress           no live progress on stderr
       --progress-interval DURATION
-                             how often progress is printed (at least 1s); implies --progress
-                               Default 1s while the line redraws on a terminal, 30s for appended
-                               records.
-      --stats                print the end-of-run statistics on stderr
-                               Default: for runs over 1.5 s, runs that write output, and runs that
-                               do not complete; not with -q, nor after a closed downstream pipe.
-      --no-stats             no end-of-run statistics on stderr
+                              how often progress is printed (at least 1s); implies --progress
+                                Default 1s while the line redraws on a terminal, 30s for appended
+                                records.
+      --stats                 print the end-of-run statistics on stderr
+                                Default: for runs over 1.5 s, runs that write output, and runs that
+                                do not complete; not with -q, nor after a closed downstream pipe.
+      --no-stats              no end-of-run statistics on stderr
       --color auto|always|never
-                             color the progress line, the statistics and the help (default auto)
-                               auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
-                               forces it.
+                              color the progress line, the statistics and the help (default auto)
+                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
+                                forces it.
+      --log-format text|json  stderr as text, or json: one JSON object per line (default text)
+                                json: warnings, the start line, progress records, the request log
+                                and the outcome as events, no redrawn line or statistics block.
 
 swath resume --help lists the options a resume may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -300,174 +306,180 @@ Examples:
   swath du gs://bucket --format jsonl
 
 Totals:
-  -d, --depth N              also total each prefix down to N levels below SOURCE (0: the total)
-                               A prefix ends at a '/'; each includes what is below it, as du.
-      --allocated            local: total the files' allocated bytes instead of their apparent size
-                               st_blocks x 512, as du; a directory's own blocks are not counted.
-      --count-links-once     local: count a file with several hard links once, as du does
-                               Under the first of its names in byte order.
-      --sort name|size       order prefixes by name, or by size, largest first (default name)
-                               By size the prefixes below each parent are ordered, each still above
-                               its own; the total keeps its place (last in the table, first in TSV
-                               and JSONL), and a prefix of unknown size comes last.
-      --max-prefixes N       fail rather than hold more than N distinct prefixes (default 1000000)
-                               Raise it for a deep --depth over a wide tree when memory allows
-                               (about 150 bytes a prefix); it bounds memory, never the objects
-                               counted.
-      --max-inodes N         local: the most hard-linked files to remember (default 1000000)
-                               With --count-links-once. Raise it for a tree of more hard-linked
-                               files when memory allows (about 100 bytes each).
+  -d, --depth N               also total each prefix down to N levels below SOURCE (0: the total)
+                                A prefix ends at a '/'; each includes what is below it, as du.
+      --allocated             local: total the files' allocated bytes instead of their apparent size
+                                st_blocks x 512, as du; a directory's own blocks are not counted.
+      --count-links-once      local: count a file with several hard links once, as du does
+                                Under the first of its names in byte order.
+      --sort name|size        order prefixes by name, or by size, largest first (default name)
+                                By size the prefixes below each parent are ordered, each still above
+                                its own; the total keeps its place (last in the table, first in TSV
+                                and JSONL), and a prefix of unknown size comes last.
+      --max-prefixes N        fail rather than hold more than N distinct prefixes (default 1000000)
+                                Raise it for a deep --depth over a wide tree when memory allows
+                                (about 150 bytes a prefix); it bounds memory, never the objects
+                                counted.
+      --max-inodes N          local: the most hard-linked files to remember (default 1000000)
+                                With --count-links-once. Raise it for a tree of more hard-linked
+                                files when memory allows (about 100 bytes each).
 
 Output:
       --format auto|table|tsv|jsonl
-                             text rows: auto is the table on a terminal, TSV otherwise
-                               With -o FILE the file's name says the format; a --format that agrees
-                               with it is accepted.
+                              text rows: auto is the table on a terminal, TSV otherwise
+                                With -o FILE the file's name says the format; a --format that agrees
+                                with it is accepted.
 
 Filters:
-      --include GLOB         keep keys this glob matches (repeatable: any of them)
-                               Matched against the key below SOURCE: with a '/' from SOURCE's root
-                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
-                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
-                               \c. Includes sharing a literal prefix narrow the listed prefix.
-      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                               Any include, glob or regex, keeps a key. ^ with a literal prefix
-                               narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
-      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
-                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
-                               KB, MB, GB, TB (decimal), any case.
-      --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
-                               before the run started, recorded as the time it names.
-      --modified-until TIME  keep objects or entries modified at or before this time
-      --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
-                               In any case; an object without one is in none. Azure Blob: the access
-                               tier (Hot, Cool, Cold, Archive).
+      --include GLOB          keep keys this glob matches (repeatable: any of them)
+                                Matched against the key below SOURCE: with a '/' from SOURCE's root
+                                (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                                ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                                \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Any include, glob or regex, keeps a key. ^ with a literal prefix
+                                narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                                Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                                KB, MB, GB, TB (decimal), any case.
+      --max-size SIZE         keep objects or entries of at most this size
+      --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                                An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                                before the run started, recorded as the time it names.
+      --modified-until TIME   keep objects or entries modified at or before this time
+      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                                In any case; an object without one is in none. Azure Blob: the
+                                access tier (Hot, Cool, Cold, Archive).
 
 Object stores:
-      --anonymous            send no credentials (a public bucket or container)
-                               Ignores any configured. Without it a source with no usable
-                               credentials fails (auth) before listing.
-      --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style; default
-                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
-                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                               then its first path segment (Azurite). Part of the resume identity.
-      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
-                               For a service behind a private certificate authority. S3: default
-                               AWS_CA_BUNDLE.
-      --no-verify-ssl        do not verify the service's TLS certificate (warns)
-                               For a test endpoint only. A resume replays it, and warns again.
-      --all-versions         list every version of every key, not only the current objects
-                               S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                               generations, live and noncurrent. A key's rows are consecutive and
-                               never split across parts.
+      --anonymous             send no credentials (a public bucket or container)
+                                Ignores any configured. Without it a source with no usable
+                                credentials fails (auth) before listing.
+      --endpoint-url URL      the service URL in place of the provider's own (emulators, MinIO)
+                                S3: path-style addressing unless --no-s3-path-style; default
+                                AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                                URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                                then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE        trust the certificates in this PEM file besides the system's
+                                For a service behind a private certificate authority. S3: default
+                                AWS_CA_BUNDLE.
+      --no-verify-ssl         do not verify the service's TLS certificate (warns)
+                                For a test endpoint only. A resume replays it, and warns again.
+      --all-versions          list every version of every key, not only the current objects
+                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
+                                generations, live and noncurrent. A key's rows are consecutive and
+                                never split across parts.
 
 S3:
-      --s3-region NAME       the bucket's region
-                               Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
-                               us-east-1.
-      --s3-profile NAME      the shared config profile to take credentials and region from
-                               Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO,
-                               web identity, IMDS).
-      --s3-requester-pays    accept the request charges of a requester-pays bucket
-      --s3-path-style        address the bucket in the path (default with --endpoint-url)
-      --no-s3-path-style     address the bucket in the host name, also with --endpoint-url
+      --s3-region NAME        the bucket's region
+                                Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
+                                us-east-1.
+      --s3-profile NAME       the shared config profile to take credentials and region from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS).
+      --s3-requester-pays     accept the request charges of a requester-pays bucket
+      --s3-path-style         address the bucket in the path (default with --endpoint-url)
+      --no-s3-path-style      address the bucket in the host name, also with --endpoint-url
       --s3-bearer-token-command COMMAND
-                             a shell command printing a bearer token, sent instead of SigV4
-                               For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
-                               swath resume needs it again.
+                              a shell command printing a bearer token, sent instead of SigV4
+                                For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
+                                swath resume needs it again.
       --s3-bearer-token-refresh-interval DURATION
-                             run --s3-bearer-token-command again after this long (default 45m)
-      --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
-                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
-                               would select nothing.
-      --s3-dualstack         use the dual-stack (IPv6) endpoint
-                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
-                               where it would select nothing.
-      --s3-fetch-owner       fill owner_id and owner_display_name
+                              run --s3-bearer-token-command again after this long (default 45m)
+      --s3-fips               use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                                Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where
+                                it would select nothing.
+      --s3-dualstack          use the dual-stack (IPv6) endpoint
+                                Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                                where it would select nothing.
+      --s3-fetch-owner        fill owner_id and owner_display_name
 
 GCS:
       --gcs-credentials-file FILE
-                             a service-account or authorized-user JSON file (default: ADC)
-                               Without it, Application Default Credentials.
+                              a service-account or authorized-user JSON file (default: ADC)
+                                Without it, Application Default Credentials.
       --gcs-billing-project NAME
-                             bill a requester-pays bucket's requests to this project
+                              bill a requester-pays bucket's requests to this project
 
 Azure Blob:
       --azure-sas-token TOKEN
-                             a shared access signature (a query string); never recorded
-                               Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
-                               none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID
-                               (DefaultAzureCredential). Give it again to swath resume.
-      --azure-assume-flat    assume a flat namespace where the account will not tell
-                               For when Get Account Information and the Data Lake host's Filesystem
-                               Get Properties are both refused or silent; a hierarchical namespace
-                               they report still refuses. Frozen for resume and shown in the report.
+                              a shared access signature (a query string); never recorded
+                                Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
+                                none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra
+                                ID (DefaultAzureCredential). Give it again to swath resume.
+      --azure-assume-flat     assume a flat namespace where the account will not tell
+                                For when Get Account Information and the Data Lake host's Filesystem
+                                Get Properties are both refused or silent; a hierarchical namespace
+                                they report still refuses. Frozen for resume and shown in the
+                                report.
 
 Local:
       --metadata names|stat|statx
-                             what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs              omit the directories' rows (kind DIR)
-      --no-link-target       do not read symbolic links' targets
-      --one-file-system      do not walk into a mount point below the root, as du -x
+                              what is read per entry (statx adds birth_time; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind DIR)
+      --no-link-target        do not read symbolic links' targets
+      --one-file-system       do not walk into a mount point below the root, as du -x
 
 Performance:
-  -j, --workers N            listing workers (default 64; a local tree: 4 per CPU, at most 64)
-                               Raise it (128, 256) for a large listing the service does not
-                               throttle: listing waits on round trips, not the CPU; lower it when it
-                               throttles at the default.
-      --seed-from PATH       start from a previous listing's key distribution, not the seed
-                               A committed dataset of the same source and scope, or a cut file (one
-                               key per line, ascending bytewise, optionally TAB and the keys
-                               expected up to it); the engine still splits adaptively.
+  -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
+                                Raise it (128, 256) for a large listing the service does not
+                                throttle: listing waits on round trips, not the CPU; lower it when
+                                it throttles at the default.
+      --seed-from PATH        start from a previous listing's key distribution, not the seed
+                                A committed dataset of the same source and scope, or a cut file (one
+                                key per line, ascending bytewise, optionally TAB and the keys
+                                expected up to it); the engine still splits adaptively.
 
 Limits:
       --max-duration DURATION
-                             stop the run after this long (exit 124, resumable); 0: no limit
-                               Give every unattended run one; a stopped object-store run resumes
-                               where it stopped.
+                              stop the run after this long (exit 124, resumable); 0: no limit
+                                Give every unattended run one; a stopped object-store run resumes
+                                where it stopped.
       --stall-timeout DURATION
-                             stop as stuck after this long without progress (exit 75) (default 10m)
-                               0: never. Raise it for a service that is slow to answer for minutes
-                               at a time.
+                              stop as stuck after this long without progress (exit 75) (default 10m)
+                                0: never. Raise it for a service that is slow to answer for minutes
+                                at a time.
       --request-timeout DURATION
-                             per-request timeout; a request over it is retried (default 30s)
-                               Raise it for a slow endpoint or emulator whose pages take longer to
-                               answer.
-      --request-rate N       cap every HTTP attempt at N per second (0: no cap)
-                               Set it to stay under a request quota shared with other clients.
-                               Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit    turn off the adaptive concurrency limit that throttle answers lower
-                               Turn it off (with --request-rate) when a run crawls under sustained
-                               throttling with the limit near 1. Without it each of the --workers
-                               listing workers waits on one page at a time, and seed listings and
-                               structure probes run beside them.
+                              per-request timeout; a request over it is retried (default 30s)
+                                Raise it for a slow endpoint or emulator whose pages take longer to
+                                answer.
+      --request-rate N        cap every HTTP attempt at N per second (0: no cap)
+                                Set it to stay under a request quota shared with other clients.
+                                Refused when the spacing exceeds half --stall-timeout.
+      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+                                Turn it off (with --request-rate) when a run crawls under sustained
+                                throttling with the limit near 1. Without it each of the --workers
+                                listing workers waits on one page at a time, and seed listings and
+                                structure probes run beside them.
 
 Reporting:
-      --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
-                               Written on failure too, with the outcome and the attempt id. - is
-                               refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
-  -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
-                               With -qq the exit code and the reports stand alone.
-      --progress             print live progress on stderr (default: on a terminal, without -q, -v)
-      --no-progress          no live progress on stderr
+      --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
+                                Written on failure too, with the outcome and the attempt id. - is
+                                refused where stdout carries rows.
+  -v, --verbose               a start line, progress records; -vv, -vvv: the request log
+                                -vv adds each failed request and retry with its cause, -vvv every
+                                request (credentials and tokens redacted).
+  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+                                With -qq the exit code and the reports stand alone.
+      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --no-progress           no live progress on stderr
       --progress-interval DURATION
-                             how often progress is printed (at least 1s); implies --progress
-                               Default 1s while the line redraws on a terminal, 30s for appended
-                               records.
-      --stats                print the end-of-run statistics on stderr
-                               Default: for runs over 1.5 s, runs that write output, and runs that
-                               do not complete; not with -q, nor after a closed downstream pipe.
-      --no-stats             no end-of-run statistics on stderr
+                              how often progress is printed (at least 1s); implies --progress
+                                Default 1s while the line redraws on a terminal, 30s for appended
+                                records.
+      --stats                 print the end-of-run statistics on stderr
+                                Default: for runs over 1.5 s, runs that write output, and runs that
+                                do not complete; not with -q, nor after a closed downstream pipe.
+      --no-stats              no end-of-run statistics on stderr
       --color auto|always|never
-                             color the progress line, the statistics and the help (default auto)
-                               auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
-                               forces it.
+                              color the progress line, the statistics and the help (default auto)
+                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
+                                forces it.
+      --log-format text|json  stderr as text, or json: one JSON object per line (default text)
+                                json: warnings, the start line, progress records, the request log
+                                and the outcome as events, no redrawn line or statistics block.
 
 swath resume --help lists the options a resume may change.
 Profiling: SWATH_CPUPROFILE=FILE and SWATH_MEMPROFILE=FILE.
@@ -517,164 +529,171 @@ Examples:
   swath diag count s3://bucket/logs/ --sequential
 
 Filters:
-      --include GLOB         keep keys this glob matches (repeatable: any of them)
-                               Matched against the key below SOURCE: with a '/' from SOURCE's root
-                               (logs/*.gz), without one the last segment at any depth (*.gz). * and
-                               ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
-                               \c. Includes sharing a literal prefix narrow the listed prefix.
-      --exclude GLOB         drop keys this glob matches (repeatable; beats any include)
-      --include-regex REGEX  keep keys in which this regex (Go RE2) matches anywhere (repeatable)
-                               Any include, glob or regex, keeps a key. ^ with a literal prefix
-                               narrows the listed prefix as a glob's does.
-      --exclude-regex REGEX  drop keys in which this regex (Go RE2) matches anywhere (repeatable)
-      --min-size SIZE        keep objects (local: entries) of at least this size (1K, 1.5GiB)
-                               Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
-                               KB, MB, GB, TB (decimal), any case.
-      --max-size SIZE        keep objects or entries of at most this size
-      --modified-since TIME  keep objects or entries modified at or after TIME (2026-01-01, 7d)
-                               An offset or Z; UTC without one. A duration (7d, 12h) is that long
-                               before the run started, recorded as the time it names.
-      --modified-until TIME  keep objects or entries modified at or before this time
-      --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
-                               In any case; an object without one is in none. Azure Blob: the access
-                               tier (Hot, Cool, Cold, Archive).
+      --include GLOB          keep keys this glob matches (repeatable: any of them)
+                                Matched against the key below SOURCE: with a '/' from SOURCE's root
+                                (logs/*.gz), without one the last segment at any depth (*.gz). * and
+                                ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b},
+                                \c. Includes sharing a literal prefix narrow the listed prefix.
+      --exclude GLOB          drop keys this glob matches (repeatable; beats any include)
+      --include-regex REGEX   keep keys in which this regex (Go RE2) matches anywhere (repeatable)
+                                Any include, glob or regex, keeps a key. ^ with a literal prefix
+                                narrows the listed prefix as a glob's does.
+      --exclude-regex REGEX   drop keys in which this regex (Go RE2) matches anywhere (repeatable)
+      --min-size SIZE         keep objects (local: entries) of at least this size (1K, 1.5GiB)
+                                Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or
+                                KB, MB, GB, TB (decimal), any case.
+      --max-size SIZE         keep objects or entries of at most this size
+      --modified-since TIME   keep objects or entries modified at or after TIME (2026-01-01, 7d)
+                                An offset or Z; UTC without one. A duration (7d, 12h) is that long
+                                before the run started, recorded as the time it names.
+      --modified-until TIME   keep objects or entries modified at or before this time
+      --storage-class NAME    keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                                In any case; an object without one is in none. Azure Blob: the
+                                access tier (Hot, Cool, Cold, Archive).
 
 Object stores:
-      --anonymous            send no credentials (a public bucket or container)
-                               Ignores any configured. Without it a source with no usable
-                               credentials fails (auth) before listing.
-      --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style; default
-                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
-                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
-                               then its first path segment (Azurite). Part of the resume identity.
-      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
-                               For a service behind a private certificate authority. S3: default
-                               AWS_CA_BUNDLE.
-      --no-verify-ssl        do not verify the service's TLS certificate (warns)
-                               For a test endpoint only. A resume replays it, and warns again.
-      --all-versions         list every version of every key, not only the current objects
-                               S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
-                               generations, live and noncurrent. A key's rows are consecutive and
-                               never split across parts.
+      --anonymous             send no credentials (a public bucket or container)
+                                Ignores any configured. Without it a source with no usable
+                                credentials fails (auth) before listing.
+      --endpoint-url URL      the service URL in place of the provider's own (emulators, MinIO)
+                                S3: path-style addressing unless --no-s3-path-style; default
+                                AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                                URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                                then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE        trust the certificates in this PEM file besides the system's
+                                For a service behind a private certificate authority. S3: default
+                                AWS_CA_BUNDLE.
+      --no-verify-ssl         do not verify the service's TLS certificate (warns)
+                                For a test endpoint only. A resume replays it, and warns again.
+      --all-versions          list every version of every key, not only the current objects
+                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
+                                generations, live and noncurrent. A key's rows are consecutive and
+                                never split across parts.
 
 S3:
-      --s3-region NAME       the bucket's region
-                               Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
-                               us-east-1.
-      --s3-profile NAME      the shared config profile to take credentials and region from
-                               Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO,
-                               web identity, IMDS).
-      --s3-requester-pays    accept the request charges of a requester-pays bucket
-      --s3-path-style        address the bucket in the path (default with --endpoint-url)
-      --no-s3-path-style     address the bucket in the host name, also with --endpoint-url
+      --s3-region NAME        the bucket's region
+                                Default: AWS_REGION, AWS_DEFAULT_REGION, the profile's, else
+                                us-east-1.
+      --s3-profile NAME       the shared config profile to take credentials and region from
+                                Default: the AWS SDK chain (environment, AWS_PROFILE or default,
+                                SSO, web identity, IMDS).
+      --s3-requester-pays     accept the request charges of a requester-pays bucket
+      --s3-path-style         address the bucket in the path (default with --endpoint-url)
+      --no-s3-path-style      address the bucket in the host name, also with --endpoint-url
       --s3-bearer-token-command COMMAND
-                             a shell command printing a bearer token, sent instead of SigV4
-                               For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
-                               swath resume needs it again.
+                              a shell command printing a bearer token, sent instead of SigV4
+                                For GCS's XML API: 'gcloud auth print-access-token'. Never recorded:
+                                swath resume needs it again.
       --s3-bearer-token-refresh-interval DURATION
-                             run --s3-bearer-token-command again after this long (default 45m)
-      --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
-                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
-                               would select nothing.
-      --s3-dualstack         use the dual-stack (IPv6) endpoint
-                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
-                               where it would select nothing.
-      --s3-fetch-owner       fill owner_id and owner_display_name
+                              run --s3-bearer-token-command again after this long (default 45m)
+      --s3-fips               use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                                Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where
+                                it would select nothing.
+      --s3-dualstack          use the dual-stack (IPv6) endpoint
+                                Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                                where it would select nothing.
+      --s3-fetch-owner        fill owner_id and owner_display_name
 
 GCS:
       --gcs-credentials-file FILE
-                             a service-account or authorized-user JSON file (default: ADC)
-                               Without it, Application Default Credentials.
+                              a service-account or authorized-user JSON file (default: ADC)
+                                Without it, Application Default Credentials.
       --gcs-billing-project NAME
-                             bill a requester-pays bucket's requests to this project
+                              bill a requester-pays bucket's requests to this project
 
 Azure Blob:
       --azure-sas-token TOKEN
-                             a shared access signature (a query string); never recorded
-                               Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
-                               none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra ID
-                               (DefaultAzureCredential). Give it again to swath resume.
-      --azure-assume-flat    assume a flat namespace where the account will not tell
-                               For when Get Account Information and the Data Lake host's Filesystem
-                               Get Properties are both refused or silent; a hierarchical namespace
-                               they report still refuses. Frozen for resume and shown in the report.
+                              a shared access signature (a query string); never recorded
+                                Else a SAS in the source's query, else AZURE_STORAGE_SAS_TOKEN; with
+                                none, an account key in AZURE_STORAGE_KEY (Shared Key), else Entra
+                                ID (DefaultAzureCredential). Give it again to swath resume.
+      --azure-assume-flat     assume a flat namespace where the account will not tell
+                                For when Get Account Information and the Data Lake host's Filesystem
+                                Get Properties are both refused or silent; a hierarchical namespace
+                                they report still refuses. Frozen for resume and shown in the
+                                report.
 
 Local:
       --metadata names|stat|statx
-                             what is read per entry (statx adds birth_time; Linux) (default stat)
-      --no-dirs              omit the directories' rows (kind DIR)
-      --no-link-target       do not read symbolic links' targets
-      --one-file-system      do not walk into a mount point below the root, as du -x
+                              what is read per entry (statx adds birth_time; Linux) (default stat)
+      --no-dirs               omit the directories' rows (kind DIR)
+      --no-link-target        do not read symbolic links' targets
+      --one-file-system       do not walk into a mount point below the root, as du -x
 
 Performance:
-  -j, --workers N            listing workers (default 64; a local tree: 4 per CPU, at most 64)
-                               Raise it (128, 256) for a large listing the service does not
-                               throttle: listing waits on round trips, not the CPU; lower it when it
-                               throttles at the default.
-      --seed-from PATH       start from a previous listing's key distribution, not the seed
-                               A committed dataset of the same source and scope, or a cut file (one
-                               key per line, ascending bytewise, optionally TAB and the keys
-                               expected up to it); the engine still splits adaptively.
+  -j, --workers N             listing workers (default 64; a local tree: 4 per CPU, at most 64)
+                                Raise it (128, 256) for a large listing the service does not
+                                throttle: listing waits on round trips, not the CPU; lower it when
+                                it throttles at the default.
+      --seed-from PATH        start from a previous listing's key distribution, not the seed
+                                A committed dataset of the same source and scope, or a cut file (one
+                                key per line, ascending bytewise, optionally TAB and the keys
+                                expected up to it); the engine still splits adaptively.
 
 Limits:
       --max-duration DURATION
-                             stop the run after this long (exit 124, resumable); 0: no limit
-                               Give every unattended run one; a stopped object-store run resumes
-                               where it stopped.
+                              stop the run after this long (exit 124, resumable); 0: no limit
+                                Give every unattended run one; a stopped object-store run resumes
+                                where it stopped.
       --stall-timeout DURATION
-                             stop as stuck after this long without progress (exit 75) (default 10m)
-                               0: never. Raise it for a service that is slow to answer for minutes
-                               at a time.
+                              stop as stuck after this long without progress (exit 75) (default 10m)
+                                0: never. Raise it for a service that is slow to answer for minutes
+                                at a time.
       --request-timeout DURATION
-                             per-request timeout; a request over it is retried (default 30s)
-                               Raise it for a slow endpoint or emulator whose pages take longer to
-                               answer.
-      --request-rate N       cap every HTTP attempt at N per second (0: no cap)
-                               Set it to stay under a request quota shared with other clients.
-                               Refused when the spacing exceeds half --stall-timeout.
-      --no-adaptive-limit    turn off the adaptive concurrency limit that throttle answers lower
-                               Turn it off (with --request-rate) when a run crawls under sustained
-                               throttling with the limit near 1. Without it each of the --workers
-                               listing workers waits on one page at a time, and seed listings and
-                               structure probes run beside them.
+                              per-request timeout; a request over it is retried (default 30s)
+                                Raise it for a slow endpoint or emulator whose pages take longer to
+                                answer.
+      --request-rate N        cap every HTTP attempt at N per second (0: no cap)
+                                Set it to stay under a request quota shared with other clients.
+                                Refused when the spacing exceeds half --stall-timeout.
+      --no-adaptive-limit     turn off the adaptive concurrency limit that throttle answers lower
+                                Turn it off (with --request-rate) when a run crawls under sustained
+                                throttling with the limit near 1. Without it each of the --workers
+                                listing workers waits on one page at a time, and seed listings and
+                                structure probes run beside them.
 
 Reporting:
-      --report FILE          write the run report (JSON) to FILE, or - for stdout, at the end
-                               Written on failure too, with the outcome and the attempt id. - is
-                               refused where stdout carries rows.
-  -v, --verbose              a start line, and progress as appended records
-  -q, --quiet                no warnings, no automatic progress or statistics (-qq: no errors)
-                               With -qq the exit code and the reports stand alone.
-      --progress             print live progress on stderr (default: on a terminal, without -q, -v)
-      --no-progress          no live progress on stderr
+      --report FILE           write the run report (JSON) to FILE, or - for stdout, at the end
+                                Written on failure too, with the outcome and the attempt id. - is
+                                refused where stdout carries rows.
+  -v, --verbose               a start line, progress records; -vv, -vvv: the request log
+                                -vv adds each failed request and retry with its cause, -vvv every
+                                request (credentials and tokens redacted).
+  -q, --quiet                 no warnings, no automatic progress or statistics (-qq: no errors)
+                                With -qq the exit code and the reports stand alone.
+      --progress              print live progress on stderr (default: on a terminal, without -q, -v)
+      --no-progress           no live progress on stderr
       --progress-interval DURATION
-                             how often progress is printed (at least 1s); implies --progress
-                               Default 1s while the line redraws on a terminal, 30s for appended
-                               records.
-      --stats                print the end-of-run statistics on stderr
-                               Default: for runs over 1.5 s, runs that write output, and runs that
-                               do not complete; not with -q, nor after a closed downstream pipe.
-      --no-stats             no end-of-run statistics on stderr
+                              how often progress is printed (at least 1s); implies --progress
+                                Default 1s while the line redraws on a terminal, 30s for appended
+                                records.
+      --stats                 print the end-of-run statistics on stderr
+                                Default: for runs over 1.5 s, runs that write output, and runs that
+                                do not complete; not with -q, nor after a closed downstream pipe.
+      --no-stats              no end-of-run statistics on stderr
       --color auto|always|never
-                             color the progress line, the statistics and the help (default auto)
-                               auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
-                               forces it.
+                              color the progress line, the statistics and the help (default auto)
+                                auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE
+                                forces it.
+      --log-format text|json  stderr as text, or json: one JSON object per line (default text)
+                                json: warnings, the start line, progress records, the request log
+                                and the outcome as events, no redrawn line or statistics block.
 
 Diagnostics:
       --adaptive-limit-slow-start
-                             start the limit at 4 in flight, doubling each second to --workers
-      --no-seed              start from one range, without the delimiter-listing seed
+                              start the limit at 4 in flight, doubling each second to --workers
+      --no-seed               start from one range, without the delimiter-listing seed
       --structure[=auto|on|off]
-                             probes whose folder boundaries splits pivot on (default auto)
-                               The bare flag is on, so a mode needs '='. auto probes on the open
-                               frontier while its cursor is in a folder, and in bounded ranges whose
-                               chain stays inside one folder; on probes every range in a folder.
-      --slow-split           split a range whose pages are slow without waiting for an idle worker
-      --floors               never split a range of 4 pages or fewer, nor leave a child under 2
-      --sequential           list with one continuation-token chain (no ranges; the reference)
-      --max-keys N           with --sequential, stop after N objects (marked incomplete)
-      --page-size N          ask for pages of N entries (1 to 1000; default the provider's)
+                              probes whose folder boundaries splits pivot on (default auto)
+                                The bare flag is on, so a mode needs '='. auto probes on the open
+                                frontier while its cursor is in a folder, and in bounded ranges
+                                whose chain stays inside one folder; on probes every range in a
+                                folder.
+      --slow-split            split a range whose pages are slow without waiting for an idle worker
+      --floors                never split a range of 4 pages or fewer, nor leave a child under 2
+      --sequential            list with one continuation-token chain (no ranges; the reference)
+      --max-keys N            with --sequential, stop after N objects (marked incomplete)
+      --page-size N           ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- flags:end -->
 
@@ -1067,9 +1086,16 @@ table changes.
   `error.json` unchanged) and the dataset still uncommitted once it holds the lock. An attempt that cannot
   record it (another process owns the output, whose outcome stands; another process completed or replaced the
   run first; a refusal that leaves the directory as it was, such as a directory without a
-  journal, where nothing is created, or an unusable output; a failed write) prints it on stderr as one line, `swath: outcome: {...}`, after the
-  reason; the JSON report carries the reason as `outcome.unrecorded`, which is never empty when the outcome is
-  not in `error.json`.
+  journal, where nothing is created, or an unusable output; a failed write) warns of it on stderr with the
+  reason (with `-v` only for a one-line failure, below); the JSON report carries the reason as
+  `outcome.unrecorded`, which is never empty when the outcome is not in `error.json`. The outcome as one JSON
+  line on stderr, `swath: outcome: {...}` before the error line, comes with `-v`; under `--log-format json`
+  it is the `outcome` event (Log events).
+  A refusal or usage error (exit 2), and a failure before any listing request was answered or directory read
+  (a missing directory or bucket, credentials that do not load), print one line on stderr, `swath: MESSAGE`
+  (`swath: nosuchdir: no such file or directory`), and nothing else: no statistics, no `INCOMPLETE`; a usage
+  error adds its `See 'swath CMD --help'.` hint. A stop (a signal, `--max-duration`, `--stall-timeout`, a full
+  disk) and a failure after requests were answered keep the statistics. `--stats` still prints them.
 
   | Code | Class | Meaning | Resumable |
   |---|---|---|---|
@@ -1167,16 +1193,65 @@ table changes.
   bytes written and the peak RSS, every size in binary units (`3.7 KiB`, as the tables). Without `--stats` it is printed
   for a run over 1.5 s, a run that wrote parts, and a run that did not complete; not with `-q`, not after a
   closed stdout reader; `--no-stats` never. stdout carries rows or nothing: outside `swath diag count` no
-  account is printed there (a program reads `--report`). `-v` (`-vv`, `-vvv`: the same;
-  Go has no finer log levels) prints a start line and shows progress as appended records; `-q` drops warnings
-  and the automatic progress and statistics; `-qq` also drops the final error line (the exit code, `error.json`
-  and `--report` stand). `--color auto|always|never` colors the progress line and the statistics (headline
-  cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless `NO_COLOR` is set and not empty or
-  `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width: `golang.org/x/term`.
+  account is printed there (a program reads `--report`). Verbosity: by default
+  stderr carries warnings and errors; `-v` adds a start line saying where the rows go (`swath: listing SOURCE
+  to stdout`, `to DIR`, `to FILE`, `as totals`, `as a count`, with the attempt id) and shows progress as
+  appended records (not when stdout is a terminal that carries rows, unless `--progress` is given, as for the
+  automatic line); `-vv` adds each failed request (no answer, or a status of 400 or more) and each failed
+  attempt of the retry loop (retried, throttled, or the last) with its cause; `-vvv` every request
+  (method, host, path and query with every value but the listing's own parameters, such as `prefix`,
+  redacted, so no SAS, token or credential, then status and latency). `-q` drops warnings and the automatic
+  progress and statistics; `-qq` also drops the final error line (the exit code, `error.json` and `--report`
+  stand). Without `-v`, a request failure that persists is shown: when requests have failed with one
+  transport or service cause (a connection refused, a 503) for 10 s with none answered, one warning names
+  the provider, the endpoint host and the cause (`swath: warning: S3 127.0.0.1:9: connection refused
+  (retrying; 14 attempts)`), and again at most once a minute while it lasts; a run that then ends stuck or
+  at its deadline names the cause in its final error line, and `requests.failure_warnings` in the report
+  counts the warnings. A local listing that could not read entries names up to five of them with their cause,
+  then the count of the rest, and still exits 0; the report's `outcome.unreadable` is then true. On Unix,
+  SIGUSR1 (and SIGINFO, Ctrl-T, on macOS and the BSDs) prints one progress record on stderr in the log
+  format, whatever the progress settings (as GNU dd). `--color auto|always|never` colors the progress line
+  and the statistics (headline cyan, the rest dim, `INCOMPLETE` red): auto is on for a terminal unless
+  `NO_COLOR` is set and not empty or `TERM=dumb`, and `CLICOLOR_FORCE` forces it. TTY detection and width:
+  `golang.org/x/term`.
+- **Log format.** `--log-format text|json` (before or after the command word, and again on `swath resume`)
+  chooses how those lines are written: `text`, the prose above; `json`, one JSON object per line and nothing
+  else, no colour, no redrawn line and no statistics block (the `outcome` event and `--report` stand for it),
+  with progress records appended at `--progress-interval` (30 s by default) whether or not stderr is a
+  terminal, under `-v` or `--progress`. The verbosity flags gate the events as they gate the text, except
+  the `outcome` event, which ends every run and every failure unless `-qq` is given.
 - **Environment:** `SWATH_CPUPROFILE` and `SWATH_MEMPROFILE` name pprof output files;
   `SWATH_LOCALFS_ENGINE=portable` selects the portable filesystem engine; `SWATH_SPLIT_TRACE` traces range-engine splits on stderr, one line per split (range id,
   bounds, cursor, pivot, keys listed, the pivot's source, the children's depth, the range's gallop generation
   and the anchor its upper child carries).
+
+## Log events
+
+Under `--log-format json` each stderr line is one object: `ts` (RFC 3339, UTC, milliseconds), `level`
+(`debug`, `info`, `warn`, `error`), `event`, `attempt` (the attempt id, once a run has one), `msg` (the text
+line's words), then the event's fields:
+
+| Event | Level | Fields |
+|---|---|---|
+| `start` | `info` (`-v`) | `source`, `to` (where the rows go) |
+| `progress` | `info` | the progress snapshot's fields, as `.swath/progress.json` has them (`rows`, `requests`, `duration_ms`, ...) |
+| `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
+| `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (redacted as above), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
+| `retry` | `debug` (`-vv`) | `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
+| `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error) |
+
+Pinned by `TestEventGolden` (`UPDATE=1 go test ./cmd/swath` rewrites this block):
+
+<!-- events:begin -->
+```json
+{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","to":"to stdout"}
+{"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"progress","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing · 120,000 objects · 2,000 keys/s (avg 2,000)","rows":120000,"ordered":0,"encoded":0,"parts":0,"verified_bytes":0,"advance":120000,"answered":121,"frontier":121,"empty_chain_pages":0,"throttles":0,"timeouts":0,"rows_retained":0,"requests":122,"retries":1,"inflight":8,"limit":64,"mutex_wait_ms":0,"mutex_max_hold_ms":0,"started_at":"2026-11-10T11:59:00Z","as_of":"2026-11-10T12:00:00Z","duration_ms":60000,"part_age_ms":60000}
+{"ts":"2026-11-10T12:00:00.000Z","level":"warn","event":"warning","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"S3 127.0.0.1:9: connection refused (retrying; 11 attempts)","host":"127.0.0.1:9","cause":"connection refused","attempts":11}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","status":200,"latency_ms":42}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
+{"ts":"2026-11-10T12:00:00.000Z","level":"error","event":"outcome","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
+```
+<!-- events:end -->
 
 ## Run report
 
@@ -1196,7 +1271,7 @@ never zero.
 | `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (secret flags and endpoint values carrying user information `[redacted]`), `source` (the root, narrowed by the includes' literal prefix on S3 and GCS), `narrowing` (with includes: `narrowed`, or why not, **Filters** above), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
-| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
+| `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `unreadable` (some entries could not be read: the rows and totals leave them out, exit 0), `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |
 | `args_hash` | SHA-256 over the run's frozen identity (tool, format, schema, key cap, writer, part size, row bound, provider, the source's identity fields such as bucket, prefix, route and region, and the filters): the same for a run and its resumes, never a credential, not equal to Java's (which covered the scope only) |
 
 **Timings** (`timings`). `started_at` is the run's start (after the command line was read), `finished_at` its
@@ -1246,7 +1321,7 @@ violations; caller cancellation keeps its stop disposition.
 is the one request count: every counted HTTP attempt (pages, probes, client retries, engine requeues).
 `retries` counts retry-loop repetitions, `throttles` counts throttle failures and `timeouts` counts
 timeout failures. Credential waits can fail before HTTP accounting starts, so `retries` and `timeouts`
-can increase with zero `http_attempts`; they are not subsets of the HTTP count. See
+can increase with zero `http_attempts`; they are not subsets of the HTTP count. `failure_warnings` counts the persistent-failure warnings printed on stderr (Terminal). See
 [retry accounting](internals/clients.md#retry-policy-and-accounting). `cost_usd` is `http_attempts` at `basis` `rate_per_1k_usd` (0.005, `basis` `source`
 `aws-list-reference-rate` for AWS S3, `gcs-class-a-reference-rate` for GCS's own endpoint, however
 `--endpoint-url` spells it); both `null` on a
