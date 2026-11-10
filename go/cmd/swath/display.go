@@ -482,7 +482,7 @@ func (c *stderrCoord) Write(p []byte) (int, error) {
 	if c.line != "" {
 		s = "\r" + eraseLine + s + c.line
 	}
-	note(c.w, s)
+	noteKept(c.w, s) // the other writers' lines (warnings among them), around the progress line
 	return len(p), nil
 }
 
@@ -623,7 +623,7 @@ func writeStats(w io.Writer, lines []string, pal palette, hasDisposition bool) {
 		}
 		b.WriteString(indent + s + "\n")
 	}
-	note(w, b.String())
+	noteKept(w, b.String()) // the run's account, which an INCOMPLETE run needs read
 }
 
 // termUI is one run's stderr surface: the progress display (nil when

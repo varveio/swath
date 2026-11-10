@@ -106,15 +106,19 @@ func (l *eventLog) warn(msg string) { l.event(lvWarn, evWarning, msg, nil) }
 // print writes an event: in text "swath: MSG" ("swath: warning: MSG" for
 // a warning), in json its object (line).
 func (l *eventLog) print(level, event, msg string, fields any) {
+	send := note
+	if level == lvWarn || level == lvError {
+		send = noteKept // a warning or an error outlasts the request log
+	}
 	if l.json {
-		note(errOut, l.line(level, event, msg, fields))
+		send(errOut, l.line(level, event, msg, fields))
 		return
 	}
 	p := "swath: "
 	if level == lvWarn {
 		p += "warning: "
 	}
-	note(errOut, p+msg+"\n")
+	send(errOut, p+msg+"\n")
 }
 
 // line is an event as one JSON object: ts, level, event, attempt, msg,
@@ -541,9 +545,9 @@ func reportUnreadable(r *listing.Report, du bool) {
 	}
 	l.warn(msg)
 	for _, s := range samples {
-		note(errOut, indent+s+"\n")
+		noteKept(errOut, indent+s+"\n")
 	}
 	if rest := n - int64(len(samples)); rest > 0 && len(samples) > 0 {
-		note(errOut, indent+"and "+count(rest)+" more (the report's source counters say why)\n")
+		noteKept(errOut, indent+"and "+count(rest)+" more (the report's source counters say why)\n")
 	}
 }

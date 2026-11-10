@@ -361,11 +361,25 @@ const diagQueue = 256
 // requests.log_dropped).
 var dropped atomic.Int64
 
+// lineClass is what a stderr line may become when stderr does not drain.
+type lineClass uint8
+
+const (
+	// disposable: progress records and the request log (-vv, -vvv),
+	// dropped first.
+	disposable lineClass = iota
+	// kept: warnings and errors, which a reader needs: never dropped for
+	// the queue's bound, and written before the outcome.
+	kept
+	// final: the command's last lines (its outcome).
+	final
+)
+
 // diagLine is a line waiting for its writer; done closes once it is
 // written.
 type diagLine struct {
 	s     string
-	final bool
+	class lineClass
 	done  chan struct{}
 }
 
@@ -382,20 +396,39 @@ var (
 	diagSinks = map[io.Writer]*diagSink{}
 )
 
-// note writes s to w, through w's one writer goroutine, waiting at most
-// diagWait. While a write to w is stuck, lines queue without waiting; past
-// diagQueue of them they are dropped. A queued line is lost at exit.
-func note(w io.Writer, s string) { send(w, s, false) }
+// note writes s, a disposable line, to w through w's one writer
+// goroutine, waiting at most diagWait. While a write to w is stuck, lines
+// queue without waiting; past diagQueue of them a disposable one is
+// dropped. A queued line is lost at exit.
+func note(w io.Writer, s string) { send(w, s, disposable) }
 
-// noteFinal is note for a command's last lines (its outcome): they go
-// before every queued line, which is dropped (counted: the backlog of a
-// slow reader must not hold the outcome past its wait, and the process
-// exits after it), and are waited for (at most diagWait) even while a
-// write is stuck.
-func noteFinal(w io.Writer, s string) { send(w, s, true) }
+// noteKept is note for a warning or an error: queued past diagQueue too.
+func noteKept(w io.Writer, s string) { send(w, s, kept) }
 
-func send(w io.Writer, s string, final bool) {
-	l := diagLine{s, final, make(chan struct{})}
+// noteFinal is note for a command's last lines (its outcome). The queued
+// disposable lines are dropped (counted) so that a slow reader's backlog
+// does not hold the outcome past its wait (the process exits after it);
+// the kept ones are written before it, within its wait, and dropped
+// (counted) if that wait ends first, when the outcome gets one more.
+func noteFinal(w io.Writer, s string) { send(w, s, final) }
+
+// shed drops k's queued lines below class keep (diagMu held), counted.
+func (k *diagSink) shed(keep lineClass) {
+	q := k.queue[:0]
+	for _, l := range k.queue {
+		if l.class >= keep {
+			q = append(q, l)
+		} else {
+			dropped.Add(1)
+			close(l.done)
+		}
+	}
+	clear(k.queue[len(q):])
+	k.queue = q
+}
+
+func send(w io.Writer, s string, class lineClass) {
+	l := diagLine{s, class, make(chan struct{})}
 	diagMu.Lock()
 	k := diagSinks[w]
 	if k == nil {
@@ -404,38 +437,39 @@ func send(w io.Writer, s string, final bool) {
 		go drain(w, k)
 	}
 	full, stuck := len(k.queue) >= diagQueue, k.stuck
-	if final {
-		kept := k.queue[:0]
-		for _, q := range k.queue {
-			if q.final {
-				kept = append(kept, q)
-			} else {
-				dropped.Add(1)
-				close(q.done)
-			}
-		}
-		clear(k.queue[len(kept):])
-		k.queue = kept
+	if class == final {
+		k.shed(kept)
 	}
-	if !full || final {
+	if !full || class != disposable {
 		k.queue = append(k.queue, l)
 	}
 	diagMu.Unlock()
 	switch {
-	case full && !final:
+	case full && class == disposable:
 		dropped.Add(1)
 		return
-	case stuck && !final:
+	case stuck && class != final:
 		return
 	}
 	t := time.NewTimer(diagWait)
 	defer t.Stop()
 	select {
 	case <-l.done:
+		return
 	case <-t.C:
-		diagMu.Lock()
-		k.stuck = true
-		diagMu.Unlock()
+	}
+	diagMu.Lock()
+	k.stuck = true
+	if class == final {
+		k.shed(final)
+	}
+	diagMu.Unlock()
+	if class == final {
+		t.Reset(diagWait)
+		select {
+		case <-l.done:
+		case <-t.C:
+		}
 	}
 }
 

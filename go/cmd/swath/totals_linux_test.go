@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -372,5 +373,61 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 		if err := runDu(context.Background(), []string{root, "--format=tsv", q}, &out); err != nil || stderr.Len() != 0 {
 			t.Fatalf("%s: %v, stderr %q", q, err, stderr.String())
 		}
+	}
+}
+
+// gatedWriter is a stderr pipe that is full: writes wait until open
+// closes, then go through.
+type gatedWriter struct {
+	open chan struct{}
+	mu   sync.Mutex
+	b    bytes.Buffer
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	<-g.open
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.b.Write(p)
+}
+
+// TestWarningOutlastsBacklog: with stderr full while a du run with an
+// unreadable entry ends, and drained once its report is written, the
+// "could not be read" warning and the outcome both arrive, in that order:
+// the outcome's priority drops the disposable lines only.
+func TestWarningOutlastsBacklog(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory of mode 000")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(filepath.Join(locked, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	g := &gatedWriter{open: make(chan struct{})}
+	errOut = g
+	t.Cleanup(func() { errOut = os.Stderr; logs.Store(nil) })
+	report := filepath.Join(t.TempDir(), "report.json")
+	go func() {
+		for {
+			if _, err := os.Stat(report); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(10 * time.Millisecond)
+		close(g.open)
+	}()
+	conclude(runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress", "-v", "--log-format=json", "--report", report}, io.Discard))
+	g.mu.Lock()
+	got := g.b.String()
+	g.mu.Unlock()
+	w, o := strings.Index(got, "could not be read"), strings.Index(got, `"event":"outcome"`)
+	if w < 0 || o < 0 || w > o {
+		t.Fatalf("stderr %q", got)
 	}
 }

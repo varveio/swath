@@ -1277,8 +1277,9 @@ table changes.
   `outcome.error` (and so does one that ends so with no request ever answered, however short it was), and `requests.failure_warnings` in the report
   counts the warnings. A stderr that does not drain never holds the run: a line waits at most 250 ms, later
   ones queue (up to 256) without waiting while the write is stuck and are then dropped, counted in
-  `requests.log_dropped`; the final outcome and error lines go before every queued line, which is dropped (counted), and get their own
-  250 ms. A local listing that could not read entries names up to five of them with their cause,
+  `requests.log_dropped`; warnings, errors and the statistics are never dropped for that bound; the final outcome and error lines go
+  before the queued request log and progress records, which are dropped (counted), after the queued warnings,
+  within their own 250 ms (past it the warnings left are dropped, counted, and the outcome gets 250 ms more). A local listing that could not read entries names up to five of them with their cause,
   then the count of the rest, and still exits 0; the report's `outcome.unreadable` is then true. On Unix,
   SIGUSR1 (and SIGINFO, Ctrl-T, on macOS and the BSDs) prints one progress record on stderr in the log
   format, whatever the progress settings (as GNU dd). `--color auto|always|never` colors the progress line

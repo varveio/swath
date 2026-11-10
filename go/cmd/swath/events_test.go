@@ -437,7 +437,8 @@ func (b blockedWriter) Write(p []byte) (int, error) {
 // work. Thousands of request events from many goroutines leave one writer
 // goroutine and at most the queue's lines, the rest dropped and counted;
 // only the first event waits (diagWait), and the outcome line still gets
-// its bounded attempt.
+// its bounded attempt (two waits: before and after the kept lines ahead
+// of it are shed).
 func TestBlockedStderrBounded(t *testing.T) {
 	b := blockedWriter{make(chan struct{})}
 	errOut = b
@@ -468,8 +469,9 @@ func TestBlockedStderrBounded(t *testing.T) {
 	}
 	start = time.Now()
 	conclude(errors.New("boom"))
-	if d := time.Since(start); d < diagWait || d > 2*diagWait {
-		t.Errorf("the outcome line waited %s, want its own diagWait", d)
+	// Its wait, then one more once the kept lines ahead of it are shed.
+	if d := time.Since(start); d < 2*diagWait || d > 3*diagWait {
+		t.Errorf("the outcome line waited %s, want two diagWaits", d)
 	}
 }
 
