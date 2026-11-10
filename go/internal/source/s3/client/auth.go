@@ -4,15 +4,15 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
@@ -55,14 +55,15 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
-	if cfg.Trust.CABundle != "" {
-		// The bundle the listing trusts (--ca-bundle over AWS_CA_BUNDLE)
-		// is the credential chain's too.
-		pem, err := os.ReadFile(cfg.Trust.CABundle)
-		if err != nil {
-			return nil, source.Unsupported(fmt.Errorf("CA bundle: %w", err))
-		}
-		opts = append(opts, config.WithCustomCABundle(bytes.NewReader(pem)))
+	// The trust the listing has (--ca-bundle over AWS_CA_BUNDLE,
+	// --no-verify-ssl) is the credential chain's too: STS, SSO, web
+	// identity.
+	tc, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
+	}
+	if tc != nil {
+		opts = append(opts, config.WithHTTPClient(awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) { t.TLSClientConfig = tc })))
 	}
 	// The bucket's region (--s3-region) is the signing region only. The
 	// credential chain (STS for web identity and assumed roles) keeps the

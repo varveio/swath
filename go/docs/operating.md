@@ -70,7 +70,8 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
   `AWS_USE_FIPS_ENDPOINT`, `AWS_USE_DUALSTACK_ENDPOINT`); S3-compatible stores: `--endpoint-url URL`, else
   `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` (not with `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true`), addressed
   path-style unless `--no-s3-path-style`. FIPS or dual-stack with a custom endpoint is refused (exit 2).
-  `AWS_CA_BUNDLE` is the CA bundle when `--ca-bundle` is not given.
+  `AWS_CA_BUNDLE` is the CA bundle when `--ca-bundle` is not given. The CA bundle and `--no-verify-ssl` apply to
+  the credential chain (STS, SSO, web identity) as to the listing.
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
   `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
   (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
