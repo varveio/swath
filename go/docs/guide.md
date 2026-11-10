@@ -48,8 +48,7 @@ swath list s3://bucket/prefix/ -o objects.tsv.zst
 
 Replace `bucket/prefix/` with your source and configure the appropriate credentials.
 Cloud listings make provider requests and may incur charges. `du` does not write an
-inventory. Text listing is available for object stores; local `list` requires a dataset
-destination. Filters select the output, and do not generally eliminate the underlying
+inventory. Text listing is available for every source, local trees included. Filters select the output, and do not generally eliminate the underlying
 listing work. Prefix narrowing and filter semantics are in [cli.md](cli.md).
 
 ## Save and read an inventory

@@ -1,10 +1,11 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package textout writes a listing as text rows shaped as the S3 API's
-// object: JSONL (one ListObjectsV2 Contents object per line), TSV (the
-// same fields as columns, under one header line) or the aws s3 ls table,
-// to stdout or to one file, optionally gzip or zstd compressed. A file is
+// Package textout writes a listing as text rows of its schema: TSV (the
+// key and the schema's columns under one header line of their names),
+// JSONL (one object per row) or a table for people, to stdout or to one
+// file, optionally gzip or zstd compressed; and swath du's per-prefix
+// totals in the same formats. A file is
 // written to a sibling temporary and renamed over the destination once
 // complete, so a visible file is never a partial one. Text output is
 // one-shot: it keeps no journal and cannot be resumed.
@@ -17,9 +18,11 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
@@ -47,6 +50,12 @@ type Config struct {
 	Path        string    // the destination file; "" for Stdout
 	Stdout      io.Writer // the stream when Path is ""
 	Compression string    // None (""), Gzip or Zstd
+	// Columns, if set, are the TSV and JSONL columns by name, in order
+	// (the key's is KeyColumn); nil for the key and every schema column.
+	Columns []string
+	// Loc is the table's time zone (nil: time.Local); TSV and JSONL are
+	// UTC.
+	Loc *time.Location
 	// Formatters is the goroutines formatting rows at once; below 2 the
 	// order stage formats them itself. Account, if set, is told the row
 	// bytes (schema.RowsBytes) of batches handed to them and not yet
@@ -326,61 +335,143 @@ func (o *Out) Abort() {
 	}
 }
 
-// appendISO appends epoch microseconds as RFC 3339 in UTC the way the
-// AWS CLI prints a LastModified: seconds, then .ffffff only when the
-// fraction is not zero, then +00:00.
-func appendISO(dst []byte, micros int64) []byte {
-	t := time.UnixMicro(micros).UTC()
-	dst = t.AppendFormat(dst, "2006-01-02T15:04:05")
-	if us := t.Nanosecond() / 1000; us != 0 {
-		s := strconv.Itoa(us)
-		dst = append(dst, ".000000"[:7-len(s)]...)
-		dst = append(dst, s...)
-	}
-	return append(dst, "+00:00"...)
+// appendTime appends epoch microseconds as RFC 3339 in UTC with six
+// fraction digits (2026-01-02T03:04:05.000000Z): every time column's form
+// in TSV and JSONL, rows' and totals'.
+func appendTime(dst []byte, micros int64) []byte {
+	return time.UnixMicro(micros).UTC().AppendFormat(dst, "2006-01-02T15:04:05.000000Z07:00")
 }
 
-// appendJSON appends s as a JSON string, escaped as jq prints it: \" and
-// \\, \b \f \n \r \t, any other byte below 0x20 and 0x7f as \u00xx,
-// everything else (UTF-8) as is.
-func appendJSON(dst []byte, s string) []byte {
-	return append(appendEscaped(append(dst, '"'), s, true), '"')
+// tableTime is a table's time layout, to the second in the reader's zone.
+const tableTime = "2006-01-02 15:04:05"
+
+func appendLocal(dst []byte, micros int64, loc *time.Location) []byte {
+	return time.UnixMicro(micros).In(loc).AppendFormat(dst, tableTime)
 }
 
-// appendEscaped is the one escaping rule of all three formats: JSON's
-// string escapes (without the quote escape outside JSON). It is
-// reversible, keeps a row on one line and its TSV fields between tabs,
-// and never sends a terminal a control byte.
-//
-// Bytes that need no escape are appended a run at a time: the row
-// formatter runs on the order stage's drainer, so per-byte appends cost
-// listing throughput (a tenth of a text run's CPU profile before).
-func appendEscaped(dst []byte, s string, json bool) []byte {
+// appendJSONString appends s, which is UTF-8, as a JSON string, escaped as
+// jq prints it: \" and \\, \b \f \n \r \t, any other byte below 0x20 and
+// 0x7f as \u00xx, everything else as is.
+func appendJSONString(dst []byte, s string) []byte {
 	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
 	start := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c >= 0x20 && c != 0x7f && c != '\\' && (c != '"' || !json) {
+		if c >= 0x20 && c != 0x7f && c != '\\' && c != '"' {
 			continue
 		}
 		dst = append(dst, s[start:i]...)
 		start = i + 1
-		switch {
-		case c == '\\', c == '"' && json:
+		switch c {
+		case '\\', '"':
 			dst = append(dst, '\\', c)
-		case c == '\b':
+		case '\b':
 			dst = append(dst, '\\', 'b')
-		case c == '\f':
+		case '\f':
 			dst = append(dst, '\\', 'f')
-		case c == '\n':
+		case '\n':
 			dst = append(dst, '\\', 'n')
-		case c == '\r':
+		case '\r':
 			dst = append(dst, '\\', 'r')
-		case c == '\t':
+		case '\t':
 			dst = append(dst, '\\', 't')
 		default: // below 0x20, or 0x7f
 			dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&15])
 		}
 	}
+	return append(append(dst, s[start:]...), '"')
+}
+
+// appendTSV appends s as a TSV field. The grammar, of rows' and totals'
+// fields and of the tables' names: a row is one line, its fields separated
+// by tabs. In a field \\ is a backslash, \t a tab, \n a line feed, \r a
+// carriage return and \xHH (two lowercase hex digits) the byte HH, written
+// for every other byte below 0x20, for DEL (0x7f) and for every byte that
+// is not part of valid UTF-8; every other byte stands for itself. A field
+// that is exactly \N is null; an empty field is the empty string. Any
+// bytes round-trip (UnescapeTSV), and a terminal is never sent a control
+// byte.
+//
+// Bytes that need no escape are appended a run at a time: the row
+// formatter runs on the order stage's drainer, so per-byte appends cost
+// listing throughput.
+func appendTSV(dst []byte, s string) []byte {
+	const hex = "0123456789abcdef"
+	start := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			if r, n := utf8.DecodeRuneInString(s[i:]); r != utf8.RuneError || n > 1 {
+				i += n
+				continue
+			}
+		} else if c >= 0x20 && c != 0x7f && c != '\\' {
+			i++
+			continue
+		}
+		dst = append(dst, s[start:i]...)
+		switch c {
+		case '\\':
+			dst = append(dst, '\\', '\\')
+		case '\t':
+			dst = append(dst, '\\', 't')
+		case '\n':
+			dst = append(dst, '\\', 'n')
+		case '\r':
+			dst = append(dst, '\\', 'r')
+		default:
+			dst = append(dst, '\\', 'x', hex[c>>4], hex[c&15])
+		}
+		i++
+		start = i
+	}
 	return append(dst, s[start:]...)
+}
+
+// UnescapeTSV decodes one TSV field (appendTSV's grammar): its bytes, and
+// false for a null (\N). It refuses an escape the grammar does not write.
+func UnescapeTSV(field string) (string, bool, error) {
+	if field == nullTSV {
+		return "", false, nil
+	}
+	i := strings.IndexByte(field, '\\')
+	if i < 0 {
+		return field, true, nil
+	}
+	out := []byte(field[:i])
+	for ; i < len(field); i++ {
+		c := field[i]
+		if c != '\\' {
+			out = append(out, c)
+			continue
+		}
+		if i+1 == len(field) {
+			return "", false, fmt.Errorf("TSV field %q: a trailing backslash", field)
+		}
+		i++
+		switch field[i] {
+		case '\\':
+			out = append(out, '\\')
+		case 't':
+			out = append(out, '\t')
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 'x':
+			if i+2 >= len(field) {
+				return "", false, fmt.Errorf(`TSV field %q: a short \x escape`, field)
+			}
+			v, err := strconv.ParseUint(field[i+1:i+3], 16, 8)
+			if err != nil {
+				return "", false, fmt.Errorf("TSV field %q: %w", field, err)
+			}
+			out = append(out, byte(v))
+			i += 2
+		default:
+			return "", false, fmt.Errorf(`TSV field %q: unknown escape \%c`, field, field[i])
+		}
+	}
+	return string(out), true, nil
 }

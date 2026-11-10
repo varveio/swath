@@ -59,13 +59,13 @@ func TestDu(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
-	const newest, older = "2026-01-02T04:04:05+00:00", "2026-01-02T03:04:05+00:00"
-	want := "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n" +
+	const newest, older = "2026-01-02T04:04:05.000000Z", "2026-01-02T03:04:05.000000Z"
+	want := "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n" +
 		"0\t4\t4\t9\t0\t" + newest + "\t\n" +
 		"1\t2\t1\t7\t0\t" + newest + "\ta/\n" +
 		"2\t1\t0\t5\t0\t" + newest + "\ta/b/\n" +
 		"1\t1\t0\t1\t0\t" + older + "\tc/\n" +
-		"1\t0\t0\t0\t0\t\te/\n"
+		"1\t0\t0\t0\t0\t\\N\te/\n"
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
 	}
@@ -102,7 +102,7 @@ func TestDu(t *testing.T) {
 		return at.In(time.Local).Format(time.DateTime)
 	}
 	wantTable := "" +
-		"Size  Files  Dirs  LastModified (local)  Prefix\n" +
+		"Size  Files  Dirs  LastModified (local)  Path\n" +
 		" 7 B      2     1  " + local(newest) + "   a/\n" +
 		" 1 B      1     0  " + local(older) + "   c/\n" +
 		" 0 B      0     0                        e/\n" +
@@ -113,7 +113,7 @@ func TestDu(t *testing.T) {
 	// Without -d, the total alone; swath diag count keeps its one line.
 	out.Reset()
 	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv"}, &out); err != nil ||
-		out.String() != "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t9\t0\t"+newest+"\t\n" {
+		out.String() != "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t4\t4\t9\t0\t"+newest+"\t\n" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	out.Reset()
@@ -146,9 +146,9 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 func TestDuUnsized(t *testing.T) {
 	root, _ := depthTree(t)
 	for format, want := range map[string]string{
-		"tsv":   "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t4\t4\t0\t4\t\t\n1\t2\t1\t0\t2\t\ta/\n1\t1\t0\t0\t1\t\tc/\n1\t0\t0\t0\t0\t\te/\n",
-		"jsonl": `{"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":0,"Unsized":4}` + "\n" + `{"Depth":1,"Prefix":"a/","Objects":2,"Dirs":1,"Size":0,"Unsized":2}` + "\n" + `{"Depth":1,"Prefix":"c/","Objects":1,"Dirs":0,"Size":0,"Unsized":1}` + "\n" + `{"Depth":1,"Prefix":"e/","Objects":0,"Dirs":0,"Size":0,"Unsized":0}` + "\n",
-		"table": "Size  Files  Dirs  LastModified (local)  Prefix\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n   -      4     4                        (total)\n",
+		"tsv":   "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t4\t4\t0\t4\t\\N\t\n1\t2\t1\t0\t2\t\\N\ta/\n1\t1\t0\t0\t1\t\\N\tc/\n1\t0\t0\t0\t0\t\\N\te/\n",
+		"jsonl": `{"depth":0,"prefix":"","objects":4,"dirs":4,"size":0,"unsized":4,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"a/","objects":2,"dirs":1,"size":0,"unsized":2,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"c/","objects":1,"dirs":0,"size":0,"unsized":1,"last_modified":null}` + "\n" + `{"depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"unsized":0,"last_modified":null}` + "\n",
+		"table": "Size  Files  Dirs  LastModified (local)  Path\n   -      2     1                        a/\n   -      1     0                        c/\n 0 B      0     0                        e/\n   -      4     4                        (total)\n",
 	} {
 		var out bytes.Buffer
 		if err := runDu(context.Background(), []string{root, "-d", "1", "--metadata", "names", "--format", format, "--no-stats"}, &out); err != nil {
@@ -173,7 +173,7 @@ func TestDuJSONL(t *testing.T) {
 	for _, k := range keys {
 		size += len(k) // the fake's object bodies are their keys
 	}
-	if !strings.HasPrefix(lines[0], `{"Depth":0,"Prefix":"","Objects":50,"Size":`+strconv.Itoa(size)+`,"LastModified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"Depth":1,"Prefix":"`) {
+	if !strings.HasPrefix(lines[0], `{"depth":0,"prefix":"","objects":50,"size":`+strconv.Itoa(size)+`,"last_modified":"`) || len(lines) < 2 || !strings.HasPrefix(lines[1], `{"depth":1,"prefix":"`) {
 		t.Fatalf("%q", lines)
 	}
 	out.Reset()
@@ -352,7 +352,7 @@ func TestDuStopDuringOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	readJSON(t, report, &r)
-	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "Depth\t") {
+	if !r.Outcome.Complete || r.Timings.WallMs < 300 || !strings.HasPrefix(w.String(), "depth\t") {
 		t.Fatalf("outcome %+v, wall %d ms, rows %q", r.Outcome, r.Timings.WallMs, w.String())
 	}
 }

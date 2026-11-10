@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"time"
 
 	pq "github.com/parquet-go/parquet-go"
@@ -214,9 +213,11 @@ func (m *matcher) Write(p []byte) (int, error) {
 		if tab := bytes.IndexByte(line, '\t'); tab >= 0 {
 			line = line[:tab]
 		}
-		key := unescape(line)
+		key, _, err := textout.UnescapeTSV(string(line))
 		if m.bad == "" {
 			switch {
+			case err != nil:
+				m.bad = fmt.Sprintf("row %d: %v", m.next, err)
 			case m.next >= len(m.keys):
 				m.bad = fmt.Sprintf("row %d is %q past the last key", m.next, key)
 			case key != m.keys[m.next]:
@@ -239,48 +240,6 @@ func (m *matcher) done() (bool, string) {
 		return false, fmt.Sprintf("%d rows, want %d", m.next, len(m.keys))
 	}
 	return true, ""
-}
-
-// unescape reverses the text output's escaping (textout.appendEscaped:
-// JSON's escapes for bytes below 0x20, 0x7f and the backslash; nothing
-// else is touched).
-func unescape(b []byte) string {
-	if bytes.IndexByte(b, '\\') < 0 {
-		return string(b)
-	}
-	out := make([]byte, 0, len(b))
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if c != '\\' || i+1 >= len(b) {
-			out = append(out, c)
-			continue
-		}
-		i++
-		switch b[i] {
-		case 'b':
-			out = append(out, '\b')
-		case 'f':
-			out = append(out, '\f')
-		case 'n':
-			out = append(out, '\n')
-		case 'r':
-			out = append(out, '\r')
-		case 't':
-			out = append(out, '\t')
-		case 'u':
-			if i+4 < len(b) {
-				if v, err := strconv.ParseUint(string(b[i+1:i+5]), 16, 8); err == nil {
-					out = append(out, byte(v))
-					i += 4
-					continue
-				}
-			}
-			out = append(out, '\\', 'u')
-		default:
-			out = append(out, b[i])
-		}
-	}
-	return string(out)
 }
 
 // DatasetKeys reads the keys of a committed dataset's parts, in the

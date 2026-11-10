@@ -37,7 +37,7 @@ type VersionRow = schema.Row[Version]
 // entry, in S3's order within the key (newest first), so the schema is
 // grouped.
 var VersionsSchema = schema.Bind(reader.S3VersionsV1, schema.Schema[Version]{
-	Info: schema.Info{Name: "swath_listing", QuotedETag: true},
+	Info: schema.Info{Name: "swath_listing"},
 	Columns: []schema.Column[Version]{
 		{Int: func(v *Version) (int64, bool) { return v.Size, !v.DeleteMarker }},
 		{Int: func(v *Version) (int64, bool) { return v.Mtime, true }},

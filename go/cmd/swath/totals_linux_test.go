@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/varveio/swath/go/internal/textout"
 )
 
 // duTree is a small tree with what du's flags are about: hard links within
@@ -156,7 +158,7 @@ func duOracle(t *testing.T, root string, depth int, allocated, once bool) map[st
 // TestDuMatchesLstat: swath du over a real tree, with each combination of
 // --allocated and --count-links-once, at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
-// in JSONL (a name that is not UTF-8 as PrefixBase64).
+// in JSONL (a name that is not UTF-8 as prefix_base64).
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
@@ -171,9 +173,9 @@ func TestDuMatchesLstat(t *testing.T) {
 						args = append(args, "--count-links-once")
 					}
 					want := duOracle(t, root, depth, allocated, once)
-					size := "Size"
+					size := "size"
 					if allocated {
-						size = "AllocatedSize"
+						size = "allocated_size"
 					}
 					check := func(prefix string, objects, dirs, bytes int64, modified string, prev *string, first bool) {
 						t.Helper()
@@ -199,7 +201,7 @@ func TestDuMatchesLstat(t *testing.T) {
 						t.Fatal(err)
 					}
 					lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-					if lines[0] != "Depth\tObjects\tDirs\t"+size+"\tUnsized\tLastModified\tPrefix" || len(lines)-1 != len(want) {
+					if lines[0] != "depth\tobjects\tdirs\t"+size+"\tunsized\tlast_modified\tprefix" || len(lines)-1 != len(want) {
 						t.Fatalf("%d rows for %d prefixes:\n%s", len(lines)-1, len(want), out.String())
 					}
 					prev := ""
@@ -209,7 +211,12 @@ func TestDuMatchesLstat(t *testing.T) {
 							t.Fatalf("row %q", l)
 						}
 						n := func(s string) int64 { v, _ := strconv.ParseInt(s, 10, 64); return v }
-						check(f[6], n(f[1]), n(f[2]), n(f[3]), f[5], &prev, i == 0)
+						prefix, _, err := textout.UnescapeTSV(f[6])
+						if err != nil {
+							t.Fatal(err)
+						}
+						modified, _, _ := textout.UnescapeTSV(f[5]) // "" for a null
+						check(prefix, n(f[1]), n(f[2]), n(f[3]), modified, &prev, i == 0)
 					}
 					// JSONL: the same rows, each line JSON; the prefix as
 					// text when it is UTF-8, else its exact bytes in base64.
@@ -224,21 +231,21 @@ func TestDuMatchesLstat(t *testing.T) {
 						if err := json.Unmarshal([]byte(l), &r); err != nil {
 							t.Fatalf("%q: %v", l, err)
 						}
-						prefix, text := r["Prefix"].(string)
-						if b64, ok := r["PrefixBase64"].(string); ok == text {
-							t.Fatalf("%q: one of Prefix and PrefixBase64", l)
+						prefix, text := r["prefix"].(string)
+						if b64, ok := r["prefix_base64"].(string); ok == text {
+							t.Fatalf("%q: one of prefix and prefix_base64", l)
 						} else if ok {
 							raw, err := base64.StdEncoding.DecodeString(b64)
 							if err != nil || utf8.Valid(raw) {
-								t.Fatalf("%q: PrefixBase64 of %q (%v)", l, raw, err)
+								t.Fatalf("%q: prefix_base64 of %q (%v)", l, raw, err)
 							}
 							prefix = string(raw)
 						}
-						modified, _ := r["LastModified"].(string)
-						if r["Unsized"] != 0.0 || r["Depth"] != float64(strings.Count(prefix, "/")) {
-							t.Fatalf("%q: Unsized or Depth", l)
+						modified, _ := r["last_modified"].(string)
+						if r["unsized"] != 0.0 || r["depth"] != float64(strings.Count(prefix, "/")) {
+							t.Fatalf("%q: unsized or depth", l)
 						}
-						check(prefix, int64(r["Objects"].(float64)), int64(r["Dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
+						check(prefix, int64(r["objects"].(float64)), int64(r["dirs"].(float64)), int64(r[size].(float64)), modified, &prev, rows == 0)
 						rows++
 					}
 					if rows != len(want) {
@@ -296,7 +303,7 @@ func TestDuLocalRefusals(t *testing.T) {
 	// listing stopped there.
 	var out bytes.Buffer
 	if err := runDu(context.Background(), []string{root, "--allocated", "--one-filesystem", "--format", "tsv", "--no-stats"}, &out); err != nil ||
-		!strings.HasPrefix(out.String(), "Depth\tObjects\tDirs\tAllocatedSize\tUnsized\tLastModified\tPrefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
+		!strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tallocated_size\tunsized\tlast_modified\tprefix\n0\t12\t9\t") || strings.Count(out.String(), "\n") != 2 {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	ds := filepath.Join(t.TempDir(), "ds")
@@ -339,7 +346,7 @@ func TestDuWarnsOnUnreadable(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--no-progress"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out.String(), "Depth\tObjects\tDirs\tSize\tUnsized\tLastModified\tPrefix\n0\t1\t1\t2\t0\t") ||
+	if !strings.HasPrefix(out.String(), "depth\tobjects\tdirs\tsize\tunsized\tlast_modified\tprefix\n0\t1\t1\t2\t0\t") ||
 		!strings.Contains(stderr.String(), "swath: warning: 1 entry could not be read") {
 		t.Fatalf("stdout %q stderr %q", out.String(), stderr.String())
 	}

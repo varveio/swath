@@ -47,8 +47,8 @@ in [cli-inventory.md](cli-inventory.md). Readers of the dataset should read [dat
 - **Splits.** A busy range is split by its owner when workers are idle; there is no thief.
 - **Counting is a command.** Java's `--format discard` is `swath diag count SOURCE`; `swath du SOURCE [-d N]`
   totals a source per prefix, as `du`.
-- **Text rows** use the S3 API's field names (`Key`, `LastModified`, `ETag`, ...), so a JSONL line matches
-  what `aws s3api list-objects-v2` prints for the object.
+- **Text rows** are the dataset's columns under its names (`key`, `size`, `last_modified`, ...), for every
+  source, a local tree's included.
 
 ## Flags
 

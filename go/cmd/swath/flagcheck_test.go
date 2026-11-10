@@ -91,22 +91,29 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	}
 }
 
-// TestLocalTextRefusedUpFront: a local source's keys are bytes, so a text
-// run of one (no -o, -o -, or a text file) is refused with exit 2 before
-// the walk, naming the alternatives.
-func TestLocalTextRefusedUpFront(t *testing.T) {
+// TestLocalTextRows: a local source prints text rows (no -o, -o -, or a
+// text file), the local schema's columns under their names.
+func TestLocalTextRows(t *testing.T) {
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "a"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("xy"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", filepath.Join(t.TempDir(), "rows.tsv")}} {
+	file := filepath.Join(t.TempDir(), "rows.tsv")
+	for _, args := range [][]string{{src}, {src, "-o", "-"}, {src, "-o", file}} {
 		var buf bytes.Buffer
-		err := run(context.Background(), args, &buf, false)
-		if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "needs -o DIR (a dataset), or swath du") {
-			t.Errorf("%v: exit %d (%v)", args, exitOf(err), err)
+		if err := run(context.Background(), args, &buf, false); err != nil {
+			t.Fatalf("%v: %v", args, err)
 		}
-		if buf.Len() != 0 {
-			t.Errorf("%v: wrote %q", args, buf.String())
+		out := buf.String()
+		if args[len(args)-1] == file {
+			b, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = string(b)
+		}
+		if lines := strings.Split(out, "\n"); len(lines) != 3 || !strings.HasPrefix(lines[0], "key\tsize\tlast_modified\tkind\t") || !strings.HasPrefix(lines[1], "a\t2\t") {
+			t.Errorf("%v: %q", args, out)
 		}
 	}
 }

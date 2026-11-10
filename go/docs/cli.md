@@ -538,42 +538,46 @@ Diagnostics:
   queues); it is not a cap on resident memory. See [internals/ordering.md](internals/ordering.md).
 - **`-o DIR`** is refused when non-empty unless `--overwrite`, which replaces only
   a previous dataset of this tool and never anything inside the listed root.
-- **Text output** (S3, GCS and Azure Blob sources; a local tree's keys are bytes, which JSON cannot carry, so it needs the
-  dataset: `swath list DIR` without `-o DIR`, or with a text `-o`, is refused with exit 2, naming `-o DIR` and `swath du`). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`, optionally `.gz` or `.zst`, is one file in that
+- **Text output** (every source, a local tree's included). The `-o` name decides: `NAME.tsv` or `NAME.jsonl`,
+  optionally `.gz` or `.zst`, is one file in that
   format and compression; any other name is the Parquet dataset; no `-o`, or `-o -`, is stdout, where `--format
   auto|table|tsv|jsonl` chooses (`auto`, the default: the table on a terminal, TSV otherwise) and a pipe
   compresses (`| zstd`). `--format` with a `-o` file or directory is refused, because the name already says it.
-  Rows are the S3 API's object (ListObjectsV2 `Contents`), so they are read with what already reads S3 listings:
-  - JSONL, one object per line, the API's names in its order: `Key`, `LastModified`, `ETag`,
-    `ChecksumAlgorithm` (a list), `ChecksumType`, `Size`, `StorageClass`, `Owner` (`DisplayName`, `ID`; only with
-    `--fetch-owner`). A field without a value, or one the provider lacks (GCS has no checksum or owner fields), is
-    left out, not null. A line is byte for byte what `aws s3api list-objects-v2 ... | jq -c '.Contents[]'`
-    prints for the object: `ETag` keeps its quotes (the dataset stores it bare), `LastModified` is printed as the
-    AWS CLI does (UTC, `+00:00`, a microsecond fraction only when not zero), strings are escaped as jq does.
+  Rows are the dataset's: `key`, then the source schema's columns in the schema's order under the dataset's
+  column names ([internals/parquet-output.md](internals/parquet-output.md#schemas)), so a script and a DuckDB
+  query use the same names. Columns after `key`, `size` and `last_modified` differ by schema; read them by name,
+  not by position. Values are as the schema stores them (S3's `etag` without its quotes, `checksum_algorithm`
+  its one value, the owner two columns), integers exact, unsigned columns (`uid`, `inode`, `dev`) unsigned,
+  booleans `true` and `false`, every time column in UTC with six fraction digits
+  (`2023-11-14T22:13:20.000000Z`). A null is not an empty string and not zero.
+  - JSONL, one object per line, its members in column order, a null `null`, strings escaped as jq does. A string
+    or binary value that is not UTF-8 (a local name's bytes) is `NAME_base64`, its exact bytes in standard
+    base64, in place of `NAME` (`key_base64`, `link_target_base64`); no column name ends in `_base64`.
 
     ```text
-    {"Key":"logs/2023/app.log","LastModified":"2023-11-14T22:13:20+00:00","ETag":"\"fba9dede5f27731c9771645a39863328\"","ChecksumAlgorithm":["CRC64NVME"],"ChecksumType":"FULL_OBJECT","Size":434234,"StorageClass":"STANDARD"}
+    {"key":"logs/2023/app.log","size":434234,"last_modified":"2023-11-14T22:13:20.000000Z","etag":"fba9dede5f27731c9771645a39863328","storage_class":"STANDARD","owner_id":null,"owner_display_name":null,"checksum_algorithm":"CRC64NVME","checksum_type":"FULL_OBJECT"}
     ```
-  - TSV: the same fields as columns in the same order under one header line, a column for each field the
-    provider has (S3: all nine, `Owner.DisplayName` and `Owner.ID` flattened; GCS: `Key LastModified ETag Size
-    StorageClass`), an absent value empty, `ChecksumAlgorithm` its one value.
+  - TSV: one header line of the column names, then a line per row. In a field `\\` is a backslash, `\t` a tab,
+    `\n` a line feed, `\r` a carriage return and `\xHH` (two lowercase hex digits) the byte HH, written for
+    every other byte below 0x20, for DEL and for every byte that is not part of valid UTF-8; every other byte
+    stands for itself. A field that is exactly `\N` is null; an empty field is the empty string. Any bytes
+    round-trip, a row is one line, and a terminal is never sent a control byte.
 
     ```text
-    Key	LastModified	ETag	ChecksumAlgorithm	ChecksumType	Size	StorageClass	Owner.DisplayName	Owner.ID
-    logs/2023/app.log	2023-11-14T22:13:20+00:00	"fba9dede5f27731c9771645a39863328"	CRC64NVME	FULL_OBJECT	434234	STANDARD		
+    key	size	last_modified	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
+    logs/2023/app.log	434234	2023-11-14T22:13:20.000000Z	fba9dede5f27731c9771645a39863328	STANDARD	\N	\N	CRC64NVME	FULL_OBJECT
     ```
-  - The table: the `aws s3 ls --recursive` line, the time to the second, the size right-aligned in 10 columns,
-    the key, no header; in UTC (aws prints local time), so two runs' rows compare equal wherever they ran.
+  - The table, for reading: a header, the time to the second in the reader's local time (`TZ` chooses it), the
+    size in binary units as `swath du`'s table, then `kind` where the schema has it (a local tree), the version
+    columns where the schema describes versions (`--all-versions`: the version ID column under its own name,
+    `latest`, and `delete_marker` where the source has delete markers), and the key last, escaped as in TSV. A
+    missing value is blank. The time and size columns have fixed widths; `kind` and the version ID are as wide
+    as their widest value so far.
 
     ```text
-    2023-11-14 22:13:20     434234 logs/2023/app.log
+    last_modified (local)      size  key
+    2023-11-14 22:13:20     424 KiB  logs/2023/app.log
     ```
-
-  One escaping rule for all three, JSON's string escapes: `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, any other byte
-  below 0x20 and 0x7f as `\u00xx`, and `\"` inside JSON only. It is reversible, keeps a row on one line and a
-  TSV field between its tabs, and never sends a terminal a control byte. Other provider columns (GCS
-  `generation`, `md5`, `crc32c`, `content_type`, `time_created`) have no S3 field and are not written: they are
-  in the dataset.
   A file is written to a temporary beside it and installed only when complete (synced, then renamed, the
   directory synced), replacing a previous file; a failed run leaves the destination as it was. A reader that closes
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
@@ -590,12 +594,12 @@ Diagnostics:
   directories below it (local trees), their bytes (the `size` column) and the newest modification time among
   them, a parent including its children; `-d 0`, the default, is the total alone, as `du -s`. A key with fewer
   than N `/` counts in the prefixes it has (`top.txt` only in the total). A local directory's row lists its own
-  prefix (an empty directory shows 0) and counts in its parents' `Dirs`, never as an object, and its time is not
+  prefix (an empty directory shows 0) and counts in its parents' `dirs`, never as an object, and its time is not
   the newest's; an S3 delete marker lists its prefixes (they count toward `--max-prefixes`) and adds no object,
   bytes or time. A directory's own size is no object's (nor is it in the run report's `object_bytes`), so the
   totals' objects and bytes are the files, links and other entries. With `--all-versions` every version is an
   object. The filters apply first, to every row, directories included (**Filters** below): `--min-size 1M` keeps
-  the large files and drops the directories, whose own size is small, so `Dirs` counts only the directories that
+  the large files and drops the directories, whose own size is small, so `dirs` counts only the directories that
   pass and a directory left with nothing is no row. The bytes are the objects' sizes as listed: not storage
   consumed, compression, replicas or a bill.
 
@@ -605,46 +609,46 @@ Diagnostics:
   includes every row), so add up rows of one depth only, never across depths: the depth-1 rows together leave
   out the objects directly under SOURCE, and all rows together count an object once per level it is under. The
   table is for reading: a heading, sizes in binary units to three significant digits (`5.88 MiB`; bytes below
-  1 KiB), a local tree's files counted as `Files`, the newest time to the second in the reader's local time (as
+  1 KiB), a local tree's files counted as `Files` under `Path`, the newest time to the second in the reader's local time (as
   `ls -l` and `du --time`; `TZ` chooses it), the prefix last, as `du` prints its paths, and the total last, named
   `(total)`, as `du` and `wc` end on theirs:
 
   ```text
-      Size  Files  Dirs  LastModified (local)  Prefix
+      Size  Files  Dirs  LastModified (local)  Path
    695 KiB     73    11  2026-11-09 02:44:49   bench/
    429 KiB     48     2  2026-11-09 13:03:32   cmd/
   5.88 MiB    681    97  2026-11-09 13:03:32   (total)
   ```
 
-  TSV and JSONL are for programs and are the same for every source of a kind: exact bytes and microsecond UTC
-  times (`+00:00`), fields `Depth`, `Objects`, `Dirs` (local trees), `Size` (`AllocatedSize` with `--allocated`),
-  `Unsized` (local trees), `LastModified` and `Prefix`, in that order in TSV (the numbers first and the name
-  last, as `du` prints a size and then its path). `Depth` is the row's level below SOURCE: 0 is the total, which
-  stays the first row, in byte order; select it by `Depth`, not by its place or its prefix
-  (`jq 'select(.Depth == 0) | .Size'`; `jq 'select(.Depth == 1)'` for the children). The total's `Prefix` is
+  TSV and JSONL are for programs and are the same for every source: exact bytes and the times of text rows
+  (UTC, six fraction digits), fields `depth`, `objects`, `dirs` (local trees), `size` (`allocated_size` with
+  `--allocated`), `unsized` (local trees), `last_modified` and `prefix`, in that order in TSV (the numbers first
+  and the name last, as `du` prints a size and then its path). `depth` is the row's level below SOURCE: 0 is the
+  total, which stays the first row, in byte order; select it by `depth`, not by its place or its prefix
+  (`jq 'select(.depth == 0) | .size'`; `jq 'select(.depth == 1)'` for the children). The total's `prefix` is
   SOURCE's prefix up to its last `/` (empty for a whole bucket or a local tree, so a TSV total line ends with an
   empty field: split TSV at tabs, `awk -F'\t'` or `cut`, never at runs of blanks). The fields say objects for a
-  local tree's files too, so a script reads every source with the same names; only the table says `Files`.
-  `Size` is the bytes of the objects that had a size, and `Unsized` counts the files that had none
-  (`--metadata names` reads no sizes), as `rclone size --json`'s `sizeless`: a size with `Unsized` above 0 leaves
-  those files out, and the table shows it as `-`. A time is missing when no object under the prefix had one:
-  empty in TSV and in the table, absent in JSONL. TSV takes text output's escaping, so any name round-trips; in
-  JSONL a prefix that is not UTF-8 (a local name's bytes, which a JSON string cannot carry exactly) is
-  `PrefixBase64`, its exact bytes in standard base64, instead of `Prefix`:
+  local tree's files too, so a script reads every source with the same names; only the table says `Files` and
+  `Path`. `size` is the bytes of the objects that had a size, and `unsized` counts the files that had none
+  (`--metadata names` reads no sizes), as `rclone size --json`'s `sizeless`: a size with `unsized` above 0 leaves
+  those files out, and the table shows it as `-`. A time is null when no object under the prefix had one: `\N`
+  in TSV, `null` in JSONL, blank in the table. TSV takes text rows' grammar, so any name round-trips; in JSONL a
+  prefix that is not UTF-8 (a local name's bytes, which a JSON string cannot carry exactly) is `prefix_base64`,
+  its exact bytes in standard base64, instead of `prefix`:
 
   ```text
   $ swath du s3://bucket/logs/ -d 2 --format tsv
-  Depth	Objects	Size	LastModified	Prefix
-  0	4	9	2026-01-02T04:04:05+00:00	logs/
-  1	2	7	2026-01-02T04:04:05+00:00	logs/a/
-  2	1	5	2026-01-02T04:04:05+00:00	logs/a/b/
-  1	1	1	2026-01-02T03:04:05+00:00	logs/c/
+  depth	objects	size	last_modified	prefix
+  0	4	9	2026-01-02T04:04:05.000000Z	logs/
+  1	2	7	2026-01-02T04:04:05.000000Z	logs/a/
+  2	1	5	2026-01-02T04:04:05.000000Z	logs/a/b/
+  1	1	1	2026-01-02T03:04:05.000000Z	logs/c/
   ```
 
   ```text
   $ swath du /data -d 2 --format jsonl
-  {"Depth":0,"Prefix":"","Objects":4,"Dirs":4,"Size":9,"Unsized":0,"LastModified":"2026-01-02T04:04:05+00:00"}
-  {"Depth":2,"PrefixBase64":"bS//YmluLw==","Objects":1,"Dirs":0,"Size":300,"Unsized":0,"LastModified":"2026-11-09T11:38:25+00:00"}
+  {"depth":0,"prefix":"","objects":4,"dirs":4,"size":9,"unsized":0,"last_modified":"2026-01-02T04:04:05.000000Z"}
+  {"depth":2,"prefix_base64":"bS//YmluLw==","objects":1,"dirs":0,"size":300,"unsized":0,"last_modified":"2026-11-09T11:38:25.000000Z"}
   ```
 
   Rows are written once the count completes, before the run's end is stamped and its outcome settled, so the

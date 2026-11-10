@@ -63,10 +63,6 @@ type Factory struct {
 	// "logs/"): the keys it lists start with it. Without it the keys are
 	// relative to the root (a local tree's).
 	KeyPrefix func(root string) (string, error)
-	// BinaryKeys: the provider's keys are bytes, not UTF-8 (schema.Binary),
-	// so its rows cannot be written as text; the command refuses a text run
-	// of it before opening it.
-	BinaryKeys bool
 	// EncoderBytes is the working set admitted per Parquet encoder of the
 	// provider's schema (parquetout.EncoderBytes), known before the source
 	// is opened; 0 prices it as parquetout.DefaultEncoderBytes.

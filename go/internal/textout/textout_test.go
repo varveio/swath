@@ -9,7 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
@@ -26,16 +29,15 @@ func nonEmpty(f func(*obj) string) func(*obj) (string, bool) {
 	return func(o *obj) (string, bool) { v := f(o); return v, v != "" }
 }
 
-// testSchema has a provider's extra column (owner_id stands in, with no
-// owner_display_name) and an unquoted etag (GCS-like).
+// testSchema is a schema of string, integer and time columns, some null.
 var testSchema = &schema.Schema[obj]{Info: schema.Info{ID: "test", Key: schema.String},
 	Heap: func(o *obj) int64 { return int64(len(o.etag) + len(o.class) + len(o.owner)) }, Columns: []schema.Column[obj]{
-		{Spec: schema.Spec{Name: "size"}, Int: func(o *obj) (int64, bool) { return o.size, true }},
-		{Spec: schema.Spec{Name: "last_modified"}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
-		{Spec: schema.Spec{Name: "etag"}, Str: nonEmpty(func(o *obj) string { return o.etag })},
-		{Spec: schema.Spec{Name: "storage_class"}, Str: nonEmpty(func(o *obj) string { return o.class })},
-		{Spec: schema.Spec{Name: "owner_id"}, Str: nonEmpty(func(o *obj) string { return o.owner })},
-		{Spec: schema.Spec{Name: "generation"}, Int: func(o *obj) (int64, bool) { return 7, true }},
+		{Spec: schema.Spec{Name: "size", Type: schema.Int64}, Int: func(o *obj) (int64, bool) { return o.size, true }},
+		{Spec: schema.Spec{Name: "last_modified", Type: schema.TimestampMicros}, Int: func(o *obj) (int64, bool) { return o.mtime, o.mtime != 0 }},
+		{Spec: schema.Spec{Name: "etag", Type: schema.String}, Str: nonEmpty(func(o *obj) string { return o.etag })},
+		{Spec: schema.Spec{Name: "storage_class", Type: schema.String}, Str: nonEmpty(func(o *obj) string { return o.class })},
+		{Spec: schema.Spec{Name: "owner_id", Type: schema.String}, Str: nonEmpty(func(o *obj) string { return o.owner })},
+		{Spec: schema.Spec{Name: "generation", Type: schema.Int64}, Int: func(o *obj) (int64, bool) { return 7, true }},
 	}}
 
 var rows = [][]schema.Row[obj]{{
@@ -77,30 +79,61 @@ func write(t *testing.T, cfg Config) []byte {
 	return buf.Bytes()
 }
 
-// TestRowContract: the three formats over a schema with fewer fields than
-// S3's (absent fields omitted; a provider's other columns not written),
-// JSON escaping as jq prints it (the same rule, minus the quote escape,
-// in TSV and the table), and LastModified with a fraction only when it
-// has one.
+// TestRowContract: the three formats over a schema's columns in its order
+// under its names: TSV with \N for a null and the TSV escapes, JSONL with
+// null and JSON's escapes, every time with six fraction digits in UTC; the
+// table's time in its zone, the size in binary units, a null blank.
 func TestRowContract(t *testing.T) {
-	tsv := "Key\tLastModified\tETag\tSize\tStorageClass\tOwner.ID\n" +
-		"a/b.txt\t2023-11-14T22:13:20+00:00\te1\t12\tSTANDARD\t\n" +
-		"tab\\there\\nnl\\\\x<&>\"\\u001b\\u007fµ\t\t\t0\t\t\n" +
-		"µ\t2023-11-14T22:13:20.000120+00:00\te\t1099511627776\t\to\n"
+	tsv := "key\tsize\tlast_modified\tetag\tstorage_class\towner_id\tgeneration\n" +
+		"a/b.txt\t12\t2023-11-14T22:13:20.000000Z\te1\tSTANDARD\t\\N\t7\n" +
+		"tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\t0\t\\N\t\\N\t\\N\t\\N\t7\n" +
+		"µ\t1099511627776\t2023-11-14T22:13:20.000120Z\te\t\\N\to\t7\n"
 	if got := string(write(t, Config{Format: TSV})); got != tsv {
 		t.Fatalf("tsv\n%q\nwant\n%q", got, tsv)
 	}
-	jsonl := `{"Key":"a/b.txt","LastModified":"2023-11-14T22:13:20+00:00","ETag":"e1","Size":12,"StorageClass":"STANDARD"}` + "\n" +
-		`{"Key":"tab\there\nnl\\x<&>\"\u001b\u007fµ","Size":0}` + "\n" +
-		`{"Key":"µ","LastModified":"2023-11-14T22:13:20.000120+00:00","ETag":"e","Size":1099511627776,"Owner":{"ID":"o"}}` + "\n"
+	jsonl := `{"key":"a/b.txt","size":12,"last_modified":"2023-11-14T22:13:20.000000Z","etag":"e1","storage_class":"STANDARD","owner_id":null,"generation":7}` + "\n" +
+		`{"key":"tab\there\nnl\\x<&>\"\u001b\u007fµ","size":0,"last_modified":null,"etag":null,"storage_class":null,"owner_id":null,"generation":7}` + "\n" +
+		`{"key":"µ","size":1099511627776,"last_modified":"2023-11-14T22:13:20.000120Z","etag":"e","storage_class":null,"owner_id":"o","generation":7}` + "\n"
 	if got := string(write(t, Config{Format: JSONL})); got != jsonl {
 		t.Fatalf("jsonl\n%s\nwant\n%s", got, jsonl)
 	}
-	table := "2023-11-14 22:13:20         12 a/b.txt\n" +
-		"                             0 tab\\there\\nnl\\\\x<&>\"\\u001b\\u007fµ\n" +
-		"2023-11-14 22:13:20 1099511627776 µ\n"
-	if got := string(write(t, Config{Format: Table})); got != table {
+	table := "last_modified (local)      size  key\n" +
+		"2023-11-14 23:13:20        12 B  a/b.txt\n" +
+		"                            0 B  tab\\there\\nnl\\\\x<&>\"\\x1b\\x7fµ\n" +
+		"2023-11-14 23:13:20    1.00 TiB  µ\n"
+	if got := string(write(t, Config{Format: Table, Loc: time.FixedZone("X", 3600)})); got != table {
 		t.Fatalf("table\n%q\nwant\n%q", got, table)
+	}
+}
+
+// TestTSVGrammar: every byte, alone, doubled and between plain runs and
+// valid UTF-8, round-trips through the TSV escaping, which writes only
+// valid UTF-8 without a control byte; \N is null and differs from the
+// escaped value \N; a malformed escape is refused.
+func TestTSVGrammar(t *testing.T) {
+	for c := 0; c < 256; c++ {
+		b := string([]byte{byte(c)})
+		for _, s := range []string{b, b + b, "ab" + b + "é" + b + b + "\\N", "\xe2\x82" + b} {
+			e := string(appendTSV(nil, s))
+			if !utf8.ValidString(e) || strings.ContainsFunc(e, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+				t.Fatalf("%q escaped as %q", s, e)
+			}
+			got, ok, err := UnescapeTSV(e)
+			if err != nil || !ok || got != s {
+				t.Fatalf("%q -> %q -> %q %v %v", s, e, got, ok, err)
+			}
+		}
+	}
+	if _, ok, err := UnescapeTSV(`\N`); ok || err != nil {
+		t.Fatalf("null: %v %v", ok, err)
+	}
+	if got, ok, err := UnescapeTSV(`\\N`); !ok || err != nil || got != `\N` {
+		t.Fatalf("escaped \\N: %q %v %v", got, ok, err)
+	}
+	for _, bad := range []string{`a\`, `\x4`, `\xzz`, `\u0001`, `\b`} {
+		if _, _, err := UnescapeTSV(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }
 
@@ -141,9 +174,5 @@ func TestFileCompressedAndAtomic(t *testing.T) {
 	}
 	if _, err := Open(Config{Format: TSV, Path: dir}); err == nil {
 		t.Fatal("a directory destination accepted")
-	}
-	bin := &schema.Schema[obj]{Info: schema.Info{ID: "bin", Key: schema.Binary}}
-	if _, err := NewSink(o, bin); err == nil {
-		t.Fatal("a byte-key schema accepted")
 	}
 }

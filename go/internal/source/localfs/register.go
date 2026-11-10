@@ -22,7 +22,7 @@ import (
 
 // The local filesystem takes roots without a scheme.
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", BinaryKeys: true, Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Scheme: "", Flags: flags, Defaults: func() any { return &Options{LinkTarget: true} }, Open: open, Workers: defaultWorkers, CheckTotals: checkTotals,
 		Hints: []source.Hint{{Flag: "metadata"}, {Flag: "no-dirs"}, {Flag: "no-link-target"}, {Flag: "one-filesystem"}},
 		Usage: "a local directory"})
 }

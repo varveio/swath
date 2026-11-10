@@ -40,20 +40,20 @@ func TestTextOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	const header = "Key\tLastModified\tETag\tChecksumAlgorithm\tChecksumType\tSize\tStorageClass\tOwner.DisplayName\tOwner.ID"
+	const header = "key\tsize\tlast_modified\tetag\tstorage_class\towner_id\towner_display_name\tchecksum_algorithm\tchecksum_type"
 	if lines[0] != header || len(lines) != len(keys)+1 {
 		t.Fatalf("%d lines, first %q", len(lines), lines[0])
 	}
 	for i, k := range keys {
-		if f := strings.Split(lines[i+1], "\t"); f[0] != k || f[5] != strconv.Itoa(len(k)) {
+		if f := strings.Split(lines[i+1], "\t"); f[0] != k || f[1] != strconv.Itoa(len(k)) {
 			t.Fatalf("row %d: %q", i, lines[i+1])
 		}
 	}
 	out.Reset()
-	// The ETag as the API returns it: the body's MD5 in quotes.
-	etag := fmt.Sprintf(`"\"%x\""`, md5.Sum([]byte(keys[0])))
+	// The ETag as the dataset stores it: the body's MD5, its quotes removed.
+	etag := fmt.Sprintf(`"%x"`, md5.Sum([]byte(keys[0])))
 	if err := run(context.Background(), append(src, "-o", "-", "--format", "jsonl"), &out, false); err != nil ||
-		!strings.HasPrefix(out.String(), `{"Key":"`+keys[0]+`","LastModified":"`) || !strings.Contains(out.String(), `+00:00","ETag":`+etag+`,"Size":`) {
+		!strings.HasPrefix(out.String(), `{"key":"`+keys[0]+`","size":`) || !strings.Contains(out.String(), `Z","etag":`+etag+`,"storage_class":`) {
 		t.Fatalf("%v %.200s", err, out.String())
 	}
 	file := filepath.Join(t.TempDir(), "list.jsonl.gz")
@@ -71,9 +71,6 @@ func TestTextOutput(t *testing.T) {
 	err := dispatch(context.Background(), []string{"resume", file}, io.Discard)
 	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "not resumable") {
 		t.Fatalf("resume of a text file: %v", err)
-	}
-	if err := run(context.Background(), []string{t.TempDir()}, &out, false); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "or swath du") {
-		t.Fatalf("local source as text: %v", err)
 	}
 	var u usageError
 	if err := run(context.Background(), append(src, "--report-format", "json"), &out, false); !errors.As(err, &u) {

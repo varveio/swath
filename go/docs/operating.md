@@ -467,9 +467,10 @@ our measurements, and pages of old versions are slow to first byte; history mult
 lists generations at the cost of live objects.
 
 **Permissions and refusals.** S3 needs `s3:ListBucketVersions` (`s3:ListBucket` alone answers 403, and swath
-never falls back to a current-object listing); GCS needs the same `storage.objects.list`. Text output adds
-`VersionId` (a GCS generation in decimal), `IsLatest` (GCS: no `time_deleted`) and, on S3, `IsDeleteMarker`, and
-omits a delete marker's `Size` and `ETag`. `--min-size` and `--max-size` never match a delete marker. A resume
+never falls back to a current-object listing); GCS needs the same `storage.objects.list`. Text rows carry the
+versions schema's columns: S3's `version_id`, `is_latest` and `is_delete_marker` (a delete marker's `size` and
+`etag` null), GCS's `generation` and `time_deleted` (null on the live generation); the table shows the version
+ID, `latest` and, on S3, `delete_marker`. `--min-size` and `--max-size` never match a delete marker. A resume
 continues in the mode its run started in; a run in the other mode is refused on that output. Directory buckets have
 no versions and stay refused.
 

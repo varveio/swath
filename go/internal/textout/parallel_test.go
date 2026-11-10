@@ -87,7 +87,8 @@ func TestParallelFormatEqualsSerial(t *testing.T) {
 	for _, seg := range bigRows(60_000) {
 		rows = append(rows, seg...)
 	}
-	rows = append(rows, schema.Row[obj]{Key: "zz/tab\there\nnl\\\x1b\x7fµ", Data: obj{size: 3}})
+	rows = append(rows, schema.Row[obj]{Key: "zz/tab\there\nnl\\\x1b\x7fµ", Data: obj{size: 3}},
+		schema.Row[obj]{Key: "zz/\xff\xfe", Data: obj{size: 4, owner: "o\xc3"}})
 	r := rand.New(rand.NewPCG(1, 2))
 	dir := t.TempDir()
 	for _, format := range []string{TSV, JSONL, Table} {
@@ -106,7 +107,7 @@ func TestParallelFormatEqualsSerial(t *testing.T) {
 				if !bytes.Equal(got, want) {
 					t.Fatalf("%s, %d formatters, %s: %d bytes, want the serial %d", format, n, comp, len(got), len(want))
 				}
-				if b.n.Load() != 0 || b.peak.Load() == 0 {
+				if b.n.Load() != 0 || (b.peak.Load() == 0) != (format == Table) { // the table is formatted serially
 					t.Fatalf("%s, %d formatters: %d bytes left charged (peak %d)", format, n, b.n.Load(), b.peak.Load())
 				}
 			}

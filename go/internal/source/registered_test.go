@@ -189,11 +189,19 @@ func TestRegisteredRestart(t *testing.T) {
 			var got, want []row
 			d := json.NewDecoder(&buf)
 			for d.More() {
-				var r row
+				var r struct {
+					Key        string `json:"key"`
+					VersionID  string `json:"version_id"`
+					Generation int64  `json:"generation"`
+				}
 				if err := d.Decode(&r); err != nil {
 					t.Fatal(err)
 				}
-				got = append(got, r)
+				id := r.VersionID
+				if c.groups && r.Generation != 0 {
+					id = strconv.FormatInt(r.Generation, 10)
+				}
+				got = append(got, row{r.Key, id})
 			}
 			for _, k := range keys[len(keys)/2+1:] {
 				if c.groups {

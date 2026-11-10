@@ -211,12 +211,12 @@ is `--workers`, default 64 as Java's, whatever the CPU count;
 by default, as Java's `shallow` is), and `--format discard` is `swath diag count`, which counts without ordering or
 spilling.
 Text output keeps stdout (no `-o`, or `-o -`; a closed reader exits 0), `-o FILE.tsv|.jsonl[.gz|.zst]` and
-`--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows now use the S3 API's object
-shape, so they are read with what already reads S3 listings ([cli.md](cli.md), "Text output"): Java's `key`,
-`size`, `last_modified`, `etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`,
-`checksum_type` are `Key`, `Size`, `LastModified` (`+00:00`), `ETag` (with its quotes), `StorageClass`,
-`Owner.ID`, `Owner.DisplayName`, `ChecksumAlgorithm` (a list in JSONL), `ChecksumType`, in the API's order;
-`row_type` is gone; control bytes use JSON's escapes, not `\xNN`; the table is the `aws s3 ls` line. Not
+`--format auto|table|tsv|jsonl` (stdout only; with `-o` the name decides). Its rows are the source schema's
+columns under the dataset's names ([cli.md](cli.md), "Text output"): Java's `key`, `size`, `last_modified`,
+`etag`, `storage_class`, `owner_id`, `owner_display_name`, `checksum_algorithm`, `checksum_type` keep their names,
+in the dataset's order, with every other column of the schema (GCS's `generation`, a local tree's `kind`);
+times have six fraction digits; a null is `\N` in TSV and `null` in JSONL; `row_type` is gone; the table has a
+header, local time and binary units. Not
 ported: `--output-type` and `--format parquet` (the `-o` name decides), `--compression` (the name compresses a
 file; pipe stdout through `zstd`), a directory of text parts, `--text-part-size`, `--text-writers`, the
 `.parquet` one-writer file. Text runs are not resumable: they keep no journal. `--bearer-token-command` and `--bearer-token-refresh-interval` are Java's; the command is
