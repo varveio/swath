@@ -1055,23 +1055,26 @@ Today 77 of the 110 GCS captures match, the 77 pinned `match`; the other 33 meet
 
 ## Container image
 
-`Dockerfile.replay-go` (at the repository root) builds an image that holds the static binary and nothing else:
-`/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the runtime stage is
-`scratch`, so there is no shell, no package manager and no OS package in it. Fixtures are never baked in: mount
-one read-only and pass its container path to `--fixture`.
+The `swath-replay` target of `Dockerfile.go` (at the repository root) builds an image that holds the static binary
+and nothing else: `/opt/swath-replay/swath-replay` is the entrypoint, the process runs as `10001:10001`, and the
+runtime stage is `scratch`, so there is no shell, no package manager and no OS package in it. Releases publish it
+as `ghcr.io/varveio/swath-replay` ([operating.md](operating.md#install-and-verify)). Fixtures are never baked in:
+mount one read-only and pass its container path to `--fixture`.
 
 ```bash
-docker build -f Dockerfile.replay-go --build-arg SWATH_REVISION="$(git rev-parse HEAD)" -t swath-replay-go:dev .
+docker build -f Dockerfile.go --target swath-replay --build-arg SWATH_REVISION="$(git rev-parse HEAD)" \
+  -t swath-replay-go:dev .
 docker run --rm -p 127.0.0.1:19090:19090 -p 127.0.0.1:19192:19192 -v /data/sorted:/fixtures:ro \
   swath-replay-go:dev serve --fixture /fixtures --bucket bkt --host 0.0.0.0 --port 19090 --metrics-port 19192
 ```
 
 The server must bind `0.0.0.0` for a published port to reach it; it has no authentication, so bind the host
 side to loopback as shown unless an isolated container network is the boundary. The build context is `go/`
-alone (`Dockerfile.replay-go.dockerignore`, which also leaves out local build output). The build stage
-cross-compiles for the target platform, so `--platform linux/arm64` builds on an amd64 host without emulation.
-Build arguments: `SWATH_REVISION` is the commit `--version` prints (the context carries no `.git`, so without
-it the binary names no revision), `GOFLAGS` passes through to the Go toolchain (`-p=2` bounds the compile on a
+alone (`Dockerfile.go.dockerignore`, which also leaves out local build output). The build stage, shared with the
+lister's image, cross-compiles both commands for the target platform, so `--platform linux/arm64` builds on an
+amd64 host without emulation. Build arguments: `SWATH_VERSION` is the version `--version` prints (`devel`
+without it), `SWATH_REVISION` the commit (the context carries no `.git`, so without it the binary names no
+revision), `GOFLAGS` passes through to the Go toolchain (`-p=2` bounds the compile on a
 shared host), and `GOPROXY` names a module mirror.
 
 `sort-fixture` writes its output, so it needs a writable mount; running it as the invoking user leaves the
@@ -1095,12 +1098,14 @@ The Go jobs of `.github/workflows/ci.yml` each always run and do their work only
 (or on a manual run); `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` and `go-xos` are the tests
 ([testing.md](testing.md#continuous-integration)); two concern the replay:
 
-- `go-build` (inputs: `go/`, the workflow, `Dockerfile.replay-go` and its ignore file, the replay smoke
-  script, the race shard table): the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
-  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then the image:
-  built for linux/amd64 and linux/arm64 without pushing, the native one loaded as `swath-replay-go:ci` and
-  smoked twice on fixtures written in the job, so neither needs network or a recording: the Go
-  lister's dataset of a `bench/s3fake` bucket of 2,000 keys (sorted, served as it is), and an unsorted
+- `go-build` (inputs: `go/`, the workflow, `Dockerfile.go` and its ignore file, the image smoke scripts, the
+  race shard table): the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
+  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then both images
+  of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
+  `swath-go:ci` and `swath-replay-go:ci` and smoked on data written in the job, so none needs network or a
+  recording. The lister image lists a `bench/s3fake` bucket of 2,000 keys into a dataset
+  (`scripts/ci/smoke-container.sh`: read back with DuckDB, resumed as a no-op); the replay image
+  serves that dataset (sorted, served as it is) and an unsorted
   capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
   refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.
 - `go-fixtures` (inputs: `go/`, the workflow, the `swath-replay`, `swath-core` and `swath-model` Gradle modules,

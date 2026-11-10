@@ -1,10 +1,12 @@
 # Packaging and release engineering
 
-This is the contributor reference for building, packaging, testing, and publishing the
-self-contained jar, application archives, and container images. It is not the installation or
-container-usage guide. To run a release, use [Installation](install.md); for credentials,
-output mounts, and production object-store access, use
-[Operating swath](operating.md).
+This is the contributor reference for building, packaging, and testing the Java
+implementation's self-contained jar, application archives, and container images. Releases no
+longer publish them: from 0.4 a release ships the Go binaries and images
+([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/operating.md#install-and-verify)),
+and v0.3.2 was the last Java release. It is not the installation or container-usage guide. To
+run the Java release, use [Installation](install.md); for credentials, output mounts, and
+production object-store access, use [Operating swath](operating.md).
 
 For the module and dependency graph behind the artifacts, see
 [`build-and-modules.md`](internals/build-and-modules.md).
@@ -261,54 +263,11 @@ addition to the JVM-native `JAVA_TOOL_OPTIONS`.
 
 ## 6. Container images (GHCR)
 
-The tag-driven release workflow publishes multi-arch images at
-`ghcr.io/varveio/swath` and `ghcr.io/varveio/swath-replay`. Their exact paths and digests are printed in the
-workflow run summary. Package visibility is controlled by the repository's GHCR
-settings; build from source (§3–§5) if the package is not available to your
-account.
-
-Prefer pinning by **digest** over a mutable tag — the digest is the only
-immutable reference:
-
-```bash
-docker pull ghcr.io/varveio/swath@sha256:<digest>
-docker pull ghcr.io/varveio/swath-replay@sha256:<digest>
-```
-
-The release workflow prints the pushed manifest's digest to its run summary, so
-a consumer can copy the exact digest to pin against; each GitHub release also
-ships the signed, attested assets to verify against
-([verify a release](install.md#verify-a-release)).
-
-### Tags & versioning
-
-Each release image carries the same release-cadence tags:
-
-| Tag | Meaning | Mutable? |
-|---|---|---|
-| `<version>` (e.g. `0.3.0`) | The release tag's canonical Gradle version | Intended immutable |
-| `<major>.<minor>` (e.g. `0.3`) | Newest patch of that minor line | Moves |
-| `latest` | Most recently published release | Moves |
-| `<major>` (e.g. `1`) | Newest release of that major line. **Not published while the version is `0.x`** — a bare `0` would imply a stability contract 0.x disclaims | Moves |
-
-A pre-release (`X.Y.Z-rc.N`) publishes its own immutable tag and nothing else:
-
-| Tag | Meaning | Mutable? |
-|---|---|---|
-| `<version>-rc.<n>` (e.g. `0.4.0-rc.1`) | The pre-release tag's canonical Gradle version | Intended immutable |
-
-No `latest`, no rolling `<major>.<minor>`, no bare `<major>`, and the GitHub release is
-marked as a pre-release — so a rehearsal cannot move a tag that a consumer of the last
-real release is following. `.github/workflows/release.yml` classifies the tag once and
-every downstream step reads that classification.
-
-The replay image shares the repository's canonical Gradle version and release cadence but is
-not a GitHub release archive or part of the CLI image. The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
-output keeps the fixed `swath.jar` name — the image promotion depends on it).
-Release tags must exactly match the canonical
-Gradle version (`v0.1.0` ↔ `0.1.0`). **For anything that must not shift under
-it — for example a downstream image built `FROM` this one — pin the digest, not
-`latest`/`<version>`.**
+Releases up to v0.3.2 published the Java images at `ghcr.io/varveio/swath` and
+`ghcr.io/varveio/swath-replay`, with the uber-jar as the release asset
+`swath-<version>.jar`. From 0.4 the same packages carry the Go images, built from
+`Dockerfile.go`; [`RELEASING.md`](../RELEASING.md) owns their tags, assets and verification.
+Pin a Java image by the digest its release printed, or by its version tag (`0.3.2`).
 
 ## 7. CI image checks and release publication
 
@@ -321,9 +280,9 @@ pushes: GHCR is written only by `.github/workflows/release.yml`, behind the prot
 `public-release` environment (see [CI architecture](ops/dev/CI.md#registry-and-artifacts)). To
 run an unreleased commit, build the image from its checkout with `docker build .`.
 
-The deep smoke (Parquet write, read and resume against the public smoke bucket, then the replay
-image serving that capture through DuckDB and Jetty) reaches a real bucket, so only the release
-workflow runs it, against the pushed digest, before it applies `latest`.
+The Java images' deep smoke (Parquet write, read and resume against the public smoke bucket)
+no longer runs: releases publish the Go images, which `release.yml` smokes against the pushed
+digests ([`RELEASING.md`](../RELEASING.md#what-gates-a-release)).
 
 Which jobs run depends on the trigger:
 
@@ -333,7 +292,7 @@ Which jobs run depends on the trigger:
 | **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 | **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 
-A change that touches only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
+A change that touches only the Go port (`go/**`, `Dockerfile.go`) runs none of the Java
 tiers and builds no Java image: the Java jobs report success with their steps skipped.
 
 The release publish job requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository variable,

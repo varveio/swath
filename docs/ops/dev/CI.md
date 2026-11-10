@@ -17,7 +17,7 @@ runners are owned elsewhere and are only summarized here:
 | --- | --- | --- |
 | [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check, `ci-gate` |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
-| [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | rebuild and retest the Java distribution at the tag, then publish, sign and attest |
+| [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
 | [`go-stress.yml`](../../../.github/workflows/go-stress.yml) | dispatch only | repeat one Go test or pattern N times on a chosen runner |
 
@@ -28,23 +28,27 @@ tag must not be published. `site.yml` keeps its checks and its deploy in one fil
 gate is the file itself, not a branch rule someone has to remember. `go-stress.yml` is a tool, not a
 gate: it exists so a suspected flake is measured by repetition instead of being retried until green.
 
-`release.yml` does not trust the `ci.yml` run of the tagged commit. It verifies that the tag is
-an ancestor of `main`, reruns the fast, integration and deep tiers on the tag's SHA, builds once,
-pushes the image by digest, smokes that digest, and only then applies tags and signs. It builds and
-publishes the Java distribution only; no Go job runs there.
+`release.yml` ships the Go implementation; no Java job runs there. It does not trust the `ci.yml`
+run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
+passed `ci.yml` to reach `main`. It verifies that the tag is an ancestor of `main`, reruns `go vet`
+and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
+binaries once into the release archives, builds both images from those archived binaries, pushes
+them by digest, smokes the digests, and only then applies tags and signs.
+[`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
 ## Registry and artifacts
 
 GHCR is written by `release.yml` only. Pull requests, `main` pushes and dispatches build and smoke
-both Java images in `docker-check` and throw them away; nothing outside a release pushes a tag, so
-the registry holds release versions and nothing else. An unreleased commit's image is built
-locally from the checkout (`docker build .`).
+both Java images in `docker-check` and both Go images in `go-build`, and throw them away; nothing
+outside a release pushes a tag, so the registry holds release versions and nothing else. An
+unreleased commit's image is built locally from the checkout (`docker build -f Dockerfile.go .`).
 
-The artifact uploads of `ci.yml`, `nightly.yml` and `go-stress.yml` set their own `retention-days`
+The artifact uploads of `ci.yml`, `nightly.yml`, `go-stress.yml` and `release.yml` set their own `retention-days`
 instead of taking the repository default:
 
 - 14 days for the per-commit test reports and `go test -json` streams in `ci.yml`;
-- 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`;
+- 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`, and the release's
+  `go test -json` stream;
 - 1 day for an artifact that only hands files from one job to another in the same run.
 
 ## One required check: `ci-gate`
@@ -81,11 +85,11 @@ Most pull requests touch only one side of the repository, and nearly all recent 
 port. The `changes` job diffs the pull request's base (or the push's previous commit) against
 `HEAD` and emits two flags:
 
-- **Java change:** any path outside `go/` and `Dockerfile.replay-go*`. Documentation, scripts,
+- **Java change:** any path outside `go/` and `Dockerfile.go*`. Documentation, scripts,
   this workflow and the root build files count, so the Java tiers run unless the change is
   provably Go-only.
 - **Go change:** a path under `go/`, the CI workflow, the `setup-go` composite action,
-  `Dockerfile.replay-go*`, or one of the scripts the Go jobs run (the replay smoke, the race shard
+  `Dockerfile.go*`, or one of the scripts the Go jobs run (the image smokes, the race shard
   table, the SeekParquet conformance scripts).
 
 A dispatch, an empty diff or a missing base sets both. Renames are listed by both paths
@@ -129,7 +133,7 @@ again.
 Deep runs off pull requests. Its tests are schedule-sensitive probe budgets and latency-injecting
 retry and throttle tests that are slow and flaky under contention, so they would block unrelated
 pull requests. The invariants they guard are pinned on every pull request by fast deterministic
-smokes; deep is the timing-realistic confirmation on `main`, nightly and at release. A tag-filtered
+smokes; deep is the timing-realistic confirmation on `main` and nightly. A tag-filtered
 tier that matches nothing reports green, so `scripts/ci/report-test-counts.sh` fails the step when
 the tier ran no test.
 
@@ -153,7 +157,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-lint` | `gofmt`, `go vet`, `go mod tidy -diff`, and the shard table's self-test and coverage check |
 | `go-race (SHARD)` | `go test -race` on one shard of the main module |
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
-| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go replay image for two architectures and its smokes |
+| `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes |
 | `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)` | `go vet` and the whole suite without `-race` on other platforms |
 | `go-fixtures` | the replay fixture tier on Java-written fixtures |
@@ -270,8 +274,9 @@ generation under this layout is to be measured on the first `main` pushes and re
 ### Other caches
 
 - **Gradle:** `gradle/actions/setup-gradle` with its defaults in `ci.yml` and `nightly.yml`.
-  `release.yml` disables it and builds the tag from a cold cache.
-- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-replay-go`,
+- **Release:** `release.yml` restores no cache: it sets up Go with `actions/setup-go` directly, its
+  cache off, and builds and tests the tag cold.
+- **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-go`,
   written from `main` only (`docker-check` and `go-build` on a push). A pull request reads
   them and writes nothing: a cache written on a pull request is scoped to that pull request's
   ref, so it serves no other run while taking 0.5–1 GB of the quota per open pull request.

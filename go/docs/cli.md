@@ -7,7 +7,7 @@ swath du SOURCE [-d N] [flags]          total SOURCE's objects and bytes, per ke
 swath resume DIR [flags]                continue the interrupted run in DIR
 swath show [--journal] DIR              show a dataset or an interrupted run
 swath diag list|count SOURCE [flags]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
-swath --version                         print the build (tool, module version, VCS revision)
+swath --version                         print the build (tool, version, VCS revision)
 ```
 
 `swath --help` prints that summary; `--help` on every command (`swath list --help`, `swath du --help`,
@@ -950,7 +950,7 @@ never zero.
 | Field | Meaning |
 |---|---|
 | `report_version` | 3 |
-| `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the Go module version (`devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
+| `build` (`tool`, `version`, `revision`) | the binary: `swath-go`, the version (the release's `X.Y.Z` that `build.sh` stamps from `$SWATH_VERSION`, `devel` for a binary built from a source checkout), the VCS revision (`-dirty` if modified) |
 | `attempt` (`id`, `started`) | this invocation: 128 random bits in hex, and when the command began; `error.json` carries the same |
 | `invocation` | what was asked: `argv` (secret flags and endpoint values that cannot parse or carry user information, a query or a fragment `[redacted]`), `source` (the root, narrowed by an anchored `--include` on S3 and GCS), `out`, `resume`, `schema_id`, `fields` (the metadata tier), `workers`, `encoders`, `row_budget_bytes` (the one row budget), `part_size_bytes`, `prior` (`--seed-from`: `path`, `source` `dataset` or `cuts`, `cuts` offered, `counted`) |
 | `outcome` | `status` (`committed`, `written`, `listed`, `stopped`, `failed`), `error`, `complete`, `stop_reason`, `stop_source`, `entry_errors`, `class`, `exit_code`, `resumable`, `cause`, `unrecorded` (Exit status above) |

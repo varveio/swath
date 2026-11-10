@@ -19,6 +19,24 @@ func TestRevision(t *testing.T) {
 	}
 }
 
+// TestVersion: a version set at link time (build.sh, from $SWATH_VERSION)
+// is the build's and its User-Agent's; unset, a source build is devel.
+func TestVersion(t *testing.T) {
+	old := Version
+	defer func() { Version = old }()
+	Version = ""
+	if b := Read(); b.Version != "devel" {
+		t.Fatalf("unstamped build %+v, want version devel", b)
+	}
+	Version = "0.4.0-rc.1"
+	if b := Read(); b.Version != Version || b.Tool != Tool {
+		t.Fatalf("stamped build %+v, want version %s", b, Version)
+	}
+	if got, want := UserAgent(), "swath-go/0.4.0-rc.1"; got != want {
+		t.Fatalf("UserAgent() = %q, want %q", got, want)
+	}
+}
+
 func TestUserAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
