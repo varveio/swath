@@ -99,7 +99,7 @@ func (e *Error) Error() string {
 		s += ": " + e.Message
 	}
 	if e.Region != "" {
-		s += " (the bucket is in " + e.Region + ")"
+		s += " (the bucket is in " + e.Region + ": give --s3-region " + e.Region + ")"
 	}
 	if e.RequestID != "" {
 		s += " (request id " + e.RequestID + ")"

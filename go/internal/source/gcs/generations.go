@@ -32,7 +32,7 @@ type GenerationRow = schema.Row[Generation]
 // columns in the same order, then time_deleted. There is no is_latest
 // column: the live generation is the one whose time_deleted is null.
 var GenerationSchema = schema.Bind(reader.GCSGenerationsV1, schema.Schema[Generation]{
-	Info: schema.Info{Name: "swath_listing"},
+	Info: schema.Info{Name: "swath_listing", StorageClass: "storage_class"},
 	Columns: append(lift(Schema.Columns),
 		schema.Column[Generation]{Int: func(g *Generation) (int64, bool) { return g.TimeDeleted, g.TimeDeleted != 0 }}),
 	Bytes: func(g *Generation) int64 { return 48 + objectHeap(&g.Object) }, // six integers of 8 bytes

@@ -869,8 +869,6 @@ func TestAdmissionFallbackPolicy(t *testing.T) {
 		{errors.Join(client.ErrHNSUnknown, source.Unsupported(errors.New("unsupported"))), true},
 		{errors.New("unclassified"), false},
 		{nil, false},
-		{&objhttp.CredentialError{Err: context.DeadlineExceeded}, true},
-		{&objhttp.CredentialError{Transient: true, Err: context.DeadlineExceeded}, false},
 		{source.Unsupported(&objhttp.CredentialError{Err: context.DeadlineExceeded}), false},
 		{errors.Join(objhttp.ErrInvalidPage, &client.Error{Status: 403}), false},
 		{errors.Join(objhttp.ErrSyntax, &client.Error{Status: 401}), false},

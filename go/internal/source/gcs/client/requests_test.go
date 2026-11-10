@@ -217,7 +217,7 @@ func (f found) find(context.Context, ...string) (*google.Credentials, error) {
 
 // withTokens builds a client whose credential search finds ts.
 func withTokens(cfg Config, ts oauth2.TokenSource) (*Client, error) {
-	return newClient(context.Background(), cfg, found{ts: ts}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+	return newClient(context.Background(), cfg, found{ts: ts}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil, nil))
 }
 
 type tokens struct{ err error }

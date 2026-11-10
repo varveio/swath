@@ -278,6 +278,10 @@ deleted-at, and an optional delete-marker column. `schema.Bind` copies the decla
 64-bit integers formatted in decimal; latest is a required boolean or the absence of a nullable deleted-at
 timestamp. A present zero timestamp means deleted. Latest and delete-marker flags must be required booleans
 with accessors; missing, repeated or mistyped role columns are refused. A schema with roles must group keys.
+
+A producer also declares its storage-class column, `schema.Info.StorageClass` (`storage_class` for S3 and GCS,
+`access_tier` for Azure Blob, none for a local tree): `--storage-class` filters on it, and `schema.Bind` refuses
+a declaration that names no string column.
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer

@@ -9,8 +9,9 @@ request timeout, retries and admission.
 
 An anchored literal `--include` can narrow the listing prefix. Google's own endpoint has a
 reference Class A request-cost estimate; custom endpoints have none. GCS does not honor
-`Retry-After`. `--anonymous` overrides ambient and explicit credentials silently: it prints no
-ignored-credentials note. Endpoint validation rejects user information and URI-template braces
+`Retry-After`. `--anonymous` with `--gcs-credentials-file` is refused (exit 2), as every provider refuses it
+beside an explicit credential; a `GOOGLE_APPLICATION_CREDENTIALS` it ignores is named in the shared one-line
+warning. Endpoint validation rejects user information and URI-template braces
 in the path, but does not reject queries or fragments.
 
 ## Provider implementation

@@ -135,8 +135,8 @@ func (s *Spec) Descriptions() []string {
 	return d
 }
 
-// Compile binds the filters to a schema's columns (size, last_modified,
-// storage_class by name). The predicate is called on the listing workers
+// Compile binds the filters to a schema's columns (size and last_modified
+// by name, the storage class as the schema declares it). The predicate is called on the listing workers
 // for every row: it allocates nothing.
 func Compile[P any](s *Spec, sc *schema.Schema[P]) (func(*schema.Row[P]) bool, error) {
 	if s.Empty() {
@@ -155,7 +155,8 @@ func Compile[P any](s *Spec, sc *schema.Schema[P]) (func(*schema.Row[P]) bool, e
 			size = c.Int
 		case "last_modified":
 			mtime = c.Int
-		case "storage_class":
+		}
+		if c.Name == sc.StorageClass && sc.StorageClass != "" {
 			class = c.Str
 		}
 	}
@@ -165,7 +166,7 @@ func Compile[P any](s *Spec, sc *schema.Schema[P]) (func(*schema.Row[P]) bool, e
 	case s.hasMtime && mtime == nil:
 		return nil, fmt.Errorf("--modified-since and --modified-until need a last_modified column; schema %s has none", sc.ID)
 	case s.classes != nil && class == nil:
-		return nil, fmt.Errorf("--storage-class needs a storage_class column; schema %s has none", sc.ID)
+		return nil, fmt.Errorf("--storage-class needs a storage class column; schema %s has none", sc.ID)
 	}
 	inc, exc := s.include, s.exclude
 	minS, maxS, since, until, classes := s.minSize, s.maxSize, s.since, s.until, s.classes

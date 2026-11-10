@@ -308,6 +308,8 @@ type Store struct {
 	// listed unauthenticated. Without it a source with no usable
 	// credentials fails (class auth) before any listing request.
 	Anonymous bool
+	// Trust is how the service's TLS certificate is verified.
+	Trust Trust
 }
 
 // The store group's flag names.
@@ -315,16 +317,19 @@ const (
 	endpointFlag       = "endpoint-url"
 	requestTimeoutFlag = "request-timeout"
 	anonymousFlag      = "anonymous"
+	caBundleFlag       = "ca-bundle"
+	noVerifyFlag       = "no-verify-ssl"
 )
 
 // StoreGroup is the flag group every object store provider names: one
-// --endpoint-url, --request-timeout and --anonymous, whichever provider
-// owns the root. --endpoint-url is part of each provider's identity (a
-// resume refuses another); the timeout and anonymity are operational.
+// --endpoint-url, --request-timeout, --anonymous, --ca-bundle and
+// --no-verify-ssl, whichever provider owns the root. --endpoint-url is part
+// of each provider's identity (a resume refuses another); the timeout,
+// anonymity and TLS trust are operational.
 var StoreGroup = &FlagGroup{
 	Name:        "store",
 	Flags:       func(fs *pflag.FlagSet, _ bool) any { return StoreFlags(fs) },
-	Operational: []string{anonymousFlag, requestTimeoutFlag},
+	Operational: []string{anonymousFlag, requestTimeoutFlag, caBundleFlag, noVerifyFlag},
 	URLs:        []string{endpointFlag},
 }
 
@@ -335,7 +340,11 @@ func StoreFlags(fs *pflag.FlagSet) *Store {
 	Define(fs, Flag{Name: anonymousFlag, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
 		Long: "Ignores any configured. Without it a source with no usable credentials fails (auth) before listing."})
 	Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
-		Long: "S3: path-style addressing unless --no-s3-path-style. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). Part of the resume identity."})
+		Long: "S3: path-style addressing unless --no-s3-path-style; default AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). Part of the resume identity."})
+	Define(fs, Flag{Name: caBundleFlag, Value: Text(&s.Trust.CABundle), Metavar: "FILE", Usage: "trust the certificates in this PEM file besides the system's",
+		Long: "For a service behind a private certificate authority. S3: default AWS_CA_BUNDLE."})
+	Define(fs, Flag{Name: noVerifyFlag, Value: Switch(&s.Trust.NoVerify), Usage: "do not verify the service's TLS certificate (warns)",
+		Long: "For a test endpoint only. A resume replays it, and warns again."})
 	Define(fs, Flag{Name: requestTimeoutFlag, Value: Duration(&s.Timeout), Metavar: "DURATION", Usage: "per-request timeout; a request over it is retried",
 		Default: FormatDuration(DefaultRequestTimeout), Group: GroupLimits,
 		Long: "Raise it for a slow endpoint or emulator whose pages take longer to answer."})

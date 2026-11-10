@@ -57,17 +57,20 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.store != nil {
-			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+			opt.Endpoint, opt.Timeout, opt.Anonymous, opt.Trust = o.store.Endpoint, o.store.Timeout, o.store.Anonymous, o.store.Trust
 		}
 		if o.common != nil {
 			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
+		if opt.Anonymous && opt.CredentialsFile != "" {
+			return nil, source.AnonymousConflict("--gcs-credentials-file")
+		}
 	case *Options: // a library caller
 		opt = *o
 	default:
-		return nil, fmt.Errorf("gcs: options are %T, not *gcs.Options", req.Options)
+		return nil, fmt.Errorf("GCS: options are %T, not *gcs.Options", req.Options)
 	}
-	opt.Bucket, opt.Prefix, opt.Workers = bucket, prefix, req.Workers
+	opt.Bucket, opt.Prefix, opt.Workers, opt.Warn = bucket, prefix, req.Workers, req.Warn
 	if opt.AllVersions {
 		p, err := NewGenerations(ctx, opt)
 		if err != nil {
