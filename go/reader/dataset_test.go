@@ -531,3 +531,22 @@ func TestCheckSchemaReadsTheVerifiedPart(t *testing.T) {
 	}
 	semanticAt(t, d.CheckSchema(ctx), KindSchema, "last_modified")
 }
+
+// A mismatch names both sides; a container or URI that holds user
+// information, a query or a fragment where the bucket belongs is hidden,
+// whichever side it is on, and clean values and literal prefixes are shown.
+func TestMismatchShowsCleanValuesOnly(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"clean", "clean"},
+		{"u:SECRET@b", "[redacted]"},
+		{"b?sig=SECRET", "[redacted]"},
+		{"s3://b/p", "s3://b/p"},
+		{"s3://b/p?literal#key@x", "s3://b/p?literal#key@x"},
+		{"s3://u:SECRET@b/p", "s3://[redacted]"},
+		{"az://acct?sig=SECRET/c", "az://[redacted]"},
+	} {
+		if got := shown(c.in); got != c.want {
+			t.Errorf("shown(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
