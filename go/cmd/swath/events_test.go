@@ -556,3 +556,30 @@ func TestOutcomeBeforeBacklog(t *testing.T) {
 		t.Fatalf("last line %q of %d, %d dropped", lines[len(lines)-1], len(lines), dropped.Load()-base)
 	}
 }
+
+// TestStatusRecordsStayDisposable: with a redrawn progress line on an
+// undrained stderr, status records (SIGUSR1) stay disposable through the
+// progress-line coordinator, and warnings, kept, are bounded too: 1,200
+// of each leave at most diagQueue of each class queued.
+func TestStatusRecordsStayDisposable(t *testing.T) {
+	b := blockedWriter{make(chan struct{})}
+	coord := &stderrCoord{w: b, line: "listing ..."}
+	errOut = coord
+	t.Cleanup(func() { close(b.release); errOut = os.Stderr; logs.Store(nil) })
+	setLog(termOptions{}, "a")
+	tt := &termUI{began: time.Now()}
+	for range 1200 {
+		tt.status(listing.ProgressSnapshot{Rows: 1})
+		elog().warn("a warning")
+	}
+	diagMu.Lock()
+	defer diagMu.Unlock()
+	k := diagSinks[io.Writer(b)]
+	n := map[lineClass]int{}
+	for _, l := range k.queue {
+		n[l.class]++
+	}
+	if n[disposable] > diagQueue || n[kept] > diagQueue {
+		t.Fatalf("queued %d disposable, %d kept lines", n[disposable], n[kept])
+	}
+}

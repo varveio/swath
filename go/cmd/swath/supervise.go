@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -108,7 +109,7 @@ func classify(err, cause error, dir string) outcome {
 		return outcome{Class: listing.ClassCompleted, ExitCode: exitCompleted}
 	}
 	resumable := dir != "" && !dataset.Committed(dir) && hasJournal(dir)
-	o := outcome{Message: scrub(err.Error()), Resumable: resumable, StopSource: stopSource(cause)}
+	o := outcome{Message: err.Error(), Resumable: resumable, StopSource: stopSource(cause)}
 	var u usageError
 	var se *signalError
 	var ue *journal.UnresumableError
@@ -368,8 +369,9 @@ const (
 	// disposable: progress records and the request log (-vv, -vvv),
 	// dropped first.
 	disposable lineClass = iota
-	// kept: warnings and errors, which a reader needs: never dropped for
-	// the queue's bound, and written before the outcome.
+	// kept: warnings, errors and the statistics, which a reader needs:
+	// bounded apart (diagQueue of them, the oldest dropped past it), and
+	// written before the outcome.
 	kept
 	// final: the command's last lines (its outcome).
 	final
@@ -402,7 +404,8 @@ var (
 // dropped. A queued line is lost at exit.
 func note(w io.Writer, s string) { send(w, s, disposable) }
 
-// noteKept is note for a warning or an error: queued past diagQueue too.
+// noteKept is note for a warning, an error or the statistics: queued past
+// diagQueue disposable lines, up to diagQueue kept ones.
 func noteKept(w io.Writer, s string) { send(w, s, kept) }
 
 // noteFinal is note for a command's last lines (its outcome). The queued
@@ -427,7 +430,29 @@ func (k *diagSink) shed(keep lineClass) {
 	k.queue = q
 }
 
+// bound makes room for one more kept line (diagMu held): past diagQueue
+// of them the oldest is dropped, counted.
+func (k *diagSink) bound() {
+	n := 0
+	for _, l := range k.queue {
+		if l.class == kept {
+			n++
+		}
+	}
+	if n < diagQueue {
+		return
+	}
+	i := slices.IndexFunc(k.queue, func(l diagLine) bool { return l.class == kept })
+	dropped.Add(1)
+	close(k.queue[i].done)
+	k.queue = slices.Delete(k.queue, i, i+1)
+}
+
 func send(w io.Writer, s string, class lineClass) {
+	if c, ok := w.(*stderrCoord); ok {
+		c.put(s, class) // the line keeps its class through the progress line
+		return
+	}
 	l := diagLine{s, class, make(chan struct{})}
 	diagMu.Lock()
 	k := diagSinks[w]
@@ -437,8 +462,11 @@ func send(w io.Writer, s string, class lineClass) {
 		go drain(w, k)
 	}
 	full, stuck := len(k.queue) >= diagQueue, k.stuck
-	if class == final {
+	switch class {
+	case final:
 		k.shed(kept)
+	case kept:
+		k.bound()
 	}
 	if !full || class != disposable {
 		k.queue = append(k.queue, l)

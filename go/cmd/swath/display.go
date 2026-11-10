@@ -475,15 +475,21 @@ type stderrCoord struct {
 	done bool   // progress ended: no frame is drawn again
 }
 
+// Write writes p as a disposable line (send); the command's own lines
+// reach send with their class, which the coordinator keeps (put).
 func (c *stderrCoord) Write(p []byte) (int, error) {
+	c.put(string(p), disposable)
+	return len(p), nil
+}
+
+// put writes s, of class, around the frame on screen.
+func (c *stderrCoord) put(s string, class lineClass) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := string(p)
 	if c.line != "" {
 		s = "\r" + eraseLine + s + c.line
 	}
-	noteKept(c.w, s) // the other writers' lines (warnings among them), around the progress line
-	return len(p), nil
+	send(c.w, s, class)
 }
 
 // frame draws a redrawn progress line in place.
