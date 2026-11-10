@@ -5,6 +5,7 @@
 #   go-race-shards.sh --matrix      the matrix ci.yml expands, as JSON (needs no Go)
 #   go-race-shards.sh SHARD         the `go test` arguments of SHARD, one per line (run in go/)
 #   go-race-shards.sh --check       every package's tests run in exactly one shard (run in go/)
+#   go-race-shards.sh --arm64-extra packages not already raced on arm64 (run in go/)
 #   go-race-shards.sh --self-test   the table checks against synthetic package lists (needs no Go)
 #
 # A row names its packages and a -run pattern. A row with a pattern splits one package: the
@@ -64,6 +65,25 @@ load_packages() {
   module=$(go list -m)
   ALL=$(go list -race ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u)
   if [ -z "$ALL" ]; then echo "go list -race ./... lists no package" >&2; return 1; fi
+}
+
+# The ordinary PR cross-architecture leg need not rerun the heavy arm64 race
+# packages. Derive its complement from the same table, including future shards.
+arm64_extra() {
+  local row covered= result
+  for row in "${table[@]}"; do
+    if [ "$(field "$row" 2)" = "$arm" ]; then
+      # A remainder shard with no selector could move to arm64 too.
+      if [ -z "$(field "$row" 3)" ]; then
+        covered+="$(rest_packages)"$'\n'
+      else
+        covered+="$(expand "$(field "$row" 3)")"$'\n'
+      fi
+    fi
+  done
+  result=$(comm -23 <(sort -u <<<"$ALL") <(sed '/^$/d' <<<"$covered" | sort -u))
+  [ -n "$result" ] || { echo '::error::no arm64 complement; update the xos matrix' >&2; return 1; }
+  printf '%s\n' "$result"
 }
 
 # The packages selector list $1 (comma-separated paths and ./x/... prefixes) names, one per line,
@@ -271,6 +291,15 @@ self_test() {
   if [ "$got" != "./a ./a/b ./c" ]; then echo "self-test: x expands to '$got', want './a ./a/b ./c'"; fail=1; fi
   got=$(shard_args rest | paste -sd' ' -)
   if [ "$got" != "./ab ./d" ]; then echo "self-test: rest expands to '$got', want './ab ./d'"; fail=1; fi
+  table=("x $arm ./a/...,./c -" "rest $amd - -")
+  got=$(arm64_extra | paste -sd' ' -)
+  if [ "$got" != "./ab ./d" ]; then echo "self-test: arm64 complement is '$got'"; fail=1; fi
+  table=("s $arm ./a ^TestX\$" "s-rest $arm ./a -" "rest $amd - -")
+  got=$(arm64_extra | paste -sd' ' -)
+  if [ "$got" != "./a/b ./ab ./c ./d" ]; then echo "self-test: split arm64 complement is '$got'"; fail=1; fi
+  table=("x $amd ./a -" "rest $arm - -")
+  got=$(arm64_extra)
+  if [ "$got" != "./a" ]; then echo "self-test: rest arm64 complement is '$got'"; fail=1; fi
   if [ "$fail" = 0 ]; then echo "self-test: ok"; fi
   return "$fail"
 }
@@ -286,6 +315,7 @@ case "${1:-}" in
     printf ']\n'
     ;;
   --self-test) self_test ;;
+  --arm64-extra) load_packages; arm64_extra ;;
   --check) load_packages; check ;;
   ''|-*) sed -n '2,9s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
   *) load_packages; shard_args "$1" ;;

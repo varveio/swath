@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise cache deletion boundaries and the actual change/matrix shell in ci.yml."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -21,6 +22,11 @@ def run_step(name):
             break
         lines.append(line[10:])
     return '\n'.join(lines)
+
+
+spec = importlib.util.spec_from_file_location('go_ci_policy', ROOT / 'scripts/ci/go-ci-policy.py')
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
 
 
 class PolicyTests(unittest.TestCase):
@@ -60,97 +66,149 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue({2, 3, 6, 11, 13, 15} <= kept)
         self.assertFalse(deleted & kept)
 
-    def test_changes_and_matrix(self):
+    def test_module_and_tier_selection(self):
+        cases = [
+            (['go/internal/x.go'], {'go', 'fixtures'}),
+            (['go/docs/guide.md'], {'go', 'fixtures'}),
+            (['go/reader/read_test.go'], {'go', 'reader', 'fixtures'}),
+            (['go/objfile/testdata/fixture'], {'objfile'}),
+            (['go/objfile/go.sum'], {'objfile', 'platforms'}),
+            (['go/go.mod'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['go/reader/go.sum'], {'go', 'reader', 'fixtures', 'images', 'platforms'}),
+            (['go/cmd/swath/foo_windows.go'], {'go', 'fixtures', 'platforms'}),
+            (['go/internal/journal/lock.go'], {'go', 'fixtures', 'platforms'}),
+            (['go/internal/source/localfs/scan.go'], {'go', 'fixtures', 'platforms'}),
+            (['go/internal/parquetout/sink.go'], {'go', 'fixtures', 'platforms'}),
+            (['go/objfile/foo_arm64.s'], {'objfile', 'platforms'}),
+            (['Dockerfile.go'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['go/notices.sh'], {'go', 'fixtures', 'images', 'platforms'}),
+            (['LICENSE'], {'java', 'go', 'fixtures', 'images', 'platforms'}),
+            (['docs/replay-provider-expectations.json'], {'java', 'go', 'fixtures'}),
+            (['docs/replay-provider-evidence.tar.gz'], {'java', 'go', 'fixtures'}),
+            (['swath-replay/src/Test.java'], {'java', 'fixtures'}),
+            (['build.gradle.kts'], {'java', 'fixtures'}),
+            (['gradlew.bat'], {'java', 'fixtures'}),
+            (['swath-cli/src/Test.java'], {'java'}),
+            (['docs/configuration.md'], {'java'}),
+            (['docs/internals/architecture.md'], set()),
+            (['README.md', 'SECURITY.md'], set()),
+            (['site/data/runs/facts.json'], {'java'}),
+            (['docs/assets/demo.mp4'], {'java'}),
+            (['site/index.html'], set()),
+        ]
+        for paths, expected in cases:
+            with self.subTest(paths=paths):
+                got = policy.select(paths, 'pull_request')
+                self.assertEqual({key for key, value in got.items() if value}, expected)
+        for paths in [['.github/workflows/ci.yml'], ['.github/actions/setup-go/action.yml'],
+                      ['scripts/ci/go-race-shards.sh'], ['unknown-build-input'], []]:
+            got = policy.select(paths, 'pull_request')
+            self.assertTrue(all(value for key, value in got.items() if key != 'java'), paths)
+        for kwargs in [dict(force_full=True), dict(unknown=True), dict(toolchain=True)]:
+            got = policy.select(['README.md'], 'pull_request', **kwargs)
+            self.assertTrue(all(value for key, value in got.items() if key != 'java'), kwargs)
+        for event in ['push', 'workflow_dispatch']:
+            got = policy.select(['README.md'], event)
+            self.assertTrue(all(value for key, value in got.items() if key != 'java'))
+        self.assertTrue(policy.select(['go/internal/foo.go'], 'pull_request',
+                                      build_tags=True)['platforms'])
+
+    def test_dependency_closure_uses_modules_not_cache_keys(self):
+        manifests = {'go': 'module example/main\nrequire example/reader v1.0.0',
+                     'reader': 'module example/reader', 'objfile': 'module example/objfile'}
+        out = policy.select(['go/objfile/object.go'], 'pull_request')
+        self.assertFalse(policy.dependants(out, manifests)['go'])
+        manifests['reader'] += '\nrequire example/objfile v1.0.0'
+        out = policy.dependants(out, manifests)
+        self.assertTrue(out['reader'] and out['go'] and out['fixtures'])
+
+    def test_real_git_diff_renames_tags_toolchain_and_missing_history(self):
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp)
             subprocess.run(['git', 'init', '-q', temp], check=True)
             for args in [('user.email', 'ci@example.invalid'), ('user.name', 'CI')]:
                 subprocess.run(['git', 'config', *args], cwd=temp, check=True)
-            (cwd / 'base').write_text('base')
+            for flag, path in policy.MODULES.items():
+                f = cwd / path
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text('module example/' + flag + '\ngo 1.26.0\n')
+            source = cwd / 'go/objfile/source.go'
+            source.write_text('package objfile\n')
             subprocess.run(['git', 'add', '.'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'base'], cwd=temp, check=True)
             base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
             output = cwd / 'output'
-            env = dict(os.environ, EVENT='pull_request', BASE=base, GITHUB_OUTPUT=str(output))
-            cases = [
-                (['go/internal/x.go', 'CHANGELOG.md'], 'false', 'true'),
-                (['README.md', 'SECURITY.md'], 'false', 'false'),
-                (['docs/replay-provider-expectations.json'], 'true', 'false'),
-                (['docs/replay-provider-evidence.tar.gz'], 'true', 'false'),
-                (['docs/configuration.md'], 'true', 'false'),
-                (['docs/internals/architecture.md'], 'false', 'false'),
-                (['scripts/ci/cache-prune.sh'], 'false', 'false'),
-                (['site/data/runs/fixture.json'], 'true', 'false'),
-                (['docs/assets/swath-demo.mp4'], 'true', 'false'),
-                (['go/docs/guide.md'], 'false', 'true'),
-                (['site/index.html'], 'false', 'false'),
-                (['scripts/ci/report-test-counts.sh'], 'true', 'false'),
-                (['.github/workflows/nightly.yml'], 'true', 'false'),
-                (['scripts/provider-conformance/java/Capture.java'], 'true', 'false'),
-                (['scripts/legal/render-third-party-notices.py'], 'true', 'false'),
-                (['Dockerfile.replay'], 'true', 'false'),
-                (['.dockerignore'], 'true', 'false'),
-                (['gradlew.bat'], 'true', 'false'),
-                (['gradle/libs.versions.toml'], 'true', 'false'),
-                (['config/license/allowed-licenses.json'], 'true', 'false'),
-                (['THIRD_PARTY_NOTICES.md'], 'true', 'false'),
-                (['Dockerfile.go'], 'false', 'true'),
-                (['scripts/ci/smoke-container.sh'], 'false', 'true'),
-                (['docs/README.md'], 'false', 'false'),
-                (['CHANGELOG.md.java'], 'false', 'false'),
-                (['build.gradle.kts'], 'true', 'false'),
-                (['.github/workflows/ci.yml'], 'true', 'true'),
-                (['swath-core/src/X.java', 'go/X.java'], 'true', 'true'),
-                ([], 'true', 'true'),
-            ]
-            for paths, java, go in cases:
-                subprocess.run(['git', 'reset', '--hard', '-q', base], cwd=temp, check=True)
-                for path in paths:
-                    target = cwd / path
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text('changed')
-                subprocess.run(['git', 'add', '.'], cwd=temp, check=True)
-                subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'case'], cwd=temp, check=True)
+            env = dict(os.environ, EVENT='pull_request', BASE=base,
+                       GITHUB_OUTPUT=str(output), PR_LABELS='[]')
+
+            def run(**extra):
                 output.write_text('')
-                subprocess.run(['bash', '-c', run_step('Detect Java- and Go-relevant changes')],
-                               cwd=temp, env=env, check=True, capture_output=True)
-                self.assertEqual(output.read_text(), f'java={java}\ngo={go}\n', paths)
-                output.unlink()
-            for event, base_arg in [('workflow_dispatch', base), ('pull_request', ''),
-                                    ('push', '0' * 40)]:
-                output.write_text('')
-                subprocess.run(['bash', '-c', run_step('Detect Java- and Go-relevant changes')],
-                               cwd=temp, env=dict(env, EVENT=event, BASE=base_arg),
-                               check=True, capture_output=True)
-                self.assertEqual(output.read_text(), 'java=true\ngo=true\n')
-            output.write_text('')
-            failed = subprocess.run(['bash', '-c', run_step('Detect Java- and Go-relevant changes')],
-                                    cwd=temp, env=dict(env, BASE='missing-ref'), capture_output=True)
-            self.assertNotEqual(failed.returncode, 0)
-            self.assertEqual(output.read_text(), '')
-            output.unlink()
-            (cwd / 'swath-core').mkdir(exist_ok=True)
-            (cwd / 'swath-core/Source.java').write_text('source')
-            subprocess.run(['git', 'add', '.'], cwd=temp, check=True)
-            subprocess.run(['git', 'commit', '-qm', 'Java source'], cwd=temp, check=True)
-            rename_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
-            (cwd / 'go').mkdir(exist_ok=True)
-            subprocess.run(['git', 'mv', 'swath-core/Source.java', 'go/Source.java'], cwd=temp, check=True)
-            subprocess.run(['git', 'commit', '-qm', 'Move source'], cwd=temp, check=True)
-            output.write_text('')
-            subprocess.run(['bash', '-c', run_step('Detect Java- and Go-relevant changes')],
-                           cwd=temp, env=dict(env, BASE=rename_base), check=True, capture_output=True)
-            self.assertEqual(output.read_text(), 'java=true\ngo=true\n')
-            for changed, event, expected in [
-                ('true', 'pull_request', ['ubuntu-24.04-arm']),
-                ('true', 'push', ['macos-latest', 'windows-latest', 'ubuntu-24.04-arm']),
-                ('true', 'workflow_dispatch', ['macos-latest', 'windows-latest', 'ubuntu-24.04-arm']),
-                ('false', 'pull_request', ['off']),
+                result = subprocess.run(['python3', str(ROOT / 'scripts/ci/go-ci-policy.py')],
+                                        cwd=temp, env=dict(env, **extra), capture_output=True, text=True)
+                rows = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                return result, rows
+
+            subprocess.run(['git', 'mv', 'go/objfile/source.go', 'go/source.go'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'move across modules'], cwd=temp, check=True)
+            result, rows = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((rows['go'], rows['objfile'], rows['reader']), ('true', 'true', 'false'))
+            result, rows = run(PR_LABELS='[{"name":"ci:full"}]')
+            self.assertEqual(rows['full'], 'true')
+            # Deleted build constraints still escalate the selected module.
+            (cwd / 'go/source.go').write_text('//go:build linux\n\npackage objfile\n')
+            subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'constraint'], cwd=temp, check=True)
+            self.assertEqual(run()[1]['platforms'], 'true')
+            (cwd / 'go/go.mod').write_text('module example/go\ngo 1.27.0\n')
+            subprocess.run(['git', 'add', 'go/go.mod'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'toolchain'], cwd=temp, check=True)
+            self.assertEqual(run()[1]['full'], 'true')
+            for bad_base in ['missing-ref']:
+                result, rows = run(BASE=bad_base)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(rows, {})
+            self.assertEqual(run(BASE='')[1]['full'], 'true')
+            # A new nested module cannot silently miss every existing job.
+            (cwd / 'go/new').mkdir()
+            (cwd / 'go/new/go.mod').write_text('module example/new\n')
+            subprocess.run(['git', 'add', 'go/new/go.mod'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'new module'], cwd=temp, check=True)
+            result, rows = run()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(rows, {})
+
+    def test_actual_xos_matrix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / 'output'
+            for main, any_module, platforms, expected, scope in [
+                ('true', 'true', 'false', ['ubuntu-24.04-arm'], 'extra'),
+                ('true', 'true', 'true', ['macos-latest', 'windows-latest', 'ubuntu-24.04-arm'], 'full'),
+                ('false', 'true', 'true', ['macos-latest', 'windows-latest', 'ubuntu-24.04-arm'], 'full'),
+                ('false', 'true', 'false', ['off'], 'off'),
+                ('false', 'false', 'false', ['off'], 'off'),
             ]:
                 output.write_text('')
+                env = dict(os.environ, GO_CHANGED=main, GO_ANY=any_module, PLATFORMS=platforms,
+                           GITHUB_OUTPUT=str(output))
                 subprocess.run(['bash', '-c', run_step('Go cross-OS matrix')], cwd=temp,
-                               env=dict(env, GO_CHANGED=changed, EVENT=event), check=True, capture_output=True)
-                self.assertEqual([x['os'] for x in json.loads(output.read_text().split('=', 1)[1])], expected)
+                               env=env, check=True, capture_output=True)
+                matrix = json.loads(output.read_text().split('=', 1)[1])
+                self.assertEqual([row['os'] for row in matrix], expected)
+                self.assertEqual({row['scope'] for row in matrix}, {scope})
+
+    def test_full_gate_refuses_partial_or_failed_validation(self):
+        selection = dict.fromkeys(('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms'), 'true')
+        for result, omitted, expected in [('success', None, 0), ('failure', None, 1),
+                                           ('skipped', None, 1), ('cancelled', None, 1),
+                                           *[('success', key, 1) for key in selection]]:
+            selected = dict(selection)
+            if omitted:
+                selected[omitted] = 'false'
+            run = subprocess.run(['bash', '-c', run_step('Full Go validation passed')],
+                                 env=dict(os.environ, RESULT=result, SELECTION=json.dumps(selected)),
+                                 capture_output=True)
+            self.assertEqual(run.returncode == 0, expected == 0, (result, omitted))
 
 
 if __name__ == '__main__':
