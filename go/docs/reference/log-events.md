@@ -7,8 +7,9 @@ progress line, no color and no statistics block (the `outcome` event and `--repo
 swath list s3://bucket/logs/ -o logs.parquet --log-format json -v 2> swath.log
 ```
 
-`--log-format` is taken by every command, before or after the command word, and again by `swath resume`. A
-command line that is refused before the option is read still reports in the format it names.
+`--log-format` is taken by every command, anywhere on the line before `--`, and again by `swath resume`. A
+command line refused before the run starts (an unknown option, a bad value, a refused destination) still
+reports in the format it names; for a line that does not parse, that is best effort.
 
 Each object has `ts` (RFC 3339, UTC, milliseconds), `level` (`debug`, `info`, `warn`, `error`), `event`,
 `attempt` (the attempt id, once a run has one), `msg` (the text line's words), then the event's fields:
@@ -18,7 +19,7 @@ Each object has `ts` (RFC 3339, UTC, milliseconds), `level` (`debug`, `info`, `w
 | `start` | `info` (`-v`) | `source`, `mode` (what the run writes: `rows` on stdout, a text `file`, a `dataset`, `totals`, or a `count`), `destination` (the path, `stdout`, or absent for a count) |
 | `progress` | `info` | the progress snapshot's fields, as `.swath/progress.json` has them (`rows`, `requests`, `duration_ms`, ...: [run-report.md](run-report.md#progress-file)) |
 | `warning` | `warn` | none, or: a persistent failure's `host`, `cause`, `attempts`; unreadable entries' `unreadable` (their count) and `samples`; a goroutine dump's `stacks` |
-| `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (every query value but the listing's own parameters, such as `prefix`, `[redacted]`), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
+| `request` | `debug` (`-vv` failed, `-vvv` all) | `op` (the method), `host`, `path` (the listing's own query parameters, such as `prefix`, as sent; every other parameter, name and value, shown as `[redacted]`), `status` (absent without an answer), `cause` (without an answer), `latency_ms` |
 | `retry` | `debug` (`-vv`) | `host` and `path` (the attempt's request, redacted as a `request` event's), `try` (the call's attempt, from 1), `class` (the diagnostic label), `status`, `code` (the provider's), `cause`, `retry`, `wait_ms` |
 | `outcome` | `info`, `error` on failure | `class`, `exit_code`, `resumable`, `cause`, `message` (the report's error) |
 
@@ -27,6 +28,10 @@ or `-vvv`, and progress records `-v` or `--progress`; they come every `--progres
 default) whether or not stderr is a terminal. The `outcome` event ends every run and every failure unless
 `-qq` is given.
 
+A stderr that does not drain never holds the run. Warnings and errors are kept in a bounded queue of their own;
+progress records and request events are dropped first. The final `outcome` event is written before the queued
+request events. What was dropped is counted in the report's `requests.log_dropped`.
+
 Each event once:
 
 <!-- events:begin -->
@@ -34,8 +39,8 @@ Each event once:
 {"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"start","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing s3://bucket/logs/ to stdout","source":"s3://bucket/logs/","mode":"rows","destination":"stdout"}
 {"ts":"2026-11-10T12:00:00.000Z","level":"info","event":"progress","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"listing · 120,000 objects · 2,000 keys/s (avg 2,000)","rows":120000,"ordered":0,"encoded":0,"parts":0,"verified_bytes":0,"advance":120000,"answered":121,"frontier":121,"empty_chain_pages":0,"throttles":0,"timeouts":0,"rows_retained":0,"requests":122,"retries":1,"inflight":8,"limit":64,"mutex_wait_ms":0,"mutex_max_hold_ms":0,"started_at":"2026-11-10T11:59:00Z","as_of":"2026-11-10T12:00:00Z","duration_ms":60000,"part_age_ms":60000}
 {"ts":"2026-11-10T12:00:00.000Z","level":"warn","event":"warning","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"S3 127.0.0.1:9: connection refused (retrying; 11 attempts)","host":"127.0.0.1:9","cause":"connection refused","attempts":11}
-{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","status":200,"latency_ms":42}
-{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 acct.blob.core.windows.net/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted] failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","host":"acct.blob.core.windows.net","path":"/c?comp=list&marker=[redacted]&prefix=logs%2F&restype=container&sig=[redacted]&sv=[redacted]","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"request","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"request GET acct.blob.core.windows.net/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]: 200 (42ms)","op":"GET","host":"acct.blob.core.windows.net","path":"/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]","status":200,"latency_ms":42}
+{"ts":"2026-11-10T12:00:00.000Z","level":"debug","event":"retry","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"attempt 2 acct.blob.core.windows.net/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted] failed (throttle): 503 SlowDown: Please reduce your request rate.; retrying in 400ms","host":"acct.blob.core.windows.net","path":"/c?comp=list&[redacted]&prefix=logs%2F&restype=container&[redacted]&[redacted]","try":2,"class":"throttle","status":503,"code":"SlowDown","cause":"503 SlowDown: Please reduce your request rate.","retry":true,"wait_ms":400}
 {"ts":"2026-11-10T12:00:00.000Z","level":"error","event":"outcome","attempt":"5f0c2a9e4b1d4c3a8e7f6a5b4c3d2e1f","msg":"stuck: no progress within the stall timeout (stuck_no_rows)","class":"stuck","exit_code":75,"resumable":true,"cause":"stuck_no_rows","message":"stuck: no progress within the stall timeout (stuck_no_rows)"}
 ```
 <!-- events:end -->

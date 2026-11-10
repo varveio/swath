@@ -23,7 +23,8 @@ A name ending in an extension swath does not write (`.csv`, `.json`, `.txt`, a b
 Every row has `key` first, then the source's columns under the dataset's names: `size`, `last_modified` and
 the columns of the source's schema ([output.md](../output.md#text-rows)). Every format and every source
 lists in ascending byte order of the key. A local tree lists its directories too (kind `DIR`, the key ending
-in `/`) unless `--no-dirs`; a local SOURCE that is a file lists as its one row.
+in `/`) unless `--no-dirs`. A local SOURCE that is a file lists as its one row, read as the same entry would be
+in a listing of its parent: at the `--metadata` tier, and a symbolic link as the link, not its target.
 
 A dataset directory must be new or empty; `--overwrite` replaces a previous swath dataset there, and
 nothing else. A text file is written beside its name and renamed into place when complete, so a failed run

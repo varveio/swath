@@ -3,7 +3,7 @@
 This is the contributor reference for building, packaging, and testing the Java
 implementation's self-contained jar, application archives, and container images. Releases no
 longer publish them: from 0.4 a release ships the Go binaries and images
-([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/running.md#install-and-verify)),
+([`RELEASING.md`](../RELEASING.md), [Go install](../go/docs/install.md)),
 and v0.3.2 was the last Java release. It is not the installation or container-usage guide. To
 run the Java release, use [Installation](install.md); for credentials, output mounts, and
 production object-store access, use [Operating swath](operating.md).

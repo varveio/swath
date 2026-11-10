@@ -27,7 +27,8 @@ The fields most runs need:
 one of the dataset directory's own entries (`manifest.json`, `data/`, `run.json`, `error.json`, `.swath/`)
 or a path inside another swath dataset: those are refused before listing, with exit 2. A name of its own in
 the output directory, such as `DIR/attempt-1.json`, is accepted. A report that cannot be written at the end
-fails the command (exit 1).
+fails the command (exit 1). `--report -` where stdout carries rows is refused (exit 2) and prints nothing on
+stdout.
 
 ## Progress file
 

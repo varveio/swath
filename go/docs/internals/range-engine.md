@@ -266,7 +266,7 @@ at most 16 pages listed, however deep its keys' shared prefix.
 The open frontier's remainder is unbounded, so neither gate applies to it.
 
 **Structure probes** (on their evidence by default; `swath diag list --structure=on` probes every range in a
-folder, `--structure=off`, or `=false`, none; a library caller's zero `Options` has none). A page's density is
+folder, `--structure=off` none; a library caller's zero `Options` has none). A page's density is
 leaf-local and the anchor reflection overshoots into gaps between sparse folder names, so neither can place a
 pivot on a distant folder boundary; a delimiter listing can. A probe is one delimiter request per folder level
 (`max-keys` 32, start-after the cursor), all levels at once, alongside the range's next page, only while a
@@ -380,7 +380,7 @@ worker then drained alone. `SWATH_SPLIT_TRACE=1` prints each split with its pivo
 generation and the anchor its upper child carries.
 
 **Sequential oracle.** `swath diag list --sequential` lists the scope as one continuation-token chain; its dataset is
-byte-identical to the parallel core's. It is the only mode where `-max-keys` stops early (the dataset is
+byte-identical to the parallel core's. It is the only mode where `--max-keys` stops early (the dataset is
 then marked incomplete).
 
 ## Resume

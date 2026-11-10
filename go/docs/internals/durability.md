@@ -215,8 +215,8 @@ and a stated durability: `Durable` (file synced before the rename, directory aft
    endpoint, path or addressing style may serve another bucket of the same name. A library caller's supplied
    `s3.Options.Client` must name its route (`s3.Routed`), recorded as the endpoint and compared byte for byte
    past the scheme and host case, or the run declines resume. Workers, encoders,
-   row budget and credentials may change; so may the seed for a library caller (`-seed` is not part of
-   the identity), but the CLI's `swath resume` replays the recorded `--seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
+   row budget and credentials may change; so may the seed for a library caller (the seed is not part of
+   the identity), but the CLI's `swath resume` replays the recorded `--no-seed` and does not accept it. A run with `--max-keys` keeps no journal and cannot resume: the cap counts what
    one process listed.
 3. Recovers `data/`. Every path it acts on is checked first by lstat, never following a link. Before the
    lock is taken, for the run or for a refusal's settlement, an existing `.swath/` must be a directory and an
@@ -267,7 +267,7 @@ A journaled run that fails with an ordinary error (not a crash) leaves its tempo
 may already be recorded (its rename failed), and only `swath resume`'s reconciliation decides which are.
 `swath resume` on a committed dataset meets `ErrComplete`: complete coverage exits 0 (class `completed`, the
 report saying `complete`; idempotent, as Java's), partial coverage exits 1 (`incomplete`); on a directory without a journal (an empty
-workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `-overwrite`.
+workspace included), `ErrNothingToResume`; neither changes the directory. A new run over an interrupted one needs `--overwrite`.
 
 ## The outcome of an attempt
 

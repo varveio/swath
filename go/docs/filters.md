@@ -32,14 +32,15 @@ below its root. The rows still show the full key.
 | `*.gz` (no `/`) | the last segment, at any depth: `a.gz`, `x/y/a.gz` |
 | `logs/*.gz` (with a `/`) | from SOURCE's root: `logs/a.gz`, not `logs/x/a.gz`; a leading `/` only anchors (`/a.txt`) |
 | `*`, `?` | any characters, or one, within a segment (never `/`) |
-| `**` | any number of whole segments, as a segment of its own: `logs/**`, `**/tmp`, `a/**/b` |
+| `**` | any number of whole segments, as a segment of its own: `logs/**`, `**/tmp`, `a/**/b`; a trailing `**` is at least one, so `logs/**` is what lies below `logs/`, not the `logs/` row (as in gitignore) |
 | `[abc]`, `[a-z]`, `[!a-z]` | one character (never `/`) |
 | `{a,b}` | either (not nested) |
 | `\c` | the character `c` |
 
 A local directory's row has a key ending in `/` and is matched as its name: `--exclude raw` drops the row of
-the directory `raw/` but lists what is below it; `--exclude '2025/**'` drops `2025/` and everything below it;
-`--exclude '**/node_modules/**'` every `node_modules` directory and its contents. Filters drop rows; the walk
+the directory `raw/` but lists what is below it; `--exclude '2025/**'` drops everything below `2025/` but keeps
+its row, and `--exclude 2025/ --exclude '2025/**'` drops both; `--exclude '**/node_modules/**'` drops the
+contents of every `node_modules` directory. Filters drop rows; the walk
 still lists every directory.
 
 An empty or malformed pattern is refused with exit 2.

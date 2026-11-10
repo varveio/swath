@@ -50,7 +50,9 @@ Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in 
 `--s3-bearer-token-command` must be given it again.
 
 A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
-exit 0. Local trees and text output keep no journal; resume refuses them, and they are run again.
+exit 0. Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
+judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
+resumes, and a text file `rows.tsv` is refused as text output.
 
 ## Options
 

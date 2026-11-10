@@ -42,8 +42,9 @@ uses the same one. There is no cost estimate for a custom endpoint.
 
 `--ca-bundle FILE` trusts the certificates in a PEM file besides the system's (a private certificate
 authority). `--no-verify-ssl` checks no certificate, for a test endpoint only: it warns on every run that
-has it, a resume included, and the report's `source.stats.no_verify_ssl` is true. A resume may give either
-again; `--verify-ssl` undoes a recorded `--no-verify-ssl`.
+has it, a resume included, and the report's `source.stats.no_verify_ssl` is true. Both apply to the
+credential lookups swath makes over HTTPS (S3's STS and SSO, GCS's token exchange) as to the listing. A resume
+may give either again; `--verify-ssl` undoes a recorded `--no-verify-ssl`.
 
 ## Amazon S3
 
@@ -136,7 +137,8 @@ run's identity.
 will not say (an anonymous caller is always refused that question, and swath then asks the account's Data
 Lake host, which answers public containers), the run is refused too, unless `--azure-assume-flat` asserts a
 flat namespace. The assertion is recorded for resume and shown in the report's `namespace`; an account that
-reports a hierarchical namespace is refused whatever is asserted. Versions, snapshots and deleted blobs are not
+reports a hierarchical namespace is refused whatever is asserted. A credential the service refuses during
+these checks (an expired SAS, say) ends the run as an authentication failure (exit 1, cause `auth`). Versions, snapshots and deleted blobs are not
 listed, and `--all-versions` is refused.
 
 **Permissions.** Permission to list the container's blobs: a SAS with the list permission, or an Entra ID
@@ -163,6 +165,9 @@ A path lists a directory tree, or a single file as its one row. Its rows are ent
 is not a directory: regular files, symbolic links, devices) and directories, each directory's key ending in
 `/`. swath walks the tree through the operating system, so a mounted share (NFS, SMB, a FUSE mount) lists as
 any directory does.
+
+A SOURCE that is a file is read as the same entry in a listing of its parent: at the `--metadata` tier, and a
+symbolic link as the link (kind `SYMLINK`, its target in `link_target`), never followed. Its key is its name.
 
 | Option | Effect |
 |---|---|

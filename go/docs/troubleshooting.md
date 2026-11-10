@@ -120,7 +120,12 @@ swath: warning: S3 127.0.0.1:9: connection refused (retrying; 14 attempts)
 ```
 
 Every request has failed with one cause for 10 seconds. swath keeps retrying until `--stall-timeout` or
-`--max-duration`; check the endpoint, the network and `--endpoint-url`.
+`--max-duration`; check the endpoint, the network and `--endpoint-url`. A run that ends without any request
+answered names the cause in its final error:
+
+```text
+swath: deadline: --max-duration reached; every request was failing: S3 127.0.0.1:1: connection refused (30 attempts)
+```
 
 ## The disk filled (exit 74)
 

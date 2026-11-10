@@ -22,7 +22,7 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
   `split` with `--sequential`, `floors` without `--floors`, `structure` with `--structure=off` (`--sequential`,
   `--floors` and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
-  without `-max-keys`, `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
+  without `--max-keys`, `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
   `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
 - present and zero: the policy was on and never fired.
 

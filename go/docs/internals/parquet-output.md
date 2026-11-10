@@ -144,7 +144,7 @@ The router is the order stage's sink. It owns part boundaries, so they never dep
 - Ordinals are dense and zero-based; the router knows the last part (the journal records it, so a resume
   after the final part only publishes).
 
-The same rows therefore produce the same parts, byte for byte, for any `-workers` and `-encoders`, unless the
+The same rows therefore produce the same parts, byte for byte, for any `--workers` and `--encoders`, unless the
 part interval cuts (below).
 
 After listing, the order stage may write the rest as segments: consecutive parts opened in order and written

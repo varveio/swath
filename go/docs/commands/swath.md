@@ -47,7 +47,17 @@ credentials and limits are in [sources.md](../sources.md).
 Options are parsed GNU-style: short options bundle (`-vq`) and take attached values (`-d1`, `-oPATH`); long
 options take `--name value` or `--name=value`; options and operands may come in any order; `--` ends the
 options. A long name with one dash (`-depth`) is refused. A switch that is on by default is turned off by
-its `--no-` spelling (`--no-progress`, `--no-s3-path-style`).
+its `--no-` spelling (`--no-progress`, `--no-s3-path-style`). A list option (`--columns key,size`,
+`--storage-class STANDARD,GLACIER`) refuses an empty element (`key,`) with exit 2.
+
+The [global options](#options) (`-v`, `-q`, `--color`, `--log-format`) may stand anywhere on the line, before
+or after the command word, and count only before `--`. A command line refused early, an unknown option among
+them, still reports in the `--log-format` it names:
+
+```text
+$ swath list /data --bogus --log-format json
+{"ts":"...","level":"error","event":"outcome","msg":"unknown flag --bogus","class":"usage","exit_code":2,"resumable":false,"message":"unknown flag --bogus"}
+```
 
 An unknown option is a usage error that names the nearest one and the help to read:
 
@@ -59,7 +69,12 @@ See 'swath list --help'.
 
 An option that belongs to one provider carries its prefix (`--s3-region`, `--gcs-credentials-file`,
 `--azure-sas-token`) and is refused, with exit 2, for another provider's source. Options every object store
-shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`) are bare.
+shares (`--endpoint-url`, `--anonymous`) and the local tree's own (`--one-file-system`) are bare. An older
+spelling (`--endpoint`, `--profile`, `--region`) gets the same suggestion of the current name.
+
+A value that can carry a secret is never shown or recorded as typed: `--azure-sas-token`,
+`--s3-bearer-token-command`, and the user information, query or fragment of SOURCE, `--endpoint-url` or a URL
+given to `-o` are `[redacted]` in errors, logs, the report and the journal. Plain paths are shown as typed.
 
 `-h` prints a command's short help (the usage, the examples and the most used options), `--help` all of it.
 Both go to stdout and exit 0.
