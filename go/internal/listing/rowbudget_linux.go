@@ -6,6 +6,7 @@ package listing
 import (
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -42,9 +43,8 @@ func cgroupMemory() int64 {
 // mounted several times, each mount a view from its own root: through
 // every mount whose view holds the process's cgroup, each directory from
 // that cgroup up to the mount point may set a limit, and the least of them
-// all wins. A mount whose view does not hold it (the cgroup outside the
-// mount's root, as a cgroup namespace's "/.." shows a cgroup above it) is
-// skipped: its root may be a sibling's, whose limit does not constrain the
+// all wins. A mount whose root is not the process's cgroup or an ancestor
+// of it (mountRel) is skipped: a sibling's limit does not constrain the
 // process. "max" and a v1 limit at or past 2^62 (its unlimited sentinel,
 // rounded to the page size) are none.
 func cgroupLimit(cgroup, mountinfo string, read func(string) ([]byte, error)) int64 {
@@ -87,22 +87,44 @@ func cgroupLimit(cgroup, mountinfo string, read func(string) ([]byte, error)) in
 }
 
 // mountRel is the cgroup p (as /proc/self/cgroup names it) relative to a
-// mount whose root is root, false when the mount's view does not hold it.
-// The kernel writes ".." components only at the front, for a cgroup above
-// the reader's cgroup namespace root ("/../job"); they are matched against
-// the root as written ("/.."), never cleaned away first.
+// mount whose root is root, both in the reader's cgroup namespace's
+// coordinates: the kernel writes ".." components only at the front, for a
+// cgroup above that namespace's root ("/../job", a mount root "/.."). It is
+// false when the mount's root is not proven to be p or an ancestor of it
+// (a sibling's subtree): its limits do not bind p. A root that is an
+// ancestor of the namespace root whose path down to p cannot be known (p
+// "/x" below a root "/..": the namespace root's own name is not shown) is
+// "/": its own limit binds p, nothing below it is walked.
 func mountRel(p, root string) (string, bool) {
-	rel := p
-	if root != "/" {
-		var ok bool
-		if rel, ok = strings.CutPrefix(p, root); !ok || rel != "" && rel[0] != '/' {
-			return "", false
+	pu, pd, ok := cgroupSteps(p)
+	ru, rd, rok := cgroupSteps(root)
+	switch {
+	case !ok || !rok:
+		return "", false
+	case ru == pu && len(rd) <= len(pd) && slices.Equal(rd, pd[:len(rd)]):
+		return "/" + strings.Join(pd[len(rd):], "/"), true
+	case ru > pu && len(rd) == 0:
+		return "/", true
+	}
+	return "", false
+}
+
+// cgroupSteps splits a namespace-relative cgroup path into its leading ".."
+// components (up) and the names below them (down); false for a ".." after
+// a name, which the kernel never writes.
+func cgroupSteps(p string) (up int, down []string, ok bool) {
+	for c := range strings.SplitSeq(p, "/") {
+		switch {
+		case c == "" || c == ".":
+		case c == ".." && len(down) == 0:
+			up++
+		case c == "..":
+			return 0, nil, false
+		default:
+			down = append(down, c)
 		}
 	}
-	if strings.Contains(rel+"/", "/../") {
-		return "", false
-	}
-	return path.Clean("/" + rel), true
+	return up, down, true
 }
 
 // hasMemory reports whether a v1 hierarchy's controller list holds memory.
