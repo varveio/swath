@@ -98,9 +98,9 @@ Usage: swath list SOURCE [OPTIONS]
 Recursively list every entry below SOURCE: text rows on stdout, or an inventory with -o.
 
 -o DIR writes a sorted Parquet dataset, -o NAME.tsv or NAME.jsonl (optionally .gz or .zst) text rows
-into that file. SOURCE is a local directory or file, az://account/container[/prefix],
-gs://bucket[/prefix] or s3://bucket[/prefix]; an Azure Blob URL,
-https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
+into that file. SOURCE is a local directory or file, az://account/container[/prefix] (or
+https://account.blob.core.windows.net/container[/prefix]), gs://bucket[/prefix] or
+s3://bucket[/prefix].
 
 Examples:
   swath list s3://bucket/logs/ -o logs.parquet
@@ -320,9 +320,9 @@ Total SOURCE's objects (a local tree's files), bytes and newest time, per prefix
 -d N totals each prefix down to N levels below SOURCE, a parent including its children, as du. A
 table on a terminal puts the total last; pipes default to TSV, --format jsonl selects JSONL, and
 both put the total first, at depth 0. Bytes are the objects' sizes as listed, not storage or
-billing. SOURCE is a local directory or file, az://account/container[/prefix], gs://bucket[/prefix]
-or s3://bucket[/prefix]; an Azure Blob URL,
-https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
+billing. SOURCE is a local directory or file, az://account/container[/prefix] (or
+https://account.blob.core.windows.net/container[/prefix]), gs://bucket[/prefix] or
+s3://bucket[/prefix].
 
 Examples:
   swath du s3://bucket/logs/
@@ -527,9 +527,9 @@ Usage: swath diag list SOURCE [OPTIONS]
 Every swath list option (swath list --help), and the diagnostic ones below.
 
 They exist to run an experiment or a comparison, not to operate the tool. SOURCE is a local
-directory or file, az://account/container[/prefix], gs://bucket[/prefix] or s3://bucket[/prefix]; an
-Azure Blob URL, https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is
-az://ACCOUNT/CONTAINER[/PREFIX].
+directory or file, az://account/container[/prefix] (or
+https://account.blob.core.windows.net/container[/prefix]), gs://bucket[/prefix] or
+s3://bucket[/prefix].
 
 Examples:
   swath diag list s3://bucket/logs/ -o ds --no-seed
@@ -561,9 +561,9 @@ Usage: swath diag count SOURCE [OPTIONS]
 Count SOURCE's rows and object bytes, writing nothing, to measure the listing.
 
 Rows are counted as they arrive, never ordered, buffered or spilled. Prints one line of counts and
-resources. SOURCE is a local directory or file, az://account/container[/prefix],
-gs://bucket[/prefix] or s3://bucket[/prefix]; an Azure Blob URL,
-https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX].
+resources. SOURCE is a local directory or file, az://account/container[/prefix] (or
+https://account.blob.core.windows.net/container[/prefix]), gs://bucket[/prefix] or
+s3://bucket[/prefix].
 
 Examples:
   swath diag count s3://bucket/logs/
@@ -983,7 +983,8 @@ table changes.
   tree's path relative to its root); rows still print full keys. A glob with a `/` is anchored there (`logs/*.gz`;
   a leading `/` only anchors: `/a.txt`), one without matches the last segment at any depth (`*.gz` keeps
   `a/b/c.gz`), and a key ending in `/` (a directory's row) matches as its name. `*` and `?` never cross `/`, `**`
-  is any number of whole segments and only a segment of its own (`a/**/b`, `**/x`, `logs/**`), `[abc]`, `[a-z]`
+  is any number of whole segments and only a segment of its own (`a/**/b`, `**/x`, `logs/**`; a trailing one is at least one, so `logs/**` is what lies below
+  `logs/`, not the `logs/` row, as in gitignore), `[abc]`, `[a-z]`
   and `[!a-z]` are one character (never `/`), `{a,b}` is either (not nested), `\c` is `c`; an empty or
   malformed pattern is refused (exit 2). A glob filters rows, not the walk: `--exclude node_modules` drops that
   directory's row, `--exclude '**/node_modules/**'` what is below it. `--min-size` and `--max-size` keep sizes

@@ -402,8 +402,11 @@ func TestReportStdout(t *testing.T) {
 	if err := run(context.Background(), []string{src, "-o", filepath.Join(t.TempDir(), "ds"), "--no-stats"}, &out, false); err != nil || out.Len() != 0 {
 		t.Fatalf("swath list -o wrote %q on stdout (%v)", out.String(), err)
 	}
-	if err := runDu(context.Background(), []string{src, "--report", "-"}, &out); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "carries the rows") {
-		t.Fatalf("du --report -: %v", err)
+	if err := runDu(context.Background(), []string{src, "--report", "-"}, &out); exitOf(err) != exitUsage || !strings.Contains(err.Error(), "carries the rows") || out.Len() != 0 {
+		t.Fatalf("du --report -: %v, stdout %q", err, out.String())
+	}
+	if err := run(context.Background(), []string{src, "--format", "tsv", "--report", "-"}, &out, false); exitOf(err) != exitUsage || out.Len() != 0 {
+		t.Fatalf("list to stdout --report -: %v, stdout %q", err, out.String())
 	}
 	// A refusal before the run (an unknown scheme) prints its report too.
 	out.Reset()

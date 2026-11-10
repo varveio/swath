@@ -17,7 +17,8 @@ import (
 // anchors); one without matches the last segment at any depth. A key
 // ending in '/' (a directory's row) matches as the pattern without it. *
 // is any run of characters but '/', ? one character but '/', ** any number
-// of whole segments (only as a segment of its own), [a-z] one character of
+// of whole segments (only as a segment of its own; a trailing one, a/**,
+// at least one: below a/, not a/ itself), [a-z] one character of
 // a class ([!a-z]: one not in it; never '/'), {a,b} one of the
 // alternatives (not nested), \c the character c.
 //
@@ -45,10 +46,16 @@ func globRegexp(p string) (string, error) {
 			if inBrace || i > 0 && body[i-1] != '/' || !end && body[i+2] != '/' {
 				return "", errors.New("** must be a whole segment (a/**/b, **/x, a/**)")
 			}
-			if end {
+			switch {
+			case end && i > 0:
+				// a/** is what lies below a/, not the a/ row itself
+				// (as gitignore's): --exclude a or a/ drops that row.
+				b.WriteString(`(?s:.+)`)
+				i += 2
+			case end:
 				b.WriteString(`(?s:.*)`)
 				i += 2
-			} else {
+			default:
 				b.WriteString(anySegments)
 				i += 3
 			}

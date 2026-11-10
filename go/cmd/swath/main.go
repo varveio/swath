@@ -797,7 +797,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		att = newAttempt()
 	}
 	o, root, err := parseList(args, stdout, cmd)
-	if err != nil && o.parsed && o.report != "" && !errors.Is(err, errReportStdout) {
+	if u := (usageError{}); err != nil && o.parsed && o.report != "" && !(errors.As(err, &u) && u.error == errReportStdout) {
 		// A refusal of a command line that parsed has a report, unless
 		// its destination is itself refused.
 		if checkSidePaths(&o) == nil {

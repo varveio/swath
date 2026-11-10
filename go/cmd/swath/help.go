@@ -265,7 +265,7 @@ func examples() (stores []string, local string) {
 
 // helpOf is the help text of a list command.
 func helpOf(cmd command) commandHelp {
-	src := "SOURCE is " + sourceForms() + "; an Azure Blob URL, https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX], is az://ACCOUNT/CONTAINER[/PREFIX]."
+	src := "SOURCE is " + sourceForms() + "."
 	stores, local := examples()
 	a, b := stores[0], stores[min(1, len(stores)-1)]
 	switch {

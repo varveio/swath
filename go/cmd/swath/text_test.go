@@ -191,7 +191,7 @@ func TestLocalTextEndToEnd(t *testing.T) {
 	for format, want := range map[string]string{
 		"tsv":   "a/b/f\t\\N\t\\N\tFILE\t",
 		"jsonl": `{"key":"a/b/f","size":null,"last_modified":null,"kind":"FILE",`,
-		"table": "                                 FILE  a/b/f\n",
+		"table": "                                 FILE          a/b/f\n", // kind: BLOCK_DEVICE wide
 	} {
 		out.Reset()
 		if err := run(context.Background(), []string{root, "--metadata", "names", "--format", format, "--no-stats"}, &out, false); err != nil || !strings.Contains(out.String(), want) {
