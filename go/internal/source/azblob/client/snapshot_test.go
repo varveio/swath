@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,10 +17,11 @@ import (
 
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
 )
 
 // wireSnapshot is the checked-in rendering of every request shape the
-// client sends (wire), edited by hand when the wire is meant to change.
+// client sends (wire, objhttptest.Snapshot).
 const wireSnapshot = "testdata/wire.txt"
 
 // TestWireSnapshot: each request the client sends, under each
@@ -106,26 +105,7 @@ func TestWireSnapshot(t *testing.T) {
 			fmt.Fprintf(&b, "== %s: %s\n%s", auth.name, call.name, wire(t, req, cp.bodies[n]))
 		}
 	}
-	want, err := os.ReadFile(wireSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := b.String(); got != string(want) {
-		gl, wl := strings.Split(got, "\n"), strings.Split(string(want), "\n")
-		i := 0
-		for i < len(gl) && i < len(wl) && gl[i] == wl[i] {
-			i++
-		}
-		t.Errorf("the wire differs from %s first at line %d:\n got  %q\n want %q\nthe whole wire now (review it before replacing the file):\n%s",
-			wireSnapshot, i+1, line(gl, i), line(wl, i), got)
-	}
-}
-
-func line(lines []string, i int) string {
-	if i < len(lines) {
-		return lines[i]
-	}
-	return "(end)"
+	objhttptest.Snapshot(t, wireSnapshot, b.String())
 }
 
 var (
@@ -133,51 +113,33 @@ var (
 	sigForm  = regexp.MustCompile(`^SharedKey acct:[A-Za-z0-9+/]{43}=$`)
 )
 
-// wire renders one request toFake delivered: its method and intended
-// authority, path and query as sent, headers (but toFake's X-Original-Host)
-// sorted by name, and its body's length. x-ms-date (an HTTP date), a Shared
-// Key signature (verified by the caller) and the SDK's telemetry token's
-// version and platform are replaced by their form; anything else is as sent.
+// wire renders one request toFake delivered (objhttptest.Request), on the
+// authority it was addressed to, without toFake's X-Original-Host.
+// x-ms-date (an HTTP date), a Shared Key signature (verified by the caller)
+// and the SDK's telemetry token's version and platform are replaced by
+// their form; anything else is as sent.
 func wire(t *testing.T, req *http.Request, body int) string {
 	t.Helper()
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s https://%s%s\n", req.Method, req.Header.Get("X-Original-Host"), req.URL.EscapedPath())
-	if req.URL.RawQuery != "" {
-		for p := range strings.SplitSeq(req.URL.RawQuery, "&") {
-			fmt.Fprintf(&b, "  query %s\n", p)
-		}
-	}
-	for _, k := range slices.Sorted(func(yield func(string) bool) {
-		for k := range req.Header {
-			if !yield(k) {
-				return
+	return objhttptest.Request(req, "https://"+req.Header.Get("X-Original-Host"), body, func(k, v string) (string, bool) {
+		switch k {
+		case "X-Original-Host":
+			return "", false
+		case "X-Ms-Date":
+			if _, err := time.Parse(http.TimeFormat, v); err != nil {
+				t.Errorf("x-ms-date %q: %v", v, err)
 			}
-		}
-	}) {
-		if k == "X-Original-Host" {
-			continue
-		}
-		for _, v := range req.Header[k] {
-			switch k {
-			case "X-Ms-Date":
-				if _, err := time.Parse(http.TimeFormat, v); err != nil {
-					t.Errorf("x-ms-date %q: %v", v, err)
+			v = "<date>"
+		case "Authorization":
+			if strings.HasPrefix(v, "SharedKey ") {
+				if !sigForm.MatchString(v) {
+					t.Errorf("Authorization %q", v)
 				}
-				v = "<date>"
-			case "Authorization":
-				if strings.HasPrefix(v, "SharedKey ") {
-					if !sigForm.MatchString(v) {
-						t.Errorf("Authorization %q", v)
-					}
-					v = "SharedKey acct:<signature>"
-				}
-			case "User-Agent":
-				v = strings.Replace(v, buildinfo.UserAgent(), "<swath>", 1)
-				v = sdkToken.ReplaceAllString(v, "azsdk-go-azblob/<version> (<platform>)")
+				v = "SharedKey acct:<signature>"
 			}
-			fmt.Fprintf(&b, "  header %s: %s\n", k, v)
+		case "User-Agent":
+			v = strings.Replace(v, buildinfo.UserAgent(), "<swath>", 1)
+			v = sdkToken.ReplaceAllString(v, "azsdk-go-azblob/<version> (<platform>)")
 		}
-	}
-	fmt.Fprintf(&b, "  body %d bytes\n", body)
-	return b.String()
+		return v, true
+	})
 }

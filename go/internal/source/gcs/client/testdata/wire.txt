@@ -1,0 +1,224 @@
+== anonymous: objects
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous: objects, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous: generations
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  query versions=true
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous: generations, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  query versions=true
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: objects
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: objects, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: generations
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  query versions=true
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token: generations, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  query versions=true
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token, billed project: objects
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  query userProject=billed-p
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token, billed project: objects, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  query userProject=billed-p
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token, billed project: generations
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query prettyPrint=false
+  query projection=noAcl
+  query userProject=billed-p
+  query versions=true
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== token, billed project: generations, every option
+GET https://storage.googleapis.com/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query fields=kind%2CnextPageToken%2Cprefixes%2Citems%28name%2Csize%2Cupdated%2CtimeCreated%2CtimeDeleted%2Cetag%2Cgeneration%2Cmetageneration%2CstorageClass%2Cmd5Hash%2Ccrc32c%2CcontentType%29
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  query userProject=billed-p
+  query versions=true
+  header Accept-Encoding: gzip
+  header Authorization: Bearer tok
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: objects
+GET http://gcs.example/storage/v1/b/bkt/o
+  query alt=json
+  query prettyPrint=false
+  query projection=noAcl
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: objects, every option
+GET http://gcs.example/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: generations
+GET http://gcs.example/storage/v1/b/bkt/o
+  query alt=json
+  query prettyPrint=false
+  query projection=noAcl
+  query versions=true
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes
+== anonymous, custom endpoint: generations, every option
+GET http://gcs.example/storage/v1/b/bkt/o
+  query alt=json
+  query delimiter=%2F
+  query endOffset=p%2Fe%26%3D%23%3F
+  query maxResults=1000
+  query pageToken=tok%2F%2B%3D
+  query prefix=p%2Fa+b%2Bc%25%2F%C3%A9
+  query prettyPrint=false
+  query projection=noAcl
+  query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
+  query versions=true
+  header Accept-Encoding: gzip
+  header User-Agent: <swath> google-api-go-client/<version>
+  header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
+  body 0 bytes

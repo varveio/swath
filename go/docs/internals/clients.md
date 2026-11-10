@@ -11,6 +11,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
 
 - **Requests.** Building and serializing the call: query parameters, escaping, the request path. S3 also endpoint
   resolution (virtual-hosted and path-style addressing, FIPS and dual-stack hosts, partitions, custom endpoints).
+  Each client's [wire snapshot](#wire-snapshots) holds what the SDK sends.
 - **Authentication.** S3: the AWS credential chain (environment, shared config and profiles, SSO, web identity and
   STS, IMDS) and SigV4 signing. GCS: Google's credential loading (service-account and authorized-user files,
   Application Default Credentials, the metadata server) and token refresh (`golang.org/x/oauth2`). Azure: Entra ID
@@ -286,10 +287,14 @@ properties, and with `ResourceType` prefixes listed as blobs. An Arrow listing m
 Azure's documented listing metadata, its batches must hold `NumberOfRecords` rows (`TestArrowEnvelope`), and each
 column behind what swath writes must have a type the SDK's resolver for it reads (`client.arrowColumns`: utf8
 `Name`, `ResourceType`, `Etag`, `Content-MD5`, `Content-Type`, `BlobType` and `AccessTier`; uint64 or int64
-`Content-Length`; timestamp `Last-Modified` and `Creation-Time`; `TestArrowColumnTypes`). These are the fields the
-conversion reads, and `ResourceType`, which sorts prefixes from blobs. Every other column may have any type, mapped
+`Content-Length`; timestamp `Last-Modified` and `Creation-Time`). These are the fields the
+conversion reads, and `ResourceType`, which sorts prefixes from blobs. `TestArrowColumnTypes` reads a page holding
+every one of them through `listOnce` and the SDK's decoder and compares the values listed: in Azure's types, with an
+int64 length, with both times in each timestamp unit (truncated to microseconds), with optional values null, and
+with only `Name` and `ResourceType` present. It also refuses each of them in an incompatible type (a large-utf8 or
+dictionary string, an int32 or utf8 length, an int64 or utf8 time). Every other column may have any type, mapped
 by the SDK or not: swath never reads it, so a type change there (to `LeaseState` or `Metadata`, say) does not fail a
-listing. Azure sends these types today (a live 4,983-row page: utf8 strings, timestamp[s] times, uint64 `Content-Length`, bool
+listing (also `TestArrowColumnTypes`). Azure sends these types today (a live 4,983-row page: utf8 strings, timestamp[s] times, uint64 `Content-Length`, bool
 flags, one batch, all-null columns left out). A refused envelope is a parse failure, retried. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
 prefixes; both are in wire (UTF-16 code-unit) order and no name is in both, so merging them with
 `utf16order.Compare` restores the one sequence the byte-order adapter needs (`TestWireOrder`, `TestMergeOrder`); a
@@ -301,12 +306,8 @@ recorded Arrow page and the XML page of the same listing, flat and hierarchy, co
 azblob cannot: `x-ms-version` to the pinned `client.Version` (the SDK sends its own default and refuses
 `ClientOptions.APIVersion`, `TestServiceVersionPinned`). Get Account Information sends no `Accept`, and swath reads
 its header only. `startFrom`, `marker` and `prefix` are the SDK's
-own options (`TestStartFromSent`). `TestWireSnapshot` holds every request the client sends, under each
-authentication form, to `testdata/wire.txt`: method, intended host, path, every query parameter as sent, every
-header value and the body's length, with dates, Shared Key signatures (verified first) and the SDK's version and
-platform text replaced. The file is edited by hand when the wire is meant to change; a difference is SDK drift for
-review, and the semantic tests say whether it is wrong. No `x-ms-client-request-id` is sent, and an attempt's
-in-flight time includes the SDK's decoding.
+own options (`TestStartFromSent`). Its [wire snapshot](#wire-snapshots) covers anonymous, SAS, Shared Key and
+Entra ID requests. No `x-ms-client-request-id` is sent, and an attempt's in-flight time includes the SDK's decoding.
 
 The SDK's readings, each pinned by `TestSDKDecoding`: an `Encoded` name is percent-decoded with query semantics (a
 literal `+` reads as a space; Azure sends `+` as `%2B`, and every captured `Encoded` name escapes every reserved
@@ -328,6 +329,33 @@ XML message are scrubbed of the SAS by parameter name before storage; the stored
 (`TestSASRedacted`). `NamespaceInfo`'s HEAD has no body: its code is the header's.
 `AuthenticationFailed` arrives as a 403 and `ServerBusy` as a 503, so
 the code decides before the status, and a 500 is retried only when it is `OperationTimedOut` or `InternalError`.
+
+## Wire snapshots
+
+The SDKs own serialization, so an SDK update can change a request without changing swath's code. Each client's
+`TestWireSnapshot` renders every request shape it sends to its `testdata/wire.txt` (`objhttptest.Request`): the
+method, the origin it was addressed to and the escaped path, every query parameter as sent, in order and with
+duplicates, every header value and the body's length. The client's semantic request tests stay beside it and say
+what a request must carry; the snapshot shows anything else that moves.
+
+- **S3** records requests as they reach the transport below the Guard, with the headers that were signed:
+  anonymous, an access key and a session's credentials (with requester pays) from the environment, and a bearer
+  token; virtual-hosted on AWS's endpoint, path-style, and on a custom endpoint; `ListObjectsV2` with no options,
+  with every option and continuing, and `ListObjectVersions` with no options and with every option. A SigV4
+  signature is checked with the SDK's own signer before it is replaced; the signing scope, the signed-header names
+  and the session token stay. The query's escaping differs by signing: unsigned requests send a space as `+`,
+  signed ones as `%20`, the SigV4 canonical form.
+- **GCS** records what its test server receives, the origin from the transport: anonymous and with a fixed token,
+  on Google's endpoint with and without a billed project and on a custom endpoint (no fields selector); live and
+  generations listings, each with no options and with every option.
+- **Azure** records what its test server receives: anonymous, SAS, Shared Key and Entra ID; flat and hierarchy
+  listings with no options and with every option, Get Account Information and the Data Lake HEAD. Shared Key
+  signatures are checked independently of the SDK before they are replaced.
+
+Only volatile text is replaced by its form: dates, S3's invocation ID, signatures, and the SDK, language and
+platform versions in `User-Agent` and `X-Goog-Api-Client`. A difference fails with the first differing line and
+the whole new rendering. It is drift for review: when the semantic tests still pass and the change is intended,
+the file is replaced with the new rendering by hand.
 
 ## Measurements
 

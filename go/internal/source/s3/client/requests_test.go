@@ -18,21 +18,25 @@ import (
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
 )
 
-// recorder answers without a network and keeps each request's URL: a
+// recorder answers without a network and keeps each request as it reaches
+// the transport below the Guard, signed, and its body's length: a
 // ListVersionsResult to a versions request, okPage to the others, after
 // failing the first fail requests with a 503.
 type recorder struct {
 	fail   int
 	mu     sync.Mutex
-	urls   []*url.URL
-	agents []string
+	reqs   []*http.Request
+	bodies []int
 }
 
 func (r *recorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	var sent int64
+	if req.Body != nil {
+		sent, _ = io.Copy(io.Discard, req.Body)
+	}
 	r.mu.Lock()
-	r.urls = append(r.urls, req.URL)
-	r.agents = append(r.agents, req.Header.Get("User-Agent"))
-	n := len(r.urls)
+	r.reqs, r.bodies = append(r.reqs, req), append(r.bodies, int(sent))
+	n := len(r.reqs)
 	r.mu.Unlock()
 	status, body := 200, okPage
 	switch {
@@ -62,16 +66,16 @@ func TestUserAgent(t *testing.T) {
 	if _, err := c.ListObjectVersions(context.Background(), &VersionsInput{Bucket: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.agents) != 4 {
-		t.Fatalf("%d requests, want 4", len(rec.agents))
+	if len(rec.reqs) != 4 {
+		t.Fatalf("%d requests, want 4", len(rec.reqs))
 	}
-	for _, agent := range rec.agents {
-		if token := buildinfo.UserAgent(); !strings.HasPrefix(agent, token+" ") ||
+	for _, req := range rec.reqs {
+		if agent, token := req.Header.Get("User-Agent"), buildinfo.UserAgent(); !strings.HasPrefix(agent, token+" ") ||
 			!strings.Contains(agent, "aws-sdk-go-v2/") || strings.Count(agent, token) != 1 {
 			t.Errorf("User-Agent %q: want one leading product token and the SDK product", agent)
 		}
 	}
-	t.Logf("User-Agent: %s", rec.agents[0])
+	t.Logf("User-Agent: %s", rec.reqs[0].Header.Get("User-Agent"))
 }
 
 // routeOf is a request URL's route: scheme, host and escaped path.
@@ -113,7 +117,7 @@ func TestRequestURLs(t *testing.T) {
 		if _, err := newTest(t, cfg).ListObjectsV2(context.Background(), &ListInput{Bucket: "bkt"}); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if got := routeOf(rec.urls[0]); got != c.route {
+		if got := routeOf(rec.reqs[0].URL); got != c.route {
 			t.Errorf("%s: request to %s, want %s", c.name, got, c.route)
 		}
 	}
@@ -152,7 +156,7 @@ func TestRequestOptions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		u := rec.urls[len(rec.urls)-1]
+		u := rec.reqs[len(rec.reqs)-1].URL
 		if !reflect.DeepEqual(u.Query(), tc.want) {
 			t.Errorf("query %s, want %v", u.RawQuery, tc.want)
 		}

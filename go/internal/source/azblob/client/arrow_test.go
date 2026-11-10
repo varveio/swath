@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -196,80 +199,157 @@ func TestArrowEnvelope(t *testing.T) {
 	}
 }
 
-// columnPage is a one-batch final Arrow listing of the names a/ and b with
-// a second column col holding values, dictionary-encoded when dict is set.
-func columnPage(col string, values [2]string, dict bool) []byte {
-	typ := arrow.DataType(arrow.BinaryTypes.String)
-	if dict {
-		typ = &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int32, ValueType: arrow.BinaryTypes.String}
-	}
-	m := arrow.MetadataFrom(map[string]string{"NextMarker": "", "NumberOfRecords": "2"})
-	schema := arrow.NewSchema([]arrow.Field{{Name: "Name", Type: arrow.BinaryTypes.String, Nullable: true},
-		{Name: col, Type: typ, Nullable: true}}, &m)
-	nb := array.NewStringBuilder(amem.DefaultAllocator)
-	nb.AppendValues([]string{"a/", "b"}, nil)
-	names := nb.NewArray()
-	var vals arrow.Array
-	if dict {
-		db := array.NewDictionaryBuilder(amem.DefaultAllocator, typ.(*arrow.DictionaryType)).(*array.BinaryDictionaryBuilder)
-		for _, v := range values {
-			if err := db.AppendString(v); err != nil {
-				panic(err)
-			}
+// column is one column of a test Arrow listing: its name, its type and its
+// values, a JSON array as array.FromJSON reads it.
+type column struct {
+	name   string
+	typ    arrow.DataType
+	values string
+}
+
+// columnsPage is a one-batch final Arrow listing of cols, built from mem;
+// everything it allocates is released before it returns.
+func columnsPage(t *testing.T, mem amem.Allocator, cols []column) []byte {
+	t.Helper()
+	fields := make([]arrow.Field, len(cols))
+	arrays := make([]arrow.Array, len(cols))
+	for i, c := range cols {
+		a, _, err := array.FromJSON(mem, c.typ, strings.NewReader(c.values))
+		if err != nil {
+			t.Fatalf("column %s %s %s: %v", c.name, c.typ, c.values, err)
 		}
-		vals = db.NewArray()
-	} else {
-		vb := array.NewStringBuilder(amem.DefaultAllocator)
-		vb.AppendValues(values[:], nil)
-		vals = vb.NewArray()
+		defer a.Release()
+		fields[i], arrays[i] = arrow.Field{Name: c.name, Type: c.typ, Nullable: true}, a
 	}
-	rec := array.NewRecordBatch(schema, []arrow.Array{names, vals}, 2)
+	rows := arrays[0].Len()
+	m := arrow.MetadataFrom(map[string]string{"NextMarker": "", "NumberOfRecords": strconv.Itoa(rows)})
+	schema := arrow.NewSchema(fields, &m)
+	rec := array.NewRecordBatch(schema, arrays, int64(rows))
+	defer rec.Release()
 	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(schema))
+	w := ipc.NewWriter(&buf, ipc.WithSchema(schema), ipc.WithAllocator(mem))
 	if err := w.Write(rec); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	return buf.Bytes()
 }
 
-// TestArrowColumnTypes: a column behind what swath writes, of a type the
-// SDK's resolver does not read, is refused, never decoded as nulls: a
-// dictionary-encoded AccessTier would blank the tier, a dictionary-encoded
-// ResourceType would list the prefix a/ as a blob. The same pages in utf8
-// (Azure's type) are read. A column swath does not read may have any type,
-// whether the SDK maps it (LeaseState) or not.
+// TestArrowColumnTypes: the ten columns behind what swath writes
+// (arrowColumns), through the SDK's decoder. A page of the prefix a/, a
+// blob bé with every property and a blob c with none (each optional value
+// null) is read in Azure's types (utf8, uint64, timestamp[s]), with
+// Content-Length int64 too and with both timestamps in each other unit,
+// each value as listed: Content-MD5 back in base64, times in Unix
+// microseconds, a finer unit truncated. ResourceType marks a/ a prefix on
+// a hierarchy page. Each of the ten columns in a type its resolver does
+// not read is refused, never decoded as nulls: a dictionary-encoded
+// AccessTier would blank the tier, a dictionary-encoded ResourceType would
+// list a/ as a blob. A column swath does not read may have any type,
+// whether the SDK maps it (LeaseState, LastAccessTime) or not, and the
+// optional columns may be absent.
 func TestArrowColumnTypes(t *testing.T) {
-	for _, c := range []struct {
-		name, delimiter, col string
-		values               [2]string
-		dict                 bool
-		want                 *ListOutput // nil: refused, ErrSyntax
-	}{
-		{"AccessTier utf8", "", "AccessTier", [2]string{"Hot", "Cool"}, false,
-			&ListOutput{Items: []Item{{Name: "a/", AccessTier: "Hot"}, {Name: "b", AccessTier: "Cool"}}}},
-		{"AccessTier dictionary", "", "AccessTier", [2]string{"Hot", "Cool"}, true, nil},
-		{"ResourceType utf8", "/", "ResourceType", [2]string{"blobprefix", "blob"}, false,
-			&ListOutput{Items: []Item{{Name: "a/", Prefix: true}, {Name: "b"}}}},
-		{"ResourceType dictionary", "/", "ResourceType", [2]string{"blobprefix", "blob"}, true, nil},
-		{"LeaseState dictionary, mapped by the SDK, unread", "", "LeaseState", [2]string{"available", "leased"}, true,
-			&ListOutput{Items: []Item{{Name: "a/"}, {Name: "b"}}}},
-		{"unmapped column dictionary", "", "Unmapped", [2]string{"x", "y"}, true,
-			&ListOutput{Items: []Item{{Name: "a/"}, {Name: "b"}}}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, _, err := listOnce(t, arrowType, columnPage(c.col, c.values, c.dict), c.delimiter)
-			if c.want == nil {
-				if !errors.Is(err, objhttp.ErrSyntax) || !strings.Contains(err.Error(), c.col) {
-					t.Fatalf("page %+v, error %v: want ErrSyntax naming %s", got, err, c.col)
+	lm := time.Date(2026, 11, 10, 21, 7, 5, 123456789, time.UTC)
+	ct := time.Date(2025, 1, 2, 3, 4, 5, 987654321, time.UTC)
+	at := func(tm time.Time, u arrow.TimeUnit) string {
+		return fmt.Sprintf("[null, %d, null]", tm.UnixNano()/int64(u.Multiplier()))
+	}
+	str := arrow.BinaryTypes.String
+	dict := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int32, ValueType: str}
+	page := func(replace ...column) []column {
+		cols := []column{
+			{"Name", str, `["a/", "bé", "c"]`},
+			{"ResourceType", str, `["blobprefix", "blob", "blob"]`},
+			{"Etag", str, `[null, "0x8DE2001D2C3F4A5", null]`},
+			{"Content-MD5", str, `[null, "1B2M2Y8AsgTpgAmY7PhCfg==", null]`},
+			{"Content-Type", str, `[null, "text/plain; charset=utf-8", null]`},
+			{"BlobType", str, `[null, "BlockBlob", null]`},
+			{"AccessTier", str, `[null, "Cool", null]`},
+			{"Content-Length", arrow.PrimitiveTypes.Uint64, `[null, 5000000000, null]`},
+			{"Last-Modified", &arrow.TimestampType{Unit: arrow.Second}, at(lm, arrow.Second)},
+			{"Creation-Time", &arrow.TimestampType{Unit: arrow.Second}, at(ct, arrow.Second)},
+		}
+		for _, r := range replace {
+			if i := slices.IndexFunc(cols, func(c column) bool { return c.name == r.name }); i >= 0 {
+				cols[i] = r
+			} else {
+				cols = append(cols, r)
+			}
+		}
+		return cols
+	}
+	listed := func(unit time.Duration, hierarchy bool) *ListOutput {
+		return &ListOutput{Items: []Item{{Name: "a/", Prefix: hierarchy},
+			{Name: "bé", Size: 5000000000, ETag: "0x8DE2001D2C3F4A5", ContentMD5: "1B2M2Y8AsgTpgAmY7PhCfg==",
+				ContentType: "text/plain; charset=utf-8", BlobType: "BlockBlob", AccessTier: "Cool",
+				LastModified: lm.Truncate(max(unit, time.Microsecond)).UnixMicro(),
+				CreationTime: ct.Truncate(max(unit, time.Microsecond)).UnixMicro()},
+			{Name: "c"}}}
+	}
+	type read struct {
+		name string
+		cols []column
+		unit time.Duration // the timestamps' unit; 0: Azure's, a second
+	}
+	reads := []read{
+		{"Azure's types", page(), 0},
+		{"Content-Length int64", page(column{"Content-Length", arrow.PrimitiveTypes.Int64, `[null, 5000000000, null]`}), 0},
+		{"unread columns of any type", page(column{"LeaseState", dict, `["available", "leased", null]`},
+			column{"LastAccessTime", str, `["x", "y", null]`}, column{"Unmapped", dict, `["x", "y", "x"]`}), 0},
+	}
+	for _, u := range []arrow.TimeUnit{arrow.Millisecond, arrow.Microsecond, arrow.Nanosecond} {
+		typ := &arrow.TimestampType{Unit: u}
+		reads = append(reads, read{"timestamps " + typ.String(),
+			page(column{"Last-Modified", typ, at(lm, u)}, column{"Creation-Time", typ, at(ct, u)}), u.Multiplier()})
+	}
+	for _, r := range reads {
+		for _, d := range []string{"", "/"} {
+			t.Run(r.name+"/delimiter="+d, func(t *testing.T) {
+				mem := amem.NewCheckedAllocator(amem.NewGoAllocator())
+				defer mem.AssertSize(t, 0)
+				got, _, err := listOnce(t, arrowType, columnsPage(t, mem, r.cols), d)
+				if want := listed(cmp.Or(r.unit, time.Second), d != ""); err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("page %+v, error %v; want %+v", got, err, want)
 				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, c.want) {
-				t.Fatalf("page %+v, error %v; want %+v", got, err, c.want)
-			}
-		})
+			})
+		}
+	}
+	t.Run("only Name and ResourceType", func(t *testing.T) {
+		mem := amem.NewCheckedAllocator(amem.NewGoAllocator())
+		defer mem.AssertSize(t, 0)
+		got, _, err := listOnce(t, arrowType, columnsPage(t, mem, page()[:2]), "/")
+		want := &ListOutput{Items: []Item{{Name: "a/", Prefix: true}, {Name: "bé"}, {Name: "c"}}}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("page %+v, error %v; want %+v", got, err, want)
+		}
+	})
+
+	var refused []column
+	for _, c := range page() {
+		if c.typ == str {
+			refused = append(refused, column{c.name, arrow.BinaryTypes.LargeString, c.values}, column{c.name, dict, c.values})
+		}
+	}
+	refused = append(refused,
+		column{"Content-Length", arrow.PrimitiveTypes.Int32, `[null, 7, null]`},
+		column{"Content-Length", str, `[null, "5000000000", null]`},
+		column{"Last-Modified", arrow.PrimitiveTypes.Int64, at(lm, arrow.Second)},
+		column{"Last-Modified", str, `[null, "2026-11-10T21:07:05Z", null]`},
+		column{"Creation-Time", arrow.PrimitiveTypes.Int64, at(ct, arrow.Second)},
+		column{"Creation-Time", str, `[null, "2025-01-02T03:04:05Z", null]`},
+	)
+	for _, c := range refused {
+		for _, d := range []string{"", "/"} {
+			t.Run(c.name+" "+c.typ.String()+"/delimiter="+d, func(t *testing.T) {
+				mem := amem.NewCheckedAllocator(amem.NewGoAllocator())
+				defer mem.AssertSize(t, 0)
+				got, _, err := listOnce(t, arrowType, columnsPage(t, mem, page(c)), d)
+				if !errors.Is(err, objhttp.ErrSyntax) || !strings.Contains(err.Error(), strconv.Quote(c.name)) {
+					t.Fatalf("page %+v, error %v: want ErrSyntax naming %s", got, err, c.name)
+				}
+			})
+		}
 	}
 }
