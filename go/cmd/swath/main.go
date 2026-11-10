@@ -1039,7 +1039,10 @@ func explain(err error) error {
 	var mm *journal.MismatchError
 	var ve *journal.VersionError
 	var le *totals.LimitError
-	var ce interface{ CredentialRefused() bool } // objhttp.CredentialError
+	var ce interface { // objhttp.CredentialError
+		CredentialRefused() bool
+		CredentialSource() string
+	}
 	switch {
 	case errors.Is(err, listing.ErrAmbiguousTail):
 		return fmt.Errorf("%w (the part is kept in DIR/.swath/suspect; swath list --overwrite starts over, or removing that directory accepts the source as it is now)", err)
@@ -1064,10 +1067,29 @@ func explain(err error) error {
 	case errors.As(err, &ce) && ce.CredentialRefused():
 		// No credentials, or none that load: swath never falls back to
 		// anonymous requests on its own.
-		return fmt.Errorf("%w (a public bucket needs --anonymous)", err)
+		return &credentialRefusal{error: err, source: ce.CredentialSource(), verbose: elog().shows(lvInfo)}
 	}
 	return err
 }
+
+// credentialRefusal is a credential failure that will not pass, shown in
+// one line. Its cause (an SDK's chain report, a token endpoint's answer)
+// is the outcome's message, which -v shows (conclude).
+type credentialRefusal struct {
+	error
+	source  string
+	verbose bool
+}
+
+func (e *credentialRefusal) Error() string {
+	msg := "could not obtain credentials (" + e.source + "); for public storage use --anonymous"
+	if !e.verbose {
+		msg += "; use -v for details"
+	}
+	return msg
+}
+
+func (e *credentialRefusal) Unwrap() error { return e.error }
 
 // profile starts the CPU profile and arranges the allocation profile, the
 // files SWATH_CPUPROFILE and SWATH_MEMPROFILE name (as checkSidePaths

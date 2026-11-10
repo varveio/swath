@@ -6,14 +6,25 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 ## Credentials could not be loaded
 
 ```text
-swath: S3 client: credentials (environment): AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY (a public bucket needs --anonymous)
+swath: could not obtain credentials (environment); for public storage use --anonymous; use -v for details
 ```
 
 Exit 1, cause `auth`. Without `--anonymous` swath needs working credentials before it sends a request, and
 it never falls back to unsigned requests. For a public bucket or container, add `--anonymous`. Otherwise fix
-the credential source the message names: a key without its secret, a profile that does not exist, an expired
-SSO login (`aws sso login`), a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file. Where each provider
-looks: [sources.md](sources.md).
+the credential source the message names. Its cause, which can be long (an SDK's report of every credential it
+tried, a token endpoint's answer), is the outcome's message: in the outcome line `-v` prints first (the
+`outcome` event's `message` under `--log-format json -v`) and in the report's `outcome.message`:
+
+```text
+swath: outcome: {"class":"fatal","exit_code":1,"message":"S3 client: credentials (environment): AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY",...}
+swath: could not obtain credentials (environment); for public storage use --anonymous
+```
+
+Common causes: a key without its secret, a profile that does not exist, an expired SSO login (`aws sso login`),
+a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file, no Entra ID credential on a host outside Azure.
+Where each provider looks: [sources.md](sources.md). A credential lookup that failed only transiently, and
+credentials the service refused ([access denied](#access-denied)), are not this failure: their errors are
+printed whole.
 
 ## Access denied
 

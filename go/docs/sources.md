@@ -16,7 +16,8 @@ listing sends requests the provider may charge for; the run report estimates the
 
 Without `--anonymous`, swath uses the provider's credentials and stops before listing (exit 1, cause `auth`)
 when there are none or they do not load. It never falls back to unsigned requests: a public bucket or
-container needs `--anonymous`, which sends no credentials whatever the environment holds.
+container needs `--anonymous`, which sends no credentials whatever the environment holds. The error is one
+line naming the credential source; `-v` shows its cause ([troubleshooting](troubleshooting.md#credentials-could-not-be-loaded)).
 
 `--anonymous` beside an explicit credential (`--s3-profile`, `--s3-bearer-token-command`,
 `--gcs-credentials-file`, `--azure-sas-token`, a SAS in the source URL) is refused with exit 2. Credentials

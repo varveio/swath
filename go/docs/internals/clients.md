@@ -40,7 +40,12 @@ clients are described in [providers.md](providers.md) and the page of each provi
   not find or cannot load stop the run before listing; swath never falls back to anonymous
   requests. Credential failures normally have class `auth`; failed Entra acquisition during Azure
   namespace admission can instead yield `refused`, cause `unsupported` (exit 2), when flatness
-  cannot be established. Provider-specific diagnostics describe the credential source.
+  cannot be established. Provider-specific diagnostics describe the credential source. The command shows a
+  credential failure that will not pass (`CredentialRefused`) as one line naming its source
+  (`CredentialSource`) and `--anonymous`, and leaves the cause, which can be an SDK's chain report or a token
+  endpoint's HTML body, to the outcome's message: stderr shows it only with `-v`, the report always. The typed
+  error, its chain, class and exit code are unchanged; transient credential failures and the service's
+  refusals print whole (`TestPublicBucketHint`, `TestCredentialRefusalShown`).
 - **`objhttp.Guard`**, an `http.RoundTripper` below each SDK client: it accepts 2xx bodies of at most
   16 MiB for S3/GCS or 64 MiB for Azure, then invokes provider-specific validation before passing the
   body upward. These are accepted-body byte limits, not memory limits: the buffer can have spare

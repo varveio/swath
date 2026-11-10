@@ -251,8 +251,8 @@ the list below is the earlier history of the unreleased builds.
   cause `auth`, during Azure namespace admission too (a SAS the service refuses there: `auth` or
   `access_denied`) ([credentials](sources.md#credentials-on-every-object-store)). Give `--anonymous` for a public bucket or container
   (it may be given to `swath resume`). An AWS or GCS credential lookup that fails transiently at start is now
-  `auth` too, rather than a note and retried requests; later refreshes are still retried. The error ends
-  with "(a public bucket needs --anonymous)".
+  `auth` too, rather than a note and retried requests; later refreshes are still retried. The error is one
+  line naming the credential source and `--anonymous`; `-v` shows its cause.
 - An endpoint URL with user information (`http://user:password@host/`, through `--endpoint-url`, then
   also `--gcs-endpoint` or `--azblob-endpoint`) is refused before anything is recorded, where it was accepted and
   its password recorded in the journal identity; give credentials through the provider's own configuration.

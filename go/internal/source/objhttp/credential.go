@@ -40,6 +40,11 @@ func TransientStatus(status int) bool {
 
 // CredentialRefused reports a credential failure that will not pass: no
 // credentials found, or configured ones that do not load or are refused.
-// The command matches it by this method (it imports providers only to
-// register them) to say that a public bucket needs --anonymous.
+// The command matches it by this method and CredentialSource (it imports
+// providers only to register them) to show it in one line that names
+// --anonymous, the cause (an SDK's chain report, a token endpoint's body)
+// left to -v.
 func (e *CredentialError) CredentialRefused() bool { return !e.Transient }
+
+// CredentialSource is where the credentials came from (Source).
+func (e *CredentialError) CredentialSource() string { return e.Source }
