@@ -20,6 +20,7 @@ Linked into `cmd/swath` unless marked tests.
 | `golang.org/x/oauth2` (`google`) | BSD-3 | Google application-default credentials and token refresh for GCS; bearer-token reuse (`internal/source/tokensource`). |
 | `golang.org/x/sync` (`singleflight`) | BSD-3 | One token refresh shared by concurrent callers (`tokensource`: S3 bearer tokens, GCS credentials and Azure Entra tokens). |
 | `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock), console VT mode, `GetDiskFreeSpaceEx` (free space for the spill reserve) and the closed-pipe and sharing-violation errors. |
+| `github.com/spf13/pflag` | BSD-3 | The CLI's flag parser (`cmd/swath`): GNU-style long options, `--no-NAME` negations, and the flag table that help and `swath completion` are generated from. |
 | `golang.org/x/term` | BSD-3 | Whether stderr is a terminal, and its width, for the progress line. |
 | `github.com/klauspost/compress` (`zstd`, `gzip`) | BSD-3 | zstd for Parquet pages and spill frames, gzip and zstd for text output; the standard library has no zstd, and the same module's gzip is a drop-in for `compress/gzip`. |
 | `github.com/varveio/seekparquet/go` | Apache-2.0 | The SeekParquet format's mechanisms: the part writer (`write`), the manifest's JSON, footer and key-page inspection, and the reader `swath-replay` serves datasets through. Pinned at a pseudo-version of its `main` (bumped deliberately) until it releases. |
@@ -41,15 +42,14 @@ Linked into `cmd/swath` unless marked tests.
 | Spill | `internal/order` | external-sort packages (extsort) | Rows arrive sorted, so there is no merge to buy; the spill shares the memory and disk budgets with the run. |
 | Counters | `internal/counters` | `expvar`, VictoriaMetrics metrics, OpenTelemetry | The definition table is the report's schema (units, feature gating, documentation); the packages have neither. |
 | Supervisor | `cmd/swath/supervise.go` | `signal.NotifyContext` | The exit-code mapping, the progress watchdog, owned diagnostic writes and the bounded forced exit are the application's; the standard primitives are used underneath. |
-| Flags | `cmd/swath` (standard `flag`) | spf13/cobra and pflag | The subcommands and their Java-compatible spellings fit the standard package; cobra adds command machinery the CLI does not need. |
+| Commands | `cmd/swath` (pflag flag sets) | spf13/cobra | The subcommands, help and shell completion are generated from one flag table over pflag; cobra adds command machinery the CLI does not need. |
 | Filesystem lister | `internal/source/localfs` | charlievieth/fastwalk, karrick/godirwalk | They are unsorted, allocate per entry and have no `statx` or arena; the lister sorts before it stats. |
 | List clients | `internal/source/s3/client`, `gcs/client`, `azblob/client` | the SDKs' paginators and retryers, `cloud.google.com/go/storage` | Each client uses the SDK's service client; what is built here is the one retry owner and admission, the bounded and validated body (`objhttp.Guard`), S3's page scanner (per page, not per object, and versions in wire order), Azure's merge into wire order and the transport pool ([clients.md](clients.md)). `cloud.google.com/go/storage` adds gRPC transport and retries the port would turn off. |
 | Parquet part router | `internal/parquetout` | the seekparquet module's writer alone (`local.WriteDir`) | It is the part-size, interval, resume-cut and encoder-pool policy over the module's part writer (`write.NewPart`), which is the encoder; the journal and publication stay swath's (the module's `local` package has no fault hooks). |
 
 **Triggers to revisit:** a storage need beyond append-and-scan (mutable tables, queries, compaction) or another
 change to the journal's recovery format (bbolt); a second subsystem that needs generic retries (a retry
-package there); metrics export to an external system (OpenTelemetry); shell completion or many more commands
-(cobra); a profile on macOS or Windows where `stat` dominates (a native lister); binary size becoming a gate
+package there); metrics export to an external system (OpenTelemetry); many more commands (cobra); a profile on macOS or Windows where `stat` dominates (a native lister); binary size becoming a gate
 (an upstream split or a fork of parquet-go); a Windows crash test (Windows directory durability, then
 journaled runs there).
 

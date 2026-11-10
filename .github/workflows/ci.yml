@@ -38,7 +38,7 @@ jobs:
       go_shards: ${{ steps.shards.outputs.matrix }}
       go_xos: ${{ steps.xos.outputs.matrix }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Instrumentation-drift guard (§5)
         if: needs.changes.outputs.java == 'true'
@@ -130,7 +130,7 @@ jobs:
 
       - name: Set up JDK 25
         if: needs.changes.outputs.java == 'true'
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v4
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
         with:
           distribution: temurin
           java-version: "25"
@@ -181,11 +181,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up JDK 25
         if: needs.changes.outputs.java == 'true'
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v4
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
         with:
           distribution: temurin
           java-version: "25"
@@ -236,11 +236,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up JDK 25
         if: needs.changes.outputs.java == 'true'
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v4
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
         with:
           distribution: temurin
           java-version: "25"
@@ -328,7 +328,7 @@ jobs:
             image: swath-replay:ci
             cache_scope: swath-replay
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Docker Buildx
         if: needs.changes.outputs.java == 'true'
@@ -387,7 +387,7 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true' || needs.changes.outputs.reader == 'true' || needs.changes.outputs.objfile == 'true'
@@ -446,7 +446,7 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
@@ -500,7 +500,7 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
@@ -540,7 +540,7 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.go == 'true'
@@ -683,7 +683,7 @@ jobs:
       run:
         working-directory: go/objfile
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.objfile == 'true'
@@ -713,7 +713,7 @@ jobs:
       run:
         working-directory: go/reader
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.reader == 'true'
@@ -749,7 +749,7 @@ jobs:
         shell: bash
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: matrix.scope != 'off'
@@ -791,7 +791,7 @@ jobs:
       run:
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Go (version from go/go.mod)
         if: needs.changes.outputs.fixtures == 'true'
@@ -801,7 +801,7 @@ jobs:
 
       - name: Set up JDK 25
         if: needs.changes.outputs.fixtures == 'true'
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v4
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78  # v6.2.0
         with:
           distribution: temurin
           java-version: "25"
@@ -918,7 +918,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Full Go validation passed
         env:
