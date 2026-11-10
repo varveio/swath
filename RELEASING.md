@@ -86,7 +86,7 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
 
 - `go-tests`: `go vet ./...` and `go test -race ./...` of the main module unsharded on
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
-- `build`: the static builds for all four targets and their `--version` stamp, and the
+- `build`: the static builds for all five targets and their `--version` stamp, and the
   license gate: `go/notices.sh` fails on a linked module whose license go-licenses does not
   recognize or that is not on its allow-list (the Java build's, as SPDX identifiers), or when
   the targets link different modules

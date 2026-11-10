@@ -245,7 +245,7 @@ func TestPartIntervalBoundsRecoveryPointAge(t *testing.T) {
 	if ages[0] < 1500 || cuts[0] != 0 {
 		t.Fatalf("by size only: age %d ms, %d time cuts", ages[0], cuts[0])
 	}
-	if 2*ages[1] > ages[0] || cuts[1] < 3 {
+	if ages[1] == 0 || 2*ages[1] > ages[0] || cuts[1] < 3 {
 		t.Fatalf("with the interval: age up to %d ms (by size only: %d ms), %d time cuts", ages[1], ages[0], cuts[1])
 	}
 }

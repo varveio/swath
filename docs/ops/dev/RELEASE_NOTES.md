@@ -94,7 +94,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 - Not listed: Azure hierarchical namespaces, blob versions, snapshots and deleted blobs; S3 directory
   buckets; GCS soft-deleted objects. Mounted shares are read through the operating system, not a native
   NFS or SMB client.
-- Archives are built for the four targets above only; images are linux only.
+- Archives are built for the five targets above only; images are linux only.
 - The dataset format is SeekParquet draft revision 1.
 - `swath-replay` reads Java-era fixtures through a transitional reader that will be removed; re-list a
   Java-era fixture you still need.
