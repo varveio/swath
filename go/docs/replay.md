@@ -1095,21 +1095,20 @@ directory and serves that.
 
 ## Continuous integration
 
-The Go jobs of `.github/workflows/ci.yml` each always run and do their work only when their inputs changed
-(or on a manual run); `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` and `go-xos` are the tests
+The Go jobs of `.github/workflows/ci.yml` run complete selected modules/tiers on PRs and all Go work on
+main/dispatch; `ci-gate` needs all of them. `go-lint`, `go-race`, `go-nonrace` and `go-xos` are the tests
 ([testing.md](testing.md#continuous-integration)); two concern the replay:
 
-- `go-build` (inputs: `go/`, the workflow, `Dockerfile.go` and its ignore file, the image smoke scripts, the
-  race shard table): the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
-  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit), then both images
-  of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
+- `go-build`: when main is selected, the static builds of `swath` and `swath-replay` for linux/amd64, linux/arm64,
+  darwin/arm64 and windows/amd64 (each linux/amd64 binary's `--version` must name the commit). Packaging/dependency/full PRs
+  and all main/dispatch runs also build both images of `Dockerfile.go`: built for linux/amd64 and linux/arm64 without pushing, the native ones loaded as
   `swath-go:ci` and `swath-replay-go:ci` and smoked on data written in the job, so none needs network or a
   recording. The lister image lists a `bench/s3fake` bucket of 2,000 keys into a dataset
   (`scripts/ci/smoke-container.sh`: read back with DuckDB, resumed as a no-op); the replay image
   serves that dataset (sorted, served as it is) and an unsorted
   capture from `bench/replay/capture` (2,000 objects in descending key order, no stamps), which the server
   refuses, so the smoke sorts it with the image's `sort-fixture` first; the step requires that it did.
-- `go-fixtures` (inputs: `go/`, the workflow, the `swath-replay`, `swath-core` and `swath-model` Gradle modules,
+- `go-fixtures` (inputs: main/reader, shared CI inputs, the `swath-replay`, `swath-core` and `swath-model` Gradle modules,
   the shared Gradle build and wrapper (`build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`,
   `gradle/`, `build-logic/`, `gradlew`), `docs/replay-provider-evidence.tar.gz`,
   `docs/replay-provider-expectations.json`, the replay smoke script): JDK 25,

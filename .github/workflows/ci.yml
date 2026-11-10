@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   # Manual trigger so maintainers can run the full pipeline from any branch on demand.
@@ -19,21 +20,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Java runs for its source/build/image inputs and runtime fixtures. Prose changes use the
-  # site checks; Java's documentation assertions run when its suite otherwise runs. Keep
-  # docs/configuration.md: TuneOptionsTest checks that table against the Java implementation.
-  # Go has its own dependency list below. Dispatch and unknown/empty diffs run both tiers.
-  # The jobs still RUN and succeed with their steps skipped (not `skipped` as jobs), so ci-gate keeps
-  # requiring every job on a pull request.
-  # A failure here skips its dependants, which fails ci-gate on a pull request. go-fixtures keeps
-  # its own, wider detection. go_shards is the go-race matrix, from the shard table; go_xos is the
-  # go-xos matrix, from the event.
+  # The policy owns module dependencies, external inputs and escalation. Main and
+  # dispatch always validate the complete Go tree; PRs select complete modules.
+  # Jobs still run when unaffected, with their work skipped, so ci-gate stays strict.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       java: ${{ steps.changes.outputs.java }}
       go: ${{ steps.changes.outputs.go }}
+      reader: ${{ steps.changes.outputs.reader }}
+      objfile: ${{ steps.changes.outputs.objfile }}
+      fixtures: ${{ steps.changes.outputs.fixtures }}
+      images: ${{ steps.changes.outputs.images }}
+      platforms: ${{ steps.changes.outputs.platforms }}
+      full: ${{ steps.changes.outputs.full }}
       go_shards: ${{ steps.shards.outputs.matrix }}
       go_xos: ${{ steps.xos.outputs.matrix }}
     steps:
@@ -46,42 +47,14 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
-            echo "java=true" >> "$GITHUB_OUTPUT"
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          else
-            # Capture the whole list first: a git failure then fails the step (set -e) instead of
-            # reading as "Go-only". An empty diff also runs everything.
-            # --no-renames: a rename reports only its destination, so moving a Java file under go/
-            # would otherwise read as Go-only. Listing both paths keeps the source path visible.
-            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            java_inputs='^swath-[^/]+/'
-            java_inputs+='|^(build-logic|gradle|config)/'
-            java_inputs+='|^scripts/(legal|benchmarks/replay|provider-conformance)/'
-            java_inputs+='|^scripts/ci/(check-instrumentation-drift\.(sh|py)|osv-image-policy\.py|report-test-counts\.sh)$'
-            java_inputs+='|^\.github/workflows/(ci|nightly)\.yml$'
-            java_inputs+='|^(docs/assets|site/data/runs)/'
-            java_inputs+='|^docs/(configuration\.md|replay-provider-(evidence\.tar\.gz|expectations\.json))$'
-            java_inputs+='|^((build|settings)\.gradle\.kts|gradle\.properties|gradlew(\.bat)?|Dockerfile(\.replay)?|\.dockerignore|LICENSE|NOTICE|THIRD_PARTY_NOTICES\.md)$'
-            if [ -z "$changed" ] || grep -E "$java_inputs" >/dev/null <<<"$changed"; then
-              echo "java=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "java=false" >> "$GITHUB_OUTPUT"
-            fi
-            # grep reads every line rather than exiting at the first match while git still writes
-            # (the list is captured above, so no SIGPIPE can turn a match into go=false).
-            if [ -z "$changed" ] || grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|Dockerfile\.go|scripts/ci/smoke-container\.sh$|scripts/ci/smoke-replay-container\.sh$|scripts/ci/go-race-shards\.sh$|scripts/ci/seekparquet-conformance\.sh$|scripts/ci/seekparquet_conformance\.py$)' >/dev/null <<<"$changed"; then
-              echo "go=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "go=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-          echo "changes: $(cat "$GITHUB_OUTPUT")"
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels || fromJSON('[]')) }}
+        run: python3 scripts/ci/go-ci-policy.py
 
       - name: CI policy regression tests
-        run: python3 scripts/ci/test-ci-policy.py
+        run: |
+          python3 scripts/ci/test-ci-policy.py
+          python3 scripts/ci/test-release-go-ci.py
+          ./scripts/ci/go-race-shards.sh --self-test
 
       # Always computed: go-race expands it before its steps can skip. When go=false it is one
       # step-skipped leg on ubuntu-latest, not every shard's (arm64) runner.
@@ -99,25 +72,25 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "go-race shards: $matrix"
 
-      # Always computed, for the same reason: go-xos's runners are chosen before its steps can
-      # skip, and a job-level `if` would make it `skipped`, which fails ci-gate on a pull request.
-      # A pull request runs linux/arm64. Windows setup/tests and the macOS runner queue set
-      # the pull request wall time; both run on main and dispatch here and nightly in nightly.yml. Without a Go
-      # change, one step-skipped leg on ubuntu-latest, so no macOS, Windows or arm64 runner is
-      # queued.
+      # The ordinary PR arm64 leg covers only packages raced on amd64. Escalated
+      # PRs and main/dispatch run the full suite on all platforms. An off leg
+      # succeeds without queueing a platform runner when no selected module needs it.
       - name: Go cross-OS matrix
         id: xos
         env:
           GO_CHANGED: ${{ steps.changes.outputs.go }}
-          EVENT: ${{ github.event_name }}
+          GO_ANY: ${{ steps.changes.outputs.go == 'true' || steps.changes.outputs.reader == 'true' || steps.changes.outputs.objfile == 'true' }}
+          PLATFORMS: ${{ steps.changes.outputs.platforms }}
         run: |
           set -euo pipefail
-          if [ "$GO_CHANGED" != true ]; then
-            matrix='[{"os":"off","runner":"ubuntu-latest"}]'
-          elif [ "$EVENT" = pull_request ]; then
-            matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+          if [ "$GO_ANY" != true ]; then
+            matrix='[{"os":"off","runner":"ubuntu-latest","scope":"off"}]'
+          elif [ "$PLATFORMS" = true ]; then
+            matrix='[{"os":"macos-latest","runner":"macos-latest","scope":"full"},{"os":"windows-latest","runner":"windows-latest","scope":"full"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm","scope":"full"}]'
+          elif [ "$GO_CHANGED" = true ]; then
+            matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm","scope":"extra"}]'
           else
-            matrix='[{"os":"macos-latest","runner":"macos-latest"},{"os":"windows-latest","runner":"windows-latest"},{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm"}]'
+            matrix='[{"os":"off","runner":"ubuntu-latest","scope":"off"}]'
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "go-xos legs: $matrix"
@@ -402,13 +375,8 @@ jobs:
           grep -qF "${GITHUB_SHA:0:12}" <<<"$out"
           docker run --rm "${{ matrix.image }}" --help | grep -q 'Parallel, resumable S3 object lister'
 
-  # Go port (go/, see AGENTS.md "Go port"), in four jobs that run side by side, so a vet error
-  # reports in a minute and the race tests' wall is their slowest shard instead of their sum
-  # (one serial job took 17.5 min, internal/listing alone ~12 of it). Each always runs and does
-  # its work only when changes.outputs.go is true, so Java-only changes pay a checkout and
-  # nothing else. ci-gate needs every one: a job that did its work and failed, or one skipped on
-  # a pull request, fails the gate.
-
+  # Go jobs run concurrently. PRs test complete affected modules; main/dispatch
+  # select all modules, platforms, fixtures and images for release qualification.
   # The cheap verdicts first: formatting, vet, and the race shard table's own check (every
   # package and every test of a split package in exactly one shard).
   go-lint:
@@ -422,13 +390,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.reader == 'true' || needs.changes.outputs.objfile == 'true'
         uses: ./.github/actions/setup-go
         with:
           key: go-lint
 
       - name: gofmt
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.go == 'true' || needs.changes.outputs.reader == 'true' || needs.changes.outputs.objfile == 'true'
         run: |
           set -euo pipefail
           unformatted=$(gofmt -l .)
@@ -562,9 +530,8 @@ jobs:
         if: needs.changes.outputs.go == 'true'
         run: ../scripts/ci/seekparquet-conformance.sh "$RUNNER_TEMP/seekparquet-conformance"
 
-  # Artifacts, independent of the tests: static cross-builds of both commands, the journal's
-  # Windows test compile, and the Go images (Dockerfile.go: the lister and the replay server)
-  # built and smoked.
+  # Static cross-builds stay on every main-module PR. Packaged images run on
+  # main/dispatch and packaging/dependency/escalated PRs; the license gate stays on all.
   go-build:
     needs: changes
     runs-on: ubuntu-latest
@@ -600,6 +567,11 @@ jobs:
             "$RUNNER_TEMP/$cmd-linux-amd64" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
           done
 
+      # Preserve the license gate when a PR does not build the packaged images.
+      - name: Linked-module license gate
+        if: needs.changes.outputs.go == 'true' && needs.changes.outputs.images != 'true'
+        run: ./notices.sh "$RUNNER_TEMP/THIRD_PARTY_NOTICES"
+
       # The Go images, built as release.yml builds them but compiled here rather than promoted
       # from release archives: both architectures of each target (no push), then the
       # builder-native ones loaded for the smokes. No QEMU: the build stage cross-compiles and
@@ -607,11 +579,11 @@ jobs:
       # stage that would need emulation. The two targets share the build stage, so the second
       # build reuses the first's layers from the builder and only the first writes the cache.
       - name: Set up Docker Buildx
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       - name: Build Go lister image (both architectures, no push)
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -627,7 +599,7 @@ jobs:
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=swath-go,mode=max' || '' }}
 
       - name: Build Go replay image (both architectures, no push)
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -639,7 +611,7 @@ jobs:
           cache-from: type=gha,scope=swath-go
 
       - name: Build Go lister image (builder-native arch) + load for smoke
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -651,7 +623,7 @@ jobs:
           cache-from: type=gha,scope=swath-go
 
       - name: Build Go replay image (builder-native arch) + load for smoke
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -664,7 +636,7 @@ jobs:
 
       # The lister smoke reads the dataset back with DuckDB, checksum-verified before it runs.
       - name: Install DuckDB CLI
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
@@ -679,7 +651,7 @@ jobs:
       # bench/replay/capture is refused as not servable sorted, so the replay smoke's fallback
       # sorts it with the image's own sort-fixture first; the step requires that the fallback ran.
       - name: Smoke — Go lister image writes a dataset; Go replay image serves it and a sorted capture
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.images == 'true'
         run: |
           set -euo pipefail
           for image in swath-go:ci swath-replay-go:ci; do
@@ -714,13 +686,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.objfile == 'true'
         uses: ./.github/actions/setup-go
         with:
           key: go-objfile
 
       - name: vet, tidy, race tests, static cross-builds
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.objfile == 'true'
         run: |
           set -euo pipefail
           go vet ./...
@@ -744,13 +716,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.reader == 'true'
         uses: ./.github/actions/setup-go
         with:
           key: go-reader
 
       - name: vet, tidy, race tests, static cross-builds
-        if: needs.changes.outputs.go == 'true'
+        if: needs.changes.outputs.reader == 'true'
         run: |
           set -euo pipefail
           go vet ./...
@@ -760,20 +732,9 @@ jobs:
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build ./...
           done
 
-  # The Go default tier on the other platforms the port ships for: plain `go test` (no -race:
-  # slow on macOS, and the Windows race detector needs cgo) on Windows, linux/arm64 and macOS.
-  # Only vet and the tests: gofmt, the shard check, the heap gates, the cross-builds and the
-  # image stay in the jobs above. The legs are the changes job's go_xos: linux/arm64
-  # on every Go change, Windows and macOS on main, dispatch and nightly only,
-  # and without a Go change one go-xos (off) leg on ubuntu-latest whose steps skip.
-  #
-  # The linux/arm64 leg is what keeps arm64 before merge: the go-race arm64 shards cover only
-  # internal/listing and cmd/swath, and the one product-relevant macOS finding so far
-  # (TestFooterOnlyChange, #308) was parquet-go's arm64 encoder path, not Darwin. It runs the
-  # rest of the tree on arm64 at Linux prices with no runner queue. What only the macOS leg
-  # covers is Darwin itself: APFS's refusal of names that are not UTF-8, and the crash, durable
-  # and kill matrices on Darwin's filesystem and signals, run there without -race
-  # (go/docs/testing.md, cross-OS).
+  # Ordinary PRs keep arm64 coverage of the packages raced on amd64, without
+  # repeating the CLI/engine matrices already raced on arm64. The shard table owns
+  # that complement. Escalated PRs/main/dispatch run every selected module in full.
   go-xos:
     needs: changes
     name: go-xos (${{ matrix.os }})
@@ -791,27 +752,39 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Set up Go (version from go/go.mod)
-        if: needs.changes.outputs.go == 'true'
+        if: matrix.scope != 'off'
         uses: ./.github/actions/setup-go
         with:
           key: go-xos
 
-      - name: go vet
-        if: needs.changes.outputs.go == 'true'
-        run: go vet ./...
+      - name: Main module vet and tests (no -race)
+        if: matrix.scope != 'off' && needs.changes.outputs.go == 'true'
+        env:
+          SCOPE: ${{ matrix.scope }}
+        run: |
+          set -euo pipefail
+          packages=(./...)
+          if [ "$SCOPE" = extra ]; then
+            selected=$(../scripts/ci/go-race-shards.sh --arm64-extra)
+            mapfile -t packages <<<"$selected"
+          fi
+          go vet "${packages[@]}"
+          go test -count=1 -timeout 25m "${packages[@]}"
 
-      - name: go test (no -race)
-        if: needs.changes.outputs.go == 'true'
-        run: go test -count=1 -timeout 25m ./...
+      - name: Reader module vet and tests (no -race)
+        if: matrix.scope == 'full' && needs.changes.outputs.reader == 'true'
+        working-directory: go/reader
+        run: go vet ./... && go test -count=1 -timeout 15m ./...
 
-  # The Go replay's fixture tier: the store's tests on fixtures the Java replay distribution
-  # writes (bench/replay/make-fixtures.sh: DuckDB captures sorted by the Java sort-fixture),
-  # gated in the tests on SWATH_REPLAY_FIXTURES and skipped everywhere else. A separate job, so
-  # the Gradle build runs beside the Go jobs rather than inside its budget. Same always-runs,
-  # works-on-change shape as the Go jobs. Its inputs are wider: the Java replay module and the
-  # modules it builds on (swath-core, swath-model), the shared Gradle build and wrapper, the
-  # evidence archive and expectations the tests read, and the replay smoke script.
+      - name: Object-file module vet and tests (no -race)
+        if: matrix.scope == 'full' && needs.changes.outputs.objfile == 'true'
+        working-directory: go/objfile
+        run: go vet ./... && go test -count=1 -timeout 15m ./...
+
+  # Go replay interoperability with externally generated fixtures. The shared
+  # policy includes main/reader changes and the Java/evidence inputs of these fixtures.
   go-fixtures:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -819,40 +792,15 @@ jobs:
         working-directory: go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect Go changes
-        id: changes
-        working-directory: .
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = workflow_dispatch ] || [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          else
-            # Capture the whole list first: a git failure then fails the step (set -e) instead of
-            # reading as "no Go change", and grep reads every line rather than exiting at the
-            # first match while git still writes (git's SIGPIPE under pipefail would turn a
-            # match into go=false).
-            changed=$(git diff --no-renames --name-only "$BASE" HEAD)
-            if grep -E '^(go/|\.github/workflows/ci\.yml$|\.github/actions/setup-go/|swath-replay/|swath-core/|swath-model/|docs/replay-provider-(evidence\.tar\.gz|expectations\.json)$|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradle/|build-logic/|gradlew$|scripts/ci/smoke-replay-container\.sh$)' >/dev/null <<<"$changed"; then
-              echo "go=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "go=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
 
       - name: Set up Go (version from go/go.mod)
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         uses: ./.github/actions/setup-go
         with:
           key: go-fixtures
 
       - name: Set up JDK 25
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v4
         with:
           distribution: temurin
@@ -860,20 +808,20 @@ jobs:
 
       # This job runs the wrapper itself, so it validates it itself (see fast-tests).
       - name: Validate Gradle wrapper
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
 
       - name: Set up Gradle
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
 
       - name: Java replay distribution
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         working-directory: .
         run: ./gradlew --no-daemon --stacktrace :swath-replay:installDist
 
       - name: Java-written replay fixtures
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         run: |
           set -euo pipefail
           PATH="$GITHUB_WORKSPACE/swath-replay/build/install/swath-replay/bin:$PATH" \
@@ -883,7 +831,7 @@ jobs:
       # test is added to both. Every named test must run and pass: a name that matches nothing,
       # or a test that skips (the gate it reads unset), would otherwise pass vacuously.
       - name: Gated replay tests on the Java-written fixtures
-        if: steps.changes.outputs.go == 'true'
+        if: needs.changes.outputs.fixtures == 'true'
         env:
           SWATH_REPLAY_FIXTURES: ${{ runner.temp }}/replay-fixtures
           FIXTURE_PACKAGES: ./internal/replay/store ./internal/replay/evidence ./internal/replay/azure
@@ -939,21 +887,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # A skipped dependency passes the gate only OFF pull_request, where a job may legitimately
-      # be event-gated. On a pull request
-      # every dependency runs (the Java and Go jobs do their work only when their inputs changed), so there `skipped` is not a pass: that is what stops a future
-      # `if:` from quietly removing a tier from the gate while the check stays green.
+      # Unaffected jobs succeed with skipped steps. A skipped job is never a pass:
+      # main's full Go qualification must prove that every selected tier actually ran.
       - name: Every gating job passed
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ALLOW_SKIPPED: ${{ github.event_name != 'pull_request' }}
         run: |
           set -euo pipefail
-          if [ "$ALLOW_SKIPPED" = true ]; then
-            allowed='["success","skipped"]'
-          else
-            allowed='["success"]'
-          fi
+          allowed='["success"]'
           {
             echo "### CI gate"
             echo
@@ -968,3 +909,29 @@ jobs:
             exit 1
           fi
           echo "CI gate passed."
+
+  # Full-scope PRs exercise this gate too; release accepts only its main push
+  # result at the exact SHA. Ordinary scoped PRs do not emit this qualification.
+  go-full-gate:
+    needs: [changes, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
+    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+
+      - name: Full Go validation passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTION: ${{ toJSON(needs.changes.outputs) }}
+        run: |
+          set -euo pipefail
+          jq -e 'all(.[]; .result == "success")' <<<"$NEEDS"
+          shards=$(./scripts/ci/go-race-shards.sh --matrix)
+          jq -e --argjson shards "$shards" '
+            (.full == "true") and (.go == "true") and (.reader == "true") and
+            (.objfile == "true") and (.fixtures == "true") and (.images == "true") and
+            (.platforms == "true") and (.go_shards | fromjson == $shards) and
+            (.go_xos | fromjson |
+              (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm", "windows-latest"] and
+              all(.[]; .scope == "full" and .runner == .os))' <<<"$SELECTION"

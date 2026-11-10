@@ -15,7 +15,7 @@ runners are owned elsewhere and are only summarized here:
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
-| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check, `ci-gate` |
+| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push/label change, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check, `ci-gate` |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
@@ -32,7 +32,8 @@ gate: it exists so a suspected flake is measured by repetition instead of being 
 
 `release.yml` ships the Go implementation; no Java job runs there. It does not trust the `ci.yml`
 run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
-passed `ci.yml` to reach `main`. It verifies that the tag is an ancestor of `main`, reruns `go vet`
+passed full Go validation. It separately verifies that the tag is an ancestor of `main` and requires
+`go-full-gate` from the exact commit's main push run. It then reruns `go vet`
 and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes
 them by digest, smokes the digests, and only then applies tags and signs.
@@ -43,7 +44,9 @@ them by digest, smokes the digests, and only then applies tags and signs.
 ## Registry and artifacts
 
 GHCR is written by `release.yml` only. Pull requests, `main` pushes and dispatches build and smoke
-both Java images in `docker-check` and both Go images in `go-build`, and throw them away; nothing
+selected Java images in `docker-check` and selected Go images in `go-build`, and throw them away.
+Go images run on packaging/dependency/full PRs and on every main/dispatch run; static cross-builds and
+the license gate remain on every selected main-module PR. Nothing
 outside a release pushes a tag, so the registry holds release versions and nothing else. An
 unreleased commit's image is built locally from the checkout (`docker build -f Dockerfile.go .`).
 
@@ -71,10 +74,9 @@ Two details carry the weight:
 
 - `if: always()`. Without it a failed dependency skips `ci-gate`, a skipped required check never
   reports, and the pull request waits instead of going red.
-- `skipped` is a failure on a pull request and a pass elsewhere. On a pull request every gating job
-  is expected to run, so a job that shows `skipped` means some `if:` removed a tier from the gate,
-  and the gate fails. On `main` and dispatch, a job may legitimately be event-gated, so `skipped`
-  passes there.
+- `skipped` is a failure on every event. An unaffected job runs with its work skipped, so its
+  result is `success`. A skipped job means a dependency failed or a tier was removed from the gate.
+  This also makes the gate usable as evidence for full main validation.
 
 The job writes a table of every dependency and its result to the step summary; that table is the
 first place to look when the gate is red.
@@ -85,42 +87,64 @@ either. Neither `nightly.yml` nor `site.yml` is a required check.
 
 ## Change detection
 
-Most pull requests touch only one side of the repository, and nearly all recent ones only the Go
-port. The `changes` job diffs the pull request's base (or the push's previous commit) against
-`HEAD` and emits two flags:
+[`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) selects complete Go modules and
+tiers. PR selection follows changed paths and local module dependencies: reader changes include main,
+object-file changes stay independent unless a consumer is added, and main changes do not retest an
+unchanged independent module. Testdata, embedded files, generated-help documents and external replay
+fixtures are inputs too. The exact module/tier mapping and escalation rules live in
+[Go testing](../../../go/docs/testing.md#change-detection); regression cases exercise the actual selector,
+workflow matrix shell, rename/deletion behavior and the gate.
 
-- **Java change:** Java module trees (`swath-*`), Gradle build/configuration/wrapper inputs,
-  Java Dockerfiles and the shared Docker ignore file, legal inputs, the scripts Java builds/tests
-  execute, and the CI or nightly workflow. Runtime fixtures remain inputs: replay-provider evidence
-  and expectations, `site/data/runs/`, `docs/assets/`, and the Java option table in
-  `docs/configuration.md`. The workflow owns the exact positive path list. General prose, site
-  layout, Go-only scripts and other workflow changes no longer launch Java. Java's prose assertions
-  still run when the Java suite runs; the site workflow is the per-change documentation gate.
-- **Go change:** a path under `go/`, the CI workflow, the `setup-go` composite action,
-  `Dockerfile.go*`, or one of the scripts the Go jobs run (the image smokes, the race shard
-  table, the SeekParquet conformance scripts).
+Main and manual dispatch always select full Go validation. PRs can request it with the `ci:full` label;
+shared build/CI/toolchain changes and unknown ownership also select it. Platform and dependency changes
+request broader runtime checks for their affected modules. This is module-level selection, not an
+attempt to infer which individual assertions a source edit affects.
 
-A dispatch, an empty diff or a missing base sets both. Renames are listed by both paths
-(`--no-renames`) so moving a Java file under `go/` is not read as Go-only, and the diff is captured
-before it is filtered so a `git` failure fails the step instead of reading as "no change".
+Java retains the positive source/build/image/fixture list in the policy script. Ordinary prose and
+site layout do not select Java; its documentation assertions run with the next Java suite. Replay
+fixture generation retains its additional Java/build/evidence inputs without selecting unrelated Go
+modules. An absent/zero base or empty diff selects full validation; a failed diff is an error. Both
+sides of renames are considered.
 
-The jobs do not use these flags in a job-level `if:`. Every job runs and puts the flag on its
-steps, so an unaffected job finishes in seconds as `success`. A job-level `if:` would make it
-`skipped`, which fails `ci-gate` on a pull request; the step-level form is what lets the gate keep
-treating `skipped` as a removed tier. If `changes` itself fails, its dependants are skipped and the
-gate goes red, which is the safe direction.
+Unaffected jobs succeed with skipped steps. Matrices use one `off` leg on ubuntu-latest when no work
+is selected, so no platform runner is queued. The nightly workflow is unfiltered and also backstops
+input-selection mistakes.
 
-Matrix jobs need one more step, because a matrix is expanded before any step can skip. `changes`
-also emits the `go-race` and `go-xos` matrices. Without a Go change each is a single `off` leg on
-`ubuntu-latest` whose steps skip, so a Java-only pull request queues no arm64, Windows or macOS
-runner.
+### Full validation and releases
 
-`go-fixtures` keeps its own, wider detection. It runs the Go replay store's tests on fixtures the
-Java replay distribution writes, so its inputs include the Java replay module and the modules it
-builds on, the Gradle build and wrapper, and the evidence archive under `docs/`. Folding that into
-the shared Go flag would run every Go job on unrelated Java changes.
+`go-full-gate` depends directly on every Go job on full-scope PRs and main/dispatch. It requires every job to pass, every
+Go selection to be enabled, the full race-shard matrix and exactly the three full platform legs.
+Regression tests require both aggregates to include every Go job. Full-scope PRs exercise the
+qualification before merge, but only its main push result can qualify a release. Main runs retain independent concurrency groups, so a newer merge cannot
+cancel the older commit's qualification. A red main run must be fixed or reverted; green PR checks do
+not qualify a release.
 
-The nightly workflow runs with no path filter, so it also backstops a mistake in these path lists.
+[`verify-release-go-ci.py`](../../../scripts/ci/verify-release-go-ci.py) requires that job's success
+from the **newest main push run and its current attempt**, in `ci.yml` in this repository, at the
+**exact tagged SHA**. PR/dispatch runs, another SHA, a skipped/missing gate, and stale successes are
+not substitutes. Only a commit that was the head of a main push can qualify; an intermediate
+commit in a multi-commit push or a PR branch commit merely reachable through a merge has no such run.
+Tag the validated pushed main head instead. A pending/missing main run is given up to ten minutes; then release fails with a
+message explaining the eligibility rule and how to wait for pending CI. A completed failed gate fails immediately. The guard uses read-only
+Actions access and does not dispatch builds or publish anything. Java jobs do not qualify a Go release and need not finish before full Go qualification passes.
+
+## Why this PR scope
+
+The PR loop keeps the complete race suite for affected modules, distinct heap/conformance checks,
+cheap cross-compilation, and architecture-sensitive tests. It avoids repeating heavy CLI/engine
+packages without race instrumentation on the same arm64 runner. Other packages retain their arm64
+run, derived from the race-shard table. Packaging can wait for main except on relevant changes;
+its license check stays on PRs. Moving off-critical-path jobs saves runner capacity, not necessarily
+elapsed time. [Measurements](../../../go/docs/measurements.md#ci-go-caches-race-shards-and-cross-os-legs-2026-11-09)
+record the observed costs; there is no fixed PR-duration guarantee.
+
+This is a deliberate latency/coverage tradeoff. Comparable projects use different policies:
+[restic](https://github.com/restic/restic/blob/c734245fd3ae9bcac8ab3aaafb4482d4b5d0ae92/.github/workflows/tests.yml)
+keeps multiple OSes and cross-builds on PRs;
+[JuiceFS](https://github.com/juicedata/juicefs/blob/46b443cdd0f16ad11d30c819eb5c4052d12257de/.github/workflows/unittests.yml)
+shards its core unit suite on Linux and has
+[targeted Windows testing](https://github.com/juicedata/juicefs/blob/46b443cdd0f16ad11d30c819eb5c4052d12257de/.github/workflows/wintest.yml).
+Those examples motivate explicit tiers, not a claim that deferring platform tests is universal practice.
 
 ## Java tiers
 
@@ -167,7 +191,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
 | `go-build` | static cross-builds of both commands for four targets, the version stamp, the Go lister and replay images (`Dockerfile.go`) for two architectures and their smokes; the image build runs the Go license gate (`go/notices.sh`) |
 | `go-objfile`, `go-reader` | the nested modules `go/objfile` and `go/reader`: vet, tidy, race tests, cross-builds |
-| `go-xos (OS)` | `go vet` and the whole suite without `-race` on other platforms |
+| `go-xos (OS)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch |
 | `go-fixtures` | the replay fixture tier on Java-written fixtures |
 
 The nested modules have their own `go.mod`, so `./...` in `go/` never reaches them; each needs its
@@ -198,7 +222,7 @@ encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `interna
 
 In the measured history (2026-11-09, about 200 runs), a warm run took 7–8 minutes and its critical
 path was the single `go-race (rest)` shard at 5.4–8.4 minutes. That shard is now three
-(`rest-replay`, `rest-source`, `rest`); their wall times have not yet been measured.
+(`rest-replay`, `rest-source`, `rest`); their observations are recorded in [measurements](../../../go/docs/measurements.md).
 
 Each leg runs with `-count=1`, because a restored build cache would otherwise replay earlier
 results as `(cached)` instead of racing them, and with a per-package `-timeout` below the job's
@@ -208,31 +232,16 @@ command to rerun the shard locally.
 
 ### Cross-OS
 
-`go-xos` runs the default tier without `-race` (slow on macOS; the Windows race detector needs
-cgo). The `changes` job chooses its legs:
+Ordinary PRs retain arm64 coverage for packages raced on amd64, using the complement of the shard
+table. They do not repeat `internal/listing` and `cmd/swath` there. Full platform validation runs
+on main and dispatch, and on PRs selected by platform/dependency inputs or `ci:full`. Cross-builds
+remain on PRs. The selected-module and platform-skip details belong to
+[Go testing](../../../go/docs/testing.md#cross-os).
 
-| Event, with a Go change | Legs |
-| --- | --- |
-| pull request | `ubuntu-24.04-arm` |
-| push to `main`, dispatch | `macos-latest`, `windows-latest`, `ubuntu-24.04-arm` |
-| nightly | `nightly.yml` `go-xos-macos`, `go-xos-windows` |
-
-macOS is off pull requests because its runner queue set the pull request's wall time: every run
-over 13 minutes in the measured history waited 7–10 minutes for a macOS runner, and that wait is
-not tunable from the workflow. The macOS-only failures in that history were test-timing flakes,
-except one: `TestFooterOnlyChange` (#308), which was parquet-go's arm64 encoder path, not Darwin.
-The `ubuntu-24.04-arm` leg keeps that class of finding before merge, running the whole tree on
-arm64 on a Linux runner with no comparable queue. Windows is also off pull requests: on
-2026-11-10 its cache restoration, vet and tests set the typical PR critical path at 6–8 minutes. It has found a real filesystem difference (#310);
-that coverage remains on main and nightly.
-
-The trade-off: a change that breaks only on Windows or Darwin itself (filesystem behavior or
-signals) passes its pull request and fails on its merge to `main`, or at the latest in the nightly run. To check a branch on
-either platform before merging, dispatch `nightly.yml` on it with `jobs=go-xos-macos` or
-`jobs=go-xos-windows`, or use `go-stress.yml` with the corresponding OS.
-
-A matrix leg cannot be dropped with a job-level `if:` (it is evaluated before expansion) and a
-step-level `if:` still waits for the runner, which is why the leg list comes from `changes`.
+macOS and Windows runtime coverage is usually deferred because those jobs and their runner queues
+previously dominated PR turnaround. It has caught real platform differences, so it is retained on
+main/nightly and required before release. Path escalation is an early-warning aid, not proof that
+unselected code cannot have platform-specific behavior.
 
 ## Caching
 

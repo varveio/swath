@@ -1547,3 +1547,23 @@ A local focused before/after run passed the same 15 test/subtest cases, with no 
 is unsuitable for comparison: other workloads heavily loaded the shared host during the second run.
 The focused command was `GOMAXPROCS=4 go test -count=1 -timeout 12m -json
 -run '^(TestSIGKILL.*|TestForcedExit.*)$' ./cmd/swath` from `go/`.
+
+
+### PR tier selection: costs used in the policy, 2026-11-10
+
+The warm [PR run 42826108596](https://github.com/varveio/swath/actions/runs/42826108596),
+`ac1ca731` with Go 1.26.10, spent **12 seconds** in `go-build`'s static cross-build step
+(two commands for four targets plus the Windows journal test compile), **86 seconds** in the first
+multiarchitecture image build, and **4 seconds** in the offline image smoke. The entire job took
+2m47s, including Go/Buildx setup and cleanup. Cross-compilation is retained on affected-code PRs;
+conditional packaging saves runner capacity but was not this run's critical path.
+
+The [main run 42828142577](https://github.com/varveio/swath/actions/runs/42828142577), `c3b93d33`,
+spent 197.289s in `cmd/swath` and 188.071s in `internal/listing` inside the 4m05s non-race arm64 job.
+Those package times overlap; they must not be added. Both packages also ran in arm64 race shards.
+Ordinary PRs now omit that second execution and derive the remaining arm64 packages from the shard
+table. Full platform runs retain it. No test cases or race shards were removed.
+
+These are individual hosted observations, not a cold-cache benchmark or a measured speedup for the
+new scope policy. Skipping unaffected nested modules likewise saves work and queue capacity; their
+short jobs were not usually the critical path. The provider shard's variability can still dominate.

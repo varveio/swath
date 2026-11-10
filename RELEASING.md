@@ -66,12 +66,22 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 ## What gates a release
 
-The tag's commit has already passed every `ci.yml` job: it reached `main` through a pull
-request whose `ci-gate` was green, and `main`'s own run repeated the gate. The `source` job
-proves the tag is that commit, an ancestor of `origin/main`. The release therefore does not
-rerun `ci.yml`'s matrix (the race shards on two architectures, the cross-OS legs, the
-nested modules, the replay fixtures); it reruns what guards the bytes it ships, on the tag
-SHA, from a cold cache:
+The `source` job verifies tag SHA and main ancestry, then independently requires a successful
+**`go-full-gate`** from that exact commit's `ci.yml` main push run. This gate certifies all Go modules,
+race shards, non-race checks, platforms, cross-builds, images and replay fixtures; it is independent
+of the legacy Java jobs. Being on main or
+having a green PR is insufficient. The verifier selects the newest run and its current attempt;
+it rejects skipped/failed gates and does not accept a PR or manual dispatch in place of main.
+
+Only a SHA that was the head of a main push can qualify. An intermediate commit in a multi-commit
+push, or a PR branch commit merely reachable through a merge, has no qualifying push run: release
+the validated pushed main head instead. If its main CI is pending, release waits up to ten minutes. If the gate is failed, missing after that
+wait, or predates this qualification mechanism, release stops before building/publishing. For an existing qualifying main run, fix or rerun its failed checks, then rerun release. A commit
+without a qualifying push run must be replaced by a validated pushed main head. A successful later commit does
+not qualify an earlier tag. The release token needs read-only Actions access to verify this result.
+
+With full validation established, release does not repeat that whole platform matrix. It checks
+what guards the bytes it ships, on the tag SHA, from a cold cache:
 
 - `go-tests`: `go vet ./...` and `go test -race ./...` of the main module unsharded on
   linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
@@ -85,8 +95,9 @@ SHA, from a cold cache:
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's
   part list, then resumed as a no-op), and the replay image serving that dataset.
 
-`ci.yml` `go-build` runs the same image smoke offline on every Go pull request, so a broken
-smoke script or image shows there first, not at release.
+`ci.yml` `go-build` runs the same image smoke offline on every main/dispatch run and on
+packaging/dependency/full PRs. Ordinary code PRs retain native cross-builds and the license gate;
+the main qualification ensures their packaged images are validated before release.
 
 ## Release candidates
 
@@ -163,8 +174,8 @@ do not repair the published candidate by hand.
    ```sh
    git push origin v0.4.0
    ```
-5. The `Release` workflow first proves the tag commit is an ancestor of `origin/main` and
-   checks the release notes, then runs the Go gate and builds the assets once on that exact
+5. The `Release` workflow first proves the tag commit is an ancestor of `origin/main`, requires
+   its successful full Go qualification, and checks the release notes, then runs the Go gate and builds the assets once on that exact
    tag SHA, and then waits on the protected `public-release` environment. **Approve it.**
    The publish job then pushes both images by digest, smokes those digests, tags them,
    signs and attests everything, creates the GitHub release as a **draft**, runs the
