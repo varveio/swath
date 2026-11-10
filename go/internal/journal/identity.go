@@ -183,15 +183,17 @@ func redactEndpoint(value string) string {
 }
 
 // A source root keeps its prefix, which is a literal key where ? and # are
-// data: only a credential-bearing authority and a signed query (a shared
-// access signature) are hidden.
+// data: only a credential-bearing authority is hidden, and an Azure root's
+// whole query, which is where its shared access signature goes. Deciding
+// which Azure queries are signatures is the provider's job; a display can
+// afford to hide a literal '?' in an Azure prefix instead.
 func redactSource(value string) string {
 	scheme, rest, ok := strings.Cut(value, "://")
 	authority, _, _ := strings.Cut(rest, "/")
 	if ok && strings.ContainsAny(authority, "@?#") {
 		return scheme + "://[redacted]"
 	}
-	if i := strings.IndexByte(value, '?'); i >= 0 && signedQuery(value[i+1:]) {
+	if i := strings.IndexByte(value, '?'); i >= 0 && scheme == "az" {
 		return value[:i] + "?[redacted]"
 	}
 	return value
@@ -204,40 +206,4 @@ func redactName(value string) string {
 		return "[redacted]"
 	}
 	return value
-}
-
-// signedQuery reports whether a query names a signature (a shared access
-// signature's sig), in any case and through any number of percent escapes;
-// an escape that does not decode is kept as it is.
-func signedQuery(q string) bool {
-	for range 3 {
-		var b strings.Builder
-		for i := 0; i < len(q); i++ {
-			if q[i] == '%' && i+2 < len(q) && isHex(q[i+1]) && isHex(q[i+2]) {
-				b.WriteByte(unhex(q[i+1])<<4 | unhex(q[i+2]))
-				i += 2
-				continue
-			}
-			b.WriteByte(q[i])
-		}
-		if b.String() == q {
-			break
-		}
-		q = b.String()
-	}
-	return strings.Contains(strings.ToLower(q), "sig=")
-}
-
-func isHex(c byte) bool {
-	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
-}
-
-func unhex(c byte) byte {
-	switch {
-	case c <= '9':
-		return c - '0'
-	case c <= 'F':
-		return c - 'A' + 10
-	}
-	return c - 'a' + 10
 }
