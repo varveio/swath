@@ -7,6 +7,7 @@ swath du SOURCE [-d N] [OPTIONS]          total SOURCE's objects and bytes, per 
 swath resume DIR [OPTIONS]                continue the interrupted run in DIR
 swath show DIR [--journal]                show a dataset or an interrupted run
 swath diag list|count SOURCE [OPTIONS]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
+swath completion bash|zsh|fish            print a shell completion script
 swath version, swath -V, --version        print swath VERSION (REVISION)
 ```
 
@@ -608,6 +609,23 @@ Diagnostics:
       --page-size N          ask for pages of N entries (1 to 1000; default the provider's)
 ```
 <!-- flags:end -->
+
+## Shell completion
+
+`swath completion bash|zsh|fish` prints a completion script for the commands, each command's flags (long and
+short), the choices of an enumerated flag (`--format`, `--color`, `--metadata`), file and directory names where
+a flag or SOURCE takes a path, and the URL schemes (`s3://`, `gs://`, `az://`). The scripts are generated from
+the flag table of the build, so every flag is in them. Install one for the current shell, or put the line in
+its startup file:
+
+```text
+source <(swath completion bash)                                  # bash; ~/.bashrc
+source <(swath completion zsh)                                   # zsh, after compinit; ~/.zshrc
+swath completion fish > ~/.config/fish/completions/swath.fish    # fish
+```
+
+`UPDATE=1 go test ./cmd/swath -run TestCompletion` rewrites the goldens in `cmd/swath/testdata` after the flag
+table changes.
 
 ## Semantics worth stating
 

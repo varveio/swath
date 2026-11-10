@@ -300,6 +300,8 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		return resume(ctx, with(rest), stdout)
 	case "show":
 		return show(rest, stdout)
+	case "completion":
+		return completion(rest, stdout)
 	case "version":
 		printVersion(stdout)
 		return nil

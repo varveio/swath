@@ -327,12 +327,13 @@ var rootCommands = [][2]string{
 	{"resume", "continue an interrupted run"},
 	{"show", "show a dataset or an interrupted run"},
 	{"diag", "list or count with the diagnostic options (experiments, comparisons)"},
+	{"completion", "print a shell completion script (bash, zsh, fish)"},
 	{"help", "show a command's help (swath help COMMAND)"},
 	{"version", "print the version"},
 }
 
 // commandWords are the words dispatch takes as a command.
-var commandWords = []string{"list", "ls", "du", "resume", "show", "diag", "help", "version"}
+var commandWords = []string{"list", "ls", "du", "resume", "show", "diag", "completion", "help", "version"}
 
 // rootHelp prints swath's own help.
 func rootHelp(w io.Writer, s helpStyle) {
