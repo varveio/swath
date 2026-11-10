@@ -33,7 +33,8 @@ and the service picks: an account or endpoint without Arrow listings (a hierarch
 server) answers XML, and so may an account whose eligibility changes mid-run. There is no option: XML is the
 service's fallback, not swath's. An XML page must have an `EnumerationResults` root, nothing after it and no `Error`
 element in it, and must hold `Blobs`; an Arrow page must read without error, with `NextMarker` and
-`NumberOfRecords` in its schema metadata, that many rows, and each column the SDK maps in a type the SDK reads ([clients.md](../clients.md#azure-decoding-and-requests)).
+`NumberOfRecords` in its schema metadata, that many rows, and each column behind what swath writes in a type the SDK reads; other columns, which swath
+never reads, may have any type ([clients.md](../clients.md#azure-decoding-and-requests)).
 Both convert to the same page (`TestArrowEquivalence`, recorded live). The `list_format.*` counters say which format
 each valid page came in. A hierarchy page's blobs and prefixes, which the SDK returns
 apart, are merged back into wire order (UTF-16 code-unit order, `utf16order.Compare`). Filesystem Get Properties (`NamespaceInfo`, below) has no SDK call and is one plain HEAD.

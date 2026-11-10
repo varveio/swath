@@ -235,11 +235,12 @@ func columnPage(col string, values [2]string, dict bool) []byte {
 	return buf.Bytes()
 }
 
-// TestArrowColumnTypes: a column the SDK maps, of a type its resolver does
-// not read, is refused, never decoded as nulls: a dictionary-encoded
-// AccessTier would blank the tier, a dictionary-encoded ResourceType would
-// list the prefix a/ as a blob. The same pages in utf8 (Azure's type) are
-// read, and a column the SDK does not map may have any type.
+// TestArrowColumnTypes: a column behind what swath writes, of a type the
+// SDK's resolver does not read, is refused, never decoded as nulls: a
+// dictionary-encoded AccessTier would blank the tier, a dictionary-encoded
+// ResourceType would list the prefix a/ as a blob. The same pages in utf8
+// (Azure's type) are read. A column swath does not read may have any type,
+// whether the SDK maps it (LeaseState) or not.
 func TestArrowColumnTypes(t *testing.T) {
 	for _, c := range []struct {
 		name, delimiter, col string
@@ -253,6 +254,8 @@ func TestArrowColumnTypes(t *testing.T) {
 		{"ResourceType utf8", "/", "ResourceType", [2]string{"blobprefix", "blob"}, false,
 			&ListOutput{Items: []Item{{Name: "a/", Prefix: true}, {Name: "b"}}}},
 		{"ResourceType dictionary", "/", "ResourceType", [2]string{"blobprefix", "blob"}, true, nil},
+		{"LeaseState dictionary, mapped by the SDK, unread", "", "LeaseState", [2]string{"available", "leased"}, true,
+			&ListOutput{Items: []Item{{Name: "a/"}, {Name: "b"}}}},
 		{"unmapped column dictionary", "", "Unmapped", [2]string{"x", "y"}, true,
 			&ListOutput{Items: []Item{{Name: "a/"}, {Name: "b"}}}},
 	} {

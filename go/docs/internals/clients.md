@@ -284,10 +284,12 @@ of any other physical type (a dictionary-encoded `AccessTier` or `ResourceType`,
 properties, and with `ResourceType` prefixes listed as blobs. An Arrow listing must therefore read without error
 (the batches are read once, not converted), its schema metadata must hold `NextMarker` and `NumberOfRecords`,
 Azure's documented listing metadata, its batches must hold `NumberOfRecords` rows (`TestArrowEnvelope`), and each
-column the SDK maps must have a type its resolver reads (`client.arrowColumns`: utf8 for the strings, bool,
-timestamp, uint64 or int64 for `Content-Length` and the sequence number, uint64 or int32 for the two 32-bit counts,
-a utf8-to-utf8 map for metadata and tags; `TestArrowColumnTypes`). Columns it does not map may have any type. Azure
-sends these types today (a live 4,983-row page: utf8 strings, timestamp[s] times, uint64 `Content-Length`, bool
+column behind what swath writes must have a type the SDK's resolver for it reads (`client.arrowColumns`: utf8
+`Name`, `ResourceType`, `Etag`, `Content-MD5`, `Content-Type`, `BlobType` and `AccessTier`; uint64 or int64
+`Content-Length`; timestamp `Last-Modified` and `Creation-Time`; `TestArrowColumnTypes`). These are the fields the
+conversion reads, and `ResourceType`, which sorts prefixes from blobs. Every other column may have any type, mapped
+by the SDK or not: swath never reads it, so a type change there (to `LeaseState` or `Metadata`, say) does not fail a
+listing. Azure sends these types today (a live 4,983-row page: utf8 strings, timestamp[s] times, uint64 `Content-Length`, bool
 flags, one batch, all-null columns left out). A refused envelope is a parse failure, retried. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
 prefixes; both are in wire (UTF-16 code-unit) order and no name is in both, so merging them with
 `utf16order.Compare` restores the one sequence the byte-order adapter needs (`TestWireOrder`, `TestMergeOrder`); a

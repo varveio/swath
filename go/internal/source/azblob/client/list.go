@@ -42,10 +42,12 @@ package client
 //     decoded page must hold Blobs (Segment nil otherwise). Arrow: the
 //     stream must read without error, its schema metadata must hold
 //     NextMarker and NumberOfRecords, its batches that many rows, and each
-//     column the SDK maps a type the SDK reads (the SDK reads a stream cut
-//     after a batch as whole, one without NextMarker as a final page, and
-//     a column of another type, a dictionary-encoded one say, as nulls;
-//     TestArrowEnvelope, TestArrowColumnTypes).
+//     column behind what swath writes (arrowColumns) a type the SDK reads
+//     (the SDK reads a stream cut after a batch as whole, one without
+//     NextMarker as a final page, and a column of another type, a
+//     dictionary-encoded one say, as nulls; TestArrowEnvelope,
+//     TestArrowColumnTypes). Other columns may have any type: swath does
+//     not read them, so a change there does not fail a listing.
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
 //     (TestRedactedRefusal). The SDK's own log, which quotes failed
 //     requests' URLs, is not swath's: the command turns it off at startup
@@ -407,16 +409,17 @@ func envelope(req *http.Request, status int, header http.Header, body []byte) er
 
 // arrowEnvelope checks an Arrow listing: an IPC stream whose schema
 // metadata holds NextMarker and NumberOfRecords (Azure's listing metadata),
-// whose columns the SDK maps each have a type its decoder reads
-// (arrowColumns), and whose record batches hold NumberOfRecords rows. The
-// SDK's decoder reads a stream cut at a message boundary as whole (the
-// Arrow reader takes the body's end for the stream's), batches missing,
-// all of them included, as a shorter page, a schema without NextMarker as
-// a final page, and a column of another type as nulls (a dictionary
-// ResourceType makes prefixes blobs); each would drop or blank entries, so
-// each is refused (TestArrowEnvelope, TestArrowColumnTypes). Columns the
-// SDK does not map are ignored, as it ignores them. The batches are read
-// (one copy of the body), not converted row by row.
+// whose columns behind what swath writes each have a type the SDK's
+// decoder reads (arrowColumns), and whose record batches hold
+// NumberOfRecords rows. The SDK's decoder reads a stream cut at a message
+// boundary as whole (the Arrow reader takes the body's end for the
+// stream's), batches missing, all of them included, as a shorter page, a
+// schema without NextMarker as a final page, and a column of another type
+// as nulls (a dictionary ResourceType makes prefixes blobs); each would
+// drop or blank entries, so each is refused (TestArrowEnvelope,
+// TestArrowColumnTypes). Every other column may have any type: swath does
+// not read it. The batches are read (one copy of the body), not converted
+// row by row.
 func arrowEnvelope(body []byte) error {
 	r, err := ipc.NewReader(bytes.NewReader(body))
 	if err != nil {
@@ -450,43 +453,26 @@ func arrowEnvelope(body []byte) error {
 	return nil
 }
 
-// The physical types the SDK's Arrow resolvers take (azblob v1.8.3
-// internal/arrow: resolveString, resolveBool, resolveTimestamp,
-// resolveInt64, resolveInt32, resolveMapCol, each a type assertion that
-// yields nil, every value null, on any other type).
+// The physical types the SDK's Arrow resolvers take for the columns swath
+// reads (azblob v1.8.3 internal/arrow: resolveString, resolveTimestamp,
+// resolveInt64, each a type assertion that yields nil, every value null,
+// on any other type).
 var (
 	arrowString    = func(t arrow.DataType) bool { return t.ID() == arrow.STRING }
-	arrowBool      = func(t arrow.DataType) bool { return t.ID() == arrow.BOOL }
 	arrowTimestamp = func(t arrow.DataType) bool { return t.ID() == arrow.TIMESTAMP }
 	arrowInt64     = func(t arrow.DataType) bool { return t.ID() == arrow.UINT64 || t.ID() == arrow.INT64 }
-	arrowInt32     = func(t arrow.DataType) bool { return t.ID() == arrow.UINT64 || t.ID() == arrow.INT32 }
-	arrowMap       = func(t arrow.DataType) bool {
-		m, ok := t.(*arrow.MapType)
-		return ok && m.KeyType().ID() == arrow.STRING && m.ItemType().ID() == arrow.STRING
-	}
 )
 
-// arrowColumns are the columns the SDK's Arrow decoder maps
-// (resolveColumns), each with the types its resolver reads.
+// arrowColumns are the Arrow columns behind what swath writes: the fields
+// item reads (BlobItem.Name and the Properties it keeps) and ResourceType,
+// by which the SDK tells a hierarchy page's prefixes from its blobs; each
+// with the types the SDK's resolver for it reads. Other columns may have
+// any type: swath never reads them, so a change there must not fail a
+// listing.
 var arrowColumns = map[string]func(arrow.DataType) bool{
-	"Name": arrowString, "Snapshot": arrowString, "VersionId": arrowString, "Etag": arrowString,
-	"Content-Type": arrowString, "Content-Encoding": arrowString, "Content-Language": arrowString,
-	"Content-Disposition": arrowString, "Cache-Control": arrowString, "Content-MD5": arrowString,
-	"BlobType": arrowString, "AccessTier": arrowString, "SmartAccessTier": arrowString, "LeaseState": arrowString,
-	"LeaseStatus": arrowString, "LeaseDuration": arrowString, "CustomerProvidedKeySha256": arrowString,
-	"EncryptionScope": arrowString, "ArchiveStatus": arrowString, "RehydratePriority": arrowString,
-	"CopyId": arrowString, "CopyStatus": arrowString, "CopySource": arrowString, "CopyProgress": arrowString,
-	"CopyStatusDescription": arrowString, "CopyDestinationSnapshot": arrowString,
-	"ImmutabilityPolicyMode": arrowString, "ResourceType": arrowString,
-	"Deleted": arrowBool, "IsCurrentVersion": arrowBool, "HasVersionsOnly": arrowBool,
-	"AccessTierInferred": arrowBool, "ServerEncrypted": arrowBool, "IncrementalCopy": arrowBool,
-	"Sealed": arrowBool, "LegalHold": arrowBool,
-	"Creation-Time": arrowTimestamp, "Last-Modified": arrowTimestamp, "AccessTierChangeTime": arrowTimestamp,
-	"CopyCompletionTime": arrowTimestamp, "ImmutabilityPolicyUntilDate": arrowTimestamp,
-	"DeletedTime": arrowTimestamp, "LastAccessTime": arrowTimestamp,
-	"Content-Length": arrowInt64, "x-ms-blob-sequence-number": arrowInt64,
-	"RemainingRetentionDays": arrowInt32, "TagCount": arrowInt32,
-	"Metadata": arrowMap, "OrMetadata": arrowMap, "Tags": arrowMap,
+	"Name": arrowString, "ResourceType": arrowString, "Etag": arrowString, "Content-MD5": arrowString,
+	"Content-Type": arrowString, "BlobType": arrowString, "AccessTier": arrowString,
+	"Content-Length": arrowInt64, "Last-Modified": arrowTimestamp, "Creation-Time": arrowTimestamp,
 }
 
 // xmlEnvelope checks an XML listing: the root element is
