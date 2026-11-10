@@ -5,7 +5,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query prettyPrint=false
   query projection=noAcl
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous: objects, every option
@@ -21,7 +21,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query projection=noAcl
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous: generations
@@ -32,7 +32,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query projection=noAcl
   query versions=true
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous: generations, every option
@@ -49,7 +49,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   query versions=true
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token: objects
@@ -60,7 +60,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query projection=noAcl
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token: objects, every option
@@ -77,7 +77,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token: generations
@@ -89,7 +89,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query versions=true
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token: generations, every option
@@ -107,7 +107,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query versions=true
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token, billed project: objects
@@ -119,7 +119,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query userProject=billed-p
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token, billed project: objects, every option
@@ -137,7 +137,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query userProject=billed-p
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token, billed project: generations
@@ -150,7 +150,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query versions=true
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == token, billed project: generations, every option
@@ -169,7 +169,7 @@ GET https://storage.googleapis.com/storage/v1/b/bkt/o
   query versions=true
   header Accept-Encoding: gzip
   header Authorization: Bearer tok
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous, custom endpoint: objects
@@ -178,7 +178,7 @@ GET http://gcs.example/storage/v1/b/bkt/o
   query prettyPrint=false
   query projection=noAcl
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous, custom endpoint: objects, every option
@@ -193,7 +193,7 @@ GET http://gcs.example/storage/v1/b/bkt/o
   query projection=noAcl
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous, custom endpoint: generations
@@ -203,7 +203,7 @@ GET http://gcs.example/storage/v1/b/bkt/o
   query projection=noAcl
   query versions=true
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes
 == anonymous, custom endpoint: generations, every option
@@ -219,6 +219,6 @@ GET http://gcs.example/storage/v1/b/bkt/o
   query startOffset=p%2Fa+b%2Bc%25%2F%C3%A9%00
   query versions=true
   header Accept-Encoding: gzip
-  header User-Agent: <swath> <google-api-go-client>
+  header User-Agent: <swath> google-api-go-client/<version>
   header X-Goog-Api-Client: gl-go/<version> gdcl/<version>
   body 0 bytes

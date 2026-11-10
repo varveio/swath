@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/api/googleapi"
-
 	"github.com/varveio/swath/go/internal/buildinfo"
 	"github.com/varveio/swath/go/internal/source/objhttp/objhttptest"
 )
@@ -91,20 +89,21 @@ func TestWireSnapshot(t *testing.T) {
 	objhttptest.Snapshot(t, wireSnapshot, b.String())
 }
 
-var apiClient = regexp.MustCompile(`\b(gl-go|gdcl)/\S+`)
+var clientVersion = regexp.MustCompile(`\b(gl-go|gdcl|google-api-go-client)/\S+`)
 
 // wire renders one request the test server got (objhttptest.Request) on
 // origin, where it was addressed. The X-Goog-Api-Client versions (Go's and
-// the generated client's) and the User-Agent's swath token and client
-// version are replaced by their form; anything else is as sent.
+// the generated client's) and the User-Agent's swath token and the
+// generated client's version are replaced by their form; anything else is
+// as sent.
 func wire(req *http.Request, origin string, body int) string {
 	return objhttptest.Request(req, origin, body, func(k, v string) (string, bool) {
 		switch k {
 		case "X-Goog-Api-Client":
-			v = apiClient.ReplaceAllString(v, "${1}/<version>")
+			v = clientVersion.ReplaceAllString(v, "${1}/<version>")
 		case "User-Agent":
 			v = strings.Replace(v, buildinfo.UserAgent(), "<swath>", 1)
-			v = strings.Replace(v, googleapi.UserAgent, "<google-api-go-client>", 1)
+			v = clientVersion.ReplaceAllString(v, "${1}/<version>")
 		}
 		return v, true
 	})
