@@ -37,7 +37,7 @@ final class DocumentationEntryPointTest {
             "docs/go-release-copy-checklist.md",
             "go/README.md",
             "go/docs/README.md",
-            "go/docs/guide.md",
+            "go/docs/getting-started.md",
             "go/docs/from-java.md");
 
     private static final Pattern MARKDOWN_LINK =
@@ -67,7 +67,7 @@ final class DocumentationEntryPointTest {
     @Test
     void goPreviewEntryPointsKeepReleaseScopeAndLimits() throws Exception {
         String readme = read("README.md");
-        String guide = read("go/docs/guide.md");
+        String guide = read("go/docs/getting-started.md");
 
         assertThat(readme)
                 .contains("Parallel listing and inventory for large object stores and filesystems")
@@ -76,18 +76,17 @@ final class DocumentationEntryPointTest {
                 .contains("Build Go from source")
                 .contains("Go will replace Java at release")
                 .contains("No scan resume")
-                .contains("Listing rows require `-o DIR`")
                 .contains("Flat namespaces and current blobs only")
                 .contains("not an atomic storage snapshot")
                 .contains("historical Java evidence")
-                .contains("go/docs/guide.md")
+                .contains("go/docs/getting-started.md")
                 .contains("https://github.com/varveio/swath/tree/v0.3.2/docs")
                 .doesNotContain("-o inventory.parquet");
         assertThat(guide)
-                .contains("Unreleased Go implementation on main")
+                .contains("not released yet")
                 .contains("Java v0.3.2")
-                .contains("Local scans and text output cannot resume")
-                .contains("exact part list from")
+                .contains("Local trees and text output keep no journal")
+                .contains("Read the parts the manifest lists")
                 .contains("union_by_name = true")
                 .doesNotContain("data/*.parquet");
     }

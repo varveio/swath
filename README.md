@@ -31,7 +31,7 @@ This table describes **Go on main**, not the Java release.
 
 | Source | Listing and summaries | Limits |
 | --- | --- | --- |
-| Local and mounted filesystems | Sorted Parquet inventory; direct `du` summaries | Listing rows require `-o DIR`. No scan resume. Mounted shares use the OS filesystem, not a native NFS or SMB client. |
+| Local and mounted filesystems | Text or dataset listing; direct `du` summaries | No scan resume. Mounted shares use the OS filesystem, not a native NFS or SMB client. |
 | Amazon S3 | Text or dataset listing; prefix totals; eligible dataset resume | General-purpose buckets, not directory buckets. `--all-versions` lists versions and delete markers. Check S3-compatible endpoints separately. |
 | Google Cloud Storage | Native `gs://` listing; prefix totals; eligible dataset resume | `--all-versions` lists live and noncurrent generations. Their metadata differs from S3 versions. |
 | Azure Blob Storage | `az://` listing; prefix totals; eligible dataset resume | Flat namespaces and current blobs only. Hierarchical namespaces and Azure version listing are unsupported. |
