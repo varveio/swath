@@ -138,7 +138,6 @@ type running struct {
 	ended        bool // the range listed through its bound (a leaf)
 	split        bool // the range split and handed on its rest
 	id           uint64
-	dens         density        // page density, for the floors
 	sb           structure      // known folder boundaries (structure probes)
 	pending      chan structure // a structure probe in flight
 	zeroes       uint8          // consecutive structure probes that found no folder, the ancestry's included
@@ -593,15 +592,10 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		// them in place. In group mode they are the emitted rows' distinct
 		// keys (density is of keys; st.keys counts rows, the work).
 		n := len(rows)
-		var first, last string
-		names := n
-		if n > 0 {
-			first, last = rows[0].Key, rows[n-1].Key
-			if head == "" {
-				// Kept for the range's life and handed on as an upper
-				// child's anchor: a copy, not a view of this page.
-				head = strings.Clone(first)
-			}
+		if n > 0 && head == "" {
+			// Kept for the range's life and handed on as an upper child's
+			// anchor: a copy, not a view of this page.
+			head = strings.Clone(rows[0].Key)
 		}
 		var page []string
 		var g *gauge
@@ -609,7 +603,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if !done {
 			if p.d.Groups {
 				page = distinct(rows)
-				names = len(page)
 			} else {
 				page = make([]string, n)
 				for i := range page {
@@ -621,8 +614,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			if g = newGauge(page); g != nil && !r.open {
 				rem = g.keys(c, r.hi)
 			}
-		} else if p.d.Groups && n > 0 {
-			names = len(distinct(rows))
 		}
 		overfetch := len(out.Rows) - kept
 		if p.d.Groups {
@@ -654,9 +645,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		}
 		st.ended = done
 		st.groupOpen = p.d.Groups && grp.unsplittable()
-		if p.opt.Floors && n > 0 { // only the tail floor reads it
-			st.dens.observe(first, last, r.lo, r.hi, names)
-		}
 		if !math.IsNaN(rem) {
 			st.rem = rem
 		}
@@ -840,16 +828,6 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 			return
 		}
 	}
-	// Remaining-estimate floor (bounded ranges; the frontier's estimate is
-	// unbounded): counted per page, before demand, as Java does.
-	est := math.Inf(1)
-	if p.opt.Floors && !r.open {
-		est = estRemaining(c, r.lo, r.hi, st.keys, int64(p.opt.PageSize))
-		if belowRemainingFloor(est, int64(p.opt.PageSize)) {
-			p.c.Inc(cSkippedRemainingFloor)
-			return
-		}
-	}
 	hunger := p.opt.Workers - len(p.running) - p.queued
 	if p.opt.SplitCoin == nil {
 		switch {
@@ -984,14 +962,6 @@ func (p *Engine[P]) decide(st *running, r Range, c string, pr proposal) (pv pivo
 	st.refused = 0
 	if g := pr.gauge; g != nil {
 		pv.lower, pv.upper, pv.estOK = g.keys(c, m), g.keys(m, r.hi), true
-	}
-	// Child-tail floor: the upper child must realize more than two pages.
-	if p.opt.Floors && !r.open {
-		f := pivotFraction(c, m, r.lo, r.hi)
-		if tailBelowFloor(est, f, st.dens.ratio(c, r.lo, r.hi, st.keys), int64(p.opt.PageSize)) {
-			p.c.Inc(cSkippedTailFloor)
-			return pivot{}, false
-		}
 	}
 	p.account(time.Now())
 	p.queued += 2 // the children, reserved until commit hands them out

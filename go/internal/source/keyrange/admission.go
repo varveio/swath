@@ -16,6 +16,15 @@ import (
 // rest alone. Both gates and the rank read one estimate: the keys in an
 // interval, from the density of the range's last page.
 
+func commonLen(a, b string) int {
+	n := min(len(a), len(b))
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
+}
+
 const (
 	// admitRemainderPages: a bounded range with an estimated remainder
 	// (c, hi] under this many pages is not split. The owner lists it in

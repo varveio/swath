@@ -20,24 +20,24 @@ func TestFlags(t *testing.T) {
 	for _, diag := range []bool{false, true} {
 		f := pflag.NewFlagSet("t", pflag.ContinueOnError)
 		c := Flags(f, diag)
-		if !c.Admission.Limiter || !c.Policy.Seed || c.Policy.Floors || c.Policy.Structure != StructureAuto {
+		if !c.Admission.Limiter || !c.Policy.Seed || c.Policy.Structure != StructureAuto {
 			t.Fatalf("defaults: %+v", *c)
 		}
 		args := []string{"--no-adaptive-limit", "--request-rate", "5"}
 		if diag {
-			args = append(args, "--no-seed", "--adaptive-limit-slow-start", "--floors", "--sequential", "--max-keys", "9", "--structure=off")
+			args = append(args, "--no-seed", "--adaptive-limit-slow-start", "--sequential", "--max-keys", "9", "--structure=off")
 		}
 		if err := f.Parse(args); err != nil {
 			t.Fatal(err)
 		}
 		want, adm := Policy{Seed: true, Structure: StructureAuto}, objhttp.Admission{RequestRate: 5}
 		if diag {
-			want, adm = Policy{Floors: true, Sequential: true, MaxKeys: 9}, objhttp.Admission{SlowStart: true, RequestRate: 5}
+			want, adm = Policy{Sequential: true, MaxKeys: 9}, objhttp.Admission{SlowStart: true, RequestRate: 5}
 		}
 		if c.Policy != want || c.Admission != adm {
 			t.Fatalf("diag=%v: %+v, want %+v %+v", diag, *c, want, adm)
 		}
-		if o := c.Policy.Options(); o.Seed != want.Seed || o.Floors != want.Floors || o.MaxKeys != want.MaxKeys {
+		if o := c.Policy.Options(); o.Seed != want.Seed || o.Sequential != want.Sequential || o.MaxKeys != want.MaxKeys {
 			t.Fatalf("options %+v", o)
 		}
 	}

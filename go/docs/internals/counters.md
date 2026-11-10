@@ -19,8 +19,8 @@ a policy names it (`Feature`). `features` maps every such policy to whether this
 an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
 - absent, no feature: this build or provider has no such counter;
 - absent, feature `false`: the policy was off for this run (for S3: `seed` with `swath diag list --no-seed` or `--sequential`,
-  `split` with `--sequential`, `floors` without `--floors`, `structure` with `--structure=off` (`--sequential`,
-  `--floors` and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
+  `split` with `--sequential`, `structure` with `--structure=off` (`--sequential`
+  and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
   without `-max-keys`, `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
   `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
@@ -224,8 +224,6 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `busy_ns` | count | ns |  | sum of Expand wall time |
 | `sink_wait_ns` | count | ns |  | time Expand spent handing rows to the order stage (backpressure) |
 | `requeues` | count | requests |  | pages asked again after the client's retries were exhausted (the run never fails on that) |
-| `split.skipped.remaining_floor` | count | decisions | floors | bounded range with at most 4 pages of keys left by its estimate: not split |
-| `split.skipped.tail_floor` | count | decisions | floors | the child past the pivot would realize at most 2 pages of keys: not split |
 | `structure.requests` | count | requests | structure | delimiter probes (max-keys 32) after a cursor, one per folder level; also counted in requests |
 | `structure.zero_fanout` | count | probes | structure | probes that found no folder at any level |
 | `structure.no_boundary` | count | probes | structure | probes whose folders all lay outside the range |
