@@ -930,8 +930,8 @@ rows read past a span's end and discarded (rows handed to a sibling are not coun
 
 The seed cuts these listings into spans smaller than a 5,000-entry page, and a span reads until its first non-member, so
 most of each span's last page was discarded. At 1,000 the whole container listed in about half the wall time with a quarter
-less CPU and half the memory, for three times the requests (List Blobs is billed per request). 500 adds requests without
-saving more. The default became 1,000, which matches S3's and GCS's page caps. `EndBefore` (#226) would end each span at the
+less CPU and half the memory, for three times the requests (List Blobs is billed per request). 500 decoded about 5% fewer rows and used less memory
+(127 MB against 177) but nearly doubled the requests and took longer. The default became 1,000, which matches S3's and GCS's page caps. `EndBefore` (#226) would end each span at the
 service and make large pages cheap again; revisit the default if it lands.
 
 ## Local filesystem walker

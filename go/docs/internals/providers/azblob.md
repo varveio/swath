@@ -146,7 +146,7 @@ do it) is the client's invalid page, a protocol violation.
 start after `After` (exclusive; `StartInclusive` is false) and end at `Through`, which is never sent. `AcceptBound` takes valid UTF-8 of at most 1,024 UTF-16 code units, without NUL or another
 control character, not ending in `.` (Azure's name rules). `Requeue` is `objhttp.Requeue`; `InvalidPage` is `objhttp.ErrInvalidPage`
 ([shared failure vocabulary](../clients.md)). Pages are 1,000 entries (`defaultPageSize`; the
-service's cap is 5,000, `client.MaxPageSize`) unless `--page-size` sets another size: a range reads to its first non-member, so the rest of its last page is discarded, and at 5,000 that was most of what was read ([measurements](../measurements.md#azure-page-size-2026-11-10)). An adapter page maps `Blob` items to rows and `BlobPrefix` items
+service's cap is 5,000, `client.MaxPageSize`) unless the diagnostic `--page-size` (1 to 1,000) sets another size: a range reads to its first non-member, so the rest of its last page is discarded unless a sibling span takes it over, and at 5,000 that was 62% of the rows read on the measured listing ([measurements](../measurements.md#azure-page-size-2026-11-10)). An adapter page maps `Blob` items to rows and `BlobPrefix` items
 to `Prefixes`, with the adapter's `Truncated` and token.
 
 **Schema** `swath/azblob-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
