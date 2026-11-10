@@ -40,13 +40,19 @@ when the report says so.
   output (ordering, spill and one Parquet encoder) is the limit, so more workers do not help there. Raise it
   (128, 256) only on a machine with spare cores and a service that does not throttle. Lower it if the service
   throttles at 64.
-- **`--row-budget`** (default 128 MiB). The bytes of rows held in memory between listing and encoding. It is
-  not a memory cap: the process's peak is a few times the budget plus the pages in flight. At the defaults,
-  sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
+- **`--row-budget`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
+  and encoding. Memory is the least of physical memory, the cgroup's limit and `GOMEMLIMIT`, and 128 MiB stands
+  in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB
+  (`invocation.row_budget`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
+  spill to disk: a listing whose waiting rows fit in the budget never spills. It is
+  not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The measurements
+  that follow were taken at a 128 MiB budget, the default before 0.4.0: sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
   0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
   267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
-  vCPU, and no run has been measured on a 1.8 GB machine. If `resources.peak_rss_bytes` comes near the machine's memory,
-  lower the budget (64 MiB). If `resources.budget_wait_ns` is large and memory is free, raise it.
+  vCPU, and no run has been measured on a 1.8 GB machine; the 1 GiB default on such hosts has not been measured
+  over those lists. If `resources.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
+  heavy (`resources.spill.rows` near the rows listed) or `resources.budget_wait_ns` is large and memory is free,
+  raise it: past what a listing holds ahead of its output, more buys only tail workers.
 - **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to
   disposable spill files on the output's filesystem. By default spill may use half the free space at the
   start, minus a reserve of at least 1 GiB. Set `--spill-budget` when the filesystem is shared. Size the disk

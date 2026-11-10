@@ -60,7 +60,7 @@ are priced at 3,072 bytes; S3 and GCS at 1,024 bytes. All these schemas price a 
 state. The measurement dates and margins are in the writer-admission row above.
 
 Resource admission limits the default encoder count; an explicit `--encoders N` bypasses its
-memory and descriptor limits, with a warning on a shortfall. At the default 128 MiB allowance,
+memory and descriptor limits, with a warning on a shortfall. At a 128 MiB allowance,
 S3 current objects admit 4 encoders and GCS current objects 3, subject to cores and descriptors.
 After listing, the allowance adds 1 MiB per worker: at 64 workers the calculated counts are
 6 for S3 and 5 for GCS; at 256 workers, 12 and 11. Explicit counts are never raised. See
@@ -105,7 +105,7 @@ runs on one path.
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 4); `--report -`
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 5); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
 [../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is

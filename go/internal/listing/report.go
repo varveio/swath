@@ -23,8 +23,10 @@ import (
 // for versions schemas the attempt-scoped version classification and
 // distinct keys, and swath du's per-prefix totals (output.totals). 4:
 // invocation.narrowing (the includes' prefix narrowing), outcome.unreadable
-// and requests.failure_warnings.
-const ReportVersion = 4
+// and requests.failure_warnings. 5: invocation.row_budget (how the row
+// budget was chosen: by default a share of memory), resources.spill.frames
+// and opens.
+const ReportVersion = 5
 
 // Report is the one run report: run.json beside a committed dataset, and
 // what -json prints, for every provider. It is operational: a dataset is
@@ -151,18 +153,19 @@ type Build = buildinfo.Build
 
 // Invocation is what was asked.
 type Invocation struct {
-	Argv           []string `json:"argv"`
-	Source         string   `json:"source"`              // the root as recorded
-	Narrowing      string   `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
-	Out            string   `json:"out,omitempty"`       // the dataset directory; empty for a dry run
-	Resume         bool     `json:"resume,omitempty"`    // continued an interrupted run
-	SchemaID       string   `json:"schema_id"`
-	Fields         string   `json:"fields,omitempty"` // the metadata tier, for providers with tiers
-	Workers        int      `json:"workers"`
-	Encoders       int      `json:"encoders"`
-	RowBudgetBytes int64    `json:"row_budget_bytes"`
-	PartSizeBytes  int64    `json:"part_size_bytes"`
-	Prior          *Prior   `json:"prior,omitempty"` // the --seed-from prior the range engine started from
+	Argv           []string  `json:"argv"`
+	Source         string    `json:"source"`              // the root as recorded
+	Narrowing      string    `json:"narrowing,omitempty"` // how the includes narrowed source (filter.Narrowed, or why not)
+	Out            string    `json:"out,omitempty"`       // the dataset directory; empty for a dry run
+	Resume         bool      `json:"resume,omitempty"`    // continued an interrupted run
+	SchemaID       string    `json:"schema_id"`
+	Fields         string    `json:"fields,omitempty"` // the metadata tier, for providers with tiers
+	Workers        int       `json:"workers"`
+	Encoders       int       `json:"encoders"`
+	RowBudgetBytes int64     `json:"row_budget_bytes"`
+	RowBudget      RowBudget `json:"row_budget"` // how row_budget_bytes was chosen
+	PartSizeBytes  int64     `json:"part_size_bytes"`
+	Prior          *Prior    `json:"prior,omitempty"` // the --seed-from prior the range engine started from
 }
 
 // The outcome vocabulary, in one place. Three separate dimensions:

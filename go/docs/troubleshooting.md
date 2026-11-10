@@ -137,9 +137,10 @@ output's filesystem: size the disk as [production.md](production.md#disk-sizing)
 ## Memory is higher than `--row-budget`
 
 `--row-budget` bounds the rows held between listing and encoding, not the process's memory: pages in flight,
-the encoders and the garbage collector come on top, a few times the budget in all. Read
-`resources.peak_rss_bytes` in the report of a representative run, and lower the budget on a small host
-([running.md](running.md#memory)).
+directories being read, the encoders, the tail after listing and the garbage collector come on top, and swath
+sets no total-memory limit. Read `resources.peak_rss_bytes` in the report of a representative run. To use less,
+lower the budget together with `--workers` and `--encoders`: a lower budget alone can spill more without
+lowering the peak ([running.md](running.md#memory)).
 
 ## `swath du` shows a size of 0, or `-`
 

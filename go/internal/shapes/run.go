@@ -106,8 +106,11 @@ func Run(ctx context.Context, ks *scalefake.Keyspace, keys []string, a Arm) (Res
 	if fs.NArg() > 0 {
 		return Result{}, fmt.Errorf("%s: stray arguments %q", a.Name, fs.Args())
 	}
+	// The row budget is pinned: the default follows the host's memory,
+	// and an arm's counters (encoders admitted, spill) must not move with
+	// the runner the baselines are compared on.
 	cfg := listing.Config{Source: listing.SourceConfig{URI: "s3://bkt", Options: opts},
-		Limits: listing.Limits{Workers: a.Workers, PartInterval: -1}}
+		Limits: listing.Limits{Workers: a.Workers, PartInterval: -1, RowBudget: listing.DefaultRowBudget}}
 	m := &matcher{keys: keys}
 	if a.Out != "" {
 		cfg.Output.Dir, cfg.Output.NoJournal = a.Out, true

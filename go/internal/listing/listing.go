@@ -133,7 +133,10 @@ type Limits struct {
 	Encoders int // Parquet encoders; default GOMAXPROCS, admitted against the row budget and descriptors (admitEncoders)
 	// RowBudget bounds the bytes of rows and scheduler metadata held
 	// between listing and encoding (reorder storage and the encoders'
-	// queues); default DefaultRowBudget. It is not a cap on resident memory.
+	// queues); 0 is the default, 1/16 of the least detected memory limit
+	// (physical, cgroup, GOMEMLIMIT), at least minRowBudget and at most
+	// 1 GiB (DefaultRowBudget when none is detected: rowBudgetFor). It is
+	// not a cap on resident memory.
 	RowBudget int64
 	PartSize  int64 // target bytes per part; default 64 MiB (frozen for a resume)
 	// PartInterval bounds the open part's age: a part open that long with
@@ -154,6 +157,8 @@ type Limits struct {
 	// encoderBytes is the working set admitted per Parquet encoder, the
 	// source's schema's (encoderPrice).
 	encoderBytes int64
+	// rowBudgetWhy is how RowBudget was chosen (rowBudgetFor).
+	rowBudgetWhy RowBudget
 }
 
 // SpillLimits bound spill.
@@ -186,8 +191,16 @@ type Spill struct {
 	// storage bound (a malformed frame; the run fails).
 	DecodeRefused int64 `json:"decode_refused"`
 	Ranges        int64 `json:"ranges"` // ranges that spilled
-	PeakBytes     int64 `json:"peak_bytes"`
-	Refused       int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
+	// Frames is the row frames written (not a file's header, capture or
+	// trailer frames); Opens the spill file opens attempted (order's
+	// spiller.opens): one per frame written and per frame read at an
+	// offset, beside the readers, trailer reads, seals and certificate
+	// replays. Against Ranges and Frames, the per-file and per-frame
+	// overhead of many small spills.
+	Frames    int64 `json:"frames"`
+	Opens     int64 `json:"opens"`
+	PeakBytes int64 `json:"peak_bytes"`
+	Refused   int64 `json:"refused"` // frames the disk budget refused (the emitter waited instead)
 	// MaxBytes is the cap on live spill bytes in effect (0: none);
 	// ReserveBytes the free space spill left on its filesystem (0: none).
 	MaxBytes     int64 `json:"max_bytes"`
@@ -254,10 +267,11 @@ func spillReserve(encoders int, partSize int64) int64 {
 const (
 	// minSpillReserve is spillReserve's floor.
 	minSpillReserve = 1 << 30
-	// DefaultRowBudget bounds rows in flight at 128 MiB: enough for every
-	// worker's pages at the default 64 workers to queue behind a slow
-	// frontier, and the allowance that admits 4 encoders of the object
-	// stores' schemas (admitEncoders).
+	// DefaultRowBudget is the row budget when the host's memory is unknown
+	// (rowBudgetFor), 128 MiB: enough for every worker's pages at the
+	// default 64 workers to queue behind a slow frontier, and the
+	// allowance that admits 4 encoders of the object stores' schemas
+	// (admitEncoders).
 	DefaultRowBudget = 128 << 20
 	// DefaultWorkers is the default listing concurrency, whatever the CPU
 	// count: Java's proven default (--concurrency 64). Listing waits on
@@ -297,9 +311,7 @@ func (c *Config) resolve() error {
 	if l.Workers == 0 {
 		l.Workers = defaultWorkers(c.Source.URI)
 	}
-	if l.RowBudget == 0 {
-		l.RowBudget = DefaultRowBudget
-	}
+	l.RowBudget, l.rowBudgetWhy = rowBudgetFor(l.RowBudget, readMemoryLimits())
 	l.maxEncoders, l.encodersGiven = l.Encoders, l.Encoders > 0
 	l.encoderBytes = encoderPrice(c.Source.URI)
 	if l.Encoders == 0 {
@@ -480,7 +492,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 		argv = []string{}
 	}
 	sum.Invocation = Invocation{Argv: argv, Source: registry.Redact(cfg.Source.URI), Narrowing: cfg.Source.Narrowing, Out: cfg.Output.Dir, Resume: cfg.Output.Resume, Workers: cfg.Limits.Workers,
-		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, PartSizeBytes: cfg.Limits.PartSize}
+		Encoders: cfg.Limits.Encoders, RowBudgetBytes: cfg.Limits.RowBudget, RowBudget: cfg.Limits.rowBudgetWhy, PartSizeBytes: cfg.Limits.PartSize}
 	f, err := registry.Lookup(cfg.Source.URI)
 	if err != nil {
 		return sum.failed(err)
@@ -1097,7 +1109,7 @@ func (a *attempt) account(ost order.Stats, oopt order.Options, filtered int64) {
 	// (order.Count: no reorder storage, max_buffered_bytes 0).
 	res.Features = map[string]bool{"spill": oopt.SpillDir != "", "order": !dryRun(a.cfg)}
 	if oopt.SpillDir != "" {
-		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
+		res.Spill = &Spill{Rows: ost.SpillRows, Bytes: ost.SpillBytes, LogicalBytes: ost.SpillLogical, Format: ost.SpillFormat, DecodeRefused: ost.SpillDecodeRefused, Ranges: ost.SpillFiles, Frames: ost.SpillFrames, Opens: ost.SpillOpens, PeakBytes: ost.SpillPeak, Refused: ost.SpillRefused,
 			MaxBytes: oopt.SpillMax, ReserveBytes: oopt.SpillReserve, PeakReaders: ost.PeakReaders,
 			Dir: oopt.SpillDir, FSType: order.FSType(existing(oopt.SpillDir)), DurableOff: a.jr.offReason()}
 		if c := a.jr.cacheOf(); c != nil && ost.Durable {

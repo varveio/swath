@@ -77,7 +77,8 @@ those children's keys (`TestFailedRangeStopsTheStream` forces that window with `
 
 ## The budget
 
-`Options.Budget` is a byte budget, `--row-budget`, for rows in flight. A row counts its value (`schema.Row[P]`, the
+`Options.Budget` is a byte budget, `--row-budget`, for rows in flight: by default 1/16 of the least detected memory
+limit (physical, cgroup, `GOMEMLIMIT`), between 128 KiB and 1 GiB (`listing.rowBudgetFor`). A row counts its value (`schema.Row[P]`, the
 key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
 counting them approximates the arena they keep alive. That holds only while most of a page is handed on: a row
 filter (`registry/filtered.go`) that keeps at most half of a page's rows or charged bytes detaches the survivors

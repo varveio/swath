@@ -111,6 +111,7 @@ type Stats struct {
 	SpillFrames  int64
 	SpillBytes   int64
 	SpillFiles   int64 // ranges that spilled
+	SpillOpens   int64 // spill files opened (spiller.opens)
 	SpillPeak    int64 // peak live spill bytes
 	// SpillLogical is the spilled rows' logical bytes (schema.LogicalBytes):
 	// against SpillBytes, what the frame coding saved. SpillFormat names
@@ -611,7 +612,7 @@ func Run[R, P any](ctx context.Context, p source.Provider[R, P], sink Sink[P], s
 		err = &dataset.InvariantError{Reason: fmt.Sprintf("order stage: received %d rows, handed on %d", st.Received, st.Rows)}
 	}
 	if o.sp != nil {
-		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load()
+		st.SpillRows, st.SpillFrames, st.SpillBytes, st.SpillFiles, st.SpillOpens = o.sp.rows.Load(), o.sp.frames.Load(), o.sp.bytes.Load(), o.sp.files.Load(), o.sp.opens.Load()
 		st.SpillPeak, st.SpillRefused = o.sp.peak.Load(), o.sp.refused.Load()
 		st.Drainer.ReplayDecode += time.Duration(o.sp.decodeNs.Load())
 		st.SpillLogical, st.SpillFormat, st.SpillDecodeRefused = o.sp.logical.Load(), o.sp.format(), o.sp.decodeRefused.Load()

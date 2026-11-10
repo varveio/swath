@@ -123,9 +123,15 @@ type spiller[P any] struct {
 	tick uint64                  // reader use order, for eviction (mu)
 
 	rows, frames, bytes, files atomic.Int64
-	logical                    atomic.Int64 // schema.LogicalBytes of the rows written
-	decodeRefused              atomic.Int64 // frames refused at read for decoding past their bound
-	decodeNs                   atomic.Int64 // the drainer's own frame decoding (next)
+	// opens counts the opens of spill files attempted (a failed one
+	// included): each frame written (an append), a reader, a frame read at
+	// an offset, a trailer read, a seal and a recovered certificate's
+	// replay. A resume's validation of the recorded certificates, before
+	// the run, is not counted.
+	opens         atomic.Int64
+	logical       atomic.Int64 // schema.LogicalBytes of the rows written
+	decodeRefused atomic.Int64 // frames refused at read for decoding past their bound
+	decodeNs      atomic.Int64 // the drainer's own frame decoding (next)
 
 	// cache, if set, is the attempt's durable spill (durable.go): a range
 	// whose provider declared its span gets a durable file when a slot is
@@ -277,6 +283,7 @@ func (s *spiller[P]) openReader(f *spillFile) error {
 	s.mu.Unlock()
 	var fh *os.File
 	var err error
+	s.opens.Add(1)
 	if f.d != nil {
 		fh, err = s.cache.root.Open(s.cache.rel(f.d.name))
 	} else {
@@ -369,6 +376,7 @@ func (s *spiller[P]) seal(f *spillFile) error {
 	}
 	var fh *os.File
 	if err == nil {
+		s.opens.Add(1)
 		fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_WRONLY, 0)
 	}
 	if err == nil {
@@ -517,6 +525,7 @@ func (s *spiller[P]) writeFrames(f *spillFile, rows []schema.Row[P], meta []byte
 	}
 	if err == nil {
 		var fh *os.File
+		s.opens.Add(1)
 		if f.d != nil {
 			fh, err = s.cache.root.OpenFile(s.cache.rel(f.d.name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		} else {
@@ -769,6 +778,7 @@ func (s *spiller[P]) readAt(f *spillFile, off, size int64) ([]schema.Row[P], tim
 // openAt opens f for a read at an offset: a durable file through the
 // output root, as its writes and the drainer's reader do.
 func (s *spiller[P]) openAt(f *spillFile) (*os.File, error) {
+	s.opens.Add(1)
 	if f.d != nil {
 		return s.cache.root.Open(s.cache.rel(f.d.name))
 	}
@@ -794,6 +804,7 @@ func (s *spiller[P]) trailerRows(f *spillFile) (int64, error) {
 	if f.trailerAt <= 0 || size <= 9 || size > 32 {
 		return 0, errSpillFrame
 	}
+	s.opens.Add(1)
 	fh, err := os.Open(f.path)
 	if err != nil {
 		return 0, fmt.Errorf("spill: %w", err)

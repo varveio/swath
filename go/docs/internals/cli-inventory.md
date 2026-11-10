@@ -109,7 +109,7 @@ decision to add it later).
 | `--max-duration DURATION` (exit 124, resumable) | `--max-duration` (0: none; exit 124, resumable) | kept | – |
 | `--idle-timeout` (120 s, no activity) | `--stall-timeout` (10 min, no progress in key space; an empty continuing page counts within the first 1,024 of its run) | renamed | one watchdog owns liveness, 2026-11-05 |
 | `--no-progress-timeout` (10 min, no committed progress) | `--stall-timeout` | renamed | one watchdog owns liveness, 2026-11-05 |
-| `--object-listing-queue-size N` (50,000 entries) | `--row-budget` (bytes of rows in flight, default 128 MiB) | renamed | one byte budget instead of the weighted channel, 2026-11-05; `--memory` (twice the row budget) renamed 2026-11-06 to name what it bounds |
+| `--object-listing-queue-size N` (50,000 entries) | `--row-budget` (bytes of rows in flight, default 1/16 of memory, at most 1 GiB) | renamed | one byte budget instead of the weighted channel, 2026-11-05; `--memory` (twice the row budget) renamed 2026-11-06 to name what it bounds |
 
 ## Concurrency and throttling
 

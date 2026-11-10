@@ -187,7 +187,8 @@ func datasetPrior(dir string, loc source.Locator) (*source.Prior, error) {
 // memory: a file past either bound is refused before any request instead
 // of read. 16 MiB of lines and 262,144 cuts hold about 30 MiB at most
 // (the keys, and 24 bytes per cut twice: the prior's and the tiling's
-// candidates); a run's row budget defaults to 128 MiB.
+// candidates); a run's row budget is at least 128 KiB, by default 1/16
+// of memory (rowBudgetFor).
 const (
 	maxCutFileBytes = 16 << 20
 	maxCutFileCuts  = 1 << 18
