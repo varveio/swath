@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -55,6 +55,10 @@ func captureSyncStderr(t *testing.T) *syncBuffer {
 	return b
 }
 
+// errConnRefused is a refused connection's innermost error, the same text
+// on every platform.
+var errConnRefused = errors.New("connection refused")
+
 // TestEventGolden pins --log-format json: each event once, as
 // docs/cli.md's "Log events" block shows it (UPDATE=1 rewrites the block).
 func TestEventGolden(t *testing.T) {
@@ -68,7 +72,7 @@ func TestEventGolden(t *testing.T) {
 	l.progress(listing.ProgressSnapshot{Objects: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
 		StartedAt: at.Add(-time.Minute), AsOf: at, DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
 	w := newFailureWatch("s3")
-	refused := objhttp.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: syscall.ECONNREFUSED}
+	refused := objhttp.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
 	for i := range 14 {
 		w.exchange(refused, at.Add(time.Duration(i)*time.Second))
 	}
@@ -130,7 +134,7 @@ func TestFailureWatch(t *testing.T) {
 	w := newFailureWatch("s3")
 	at := time.Unix(1_000_000, 0)
 	u := &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/b"}
-	refused := objhttp.Exchange{Method: http.MethodGet, URL: u, Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}}
+	refused := objhttp.Exchange{Method: http.MethodGet, URL: u, Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", errConnRefused)}}
 	fail := func(d time.Duration) { w.exchange(refused, at.Add(d)) }
 	for d := time.Duration(0); d < persistFor; d += time.Second {
 		fail(d)
@@ -203,12 +207,15 @@ func TestPersistentFailureRun(t *testing.T) {
 	if exitCode(t, err) != exitStuck {
 		t.Fatalf("exit %v", err)
 	}
-	warning := "swath: warning: gs " + host + ": connection refused (retrying; "
-	if s := stderr.String(); strings.Count(s, warning) != 1 || !strings.Contains(s, "INCOMPLETE (stuck)") {
+	// The cause in the platform's words (connection refused).
+	warning := regexp.MustCompile(`(?m)^swath: warning: gs ` + regexp.QuoteMeta(host) + `: ([^(]+) \(retrying; \d+ attempts\)$`)
+	s := stderr.String()
+	m := warning.FindAllStringSubmatch(s, -1)
+	if len(m) != 1 || !strings.Contains(s, "INCOMPLETE (stuck)") {
 		t.Fatalf("stderr %q", s)
 	}
-	if !strings.Contains(err.Error(), "every request was failing: gs "+host+": connection refused (") {
-		t.Fatalf("the final error does not name the cause: %v", err)
+	if !strings.Contains(err.Error(), "every request was failing: gs "+host+": "+m[0][1]+" (") {
+		t.Fatalf("the final error does not name the cause %q: %v", m[0][1], err)
 	}
 	var rep listing.Report
 	readJSON(t, report, &rep)
@@ -307,15 +314,28 @@ func TestOneLineFailures(t *testing.T) {
 		http.Error(w, `{"error":{"code":404,"message":"The specified bucket does not exist."}}`, http.StatusNotFound)
 	}))
 	t.Cleanup(nobucket.Close)
+	_, serr := os.Stat(missing)
+	var pe *fs.PathError
+	if !errors.As(serr, &pe) {
+		t.Fatal(serr)
+	}
+	notFound := pe.Err.Error() // the platform's words
+	// A dataset run: swath diag list --no-journal where a journal is refused (Windows).
+	dataset := func(args ...string) []string {
+		if len(unjournaled) > 0 {
+			return append(append([]string{"diag", "list"}, args...), unjournaled...)
+		}
+		return append([]string{"list"}, args...)
+	}
 	for _, c := range []struct {
 		name string
 		args []string
 		line string // the whole of stderr; "" checks one line
 	}{
-		{"not empty", []string{"list", src, "-o", full}, "swath: " + full + ": output directory is not empty (use --overwrite to replace a previous dataset)\n"},
-		{"no such directory", []string{"du", missing}, "swath: " + missing + ": no such file or directory\n"},
-		{"no such directory, a dataset", []string{"list", missing, "-o", filepath.Join(t.TempDir(), "ds")}, "swath: " + missing + ": no such file or directory\n"},
-		{"no such bucket", []string{"list", "gs://bkt", "--endpoint-url", nobucket.URL + gcstest.Path, "--anonymous", "-o", filepath.Join(t.TempDir(), "ds")}, ""},
+		{"not empty", dataset(src, "-o", full), "swath: " + full + ": output directory is not empty (use --overwrite to replace a previous dataset)\n"},
+		{"no such directory", []string{"du", missing}, "swath: " + missing + ": " + notFound + "\n"},
+		{"no such directory, a dataset", dataset(missing, "-o", filepath.Join(t.TempDir(), "ds")), "swath: " + missing + ": " + notFound + "\n"},
+		{"no such bucket", dataset("gs://bkt", "--endpoint-url", nobucket.URL+gcstest.Path, "--anonymous", "-o", filepath.Join(t.TempDir(), "ds")), ""},
 	} {
 		for _, mode := range []string{"", "-v", "--log-format=json"} {
 			stderr.mu.Lock()
