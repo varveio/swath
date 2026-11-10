@@ -20,7 +20,7 @@ cd go
   --host 127.0.0.1 --port 19090 --metrics-port 19192 &
 until curl -sf http://127.0.0.1:19192/healthz >/dev/null; do sleep 0.2; done
 curl 'http://127.0.0.1:19090/noaa-normals-pds?list-type=2&max-keys=10&encoding-type=url'
-./swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style -anonymous -o /tmp/ds
+./swath list s3://noaa-normals-pds --endpoint-url http://127.0.0.1:19090 --s3-path-style --anonymous -o /tmp/ds
 kill %1
 ```
 

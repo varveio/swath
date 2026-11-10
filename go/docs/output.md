@@ -20,6 +20,10 @@ swath du s3://bucket -d 1                    # totals per prefix
 A [swath dataset](dataset.md) is a directory of sorted Parquet parts and a `manifest.json` that commits them.
 Querying one is shown in [getting-started.md](getting-started.md#6-query-it-with-duckdb).
 
+A listing feeds analysis, migration planning or a comparison with an earlier one; swath itself does not copy,
+compare or schedule. A dataset is not a direct `rclone --files-from` input: a handoff must generate and test a
+compatible path list. Names, sizes and times alone do not validate a backup.
+
 ## Text rows
 
 The `-o` name chooses the format and the compression: `NAME.tsv` or `NAME.jsonl`, optionally followed by

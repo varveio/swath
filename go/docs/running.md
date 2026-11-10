@@ -1,123 +1,15 @@
-# Operating swath (Go)
+# Running swath
 
-For the person who runs `swath` in production: how to install it, size and run a listing, watch it, stop and
-resume it, and read what it produced. Flags and exit codes in full: [cli.md](commands/swath.md). Why it behaves as it
-does: [internals/durability.md](internals/durability.md), [internals/ordering.md](internals/ordering.md),
-[internals/providers.md](internals/providers.md).
-
-swath lists metadata from local or mounted filesystems, S3, GCS and Azure Blob Storage.
-It does not read or modify source file/object contents. Object stores use their listing APIs;
-versioned S3 listing uses `ListObjectVersions` instead of `ListObjectsV2`.
-
-## Install and verify
-
-**Go on main is unreleased.** Java v0.3.2 is the latest published release and has a different
-CLI and dataset contract. Build Go from source for this guide; Go will replace Java at release.
-
-One static binary, pure Go (`CGO_ENABLED=0`), no runtime to install. Build it with Go 1.26 (the `go` directive
-in `go.mod`):
+How to size, run, watch, stop and resume a large listing, and keep a refreshed inventory. A short checklist
+for whoever schedules runs is [production.md](production.md); what each exit code means is
+[reference/exit-codes.md](reference/exit-codes.md).
 
 ```bash
-cd go
-./build.sh -o swath                                   # static, stripped, the revision stamped
-GOOS=linux  GOARCH=arm64 ./build.sh -o swath-linux-arm64
-GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
-./swath --version        # swath-go VERSION (REVISION)
+swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
+  --seed-from /data/inv-2026-11-09 \
+  --report /var/log/swath/inv-2026-11-10.attempt-1.json \
+  --max-duration 6h
 ```
-
-`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Revision=REV'` with REV the
-checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its commit). A plain
-`go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
-git worktree may lack (`--version` then shows none).
-
-The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
-on every Go change without `-race` on macOS (arm64) and Windows (amd64), and with `-race` on Linux: `internal/listing`
-and `cmd/swath` on arm64, the other packages on amd64; a nightly run races the whole suite on amd64
-([testing](internals/testing.md#continuous-integration)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](internals/measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
-with GCS).
-
-`--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
-build recorded one (`-dirty` if the tree was modified). Every report carries the same in `build`. Keep the
-revision with any run you may need to investigate.
-
-## Credentials
-
-Use the provider's supported credential sources; do not put secrets in shell history.
-Azure also accepts a SAS flag or source query and redacts it from records; see the
-[Azure credential and namespace reference](internals/providers/azblob.md).
-Without `--anonymous`, missing or unusable credentials stop the run before listing; swath never
-falls back to unsigned requests. Credential failures have cause `auth` (exit 1) for every provider,
-Azure's during namespace admission included. `--anonymous` beside an explicit credential
-(`--s3-profile`, `--s3-bearer-token-command`, `--gcs-credentials-file`, `--azure-sas-token`, a SAS in the
-source URL) is refused (exit 2); credentials only the environment holds are ignored with one warning that
-names the variables.
-
-**S3.** The AWS SDK's default chain: environment keys, the shared `config` and `credentials` files
-(`--s3-profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
-profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMDSv2).
-
-- Requests go unsigned only with `--anonymous`, which ignores every credential: a public bucket needs it.
-- The chain's first lookup is waited for up to 30 s (a web-identity token file mounted late included). A
-  lookup that fails, an empty chain among them, stops the run with cause `auth` before any listing request.
-  Later refreshes that fail transiently (an STS 5xx or throttle) are retried with each request.
-- Refused before any request as configured but broken: an access key without its secret or the reverse, a
-  session token without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`, a profile that does
-  not exist.
-- Region: `--s3-region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
-  wrong region is an error that names the bucket's region and the flag to give (`--s3-region eu-west-1`). Redirects are not followed. STS calls use the
-  environment's or profile's region, not `--s3-region`.
-- Requester-pays buckets: `--s3-requester-pays`. Endpoint variants: `--s3-fips`, `--s3-dualstack` (else
-  `AWS_USE_FIPS_ENDPOINT`, `AWS_USE_DUALSTACK_ENDPOINT`); S3-compatible stores: `--endpoint-url URL`, else
-  `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` (not with `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true`), addressed
-  path-style unless `--no-s3-path-style`. FIPS or dual-stack with a custom endpoint is refused (exit 2).
-  `AWS_CA_BUNDLE` is the CA bundle when `--ca-bundle` is not given. The CA bundle and `--no-verify-ssl` apply to
-  the credential chain (STS, SSO, web identity) as to the listing.
-- Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
-  `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
-  (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
-  recorded, so give it again to `swath resume DIR` ([cli.md](commands/swath.md), "Bearer tokens").
-- Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
-  in `--x-s3` is refused, exit 2).
-
-**GCS.** `--gcs-credentials-file FILE` (Google credential JSON, including service-account and authorized-user
-files), else Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
-Requests go unauthenticated only with `--anonymous` (a public bucket needs it). Credentials that cannot be
-found or loaded (no ADC anywhere, a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file) are refused
-(`auth`) before any listing request. The token scope is
-`devstorage.read_only`. Requester-pays buckets: `--gcs-billing-project PROJECT` bills that project; it is part of
-the resume identity.
-
-S3 uses one transport; GCS and Azure Blob use a pool sized by workers. HTTP/2 is available where
-the endpoint and transport support it. HTTP/1.1 at an S3 endpoint is endpoint behavior, not a client
-guarantee, including for S3-compatible stores. See [pool construction](internals/clients.md#pool-construction).
-
-The report's `source.stats` records `anonymous`, `credentials` (where they came from), `no_verify_ssl` when
-`--no-verify-ssl` was in force and, for S3, `region`.
-
-## Object-store requests
-
-S3, GCS and Azure Blob share `--anonymous`, `--endpoint-url`, `--ca-bundle`, `--no-verify-ssl`,
-`--request-timeout`, `--no-adaptive-limit` and `--request-rate`. Without `--anonymous`, missing or unusable
-credentials stop the run (cause `auth`); `--anonymous` ignores ambient credentials and refuses explicit ones.
-`--ca-bundle FILE` adds a PEM file's certificates to the system roots (a private certificate authority);
-`--no-verify-ssl` checks no certificate and warns on every run that has it, a resume included. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
-no user information. Provider pages describe additional endpoint rules and credential diagnostics.
-
-A request has a 30 s timeout by default. Retryable failures get up to nine attempts with
-exponential backoff (100 ms base, 5 s maximum). For engine listing calls, retry exhaustion
-returns the page to the range engine for requeue. Azure namespace admission runs before the
-engine exists: exhausted admission checks can refuse the run when flatness remains unknown,
-unless `--azure-assume-flat` asserts it. `--stall-timeout` and `--max-duration` bound a run that cannot
-make progress. Retryable status codes and server-directed waits differ by provider.
-
-The adaptive limiter starts at `--workers` (64 by default). `--request-rate N` adds a
-cap on every HTTP attempt, retries and probes included (default 0: no cap). See
-[throttling](#throttling) for controller behavior and tuning, and
-[request admission](internals/clients.md#request-admission) for implementation details and counters.
-
-Provider support and differences: [S3](internals/providers/s3.md#support-and-differences),
-[GCS](internals/providers/gcs.md#support-and-differences),
-[Azure Blob](internals/providers/azblob.md#support-and-differences).
 
 ## Sizing a run
 
@@ -127,9 +19,11 @@ Provider support and differences: [S3](internals/providers/s3.md#support-and-dif
 | Row budget | `--row-budget` | 128 MiB | bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the segment tail: each segment worker is planned at `resources.drain.segments.per_worker_bytes` of a second budget (`free_bytes`); when `workers_by` is `row_budget`, a budget larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders and cores allow |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by the schema's calculated working set and the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
 | Spill disk | `--spill-budget` | 0: half the free space on the spill filesystem at start, after the reserve | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's under `$TMPDIR`, as a stream has no directory; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
-| Part size | `--part-size` | 64 MiB | target Parquet bytes per part |
+| Part size | `--part-size`, `--part-rotation-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-rotation-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
 
-**Disk for the worst case** is the dataset itself plus the spill cap plus the reserve, all on the output's
+### Disk
+
+The worst case is the dataset itself plus the spill cap plus the reserve, all on the output's
 filesystem (spill lives under the output directory, or beside a text file). The spill cap includes the
 durable spill a journaled run keeps for a resume (`DIR/.swath/spill/durable/`): a certified file stays on
 disk, charged to the cap, until the published dataset covers its keys, and when the cap is reached the
@@ -143,7 +37,9 @@ report's `output.output_bytes` over `output.rows_committed`; `resources.free_dis
 waits), but not always: a range's closing trailer that does not fit, or any other spill I/O error, stops the
 run (resumable; [ordering](internals/ordering.md#spill)).
 
-**Memory.** A run holds:
+### Memory
+
+A run holds:
 
 - **Rows in flight, bounded by `--row-budget`:** rows listed ahead of the publish frontier and the
   encoders' queues, with the scheduler's metadata (about 150 bytes per waiting range; its two bounds are
@@ -184,12 +80,7 @@ Linux (VmHWM), macOS (`getrusage`) and Windows (peak working set) measure it wit
 platform `resources.rusage_available` is false and `peak_rss_bytes`, `timings.user_cpu_ms` and
 `timings.sys_cpu_ms` are left out (the summary line prints `-`), never reported as zero.
 
-## Running
-
-```bash
-swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
-  --report /var/run/swath/attempt-1.json --max-duration 6h
-```
+## Limits and the outcome of record
 
 - **Output directory.** `-o DIR` must be empty or absent. A non-empty directory is refused (exit 2) unless
   `--overwrite`, which replaces only a previous dataset of this tool. For a local source the output may not be
@@ -199,7 +90,7 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
   the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  `--report -` also prints the report on stdout; the default prints one line.
+  Its schema: [reference/run-report.md](reference/run-report.md).
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
   The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
   that keeps returning rows or pages forever. Give every unattended attempt one.
@@ -221,6 +112,17 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
 - **`--stall-timeout`** (default 10 min; 0: never) stops a run with no progress and no usable answer from the
   service for that long (exit 75). A warning is printed at half.
 
+## Cost
+
+Object stores charge per listing request, and each returns up to 1,000 keys. A run sends about one request
+per 1,000 keys, plus the seed's delimiter listings, the probes that pick split points, and retries; a run
+seeded from a previous dataset (`--seed-from`) comes close to one per 1,000. The run report counts every HTTP
+attempt in `requests.http_attempts`, and on AWS S3 and GCS's own endpoints estimates their cost in
+`cost.cost_usd` at the provider's reference list rate (0.005 USD per 1,000 requests); a custom endpoint and
+Azure Blob have no estimate. The progress line shows the same estimate as the run goes. Pricing varies by
+provider, region and time: check the provider's current price for a budget. A resume lists again what was
+not yet published, so an interrupted run costs more than an uninterrupted one.
+
 ## Watching a run
 
 **On a terminal.** swath draws one progress line on stderr, redrawn every second: phase, objects (with rows a
@@ -228,19 +130,19 @@ resume recovered), live and average keys/s, parts, requests in flight, elapsed t
 estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
 (`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
 automatic progress and the warnings off, `--no-progress` turns progress off everywhere. At the end, runs over
-1.5 s, runs that wrote parts and runs that did not complete print Java's statistics block on stderr (objects,
-time, keys/s, API calls per 1,000 objects, mean and peak in flight, throttles and retries when any, the
-estimate, files, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
+1.5 s, runs that wrote output and runs that did not complete print the statistics on stderr (objects,
+time, keys/s, API calls, mean and peak in flight, throttles and retries when any, the estimate, the parts or
+file written, bytes and peak RSS); `--stats` forces it (also for a supervisor's log), `--no-stats` drops it.
 An `INCOMPLETE (class)` first line names a stop, with the `swath resume DIR` command when it is resumable.
-The one-line summary stays on stdout. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
+stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
 
 `DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
 counts, the request account (`requests`, `retries`, `inflight`, the limiter's `limit`, `cost_usd`) and the order
 stage's resources. The report written at the end keeps the curve (`history`, up to 300 samples), the phase times
 (`timings.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
 resources and the provider's counters (`source.stats.counters.values`: attempt latency percentiles, the
-limiter's steps, the split counters). Both schemas are listed once, under "Progress file" and "Run report" in
-[cli.md](commands/swath.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
+limiter's steps, the split counters). Both schemas are in
+[reference/run-report.md](reference/run-report.md); the counters in [internals/counters.md](internals/counters.md). The signals to read:
 
 **The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
 parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
@@ -289,7 +191,7 @@ timeout and latency brakes, and counters.
 - `--request-rate N` adds an aggregate rate cap for a quota shared across a fleet. Reservations
   are spaced; scheduling delays can bunch actual sends.
 - Exhausted engine listing calls requeue while the run lives; admission failures are described
-  under [object-store requests](#object-store-requests). A stall watchdog or deadline can stop
+  under [object-store requests](sources.md#object-store-requests). A stall watchdog or deadline can stop
   a run that keeps failing.
 
 Measured on the synthetic S3 fake ([measurements](internals/measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
@@ -302,15 +204,8 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 
 ## Stopping and resuming
 
-| Exit | Class | Retry |
-|---|---|---|
-| 0 | `completed` | done (also `swath resume` on a complete dataset) |
-| 1 | `fatal`, `incomplete` | no: a resume will not fix it (access denied, no such bucket, a protocol violation, an invariant) |
-| 2 | `usage`, `refused` | no: fix the command or the output directory |
-| 74 | `disk_full` | `swath resume` once there is space (or after moving the output to a larger disk) |
-| 75 | `stuck` | `swath resume`; `cause` is `stuck_empty_chain`, `stuck_throttle`, `stuck_timeouts` or `stuck_no_rows` |
-| 124 | `deadline` | `swath resume`, but only under a separate budget (attempts or total time); past it, a person |
-| 130, 143 | `interrupted` (SIGINT), `terminated` (SIGTERM) | `swath resume` |
+A dataset run of an object store that stops with exit 74, 75, 124, 130 or 143 can be resumed; what a
+supervisor does with each code is in [reference/exit-codes.md](reference/exit-codes.md#what-a-supervisor-does-with-each-code).
 
 "Resumable" means an object-store run whose journal is intact. A filesystem run keeps no journal: start it
 again in a new or empty directory (`--overwrite` refuses an interrupted filesystem output as not a dataset).
@@ -319,15 +214,21 @@ again in a new or empty directory (`--overwrite` refuses an interrupted filesyst
 `error.json` and the report are written. Only the first signal counts; the forced exit follows 15 s later. SIGKILL, a panic or an
 OOM kill loses nothing durable: the journal is crash-safe and the resume reconciles.
 
-**`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
-value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
-`--spill-reserve`, `--no-spill-compress` and `--spill-plain`, `--part-interval`, `--report`,
-`--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and the operational ones: the shared
-`--anonymous`, `--request-timeout`, `--no-adaptive-limit`, `--adaptive-limit-slow-start` and `--request-rate`, and each
-provider's credential flags (`--azure-sas-token`, `--gcs-credentials-file`, `--s3-profile`, `--s3-bearer-token-command`,
-`--s3-bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
-other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
-time.
+**The workspace.** `DIR/.swath/` holds `lock` (one process per output), `journal` (`swath show --journal`),
+`parts/` (encoded parts not yet published), `spill/` (disposable spill, removed by the next run, and
+`spill/durable/`: the certified spill files and their `ledger`, kept for the resume and removed when the
+dataset commits), `suspect/` (a part a resume must reproduce) and `progress.json`. Do not edit the journal or
+its parts by hand; removing `spill/durable/` only costs a resume the relisting it would have saved.
+
+A SIGKILL (or an OOM kill, a power loss) leaves the published parts, the journal, encoded parts not yet
+published, the disposable spill and the durable spill: certified files with their ledger records, and files
+whose record never reached the ledger. The resume validates every recorded file (size, checksums, every frame,
+its certificate) and unlinks every other file; a missing or damaged one is relisted, never an error.
+
+**`swath resume DIR`** replays the command recorded in the journal. Only the resource, request, credential
+and reporting options that `swath resume --help` lists may be given again, the last value winning
+([swath-resume](commands/swath-resume.md)); `--max-duration` and the other runtime values are replayed from the
+first attempt unless given again. Pass a fresh `--report` path each time.
 
 The resume keeps every published part, verifies each against its journal record (size and SHA-256: reads every
 retained part in full, measured at 247-376 MiB/s cold and 511 MiB/s warm, so 10,000 parts of 64 MiB take
@@ -379,7 +280,7 @@ when no reader uses it.
 
 ### Seeding a refresh from the previous dataset
 
-A scheduled relisting of the same bucket should pass the previous generation as `--seed-from`:
+A scheduled relisting of the same bucket should pass the previous generation as `--seed-from` (S3, GCS and Azure Blob):
 
 ```bash
 swath list s3://bucket/logs/ -o /data/logs-2026-11-08 --seed-from /data/logs-2026-11-07
@@ -395,51 +296,46 @@ admission requests can already have run. It cannot be the output directory, and 
 own directory is refused for that reason: write each generation to a new directory, as above. A bucket that
 changed shape since is still listed whole and in order; the run report's `seed.from.error.grown` and
 `seed.from.error.shrunk` count the ranges whose keys moved by more than a factor of 2 (adaptive splits covered
-them), and `seed.from.expected_keys` against the source counter `objects` is the growth. A cut file (one sorted key per line,
-optionally a tab and a count) seeds from anything else that knows the keys, but carries no identity; prefer the
-dataset.
+them), and `seed.from.expected_keys` against the source counter `objects` is the growth.
+
+A cut file seeds from anything else that knows the keys (an S3 Inventory, a prefix list), but carries no
+identity; prefer the dataset. A cut file holds one key per line, ascending bytewise without repeats, each
+inside the scope, optionally followed by a tab and the keys expected since the previous cut (on every line or
+none), at most 262,144 lines and 16 MiB (thin a larger one: every nth line, its count the sum of those it
+replaces). An unsorted or repeated cut, a cut outside the scope, a cut file past those bounds, `--seed-from`
+on a local tree, and a prior that is the output directory are refused (exit 2).
+
+The prior changes only how the work is first divided, into up to `min(1000, 4 × --workers)` ranges of about
+equal expected keys; the splits stay adaptive and the rows are the same. `swath resume` reads `--seed-from`
+again and may change or drop it (`--seed-from=`); a resume whose prior is unreadable warns and lists without
+it. The report's `invocation.prior` names what was used.
 
 ## Reading the output
+
+A reader starts only once `manifest.json` exists, reads the parts it lists (never a glob of `data/`), and
+checks the coverage when it needs the whole source: `coverage.complete` true, `coverage.stop_reason`
+`completed`, `coverage.skipped_entries` 0, `coverage.filters` empty and `scope.kind` `whole`
+([dataset.md](dataset.md#the-swath-extension)). [getting-started.md](getting-started.md#6-query-it-with-duckdb)
+shows a DuckDB query over the manifest's part list. Listed ETags are not portable content hashes; check the
+provider's caveats in the [schema registry](dataset.md#schema-registry) before comparing inventories.
 
 ```text
 DIR/
   data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
-                            (exit 1, `cause` `part_limit` past that: start over with a larger `--part-size`)
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
   error.json                the outcome of an attempt that did not complete
   .swath/                   private workspace: lock, journal, parts/, spill/, suspect/, progress.json, stack dumps
 ```
 
-**The manifest is the commit.** Parts appear in `data/` before the run ends, so `data/` alone is not a
-dataset: a reader starts only once `manifest.json` exists, and a reader that needs the whole bucket checks
-`coverage.complete` true, `coverage.stop_reason` `completed`, `coverage.skipped_entries` 0, `coverage.filters`
-empty and `scope.kind` `whole` (fields: [dataset.md](dataset.md#the-swath-extension)).
-
-```bash
-swath show DIR            # SeekParquet format, swath schema and metadata version, coverage, parts, rows, key range
-swath show --journal DIR  # an interrupted run: the journal as JSON lines
-# In DuckDB, substitute the exact S3 part paths from manifest.json:
-duckdb -c "SELECT count(*), sum(size) FROM read_parquet(['DIR/data/part-00000.parquet'], union_by_name = true)"
-duckdb -c "SELECT storage_class, count(*), sum(size) FROM read_parquet(['DIR/data/part-00000.parquet'], union_by_name = true) GROUP BY 1"
-```
-
-Use every part listed in the manifest, not a directory glob. The query above shows a one-part S3 dataset.
-
-The [schema registry](dataset.md#schema-registry) owns the columns, nullability and metadata
-semantics for S3, GCS, Azure Blob and local datasets. Read optional columns by name across parts
-(`union_by_name = true` in DuckDB). Listed ETags are not portable content hashes; check the
-provider-specific hash caveats there before comparing inventories.
-
-By default, object-store datasets list current objects only; `--all-versions` selects S3 versions
-or GCS generations. In default GCS mode, generation metadata describes the live object, not its
-history. Java swath's reader does not open Go datasets.
+By default, object-store datasets list current objects only; `--all-versions` selects S3 versions or GCS
+generations (below). Java swath's reader does not open these datasets ([upgrade.md](upgrade.md)).
 
 ### Verify a dataset
 
-`python3 verify.py DIR` independently checks S3, GCS, Azure Blob and local datasets with DuckDB,
-including manifest part bounds, footer stamps and SHA-256 digests. For Azure, it also checks the
-`azblob` source kind and every part's column types and nullability, including UTC microsecond timestamps.
+`python3 verify.py DIR` (in `go/`) independently checks S3, GCS, Azure Blob and local datasets with DuckDB,
+including manifest part bounds, footer stamps and SHA-256 digests. For Azure, it also checks the `azblob`
+source kind and every part's column types and nullability, including UTC microsecond timestamps.
 
 ## Listing every version
 
@@ -508,29 +404,4 @@ and for S3 the delete-marker state, in wire order.
   of 1.09 billion objects at 256 and 1,024 workers; listings past that and runs of hours are unmeasured
   ([measurements](internals/measurements.md#known-gaps)).
 
-## When it goes wrong
-
-1. **The exit code and the `--report` file.** `outcome.class` and `outcome.cause`: the provider's failure class
-   (`auth`, `access_denied`, `throttle`, `timeout`, `parse`, `protocol`, `unsupported`), `no_space`, or
-   a `stuck_*` cause. `outcome.unrecorded`, when set, says why `error.json` was not updated.
-2. **`DIR/error.json`**: the same outcome inside the dataset, current only when its `attempt.id` matches the
-   report's. Without a report, only the exit code is current. A command that could not record its outcome
-   says why on stderr, and prints the outcome as `swath: outcome: {...}` with `-v` (the `outcome` event under `--log-format json`).
-3. **Goroutine dumps.** At a stall, and at a forced exit, every goroutine's stack and the progress counts go
-   whole to `DIR/.swath/stacks-stuck.txt` or `stacks-forced-exit.txt` (replaced each time), else to stderr,
-   cut at 1 MiB.
-4. **`.swath/`**: `lock` (one process per output), `journal` (`swath show --journal`), `parts/` (encoded parts
-   not yet published), `spill/` (disposable spill, removed by the next run, and `spill/durable/`: the
-   certified spill files and their `ledger`, kept for the resume and removed when the dataset commits),
-   `suspect/` (a part a resume must reproduce), `progress.json`. Do not edit the journal or its parts by
-   hand; removing `spill/durable/` only costs a resume the relisting it would have saved.
-
-**What a kill leaves on disk.** A SIGKILL (or an OOM kill, a power loss) leaves the published parts, the
-journal, encoded parts not yet published, the disposable spill (removed by the next run) and the durable
-spill: certified files with their ledger records, and files whose record never reached the ledger. The
-resume validates every recorded file (size, checksums, every frame, its certificate) and unlinks every
-other file; a missing or damaged one is relisted, never an error.
-5. **Profiles:** `SWATH_CPUPROFILE=FILE` and `SWATH_MEMPROFILE=FILE` write pprof files.
-
-For a report to the maintainers include `swath --version`, the `--report` file (redact bucket names and keys),
-the provider and region, and the command line.
+When a run fails: [troubleshooting.md](troubleshooting.md).

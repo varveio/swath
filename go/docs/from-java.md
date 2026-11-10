@@ -2,20 +2,21 @@
 
 For someone who has run the Java `swath` CLI. Go is unreleased on main and will replace
 Java at release; Java v0.3.2 remains the latest published distribution. Build Go from
-source using the [Go guide](getting-started.md). The binaries currently have different launchers
+source using [getting-started.md](getting-started.md). The binaries currently have different launchers
 and output contracts. Every
 Java option, output mode, exit code and report field, with its Go counterpart and the decision behind it, is
 in [internals/cli-inventory.md](internals/cli-inventory.md). Readers of the dataset should read [dataset.md](dataset.md) (the swath dataset) and [upgrade.md](upgrade.md) (what changed from the Java layout).
 
 ## What stays the same
 
-- **Sources.** `s3://bucket[/prefix]` on general-purpose buckets, with the same credential chain, `--profile`,
-  `--region`, S3-compatible endpoints and bearer tokens for GCS's XML API. This tool adds native `gs://`
+- **Sources.** `s3://bucket[/prefix]` on general-purpose buckets, with the same credential chain, profiles
+  (`--s3-profile`), regions (`--s3-region`), S3-compatible endpoints (`--endpoint-url`) and bearer tokens for
+  GCS's XML API (`--s3-bearer-token-command`). This tool adds native `gs://`
   through the GCS JSON API, `az://account/container[/prefix]` for Azure Blob flat namespaces,
   and local or mounted directory trees.
 - **Output.** Object-store text rows as a table, TSV or JSONL, on stdout or in a `.tsv` or `.jsonl` file
-  (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Local `list` requires
-  dataset output; local `du` summaries go directly to stdout. Java's filters are kept: its regular expressions are
+  (optionally `.gz` or `.zst`), and a sorted Parquet dataset in a directory. Every source, a local
+  tree included, lists as text rows or into a dataset; `swath du` prints totals on stdout. Java's filters are kept: its regular expressions are
   `--include-regex` and `--exclude-regex` (Go's RE2, not Java's), `--include` and `--exclude` take globs, every
   filter is repeatable, and a size's `MB` is decimal (`M` and `MiB` binary).
 - **Resume.** `swath resume DIR` continues an eligible journaled S3, GCS or Azure Blob dataset run.
@@ -54,11 +55,11 @@ in [internals/cli-inventory.md](internals/cli-inventory.md). Readers of the data
 ## Flags
 
 The flags kept, renamed and removed are in [internals/cli-inventory.md](internals/cli-inventory.md). The most common ones:
-`--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` is
-`--endpoint`, `--parquet-part-size` is `--part-size` (64 MiB by default, Java's was 256 MB), and
+`--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` keeps its
+name, `--profile` and `--region` are `--s3-profile` and `--s3-region`, `--parquet-part-size` is `--part-size` (64 MiB by default, Java's was 256 MB), and
 `--format parquet --sort -o DIR` is simply `-o DIR`. Object stores share `--anonymous`,
-`--endpoint` and `--request-timeout`; provider-specific credentials and limits are described in the
-[operating reference](running.md#object-store-requests).
+`--endpoint-url` and `--request-timeout`; provider-specific credentials and limits are described in
+[sources.md](sources.md).
 
 ## The run report
 
@@ -67,7 +68,7 @@ The report is `run.json` beside a committed dataset and the `--report FILE`; Jav
 
 | Java | This tool |
 |---|---|
-| `schema_version` | `report_version` (3) |
+| `schema_version` | `report_version` (4) |
 | `run_id` | `attempt.id` |
 | `objects` (the dataset's rows) | `output.rows_committed`; this attempt's rows are `output.rows_emitted` |
 | `bytes` | `output.object_bytes` (object sizes); the dataset's own size is `output.output_bytes` |

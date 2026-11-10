@@ -1,7 +1,7 @@
 # Running swath in production
 
 A short guide for whoever schedules and watches swath. The full reference is [running.md](running.md);
-every flag is in [cli.md](commands/swath.md). Numbers below are observations on the stated runs
+every option is in the [command reference](commands/swath.md). Numbers below are observations on the stated runs
 ([internals/measurements.md](internals/measurements.md)), not limits or promises.
 
 ## The nightly command
@@ -99,7 +99,7 @@ sustained throttling, use `--no-adaptive-limit --request-rate N` ([running.md](r
 
 ## Resume after a kill
 
-`swath resume DIR` continues an S3 or GCS run after a signal, a crash, an OOM kill or a full disk. A local
+`swath resume DIR` continues an S3, GCS or Azure Blob dataset run after a signal, a crash, an OOM kill or a full disk. A local
 directory listing keeps no journal and starts over.
 
 - **Kept:** every published part, verified by size and SHA-256 before listing continues. Verification read
@@ -110,23 +110,15 @@ directory listing keeps no journal and starts over.
   listing: a kill at 40 % listed 90 to 100 % of the keys again on every list of 20M keys or more (candidate 3,
   `c48ea228`, run `cand3`), because the output waits for the leftmost range while the rest is spilled.
 
-The resume replays the recorded command. Only the resource, reporting and request flags may change
-([cli.md](commands/swath.md)). Give each attempt a fresh `--report` path.
+The resume replays the recorded command. Only the resource, reporting and request options may change
+([swath-resume](commands/swath-resume.md)). Give each attempt a fresh `--report` path.
 
 ## Where things are
 
-```text
-DIR/data/part-NNNNN.parquet   the parts, in key order
-DIR/manifest.json             the commit: readers start only once it exists
-DIR/run.json                  the run report, after the commit
-DIR/error.json                the outcome of an attempt that did not complete
-DIR/.swath/                   lock, journal, parts being published, spill/, progress.json
-```
-
-Spill lives under `DIR/.swath/spill/`, on the output's filesystem, and is removed when the run ends. A text
-file's spill goes in a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/`. Text on stdout spills under
-`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the
-run warns at start.
+The output directory's layout is in [swath-list](commands/swath-list.md#files). Spill lives under
+`DIR/.swath/spill/`, on the output's filesystem, and is removed when the run ends; text on stdout spills under
+`$TMPDIR`. On tmpfs spill uses memory: the report's `resources.spill.fs_type` names the filesystem and the run
+warns at start.
 
 ## Disk sizing
 
