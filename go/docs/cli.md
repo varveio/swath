@@ -813,7 +813,7 @@ table changes.
   stdout (`| head`) ends the run at once with exit 0, the report's outcome `stopped`, `stop_reason`
   `downstream_closed`, `complete` false. On stdout the one-line summary is not printed (stdout carries the
   rows; `--stats` prints the account on stderr) and `--report -` is refused (use `--report FILE`).
-  Text runs keep no journal: `swath resume` refuses a text destination, and an interrupted text run is run
+  Text runs keep no journal: `swath resume` refuses a text destination (stdout, a file, or a text name that is no directory: what is on disk decides, so `-o rows.tsv/` resumes as `swath resume rows.tsv/`), and an interrupted text run is run
   again. `output.text` in the report names the format, destination, compression, rows and bytes.
 - **Per-prefix totals** (`swath du SOURCE [-d N]`, every source): how much is under a bucket, a prefix or a
   directory, and under each prefix down to N levels, as `du` (and `mc du`, `gsutil du`, `s5cmd du`) for buckets and

@@ -395,3 +395,25 @@ func TestReportStdout(t *testing.T) {
 		t.Fatalf("unknown scheme, --report -: %v, stdout %q", err, out.String())
 	}
 }
+
+// TestResumeDecidesByDisk: swath resume reads what DIR holds, never its
+// name: a dataset in a directory named rows.tsv (-o rows.tsv/) is found,
+// with or without the slash; a text file's name that is no directory is a
+// text run, which keeps no journal.
+func TestResumeDecidesByDisk(t *testing.T) {
+	captureStderr(t)
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "rows.tsv")
+	if err := run(ctx, []string{localSource(t), "-o", dir + string(filepath.Separator), "--no-stats"}, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{dir, dir + string(filepath.Separator)} {
+		var out bytes.Buffer
+		if err := resume(ctx, []string{d}, &out); err != nil || !strings.Contains(out.String(), "already complete") {
+			t.Errorf("resume %s: %v, stdout %q", d, err, out.String())
+		}
+	}
+	if err := resume(ctx, []string{filepath.Join(t.TempDir(), "x.tsv")}, io.Discard); err == nil || !strings.Contains(err.Error(), errText.Error()) {
+		t.Errorf("resume of a text file's name: %v", err)
+	}
+}

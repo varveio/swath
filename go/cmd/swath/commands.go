@@ -71,7 +71,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	stop := func(err error) error {
 		return refuse(stdout, dir, seen, err, att, o.report, redactArgv(append([]string{"resume"}, args...)), o.term.verbose > 0)
 	}
-	if f, _ := textDest(dir); f != "" || dir == "-" || isFile(dir) {
+	if textRun(dir) {
 		// A text run keeps no journal: there is nothing to continue.
 		return stop(usageError{errText})
 	}
@@ -174,16 +174,25 @@ func resumeTarget(o options, dir string) options {
 	switch {
 	case dir == "-":
 		o.text = &textout.Config{}
-	case isFile(dir):
+	case textRun(dir):
 		o.text = &textout.Config{Path: dir}
 	default:
-		if f, _ := textDest(dir); f != "" {
-			o.text = &textout.Config{Path: dir}
-		} else {
-			o.out = dir
-		}
+		o.out = dir
 	}
 	return o
+}
+
+// textRun says DIR names a text run's output, which keeps no journal:
+// stdout, a file, or a text file's name (rows.tsv) that is not a
+// directory. What is on disk decides: a directory named rows.tsv (-o
+// rows.tsv/) holds a dataset or a run.
+func textRun(dir string) bool {
+	if dir == "-" || isFile(dir) {
+		return true
+	}
+	fi, err := os.Stat(dir)
+	f, _ := textDest(dir)
+	return f != "" && (err != nil || !fi.IsDir())
 }
 
 // refuse settles a resume that stopped before it could run: its outcome
