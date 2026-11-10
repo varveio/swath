@@ -1424,6 +1424,92 @@ about 1.4 KB an object at every worker count; Stream made as many allocations an
 the same host `TestScanAllocations` counted 13.07 allocations an object for Scan over its 20,000-row fixture,
 with and without `-race`, under its budget of 20.
 
+## Reader column batches, 2026-11-10
+
+The R1 SeekParquet bump also changes existing users of `RangePlan.Scan`: it is now an owning adapter over
+`ScanBatches`. Completed batches may be delivered before a later page/read error, and cancellation is checked
+between batches. Reader `Scan` still checks cancellation before every owning-batch flush; `Totals` publishes
+no totals on failure. Projected data-page scratch is retained at each scan request's high-water capacity
+across row groups. Concurrent shards each own this scratch, so the transient memory cost multiplies across
+shards; scratch is not shared between them. These are dependency-level behavior and memory changes, not
+only a new reader entry point.
+
+R1's `ScanBatches` on the R0 baseline (merged as `5c2fa6e5`), with SeekParquet
+`af57842d09a5` in both Go modules. The same 4,000,000-row, seed-1 fixture described above:
+2 parts, 20 row groups, 42.0 B/row on disk; manifest SHA-256
+`e4a5e2397fed214f2e9c33f2be037be2c0de29bf1fb244a3bfd2c42d341e2084`.
+
+Go 1.26.10, linux/amd64, GOMAXPROCS 4, default GOGC/GOMEMLIMIT, shared 4-vCPU Xeon Platinum
+8581C (2.30 GHz), about 7.7 GiB visible RAM. `BenchmarkReaderScan`, `-run '^$' -benchmem
+-benchtime=3x -count=1`, under `flock /tmp/swath-gates.lock`; fixture creation and warm-up excluded,
+planning and splitting included. Load average rose from 8.73 to 16.57 during this run: timing is heavily
+contended and does not establish worker scaling or the 18-core commoncrawl acceptance target.
+
+| Workers | Path | ns/row | allocs/row | B/row |
+|---:|---|---:|---:|---:|
+| 1 | Scan | 2,615.5 | 12.03064 | 972.5 |
+| 1 | Batch-noop | 1,061.4 | 0.03500 | 375.3 |
+| 1 | Batch-touch | 1,189.4 | 0.03504 | 375.3 |
+| 1 | Batch-all | 504.6 | 0.04404 | 448.9 |
+| 1 | Batch-size | 285.9 | 0.02204 | 373.8 |
+| 4 | Scan | 2,082.0 | 12.02953 | 972.1 |
+| 4 | Batch-noop | 847.4 | 0.03514 | 375.5 |
+| 4 | Batch-touch | 943.4 | 0.03518 | 375.5 |
+| 4 | Batch-all | 1,112.8 | 0.04310 | 448.8 |
+| 4 | Batch-size | 688.1 | 0.02184 | 373.9 |
+| 8 | Scan | 2,286.4 | 12.02902 | 972.8 |
+| 8 | Batch-noop | 1,317.1 | 0.03506 | 375.8 |
+| 8 | Batch-touch | 957.7 | 0.03506 | 375.8 |
+| 8 | Batch-all | 907.6 | 0.04295 | 449.6 |
+| 8 | Batch-size | 536.7 | 0.02179 | 374.1 |
+
+`Batch-noop` selects last_modified and storage class and only counts rows. `Batch-touch` reads every key
+byte, size, non-null time and class byte into a checksum. `Batch-all` selects all Object fields and
+`Batch-size` only key+size. `Scan` is the complete owning API on the new dependency. Each number is the
+mean of three scans; per-row costs divide the native benchmark counters by 4,000,000. Interference varied:
+worker=1 all-fields was faster than the narrower projection, so these times cannot rank projection costs.
+
+The 300K allocation guard observed 0.02269, 0.03615 and 0.04439 allocations/row for key+size, overview and
+all fields, with a ceiling of 0.06. Validation and typed accessor loops allocate zero in isolation.
+Allocation counts are much lower than owning Scan, but the design's proposed <0.01 allocations/row target
+is not met; the roughly 375 B/row overview cost remains. A separate 300K-row allocation-space profile,
+filtered to ScanBatches, attributes about 99% of sampled scan bytes to key-page decoding, including delta
+output growth and the non-reusing key buffers. Page headers, projected-page wrappers, chunk setup and
+codec state also allocate. This is allocated space, not peak or retained heap. No Stream implementation
+change is included.
+
+### Reader review fixes and decoder padding, 2026-11-10
+
+R1's review fixes on swath main `b546596a`, with both modules pinned to SeekParquet `e7aa75951776`
+(#48, decoder padding). The same benchmark cases, command, toolchain, GOMAXPROCS, host and 4M-row fixture
+as above; the manifest SHA-256 is unchanged. Three timed scans per case, after warm-up, with planning
+and splitting included. The shared-host load average fell from 11.31 to 7.12 during the run; timing is
+still contended and cannot establish the commoncrawl acceptance target or a portable scaling result.
+
+| Workers | Path | ns/row | allocs/row | B/row |
+|---:|---|---:|---:|---:|
+| 1 | Scan | 1,287.9 | 12.02852 | 709.4 |
+| 1 | Batch-noop | 421.4 | 0.03383 | 184.0 |
+| 1 | Batch-touch | 408.1 | 0.03383 | 184.0 |
+| 1 | Batch-all | 440.7 | 0.04095 | 185.2 |
+| 1 | Batch-size | 452.2 | 0.02041 | 182.4 |
+| 4 | Scan | 797.0 | 12.02724 | 708.8 |
+| 4 | Batch-noop | 217.3 | 0.03373 | 184.0 |
+| 4 | Batch-touch | 288.9 | 0.03376 | 184.0 |
+| 4 | Batch-all | 299.4 | 0.04068 | 185.5 |
+| 4 | Batch-size | 198.2 | 0.02045 | 182.4 |
+| 8 | Scan | 684.7 | 12.02701 | 709.9 |
+| 8 | Batch-noop | 250.8 | 0.03377 | 184.4 |
+| 8 | Batch-touch | 213.7 | 0.03378 | 184.3 |
+| 8 | Batch-all | 227.6 | 0.04074 | 186.7 |
+| 8 | Batch-size | 277.3 | 0.02049 | 182.6 |
+
+Overview batches now allocate about 184 B/row, versus 375–376 B/row at `af57842`; all-field batches
+allocate 185–187 B/row versus 449–450 B/row. SeekParquet #48 supplies the extra capacity its delta decoder
+requires, avoiding repeated output-buffer growth. The reader also shares its size/time checks between
+owning and borrowed paths in this run. Overview allocation counts remain about 0.034/row, above the
+proposed <0.01 target; this is cumulative allocated space, not a peak/live-memory measurement.
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through

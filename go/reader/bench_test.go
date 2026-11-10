@@ -21,9 +21,9 @@ import (
 // a fixture of SWATH_READER_BENCH_ROWS generated rows (default 4,000,000;
 // writeFixture), written once per process before any timing and removed
 // at exit. Each operation reads the whole dataset with a Dataset opened
-// and scanned once before the timed loop (warm) and a callback that does
-// nothing with the objects. Besides the standard ns/op, B/op and
-// allocs/op, each reports rows/op, the denominator of the per-row costs,
+// and scanned once before the timed loop (warm). Callbacks either count
+// rows only or touch every overview field. Besides the standard ns/op,
+// B/op and allocs/op, each reports rows/op, the denominator of the per-row costs,
 // and ns/row from the benchmark's own elapsed time.
 
 func benchRows(tb testing.TB) int64 {
@@ -113,18 +113,55 @@ func BenchmarkReaderScan(b *testing.B) {
 	dir, rows := benchDataset(b)
 	for _, workers := range []int{1, 4, 8} {
 		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
-			var counted atomic.Int64
-			scan := func(d *Dataset) {
-				err := d.Scan(context.Background(), ScanRequest{Workers: workers}, func(batch []Object) error {
-					counted.Add(int64(len(batch)))
-					return nil
+			for _, mode := range []string{"Scan", "Batch-noop", "Batch-touch", "Batch-all", "Batch-size"} {
+				b.Run(mode, func(b *testing.B) {
+					var counted, checksum atomic.Int64
+					scan := func(d *Dataset) {
+						var err error
+						if mode == "Scan" {
+							err = d.Scan(context.Background(), ScanRequest{Workers: workers}, func(batch []Object) error {
+								counted.Add(int64(len(batch)))
+								return nil
+							})
+						} else {
+							fields := FieldLastModified | FieldStorageClass
+							if mode == "Batch-all" {
+								fields = AllObjectFields
+							}
+							if mode == "Batch-size" {
+								fields = 0
+							}
+							err = d.ScanBatches(context.Background(), BatchScanRequest{Workers: workers, Fields: fields}, func(batch *ObjectBatch) error {
+								counted.Add(int64(batch.Len()))
+								if mode == "Batch-touch" {
+									var sum int64
+									for i := 0; i < batch.Len(); i++ {
+										sum += batch.Size(i)
+										for _, v := range batch.Key(i) {
+											sum += int64(v)
+										}
+										if us, ok := batch.LastModified(i); ok {
+											sum += us
+										}
+										if class, ok := batch.StorageClass(i); ok {
+											for _, v := range class {
+												sum += int64(v)
+											}
+										}
+									}
+									checksum.Add(sum)
+								}
+								return nil
+							})
+						}
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+					d := benchWarm(b, dir, scan)
+					benchLoop(b, rows, &counted, func() { scan(d) })
 				})
-				if err != nil {
-					b.Fatal(err)
-				}
 			}
-			d := benchWarm(b, dir, scan)
-			benchLoop(b, rows, &counted, func() { scan(d) })
 		})
 	}
 }
@@ -171,5 +208,37 @@ func TestScanAllocations(t *testing.T) {
 	t.Logf("%.2f allocations an object (budget %v)", perObject, scanAllocBudget)
 	if perObject > scanAllocBudget {
 		t.Errorf("%.2f allocations an object, over the budget of %v", perObject, scanAllocBudget)
+	}
+}
+
+// TestScanBatchesAllocations bounds the entire warm scan, including planning
+// and splitting. The callback only counts; there are no owning row copies.
+func TestScanBatchesAllocations(t *testing.T) {
+	const rows = 300_000
+	const budget = 0.06 // allocations/row; observed 0.044 with all fields, including page decoding
+	dir := filepath.Join(t.TempDir(), "ds")
+	if err := writeFixture(context.Background(), dir, rows, 2); err != nil {
+		t.Fatal(err)
+	}
+	d := openDir(t, dir)
+	for _, fields := range []ObjectFields{0, FieldLastModified | FieldStorageClass, AllObjectFields} {
+		var n int64
+		perRow := testing.AllocsPerRun(3, func() {
+			n = 0
+			err := d.ScanBatches(context.Background(), BatchScanRequest{Fields: fields}, func(b *ObjectBatch) error {
+				n += int64(b.Len())
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}) / rows
+		if n != rows {
+			t.Fatalf("%d objects, want %d", n, rows)
+		}
+		t.Logf("fields=%d: %.5f allocations/row (budget %.3f)", fields, perRow, budget)
+		if perRow > budget {
+			t.Errorf("%.5f allocations/row exceeds %.3f", perRow, budget)
+		}
 	}
 }

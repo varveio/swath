@@ -36,6 +36,16 @@ readers make the same distinctions):
 | Identification (`Open`, `OpenDir`) | The manifest is SeekParquet format version 0, draft revision 1 and the schema id is registered; when `extensions.swath` is present, its `version` is 1 and its members have the right JSON types | the manifest only |
 | Validation (`CheckSchema`) | The manifest's key declaration and every part's footer, stamps and columns match the schema id's row contract | every footer and each row group's first key page |
 
+`reader.ScanBatches` reads current object columns selected by its request: key and size always, optional
+fields only when requested. It checks selected column types and values; an omitted optional field is neither
+read nor checked against swath's schema. SeekParquet's structural and key checks still apply. This is not a
+whole-schema validation; use `CheckSchema` for that. `Scan` and `Stream` continue to return complete Objects.
+`ScanBatches` is stricter than `Scan`'s existing row decoder: it refuses an all-null INT64 `etag`, an INT64
+`last_modified` without its timestamp annotation, a BYTE_ARRAY key without STRING, and a current-object
+manifest declaring `key_unique: false`, all of which `Scan` accepts (optional columns are checked only when
+selected). Part schema errors name the part and have `Row == nil`; value errors name the bad row.
+The borrowed batch lifetime, null semantics and errors are defined by the [reader API](../reader/README.md).
+
 Whether a dataset suits a purpose is the application's decision. The manifest records how the listing ran (its
 source, scope and coverage, `one_filesystem` included) and when it was published; the application reads that
 metadata and decides whether a partial, filtered or prefix-scoped listing will do, whether it is of the source it

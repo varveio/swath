@@ -65,6 +65,19 @@ func (*Dataset) StreamLocal(ctx context.Context, fn func(LocalEntry) error) erro
 func (*Dataset) StreamStats() StreamStats // { Requests, Objects int64; ReadStats }
 type ScanRequest struct { Prefix []byte; Workers int; Stats *ReadStats } // Workers <= 0: 1
 func (*Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Object) error) error
+type ObjectFields uint8 // optional fields; key and size always read and checked
+const (FieldLastModified ObjectFields = 1 << iota; FieldETag; FieldStorageClass)
+const AllObjectFields = FieldLastModified | FieldETag | FieldStorageClass
+type BatchScanRequest struct { Prefix []byte; Workers int; Stats *ReadStats; Fields ObjectFields }
+func (*Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func(*ObjectBatch) error) error
+func (*ObjectBatch) Fields() ObjectFields
+func (*ObjectBatch) Len() int
+func (*ObjectBatch) Key(i int) []byte
+func (*ObjectBatch) Size(i int) int64
+func (*ObjectBatch) LastModified(i int) (micros int64, ok bool)
+func (*ObjectBatch) ETag(i int) ([]byte, bool)
+func (*ObjectBatch) StorageClass(i int) ([]byte, bool) // access_tier on Azure
+func (*ObjectBatch) Cursor(i int) *Cursor // owning copy
 type ListRequest struct { Prefix []byte; Delimiter byte; Cursor *Cursor; Limit int; Stats *ReadStats }
 type Entry struct { Object *Object; Local *LocalEntry; CommonPrefix []byte } // an object or entry, a prefix, or a prefix with its exact-key row
 func (Entry) Cursor() *Cursor
@@ -103,6 +116,32 @@ entries, err := d.List(ctx, reader.ListRequest{Prefix: []byte("logs/"), Delimite
 err = d.Scan(ctx, reader.ScanRequest{Prefix: []byte("logs/"), Workers: runtime.GOMAXPROCS(0)},
 	func(batch []reader.Object) error { /* called concurrently; do not keep batch */ return nil })
 ```
+
+For a whole-run tally without constructing Objects, select only the optional fields it needs:
+
+```go
+err = d.ScanBatches(ctx, reader.BatchScanRequest{
+	Workers: runtime.GOMAXPROCS(0),
+	Fields: reader.FieldLastModified | reader.FieldStorageClass,
+}, func(b *reader.ObjectBatch) error {
+	for i := 0; i < b.Len(); i++ {
+		key, size := b.Key(i), b.Size(i)
+		micros, hasTime := b.LastModified(i)
+		class, hasClass := b.StorageClass(i)
+		// Tally here; copy key/class bytes if keeping them after this callback.
+		_, _, _, _, _, _ = key, size, micros, hasTime, class, hasClass
+	}
+	return nil
+})
+```
+
+Zero `Fields` selects key and size only; `AllObjectFields` adds last_modified, etag and storage class.
+`Fields()` reports that selection. Optional accessors return `ok == false` for null, and panic for an
+unrequested field; empty bytes with `ok == true` are an empty value. Every indexed accessor panics outside
+`[0, Len())`. Keys and byte fields borrow decoder memory: the batch and its values must not escape the
+callback, including through a goroutine. Copy bytes explicitly to keep them; `Cursor(i)` owns its key.
+There is no Object materialization on this path. Existing `Scan` and `Stream` still return complete,
+owning Objects and take no field selection.
 
 A filesystem's entries (`swath/local-entries/v1`) stream as `LocalEntry`, every column with its nulls, and list
 as `Entry.Local`, a directory's prefix `d/` paired with its own row:
@@ -208,6 +247,27 @@ Azure versions schema.
   every completed plan, split and shard scan is counted. The context is checked before planning, before each
   batch and after the shards end: a scan whose context ended never succeeds, even one that read nothing. `Scan`
   does not add to `StreamStats`.
+- **`ScanBatches(req)`.** The same current-object scope, parallel ordering, cancellation, error propagation
+  and statistics as `Scan`, with a separate field selection. Unknown field bits are `ErrInvalidRequest`
+  before planning. Size is always projected and checked present and non-negative. Only requested optional
+  fields are projected and checked against swath's schema; requested `last_modified` values must be in years
+  1..9999. Other optional fields, including owners and checksums, are not read or checked against swath's
+  schema. SeekParquet's structural checks still apply, including cross-part physical column consistency.
+  The manifest's key declaration and each selected part's key and projected columns are checked against the
+  swath schema, including logical types and all-null columns. **This is stricter than `Scan`**, whose
+  existing row decoder remains unchanged: `Scan` accepts an all-null INT64 `etag`, an INT64 `last_modified`
+  without its timestamp annotation, a BYTE_ARRAY key without STRING, and a current-object manifest declaring
+  `key_unique: false`; `ScanBatches` refuses these with `KindSchema` (for optional fields, when selected).
+  A selected column absent from its part is `KindSchema`: none of Object's selectable columns is absence-tolerant. GCS's absence-tolerant `time_created`
+  is outside this projection. Part schema errors name the part path and have `Row == nil`, independent of
+  which shard encounters the part first; row errors identify the bad key and offset, owning their key bytes.
+  Checks run by column before the callback, so with several invalid rows the error and earlier delivered rows may differ from `Scan`.
+  Each borrowed batch stays within one row group, key page, page of every projected column and selected span;
+  it may be shorter, with no fixed size. Concurrent calls and shards have independent borrowed storage.
+  The callback must not call `Close` or wait for a goroutine that does, since `Close` waits for active scans.
+  Return an error or cancel first, then close after the scan returns. If another goroutine calls `Close`,
+  a later part's schema check may return `ErrClosed` while `Close` waits for active callbacks to finish.
+  Like `Scan`, this adds no `StreamStats`.
 - **`List(req)`.** Current objects only, as `Stream`: a versions schema is refused (`KindSchema`) before any
   read. One request of the module's delimited listing (`seekparquet.Dataset.List`), which routes it, skips each
   common prefix's keys and rolls them up (a key whose bytes after `Prefix` contain `Delimiter` yields the prefix
@@ -389,3 +449,9 @@ count; sums publishing nothing on failure; budgets read within, a budget of exac
 summing them all (shared pages and dictionaries charged once), and a one-byte budget reading nothing beyond the
 counts. varve's tests of its own page-index parsing are the module's now; `TestTotalsIgnoreManifestBoundExcludingKey`
 shows the module's refusal of a part beyond its manifest bound returned unchanged.
+
+`batch_test.go` compares every optional-field combination with `Scan` for S3, GCS and Azure across pages,
+row groups, parts, prefixes and worker counts. It checks null/empty values, absent and all-null wrong-typed
+columns, time bounds, owned error positions and cursors, cancellation, callback/source errors, stats and
+concurrent storage isolation. Local and versions schemas remain refused. The batch allocation guard and
+4M-row benchmarks are described in [reader benchmarks](../docs/internals/testing.md#reader-benchmarks).
