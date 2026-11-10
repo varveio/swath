@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -67,7 +68,10 @@ type Config struct {
 	Anonymous      bool          // never sign
 	RequestPayer   bool          // send x-amz-request-payer: requester (signed): the caller pays for a requester-pays bucket
 	RequestTimeout time.Duration // per attempt, headers and body; default 30 s
-	HTTPClient     *http.Client
+	// Trust verifies the service's certificate; its CA bundle defaults to
+	// AWS_CA_BUNDLE's, as the AWS CLI's. A supplied HTTPClient keeps its own.
+	Trust      source.Trust
+	HTTPClient *http.Client
 	// Bearer, if set, authenticates every request with its token
 	// ("Authorization: Bearer") instead of SigV4; no credential is looked up.
 	Bearer *tokensource.Shared
@@ -89,6 +93,13 @@ type Client struct {
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = source.DefaultRequestTimeout
+	}
+	if cfg.Trust.CABundle == "" {
+		cfg.Trust.CABundle = os.Getenv("AWS_CA_BUNDLE")
+	}
+	trust, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
 	}
 	a, err := loadAuth(ctx, cfg)
 	if err != nil {
@@ -112,7 +123,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Meter: objhttp.NewMeter(cfg.Retry),
 	}
 
-	hc := objhttp.Pool(1, cfg.HTTPClient, func(next http.RoundTripper) http.RoundTripper {
+	hc := objhttp.Pool(1, cfg.HTTPClient, trust, func(next http.RoundTripper) http.RoundTripper {
 		guard := &objhttp.Guard{Next: next, Validate: validate}
 		if a.bearer != nil {
 			guard.Header = bearerHeader

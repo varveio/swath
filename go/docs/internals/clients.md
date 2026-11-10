@@ -143,9 +143,10 @@ in an error.
 
 ## Pool construction
 
-`objhttp.Pool(workers, supplied, wrap)` returns HTTP clients. With no supplied client it clones
-`http.DefaultTransport` for each, retains the clone's TLS settings and sets only `ClientSessionCache` on
-its TLS configuration. Transports share that cache, set `MaxIdleConns` to 0 (no global idle cap) and
+`objhttp.Pool(workers, supplied, trust, wrap)` returns HTTP clients. With no supplied client it clones
+`http.DefaultTransport` for each, retains the clone's TLS settings and sets `ClientSessionCache` on its TLS
+configuration, and with `trust` (`source.Trust.Config`: `--ca-bundle`'s roots, or `--no-verify-ssl`) the roots
+and whether they are verified; a supplied client keeps its own TLS settings. Transports share that cache, set `MaxIdleConns` to 0 (no global idle cap) and
 `MaxIdleConnsPerHost` to 1,024. The size is `ceil(workers/16)`, clamped to 1..8: below a server's HTTP/2
 stream limit a single transport uses one connection. S3 calls `Pool(1, ...)[0]`; GCS rotates generated
 services; Azure rotates corresponding service and HTTP-client slices. Selection stays provider-owned.

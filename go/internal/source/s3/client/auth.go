@@ -4,8 +4,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/logging"
 
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
@@ -51,6 +54,15 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	opts := []func(*config.LoadOptions) error{config.WithLogger(logging.Nop{})}
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
+	}
+	if cfg.Trust.CABundle != "" {
+		// The bundle the listing trusts (--ca-bundle over AWS_CA_BUNDLE)
+		// is the credential chain's too.
+		pem, err := os.ReadFile(cfg.Trust.CABundle)
+		if err != nil {
+			return nil, source.Unsupported(fmt.Errorf("CA bundle: %w", err))
+		}
+		opts = append(opts, config.WithCustomCABundle(bytes.NewReader(pem)))
 	}
 	// The bucket's region (--s3-region) is the signing region only. The
 	// credential chain (STS for web identity and assumed roles) keeps the
@@ -183,13 +195,18 @@ func partialEnvCredentials() string {
 	return ""
 }
 
-// anonymousNote warns once when -anonymous hides credentials the
+// credentialVars are the environment variables that give the AWS SDK's
+// chain a credential: Anonymous ignores them (anonymousNote).
+var credentialVars = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
+	"AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI"}
+
+// anonymousNote warns once when Anonymous hides credentials the
 // environment holds.
 func anonymousNote(cfg Config) string {
-	if cfg.Anonymous && (os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_PROFILE") != "" || os.Getenv("AWS_SESSION_TOKEN") != "") {
-		return "-anonymous: ignoring the AWS_* credentials in the environment"
+	if !cfg.Anonymous {
+		return ""
 	}
-	return ""
+	return source.AnonymousNote("S3", credentialVars...)
 }
 
 // ready fetches what a request needs before it is sent: the bearer token

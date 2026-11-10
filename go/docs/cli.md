@@ -119,16 +119,23 @@ Filters:
                                An offset or Z; UTC without one.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                               In any case; an object without one is in none. Azure Blob: the access
+                               tier (Hot, Cool, Cold, Archive).
 
 Object stores:
       --anonymous            send no credentials (a public bucket or container)
                                Ignores any configured. Without it a source with no usable
                                credentials fails (auth) before listing.
       --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style. GCS: the JSON
-                               API base URL (fake-gcs-server). Azure Blob: the blob service URL, the
-                               account then its first path segment (Azurite). Part of the resume
-                               identity.
+                               S3: path-style addressing unless --no-s3-path-style; default
+                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                               then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
+                               For a service behind a private certificate authority. S3: default
+                               AWS_CA_BUNDLE.
+      --no-verify-ssl        do not verify the service's TLS certificate (warns)
+                               For a test endpoint only. A resume replays it, and warns again.
       --all-versions         list every version of every key, not only the current objects
                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
                                generations, live and noncurrent. A key's rows are consecutive and
@@ -151,7 +158,11 @@ S3:
       --s3-bearer-token-refresh-interval DURATION
                              run --s3-bearer-token-command again after this long (default 45m)
       --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
+                               would select nothing.
       --s3-dualstack         use the dual-stack (IPv6) endpoint
+                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                               where it would select nothing.
       --s3-fetch-owner       fill owner_id and owner_display_name
 
 GCS:
@@ -306,16 +317,23 @@ Filters:
                                An offset or Z; UTC without one.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                               In any case; an object without one is in none. Azure Blob: the access
+                               tier (Hot, Cool, Cold, Archive).
 
 Object stores:
       --anonymous            send no credentials (a public bucket or container)
                                Ignores any configured. Without it a source with no usable
                                credentials fails (auth) before listing.
       --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style. GCS: the JSON
-                               API base URL (fake-gcs-server). Azure Blob: the blob service URL, the
-                               account then its first path segment (Azurite). Part of the resume
-                               identity.
+                               S3: path-style addressing unless --no-s3-path-style; default
+                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                               then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
+                               For a service behind a private certificate authority. S3: default
+                               AWS_CA_BUNDLE.
+      --no-verify-ssl        do not verify the service's TLS certificate (warns)
+                               For a test endpoint only. A resume replays it, and warns again.
       --all-versions         list every version of every key, not only the current objects
                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
                                generations, live and noncurrent. A key's rows are consecutive and
@@ -338,7 +356,11 @@ S3:
       --s3-bearer-token-refresh-interval DURATION
                              run --s3-bearer-token-command again after this long (default 45m)
       --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
+                               would select nothing.
       --s3-dualstack         use the dual-stack (IPv6) endpoint
+                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                               where it would select nothing.
       --s3-fetch-owner       fill owner_id and owner_display_name
 
 GCS:
@@ -478,16 +500,23 @@ Filters:
                                An offset or Z; UTC without one.
       --modified-until TIME  keep objects or entries modified at or before this time
       --storage-class NAME   keep objects in these storage classes (STANDARD,GLACIER; repeatable)
+                               In any case; an object without one is in none. Azure Blob: the access
+                               tier (Hot, Cool, Cold, Archive).
 
 Object stores:
       --anonymous            send no credentials (a public bucket or container)
                                Ignores any configured. Without it a source with no usable
                                credentials fails (auth) before listing.
       --endpoint-url URL     the service URL in place of the provider's own (emulators, MinIO)
-                               S3: path-style addressing unless --no-s3-path-style. GCS: the JSON
-                               API base URL (fake-gcs-server). Azure Blob: the blob service URL, the
-                               account then its first path segment (Azurite). Part of the resume
-                               identity.
+                               S3: path-style addressing unless --no-s3-path-style; default
+                               AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base
+                               URL (fake-gcs-server). Azure Blob: the blob service URL, the account
+                               then its first path segment (Azurite). Part of the resume identity.
+      --ca-bundle FILE       trust the certificates in this PEM file besides the system's
+                               For a service behind a private certificate authority. S3: default
+                               AWS_CA_BUNDLE.
+      --no-verify-ssl        do not verify the service's TLS certificate (warns)
+                               For a test endpoint only. A resume replays it, and warns again.
       --all-versions         list every version of every key, not only the current objects
                                S3: versions and delete markers (needs s3:ListBucketVersions). GCS:
                                generations, live and noncurrent. A key's rows are consecutive and
@@ -510,7 +539,11 @@ S3:
       --s3-bearer-token-refresh-interval DURATION
                              run --s3-bearer-token-command again after this long (default 45m)
       --s3-fips              use the FIPS endpoint (s3-fips.REGION.amazonaws.com)
+                               Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it
+                               would select nothing.
       --s3-dualstack         use the dual-stack (IPv6) endpoint
+                               Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url,
+                               where it would select nothing.
       --s3-fetch-owner       fill owner_id and owner_display_name
 
 GCS:
@@ -619,8 +652,12 @@ Diagnostics:
   one given for another source (`gs://... --s3-profile`, where GCS takes `--gcs-credentials-file`; an S3 flag on a local
   tree) is refused (exit 2) rather than ignored. The flags every object store has are one shared group, the same
   for S3, GCS and Azure Blob and refused for a local tree: `--endpoint-url` (an emulator or a compatible store in
-  place of the provider's own service), `--request-timeout` and `--anonymous`, beside the range engine's
-  (`--all-versions`, `--no-adaptive-limit`, `--request-rate` and the diagnostic policy flags).
+  place of the provider's own service), `--request-timeout`, `--anonymous`, and the TLS trust flags
+  `--ca-bundle FILE` (PEM certificates trusted besides the system's; for S3 `AWS_CA_BUNDLE` when the flag is
+  absent) and `--no-verify-ssl` (no certificate check; it warns on every run that has it, a resume's replay
+  included, and the report's `source.stats.no_verify_ssl` is true), beside the range engine's
+  (`--all-versions`, `--no-adaptive-limit`, `--request-rate` and the diagnostic policy flags). Both trust flags
+  are operational: a resume replays them and may give them again (`--verify-ssl` undoes `--no-verify-ssl`).
 - **Azure Blob** (`az://ACCOUNT/CONTAINER[/PREFIX]`): `--endpoint-url URL` replaces
   `https://ACCOUNT.blob.core.windows.net` and takes the account as its first path segment (Azurite:
   `--endpoint-url http://127.0.0.1:10000`). Credentials: `--anonymous`, else a SAS (`--azure-sas-token`, the
@@ -800,7 +837,8 @@ Diagnostics:
   inclusive bounds (Java's units: `1k`, `256mb`, `1.5GiB`, binary, case-insensitive), `--modified-since` and
   `--modified-until` keep modification times within the inclusive bounds (`2026-01-01`, `2026-01-01T12:00:00`
   or with `Z` or an offset; UTC without one; a row without a time is kept, as Java's), `--storage-class
-  A,B` (repeatable) keeps the listed classes (case-insensitive). They apply to every row: on a local tree,
+  A,B` (repeatable) keeps the listed classes (case-insensitive; a row without a class is dropped), the S3 or GCS
+  storage class and the Azure Blob access tier (`Hot`, `Cool`, `Cold`, `Archive`). They apply to every row: on a local tree,
   directories too, by their own size and time, as `find -size` and `-newer` do. They reduce the rows written, not the requests
   made, with one exception on S3 and GCS: an `--include` anchored at the start with a literal (`^logs/2026/`)
   narrows the listed prefix to it (the same rows, fewer requests; `invocation.source` names the narrowed root).
@@ -825,7 +863,13 @@ Diagnostics:
   range instead (an experiment: [measurements](measurements.md) has the seed's effect on split depth);
   `swath diag list --sequential` is the one-chain oracle and the only mode where `--max-keys` stops early (the
   dataset is then marked incomplete; such a run keeps no journal and cannot be resumed). `--endpoint-url` selects an S3-compatible store, addressed path-style by default, as Java's
-  `--force-path-style` default with a custom endpoint; `--no-s3-path-style` uses virtual-host addressing there. S3 directory buckets (Express One Zone, names ending in
+  `--force-path-style` default with a custom endpoint; `--no-s3-path-style` uses virtual-host addressing there.
+  Without the flag, `AWS_ENDPOINT_URL_S3`, else `AWS_ENDPOINT_URL`, is the endpoint exactly as `--endpoint-url`
+  would be (path-style, the resume identity, no reference tariff) unless `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS`
+  is `true`; `AWS_USE_FIPS_ENDPOINT` and `AWS_USE_DUALSTACK_ENDPOINT` set `--s3-fips` and `--s3-dualstack`
+  unless the flag is given. FIPS or dual-stack with a custom endpoint, from a flag or a variable, is refused
+  (exit 2): they select among AWS's own endpoints. A request answered with the bucket's region names the fix
+  (`give --s3-region eu-west-1`); the region is not discovered. S3 directory buckets (Express One Zone, names ending in
   `--x-s3`) are refused before any request (exit 2, class `refused`).
 - **Warm start:** `--seed-from PATH` (S3, GCS and Azure Blob) starts the range engine from a previous listing's key
   distribution instead of the delimiter seed: no seed request, and the scope tiled into up to
@@ -854,11 +898,12 @@ Diagnostics:
   credentials whatever the environment holds, and it is the only way a request goes unauthenticated: a
   public bucket or container needs it. Without it, a source with no usable credentials (none configured,
   or configured and broken) stops the run before listing; there is no fallback to anonymity.
-  Credential failures normally have cause `auth` (exit 1); failed Entra acquisition during Azure
-  namespace admission can instead yield `refused`, cause `unsupported` (exit 2), when flatness
-  remains unknown without `--azure-assume-flat`. See
-  [Azure admission](internals/providers/azblob.md#provider-implementation). Credential errors identify
-  the failed credential source; their wording differs by provider.
+  Credential failures have cause `auth` (exit 1), Azure's during namespace admission included, and read
+  `S3 client: credentials (SOURCE): ...`, `GCS client: ...` or `Azure Blob client: ...`. `--anonymous` beside an
+  explicit credential (`--s3-profile`, `--s3-bearer-token-command`, `--gcs-credentials-file`,
+  `--azure-sas-token`, a SAS in the source URL) is refused (exit 2); credentials only the environment holds are
+  ignored with one warning naming the variables (`--anonymous: ignoring the GCS credentials in the environment
+  (GOOGLE_APPLICATION_CREDENTIALS)`).
 - **S3 credentials:** the AWS SDK's default credential chain applies: environment, shared files and profiles
   (`--s3-profile`), SSO, web identity, credential processes, AssumeRole, container and instance roles. Its first
   lookup is waited for up to 30 s (a web-identity token file mounted late included); a refresh that fails

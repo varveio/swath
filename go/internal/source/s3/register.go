@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,21 @@ type flagged struct {
 	common       *keyrange.Common
 	pathStyleSet bool // --s3-path-style given (else on with a custom endpoint, as Java's)
 	refreshSet   bool // --s3-bearer-token-refresh-interval given
+	fipsSet      bool // --s3-fips given (else AWS_USE_FIPS_ENDPOINT)
+	dualStackSet bool // --s3-dualstack given (else AWS_USE_DUALSTACK_ENDPOINT)
+}
+
+// tracked is a switch's value that sets *p to whether the value given is
+// on, and records in *set that it was given.
+func tracked(p *bool, on bool, set *bool) pflag.Value {
+	return source.Func(func(s string) error {
+		v, err := strconv.ParseBool(s)
+		if err != nil {
+			return errors.New("want true or false")
+		}
+		*p, *set = v == on, true
+		return nil
+	})
 }
 
 func defaults() any { return &flagged{} }
@@ -54,18 +70,8 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "s3-profile", Familiar: []string{"profile"}, Value: source.Text(&o.Profile), Metavar: "NAME", Usage: "the shared config profile to take credentials and region from",
 		Long: "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS)."})
 	source.Define(f, source.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: source.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
-	pathStyle := func(on bool) func(string) error {
-		return func(s string) error {
-			v, err := strconv.ParseBool(s)
-			if err != nil {
-				return errors.New("want true or false")
-			}
-			o.PathStyle, o.pathStyleSet = v == on, true
-			return nil
-		}
-	}
-	source.Define(f, source.Flag{Name: "s3-path-style", Value: source.Func(pathStyle(true)), Usage: "address the bucket in the path (default with --endpoint-url)"})
-	source.Define(f, source.Flag{Name: "no-s3-path-style", Value: source.Func(pathStyle(false)), Usage: "address the bucket in the host name, also with --endpoint-url"})
+	source.Define(f, source.Flag{Name: "s3-path-style", Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
+	source.Define(f, source.Flag{Name: "no-s3-path-style", Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
 	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
 		Usage: "a shell command printing a bearer token, sent instead of SigV4",
 		Long:  "For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again."})
@@ -79,8 +85,10 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 			o.BearerRefresh, o.refreshSet = d, true
 			return nil
 		})})
-	source.Define(f, source.Flag{Name: "s3-fips", Value: source.Switch(&o.FIPS), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)"})
-	source.Define(f, source.Flag{Name: "s3-dualstack", Value: source.Switch(&o.DualStack), Usage: "use the dual-stack (IPv6) endpoint"})
+	source.Define(f, source.Flag{Name: "s3-fips", Value: tracked(&o.FIPS, true, &o.fipsSet), Usage: "use the FIPS endpoint (s3-fips.REGION.amazonaws.com)",
+		Long: "Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
+	source.Define(f, source.Flag{Name: "s3-dualstack", Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
+		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
 	source.Define(f, source.Flag{Name: "s3-fetch-owner", Value: source.Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
 	return o
 }
@@ -95,10 +103,13 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.store != nil {
-			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+			opt.Endpoint, opt.Timeout, opt.Anonymous, opt.Trust = o.store.Endpoint, o.store.Timeout, o.store.Anonymous, o.store.Trust
 		}
 		if o.common != nil {
 			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
+		}
+		if err := o.environment(&opt); err != nil {
+			return nil, err
 		}
 		if !o.pathStyleSet && opt.Endpoint != "" {
 			opt.PathStyle = true // Java's default for a custom endpoint
@@ -106,13 +117,17 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 		switch {
 		case o.refreshSet && opt.BearerCommand == "":
 			return nil, source.Unsupported(errors.New("--s3-bearer-token-refresh-interval requires --s3-bearer-token-command"))
-		case opt.BearerCommand != "" && (opt.Anonymous || opt.Profile != ""):
-			return nil, source.Unsupported(errors.New("--s3-bearer-token-command excludes --anonymous and --s3-profile: the token is the credential"))
+		case opt.Anonymous && opt.Profile != "":
+			return nil, source.AnonymousConflict("--s3-profile")
+		case opt.Anonymous && opt.BearerCommand != "":
+			return nil, source.AnonymousConflict("--s3-bearer-token-command")
+		case opt.BearerCommand != "" && opt.Profile != "":
+			return nil, source.Unsupported(errors.New("--s3-bearer-token-command excludes --s3-profile: the token is the credential"))
 		}
 	case *Options: // a library caller
 		opt = *o
 	default:
-		return nil, fmt.Errorf("s3: options are %T, not *s3.Options", req.Options)
+		return nil, fmt.Errorf("S3: options are %T, not *s3.Options", req.Options)
 	}
 	opt.Bucket, opt.Prefix, opt.Workers, opt.Warn = bucket, prefix, req.Workers, req.Warn
 	if opt.AllVersions {
@@ -128,6 +143,41 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	}
 	return &opened[Object]{Bound: registry.Bind[Range, Object](p, &Schema), Registered: p, p: p, root: req.Root}, nil
 }
+
+// environment applies the AWS CLI's endpoint variables where no flag was
+// given: AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL, as --endpoint-url
+// (unless AWS_IGNORE_CONFIGURED_ENDPOINT_URLS is true), and
+// AWS_USE_FIPS_ENDPOINT and AWS_USE_DUALSTACK_ENDPOINT as --s3-fips and
+// --s3-dualstack. FIPS and dual-stack select among AWS's own endpoints, so
+// either with a custom endpoint is refused, whichever named them.
+func (o *flagged) environment(opt *Options) error {
+	endpoint, fips, dualStack := "--endpoint-url", "--s3-fips", "--s3-dualstack"
+	if opt.Endpoint == "" && !envTrue("AWS_IGNORE_CONFIGURED_ENDPOINT_URLS") {
+		for _, v := range []string{"AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL"} {
+			if opt.Endpoint = os.Getenv(v); opt.Endpoint != "" {
+				endpoint = v
+				break
+			}
+		}
+	}
+	if !o.fipsSet && envTrue("AWS_USE_FIPS_ENDPOINT") {
+		opt.FIPS, fips = true, "AWS_USE_FIPS_ENDPOINT"
+	}
+	if !o.dualStackSet && envTrue("AWS_USE_DUALSTACK_ENDPOINT") {
+		opt.DualStack, dualStack = true, "AWS_USE_DUALSTACK_ENDPOINT"
+	}
+	switch {
+	case opt.Endpoint != "" && opt.FIPS:
+		return source.Unsupported(fmt.Errorf("%s has no effect with %s: it selects among AWS's own S3 endpoints", fips, endpoint))
+	case opt.Endpoint != "" && opt.DualStack:
+		return source.Unsupported(fmt.Errorf("%s has no effect with %s: it selects among AWS's own S3 endpoints", dualStack, endpoint))
+	}
+	return nil
+}
+
+// envTrue reports whether environment variable v is true, read as the AWS
+// SDK reads its switches (in any case).
+func envTrue(v string) bool { return strings.EqualFold(os.Getenv(v), "true") }
 
 // opened is the S3 provider as the pipeline sees it.
 type opened[P any] struct {

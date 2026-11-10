@@ -100,6 +100,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
 	def(source.Flag{Name: "storage-class", Metavar: "NAME", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
+		Long: "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
 		Value: source.Func(func(v string) error {
 			for _, c := range strings.Split(v, ",") {
 				if c = strings.TrimSpace(c); c != "" {

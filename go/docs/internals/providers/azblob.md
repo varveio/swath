@@ -12,8 +12,11 @@ request timeout, retries and admission.
 Azure applies anchored `--include` filters to rows without narrowing the listing prefix.
 There is no tariff estimate, including on Azure's default endpoint. Only this provider honors
 `Retry-After` (capped at `--request-timeout`, 30 s by default, counted by `retry_after_capped`).
-It rejects a nonempty query or fragment in `--endpoint-url`; supply SAS credentials separately. `--anonymous` emits a note when it
-hides configured credentials detected by the Azure client.
+It rejects a nonempty query or fragment in `--endpoint-url`; supply SAS credentials separately. `--anonymous` with
+`--azure-sas-token` or a SAS in the root is refused (exit 2), as every provider refuses it beside an explicit
+credential; Azure credentials in the environment (`AZURE_STORAGE_SAS_TOKEN`, `AZURE_STORAGE_KEY`, the Entra ID
+variables) are ignored with the shared one-line warning naming them. `--storage-class` filters on the access
+tier (`access_tier`, the schema's declared storage-class column).
 
 ## Provider implementation
 
@@ -47,9 +50,10 @@ timeout retried; a refused grant stops the request). The chain is the SDK's, bui
 builds it (environment, workload identity, managed identity, the Azure CLI and Developer CLI logins), with no
 discovery of swath's own: a chain that will not build is an `objhttp.CredentialError` at construction; one that finds
 no credential (azidentity's own error) or whose grant is refused fails before sending the request.
-During namespace admission this can leave flatness unknown, producing `refused`, cause
-`unsupported` (exit 2), unless `--azure-assume-flat` asserts it. A credential failure during engine
-listing normally has class `auth`; transient token failures are retried per call
+A credential failure, during namespace admission as during engine listing, has class `auth` (`Azure Blob
+client: credentials (...)`, exit 1), as S3's and GCS's: admission returns it as it is rather than asking the
+Data Lake host, which would need the same token (`TestAdmissionKeepsCredentialFailure`); transient token
+failures are retried per call
 (`TestEntraDefaultChain`). A public container needs `--anonymous`; the command's error says so
 when no credentials were found. An endpoint with user information is refused (`source` `TestRegisteredEndpointRefusals`). A SAS never
 reaches a recorded file: `--azure-sas-token` is a secret flag (recorded as `[redacted]`), the root's query is recorded

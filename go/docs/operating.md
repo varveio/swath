@@ -46,10 +46,11 @@ Use the provider's supported credential sources; do not put secrets in shell his
 Azure also accepts a SAS flag or source query and redacts it from records; see the
 [Azure credential and namespace reference](internals/providers/azblob.md).
 Without `--anonymous`, missing or unusable credentials stop the run before listing; swath never
-falls back to unsigned requests. Credential failures normally have cause `auth` (exit 1). During
-Azure namespace admission, failed Entra token acquisition can instead leave the namespace unknown:
-without `--azure-assume-flat`, this is `refused`, cause `unsupported` (exit 2). See
-[Azure admission](internals/providers/azblob.md#provider-implementation).
+falls back to unsigned requests. Credential failures have cause `auth` (exit 1) for every provider,
+Azure's during namespace admission included. `--anonymous` beside an explicit credential
+(`--s3-profile`, `--s3-bearer-token-command`, `--gcs-credentials-file`, `--azure-sas-token`, a SAS in the
+source URL) is refused (exit 2); credentials only the environment holds are ignored with one warning that
+names the variables.
 
 **S3.** The AWS SDK's default chain: environment keys, the shared `config` and `credentials` files
 (`--s3-profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
@@ -63,10 +64,13 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
   session token without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`, a profile that does
   not exist.
 - Region: `--s3-region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
-  wrong region is an error that names the bucket's region. Redirects are not followed. STS calls use the
+  wrong region is an error that names the bucket's region and the flag to give (`--s3-region eu-west-1`). Redirects are not followed. STS calls use the
   environment's or profile's region, not `--s3-region`.
-- Requester-pays buckets: `--s3-requester-pays`. Endpoint variants: `--s3-fips`, `--s3-dualstack`; S3-compatible stores:
-  `--endpoint-url URL`, addressed path-style unless `--no-s3-path-style`.
+- Requester-pays buckets: `--s3-requester-pays`. Endpoint variants: `--s3-fips`, `--s3-dualstack` (else
+  `AWS_USE_FIPS_ENDPOINT`, `AWS_USE_DUALSTACK_ENDPOINT`); S3-compatible stores: `--endpoint-url URL`, else
+  `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` (not with `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true`), addressed
+  path-style unless `--no-s3-path-style`. FIPS or dual-stack with a custom endpoint is refused (exit 2).
+  `AWS_CA_BUNDLE` is the CA bundle when `--ca-bundle` is not given.
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
   `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
   (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
@@ -86,14 +90,16 @@ S3 uses one transport; GCS and Azure Blob use a pool sized by workers. HTTP/2 is
 the endpoint and transport support it. HTTP/1.1 at an S3 endpoint is endpoint behavior, not a client
 guarantee, including for S3-compatible stores. See [pool construction](internals/clients.md#pool-construction).
 
-The report's `source.stats` records `anonymous`, `credentials` (where they came from) and, for S3, `region`.
+The report's `source.stats` records `anonymous`, `credentials` (where they came from), `no_verify_ssl` when
+`--no-verify-ssl` was in force and, for S3, `region`.
 
 ## Object-store requests
 
-S3, GCS and Azure Blob share `--anonymous`, `--endpoint-url`, `--request-timeout`, `--no-adaptive-limit`
-and `--request-rate`. Without `--anonymous`, missing or unusable credentials stop the run;
-see [credentials](#credentials) for the Azure admission exception to cause `auth`. `--anonymous`
-ignores configured credentials. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
+S3, GCS and Azure Blob share `--anonymous`, `--endpoint-url`, `--ca-bundle`, `--no-verify-ssl`,
+`--request-timeout`, `--no-adaptive-limit` and `--request-rate`. Without `--anonymous`, missing or unusable
+credentials stop the run (cause `auth`); `--anonymous` ignores ambient credentials and refuses explicit ones.
+`--ca-bundle FILE` adds a PEM file's certificates to the system roots (a private certificate authority);
+`--no-verify-ssl` checks no certificate and warns on every run that has it, a resume included. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
 no user information. Provider pages describe additional endpoint rules and credential diagnostics.
 
 A request has a 30 s timeout by default. Retryable failures get up to nine attempts with

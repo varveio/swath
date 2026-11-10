@@ -391,6 +391,7 @@ func TestAnonymousPrecedence(t *testing.T) {
 		fmt.Fprint(w, page(""))
 	}))
 	defer srv.Close()
+	t.Setenv("AZURE_STORAGE_SAS_TOKEN", "sig=x") // what the provider passes as SAS: the note names it
 	c := newEntraClient(t, Config{Endpoint: srv.URL, Anonymous: true, SAS: "sig=x", SharedKey: testKey}, &countingCredential{})
 	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); err != nil {
 		t.Fatal(err)
@@ -398,6 +399,7 @@ func TestAnonymousPrecedence(t *testing.T) {
 	if src, anon := c.Credentials(); !anon || src != "anonymous" || !strings.Contains(c.Note(), "ignoring") {
 		t.Fatalf("credentials %q anonymous=%v note %q", src, anon, c.Note())
 	}
+	t.Setenv("AZURE_STORAGE_SAS_TOKEN", "")
 	if d := newTestClient(t, Config{Anonymous: true}); d.Note() != "" {
 		t.Fatalf("note %q with nothing to ignore", d.Note())
 	}

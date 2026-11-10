@@ -70,7 +70,7 @@ func fromURL(root string) (string, bool) {
 
 // errSASNotRecorded: a resumed run whose root held a SAS, which the
 // journal never records, given none again.
-var errSASNotRecorded = errors.New("azblob: the run's root carried a SAS, which is never recorded: give it again with --azure-sas-token or " + EnvSAS)
+var errSASNotRecorded = errors.New("Azure Blob: the run's root carried a SAS, which is never recorded: give it again with --azure-sas-token or " + EnvSAS)
 
 func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	account, container, prefix, sas, err := ParseURL(req.Root)
@@ -82,15 +82,21 @@ func open(ctx context.Context, req registry.Request) (registry.Source, error) {
 	case *flagged: // the command line
 		opt = o.Options
 		if o.store != nil {
-			opt.Endpoint, opt.Timeout, opt.Anonymous = o.store.Endpoint, o.store.Timeout, o.store.Anonymous
+			opt.Endpoint, opt.Timeout, opt.Anonymous, opt.Trust = o.store.Endpoint, o.store.Timeout, o.store.Anonymous, o.store.Trust
 		}
 		if o.common != nil {
 			opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 		}
+		switch {
+		case opt.Anonymous && opt.SAS != "":
+			return nil, source.AnonymousConflict("--azure-sas-token")
+		case opt.Anonymous && sas != "":
+			return nil, source.AnonymousConflict("the SAS in the source URL")
+		}
 	case *Options: // a library caller
 		opt = *o
 	default:
-		return nil, fmt.Errorf("azblob: options are %T, not *azblob.Options", req.Options)
+		return nil, fmt.Errorf("Azure Blob: options are %T, not *azblob.Options", req.Options)
 	}
 	if opt.SAS == "" && sas != "" {
 		if sas == RedactedSAS {

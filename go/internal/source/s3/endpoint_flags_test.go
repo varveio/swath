@@ -101,7 +101,7 @@ func TestBearerFlagConflicts(t *testing.T) {
 		want string
 	}{
 		{[]string{"--s3-bearer-token-refresh-interval=1m"}, "--s3-bearer-token-refresh-interval requires --s3-bearer-token-command"},
-		{[]string{"--s3-bearer-token-command=unused", "--s3-profile=work"}, "--s3-bearer-token-command excludes --anonymous and --s3-profile"},
+		{[]string{"--s3-bearer-token-command=unused", "--s3-profile=work"}, "--s3-bearer-token-command excludes --s3-profile"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			f := pflag.NewFlagSet("t", pflag.ContinueOnError)

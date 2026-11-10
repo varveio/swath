@@ -60,8 +60,8 @@ func TestPublicBucketHint(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "(a public bucket needs --anonymous)") || c.requests.Load() != 0 {
 			t.Errorf("%s: %v, %d requests; want the hint and none sent", c.name, err, c.requests.Load())
 		}
-		if c.name == "azblob normal endpoint" && (err == nil || !strings.Contains(err.Error(), "filesystem properties:")) {
-			t.Errorf("normal endpoint did not preserve both refused namespace checks: %v", err)
+		if c.name == "azblob normal endpoint" && (err == nil || strings.Contains(err.Error(), "cannot establish")) {
+			t.Errorf("the credential failure reads as a namespace refusal: %v", err)
 		}
 	}
 	// The hint is right: the public container lists with --anonymous.

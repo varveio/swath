@@ -72,6 +72,7 @@ type Config struct {
 	CredentialsFile string
 	UserProject     string        // billed project for a requester-pays bucket
 	RequestTimeout  time.Duration // per attempt; default 30 s
+	Trust           source.Trust  // verifies the service's certificate; a supplied HTTPClient keeps its own
 	HTTPClient      *http.Client
 	// Workers sizes the built transport pool (objhttp.Pool); a supplied
 	// HTTPClient is used alone.
@@ -159,7 +160,11 @@ type Client struct {
 // Application Default Credentials search) are a *objhttp.CredentialError, and
 // nothing is sent.
 func New(ctx context.Context, cfg Config) (*Client, error) {
-	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, nil))
+	trust, err := cfg.Trust.Config()
+	if err != nil {
+		return nil, err
+	}
+	return newClient(ctx, cfg, librarySearch{}, objhttp.Pool(cfg.Workers, cfg.HTTPClient, trust, nil))
 }
 
 // credentialFinder finds the credentials of a client given none: the

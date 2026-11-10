@@ -86,6 +86,7 @@ type Options struct {
 	// It is part of the resume identity and the report.
 	Flat    bool
 	Timeout time.Duration
+	Trust   source.Trust // how the service's certificate is verified
 	Workers int
 	Warn    func(string) // one-time warnings for the user; may be nil
 	Client  API          // optional; built from the options above when nil
@@ -171,9 +172,10 @@ type Stats struct {
 	Credentials string `json:"credentials,omitempty"`
 	// Namespace is how admission found the namespace flat: "account
 	// information", "filesystem properties" or "asserted" (--azure-assume-flat).
-	Namespace  string            `json:"namespace"`
-	MeanActive float64           `json:"mean_active"`
-	Counters   counters.Snapshot `json:"counters"`
+	Namespace   string            `json:"namespace"`
+	NoVerifySSL bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
+	MeanActive  float64           `json:"mean_active"`
+	Counters    counters.Snapshot `json:"counters"`
 }
 
 // Provider is the range engine bound to List Blobs.
@@ -201,7 +203,7 @@ var _ source.Provider[Range, Object] = (*Provider)(nil)
 // so nothing downstream could notice.
 func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
-		return nil, source.Unsupported(errors.New("azblob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
+		return nil, source.Unsupported(errors.New("Azure Blob: --all-versions is not supported for az:// roots (versions, snapshots and deleted blobs are not listed yet)"))
 	}
 	p, own, err := connect(ctx, opt)
 	if err != nil {
@@ -260,9 +262,14 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // Filesystem Get Properties on the account's Data Lake host (only for an
 // ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
 // false passes and true refuses; (3) anything else is unknown, which
-// refuses unless Options.Flat asserts a flat namespace.
+// refuses unless Options.Flat asserts a flat namespace. Credentials that
+// could not be had are that failure (class auth), as on any later request:
+// the Data Lake host would need the same.
 func (p *Provider) admit(ctx context.Context) error {
 	hns, err := p.client.AccountInfo(ctx, p.opt.Container)
+	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
+		return fmt.Errorf("Azure Blob client: %w", err)
+	}
 	how := "account information"
 	if err != nil && ctx.Err() == nil && fallback(err) {
 		if n, ok := p.client.(namespaced); ok {
@@ -277,16 +284,16 @@ func (p *Provider) admit(ctx context.Context) error {
 	case err != nil && ctx.Err() != nil:
 		return context.Cause(ctx)
 	case err == nil && hns:
-		return source.Unsupported(fmt.Errorf("azblob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
+		return source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
 	case err == nil:
 		p.namespace = how
 	case p.opt.Flat:
 		p.namespace = "asserted"
 		if p.opt.Warn != nil {
-			p.opt.Warn(fmt.Sprintf("azblob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
+			p.opt.Warn(fmt.Sprintf("Azure Blob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
 		}
 	default:
-		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
+		return source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
 }
@@ -304,10 +311,6 @@ func fallback(err error) bool {
 	if f == nil {
 		return false
 	}
-	var ce *objhttp.CredentialError
-	if errors.As(f, &ce) {
-		return !ce.Transient
-	}
 	classified := (&client.Error{Status: f.Status, Code: f.Code}).Failure()
 	return classified.Class == objhttp.ClassAuth || classified.Class == objhttp.ClassAccessDenied
 }
@@ -315,24 +318,27 @@ func fallback(err error) bool {
 // connect builds the client unless Options.Client supplies one (own).
 func connect(ctx context.Context, opt Options) (*Provider, bool, error) {
 	if opt.Account == "" || opt.Container == "" {
-		return nil, false, errors.New("azblob: no account or container")
+		return nil, false, errors.New("Azure Blob: no account or container")
 	}
 	p := &Provider{opt: opt, client: opt.Client}
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
 		cfg := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate}, Endpoint: opt.Endpoint, Account: opt.Account, Anonymous: opt.Anonymous,
-			SAS: opt.SAS, RequestTimeout: opt.Timeout, Workers: opt.Workers}
+			SAS: opt.SAS, RequestTimeout: opt.Timeout, Trust: opt.Trust, Workers: opt.Workers}
 		if cfg.SAS == "" {
 			cfg.SAS = os.Getenv(EnvSAS)
 		}
 		cfg.SharedKey = os.Getenv(EnvKey)
 		c, err := client.New(ctx, cfg)
 		if err != nil {
-			return nil, false, fmt.Errorf("Azure client: %w", err)
+			return nil, false, fmt.Errorf("Azure Blob client: %w", err)
 		}
 		if n := c.Note(); n != "" && opt.Warn != nil {
 			opt.Warn(n)
+		}
+		if opt.Trust.NoVerify && opt.Warn != nil {
+			opt.Warn(source.NoVerifyWarning)
 		}
 		p.client = c
 		p.creds, p.anonymous = c.Credentials()
@@ -395,7 +401,8 @@ func (p *Provider) Stats() Stats {
 		p.Set().Set(p.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
 	}
 	e := p.Engine.Stats()
-	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, MeanActive: e.MeanActive, Counters: e.Counters}
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+		MeanActive: e.MeanActive, Counters: e.Counters}
 	return st
 }
 
@@ -404,7 +411,7 @@ func (p *Provider) Stats() Stats {
 func (p *Provider) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Object], error) {
 	a, ok := ctx.Value(adapterKey{}).(*order.Adapter)
 	if !ok || a == nil {
-		return nil, source.Violation(errors.New("azblob: fetch without an Expand adapter"))
+		return nil, source.Violation(errors.New("Azure Blob: fetch without an Expand adapter"))
 	}
 	out, err := a.Fetch(ctx, q)
 	if err != nil {

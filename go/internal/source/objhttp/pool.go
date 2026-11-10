@@ -20,12 +20,13 @@ const connWorkers, maxConns = 16, 8
 // transport would carry every worker on one connection. Each is a clone
 // of http.DefaultTransport keeping up to 1,024 idle connections per host,
 // and all share one TLS session cache, so later connections resume. Cloned
-// TLS settings are retained; only ClientSessionCache is replaced.
+// TLS settings are retained; only ClientSessionCache is replaced, and with
+// trust (source.Trust.Config) the roots and whether they are verified.
 // Supplied: a copy of it, alone, over its transport (http.DefaultTransport
-// when nil). No client follows a redirect, a supplied one included: a
+// when nil), whose TLS settings are its own (trust is not applied). No client follows a redirect, a supplied one included: a
 // redirect is an answer, since the resume identity freezes where requests
 // go. wrap, if set, wraps each transport.
-func Pool(workers int, supplied *http.Client, wrap func(http.RoundTripper) http.RoundTripper) []*http.Client {
+func Pool(workers int, supplied *http.Client, trust *tls.Config, wrap func(http.RoundTripper) http.RoundTripper) []*http.Client {
 	if wrap == nil {
 		wrap = func(rt http.RoundTripper) http.RoundTripper { return rt }
 	}
@@ -48,6 +49,9 @@ func Pool(workers int, supplied *http.Client, wrap func(http.RoundTripper) http.
 			t.TLSClientConfig = &tls.Config{}
 		}
 		t.TLSClientConfig.ClientSessionCache = cache
+		if trust != nil {
+			t.TLSClientConfig.RootCAs, t.TLSClientConfig.InsecureSkipVerify = trust.RootCAs, trust.InsecureSkipVerify
+		}
 		pool[i] = &http.Client{Transport: wrap(t), CheckRedirect: noRedirect}
 	}
 	return pool
