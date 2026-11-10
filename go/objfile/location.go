@@ -32,10 +32,16 @@ func (l Location) String() string {
 // lower-case letters, digits, '.', '-' and '_', other than "." and "..". A URI with a query, a
 // fragment, user information or a port is refused.
 func ParseLocation(raw string) (Location, error) {
-	fail := func(why string) (Location, error) {
-		return Location{}, fmt.Errorf("objfile: location %q: %s", raw, why)
-	}
 	scheme, rest, ok := strings.Cut(raw, "://")
+	shown := raw
+	authority, _, _ := strings.Cut(rest, "/")
+	// Without "://" there is no authority to judge: an @ anywhere may follow a credential.
+	if strings.ContainsAny(raw, "?#") || strings.ContainsAny(authority, "@:") || !ok && strings.Contains(raw, "@") {
+		shown = "[redacted]"
+	}
+	fail := func(why string) (Location, error) {
+		return Location{}, fmt.Errorf("objfile: location %q: %s", shown, why)
+	}
 	if !ok || scheme != "s3" && scheme != "gs" && scheme != "az" {
 		return fail("want s3://BUCKET[/PREFIX], gs://BUCKET[/PREFIX] or az://ACCOUNT/CONTAINER[/PREFIX]")
 	}

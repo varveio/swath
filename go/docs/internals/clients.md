@@ -59,14 +59,19 @@ clients are described in [providers.md](providers.md) and the page of each provi
   error.
 - **The transport pool** (`objhttp.Pool`): see [pool construction](#pool-construction). S3 takes one client;
   GCS and Azure size their pools by workers and rotate their SDK services.
-- **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction without quoting
-  it (`source` `TestRegisteredEndpointRefusals`). `registry.RedactArgv`, shared by the command and listing, replaces the value
-  of every URL flag the shared flag groups declare (`source.FlagGroup.URLs`: the store group's `--endpoint`,
-  which every object store takes) with `[redacted]` when it carries user information or
-  cannot be parsed, in either argument spelling. Valid endpoints without user information are retained for
-  resume. This covers failure reports, successful reports and journal arguments, including recorded arguments
-  supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`, `listing` `TestRecordedEndpointUserinfo`,
-  `registry` `TestRedactEndpointArgv`).
+- **Secret-safe diagnostics.** [Endpoint validation](#endpoint-validation) refuses credential-bearing
+  endpoint URLs before they can be recorded. `registry.RedactArgv`, shared by the command and listing,
+  replaces every URL flag declared by the shared flag groups (`source.FlagGroup.URLs`, currently
+  `--endpoint`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
+  in either argument spelling. Clean values are kept for resume. This also protects failure reports
+  and recorded arguments supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`,
+  `TestEndpointQuerySecrecy`; `registry` `TestRedactEndpointArgv`). User information, queries and
+  fragments in a root authority are refused before provider dispatch and redacted even on refusal. Clean roots, buckets and endpoints
+  remain in diagnostics. Provider parse errors use `source.RedactRoot` to hide an unsafe authority;
+  Azure also keeps its SAS redaction. Diagnostic reads of older journals redact
+  endpoint fields and recorded arguments again. Endpoint and source mismatch errors keep both values,
+  replacing each credential-bearing value with `[redacted]`; clean values are shown unchanged.
+  Display redaction leaves the journal on disk and identity comparison unchanged.
   The SAS is scrubbed by parameter name from every error's code and message, 400 query echoes and SDK decoder
   errors included (`TestSASRedacted`, `TestScrubSASParameters`, `TestRedactedRefusal`). The SDKs' own logs, which quote request headers or URLs, are off: S3 and GCS give their
   clients a logger that discards everything (`logging.Nop` for S3; `gcs/client` `TestSDKLogsNothing`), and the command turns azcore's off at startup
@@ -91,6 +96,19 @@ string follows, as the Java tool's `USER_AGENT_PREFIX` does: S3 through a build 
 SDK's, GCS by setting the header before the generated client's, Azure through azcore's telemetry policy
 (`TelemetryOptions.ApplicationID`, which azcore cuts to 24 bytes; a development token is 23). `TestUserAgent`,
 `TestCredentialsAndHeaders` and `TestServiceVersionPinned` pin it.
+
+## Endpoint validation
+
+S3, GCS and Azure Blob clients call `objhttp.ParseEndpoint` before using a custom endpoint. It accepts
+an `http` or `https` URL with a host, without user information or any literal `?` or `#`,
+including empty query and fragment delimiters. Refusals name the rule and accepted form and
+never include the endpoint value or the URL parser's error, which can quote credentials.
+`TestParseEndpoint` and each client's `TestEndpointSecrecy` pin this boundary.
+
+The shared check returns the parsed URL unchanged; each provider owns paths and normalization.
+S3 passes the original string to its SDK, GCS adds its trailing slash and refuses URI-template
+braces ([GCS paths](providers/gcs.md#provider-implementation)), and Azure appends the account
+segment to a custom endpoint ([Azure endpoints](providers/azblob.md#provider-implementation)).
 
 ## Retry policy and accounting
 

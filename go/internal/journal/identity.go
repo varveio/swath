@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // Identity is what must not change between a run and its resume: anything
@@ -29,6 +31,24 @@ type Identity struct {
 	// Filters are the row filters' descriptions (package filter), in
 	// order; none for an unfiltered run.
 	Filters []string `json:"filters,omitempty"`
+}
+
+// Redacted returns a diagnostic copy, including for journals written before
+// credential-bearing endpoints were refused. Identity comparison uses the original.
+func (id Identity) Redacted() Identity {
+	id.Source = slices.Clone(id.Source)
+	for i := range id.Source {
+		f := &id.Source[i]
+		switch f.Name {
+		case "endpoint":
+			f.Value, f.Canonical = redactEndpoint(f.Value), redactEndpoint(f.Canonical)
+		case "source":
+			f.Value, f.Canonical = redactSource(f.Value), redactSource(f.Canonical)
+		case "account", "container":
+			f.Value, f.Canonical = redactName(f.Value), redactName(f.Canonical)
+		}
+	}
+	return id
 }
 
 // Field is one frozen source setting. Two values are the same setting when
@@ -53,7 +73,17 @@ type MismatchError struct {
 }
 
 func (e *MismatchError) Error() string {
-	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, e.Stored, e.Requested)
+	// Older journals may have recorded credentials in endpoint or root URLs.
+	stored, requested := e.Stored, e.Requested
+	switch e.Field {
+	case "endpoint":
+		stored, requested = redactEndpoint(fmt.Sprint(stored)), redactEndpoint(fmt.Sprint(requested))
+	case "source":
+		stored, requested = redactSource(fmt.Sprint(stored)), redactSource(fmt.Sprint(requested))
+	case "account", "container":
+		stored, requested = redactName(fmt.Sprint(stored)), redactName(fmt.Sprint(requested))
+	}
+	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, stored, requested)
 }
 
 // Check compares a stored identity with a requested one. It is a pure
@@ -136,4 +166,44 @@ func (id Identity) Hash() string {
 		put("filter=", f)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// redactEndpoint and redactSource protect diagnostics from credentials
+// recorded by older builds, with the standard library only (this package
+// imports no provider). An endpoint is hidden whole when it has user
+// information, a query or a fragment, literal or escaped.
+func redactEndpoint(value string) string {
+	u, err := url.Parse(value)
+	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") ||
+		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) ||
+		strings.ContainsFunc(u.Host, func(r rune) bool { return r <= 0x20 || r == 0x7f }) {
+		return "[redacted]"
+	}
+	return value
+}
+
+// A source root keeps its prefix, which is a literal key where ? and # are
+// data: only a credential-bearing authority is hidden, and an Azure root's
+// whole query, which is where its shared access signature goes. Deciding
+// which Azure queries are signatures is the provider's job; a display can
+// afford to hide a literal '?' in an Azure prefix instead.
+func redactSource(value string) string {
+	scheme, rest, ok := strings.Cut(value, "://")
+	authority, _, _ := strings.Cut(rest, "/")
+	if ok && strings.ContainsAny(authority, "@?#") {
+		return scheme + "://[redacted]"
+	}
+	if i := strings.IndexAny(value, "?#"); i >= 0 && scheme != "s3" && scheme != "gs" {
+		return value[:i+1] + "[redacted]"
+	}
+	return value
+}
+
+// redactName hides an account or container that an older build took from a
+// root with a credential-bearing authority.
+func redactName(value string) string {
+	if strings.ContainsAny(value, "@?#") {
+		return "[redacted]"
+	}
+	return value
 }

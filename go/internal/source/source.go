@@ -10,6 +10,8 @@ package source
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 
 	"github.com/varveio/swath/go/internal/schema"
 )
@@ -113,4 +115,30 @@ type Span struct {
 // and lists only the gaps between them.
 type Reusing interface {
 	Reuse(spans []Span)
+}
+
+// UnsafeURL reports whether a URL-valued setting (an endpoint) may carry a
+// credential or be reinterpreted downstream: it does not parse, has user
+// information, a literal ? or #, or a path whose escapes decode to ?, #, %
+// or a control character (an SDK that decodes the path and parses it again
+// would see a query or fail on the escape, and quote it in its error).
+func UnsafeURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || strings.ContainsAny(raw, "?#") {
+		return true
+	}
+	// A host that decodes to a space or a control character (an escaped IPv6
+	// zone) fails the same second parse.
+	return strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) ||
+		strings.ContainsFunc(u.Host, func(r rune) bool { return r <= 0x20 || r == 0x7f })
+}
+
+// RedactRoot keeps literal prefixes intact and hides credential-bearing authorities.
+func RedactRoot(root string) string {
+	scheme, rest, ok := strings.Cut(root, "://")
+	authority, _, _ := strings.Cut(rest, "/")
+	if ok && strings.ContainsAny(authority, "@?#") {
+		return scheme + "://[redacted]"
+	}
+	return root
 }

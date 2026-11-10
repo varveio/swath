@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/textout"
 )
 
@@ -274,7 +275,13 @@ func show(args []string, stdout io.Writer) error {
 	}
 	dir := f.Arg(0)
 	if *raw {
-		return journal.Dump(stdout, dir)
+		st, err := journal.Read(dir)
+		if err != nil {
+			return err
+		}
+		st.Header.Argv = redactArgv(st.Header.Argv)
+		st.Header.Identity = st.Header.Identity.Redacted()
+		return st.Dump(stdout)
 	}
 	if dataset.Committed(dir) {
 		var m dataset.Manifest
@@ -300,7 +307,7 @@ func show(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "dataset %s: %s, swath schema %s, %s\n", dir, format, m.SchemaID, metadata)
 		fmt.Fprintf(stdout, "key %s unique=%v, published %s\n", m.Key.Column, m.Key.Unique, m.PublishedAt.Format("2006-01-02T15:04:05Z"))
-		fmt.Fprintf(stdout, "source %s, scope %s %q\n", m.Source.URI, m.Scope.Kind, m.Scope.Prefix)
+		fmt.Fprintf(stdout, "source %s, scope %s %q\n", registry.Redact(m.Source.URI), m.Scope.Kind, m.Scope.Prefix)
 		c := m.Coverage
 		fmt.Fprintf(stdout, "coverage complete=%v stop=%s skipped=%d filters=%d exclusions=%d\n", c.Complete, c.StopReason, c.SkippedEntries, len(c.Filters), len(c.Exclusions))
 		fmt.Fprintf(stdout, "%d parts, %d rows, %d bytes", len(m.Parts), rows, bytes)
@@ -319,8 +326,8 @@ func show(args []string, stdout io.Writer) error {
 	}
 	h := st.Header
 	fmt.Fprintf(stdout, "interrupted run in %s (journal version %d, started %s)\n", dir, h.Version, h.Created.Format("2006-01-02T15:04:05Z"))
-	fmt.Fprintf(stdout, "command: swath %s\n", strings.Join(h.Argv, " "))
-	id := h.Identity
+	fmt.Fprintf(stdout, "command: swath %s\n", strings.Join(redactArgv(h.Argv), " "))
+	id := h.Identity.Redacted()
 	fmt.Fprintf(stdout, "identity: provider %s, schema %s, writer %s, part size %d", id.Provider, id.SchemaID, id.Writer, id.PartSize)
 	for _, f := range id.Source {
 		fmt.Fprintf(stdout, ", %s %s", f.Name, f.Value)

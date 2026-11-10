@@ -5,6 +5,10 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port: refuse credential-bearing endpoint URLs before recording a run, redact query and
+  fragment endpoint arguments, and redact credentials in location errors and older journal
+  displays while preserving clean diagnostic values.
+
 - Go port: S3, GCS and Azure Blob share `--endpoint`, `--request-timeout` (default 30 s)
   and `--anonymous`. The provider-prefixed endpoint and timeout flags are removed; resume
   refuses a recorded removed flag by name. Help derives shared groups and provider flags from

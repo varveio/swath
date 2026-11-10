@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -257,17 +256,12 @@ func Endpoint(ep string) (string, error) {
 	if ep == "" {
 		ep = DefaultEndpoint
 	}
-	u, err := url.Parse(ep)
-	switch {
-	case err != nil:
-		return "", errors.New("endpoint: not a URL; want http(s)://host[:port]/storage/v1/") // the parse error quotes it
-	case u.User != nil:
-		return "", errors.New("endpoint: user information in the URL is refused (the endpoint is recorded with the run)")
-	case u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
-		return "", fmt.Errorf("endpoint %q: want http(s)://host[:port]/storage/v1/", ep)
+	u, err := objhttp.ParseEndpoint(ep, "http(s)://host[:port]/storage/v1/")
+	if err != nil {
+		return "", err
 	}
 	if strings.ContainsAny(u.Path, "{}") {
-		return "", fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep)
+		return "", source.Unsupported(fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep))
 	}
 	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
 		u.Path, u.RawPath = u.Path+"/", p+"/"

@@ -143,7 +143,12 @@ Object learns its identity only at its first read. Compose it outermost:
 `az://ACCOUNT/CONTAINER[/PREFIX]`. The prefix is literal (nothing is decoded) and a dataset root: it gains a
 trailing `/`, and its path must be one `CheckPath` accepts. A query, fragment, user information, port, empty
 or upper-case bucket, a bucket, account or container named `.` or `..`, or a `.` or `..` prefix segment is
-refused; `Location.String` is the canonical URI.
+refused; `Location.String` is the canonical URI. Refusal errors show clean locations and replace
+a location with `[redacted]` when it contains `?` or `#`, when its authority (the bucket, or the
+account) contains `@` or a colon, or when it has no `://` and contains `@`. An `@` in the prefix is
+literal and is shown.
+Ranged-response validation errors keep the request scheme, host and escaped path, excluding
+user information, query and fragment.
 
 `remote.Open` opens a location with each provider's default credentials, read-only: the AWS SDK's default
 configuration (which also gives the region and an `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` endpoint), Google

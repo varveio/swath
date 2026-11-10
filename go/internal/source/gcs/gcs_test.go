@@ -615,3 +615,18 @@ func TestTariff(t *testing.T) {
 		t.Errorf("supplied client: tariff %v", rate)
 	}
 }
+
+func TestParseURLDiagnostics(t *testing.T) {
+	for _, c := range []struct{ root, want string }{
+		{"gs://", `not a gs://bucket[/prefix] URL: "gs://"`},
+		{"gs:///prefix", `no bucket in "gs:///prefix"`},
+		{"other://user:SECRET@bucket/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket?sig=SECRET/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+		{"other://bucket#SECRET/path", `not a gs://bucket[/prefix] URL: "other://[redacted]"`},
+	} {
+		_, _, err := ParseURL(c.root)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("ParseURL: %v, want %q", err, c.want)
+		}
+	}
+}

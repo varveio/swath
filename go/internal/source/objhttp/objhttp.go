@@ -20,6 +20,7 @@ import (
 	"math/bits"
 	"math/rand/v2"
 	"net"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -608,6 +609,17 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 	put(CSlowStartEnd, l.SlowStartEnd)
 	put(CRateWaits, n.Rate.Waits)
 	put(CRateWaitNs, n.Rate.WaitNs)
+}
+
+// ParseEndpoint refuses credential-bearing URLs before they can be recorded.
+// Errors omit the value; path rules and normalization belong to the provider.
+func ParseEndpoint(raw, form string) (*url.URL, error) {
+	if !source.UnsafeURL(raw) {
+		if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			return u, nil
+		}
+	}
+	return nil, source.Unsupported(fmt.Errorf("endpoint: want %s without user information, a query or a fragment", form))
 }
 
 // CanonicalRoute is the allowlist of equivalent route spellings for
