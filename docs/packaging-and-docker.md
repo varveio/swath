@@ -312,57 +312,35 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 
 ## 7. CI image checks and release publication
 
-Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
-builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
-no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
-**`docker-publish`** runs an offline smoke before pushing both dev images to GHCR: `swath --version`
-(asserting the Gradle version and the 12-character commit) and `--help` on the CLI image, and
-`--help` on the replay image. Its deep smoke (Parquet write, read and resume against the
-public smoke bucket, then the replay image serving that capture through DuckDB and Jetty) reaches
-a real bucket, so it runs only on manual dispatch; no pull request or `main` merge does; release-tag pushes and manual dispatch still run the public-bucket smoke. The
-release workflow runs the same deep smoke against the pushed digest before it applies `latest`. Tagged publication belongs
-to `.github/workflows/release.yml`, behind the protected `public-release`
-environment.
+One job in `.github/workflows/ci.yml`, **`docker-check`**, handles both CI images on every
+pull request, push to `main` and manual dispatch that touches Java. It builds each multi-arch
+image from source (validating both `linux/amd64` and `linux/arm64`, no QEMU per §5), loads the
+native-arch builds and smoke-tests them offline: `swath --version` (asserting the Gradle version
+and the 12-character commit) and `--help` on the CLI image, `--help` on the replay image. It never
+pushes: GHCR is written only by `.github/workflows/release.yml`, behind the protected
+`public-release` environment (see [CI architecture](ops/dev/CI.md#registry-and-artifacts)). To
+run an unreleased commit, build the image from its checkout with `docker build .`.
+
+The deep smoke (Parquet write, read and resume against the public smoke bucket, then the replay
+image serving that capture through DuckDB and Jetty) reaches a real bucket, so only the release
+workflow runs it, against the pushed digest, before it applies `latest`.
 
 Which jobs run depends on the trigger:
 
-| Event | fast-tests | integration-tests | deep-tests | docker-check | docker-publish |
-|---|:--:|:--:|:--:|:--:|:--:|
-| **Pull request** (feature branch) | ✅ | — | — | ✅ (build + smoke, no push) | — |
-| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`, offline smoke) |
-| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only, plus the public-bucket smoke) |
+| Event | fast-tests | integration-tests | deep-tests | docker-check |
+|---|:--:|:--:|:--:|:--:|
+| **Pull request** (feature branch) | ✅ | ✅ | — | ✅ (build + smoke, no push) |
+| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
+| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | ✅ (build + smoke, no push) |
 
-A merge that changes only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
-tiers: the Java jobs report success with their steps skipped and no Java image is published,
-so `main` on GHCR stays on the last Java-changing commit.
-`docker-check` is the **PR-only** build gate — it validates the multi-arch build
-and runs `--help`, but never pushes. On a merge or dispatch it doesn't run,
-because `docker-publish` builds the image itself (running both would just be a
-redundant second multi-arch build).
+A change that touches only the Go port (`go/**`, `Dockerfile.replay-go`) runs none of the Java
+tiers and builds no Java image: the Java jobs report success with their steps skipped.
 
-A dispatch can run on any branch, so it publishes the immutable `sha-<gitsha>`
-tag **only** — the mutable branch-name tag is restricted to `main`, keeping
-internal branch names off the public package. Pull a branch build by its
-`sha-` tag.
+The release publish job requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository variable,
+which acts as a publish kill-switch.
 
-`docker-publish` is gated on all three test tiers, so no image is published from
-code that failed any of them. The release publish job is separately protected by
-the `public-release` environment and requires the explicit
-`PUBLIC_RELEASE_ENABLED=true` repository variable, which acts as a publish
-kill-switch.
-
-The multi-arch **CI image build and smoke checks** have no scheduled run — they
-fire only on pull requests, pushes to `main`, and manual dispatch. A separate
-`nightly` workflow runs the deep and perf tiers and builds builder-native copies
-of both runtime images solely for OSV scanning; it never publishes those
-images. Top-level workflow concurrency cancels superseded runs of the same PR;
-`main` and manual runs have unique top-level groups and are not
-serialized there. The `docker-publish` job has its own global concurrency group,
-which queues publishes so shared tags cannot race. The `push` trigger is scoped
-to `main`, so
-**pushing a feature branch by itself runs nothing** — a feature branch is
-exercised through its **pull request**, which builds and smoke-tests the image
-but does not push it. Merges to `main` publish development tags; manual dispatch is a
-maintainer decision. Public tagged releases require the guarded release
-workflow described above. PRs from forks never push and never touch registry
+A separate `nightly` workflow runs the deep and perf tiers and builds builder-native copies of
+both runtime images solely for OSV scanning; it never publishes those images. The `push` trigger
+is scoped to `main`, so **pushing a feature branch by itself runs nothing** — a feature branch is
+exercised through its **pull request**. PRs from forks never push and never touch registry
 credentials.

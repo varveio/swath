@@ -4,7 +4,7 @@
 # --platform linux/amd64,linux/arm64 .`) works with no prior host Gradle run.
 #
 # TWO BUILD MODES, ONE RUNTIME LAYOUT: a local `docker build` compiles the CLI
-# from the copied source. The publish workflow instead overrides the build stage
+# from the copied source. The release workflow instead overrides the build stage
 # with its previously tested uber-jar, so only published images carry those exact
 # promoted bytes; both modes install the jar at the same runtime path.
 #
@@ -17,14 +17,14 @@
 #
 # "Build once, use everywhere" for release provenance: this stage compiles from
 # source so a bare `docker build .` is self-contained (an OSS user needs no prior
-# Gradle run). CI's docker-publish job substitutes the already-built, already-tested
+# Gradle run). The release workflow substitutes the already-built, already-tested
 # uber-jar for this stage via a BuildKit build-context override
 # (`--build-context build=<dir>` / `build-contexts: build=promote`), so the pushed
 # image ships the exact bytes that passed the tests and skips this recompile — while
-# a bare `docker build .` (and the PR docker-check job) still exercises this stage
+# a bare `docker build .` (and CI's docker-check job) still exercises this stage
 # from source. The override dir mirrors this stage's output path
 # (/src/swath-cli/build/libs/swath.jar); keep the runtime COPY below in sync with it.
-# See .github/workflows/ci.yml.
+# See .github/workflows/release.yml.
 # Base images are pinned by DIGEST, not just tag: `25-jdk-noble` is mutable, so a
 # tag-only pin means two builds of the "same" release can differ — the largest
 # unpinned input in an otherwise SHA-pinned supply chain. The digest is the
@@ -56,6 +56,9 @@ COPY swath-sim/build.gradle.kts swath-sim/build.gradle.kts
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon help >/dev/null 2>&1 || true
 
 COPY . .
+# The commit stamped into the jar manifest (`swath --version`); .git is not in the
+# build context, so CI passes it as a build argument.
+ARG GITHUB_SHA
 # shadowJar (not installDist): the image ships the uber-jar itself, so it is the
 # same artifact published elsewhere.
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-cli:shadowJar

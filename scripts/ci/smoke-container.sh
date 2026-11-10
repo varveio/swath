@@ -11,14 +11,11 @@
 # directly, so that is what gets tested. Exit status alone proves nothing here — a run can
 # exit 0 having written an unreadable or empty dataset.
 #
-# Used by BOTH publish paths so they cannot drift:
-#   - ci.yml  docker-publish  → dev images, on merge to main and manual dispatch
-#   - release.yml publish     → the release image, by digest, before its tags are applied
-# The release must get exactly the dev smoke, not an approximation of it; sharing one
-# script is what guarantees that.
+# Run by release.yml publish against the release image, by digest, before its tags are
+# applied.
 #
 # Runnable locally against any image reference:
-#   scripts/ci/smoke-container.sh ghcr.io/varveio/swath:main
+#   docker build -t swath:local . && scripts/ci/smoke-container.sh swath:local
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then

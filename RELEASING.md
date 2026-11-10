@@ -25,13 +25,9 @@ human side of it.
   `ghcr.io/varveio/swath-replay:X.Y.Z`, plus rolling `:X.Y`, `:X` (for major versions
   at least 1), and `:latest` tags for each package. Release candidates publish only
   their exact `:X.Y.Z-rc.N` version tag.
-- **Merges to `main`** publish the immutable `sha-<gitsha>` tag plus the mutable `main`
-  pointer.
-- **Manual dispatch** (any branch) publishes `sha-<gitsha>` **only** — the branch-name tag
-  is restricted to `main`, so internal branch names never reach the public package. Pull a
-  branch build by its `sha-` tag.
-- `:latest` and every semver tag are owned solely by releases; no development build can
-  regress them. To pin an exact build, use the immutable digest:
+- Nothing else publishes: `main` pushes and manual dispatch build and smoke the images without
+  pushing ([CI architecture](docs/ops/dev/CI.md#registry-and-artifacts)). To pin an exact
+  build, use the immutable digest:
   `ghcr.io/varveio/swath@sha256:…`.
 - GHCR creates a newly published package as private. After the first
   `ghcr.io/varveio/swath-replay` publish, set that package's visibility to **public** and

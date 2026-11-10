@@ -15,7 +15,7 @@ runners are owned elsewhere and are only summarized here:
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
-| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check or publish, `ci-gate` |
+| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push, every push to `main`, manual dispatch from any branch | the per-commit gate: Java tiers, Go jobs, image check, `ci-gate` |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | rebuild and retest the Java distribution at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks; deploy to GitHub Pages from `main` |
@@ -32,6 +32,20 @@ gate: it exists so a suspected flake is measured by repetition instead of being 
 an ancestor of `main`, reruns the fast, integration and deep tiers on the tag's SHA, builds once,
 pushes the image by digest, smokes that digest, and only then applies tags and signs. It builds and
 publishes the Java distribution only; no Go job runs there.
+
+## Registry and artifacts
+
+GHCR is written by `release.yml` only. Pull requests, `main` pushes and dispatches build and smoke
+both Java images in `docker-check` and throw them away; nothing outside a release pushes a tag, so
+the registry holds release versions and nothing else. An unreleased commit's image is built
+locally from the checkout (`docker build .`).
+
+The artifact uploads of `ci.yml`, `nightly.yml` and `go-stress.yml` set their own `retention-days`
+instead of taking the repository default:
+
+- 14 days for the per-commit test reports and `go test -json` streams in `ci.yml`;
+- 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`;
+- 1 day for an artifact that only hands files from one job to another in the same run.
 
 ## One required check: `ci-gate`
 
@@ -51,15 +65,15 @@ Two details carry the weight:
   reports, and the pull request waits instead of going red.
 - `skipped` is a failure on a pull request and a pass elsewhere. On a pull request every gating job
   is expected to run, so a job that shows `skipped` means some `if:` removed a tier from the gate,
-  and the gate fails. On `main` and dispatch, jobs are legitimately event-gated (`docker-check` is
-  pull-request-only), so `skipped` passes there.
+  and the gate fails. On `main` and dispatch, a job may legitimately be event-gated, so `skipped`
+  passes there.
 
 The job writes a table of every dependency and its result to the step summary; that table is the
 first place to look when the gate is red.
 
-`deep-tests` and `docker-publish` are not in `ci-gate`'s `needs`: they do not run on pull requests,
-and on `main` the publish depends on the deep tier directly. `go-cache-prune` is housekeeping and
-is not gated either. Neither `nightly.yml` nor `site.yml` is a required check.
+`deep-tests` is not in `ci-gate`'s `needs`: it does not run on pull requests, so requiring it would
+fail every pull request. `go-cache-prune` is housekeeping and is not gated either. Neither
+`nightly.yml` nor `site.yml` is a required check.
 
 ## Change detection
 
@@ -106,8 +120,7 @@ the tiers and their commands.
 | `fast-tests` | instrumentation-drift guard and its self-test, OSV image-policy self-test, wrapper validation, `./gradlew build -PnoIntegration` plus the CLI jar and replay distribution, license gate | every event, Java change |
 | `integration-tests` | the Docker/LocalStack integration tier only (`-PonlyIntegration`) | every event, Java change |
 | `deep-tests` | the deep tier serially, then the real `kill -9` resume ITs, each followed by an executed-test count | `main` and dispatch, Java change; nightly |
-| `docker-check` | both Java images built for amd64 and arm64, the native one smoked; no push | pull requests, Java change |
-| `docker-publish` | the tested jar promoted into both images, smoked, pushed to GHCR | `main` and dispatch, Java change |
+| `docker-check` | both Java images built from source for amd64 and arm64, the native one smoked offline; no push | every event, Java change |
 
 Integration runs on pull requests because real-store coverage that only runs after merge cannot
 block the merge that breaks it. It runs only the integration-tagged classes, not the fast tier
@@ -120,19 +133,14 @@ smokes; deep is the timing-realistic confirmation on `main`, nightly and at rele
 tier that matches nothing reports green, so `scripts/ci/report-test-counts.sh` fails the step when
 the tier ran no test.
 
-`docker-check` and `docker-publish` are one image path split by event. A pull request builds and
-throws the images away (fork-safe: no push, no credentials); `main` builds, smokes and pushes, so a
-separate validation build there would only repeat it. Neither uses QEMU: the runtime stage has no
-`RUN`, so building arm64 on an amd64 runner is pull, copy and metadata, and adding a `RUN` to the
-runtime stage fails the arm64 build as a guard.
-
-`docker-publish` ships the bytes that were tested. `fast-tests` packs its uber-jar and replay
-distribution (`prepare-container-promotion.sh`), and the publish substitutes them for the
-Dockerfile's compile stage through a BuildKit build context instead of compiling a third time. It
-needs `fast-tests`, `integration-tests` and `deep-tests`, so no tier can be red when an image is
-pushed. The smoke against a real public bucket runs on dispatch only; a `main` merge runs the
-offline smoke. The dev publish writes only `sha-` tags and the `main` tag; `latest` and version
-tags belong to `release.yml`. A Go-only merge publishes no Java image.
+`docker-check` is the only image job in `ci.yml` and never pushes ([Registry and
+artifacts](#registry-and-artifacts)); it needs no credentials, so it is fork-safe. It runs on `main` as well as on pull requests because a break can appear only in the merge result
+(a semantic conflict between two green pull requests). The native image must start offline, and
+the CLI image must report the version in `gradle.properties` and the commit under test, which
+reaches the source build as the `GITHUB_SHA` build argument because `.git` is not in the build
+context. Neither build uses QEMU: the runtime stage has no `RUN`, so building arm64 on an amd64
+runner is pull, copy and metadata, and adding a `RUN` to the runtime stage fails the arm64 build as
+a guard. The smoke against a real public bucket runs in `release.yml` only.
 
 ## Go jobs
 
@@ -264,7 +272,7 @@ generation under this layout is to be measured on the first `main` pushes and re
 - **Gradle:** `gradle/actions/setup-gradle` with its defaults in `ci.yml` and `nightly.yml`.
   `release.yml` disables it and builds the tag from a cold cache.
 - **BuildKit:** `type=gha` caches in the scopes `swath`, `swath-replay` and `swath-replay-go`,
-  written from `main` only (`docker-publish` and `go-build` on a push). A pull request reads
+  written from `main` only (`docker-check` and `go-build` on a push). A pull request reads
   them and writes nothing: a cache written on a pull request is scoped to that pull request's
   ref, so it serves no other run while taking 0.5–1 GB of the quota per open pull request.
 - **Code scanning** (GitHub's CodeQL setup, outside these workflows) also uses the repository's
@@ -276,10 +284,8 @@ generation under this layout is to be measured on the first `main` pushes and re
 superseded run. `main` and dispatch runs each get a unique group (`github.run_id`), so a merge is
 never cancelled or queued behind another: every merge runs its full suite.
 
-What must not run twice at once is serialized per job instead. `docker-publish` uses one global
-group, `ghcr-publish`, without cancellation, so two publishes never race the shared GHCR tags and a
-publish is never killed mid-push; a superseded commit's queued publish may be dropped, but its tests
-still ran. `go-cache-prune` has its own group for the same reason.
+What must not run twice at once is serialized per job instead: `go-cache-prune` has its own group,
+so two prunes never race over the same cache generations.
 
 The other workflows follow the same rule: `nightly.yml` coalesces per ref; `release.yml` runs one
 release at a time and never cancels; `site.yml` cancels superseded pull request checks but never a
@@ -319,7 +325,7 @@ minutes:
 
 - **A new job:** add it to `ci-gate`'s `needs`. If it should run only for some changes, gate its
   steps on `needs.changes.outputs.*`, not the job; a job-level `if:` fails every pull request. If it
-  is legitimately event-gated (like `docker-check`), it passes as `skipped` only off pull requests.
+  is legitimately event-gated, it passes as `skipped` only off pull requests.
 - **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
   own list if that tier reads it), and update the change-detection list in
   [`go/docs/testing.md`](../../../go/docs/testing.md#change-detection).

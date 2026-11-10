@@ -32,8 +32,8 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Java integration tier | LocalStack ITs, DuckDB read-back | PR, main, dispatch; Java change. Release | ubuntu-latest | `ci.yml` `integration-tests`; `release.yml` `integration-tests` |
 | Java deep tier and `kill -9` ITs | timing- and schedule-sensitive tests, a real `kill -9` then `--resume` | main, dispatch; Java change. Nightly. Release | ubuntu-latest | `ci.yml` `deep-tests`; `nightly.yml` `deep-and-perf`; `release.yml` `deep-tests` |
 | Java perf tier | PERF-1, PERF-2, SORT-PERF | nightly; dispatch `jobs=all` or `deep-and-perf` | ubuntu-latest | `nightly.yml` `deep-and-perf` |
-| Java image check | both Java images build for 2 architectures and start | PR; Java change | ubuntu-latest | `ci.yml` `docker-check` |
-| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | main with a Java change, dispatch. Release, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `ci.yml` `docker-publish`; `release.yml` `publish` |
+| Java image check | both Java images build for 2 architectures and start offline; nothing is pushed | PR, main, dispatch; Java change | ubuntu-latest | `ci.yml` `docker-check` |
+| Java image smoke and publish | the image writes, reads and resumes Parquet listed from a public bucket; the replay image serves it | release, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | OSV scan | Java jar closures and images against published advisories | nightly; dispatch `jobs=all` or `osv-scan` | ubuntu-latest | `nightly.yml` `osv-scan` |
 | Release guards | tag SHA and ancestry (`source`), version and release notes (`fast-tests`), assets and signatures (`publish`, under the same condition as above) | tag `v*` | ubuntu-latest | `release.yml` `source`, `fast-tests`, `publish` |
 | Site and documentation checks | links, media pins, `docs/style.md` terminology over `docs/**/*.md`, run facts, accessibility | PR, main, dispatch | ubuntu-latest | `site.yml` `site-checks` |
@@ -89,7 +89,7 @@ A dispatch, or a diff with no base, sets both. Every job still runs and only ski
 change, `go-race` and `go-xos` each run one `off` leg on ubuntu-latest, so no arm64, macOS or Windows runner is
 queued), so on a pull
 request `ci-gate` sees each job as `success` and treats `skipped` as a failure; off pull requests `skipped`
-passes (`docker-check` is PR-only). `ci-gate` needs `changes`, `fast-tests`,
+passes. `ci-gate` needs `changes`, `fast-tests`,
 `integration-tests`, `docker-check`, `go-lint`, `go-race`, `go-nonrace`, `go-build`, `go-objfile`, `go-reader`,
 `go-xos` and `go-fixtures`. `go-fixtures` keeps its own detection: its inputs add the Java replay modules
 (`swath-replay`, `swath-core`, `swath-model`), the shared Gradle build files and wrapper, and the provider
@@ -342,7 +342,7 @@ launched by hand on cloud batch hosts from the maintainers' tooling, never on a 
 kept go to [measurements.md](measurements.md) with the run, date and command. The replay server's live matrix
 is recorded once and replayed offline ([replay server oracle](#replay-server-oracle)). The one automatic
 real-bucket listing in CI is the Java image smoke, `scripts/ci/smoke-container.sh`, an anonymous listing of a
-small public prefix in `ci.yml` `docker-publish` and `release.yml` `publish`.
+small public prefix in `release.yml` `publish`.
 
 ## Invariant tests
 
