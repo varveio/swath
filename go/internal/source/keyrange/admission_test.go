@@ -63,6 +63,9 @@ func TestGaugeEstimates(t *testing.T) {
 // refuses splits (remainder, lower child, upper child), the listing is the
 // keyspace and the ranges tile it; on flat keys the refusals leave fewer
 // empty children than a sixth of the splits (without the gates: half).
+// The split tree stays within 4·log2(pages)+8, and the report shows the
+// paths that placed its pivots: frontier anchor reflections, bounded
+// gallops, and midpoint fallbacks on the hierarchical shapes.
 func TestAdmissionEngages(t *testing.T) {
 	gates := []counters.ID{cSplitSkippedRemainder, cSplitSkippedLowerTiny, cSplitSkippedUpperTiny}
 	fired := map[counters.ID]int64{}
@@ -87,6 +90,22 @@ func TestAdmissionEngages(t *testing.T) {
 		}
 		if name == "flat" && 6*(g(cChildEmptyLower)+g(cChildEmptyUpper)) > splits {
 			t.Errorf("flat: %d empty children of %d splits", g(cChildEmptyLower)+g(cChildEmptyUpper), splits)
+		}
+		t.Logf("%s: depth=%d (bound %d) requests=%d frontier=%d bounded=%d reflect=%d midpoint=%d density=%d/%d ceiling=%d shrink_prevented=%d max_gen=%d halvings=%d sliver_refused=%d empty=%d/%d",
+			name, g(cSplitMaxDepth), depthBound(len(keys), shapePage, 4), g(cRequests), g(cSplitAcceptedFrontier), g(cSplitAcceptedBounded),
+			g(cSplitPivotReflect), g(cSplitPivotMidpoint), g(cSplitPivotDensityBounded), g(cSplitPivotDensityFrontier), g(cReflectCeiling),
+			g(cDensityShrinkPrevented), g(cGallopMaxGen), g(cGallopHalvings), g(cSplitSliverRefused), g(cChildEmptyLower), g(cChildEmptyUpper))
+		if d := g(cSplitMaxDepth); d > depthBound(len(keys), shapePage, 4) {
+			t.Errorf("%s: split.max_depth %d over %d", name, d, depthBound(len(keys), shapePage, 4))
+		}
+		pivots := []counters.ID{cSplitAcceptedFrontier, cFrontierAnchored, cSplitPivotReflect, cSplitPivotDensityBounded, cGallopMaxGen}
+		if name == "date" || name == "nbm" {
+			pivots = append(pivots, cReflectCeiling, cSplitPivotMidpoint)
+		}
+		for _, id := range pivots {
+			if g(id) == 0 {
+				t.Errorf("%s: %s never fired", name, Counters[id].Key)
+			}
 		}
 	}
 	for _, id := range gates {

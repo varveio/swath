@@ -17,7 +17,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/go/internal/order"
-	"github.com/varveio/swath/go/internal/source/keyrange/keyrangetest"
 )
 
 type span struct {
@@ -113,12 +112,12 @@ func checkTiling(t *testing.T, what string, leaves []span) {
 func TestT2Pivots(t *testing.T) {
 	check := func(a, b string) {
 		t.Helper()
-		m, ok := between(a, b)
+		m, _, ok := betweenFrom(a, b)
 		if !ok {
 			return
 		}
 		if !(a < m && m < b) || !utf8.ValidString(m) || len(m) > maxKeyLen {
-			t.Fatalf("between(%q, %q) = %q", a, b, m)
+			t.Fatalf("betweenFrom(%q, %q) = %q", a, b, m)
 		}
 	}
 	rng := rand.New(rand.NewSource(1))
@@ -147,11 +146,11 @@ func TestT2Pivots(t *testing.T) {
 		check(c[0], c[1])
 	}
 	for _, nilCase := range [][2]string{{"a", "a\x00"}, {"a", "a\x01"}} {
-		if m, ok := between(nilCase[0], nilCase[1]); ok {
-			t.Fatalf("between(%q, %q) = %q, want none", nilCase[0], nilCase[1], m)
+		if m, _, ok := betweenFrom(nilCase[0], nilCase[1]); ok {
+			t.Fatalf("betweenFrom(%q, %q) = %q, want none", nilCase[0], nilCase[1], m)
 		}
 	}
-	if m, ok := between("a", "a "); ok {
+	if m, _, ok := betweenFrom("a", "a "); ok {
 		t.Fatalf("a < m < 'a ' has no safe pivot, got %q", m)
 	}
 	for range 5000 {
@@ -273,13 +272,13 @@ func TestT4Paging(t *testing.T) {
 	}
 	// A truncated empty page is followed by its token (paging_test.go).
 	// Non-ascending keys and keys not after lo.
-	bad := &stub{pages: []*keyrangetest.Page{{Contents: []keyrangetest.Object{{Key: "b"}, {Key: "a"}}}}}
-	p, _ = newTest(bad, Options{Workers: 1})
+	bad := &script{pages: []Page[Object]{last("b", "a")}}
+	p, _ = New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, bad.fetch)
 	if err := p.expandRange(context.Background(), Range{open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("non-ascending page accepted")
 	}
-	behind := &stub{pages: []*keyrangetest.Page{{Contents: []keyrangetest.Object{{Key: "a"}}}}}
-	p, _ = newTest(behind, Options{Workers: 1})
+	behind := &script{pages: []Page[Object]{last("a")}}
+	p, _ = New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, behind.fetch)
 	if err := p.expandRange(context.Background(), Range{lo: "b", open: true}, &direct{&collect{}}); err == nil {
 		t.Fatal("key not after lo accepted")
 	}

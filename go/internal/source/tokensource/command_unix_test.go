@@ -19,8 +19,8 @@ import (
 // cmd.exe on Windows, TestWindowsShell).
 func TestShell(t *testing.T) {
 	cmd := shellCommand(context.Background(), "echo hi")
-	if want := []string{"/bin/sh", "-c", "echo hi"}; strings.Join(cmd.Args, "|") != strings.Join(want, "|") || shell != "/bin/sh -c" {
-		t.Fatalf("%q %q", cmd.Args, shell)
+	if want := []string{"/bin/sh", "-c", "echo hi"}; strings.Join(cmd.Args, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", cmd.Args)
 	}
 }
 

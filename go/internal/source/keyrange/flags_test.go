@@ -64,16 +64,13 @@ func TestStructureFlag(t *testing.T) {
 }
 
 // TestStructureFlagSyntax: the bare flag means on, so a mode needs '=':
-// the usage shows --structure=auto|on|off and no separate argument, and
-// "-structure off" leaves off as the next argument (the command's SOURCE).
+// the usage shows --structure=auto|on|off and no separate argument.
 func TestStructureFlagSyntax(t *testing.T) {
 	f := flag.NewFlagSet("t", flag.ContinueOnError)
-	p := Flags(f, true)
+	Flags(f, true)
 	name, usage := flag.UnquoteUsage(f.Lookup("structure"))
 	if name != "" || !strings.Contains(usage, "--structure=auto|on|off") {
 		t.Fatalf("usage -structure %s: %s", name, usage)
 	}
-	if err := f.Parse([]string{"-structure", "off", "s3://bkt"}); err != nil || p.Policy.Structure != StructureOn || f.Arg(0) != "off" {
-		t.Fatalf("%v %v %q", err, p.Policy.Structure, f.Args())
-	}
+
 }

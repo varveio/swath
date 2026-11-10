@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/varveio/swath/go/internal/counters"
 )
 
 func TestHostileFixturesMatchSequential(t *testing.T) {
@@ -32,8 +34,11 @@ func TestHostileFixturesMatchSequential(t *testing.T) {
 // splits, a resume), to the memory budget and to the policy toggles (the
 // floors, the seed and its descent, structure probes). One
 // table, over the fixture keyspaces and the hostile ones; the reference is
-// the sorted keyspace itself.
+// the sorted keyspace itself. Eligible parallel runs also check the
+// report's split, child, leaf-depth and hand-out identities; every
+// engagement counter without a targeted test fires across the matrix.
 func TestMetamorphicLaws(t *testing.T) {
+	fired := map[counters.ID]int64{}
 	type variant struct {
 		name    string
 		opt     Options
@@ -111,10 +116,59 @@ func TestMetamorphicLaws(t *testing.T) {
 				opt.Resume = &Resume{After: want[len(want)/3]}
 				want = want[len(want)/3+1:]
 			}
-			got, _, _ := runPolicy(t, api, opt, v.workers, v.budget, v.accept)
+			got, st, _ := runPolicy(t, api, opt, v.workers, v.budget, v.accept)
+			if !opt.Sequential && !opt.SeedFirstPage && len(got) > 0 {
+				check(t, name+" "+v.name, st, int64(len(got)))
+			}
+			for id := range numCounters {
+				fired[id] += st.Get(id)
+			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("%s %s: %d keys, want %d", name, v.name, len(got), len(want))
 			}
 		}
+	}
+	for _, id := range []counters.ID{cDensityRefusedAlphabet, cDensityRefusedPastTop, cDensityRefusedOutside, cSplitPivotReflect, cSplitPivotMidpoint, cSplitPivotDensityBounded, cSplitPivotDensityFrontier,
+		cDensityRefusedShort, cDensityShrinkPrevented, cLeaves, cLeafDepthSum, cIdleDemandNs,
+		cChildEmptyReflectLower, cChildEmptyReflectUpper, cChildEmptyMidpointLower, cChildEmptyMidpointUpper,
+		cChildEmptyDensityLower, cChildEmptyDensityUpper,
+		cChildEmptyHiPivot, cChildEmptyHiBound, cChildSmallLower, cChildSmallUpper, cFrontierHandoutKeys} {
+		if fired[id] == 0 {
+			t.Errorf("%s never fired", Counters[id].Key)
+		}
+	}
+}
+
+func check(t *testing.T, what string, st Stats, listed int64) {
+	t.Helper()
+	g := st.Get
+	sum := func(ids ...counters.ID) (n int64) {
+		for _, id := range ids {
+			n += g(id)
+		}
+		return n
+	}
+	accepted := g(cSplitAcceptedBounded) + g(cSplitAcceptedFrontier)
+	if s := sum(cSplitPivotReflect, cSplitPivotMidpoint, cSplitPivotDensityBounded, cSplitPivotDensityFrontier, cSplitPivotStructure); s != accepted {
+		t.Fatalf("%s: pivot sources sum to %d, %d accepted", what, s, accepted)
+	}
+	empty := g(cChildEmptyLower) + g(cChildEmptyUpper)
+	var by int64
+	for src, ids := range emptyBy {
+		if s := pivotSource(src); s != srcBound && s != srcSliver {
+			by += g(ids[0]) + g(ids[1])
+		}
+	}
+	if by != empty || g(cChildEmptyHiPivot)+g(cChildEmptyHiBound) != empty {
+		t.Fatalf("%s: %d empty children, %d by source, %d+%d by hi", what, empty, by, g(cChildEmptyHiPivot), g(cChildEmptyHiBound))
+	}
+	if g(cChildSmallLower) < g(cChildEmptyLower) || g(cChildSmallUpper) < g(cChildEmptyUpper) {
+		t.Fatalf("%s: small children %d/%d below empty %d/%d", what, g(cChildSmallLower), g(cChildSmallUpper), g(cChildEmptyLower), g(cChildEmptyUpper))
+	}
+	if g(cLeaves) == 0 || g(cLeafDepthSum) > g(cLeaves)*g(cSplitMaxDepth) {
+		t.Fatalf("%s: leaves %d, depth sum %d, max depth %d", what, g(cLeaves), g(cLeafDepthSum), g(cSplitMaxDepth))
+	}
+	if g(cFrontierHandoutKeys) > listed || (g(cSplitAcceptedFrontier) == 0 && g(cFrontierHandoutKeys) != 0) {
+		t.Fatalf("%s: hand-out %d keys of %d, %d frontier splits", what, g(cFrontierHandoutKeys), listed, g(cSplitAcceptedFrontier))
 	}
 }

@@ -386,7 +386,7 @@ func (p *Engine[P]) seedEmit(page *Page[P], start, after string, e source.Emitte
 		skip++
 	}
 	rows = rows[skip:]
-	if p.d.Groups && skip > 0 && p.d.Detach != nil {
+	if p.d.Groups && skip > 0 {
 		rows = p.d.Detach(rows)
 	}
 	if p.d.Groups {

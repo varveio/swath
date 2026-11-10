@@ -147,16 +147,10 @@ func (p *Engine[P]) take(g *groups[P], rows []schema.Row[P], done bool, c string
 		// Reuse the previously detached allocation, without combining it
 		// with the next page's excluded headers.
 		emit = old
-	} else if p.d.Detach != nil {
+	} else {
 		emit = p.d.Detach(emit)
-	} else {
-		emit = slices.Clone(emit)
 	}
-	if p.d.Detach != nil {
-		g.held, g.owned = p.d.Detach(held), true
-	} else {
-		g.held = slices.Clone(held)
-	}
+	g.held, g.owned = p.d.Detach(held), true
 	return emit, all[j-1].Key, fresh
 }
 

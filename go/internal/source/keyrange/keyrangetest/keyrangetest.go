@@ -237,15 +237,7 @@ func Keyspaces() map[string][]string {
 	ks["deepTree"] = deep
 	// Date-partitioned and forecast-archive layouts: the folders a page's
 	// density cannot see past, where the reflection climbs levels.
-	var date []string
-	for m := 1; m <= 12; m++ {
-		for d := 1; d <= 28; d++ {
-			for p := range 12 {
-				date = append(date, fmt.Sprintf("warehouse/events/year=2025/month=%02d/day=%02d/part-%05d.parquet", m, d, p))
-			}
-		}
-	}
-	ks["dateTree"] = date
+	ks["dateTree"] = DateLayout(12)
 	var nbm []string
 	for d := 1; d <= 10; d++ {
 		for h := range 24 {
@@ -315,4 +307,17 @@ func refused(r rune) bool {
 		return true
 	}
 	return cp >= 0xD800 && cp < 0xE000
+}
+
+// DateLayout is a single-root date layout with 336 day folders.
+func DateLayout(partsPerDay int) []string {
+	var keys []string
+	for m := 1; m <= 12; m++ {
+		for d := 1; d <= 28; d++ {
+			for i := range partsPerDay {
+				keys = append(keys, fmt.Sprintf("warehouse/events/year=2025/month=%02d/day=%02d/part-%05d.parquet", m, d, i))
+			}
+		}
+	}
+	return keys
 }

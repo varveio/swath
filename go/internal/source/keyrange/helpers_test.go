@@ -5,7 +5,6 @@ package keyrange
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/varveio/swath/go/internal/schema"
@@ -18,9 +17,10 @@ import (
 type sorted = keyrangetest.Sorted
 
 var (
-	newSorted = keyrangetest.NewSorted
-	keyspaces = keyrangetest.Keyspaces
-	hostile   = keyrangetest.Hostile
+	newSorted  = keyrangetest.NewSorted
+	keyspaces  = keyrangetest.Keyspaces
+	hostile    = keyrangetest.Hostile
+	dateLayout = keyrangetest.DateLayout
 )
 
 // Object is the test payload.
@@ -83,21 +83,6 @@ func keysOf(rows []Row) []string {
 		out[i] = rows[i].Key
 	}
 	return out
-}
-
-// stub answers fixed pages in turn.
-type stub struct{ pages []*keyrangetest.Page }
-
-func (s *stub) List(_ context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
-	i := 0
-	if in.ContinuationToken != "" {
-		fmt.Sscan(in.ContinuationToken, &i)
-	}
-	out := *s.pages[i]
-	if i+1 < len(s.pages) {
-		out.IsTruncated, out.NextContinuationToken = true, fmt.Sprint(i+1)
-	}
-	return &out, nil
 }
 
 // decidePage is a split decision after a full page, as expandRange takes

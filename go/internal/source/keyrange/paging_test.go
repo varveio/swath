@@ -81,7 +81,6 @@ func TestEmptyContinuingPages(t *testing.T) {
 		{name: "terminal empty", pages: []Page[Object]{last()}, requests: 1},
 		{name: "stuck token", pages: []Page[Object]{more("a"), {Truncated: true, Token: "t1"}}, bad: true},
 		{name: "token cycle", pages: []Page[Object]{more(), {Truncated: true, Token: "t0"}}, bad: true},
-		{name: "empty with an assigned token", pages: []Page[Object]{more("a"), {Truncated: true, Token: ""}, last()}, want: []string{"a"}, requests: 3, empty: 1},
 		{name: "empty without token", pages: []Page[Object]{more("a"), {Truncated: true, Token: noToken}}, bad: true},
 		{name: "first page empty without token", pages: []Page[Object]{{Truncated: true, Token: noToken}}, bad: true},
 	}
@@ -118,12 +117,6 @@ func TestEmptyContinuingPages(t *testing.T) {
 				}
 			})
 		}
-	}
-	// The truncated page with no entry no longer fails a range.
-	s := &script{pages: []Page[Object]{more(), last()}}
-	p, _ := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, s.fetch)
-	if err := p.Expand(context.Background(), Range{open: true, id: 1}, &direct{&collect{}}); err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -71,24 +71,20 @@ type Command struct {
 	Cmd     string
 	Refresh time.Duration // 0: DefaultRefresh
 	Timeout time.Duration // 0: 30 s
-	Now     func() time.Time
 }
 
 func (c *Command) String() string { return "tokensource.Command[<redacted>]" }
 
 // Token runs the command once.
 func (c *Command) Token() (*oauth2.Token, error) {
-	now, refresh, timeout := time.Now, c.Refresh, c.Timeout
-	if c.Now != nil {
-		now = c.Now
-	}
+	refresh, timeout := c.Refresh, c.Timeout
 	if refresh <= 0 {
 		refresh = DefaultRefresh
 	}
 	if timeout <= 0 {
 		timeout = cmdTimeout
 	}
-	at := now()
+	at := time.Now()
 	tok, err := run(c.Cmd, timeout)
 	if err != nil {
 		return nil, err
