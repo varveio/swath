@@ -202,11 +202,11 @@ func acceptSource(src SourceInfo, want WholeSource, id SchemaID) error {
 	case sourceKinds[id] != want.Kind:
 		return semantic(KindCoverage, "source.kind", nil, "%q, but %s is a listing of %q", want.Kind, id, sourceKinds[id])
 	case want.Kind == "local-fs" && want.Container != "":
-		return semantic(KindCoverage, "source.container", nil, "%q: a filesystem has no container", shown(want.Container))
+		return semantic(KindCoverage, "source.container", nil, "%q: a filesystem has no container", shownName(want.Container))
 	case src.Container == nil && want.Container != "":
 		return missing("source.container")
 	case src.Container != nil && *src.Container != want.Container:
-		return semantic(KindCoverage, "source.container", nil, "%q, not %q", shown(*src.Container), shown(want.Container))
+		return semantic(KindCoverage, "source.container", nil, "%q, not %q", shownName(*src.Container), shownName(want.Container))
 	}
 	switch want.Kind {
 	case "s3", "gcs":
@@ -252,12 +252,23 @@ func shown(v string) string {
 		if authority, _, _ := strings.Cut(rest, "/"); strings.ContainsAny(authority, "@?#") {
 			return scheme + "://[redacted]"
 		}
-		// An Azure root's query is where its shared access signature goes.
-		if i := strings.IndexByte(v, '?'); i >= 0 && scheme == "az" {
+		// An S3 or GCS root's '?' is key data; any other scheme's query (an
+		// Azure root's is where its shared access signature goes) is hidden.
+		if i := strings.IndexByte(v, '?'); i >= 0 && scheme != "s3" && scheme != "gs" {
 			return v[:i] + "?[redacted]"
 		}
 		return v
 	}
+	if strings.ContainsAny(v, "@?#") {
+		return "[redacted]"
+	}
+	return v
+}
+
+// shownName keeps a clean bucket, account or container name and hides one
+// holding user information, a query or a fragment anywhere: a name is never
+// a URI, so nothing in it is key data.
+func shownName(v string) string {
 	if strings.ContainsAny(v, "@?#") {
 		return "[redacted]"
 	}

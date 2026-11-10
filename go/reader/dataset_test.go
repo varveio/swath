@@ -548,10 +548,24 @@ func TestMismatchShowsCleanValuesOnly(t *testing.T) {
 		{"az://acct/c?%73ig=SECRET&x=100%", "az://acct/c?[redacted]"},
 		{"s3://b/p?literal=100%", "s3://b/p?literal=100%"},
 		{"s3://b/p?mysig=1", "s3://b/p?mysig=1"},
+		{"https://host/p?sig=SECRET", "https://host/p?[redacted]"},
 		{"az://acct/c?sig+=SECRET", "az://acct/c?[redacted]"},
 	} {
 		if got := shown(c.in); got != c.want {
 			t.Errorf("shown(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestShownNameHidesCredentialsAnywhere(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"bucket", "bucket"},
+		{"https://host/p?sig=SECRET", "[redacted]"},
+		{"u:SECRET@b", "[redacted]"},
+		{"b#SECRET", "[redacted]"},
+	} {
+		if got := shownName(c.in); got != c.want {
+			t.Errorf("shownName(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
