@@ -191,7 +191,7 @@ func TestDuOrigin(t *testing.T) {
 	du := func(args ...string) string {
 		t.Helper()
 		var out bytes.Buffer
-		if err := runDu(context.Background(), append(args, "--endpoint", end, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
+		if err := runDu(context.Background(), append(args, "--endpoint-url", end, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
 			t.Fatal(err)
 		}
 		var rows []string
@@ -228,12 +228,12 @@ func TestDuRefusals(t *testing.T) {
 	}{
 		{false, []string{"--depth", "1"}, "--depth has no meaning for swath list"},
 		{false, []string{"--max-prefixes", "9"}, "--max-prefixes has no meaning for swath list"},
-		{true, []string{"--depth", "-1"}, "--depth -1: negative"},
-		{true, []string{"--max-prefixes", "0"}, "--max-prefixes 0"},
-		{true, []string{"--max-inodes", "0"}, "--max-inodes 0"},
+		{true, []string{"--depth", "-1"}, `--depth "-1": want a whole number, 0 or more`},
+		{true, []string{"--max-prefixes", "0"}, `--max-prefixes "0"`},
+		{true, []string{"--max-inodes", "0"}, `--max-inodes "0"`},
 		{true, []string{"--format", "parquet"}, "want auto, table, tsv or jsonl"},
-		{true, []string{"--report-format", "json"}, "use --report FILE"},
-		{true, []string{"--seed=false"}, "give it to swath diag count or swath diag list"},
+		{true, []string{"--report", "-"}, "give --report FILE"},
+		{true, []string{"--no-seed"}, "give it to swath diag count or swath diag list"},
 	} {
 		var out bytes.Buffer
 		var err error

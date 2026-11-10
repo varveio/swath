@@ -26,7 +26,7 @@ func textBucket(t *testing.T, n int) (args []string, keys []string) {
 	t.Helper()
 	keys = gcstest.Keys(n)
 	slices.Sort(keys)
-	return []string{"s3://bkt", "--endpoint", s3test.Bucket(t, keys), "--anonymous"}, keys
+	return []string{"s3://bkt", "--endpoint-url", s3test.Bucket(t, keys), "--anonymous"}, keys
 }
 
 // TestTextOutput: rows on stdout by default (TSV off a terminal, the
@@ -61,7 +61,7 @@ func TestTextOutput(t *testing.T) {
 	if err := run(context.Background(), append(src, "-o", file), &out, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "rows=2500") {
+	if out.Len() != 0 {
 		t.Fatalf("summary %q", out.String())
 	}
 	raw, _ := os.ReadFile(file)
@@ -73,7 +73,7 @@ func TestTextOutput(t *testing.T) {
 		t.Fatalf("resume of a text file: %v", err)
 	}
 	var u usageError
-	if err := run(context.Background(), append(src, "--report-format", "json"), &out, false); !errors.As(err, &u) {
+	if err := run(context.Background(), append(src, "--report", "-"), &out, false); !errors.As(err, &u) {
 		t.Fatalf("json report on a stdout of rows: %v", err)
 	}
 }
@@ -129,8 +129,9 @@ func TestResolveOutput(t *testing.T) {
 		{o: options{out: "x.jsonl.gz"}, format: "jsonl", path: "x.jsonl.gz", comp: "gzip"},
 		{o: options{out: "x.jsonl"}, format: "jsonl", path: "x.jsonl"},
 		{o: options{out: "ds"}},
-		{o: options{out: "ds", format: "tsv"}, failure: "--format is for stdout"},
-		{o: options{out: "x.tsv", format: "tsv"}, failure: "--format is for stdout"},
+		{o: options{out: "ds", format: "tsv"}, failure: "is a dataset directory"},
+		{o: options{out: "x.tsv", format: "tsv"}, format: "tsv", path: "x.tsv"},
+		{o: options{out: "x.tsv", format: "jsonl"}, failure: "names tsv"},
 		{o: options{format: "parquet"}, failure: "want auto, table, tsv or jsonl"},
 		{o: options{countOnly: true}},
 	} {

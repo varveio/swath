@@ -4,9 +4,13 @@
 package source
 
 import (
-	"flag"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
 // DefaultRequestTimeout bounds one object-store request attempt.
@@ -21,15 +25,13 @@ const DefaultRequestTimeout = 30 * time.Second
 type FlagGroup struct {
 	// Name names the group in messages.
 	Name string
-	// Flags registers the group's flags on fs and returns the value they
-	// fill when fs is parsed; diag adds its diagnostic flags (swath diag
-	// list only).
-	Flags func(fs *flag.FlagSet, diag bool) any
+	// Flags registers the group's flags on fs (Define) and returns the
+	// value they fill when fs is parsed; diag adds its diagnostic flags
+	// (swath diag list only).
+	Flags func(fs *pflag.FlagSet, diag bool) any
 	// Operational are the group's flags a resume may change: how requests
 	// are authenticated, timed and admitted, which no identity holds.
 	Operational []string
-	// Hints are every flag the group registers, in help order.
-	Hints []Hint
 	// URLs are the group's flags whose value is a URL: a recorded command
 	// line redacts one that carries userinfo, or does not parse
 	// (registry.RedactArgv).
@@ -56,11 +58,243 @@ func Shared[T any](values SharedValues, g *FlagGroup) *T {
 	return t
 }
 
-// A Hint places a flag in the command's help. When, if set, says when to
-// change it: the flag is then a limit an operator tunes (the help's Limits
-// group); a flag without one describes the source or how it is reached. A
-// diagnostic flag is shown with the diagnostic ones either way.
-type Hint struct{ Flag, When string }
+// The help groups a flag is shown under (Flag.Group), in the help's order
+// apart from the providers' own, which follow GroupStores.
+const (
+	GroupTotals      = "Totals"
+	GroupOutput      = "Output"
+	GroupFilters     = "Filters"
+	GroupStores      = "Object stores"
+	GroupPerformance = "Performance"
+	GroupLimits      = "Limits"
+	GroupReporting   = "Reporting"
+	GroupDiagnostics = "Diagnostics"
+)
+
+// A Flag is one entry of the command line's flag table: what parsing
+// fills, and what the help, the docs and shell completion say of it.
+// Define adds it to a flag set; Described reads it back.
+type Flag struct {
+	Name  string      // the long name, without dashes
+	Short string      // the one-letter form, or ""
+	Value pflag.Value // what parsing fills
+	// Metavar is the value's placeholder in the help: N, SIZE, DURATION,
+	// TIME, PATH, FILE, DIR, URL, REGEX, GLOB, NAME, COMMAND or TOKEN, or
+	// an enum's choices (auto|table|tsv|jsonl). A flag without one is a
+	// switch: given alone, it is set to true.
+	Metavar string
+	Usage   string // one line
+	Long    string // what --help adds under the line: when to change it, its constraints
+	Default string // the default as a user would type it; "" shows none
+	// Group is the help group (GroupOutput, ...); "" is the registering
+	// provider's own group, or GroupStores for a shared group's flag.
+	Group string
+	// Commands are the commands that take the flag ("list", "du", "diag
+	// list", "diag count"); nil is every command that registers it.
+	Commands []string
+	// Familiar are other tools' spellings of the flag (region for
+	// --s3-region): the unknown-flag error suggests the flag for them.
+	Familiar []string
+}
+
+// The annotations Define records a Flag's help fields under.
+const (
+	annMetavar  = "swath.metavar"
+	annLong     = "swath.long"
+	annDefault  = "swath.default"
+	annGroup    = "swath.group"
+	annCommands = "swath.commands"
+	annFamiliar = "swath.familiar"
+)
+
+// Define adds f to fs and returns the flag set's entry for it.
+func Define(fs *pflag.FlagSet, f Flag) *pflag.Flag {
+	fl := fs.VarPF(f.Value, f.Name, f.Short, f.Usage)
+	if f.Metavar == "" {
+		fl.NoOptDefVal = "true"
+	}
+	fl.Annotations = map[string][]string{
+		annMetavar: {f.Metavar}, annLong: {f.Long}, annDefault: {f.Default}, annGroup: {f.Group}, annCommands: f.Commands, annFamiliar: f.Familiar,
+	}
+	return fl
+}
+
+// Described is fl's table entry as Define recorded it (the name, short
+// form, value and usage from fl itself).
+func Described(fl *pflag.Flag) Flag {
+	a := func(k string) string {
+		if v := fl.Annotations[k]; len(v) > 0 {
+			return v[0]
+		}
+		return ""
+	}
+	return Flag{Name: fl.Name, Short: fl.Shorthand, Value: fl.Value, Usage: fl.Usage, Metavar: a(annMetavar), Long: a(annLong),
+		Default: a(annDefault), Group: a(annGroup), Commands: fl.Annotations[annCommands], Familiar: fl.Annotations[annFamiliar]}
+}
+
+// SetGroup places fl in group when its definition named none: the
+// command's default for a provider's or a shared group's flags.
+func SetGroup(fl *pflag.Flag, group string) {
+	if fl.Annotations == nil {
+		fl.Annotations = map[string][]string{}
+	}
+	if v := fl.Annotations[annGroup]; len(v) == 0 || v[0] == "" {
+		fl.Annotations[annGroup] = []string{group}
+	}
+}
+
+// Switch is a flag value that sets *p to true when given (--x), or to
+// the value given with '=' (--x=false), which the help never shows.
+func Switch(p *bool) pflag.Value { return (*switchValue)(p) }
+
+// Off is the value of a --no-x flag: given, it sets *p to false.
+func Off(p *bool) pflag.Value { return offValue{p} }
+
+type switchValue bool
+
+func (s *switchValue) Set(v string) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return errors.New("want true or false")
+	}
+	*s = switchValue(b)
+	return nil
+}
+func (s *switchValue) String() string { return strconv.FormatBool(bool(*s)) }
+func (s *switchValue) Type() string   { return "bool" }
+
+type offValue struct{ p *bool }
+
+func (o offValue) Set(v string) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return errors.New("want true or false")
+	}
+	*o.p = !b
+	return nil
+}
+func (o offValue) String() string { return strconv.FormatBool(!*o.p) }
+func (o offValue) Type() string   { return "bool" }
+
+// Text is a string flag value.
+func Text(p *string) pflag.Value { return (*textValue)(p) }
+
+type textValue string
+
+func (t *textValue) Set(v string) error { *t = textValue(v); return nil }
+func (t *textValue) String() string     { return string(*t) }
+func (t *textValue) Type() string       { return "string" }
+
+// Duration is a duration flag value: Go's syntax (90s, 1h30m), never
+// negative (zero keeps each flag's documented meaning).
+func Duration(p *time.Duration) pflag.Value { return (*durationValue)(p) }
+
+type durationValue time.Duration
+
+// errDuration is a duration flag's refusal of a value it cannot read.
+var errDuration = errors.New("want a duration such as 90s, 1h30m")
+
+func (d *durationValue) Set(v string) error {
+	x, err := time.ParseDuration(v)
+	switch {
+	case err != nil:
+		return errDuration
+	case x < 0:
+		return errors.New("negative")
+	}
+	*d = durationValue(x)
+	return nil
+}
+func (d *durationValue) String() string { return FormatDuration(time.Duration(*d)) }
+func (d *durationValue) Type() string   { return "duration" }
+
+// FormatDuration is d as a user would type it: 10m, 1h30m, 30s, 0.
+func FormatDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	if s == "0s" {
+		return "0"
+	}
+	return s
+}
+
+// Count is a whole-number flag value of at least min (0 where 0 is
+// documented, 1 for a count that must be positive).
+func Count(p *int, min int) pflag.Value { return &countValue{p, min} }
+
+// Count64 is Count for an int64.
+func Count64(p *int64, min int64) pflag.Value { return &count64Value{p, min} }
+
+type countValue struct {
+	p   *int
+	min int
+}
+
+func (c *countValue) Set(v string) error {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < c.min {
+		return wantCount(c.min)
+	}
+	*c.p = n
+	return nil
+}
+func (c *countValue) String() string { return strconv.Itoa(*c.p) }
+func (c *countValue) Type() string   { return "int" }
+
+type count64Value struct {
+	p   *int64
+	min int64
+}
+
+func (c *count64Value) Set(v string) error {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < c.min {
+		return wantCount(int(c.min))
+	}
+	*c.p = n
+	return nil
+}
+func (c *count64Value) String() string { return strconv.FormatInt(*c.p, 10) }
+func (c *count64Value) Type() string   { return "int" }
+
+func wantCount(min int) error {
+	if min > 0 {
+		return fmt.Errorf("want a whole number of at least %d", min)
+	}
+	return errors.New("want a whole number, 0 or more")
+}
+
+// Counter is a flag counted each time it is given (-v -v, -vv).
+func Counter(p *int) pflag.Value { return (*counterValue)(p) }
+
+type counterValue int
+
+func (c *counterValue) Set(v string) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return errors.New("takes no value")
+	}
+	if b {
+		*c++
+	}
+	return nil
+}
+func (c *counterValue) String() string { return strconv.Itoa(int(*c)) }
+func (c *counterValue) Type() string   { return "count" }
+
+// Func is a flag value that calls set with each value given.
+func Func(set func(string) error) pflag.Value { return funcValue(set) }
+
+type funcValue func(string) error
+
+func (f funcValue) Set(v string) error { return f(v) }
+func (f funcValue) String() string     { return "" }
+func (f funcValue) Type() string       { return "string" }
 
 // Store is the store group's value: what every object store takes alike.
 // Each provider reads it into its own options.
@@ -78,33 +312,32 @@ type Store struct {
 
 // The store group's flag names.
 const (
-	endpointFlag       = "endpoint"
+	endpointFlag       = "endpoint-url"
 	requestTimeoutFlag = "request-timeout"
 	anonymousFlag      = "anonymous"
 )
 
 // StoreGroup is the flag group every object store provider names: one
-// --endpoint, --request-timeout and --anonymous, whichever provider owns
-// the root. --endpoint is part of each provider's identity (a resume
-// refuses another); the timeout and anonymity are operational.
+// --endpoint-url, --request-timeout and --anonymous, whichever provider
+// owns the root. --endpoint-url is part of each provider's identity (a
+// resume refuses another); the timeout and anonymity are operational.
 var StoreGroup = &FlagGroup{
 	Name:        "store",
-	Flags:       func(fs *flag.FlagSet, _ bool) any { return StoreFlags(fs) },
+	Flags:       func(fs *pflag.FlagSet, _ bool) any { return StoreFlags(fs) },
 	Operational: []string{anonymousFlag, requestTimeoutFlag},
-	Hints: []Hint{
-		{Flag: anonymousFlag},
-		{Flag: endpointFlag},
-		{Flag: requestTimeoutFlag, When: "raise it for a slow endpoint or emulator (an S3-compatible store, fake-gcs-server, Azurite) whose pages take longer to answer"},
-	},
-	URLs: []string{endpointFlag},
+	URLs:        []string{endpointFlag},
 }
 
 // StoreFlags registers the store group on fs and returns the Store value
 // it fills when fs is parsed.
-func StoreFlags(fs *flag.FlagSet) *Store {
-	s := &Store{}
-	fs.BoolVar(&s.Anonymous, anonymousFlag, false, "credentials: send no credentials, ignoring any configured (a public S3 bucket, GCS bucket or Azure container); without it a source with no usable credentials fails (auth) before listing")
-	fs.StringVar(&s.Endpoint, endpointFlag, "", "store: endpoint `URL` in place of the provider's own service: an S3-compatible store (MinIO, LocalStack; path-style addressing unless --path-style=false), GCS's JSON API base URL (fake-gcs-server), or Azure's blob service URL, the account then its first path segment (Azurite); part of the resume identity")
-	fs.DurationVar(&s.Timeout, requestTimeoutFlag, DefaultRequestTimeout, "requests: per-request timeout; a request that exceeds it is retried")
+func StoreFlags(fs *pflag.FlagSet) *Store {
+	s := &Store{Timeout: DefaultRequestTimeout}
+	Define(fs, Flag{Name: anonymousFlag, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
+		Long: "Ignores any configured. Without it a source with no usable credentials fails (auth) before listing."})
+	Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
+		Long: "S3: path-style addressing unless --no-s3-path-style. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). Part of the resume identity."})
+	Define(fs, Flag{Name: requestTimeoutFlag, Value: Duration(&s.Timeout), Metavar: "DURATION", Usage: "per-request timeout; a request over it is retried",
+		Default: FormatDuration(DefaultRequestTimeout), Group: GroupLimits,
+		Long: "Raise it for a slow endpoint or emulator whose pages take longer to answer."})
 	return s
 }

@@ -566,9 +566,9 @@ func CounterDefs(throttles string) []counters.Def {
 	d[CLimiterWaits] = counters.Def{Key: "limiter.waits", Kind: counters.Count, Unit: "attempts", Feature: f, Help: "attempts that waited for a permit"}
 	d[CLimiterWaitNs] = counters.Def{Key: "limiter.wait_ns", Kind: counters.Count, Unit: "ns", Feature: f, Help: "time those attempts waited, summed"}
 	d[CLimiterDepth] = counters.Def{Key: "limiter.max_depth", Kind: counters.Max, Unit: "permits", Feature: f, Help: "most permits the limit stood below the worker count"}
-	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--limiter-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
-	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--limiter-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
-	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--limiter-slow-start: the limit the ramp ended at (0: still ramping)"}
+	d[CSlowStartDoubles] = counters.Def{Key: "slow_start.doubles", Kind: counters.Count, Unit: "steps", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout)"}
+	d[CSlowStartNs] = counters.Def{Key: "slow_start.ramp_ns", Kind: counters.Max, Unit: "ns", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout)"}
+	d[CSlowStartEnd] = counters.Def{Key: "slow_start.end_limit", Kind: counters.Max, Unit: "permits", Feature: FeatureSlowStart, Help: "--adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping)"}
 	d[CRateWaits] = counters.Def{Key: "rate.waits", Kind: counters.Count, Unit: "attempts", Feature: FeatureRequestRate, Help: "attempts that waited for a --request-rate token"}
 	d[CRateWaitNs] = counters.Def{Key: "rate.wait_ns", Kind: counters.Count, Unit: "ns", Feature: FeatureRequestRate, Help: "time those attempts waited, summed"}
 	return d

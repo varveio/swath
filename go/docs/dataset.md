@@ -101,7 +101,7 @@ module's. JSON readers must not depend on that order.
 | `coverage.complete` | The listing reached the end of its scope | whole-source acceptance: `true` |
 | `coverage.stop_reason` | `completed`, or why the listing stopped early (`max_keys`, `unreported`, ...) | whole-source acceptance: `completed` |
 | `coverage.skipped_entries` | Entries the listing could not read | whole-source acceptance: `0` |
-| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-filesystem`), `no_dirs` (`--no-dirs`) | whole-source acceptance: present and empty |
+| `coverage.filters` | The filters the run applied, as given (`include=…`, …), and the local options that leave entries out: `one_filesystem` (`--one-file-system`), `no_dirs` (`--no-dirs`) | whole-source acceptance: present and empty |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative: does not refuse |
 | `coverage.snapshot` | Always `false`: no source-wide point-in-time guarantee | informative: does not refuse |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes | informative |
@@ -148,7 +148,7 @@ TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`.
 
 **`swath/s3-objects/v1`**: `key`, `size` int64, `last_modified` timestamp, `etag` STRING (one pair of surrounding
 quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STRING (null unless the run used
-`--fetch-owner`), `checksum_algorithm` STRING (the first algorithm S3 lists), `checksum_type` STRING. `etag`,
+`--s3-fetch-owner`), `checksum_algorithm` STRING (the first algorithm S3 lists), `checksum_type` STRING. `etag`,
 `storage_class` and the checksums are null when S3 omits them.
 
 **`swath/s3-versions/v1`**: the `swath/s3-objects/v1` columns in the same order, then `version_id` STRING

@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/order"
 	"github.com/varveio/swath/go/internal/registry"
@@ -287,9 +288,9 @@ func TestRegisteredLocators(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 			flagged := f.RegisterFlags(fs, false)
-			if err := fs.Parse([]string{"--anonymous", "--endpoint", c.endpoint}); err != nil {
+			if err := fs.Parse([]string{"--anonymous", "--endpoint-url", c.endpoint}); err != nil {
 				t.Fatal(err)
 			}
 			for _, opt := range []any{c.options, flagged} {
@@ -361,9 +362,9 @@ func TestRegisteredEndpointRefusals(t *testing.T) {
 		live := strings.Replace(c.endpoint, "http://", "http://user:s3cret@", 1)
 		for _, ep := range []string{live, "http://user:s3cret@127.0.0.1:1", "https://user:s3cret@store.example/base/", "http://:s3cret@h", "http://[broken", "not-a-url", "ftp://store.example"} {
 			t.Run(c.root+"/"+ep, func(t *testing.T) {
-				fs := flag.NewFlagSet("test", flag.ContinueOnError)
+				fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 				flagged := f.RegisterFlags(fs, false)
-				if err := fs.Parse([]string{"--anonymous", "--endpoint", ep}); err != nil {
+				if err := fs.Parse([]string{"--anonymous", "--endpoint-url", ep}); err != nil {
 					t.Fatal(err)
 				}
 				for _, opt := range []any{c.options(ep), flagged} {

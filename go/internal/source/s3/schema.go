@@ -29,7 +29,7 @@ type Row = schema.Row[Object]
 
 // Schema is the current-object schema: every row is a current object, so
 // the schema has no version columns. Nullability is fixed at run start:
-// the owner columns are null unless -fetch-owner, the checksum columns are
+// the owner columns are null unless --s3-fetch-owner, the checksum columns are
 // null when S3 omits them, etag and storage_class when it does.
 var Schema = schema.Bind(reader.S3ObjectsV1, schema.Schema[Object]{
 	Info: schema.Info{Name: "swath_listing"},

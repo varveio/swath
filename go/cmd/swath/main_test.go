@@ -33,8 +33,11 @@ func TestRun(t *testing.T) {
 	if err := run(context.Background(), []string{"-o", out, src, "--part-size", "4MiB"}, &buf, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "rows=1 parts=1") {
-		t.Fatalf("summary: %s", buf.String())
+	if buf.Len() != 0 {
+		t.Fatalf("a dataset run wrote %q on stdout", buf.String())
+	}
+	if !dataset.Committed(out) {
+		t.Fatal("not committed")
 	}
 	err := run(context.Background(), []string{src, "-o", out}, &buf, false)
 	if err == nil || !strings.Contains(err.Error(), "--overwrite") {
@@ -42,7 +45,7 @@ func TestRun(t *testing.T) {
 	}
 	// The report goes out on failure too, with the outcome.
 	buf.Reset()
-	if err := run(context.Background(), []string{src, "-o", out, "--report-format", "json"}, &buf, false); err == nil ||
+	if err := run(context.Background(), []string{src, "-o", out, "--report", "-"}, &buf, false); err == nil ||
 		!strings.Contains(buf.String(), `"status": "failed"`) || !strings.Contains(buf.String(), "not empty") {
 		t.Fatalf("failure report: %v\n%s", err, buf.String())
 	}
@@ -82,7 +85,7 @@ func TestShowDataset(t *testing.T) {
 
 func TestVersion(t *testing.T) {
 	var b bytes.Buffer
-	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath-go ") {
+	if err := dispatch(context.Background(), []string{"--version"}, &b); err != nil || !strings.HasPrefix(b.String(), "swath ") {
 		t.Fatalf("%v %q", err, b.String())
 	}
 }
@@ -124,7 +127,7 @@ func TestCLIDocFlags(t *testing.T) {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "$ swath %s --help\n", cmd.name())
-		usage(&b, newFlags(&options{}, cmd.diag), cmd)
+		usage(&b, newFlags(&options{}, cmd.diag), cmd, docStyle)
 	}
 	if strings.Contains(b.String(), " \t") {
 		t.Fatal("the usage has a space before a tab (git diff --check flags it in docs/cli.md)")
@@ -260,9 +263,9 @@ func TestSpillFormatFlags(t *testing.T) {
 			plain, compress bool
 		}{
 			{nil, false, true},
-			{[]string{"--spill-compress=false"}, false, false},
+			{[]string{"--no-spill-compress"}, false, false},
 			{[]string{"--spill-plain"}, true, true},
-			{[]string{"--spill-plain", "--spill-compress=false"}, true, false},
+			{[]string{"--spill-plain", "--no-spill-compress"}, true, false},
 		} {
 			if !diag && c.args != nil {
 				continue // diagnostic flags: TestMovedFlagsNameDiag

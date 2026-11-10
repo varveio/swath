@@ -64,7 +64,7 @@ type Routed interface {
 }
 
 // The environment variables of the Azure CLI that carry a credential: a
-// SAS (when neither --azblob-sas nor the root gives one) and an account
+// SAS (when neither --azure-sas-token nor the root gives one) and an account
 // key (Shared Key).
 const (
 	EnvSAS = "AZURE_STORAGE_SAS_TOKEN"
@@ -82,7 +82,7 @@ type Options struct {
 	Anonymous bool   // send no credentials, whatever the environment holds
 	SAS       string // shared access signature; else the root's, else EnvSAS
 	// Flat asserts a flat namespace where admission cannot establish it
-	// (--azblob-flat); an answered hierarchical namespace still refuses.
+	// (--azure-assume-flat); an answered hierarchical namespace still refuses.
 	// It is part of the resume identity and the report.
 	Flat    bool
 	Timeout time.Duration
@@ -170,7 +170,7 @@ type Stats struct {
 	Anonymous   bool   `json:"anonymous"`
 	Credentials string `json:"credentials,omitempty"`
 	// Namespace is how admission found the namespace flat: "account
-	// information", "filesystem properties" or "asserted" (--azblob-flat).
+	// information", "filesystem properties" or "asserted" (--azure-assume-flat).
 	Namespace  string            `json:"namespace"`
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
@@ -283,10 +283,10 @@ func (p *Provider) admit(ctx context.Context) error {
 	case p.opt.Flat:
 		p.namespace = "asserted"
 		if p.opt.Warn != nil {
-			p.opt.Warn(fmt.Sprintf("azblob: account %s: the namespace could not be read (%v); listing as flat, as --azblob-flat asserts", p.opt.Account, err))
+			p.opt.Warn(fmt.Sprintf("azblob: account %s: the namespace could not be read (%v); listing as flat, as --azure-assume-flat asserts", p.opt.Account, err))
 		}
 	default:
-		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azblob-flat asserts it)", p.opt.Account, err))
+		return source.Unsupported(fmt.Errorf("azblob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
 	}
 	return nil
 }

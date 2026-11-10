@@ -30,7 +30,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 )
 
-// azEndpoint is a replay's --endpoint: without the account path
+// azEndpoint is a replay's --endpoint-url: without the account path
 // segment, which the client takes from the root.
 func azEndpoint(r *azblobtest.Replay) string { return strings.TrimSuffix(r.Endpoint, "/"+r.Account) }
 
@@ -44,7 +44,7 @@ func TestAzblobHostileCorpus(t *testing.T) {
 	keys := azblobtest.Keys()
 	r := azblobtest.Serve(t, keys)
 	out := filepath.Join(t.TempDir(), "ds")
-	if err := run(context.Background(), []string{"az://replay/corpus", "--endpoint", azEndpoint(r), "--anonymous", "--workers", "8",
+	if err := run(context.Background(), []string{"az://replay/corpus", "--endpoint-url", azEndpoint(r), "--anonymous", "--workers", "8",
 		"--part-size", "4KiB", "-o", out}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +128,8 @@ func TestAzblobSASNeverRecorded(t *testing.T) {
 	ctx := context.Background()
 	out := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
-	args := []string{"az://replay/corpus?sv=2026-10-06&sig=SECRET1", "--endpoint", rp.url, "--workers", "1", "-v",
-		"--page-size", "50", "--part-size", "4KiB", "--report", report, "--report-format", "json", "-o", out}
+	args := []string{"az://replay/corpus?sv=2026-10-06&sig=SECRET1", "--endpoint-url", rp.url, "--workers", "1", "-v",
+		"--page-size", "50", "--part-size", "4KiB", "--report", report, "-o", out}
 	if c := exitCode(t, run(ctx, append(args, "--max-duration", "300ms"), io.Discard, true)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
 	}
@@ -150,11 +150,11 @@ func TestAzblobSASNeverRecorded(t *testing.T) {
 	}
 	// The endpoint is frozen: not an operational flag.
 	var ue usageError
-	if err := resume(ctx, []string{out, "--endpoint", "http://127.0.0.1:1"}, io.Discard); !errors.As(err, &ue) {
+	if err := resume(ctx, []string{out, "--endpoint-url", "http://127.0.0.1:1"}, io.Discard); !errors.As(err, &ue) {
 		t.Fatalf("resume with another endpoint: %v, want a usage refusal", err)
 	}
 	rp.reset()
-	if err := resume(ctx, []string{out, "--azblob-sas", "sv=2026-10-06&sig=SECRET2", "--max-duration", "0", "-v"}, io.Discard); err != nil {
+	if err := resume(ctx, []string{out, "--azure-sas-token", "sv=2026-10-06&sig=SECRET2", "--max-duration", "0", "-v"}, io.Discard); err != nil {
 		t.Fatalf("resume with another SAS: %v", err)
 	}
 	if !dataset.Committed(out) || rp.sent("SECRET2") == 0 || rp.sent("SECRET1") != 0 {
@@ -163,7 +163,7 @@ func TestAzblobSASNeverRecorded(t *testing.T) {
 	noSecret(t, "resumed", stderr, out, report)
 }
 
-// TestAzblobSASFlagThenEnvironment: a run started with --azblob-sas
+// TestAzblobSASFlagThenEnvironment: a run started with --azure-sas-token
 // resumes with a rotated SAS from AZURE_STORAGE_SAS_TOKEN alone (the
 // provider reads it when the flag is absent); without either the resume
 // is refused, naming both.
@@ -175,7 +175,7 @@ func TestAzblobSASFlagThenEnvironment(t *testing.T) {
 	rp := newSASReplay(t)
 	ctx := context.Background()
 	out := filepath.Join(t.TempDir(), "ds")
-	args := []string{"az://replay/corpus", "--endpoint", rp.url, "--azblob-sas", "sv=2026-10-06&sig=SECRET1", "--workers", "1",
+	args := []string{"az://replay/corpus", "--endpoint-url", rp.url, "--azure-sas-token", "sv=2026-10-06&sig=SECRET1", "--workers", "1",
 		"--page-size", "50", "--part-size", "4KiB", "-o", out}
 	if c := exitCode(t, run(ctx, append(args, "--max-duration", "300ms"), io.Discard, true)); c != exitDeadline {
 		t.Fatalf("first attempt: exit %d", c)
@@ -208,7 +208,7 @@ func TestAzblobAdmissionRefusalRecordsNoSAS(t *testing.T) {
 	for _, root := range []string{"az://acct/ctr?sv=2026-10-06&sig=SECRET3", "az://acct/ctr?sig=SECRET5&x=%ZZ", "az://acct?sig=SECRET6&x=%ZZ"} {
 		out := filepath.Join(t.TempDir(), "ds")
 		report := filepath.Join(t.TempDir(), "report.json")
-		err := run(context.Background(), []string{root, "--endpoint", srv.URL, "-v", "--report", report, "--report-format", "json", "-o", out}, io.Discard, false)
+		err := run(context.Background(), []string{root, "--endpoint-url", srv.URL, "-v", "--report", report, "-o", out}, io.Discard, false)
 		// The admission refusal is exit 2; a root that does not parse fails
 		// at open, as any malformed root does.
 		if c := exitCode(t, err); c == exitCompleted || strings.Contains(root, "sv=") && c != exitUsage {
@@ -271,7 +271,7 @@ func TestAzureSDKLogProcess(t *testing.T) {
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close() // a connection refused
 	for _, ep := range []string{srv.URL, down.URL} {
-		err := run(context.Background(), []string{"az://acct/c?sv=2026-10-06&sig=SECRET9", "--endpoint", ep, "--workers", "1",
+		err := run(context.Background(), []string{"az://acct/c?sv=2026-10-06&sig=SECRET9", "--endpoint-url", ep, "--workers", "1",
 			"--request-timeout", "2s", "-o", filepath.Join(t.TempDir(), "ds")}, io.Discard, false)
 		if err == nil {
 			t.Fatalf("%s: the run did not fail", ep)

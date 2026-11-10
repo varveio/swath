@@ -105,7 +105,7 @@ runs on one path.
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 3); `--report-format json`
+Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 3); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
 [../cli.md](../cli.md#run-report) (pinned by `internal/listing/testdata/report-schema.golden`). It is

@@ -68,7 +68,7 @@ The durable spill campaign found such a service: MinIO answering a `start-after`
 empty page ([measurements.md](../measurements.md#durable-spill), `bench/minio_start_after.sh`). Its key-file
 oracle is the first kind of witness.
 
-**Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --seed=false` turns it
+**Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --no-seed` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points
 `(⊥,c1], …, (ck, ⊤]`, all real folders found by delimiter listings (`/`, the configured page size,
 `Probe` set):
@@ -76,7 +76,7 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
   start a first tile would use; `Options.SeedFirstPage`, which the command's policy sets with the seed). When it
   is not truncated the scope fits in one page: the seed emits it, the delimiter requests still in flight are
   canceled, and the seed stops there with no tile (`seed.stop.one_page`, `seed.first_page_keys`), one round
-  trip in all, as `--seed=false`. A truncated page is discarded (`seed.first_page_discarded`, one
+  trip in all, as `--no-seed`. A truncated page is discarded (`seed.first_page_discarded`, one
   request more), and the tiles start from the scope's start. `TestSeedFirstPageLargeFirstTile`
   checks that the first tile can split across the discarded page. Dated evidence:
   [seed measurements](../measurements.md#red-team-fixes-2026-11-07).
@@ -172,7 +172,7 @@ There are no finer cuts than the page index: the index gives every 1,024th key, 
 starts with need, and a tile's own pages measure the rest.
 
 The seed is a serial pre-phase of 1 to 6 waves; on a bucket of one page the first wave is the whole listing.
-The default is measured against `swath diag list --seed=false` on production key lists of 1M objects and more
+The default is measured against `swath diag list --no-seed` on production key lists of 1M objects and more
 ([measurements](../measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)), and on
 100 to 10,000 keys ([measurements](../measurements.md#red-team-fixes-2026-11-07)).
 

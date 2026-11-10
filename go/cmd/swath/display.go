@@ -4,7 +4,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,9 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record
@@ -33,7 +34,7 @@ type triFlag struct {
 	neg bool
 }
 
-func (f triFlag) IsBoolFlag() bool { return true }
+func (f triFlag) Type() string { return "bool" }
 
 func (f triFlag) String() string {
 	if f.t == nil || !f.t.set {
@@ -51,32 +52,6 @@ func (f triFlag) Set(v string) error {
 	return nil
 }
 
-// countFlag counts its occurrences (-v -v); an alias such as -vv adds by.
-type countFlag struct {
-	n  *int
-	by int
-}
-
-func (f countFlag) IsBoolFlag() bool { return true }
-
-func (f countFlag) String() string {
-	if f.n == nil {
-		return "0"
-	}
-	return strconv.Itoa(*f.n)
-}
-
-func (f countFlag) Set(v string) error {
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return err
-	}
-	if b {
-		*f.n += f.by
-	}
-	return nil
-}
-
 // termOptions are the terminal flags.
 type termOptions struct {
 	progress, stats tri
@@ -87,20 +62,33 @@ type termOptions struct {
 
 // termFlags are the terminal flags' names: runtime flags, which swath resume
 // accepts again.
-var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "v", "vv", "vvv", "q", "qq", "color"}
+var termFlags = []string{"progress", "no-progress", "progress-interval", "stats", "no-stats", "verbose", "quiet", "color"}
 
-func (t *termOptions) register(f *flag.FlagSet) {
-	f.Var(triFlag{&t.progress, false}, "progress", "print live progress on stderr (default: when stderr is a terminal and neither -q nor -v is given; --progress-interval implies it)")
-	f.Var(triFlag{&t.progress, true}, "no-progress", "no live progress on stderr")
-	f.DurationVar(&t.interval, "progress-interval", 0, "progress `interval` (default 1s while the line redraws on a terminal, 30s for appended records; at least 1s)")
-	f.Var(triFlag{&t.stats, false}, "stats", "print the end-of-run statistics on stderr (default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe)")
-	f.Var(triFlag{&t.stats, true}, "no-stats", "no end-of-run statistics on stderr")
-	f.Var(countFlag{&t.verbose, 1}, "v", "verbose: a start line, and progress as appended records (-vv, -vvv: the same)")
-	f.Var(countFlag{&t.verbose, 2}, "vv", "short for -v -v")
-	f.Var(countFlag{&t.verbose, 3}, "vvv", "short for -v -v -v")
-	f.Var(countFlag{&t.quiet, 1}, "q", "quiet: no warnings, no automatic progress or statistics (-qq: no error line either; the exit code and the reports stand)")
-	f.Var(countFlag{&t.quiet, 2}, "qq", "short for -q -q")
-	f.StringVar(&t.color, "color", "auto", "color the progress line and the statistics: auto, always or never (auto: a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it)")
+// globalFlags are the terminal flags also taken before the command word
+// (swath -v list ...).
+var globalFlags = []string{"verbose", "quiet", "color"}
+
+func (t *termOptions) register(f *pflag.FlagSet) {
+	g := source.GroupReporting
+	source.Define(f, source.Flag{Name: "verbose", Short: "v", Value: source.Counter(&t.verbose), Group: g,
+		Usage: "a start line, and progress as appended records"})
+	source.Define(f, source.Flag{Name: "quiet", Short: "q", Value: source.Counter(&t.quiet), Group: g,
+		Usage: "no warnings, no automatic progress or statistics (-qq: no errors)",
+		Long:  "With -qq the exit code and the reports stand alone."})
+	source.Define(f, source.Flag{Name: "progress", Value: triFlag{&t.progress, false}, Group: g,
+		Usage: "print live progress on stderr (default: on a terminal, without -q, -v)"})
+	source.Define(f, source.Flag{Name: "no-progress", Value: triFlag{&t.progress, true}, Group: g, Usage: "no live progress on stderr"})
+	source.Define(f, source.Flag{Name: "progress-interval", Value: source.Duration(&t.interval), Metavar: "DURATION", Group: g,
+		Usage: "how often progress is printed (at least 1s); implies --progress",
+		Long:  "Default 1s while the line redraws on a terminal, 30s for appended records."})
+	source.Define(f, source.Flag{Name: "stats", Value: triFlag{&t.stats, false}, Group: g,
+		Usage: "print the end-of-run statistics on stderr",
+		Long:  "Default: for runs over 1.5 s, runs that write output, and runs that do not complete; not with -q, nor after a closed downstream pipe."})
+	source.Define(f, source.Flag{Name: "no-stats", Value: triFlag{&t.stats, true}, Group: g, Usage: "no end-of-run statistics on stderr"})
+	t.color = "auto"
+	source.Define(f, source.Flag{Name: "color", Value: source.Text(&t.color), Metavar: "auto|always|never", Default: "auto", Group: g,
+		Usage: "color the progress line, the statistics and the help",
+		Long:  "auto: on a terminal, without NO_COLOR or TERM=dumb; CLICOLOR_FORCE forces it."})
 }
 
 func (t *termOptions) validate() error {

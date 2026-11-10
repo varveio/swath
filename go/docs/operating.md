@@ -48,11 +48,11 @@ Azure also accepts a SAS flag or source query and redacts it from records; see t
 Without `--anonymous`, missing or unusable credentials stop the run before listing; swath never
 falls back to unsigned requests. Credential failures normally have cause `auth` (exit 1). During
 Azure namespace admission, failed Entra token acquisition can instead leave the namespace unknown:
-without `--azblob-flat`, this is `refused`, cause `unsupported` (exit 2). See
+without `--azure-assume-flat`, this is `refused`, cause `unsupported` (exit 2). See
 [Azure admission](internals/providers/azblob.md#provider-implementation).
 
 **S3.** The AWS SDK's default chain: environment keys, the shared `config` and `credentials` files
-(`--profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
+(`--s3-profile`, `AWS_PROFILE`), IAM Identity Center (SSO), web identity, `credential_process`, AssumeRole
 profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMDSv2).
 
 - Requests go unsigned only with `--anonymous`, which ignores every credential: a public bucket needs it.
@@ -62,24 +62,24 @@ profiles, container credentials (ECS, EKS Pod Identity), EC2 instance roles (IMD
 - Refused before any request as configured but broken: an access key without its secret or the reverse, a
   session token without both keys, `AWS_ROLE_ARN` without `AWS_WEB_IDENTITY_TOKEN_FILE`, a profile that does
   not exist.
-- Region: `--region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
+- Region: `--s3-region`, else `AWS_REGION`, `AWS_DEFAULT_REGION`, the profile's `region`, else `us-east-1`. A
   wrong region is an error that names the bucket's region. Redirects are not followed. STS calls use the
-  environment's or profile's region, not `--region`.
-- Requester-pays buckets: `--request-payer`. Endpoint variants: `--fips`, `--dualstack`; S3-compatible stores:
-  `--endpoint URL`, addressed path-style unless `--path-style=false`.
+  environment's or profile's region, not `--s3-region`.
+- Requester-pays buckets: `--s3-requester-pays`. Endpoint variants: `--s3-fips`, `--s3-dualstack`; S3-compatible stores:
+  `--endpoint-url URL`, addressed path-style unless `--no-s3-path-style`.
 - Bearer tokens instead of SigV4 (an S3-compatible endpoint that takes OAuth tokens, such as GCS's XML API):
-  `--bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
-  (`--bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
+  `--s3-bearer-token-command 'gcloud auth print-access-token'`, refreshed every 45 m
+  (`--s3-bearer-token-refresh-interval`). A failing command fails the run with cause `auth`. The command is never
   recorded, so give it again to `swath resume DIR` ([cli.md](cli.md), "Bearer tokens").
 - Not supported: access points and Multi-Region Access Points, Outposts, S3 directory buckets (a name ending
   in `--x-s3` is refused, exit 2).
 
-**GCS.** `--gcs-credentials FILE` (Google credential JSON, including service-account and authorized-user
+**GCS.** `--gcs-credentials-file FILE` (Google credential JSON, including service-account and authorized-user
 files), else Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud file, the metadata server on Google Cloud).
 Requests go unauthenticated only with `--anonymous` (a public bucket needs it). Credentials that cannot be
 found or loaded (no ADC anywhere, a `GOOGLE_APPLICATION_CREDENTIALS` that names a missing file) are refused
 (`auth`) before any listing request. The token scope is
-`devstorage.read_only`. Requester-pays buckets: `--gcs-user-project PROJECT` bills that project; it is part of
+`devstorage.read_only`. Requester-pays buckets: `--gcs-billing-project PROJECT` bills that project; it is part of
 the resume identity.
 
 S3 uses one transport; GCS and Azure Blob use a pool sized by workers. HTTP/2 is available where
@@ -90,7 +90,7 @@ The report's `source.stats` records `anonymous`, `credentials` (where they came 
 
 ## Object-store requests
 
-S3, GCS and Azure Blob share `--anonymous`, `--endpoint`, `--request-timeout`, `--limiter`
+S3, GCS and Azure Blob share `--anonymous`, `--endpoint-url`, `--request-timeout`, `--no-adaptive-limit`
 and `--request-rate`. Without `--anonymous`, missing or unusable credentials stop the run;
 see [credentials](#credentials) for the Azure admission exception to cause `auth`. `--anonymous`
 ignores configured credentials. Endpoint URLs must use HTTP or HTTPS, have a host, and contain
@@ -100,7 +100,7 @@ A request has a 30 s timeout by default. Retryable failures get up to nine attem
 exponential backoff (100 ms base, 5 s maximum). For engine listing calls, retry exhaustion
 returns the page to the range engine for requeue. Azure namespace admission runs before the
 engine exists: exhausted admission checks can refuse the run when flatness remains unknown,
-unless `--azblob-flat` asserts it. `--stall-timeout` and `--max-duration` bound a run that cannot
+unless `--azure-assume-flat` asserts it. `--stall-timeout` and `--max-duration` bound a run that cannot
 make progress. Retryable status codes and server-directed waits differ by provider.
 
 The adaptive limiter starts at `--workers` (64 by default). `--request-rate N` adds a
@@ -192,7 +192,7 @@ swath list s3://bucket/prefix -o /data/inv-2026-11-06 \
   on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
   The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
   the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  `--report-format json` also prints the report on stdout; the default prints one line.
+  `--report -` also prints the report on stdout; the default prints one line.
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
   The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
   that keeps returning rows or pages forever. Give every unattended attempt one.
@@ -275,9 +275,9 @@ reduces concurrency under sustained throttling and recovers as answers improve.
 [Request admission](internals/clients.md#request-admission) owns its window, growth rules,
 timeout and latency brakes, and counters.
 
-- `--limiter=false` removes that limit. Seed listings and structure probes can run beside the
+- `--no-adaptive-limit` removes that limit. Seed listings and structure probes can run beside the
   workers, so more than `--workers` requests can be in flight.
-- `swath diag list --limiter-slow-start` enables an experimental ramp from a small initial limit;
+- `swath diag list --adaptive-limit-slow-start` enables an experimental ramp from a small initial limit;
   it is off by default.
 - `--request-rate N` adds an aggregate rate cap for a quota shared across a fleet. Reservations
   are spaced; scheduling delays can bunch actual sends.
@@ -290,7 +290,7 @@ throttle answers no longer move the limit, and a 300 requests/s cap holds it at 
 throttling have been measured only under the earlier per-answer rule ([history](measurements.md#throttling-through-the-fault-proxy)).
 If a run crawls with `throttles` rising and the report's
 `limiter.decreases` high (`limiter.max_depth` near `--workers`: the limit fell to about 1), use
-`--limiter=false` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
+`--no-adaptive-limit` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
 fit for live provider throttling; [request admission](internals/clients.md#request-admission) describes the tuning limits.
 
 ## Stopping and resuming
@@ -314,11 +314,11 @@ OOM kill loses nothing durable: the journal is crash-safe and the resume reconci
 
 **`swath resume DIR`** replays the command recorded in the journal. Only these may be given again (the last
 value wins): `--workers`, `--encoders`, `--row-budget`, `--spill-budget`, the diagnostic
-`--spill-reserve`, `--spill-compress` and `--spill-plain`, `--part-interval`, `--report-format`, `--report`,
+`--spill-reserve`, `--no-spill-compress` and `--spill-plain`, `--part-interval`, `--report`,
 `--max-duration`, `--stall-timeout`, `--seed-from`, the terminal flags, and the operational ones: the shared
-`--anonymous`, `--request-timeout`, `--limiter`, `--limiter-slow-start` and `--request-rate`, and each
-provider's credential flags (`--azblob-sas`, `--gcs-credentials`, `--profile`, `--bearer-token-command`,
-`--bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
+`--anonymous`, `--request-timeout`, `--no-adaptive-limit`, `--adaptive-limit-slow-start` and `--request-rate`, and each
+provider's credential flags (`--azure-sas-token`, `--gcs-credentials-file`, `--s3-profile`, `--s3-bearer-token-command`,
+`--s3-bearer-token-refresh-interval`) (`swath resume --help` prints the list). Any other flag is a usage error. `--max-duration` and the
 other runtime values are replayed from the first attempt unless given again; pass a fresh `--report` path each
 time.
 
@@ -343,8 +343,8 @@ later (this build writes and resumes version 9 only), spill on, `--spill-budget`
 not `--sequential`).
 
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
-billed project), `--fetch-owner`, the schema and the part size are frozen. A resume whose environment or
-`--profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
+billed project), `--s3-fetch-owner`, the schema and the part size are frozen. A resume whose environment or
+`--s3-profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
 was. Restore the original environment, or start over.
 
 **Refused resumes** and what they mean:

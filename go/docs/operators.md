@@ -95,7 +95,7 @@ if it happens again.
 **Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
 `limit` falls below `--workers`. A background under 15 % of answers is tolerated without a cut. For a quota
 shared with other clients, set `--request-rate N` below it. If a run crawls with the limit near 1 under
-sustained throttling, use `--limiter=false --request-rate N` ([operating.md](operating.md#throttling)).
+sustained throttling, use `--no-adaptive-limit --request-rate N` ([operating.md](operating.md#throttling)).
 
 ## Resume after a kill
 

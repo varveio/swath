@@ -4,7 +4,6 @@
 package main
 
 import (
-	"flag"
 	"go/ast"
 	"go/constant"
 	"go/parser"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/registry"
 )
@@ -43,13 +44,13 @@ func providerSpellings(command []string) spellings {
 		if f.Scheme != "" {
 			sp.schemes = append(sp.schemes, f.Scheme)
 		}
-		all, groups := flag.NewFlagSet("", flag.ContinueOnError), flag.NewFlagSet("", flag.ContinueOnError)
+		all, groups := pflag.NewFlagSet("", pflag.ContinueOnError), pflag.NewFlagSet("", pflag.ContinueOnError)
 		f.RegisterFlags(all, true)
 		for _, g := range f.Shared {
 			g.Flags(groups, true)
 		}
-		groups.VisitAll(func(fl *flag.Flag) { groupFlags[fl.Name] = true })
-		all.VisitAll(func(fl *flag.Flag) {
+		groups.VisitAll(func(fl *pflag.Flag) { groupFlags[fl.Name] = true })
+		all.VisitAll(func(fl *pflag.Flag) {
 			if groups.Lookup(fl.Name) == nil {
 				sp.flags[fl.Name] = true
 				byProvider[f.Scheme] = append(byProvider[f.Scheme], fl.Name)
@@ -89,32 +90,29 @@ func providerSpellings(command []string) spellings {
 	return sp
 }
 
-// commandFlags are the flag names the files register: the name argument
-// of flag.FlagSet's definition methods (f.BoolVar(&v, "name", ...),
-// f.Func("name", ...)) when it is a string literal.
+// commandFlags are the flag names the files register: the Name of each
+// flag table entry (source.Flag{Name: "name", ...}) when it is a string
+// literal.
 func commandFlags(files []*ast.File) []string {
 	var names []string
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
-			c, ok := n.(*ast.CallExpr)
+			c, ok := n.(*ast.CompositeLit)
 			if !ok {
 				return true
 			}
-			sel, ok := c.Fun.(*ast.SelectorExpr)
-			if !ok {
+			if sel, ok := c.Type.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Flag" {
 				return true
 			}
-			m := sel.Sel.Name
-			i := 0
-			switch {
-			case strings.HasSuffix(m, "Var"):
-				i = 1
-			case m == "Func" || m == "BoolFunc" || m == "String" || m == "Bool" || m == "Int" || m == "Int64" || m == "Duration" || m == "Float64" || m == "Uint":
-			default:
-				return true
-			}
-			if i < len(c.Args) {
-				if lit, ok := c.Args[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			for _, e := range c.Elts {
+				kv, ok := e.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if k, ok := kv.Key.(*ast.Ident); !ok || k.Name != "Name" {
+					continue
+				}
+				if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 					if v, err := strconv.Unquote(lit.Value); err == nil {
 						names = append(names, v)
 					}
@@ -136,8 +134,8 @@ func commandFlags(files []*ast.File) []string {
 // Each maximal constant string expression is checked once, on its value:
 // it counts when it is a provider's scheme, or holds one as "scheme:" (a
 // root or a prefix test); holds a provider's flag typed with dashes
-// ("--profile"); holds a word starting with a provider's flag namespace
-// ("gcs-"); or is a provider's flag name exactly ("profile"). The last two
+// ("--s3-profile"); holds a word starting with a provider's flag namespace
+// ("gcs-"); or is a provider's flag name exactly ("s3-profile"). The last two
 // do not count for a path element passed directly to filepath.Join or
 // path.Join (a file named metadata, a directory gcs-cache).
 func scan(fset *token.FileSet, files []*ast.File, sp spellings) []string {
@@ -267,7 +265,7 @@ func TestCommandNamesNoProvider(t *testing.T) {
 			t.Fatalf("provider %s:// not registered (schemes %q)", want, sp.schemes)
 		}
 	}
-	for _, want := range []string{"profile", "gcs-credentials", "azblob-sas"} {
+	for _, want := range []string{"s3-profile", "gcs-credentials-file", "azure-sas-token"} {
 		if !sp.flags[want] {
 			t.Fatalf("provider flag --%s not collected", want)
 		}
@@ -301,20 +299,20 @@ func TestScanSpellings(t *testing.T) {
 		{[]string{`var _ = "gs://" + bucket`}, true},
 		{[]string{`var _ = "--" + "gcs-" + name`}, true},
 		{[]string{`var _ = fs.Lookup("gcs-" + "credentials")`}, true},
-		{[]string{`const ns = "azblob-"`}, true},
-		{[]string{`var _ = errors.New("give --profile")`}, true},
-		{[]string{`var _ = []string{"profile"}`}, true},
+		{[]string{`const ns = "azure-"`}, true},
+		{[]string{`var _ = errors.New("give --s3-profile")`}, true},
+		{[]string{`var _ = []string{"s3-profile"}`}, true},
 		{[]string{`var _ = m["metadata"]`}, true},
-		{[]string{`var _ = fs.Lookup(filepath.Base("profile"))`}, true},
-		{[]string{`var _ = os.Getenv("profile")`}, true},
+		{[]string{`var _ = fs.Lookup(filepath.Base("s3-profile"))`}, true},
+		{[]string{`var _ = os.Getenv("s3-profile")`}, true},
 		{[]string{`var _ = os.Remove("metadata")`}, true},
-		{[]string{`var _ = filepath.Join(dir, "--profile")`}, true},
+		{[]string{`var _ = filepath.Join(dir, "--s3-profile")`}, true},
 		{[]string{`var _ = filepath.Join(dir, "metadata")`}, false},
 		{[]string{`var _ = path.Join("a", "metadata")`}, false},
 		{[]string{`var _ = filepath.Join(dir, "gcs-cache")`}, false},
 		{[]string{`var _ = fmt.Sprintf("s%s", "3")`}, false}, // run time: out of reach
 		{[]string{`var _ = errors.New("flags: bad args: x")`}, false},
-		{[]string{`var _ = "--endpoint"`}, false}, // a shared group's flag
+		{[]string{`var _ = "--endpoint-url"`}, false}, // a shared group's flag
 		{[]string{`var _ = "--request-timeout"`}, false},
 		{[]string{`var _ = "one region"`}, false},
 	} {

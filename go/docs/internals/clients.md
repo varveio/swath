@@ -61,7 +61,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
   GCS and Azure size their pools by workers and rotate their SDK services.
 - **Secret-safe diagnostics.** An endpoint URL with user information is refused at construction without quoting
   it (`source` `TestRegisteredEndpointRefusals`). `registry.RedactArgv`, shared by the command and listing, replaces the value
-  of every URL flag the shared flag groups declare (`source.FlagGroup.URLs`: the store group's `--endpoint`,
+  of every URL flag the shared flag groups declare (`source.FlagGroup.URLs`: the store group's `--endpoint-url`,
   which every object store takes) with `[redacted]` when it carries user information or
   cannot be parsed, in either argument spelling. Valid endpoints without user information are retained for
   resume. This covers failure reports, successful reports and journal arguments, including recorded arguments
@@ -158,7 +158,7 @@ before `net/http` can parse it. GCS and Azure report `transport.pool_size`.
 ## Request admission
 
 All three object-store providers build `objhttp.Admission.New(workers)` for their own clients, beside the
-engine's `keyrange.Policy`. The CLI enables the adaptive limiter by default (`--limiter=false` disables
+engine's `keyrange.Policy`. The CLI enables the adaptive limiter by default (`--no-adaptive-limit` disables
 it); a library caller's zero `Admission` leaves it off. A supplied listing client owns its admission.
 `Admission.Off` supplies feature states for reporting; the range engine does not admit HTTP requests.
 Namespace admission (for example Azure's flat-namespace check) is a separate provider decision.
@@ -182,7 +182,7 @@ above twice its rolling-minimum baseline also freezes growth; the baseline re-fl
 a latency freeze a +1 valve step is allowed at most every 30 s with more than `max(1, limit/32)` successes
 in that valve window. Timeouts end slow start and hold growth; they do not lower the limit.
 
-`swath diag list --limiter-slow-start` starts at `min(4, workers)` and doubles at paced growth steps until
+`swath diag list --adaptive-limit-slow-start` starts at `min(4, workers)` and doubles at paced growth steps until
 the worker count, the first cut or an attempt timeout. A tolerated throttle does not end the ramp, and the
 latency valve remains +1. Slow start is off by default. Counters `limiter.*` and
 `slow_start.{doubles,ramp_ns,end_limit}` distinguish engagement and brakes; feature `slow_start` distinguishes

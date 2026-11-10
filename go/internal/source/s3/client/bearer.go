@@ -9,7 +9,7 @@ import (
 	"github.com/varveio/swath/go/internal/source/tokensource"
 )
 
-// Bearer-token authentication (--bearer-token-command), as Java swath's:
+// Bearer-token authentication (--s3-bearer-token-command), as Java swath's:
 // a shell command prints an OAuth bearer token on stdout, sent as
 // "Authorization: Bearer TOKEN" instead of a SigV4 signature on every
 // request (GCS's XML API with `gcloud auth print-access-token`, or any
