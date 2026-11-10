@@ -127,7 +127,10 @@ func UnsafeURL(raw string) bool {
 	if err != nil || u.User != nil || strings.ContainsAny(raw, "?#") {
 		return true
 	}
-	return strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f })
+	// A host that decodes to a space or a control character (an escaped IPv6
+	// zone) fails the same second parse.
+	return strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) ||
+		strings.ContainsFunc(u.Host, func(r rune) bool { return r <= 0x20 || r == 0x7f })
 }
 
 // RedactRoot keeps literal prefixes intact and hides credential-bearing authorities.

@@ -175,7 +175,8 @@ func (id Identity) Hash() string {
 func redactEndpoint(value string) string {
 	u, err := url.Parse(value)
 	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") ||
-		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) {
+		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r == '%' || r < 0x20 || r == 0x7f }) ||
+		strings.ContainsFunc(u.Host, func(r rune) bool { return r <= 0x20 || r == 0x7f }) {
 		return "[redacted]"
 	}
 	return value
