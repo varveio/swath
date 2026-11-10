@@ -25,10 +25,11 @@ GOOS=darwin GOARCH=arm64 ./build.sh -o swath-darwin-arm64
 ./swath --version        # swath-go VERSION (REVISION)
 ```
 
-`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Revision=REV'` with REV the
-checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its commit). A plain
-`go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp, which a build in a
-git worktree may lack (`--version` then shows none).
+`build.sh` runs `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X …buildinfo.Version=VER -X
+…buildinfo.Revision=REV'` with VER `$SWATH_VERSION` (the release workflow sets its tag's `X.Y.Z`; empty
+otherwise) and REV the checkout's HEAD (`-dirty` with local changes in `go/`) or `$SWATH_REVISION` (CI sets its
+commit). A plain `go build ./cmd/swath` works too but takes the revision from the Go toolchain's VCS stamp,
+which a build in a git worktree may lack (`--version` then shows none).
 
 The module cross-compiles for linux/amd64, linux/arm64, darwin/arm64 and windows/amd64. CI runs the test suite
 on every Go change without `-race` on macOS (arm64) and Windows (amd64), and with `-race` on Linux: `internal/listing`
@@ -36,7 +37,7 @@ and `cmd/swath` on arm64, the other packages on amd64; a nightly run races the w
 ([testing](testing.md#continuous-integration)); measurements are from Linux. A stripped linux/amd64 binary is about 18 MB ([measurements](measurements.md#client-cpu-per-object-and-binary-size): 17.7 MB
 with GCS).
 
-`--version` prints the tool name, the module version (`devel` for a source build) and the VCS revision when the
+`--version` prints the tool name, the version (the release's `X.Y.Z`, `devel` for a source build) and the VCS revision when the
 build recorded one (`-dirty` if the tree was modified). Every report carries the same in `build`. Keep the
 revision with any run you may need to investigate.
 

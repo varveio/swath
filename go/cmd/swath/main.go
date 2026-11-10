@@ -294,7 +294,7 @@ func commands(w io.Writer) {
   swath resume DIR [flags]                continue the interrupted run in DIR
   swath show [--journal] DIR              show a dataset or an interrupted run
   swath diag list|count SOURCE [flags]    list, or count without writing, with the diagnostic flags (experiments, comparisons)
-  swath --version                         print the build (tool, module version, VCS revision)
+  swath --version                         print the build (tool, version, VCS revision)
 SOURCE is `+sourceForms()+`.
 swath COMMAND --help lists a command's flags.
 `)
