@@ -271,8 +271,12 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		return nil
 	})
-	if v := askedFormat(args); v != "" && !g.Changed("log-format") {
-		t.logFormat = v // the command's: an unknown command is reported as asked
+	if len(p.operands) > 0 && !slices.Contains(commandWords, p.operands[0]) && !g.Changed("log-format") {
+		// An unknown command is reported in the format its command line
+		// asks for, read with the list commands' flags.
+		if flags, _ := argFlags(newFlags(&options{}, true), p.operands[1:], true); askedFormat(flags) != "" {
+			t.logFormat = askedFormat(flags)
+		}
 	}
 	setLog(t, "")
 	switch {
@@ -727,6 +731,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", err
 	}
 	o.parsed = err == nil
+	o.argv = commandLine(cmd.name(), p, p.operands...)
 	switch {
 	case err != nil:
 		return o, "", err
@@ -736,11 +741,7 @@ func parseList(args []string, stdout io.Writer, cmd command) (o options, root st
 		return o, "", seeHelp{usageError{fmt.Errorf("unexpected argument %q", registry.Redact(p.operands[1]))}, cmd.name()}
 	}
 	root = registry.Canonical(p.operands[0])
-	o.argv = append(strings.Fields(cmd.name()), p.given...)
-	if strings.HasPrefix(root, "-") {
-		o.argv = append(o.argv, "--")
-	}
-	o.argv = append(o.argv, root)
+	o.argv = commandLine(cmd.name(), p, root)
 	if err := placement(f, cmd); err != nil {
 		return o, "", usageError{err}
 	}
@@ -801,7 +802,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		// A refusal of a command line that parsed has a report, unless
 		// its destination is itself refused.
 		if checkSidePaths(&o) == nil {
-			return stopEarly(stdout, o.report, redactArgv(append(strings.Fields(cmd.name()), args...)), "", att, err)
+			return stopEarly(stdout, o.report, o.argv, "", att, err)
 		}
 	}
 	if err != nil {

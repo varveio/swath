@@ -21,9 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/journal"
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/s3/s3test"
@@ -326,5 +329,50 @@ func TestSecrecyRunOutputs(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestPlaceAndSecretFlagsNeverEchoed: every flag whose value is a place
+// or a secret (source.Flag.Shown), in every spelling (--name=V, --name V,
+// -xV, -x V), carries a credential nowhere: not in the recorded command
+// (what the journal records), stderr (text or JSON events) or the report.
+func TestPlaceAndSecretFlagsNeverEchoed(t *testing.T) {
+	const value = "https://user:TESTSECRET@acct.blob.core.windows.net/c?sv=1&sig=TESTSECRET"
+	n := 0
+	newFlags(&options{}, true).VisitAll(func(fl *pflag.Flag) {
+		if source.Described(fl).Shown == "" {
+			return
+		}
+		spellings := [][]string{{"--" + fl.Name + "=" + value}, {"--" + fl.Name, value}}
+		if fl.Shorthand != "" {
+			spellings = append(spellings, []string{"-" + fl.Shorthand + value}, []string{"-" + fl.Shorthand, value})
+		}
+		for _, sp := range spellings {
+			n++
+			o, _, _ := parseList(append([]string{"s3://b"}, sp...), io.Discard, command{diag: true})
+			if strings.Contains(strings.Join(o.argv, " "), "TESTSECRET") {
+				t.Errorf("%q: recorded %q", sp, o.argv)
+			}
+			for _, format := range []string{logText, logJSON} {
+				stderr := captureStderr(t)
+				report := filepath.Join(t.TempDir(), "report.json")
+				args := append([]string{"--log-format", format, "-v", "diag", "list", "bad://b"}, sp...)
+				if fl.Name != "report" {
+					args = append(args, "--report", report)
+				}
+				var stdout bytes.Buffer
+				conclude(dispatch(context.Background(), args, &stdout))
+				logs.Store(nil)
+				raw, _ := os.ReadFile(report)
+				for what, b := range map[string][]byte{"stderr": stderr.Bytes(), "stdout": stdout.Bytes(), "report": raw} {
+					if bytes.Contains(b, []byte("TESTSECRET")) {
+						t.Errorf("%s %q: %s holds the secret: %s", format, sp, what, b)
+					}
+				}
+			}
+		}
+	})
+	if n == 0 {
+		t.Fatal("no place or secret flag in the table")
 	}
 }

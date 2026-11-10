@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
 )
 
@@ -315,30 +316,41 @@ func TestRecordedCommandCanonical(t *testing.T) {
 // TestRecordedCommandRoundTrip: every value-taking flag's recorded form
 // parses back to the same value and the same SOURCE, for an empty value
 // (--name=, not --name, which would take the next argument), one that
-// starts with a dash and one that holds '='.
+// starts with a dash, one that holds '=', and one that looks like a URL
+// with credentials (s3://user@host/p?sig=x#f): a flag that does not name a
+// place or a secret (source.Flag.Shown) holds data, a filter, recorded
+// as given, through the registry's second pass too, so a resume's filters
+// equal the run's.
 func TestRecordedCommandRoundTrip(t *testing.T) {
 	accepted := 0
 	newFlags(&options{}, true).VisitAll(func(fl *pflag.Flag) {
-		if fl.NoOptDefVal != "" {
+		if fl.NoOptDefVal != "" || source.Described(fl).Shown != "" {
 			return
 		}
-		for _, v := range []string{"", "-x", "a=b"} {
+		for _, v := range []string{"", "-x", "a=b", "s3://user@host/p?sig=x#f", "a@b", "?x", "#x", "sig=x"} {
 			f1 := newFlags(&options{}, true)
 			p1, err := parseFlags(f1, cmdDiagList, []string{"--" + fl.Name, v, "s3://b"}, nil)
 			if err != nil {
 				continue // a value this flag refuses
 			}
 			accepted++
+			if !slices.Equal(p1.recorded, p1.given) || !slices.Equal(registry.RedactArgv(p1.recorded), p1.recorded) {
+				t.Errorf("--%s %q: recorded %q, through the registry %q", fl.Name, v, p1.recorded, registry.RedactArgv(p1.recorded))
+			}
 			f2 := newFlags(&options{}, true)
-			p2, err := parseFlags(f2, cmdDiagList, append(slices.Clone(p1.given), "s3://b"), nil)
-			if err != nil || !slices.Equal(p2.given, p1.given) || !slices.Equal(p2.operands, []string{"s3://b"}) ||
+			p2, err := parseFlags(f2, cmdDiagList, append(slices.Clone(p1.recorded), "s3://b"), nil)
+			if err != nil || !slices.Equal(p2.recorded, p1.recorded) || !slices.Equal(p2.operands, []string{"s3://b"}) ||
 				f2.Lookup(fl.Name).Value.String() != f1.Lookup(fl.Name).Value.String() {
-				t.Errorf("--%s %q: recorded %q, parsed back %q %q (%v)", fl.Name, v, p1.given, p2.given, p2.operands, err)
+				t.Errorf("--%s %q: recorded %q, parsed back %q %q (%v)", fl.Name, v, p1.recorded, p2.recorded, p2.operands, err)
 			}
 		}
 	})
 	if accepted == 0 {
 		t.Fatal("no flag took any of the values")
+	}
+	o, _, err := parseList([]string{"s3://b", "--include-regex", "s3://user@host/path", "-o", "ds"}, io.Discard, command{})
+	if err != nil || !slices.Contains(registry.RedactArgv(o.argv), "--include-regex=s3://user@host/path") {
+		t.Errorf("a filter that looks like a URL: %q (%v)", registry.RedactArgv(o.argv), err)
 	}
 }
 
@@ -458,6 +470,27 @@ func TestGlobalFlagsEverywhere(t *testing.T) {
 		var ev map[string]any
 		if code == exitCompleted || json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &ev) != nil || ev["event"] != "outcome" {
 			t.Errorf("%q: exit %d, stderr %q", args, code, stderr.String())
+		}
+	}
+	// The format is read as the parser reads the flags: a value is a
+	// value, -- ends them, the last one wins; every early refusal (a
+	// one-dash name, an unknown flag) is reported in it.
+	for _, c := range []struct {
+		args []string
+		json bool
+	}{
+		{[]string{"--log-format", "text", "list", src, "--include", "--log-format", "json", "--bogus"}, false},
+		{[]string{"list", src, "-verbose", "--log-format", "json"}, true},
+		{[]string{"list", src, "--include=--log-format", "json", "--bogus"}, false},
+		{[]string{"list", src, "--bogus", "--", "--log-format", "json"}, false},
+		{[]string{"list", src, "--log-format", "json", "--log-format", "text", "--bogus"}, false},
+		{[]string{"list", src, "--log-format", "text", "--log-format=json", "--bogus"}, true},
+	} {
+		stderr := captureStderr(t)
+		t.Cleanup(func() { logs.Store(nil) })
+		code := conclude(dispatch(context.Background(), c.args, io.Discard))
+		if isJSON := json.Valid(bytes.TrimSpace(stderr.Bytes())); code != exitUsage || isJSON != c.json {
+			t.Errorf("%q: exit %d, json %v, stderr %q", c.args, code, isJSON, stderr.String())
 		}
 	}
 	if err := dispatch(context.Background(), []string{"completion", "bash", "--color", "never", "-v"}, io.Discard); err != nil {

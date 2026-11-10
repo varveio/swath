@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/varveio/swath/go/internal/dataset"
+	"github.com/varveio/swath/go/internal/registry"
 )
 
 // checkSidePaths refuses, before the source is opened, a file the command
@@ -49,7 +51,7 @@ func checkSidePaths(o *options) error {
 			err = fmt.Errorf("is a symbolic link: a profile is not written through one")
 		}
 		if err != nil {
-			return fmt.Errorf("%s %s: %w", side.what, *side.path, err)
+			return fmt.Errorf("%s %s: %w", side.what, registry.RedactPlace(*side.path), err)
 		}
 		*side.path = dest
 	}
@@ -63,7 +65,7 @@ func writable(dest string) error {
 		return fmt.Errorf("is a directory")
 	}
 	if fi, err := os.Stat(filepath.Dir(dest)); err != nil || !fi.IsDir() {
-		return fmt.Errorf("its directory %s does not exist", filepath.Dir(dest))
+		return errors.New("its directory does not exist") // the path is named, redacted, by the caller
 	}
 	return nil
 }

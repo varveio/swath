@@ -69,7 +69,7 @@ func resume(ctx context.Context, args []string, stdout io.Writer) error {
 	att := newAttempt()
 	setLog(o.term, att.ID)
 	stop := func(err error) error {
-		return refuse(stdout, dir, seen, err, att, o.report, redactArgv(append([]string{"resume"}, args...)), o.term.verbose > 0)
+		return refuse(stdout, dir, seen, err, att, o.report, commandLine("resume", p, p.operands...), o.term.verbose > 0)
 	}
 	if textRun(dir) {
 		// A text run keeps no journal: there is nothing to continue.

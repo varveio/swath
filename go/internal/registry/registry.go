@@ -384,8 +384,12 @@ func Register(f Factory) {
 // user information, ? or # is SCHEME://[redacted] (source.RedactRoot), as is
 // a URL of a scheme no provider takes, which none can tell a literal prefix
 // from a credential in, when it has a query or a fragment or does not parse.
-func Redact(root string) string {
-	root = Canonical(root)
+func Redact(root string) string { return RedactPlace(Canonical(root)) }
+
+// RedactPlace is a flag's place (a path or a URL: source.ShownPlace) as it
+// may be shown or recorded: redacted as Redact redacts a root, in the form
+// given.
+func RedactPlace(root string) string {
 	if rootCredentials(root) {
 		return source.RedactRoot(root)
 	}
@@ -423,10 +427,13 @@ func rootCredentials(root string) bool {
 	return source.RedactRoot(root) != root
 }
 
-// RedactArgv copies a command line for reports and journals: registered
-// secret flags, credential-bearing URL flags (source.FlagGroup.URLs) and
-// credentials in source roots are redacted. Both --flag VALUE and
-// --flag=VALUE are accepted.
+// RedactArgv copies a canonical command line (each flag --name=value or
+// --name, then the operands) for reports and journals: registered secret
+// flags, credential-bearing URL flags (source.FlagGroup.URLs) and
+// credentials in the operands (source roots) are redacted; any other
+// flag's value is data (a filter), kept as given. The command redacts by
+// each flag's table entry (source.Flag.Shown) as it records the line;
+// this is the second pass of a caller that hands one on.
 func RedactArgv(argv []string) []string {
 	secrets, urls := map[string]bool{}, map[string]bool{}
 	for _, f := range Factories() {
@@ -455,7 +462,7 @@ func RedactArgv(argv []string) []string {
 			hide = RedactURL(value) != value
 		}
 		if !hide {
-			out = append(out, Redact(a))
+			out = append(out, a)
 			continue
 		}
 		dashes := a[:len(a)-len(strings.TrimLeft(a, "-"))]

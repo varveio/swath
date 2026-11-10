@@ -85,7 +85,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
 		Long: "With --count-links-once. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
 
-	def(source.Flag{Name: "output", Short: "o", Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
+	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownPlace, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
 		Long:  "A trailing / names a directory whatever its name."})
 	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
@@ -146,7 +146,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	def(source.Flag{Name: "part-rotation-max-rows", Value: source.Count64(&o.partMaxRows, 0), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
 		Usage: "also close a part at N rows (0: by size and --part-interval only)",
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
-	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
+	def(source.Flag{Name: "seed-from", Shown: source.ShownPlace, Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
 		Usage: "start from a previous listing's key distribution, not the seed",
 		Long:  "A committed dataset of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively."})
 
@@ -157,7 +157,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Usage: "stop as stuck after this long without progress (exit 75)",
 		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 
-	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
+	def(source.Flag{Name: "report", Shown: source.ShownPlace, Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",
 		Long: "Written on failure too, with the outcome and the attempt id; not for a command line that does not parse (an unknown flag, a bad value). " +
 			"A directory, or a name whose directory does not exist, is refused before listing; a report that cannot be written at the end fails the command (exit 1). - is refused where stdout carries rows."})
@@ -336,9 +336,27 @@ func (s seeHelp) see() string {
 type parsed struct {
 	operands []string // the arguments that are not flags, in order
 	// given are the flags given, in order, each in its canonical spelling
-	// (--name=value; --name for a switch): the recorded command.
-	given    []string
+	// (--name=value; --name for a switch), as typed: what a command hands
+	// on to another (the root's global flags).
+	given []string
+	// recorded are given as a recorded or reported command line shows
+	// them: each value by its flag's table entry (shownValue).
+	recorded []string
 	longHelp bool // --help (not -h) asked for help
+}
+
+// commandLine is a command line as recorded or reported: the command's
+// words, the recorded flags, then the operands, redacted as roots, after
+// -- when one looks like a flag.
+func commandLine(words string, p parsed, operands ...string) []string {
+	argv := append(strings.Fields(words), p.recorded...)
+	if slices.ContainsFunc(operands, func(o string) bool { return strings.HasPrefix(o, "-") }) {
+		argv = append(argv, "--")
+	}
+	for _, o := range operands {
+		argv = append(argv, registry.Redact(o))
+	}
+	return argv
 }
 
 // parseFlags parses args with f, GNU-style: flags before, between and
@@ -347,7 +365,9 @@ type parsed struct {
 // A long name typed with one dash (-depth) is refused, not read as -d
 // epth. accept, if set, may refuse a flag before it is set. A help request
 // is pflag.ErrHelp; any other error is a usage error naming the flag and
-// pointing at cmd's help.
+// pointing at cmd's help, after the --log-format the command line gives
+// (as the parser reads it: argFlags) is set on f, so that the refusal is
+// reported in it.
 func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.Flag) error) (parsed, error) {
 	var p parsed
 	flagArgs := args
@@ -355,10 +375,18 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		flagArgs = args[:i]
 	}
 	p.longHelp = slices.Contains(flagArgs, "--help")
-	usage := func(err error) error { return seeHelp{usageError{err}, cmd} }
 	// The root's flags end at the command word (dispatch).
-	if name := singleDashLong(f, args, cmd != ""); name != "" {
-		return p, usage(fmt.Errorf("unknown flag -%s (did you mean --%s?)", name, name))
+	flags, _ := argFlags(f, args, cmd != "")
+	usage := func(err error) error {
+		if v := askedFormat(flags); v != "" {
+			_ = f.Set("log-format", v)
+		}
+		return seeHelp{usageError{err}, cmd}
+	}
+	for _, a := range flags {
+		if a.dashLong {
+			return p, usage(fmt.Errorf("unknown flag -%s (did you mean --%s?)", a.name, a.name))
+		}
 	}
 	f.Usage = func() {}
 	err := f.ParseAll(args, func(fl *pflag.Flag, value string) error {
@@ -372,15 +400,14 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		}
 		if fl.NoOptDefVal != "" && value == fl.NoOptDefVal {
 			p.given = append(p.given, "--"+fl.Name)
+			p.recorded = append(p.recorded, "--"+fl.Name)
 		} else {
 			p.given = append(p.given, "--"+fl.Name+"="+value)
+			p.recorded = append(p.recorded, "--"+fl.Name+"="+shownValue(fl, value))
 		}
 		return nil
 	})
 	p.operands = f.Args()
-	if v := askedFormat(args); err != nil && v != "" && f.Lookup("log-format") != nil {
-		_ = f.Set("log-format", v) // the refusal is reported as asked
-	}
 	var ne *pflag.NotExistError
 	var ve *pflag.ValueRequiredError
 	var ie *pflag.InvalidValueError
@@ -391,7 +418,7 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 	case errors.Is(err, pflag.ErrHelp):
 		return p, pflag.ErrHelp
 	case errors.As(err, &u):
-		return p, seeHelp{u, cmd}
+		return p, usage(u.error)
 	case errors.As(err, &ne):
 		// The name alone: what follows it may be a value.
 		typed := "--" + ne.GetSpecifiedName()
@@ -402,55 +429,104 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 	case errors.As(err, &ve):
 		return p, usage(fmt.Errorf("--%s needs a value (%s)", ve.GetFlag().Name, source.Described(ve.GetFlag()).Metavar))
 	case errors.As(err, &ie):
-		return p, usage(fmt.Errorf("--%s %q: %w", ie.GetFlag().Name, shownValue(ie.GetFlag().Name, ie.GetValue()), errors.Unwrap(ie)))
+		return p, usage(fmt.Errorf("--%s %q: %w", ie.GetFlag().Name, shownValue(ie.GetFlag(), ie.GetValue()), errors.Unwrap(ie)))
 	}
 	return p, usage(err)
 }
 
-// singleDashLong is the first long name typed with one dash (-depth) among
-// the flags of args as f's parser reads them: a flag's value is consumed,
-// not read as a flag, and the flags end at -- (and, unless interspersed,
-// at the first operand). "" for none.
-func singleDashLong(f *pflag.FlagSet, args []string, interspersed bool) string {
+// argFlag is one flag of a command line as a flag set's parser reads it.
+type argFlag struct {
+	fl       *pflag.Flag // nil: one the set does not define
+	name     string      // as typed, without its dashes
+	value    string      // its value (a switch's NoOptDefVal when given bare)
+	dashLong bool        // a long name typed with one dash (-depth)
+}
+
+// argFlags walks args as f's parser reads them: a flag's value is
+// consumed, not read as a flag (--include -verbose, --include
+// --log-format), the flags end at -- and, unless interspersed, at the
+// first operand. A flag f does not define is taken to have no value (the
+// parser refuses it there); the walk goes on past it, so that a refusal
+// still finds the flags after it (askedFormat).
+func argFlags(f *pflag.FlagSet, args []string, interspersed bool) (flags []argFlag, operands []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
-			return ""
+			return flags, append(operands, args[i+1:]...)
 		case len(a) < 2 || a[0] != '-':
 			if !interspersed {
-				return ""
+				return flags, append(operands, args[i:]...)
 			}
+			operands = append(operands, a)
 		case a[1] == '-':
-			name, _, eq := strings.Cut(a[2:], "=")
-			if fl := f.Lookup(name); fl != nil && !eq && fl.NoOptDefVal == "" {
+			name, v, eq := strings.Cut(a[2:], "=")
+			fl := f.Lookup(name)
+			switch {
+			case fl == nil || eq:
+			case fl.NoOptDefVal != "":
+				v = fl.NoOptDefVal
+			case i+1 < len(args):
 				i++
+				v = args[i]
 			}
+			flags = append(flags, argFlag{fl: fl, name: name, value: v})
 		default:
-			if name, _, _ := strings.Cut(a[1:], "="); len(name) > 1 && f.Lookup(name) != nil {
-				return name
+			if name, v, _ := strings.Cut(a[1:], "="); len(name) > 1 && f.Lookup(name) != nil {
+				flags = append(flags, argFlag{fl: f.Lookup(name), name: name, value: v, dashLong: true})
+				continue
 			}
-			// A bundle (-vd 2): the first value-taking flag takes the
-			// rest of the token, or the next argument when it ends it.
+			// A bundle (-vd 2): switches, then the first value-taking
+			// flag takes the rest of the token, or the next argument.
+		bundle:
 			for j := 1; j < len(a); j++ {
 				fl := f.ShorthandLookup(a[j : j+1])
-				if fl == nil || fl.NoOptDefVal == "" {
-					if fl != nil && j == len(a)-1 {
-						i++
-					}
-					break
+				switch rest := a[j+1:]; {
+				case fl == nil:
+					flags = append(flags, argFlag{name: a[j : j+1]})
+				case strings.HasPrefix(rest, "=") && len(rest) > 1:
+					flags = append(flags, argFlag{fl: fl, name: fl.Name, value: rest[1:]})
+				case fl.NoOptDefVal != "":
+					flags = append(flags, argFlag{fl: fl, name: fl.Name, value: fl.NoOptDefVal})
+					continue
+				case rest != "":
+					flags = append(flags, argFlag{fl: fl, name: fl.Name, value: rest})
+				case i+1 < len(args):
+					i++
+					flags = append(flags, argFlag{fl: fl, name: fl.Name, value: args[i]})
+				default:
+					flags = append(flags, argFlag{fl: fl, name: fl.Name})
 				}
+				break bundle
 			}
 		}
 	}
-	return ""
+	return flags, operands
 }
 
-// shownValue is a flag's value as an error may quote it: redacted as the
-// recorded command line redacts it (registry.RedactArgv).
-func shownValue(name, value string) string {
-	if registry.RedactArgv([]string{"--" + name + "=" + value})[0] == "--"+name+"="+redacted {
+// askedFormat is the --log-format flags give, the last one as the parser
+// takes it; "" for none, or a value that is not a format.
+func askedFormat(flags []argFlag) string {
+	v := ""
+	for _, a := range flags {
+		if a.fl != nil && a.fl.Name == "log-format" && !a.dashLong {
+			v = a.value
+		}
+	}
+	if v != logText && v != logJSON {
+		return ""
+	}
+	return v
+}
+
+// shownValue is fl's value as a recorded or reported command line, or an
+// error, shows it: by its table entry (source.Flag.Shown).
+func shownValue(fl *pflag.Flag, value string) string {
+	switch source.Described(fl).Shown {
+	case source.ShownNever:
 		return redacted
+	case source.ShownPlace:
+		return registry.RedactPlace(value)
 	}
 	return value
 }

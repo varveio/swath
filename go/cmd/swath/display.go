@@ -112,29 +112,6 @@ func (t *termOptions) registerGlobal(f *pflag.FlagSet) {
 	})
 }
 
-// askedFormat is the last --log-format value args give before --
-// (--log-format json, --log-format=json), "" for none or one that is not
-// a format: a command line that is refused, perhaps before the flag is
-// read, reports in it.
-func askedFormat(args []string) string {
-	v := ""
-	for i, a := range args {
-		if a == "--" {
-			break
-		}
-		switch x, found := strings.CutPrefix(a, "--log-format="); {
-		case found:
-			v = x
-		case a == "--log-format" && i+1 < len(args):
-			v = args[i+1]
-		}
-	}
-	if v != logText && v != logJSON {
-		return ""
-	}
-	return v
-}
-
 func (t *termOptions) validate() error {
 	switch t.color {
 	case "auto", "always", "never":

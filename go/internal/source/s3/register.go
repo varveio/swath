@@ -71,7 +71,7 @@ func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	source.Define(f, source.Flag{Name: "s3-requester-pays", Familiar: []string{"requester-pays", "request-payer"}, Value: source.Switch(&o.RequestPayer), Usage: "accept the request charges of a requester-pays bucket"})
 	source.Define(f, source.Flag{Name: "s3-path-style", Familiar: []string{"path-style"}, Value: tracked(&o.PathStyle, true, &o.pathStyleSet), Usage: "address the bucket in the path (default with --endpoint-url)"})
 	source.Define(f, source.Flag{Name: "no-s3-path-style", Value: tracked(&o.PathStyle, false, &o.pathStyleSet), Usage: "address the bucket in the host name, also with --endpoint-url"})
-	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Familiar: []string{"bearer-token-command"}, Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
+	source.Define(f, source.Flag{Name: "s3-bearer-token-command", Shown: source.ShownNever, Familiar: []string{"bearer-token-command"}, Value: source.Text(&o.BearerCommand), Metavar: "COMMAND",
 		Usage: "a shell command printing a bearer token, sent instead of SigV4",
 		Long:  "For GCS's XML API: 'gcloud auth print-access-token'. Never recorded: swath resume needs it again."})
 	source.Define(f, source.Flag{Name: "s3-bearer-token-refresh-interval", Metavar: "DURATION", Default: source.FormatDuration(tokensource.DefaultRefresh),

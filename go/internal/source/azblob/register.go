@@ -42,7 +42,7 @@ func defaults() any { return &flagged{} }
 // The flags are prefixed: one flag set serves every provider.
 func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
 	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	source.Define(f, source.Flag{Name: "azure-sas-token", Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
+	source.Define(f, source.Flag{Name: "azure-sas-token", Shown: source.ShownNever, Familiar: []string{"azblob-sas"}, Value: source.Text(&o.SAS), Metavar: "TOKEN", Usage: "a shared access signature (a query string); never recorded",
 		Long: "Else a SAS in the source's query, else " + EnvSAS + "; with none, an account key in " + EnvKey + " (Shared Key), else Entra ID (DefaultAzureCredential). Give it again to swath resume."})
 	source.Define(f, source.Flag{Name: "azure-assume-flat", Value: source.Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
 		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent; a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
