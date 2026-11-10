@@ -1641,6 +1641,38 @@ Workers 1 is unchanged by design (one shard). The 8-worker `Scan` medians (new 7
 ns/row) overlap under this load. Scan time on many cores, where the imbalance varve measured lives, is not
 measured here.
 
+### Reader Totals in shards, 2026-11-10
+
+`Totals` scanning in parallel shards over borrowed batches (varve #124, plain refresh) against the serial
+`Totals` it replaced (`serial`: one `RangePlan.Scan` of owning rows plus a count plan per path; kept in
+`totals_test.go` as `serialTotals`, the oracle), in the same binary: swath main `c97fda1b` (the shard queue,
+eight shards a worker) plus this change, SeekParquet `586dcb7` (#55, key page buffers reused) in both modules.
+`BenchmarkReaderTotals`, `-run '^$' -benchtime 3x -count 3 -p 1`, under `flock /tmp/swath-gates.lock`, Go 1.27.4,
+linux/amd64, GOMAXPROCS 4, the shared 4-vCPU Xeon Platinum 8581C; load average 2.6 at the start, 3.4 at the
+end. The same 4,000,000-row, seed-1 fixture (2 parts, 20 row groups); warm Dataset; 600 paths, root included,
+nested up to eight levels (`benchTotalsPaths`). Each arm equals the oracle. Indicative only.
+
+| Arm | ns/row (3 runs) | allocs/row | B/row |
+|---|---|---:|---:|
+| serial (before) | 765, 728, 747 | 6.03 | 427 |
+| workers=1 | 195, 196, 199 | 0.021 | 4.7 |
+| workers=4 | 100, 102, 104 | 0.021 | 9.9 |
+| workers=8 | 102, 102, 103 | 0.021 | 9.9 |
+
+Probes earlier the same day, on SeekParquet `b1c848a4d2d6`, not committed: the serial `Totals` spent about
+260 ms planning the 600 ranges (planning positions at both ends of every range, decoding a key page at each)
+and about 280 ms on 600 count plans, against 0.4 ms to plan the one range not inside another. `Totals` plans
+only the outermost ranges (the same rows) and takes each count from the rows its scan adds to the path. On that
+pin, before the shard queue, Totals measured 187 B/row at every worker count against 183 for a no-op
+`ScanBatches`; SeekParquet #55's key page reuse is most of the drop to 5–10 B/row.
+
+The key order check across shards (`shardOrder`: two key copies per shard, the last key copied once per
+batch, a comparison per shard boundary after the join) against the same binary with it stubbed out,
+interleaved three times on the same fixture (load average 0.6 to 4.4 during the runs): `BenchmarkReaderTotals`
+4.680 against 4.678 B/row at one worker and 9.919 against 9.908 at four (about 0.01 B/row); ns/row of Totals,
+`Scan` and `Batch-noop` at 1, 4 and 8 workers overlapped between the arms in every case (Totals at one worker
+190–259 against 191–196, `Batch-noop` 220–227 against 221–226), within this host's noise.
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through

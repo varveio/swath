@@ -992,7 +992,11 @@ reading every key byte, size, time and class byte), `Batch-all` (all Object fiel
 `BenchmarkReaderScanSkewed/workers={4,8}` runs the `Batch-noop` selection with a callback that does 32 times the
 work per object in the first eighth of the keys, the uneven per-key cost that shard scheduling exists for.
 `BenchmarkReaderStream` is ordered and owning, Workers do not apply: `Stream` (one pass) and `Range-pages`
-(the paged `Stream` it replaced, kept in `stream_test.go` as its oracle). Counting-only callbacks serve as the no-op baseline;
+(the paged `Stream` it replaced, kept in `stream_test.go` as its oracle). `BenchmarkReaderTotals` totals about
+600 paths nested up to eight levels, root included (`benchTotalsPaths`: every prefix above the days, days and
+shard directories evenly spaced, a few exact keys), end to end: `serial` (`serialTotals`, Totals before it read
+in shards, kept in `totals_test.go` as its oracle) and `workers={1,4,8}`; it checks each arm against the oracle
+once, untimed, and reports `paths/op`, `B/row` and `allocs/row` as well. Counting-only callbacks serve as the no-op baseline;
 all cases read the whole fixture on a Dataset opened and read once
 before the timed loop. Each reports the standard ns/op, B/op and allocs/op, `rows/op` (divide by it for a
 per-row cost) and `ns/row` from the benchmark's elapsed time, and fails unless the callback saw exactly

@@ -116,7 +116,9 @@ func batchBytes(v parquet.Value) ([]byte, bool) {
 // Callbacks may run concurrently, in ascending key order within each shard;
 // order across shards is unspecified. The first error cancels the other shards.
 // Callback and storage errors are returned unchanged. Context cancellation,
-// statistics (including failure) and StreamStats are as in Scan. fn must not
+// statistics (including failure), the key order across shards (a key_order
+// refusal returned after every batch was handed on) and StreamStats are as
+// in Scan. fn must not
 // call Close or wait for a goroutine that does: Close waits for active scans.
 // Return an error or cancel the context to stop, then close after this returns.
 // Close from another goroutine waits for active callbacks; a later part's
@@ -142,13 +144,13 @@ func (d *Dataset) ScanBatches(ctx context.Context, req BatchScanRequest, fn func
 		}
 	}
 	return d.scan(ctx, ScanRequest{Prefix: req.Prefix, Workers: req.Workers, Stats: req.Stats}, columns, func() shardScan {
-		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error {
-			return d.scanBatchShard(ctx, shard, st, req.Fields, columns, fn)
+		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error {
+			return d.scanBatchShard(ctx, shard, st, keys, req.Fields, columns, fn)
 		}
 	})
 }
 
-func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
+func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys, fields ObjectFields, columns []string, fn func(*ObjectBatch) error) error {
 	b := ObjectBatch{fields: fields}
 	part := -1
 	return shard.ScanBatches(ctx, st, func(raw *seekparquet.Batch) error {
@@ -181,6 +183,7 @@ func (d *Dataset) scanBatchShard(ctx context.Context, shard *seekparquet.RangePl
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		keys.noteBatch(raw)
 		return fn(&b)
 	})
 }

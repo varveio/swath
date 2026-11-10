@@ -6,17 +6,23 @@ package reader
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/parquet-go/parquet-go"
 	seekparquet "github.com/varveio/seekparquet/go"
 )
 
@@ -390,6 +396,155 @@ func TestScanSlowShardDoesNotHoldTheRest(t *testing.T) {
 		}
 		if err != nil {
 			t.Fatalf("batches %v: %v", batches, err)
+		}
+	}
+}
+
+// writeUnsorted writes keys, in the order given, as one part of row groups
+// of groupRows rows and pages of about one row with the writer of
+// parquet-go, which does not check key order, stamped and listed in a manifest as the module's writer would,
+// keys declared unique or not. It is how a dataset whose key order is
+// broken between two row groups looks.
+func writeUnsorted(t *testing.T, keys []string, groupRows int64, unique bool) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := parquet.NewGenericWriter[s3Row](&buf, parquet.MaxRowsPerRowGroup(groupRows), parquet.PageBufferSize(1),
+		parquet.SortingWriterConfig(parquet.SortingColumns(parquet.Ascending("key"))),
+		parquet.KeyValueMetadata(seekparquet.StampFormatVersion, "0"),
+		parquet.KeyValueMetadata(seekparquet.StampDraftRevision, "1"),
+		parquet.KeyValueMetadata(seekparquet.StampSchemaID, string(S3ObjectsV1)),
+		parquet.KeyValueMetadata(seekparquet.StampKeyColumn, "key"),
+		parquet.KeyValueMetadata(seekparquet.StampKeyUnique, strconv.FormatBool(unique)))
+	for _, r := range keyRows(keys) { // a row at a time: a page each
+		if _, err := w.Write([]s3Row{r}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ext, err := json.Marshal(map[string]any{Extension: swathExtension()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := seekparquet.MarshalManifest(seekparquet.Manifest{Key: seekparquet.Key{Column: "key", Unique: unique},
+		Version: seekparquet.Version{FormatVersion: 0, DraftRevision: 1}, SchemaID: string(S3ObjectsV1), Extensions: ext,
+		Parts: []seekparquet.PartInfo{{Path: "data/part.parquet", Rows: int64(len(keys)), Bytes: int64(buf.Len()),
+			MinKey: []byte(slices.Min(keys)), MaxKey: []byte(slices.Max(keys))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{seekparquet.ManifestName: m, "data/part.parquet": buf.Bytes()} {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestShardBoundaryOrder: a key below the one before it, or equal to it
+// under unique keys, where a row group begins, below the last key page of
+// the row group before it, passes CheckSchema, which decodes no such page;
+// read in one pass it is a key_order refusal. Scan,
+// ScanBatches and Totals refuse it at every worker count with the same
+// code and key as Stream and the serial Totals, although at more than one
+// worker each shard's own scan sees only keys in order (shardOrder).
+func TestShardBoundaryOrder(t *testing.T) {
+	for _, keys := range [][]string{
+		{"a", "b", "c", "z", "d", "e", "f", "zz"},
+		{"a", "b", "c", "d", "d", "e", "f", "g"},
+		{"a", "b", "c", "d", "e", "f", "g", "h", "g", "i", "j", "k"},
+	} {
+		t.Run(strings.Join(keys, ","), func(t *testing.T) {
+			d := openDir(t, writeUnsorted(t, keys, 4, true))
+			if err := d.CheckSchema(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			refusal := func(name string, err error) *seekparquet.RefusalError {
+				t.Helper()
+				var r *seekparquet.RefusalError
+				if !errors.As(err, &r) || r.Code != seekparquet.CodeKeyOrder {
+					t.Fatalf("%s: %v, want a key_order refusal", name, err)
+				}
+				return r
+			}
+			want := refusal("Stream", d.Stream(context.Background(), func(Object) error { return nil })).Key
+			serial, err := serialTotals(context.Background(), d, []string{"", "b", "z"})
+			if r := refusal("serial Totals", err); !bytes.Equal(r.Key, want) || serial != nil {
+				t.Fatalf("serial Totals refused %q, want %q", r.Key, want)
+			}
+			for _, workers := range []int{1, 2, 4, 8} {
+				_, err := scanAll(t, d, ScanRequest{Workers: workers})
+				if r := refusal(fmt.Sprintf("Scan workers=%d", workers), err); !bytes.Equal(r.Key, want) {
+					t.Errorf("Scan workers=%d refused %q, want %q", workers, r.Key, want)
+				}
+				err = d.ScanBatches(context.Background(), BatchScanRequest{Workers: workers, Fields: AllObjectFields}, func(*ObjectBatch) error { return nil })
+				if r := refusal(fmt.Sprintf("ScanBatches workers=%d", workers), err); !bytes.Equal(r.Key, want) {
+					t.Errorf("ScanBatches workers=%d refused %q, want %q", workers, r.Key, want)
+				}
+				got, err := d.totals(context.Background(), []string{"", "b", "z"}, workers)
+				if r := refusal(fmt.Sprintf("Totals workers=%d", workers), err); !bytes.Equal(r.Key, want) || got != nil {
+					t.Errorf("Totals workers=%d refused %q with %+v, want %q and nothing", workers, r.Key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestShardBoundaryRepeatedKeys: under keys declared to repeat, a group
+// of equal keys crossing a row group inside a part is in order; Split
+// keeps it in one shard, and Scan and Totals read it at every worker count
+// as Stream and the serial Totals do.
+func TestShardBoundaryRepeatedKeys(t *testing.T) {
+	d := openDir(t, writeUnsorted(t, []string{"a", "b", "c", "c", "c", "c", "d", "e"}, 3, false))
+	want, err := stream(t, d)
+	if err != nil || len(want) != 8 {
+		t.Fatalf("Stream: %d objects, %v", len(want), err)
+	}
+	checkTotalsSerial(t, d, []string{"", "b", "c", "c/", "d"})
+	for _, workers := range []int{1, 2, 4, 8} {
+		var mu sync.Mutex
+		var got []Object
+		err := d.Scan(context.Background(), ScanRequest{Workers: workers}, func(batch []Object) error {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, batch...)
+			return nil
+		})
+		slices.SortStableFunc(got, func(a, b Object) int { return bytes.Compare(a.Key, b.Key) })
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("Scan workers=%d: %d objects, %v; want Stream's %d", workers, len(got), err, len(want))
+		}
+	}
+}
+
+// TestShardOrder checks shardOrder alone: shards that handed on nothing
+// are skipped, and only a first key above the last before it passes.
+func TestShardOrder(t *testing.T) {
+	k := func(first, last string) shardKeys {
+		return shardKeys{first: []byte(first), last: []byte(last), seen: true}
+	}
+	for _, c := range []struct {
+		keys []shardKeys
+		bad  string
+	}{
+		{nil, ""},
+		{[]shardKeys{{}, k("a", "c"), {}, k("d", "f"), k("g", "g")}, ""},
+		{[]shardKeys{k("a", "c"), {}, k("c", "f")}, "c"},
+		{[]shardKeys{k("a", "c"), k("b", "f")}, "b"},
+		{[]shardKeys{k("a", "c"), k("d", "f"), k("e", "z")}, "e"},
+	} {
+		err := shardOrder(c.keys)
+		var r *seekparquet.RefusalError
+		switch {
+		case c.bad == "" && err != nil:
+			t.Errorf("%v: %v", c.keys, err)
+		case c.bad != "" && (!errors.As(err, &r) || r.Code != seekparquet.CodeKeyOrder || string(r.Key) != c.bad):
+			t.Errorf("%v: %v, want key_order at %q", c.keys, err, c.bad)
 		}
 	}
 }

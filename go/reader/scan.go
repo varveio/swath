@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"sync"
@@ -67,8 +68,14 @@ func scanShards(workers int) int {
 // SemanticError of KindRow); the module's and the Source's errors,
 // unchanged; or the context's, checked before planning, before each batch
 // and after the shards end, so a scan whose context ends is never a
-// success. Objects already handed to fn stay handed: a failed scan is no
-// result. Scan does not add to StreamStats.
+// success. Each shard's scan checks the order of its own keys; once every
+// shard has succeeded, each shard's first key is checked to be above the
+// last key of the shard before it, which a key out of order or repeated
+// where a row group begins can break: that is the module's key_order
+// refusal (a *seekparquet.RefusalError naming the key, at no part or row
+// group), returned after the shards' objects were handed on. Objects
+// already handed to fn stay handed: a failed scan is no result. Scan does
+// not add to StreamStats.
 func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Object) error) error {
 	if req.Stats != nil {
 		*req.Stats = ReadStats{}
@@ -79,42 +86,54 @@ func (d *Dataset) Scan(ctx context.Context, req ScanRequest, fn func(batch []Obj
 	}
 	return d.scan(ctx, req, columns, func() shardScan {
 		batch := make([]Object, 0, scanBatchObjects)
-		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error {
-			return d.scanShard(ctx, shard, st, batch, fn)
+		return func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error {
+			return d.scanShard(ctx, shard, st, keys, batch, fn)
 		}
 	})
 }
 
-// shardScan scans one shard into st. A worker's shardScan is called for
-// one shard at a time, in ascending shard order.
-type shardScan func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats) error
+// shardScan scans one shard into st and records in keys the first and
+// last key it hands on. A worker's shardScan is called for one shard at a
+// time, in ascending shard order.
+type shardScan func(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys) error
 
-// scan plans and splits the scan, then runs req.Workers goroutines that
-// take its shards in order, each scanning them with its own shardScan from
-// worker, so that what a shardScan keeps between shards is per worker.
+// scan plans req.Prefix's rows and scans them as scanRanges does.
 func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, worker func() shardScan) error {
+	return d.scanRanges(ctx, []seekparquet.Range{prefixSpan(req.Prefix).rng()}, req.Workers, req.Stats, columns, worker)
+}
+
+// scanRanges plans the rows of ranges projecting columns and splits the
+// plan, then runs workers goroutines (0 or less: 1) that take its shards
+// in order, each scanning them with its own shardScan from worker, so that
+// what a shardScan keeps between shards is per worker. It adds the plan's,
+// the split's and every shard's statistics to stats when it is not nil.
+// The first error cancels the other shards and is returned; without one,
+// the context's error is, and then the order of the keys across shards is
+// checked (shardOrder).
+func (d *Dataset) scanRanges(ctx context.Context, ranges []seekparquet.Range, workers int, stats *ReadStats, columns []string, worker func() shardScan) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	plan, err := d.sp.PlanRanges(ctx, []seekparquet.Range{prefixSpan(req.Prefix).rng()}, columns)
+	plan, err := d.sp.PlanRanges(ctx, ranges, columns)
 	if err != nil {
 		return err
 	}
-	addStats(req.Stats, plan.Stats())
-	workers := max(req.Workers, 1)
+	addStats(stats, plan.Stats())
+	workers = max(workers, 1)
 	shards, err := plan.Split(ctx, scanShards(workers))
 	if err != nil {
 		return err
 	}
 	for _, shard := range shards {
-		addStats(req.Stats, shard.Stats())
+		addStats(stats, shard.Stats())
 	}
 	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var first error
 	var once sync.Once
-	stats := make([]ReadStats, len(shards))
+	shardStats := make([]ReadStats, len(shards))
+	keys := make([]shardKeys, len(shards))
 	var next atomic.Int64
 	var wg sync.WaitGroup
 	for range min(workers, len(shards)) {
@@ -125,7 +144,7 @@ func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, w
 				if i >= len(shards) || ctx.Err() != nil {
 					return
 				}
-				if err := scanShard(ctx, shards[i], &stats[i]); err != nil {
+				if err := scanShard(ctx, shards[i], &shardStats[i], &keys[i]); err != nil {
 					once.Do(func() { first = err; cancel() })
 					return
 				}
@@ -133,13 +152,63 @@ func (d *Dataset) scan(ctx context.Context, req ScanRequest, columns []string, w
 		})
 	}
 	wg.Wait()
-	for _, st := range stats {
-		addStats(req.Stats, st)
+	for _, st := range shardStats {
+		addStats(stats, st)
 	}
-	if first == nil {
-		return parent.Err()
+	if first != nil {
+		return first
 	}
-	return first
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	return shardOrder(keys)
+}
+
+// shardKeys is the first and last key a shard handed on, owned copies.
+type shardKeys struct {
+	first, last []byte
+	seen        bool
+}
+
+// note records first as the shard's first key, unless it has one, and
+// last as its last. It copies both: a borrowed key is valid only during
+// its batch, and an owning one may be changed by the callback.
+func (k *shardKeys) note(first, last []byte) {
+	if !k.seen {
+		k.first, k.seen = append(k.first[:0], first...), true
+	}
+	k.last = append(k.last[:0], last...)
+}
+
+// noteBatch notes the keys of a batch of b.Len() > 0 rows.
+func (k *shardKeys) noteBatch(b *seekparquet.Batch) { k.note(b.Key(0), b.Key(b.Len()-1)) }
+
+// shardOrder checks the keys across the boundaries of shards that each
+// succeeded, in plan order. Each shard's scan checks the order of the key
+// pages it decodes against each other, and the module checks each row
+// group's first key against its neighbours' first keys, but nothing
+// checks a shard's first key against the last of the shard before it,
+// which the one scan of an unsplit plan does. Shards begin at row groups,
+// and with keys that may repeat Split keeps a group of equal keys inside
+// a part in one shard, so the first key of a shard must be above the last
+// of the one before it; an equal key is a duplicate of a unique key or a
+// group crossing parts, both of which an unsplit scan refuses. The
+// refusal is the module's key_order, its Key the shard's first key, at no
+// part or row group: the reader does not see where a shard begins.
+func shardOrder(keys []shardKeys) error {
+	var last []byte
+	for i := range keys {
+		k := &keys[i]
+		if !k.seen {
+			continue
+		}
+		if last != nil && bytes.Compare(last, k.first) >= 0 {
+			return &RefusalError{Code: seekparquet.CodeKeyOrder, RowGroup: -1, Row: -1, Key: bytes.Clone(k.first),
+				Detail: "a shard's first key breaks the declared key order with the last key of the shard before it"}
+		}
+		last = k.last
+	}
+	return nil
 }
 
 // scanBatchObjects is the most objects one Scan batch holds.
@@ -147,11 +216,12 @@ const scanBatchObjects = 1024
 
 // scanShard scans one shard, handing fn its objects in batches built in
 // batch, an empty slice reused from shard to shard.
-func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, batch []Object, fn func([]Object) error) error {
+func (d *Dataset) scanShard(ctx context.Context, shard *seekparquet.RangePlan, st *ReadStats, keys *shardKeys, batch []Object, fn func([]Object) error) error {
 	flush := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		keys.note(batch[0].Key, batch[len(batch)-1].Key)
 		err := fn(batch)
 		batch = batch[:0]
 		return err
