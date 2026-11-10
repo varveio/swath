@@ -2,7 +2,7 @@ module github.com/varveio/swath/go
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 require (
 	cloud.google.com/go/compute/metadata v0.10.0

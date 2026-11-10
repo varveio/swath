@@ -2,7 +2,7 @@ module github.com/varveio/swath/go/reader
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 require (
 	github.com/parquet-go/parquet-go v0.32.0
