@@ -502,3 +502,51 @@ func TestNeverAnsweredRunNamesCause(t *testing.T) {
 		t.Fatalf("report error %q", rep.Outcome.Error)
 	}
 }
+
+// slowReader is a stderr drained at about 1,000 bytes every 20 ms.
+type slowReader struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *slowReader) Write(p []byte) (int, error) {
+	for off := 0; off < len(p); off += 1000 {
+		time.Sleep(20 * time.Millisecond)
+		s.mu.Lock()
+		s.b.Write(p[off:min(off+1000, len(p))])
+		s.mu.Unlock()
+	}
+	return len(p), nil
+}
+
+// TestOutcomeBeforeBacklog: with a backlog of request events a slow
+// reader cannot drain within the outcome's wait, the outcome goes before
+// the queued events (which are dropped, counted) and is written by the
+// time the command concludes: the last line the reader received.
+func TestOutcomeBeforeBacklog(t *testing.T) {
+	r := &slowReader{}
+	errOut = r
+	t.Cleanup(func() { errOut = os.Stderr; logs.Store(nil) })
+	setLog(termOptions{logFormat: logJSON, verbose: 3}, "a")
+	base := dropped.Load()
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				elog().request(source.Exchange{Method: "GET", Status: 200, URL: &url.URL{Host: "h", Path: "/" + strings.Repeat("p", 200)}})
+			}
+		}()
+	}
+	wg.Wait()
+	conclude(&exitError{error: errDeadline, code: exitDeadline, out: outcome{Class: listing.ClassDeadline, ExitCode: exitDeadline, Message: errDeadline.Error()}})
+	r.mu.Lock()
+	got := r.b.String()
+	r.mu.Unlock()
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	var ev map[string]any
+	if json.Unmarshal([]byte(lines[len(lines)-1]), &ev) != nil || ev["event"] != evOutcome || dropped.Load() == base {
+		t.Fatalf("last line %q of %d, %d dropped", lines[len(lines)-1], len(lines), dropped.Load()-base)
+	}
+}

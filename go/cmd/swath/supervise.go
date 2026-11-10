@@ -364,8 +364,9 @@ var dropped atomic.Int64
 // diagLine is a line waiting for its writer; done closes once it is
 // written.
 type diagLine struct {
-	s    string
-	done chan struct{}
+	s     string
+	final bool
+	done  chan struct{}
 }
 
 // diagSink is one writer's queue, drained in order by one goroutine while
@@ -386,13 +387,15 @@ var (
 // diagQueue of them they are dropped. A queued line is lost at exit.
 func note(w io.Writer, s string) { send(w, s, false) }
 
-// noteFinal is note for a command's last lines (its outcome): queued even
-// when the queue is full, and waited for (at most diagWait) even while a
+// noteFinal is note for a command's last lines (its outcome): they go
+// before every queued line, which is dropped (counted: the backlog of a
+// slow reader must not hold the outcome past its wait, and the process
+// exits after it), and are waited for (at most diagWait) even while a
 // write is stuck.
 func noteFinal(w io.Writer, s string) { send(w, s, true) }
 
 func send(w io.Writer, s string, final bool) {
-	l := diagLine{s, make(chan struct{})}
+	l := diagLine{s, final, make(chan struct{})}
 	diagMu.Lock()
 	k := diagSinks[w]
 	if k == nil {
@@ -401,6 +404,19 @@ func send(w io.Writer, s string, final bool) {
 		go drain(w, k)
 	}
 	full, stuck := len(k.queue) >= diagQueue, k.stuck
+	if final {
+		kept := k.queue[:0]
+		for _, q := range k.queue {
+			if q.final {
+				kept = append(kept, q)
+			} else {
+				dropped.Add(1)
+				close(q.done)
+			}
+		}
+		clear(k.queue[len(kept):])
+		k.queue = kept
+	}
 	if !full || final {
 		k.queue = append(k.queue, l)
 	}
