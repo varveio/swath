@@ -206,25 +206,36 @@ func TestLocalTextEndToEnd(t *testing.T) {
 
 // TestNoProgressAmongRows: with stdout a terminal that carries rows, the
 // automatic progress line and -v's appended records stay off; --progress
-// still draws them.
+// still draws them. Where a record is expected the fake holds its answers
+// until one is on stderr, so a slow runner cannot end the run first; where
+// none is, it holds them past the first progress samples (2 s apart).
 func TestNoProgressAmongRows(t *testing.T) {
 	h := s3test.Handler(s3test.Backend(t, []string{"a", "b"}))
-	// A 4 s stall timeout samples progress every second, within the run.
-	src := []string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--stall-timeout", "4s", "--endpoint-url", s3test.Serve(t, s3test.Delayed(h, 1500*time.Millisecond))}
 	stdout, stderr := stdoutTerminal, stderrTerminal
 	stdoutTerminal, stderrTerminal = func() bool { return true }, func() (bool, int) { return true, 120 }
 	t.Cleanup(func() { stdoutTerminal, stderrTerminal = stdout, stderr })
+	const record = "listing · "
 	for _, tc := range []struct {
 		extra  []string
 		forced bool
 	}{{nil, false}, {[]string{"--progress"}, true}, {[]string{"-v"}, false}, {[]string{"-v", "--progress"}, true}} {
-		errs := captureStderr(t)
-		args := append(slices.Clone(src), tc.extra...)
+		errs := captureSyncStderr(t)
+		hold := func() {
+			if !tc.forced {
+				time.Sleep(3 * time.Second)
+				return
+			}
+			for end := time.Now().Add(time.Minute); !strings.Contains(errs.String(), record) && time.Now().Before(end); {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		endpoint := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hold(); h.ServeHTTP(w, r) }))
+		args := append([]string{"s3://bkt", "--anonymous", "--no-stats", "--color", "never", "--endpoint-url", endpoint}, tc.extra...)
 		var out bytes.Buffer
 		if err := run(context.Background(), args, &out, false); err != nil {
 			t.Fatal(err)
 		}
-		if drawn := strings.Contains(errs.String(), "listing · "); drawn != tc.forced || !strings.Contains(out.String(), "  a\n") {
+		if drawn := strings.Contains(errs.String(), record); drawn != tc.forced || !strings.Contains(out.String(), "  a\n") {
 			t.Errorf("%v: stderr %q, stdout %q", tc.extra, errs.String(), out.String())
 		}
 	}

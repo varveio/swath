@@ -75,10 +75,10 @@ func TestProgressRecord(t *testing.T) {
 func TestAllVersionsNouns(t *testing.T) {
 	var o options
 	f := newFlags(&o, false)
-	if o.allVersions == nil || *o.allVersions {
+	if o.allVersions == nil || o.versions() {
 		t.Fatal("--all-versions unseen or on by default")
 	}
-	if err := f.Parse([]string{"--all-versions"}); err != nil || !*o.allVersions {
+	if err := f.Parse([]string{"--all-versions"}); err != nil || !o.versions() {
 		t.Fatalf("%v: --all-versions unseen", err)
 	}
 }

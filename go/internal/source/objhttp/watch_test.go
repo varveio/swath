@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // TestWatch: the watch sees each round trip through a Guard (method, URL,
@@ -26,13 +28,13 @@ func TestWatch(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	var mu sync.Mutex
-	var seen []Exchange
-	var failures []Failed
-	SetWatch(&Watch{
-		Exchange: func(e Exchange) { mu.Lock(); seen = append(seen, e); mu.Unlock() },
-		Failed:   func(f Failed) { mu.Lock(); failures = append(failures, f); mu.Unlock() },
+	var seen []source.Exchange
+	var failures []source.Failed
+	source.SetWatch(&source.Watch{
+		Exchange: func(e source.Exchange) { mu.Lock(); seen = append(seen, e); mu.Unlock() },
+		Failed:   func(f source.Failed) { mu.Lock(); failures = append(failures, f); mu.Unlock() },
 	})
-	t.Cleanup(func() { SetWatch(nil) })
+	t.Cleanup(func() { source.SetWatch(nil) })
 	hc := &http.Client{Transport: &Guard{}}
 	var c Counters
 	r := Retry{BaseBackoff: time.Millisecond}
@@ -56,7 +58,7 @@ func TestWatch(t *testing.T) {
 	if len(seen) != 2 || seen[0].Status != 503 || seen[1].Status != 200 || seen[0].Method != http.MethodGet || seen[0].URL.Path != "/b" || seen[1].Latency <= 0 {
 		t.Fatalf("exchanges %+v", seen)
 	}
-	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Failure.Status != 503 {
+	if len(failures) != 1 || failures[0].Attempt != 1 || !failures[0].Retry || failures[0].Wait <= 0 || failures[0].Status != 503 || failures[0].Class != string(ClassOther) {
 		t.Fatalf("failures %+v", failures)
 	}
 }

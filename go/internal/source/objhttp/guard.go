@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/varveio/swath/go/internal/source"
 )
 
 const (
@@ -91,16 +93,16 @@ func WithCapture(ctx context.Context, c *Capture) context.Context {
 	return context.WithValue(ctx, captureKey{}, c)
 }
 
-// RoundTrip implements http.RoundTripper. The watch (SetWatch) sees each
+// RoundTrip implements http.RoundTripper. The watch (source.SetWatch) sees each
 // round trip, its body read included.
 func (g *Guard) RoundTrip(req *http.Request) (*http.Response, error) {
-	w := watching.Load()
+	w := source.Watching()
 	if w == nil || w.Exchange == nil {
 		return g.roundTrip(req)
 	}
 	t0 := time.Now()
 	resp, err := g.roundTrip(req)
-	e := Exchange{Method: req.Method, URL: req.URL, Err: err, Latency: time.Since(t0)}
+	e := source.Exchange{Method: req.Method, URL: req.URL, Err: err, Latency: time.Since(t0)}
 	if resp != nil {
 		e.Status = resp.StatusCode
 	}

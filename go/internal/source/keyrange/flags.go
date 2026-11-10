@@ -69,7 +69,7 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 	// Policy has no seed and no probes, its zero Admission no limiter.
 	c := &Common{Policy: Policy{Seed: true, Structure: StructureAuto}, Admission: objhttp.Admission{Limiter: true}}
 	p, a := &c.Policy, &c.Admission
-	source.Define(f, source.Flag{Name: "all-versions", Value: source.Switch(&c.AllVersions), Usage: "list every version of every key, not only the current objects",
+	source.Define(f, source.Flag{Name: source.AllVersionsFlag, Value: source.Switch(&c.AllVersions), Usage: "list every version of every key, not only the current objects",
 		Long: "S3: versions and delete markers (needs s3:ListBucketVersions). GCS: generations, live and noncurrent. A key's rows are consecutive and never split across parts."})
 	source.Define(f, source.Flag{Name: "request-rate", Value: (*rateFlag)(&a.RequestRate), Metavar: "N", Group: source.GroupLimits,
 		Usage: "cap every HTTP attempt at N per second (0: no cap)",

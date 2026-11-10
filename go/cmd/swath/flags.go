@@ -17,7 +17,6 @@ import (
 	"github.com/varveio/swath/go/internal/listing"
 	"github.com/varveio/swath/go/internal/registry"
 	"github.com/varveio/swath/go/internal/source"
-	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/totals"
 )
 
@@ -226,9 +225,7 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 			source.SetGroup(fl, source.GroupStores)
 		}
 	}
-	if c, ok := shared[keyrange.Group].(*keyrange.Common); ok {
-		o.allVersions = &c.AllVersions // the terminal's nouns (rowNouns)
-	}
+	o.allVersions = f.Lookup(source.AllVersionsFlag) // the terminal's nouns (rowNouns)
 	for _, p := range registry.Factories() {
 		named := source.SharedValues{}
 		for _, g := range p.Shared {

@@ -484,7 +484,7 @@ type options struct {
 	spillPlain             bool
 	sources                map[string]any      // each provider's options value, by scheme
 	owners                 map[string][]string // a provider flag's name: the schemes it applies to
-	allVersions            *bool               // --all-versions (nil without a provider on the range engine)
+	allVersions            *pflag.Flag         // --all-versions (nil without a provider on the range engine)
 	term                   termOptions
 	format                 string
 	columns                []string        // --columns
@@ -865,7 +865,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	}
 	// The empty scheme is a local path. stdout carries rows to a reader on
 	// the same screen: swath list's text there, and swath du's table.
-	n := rowNouns(pf.Scheme == "", o.allVersions != nil && *o.allVersions)
+	n := rowNouns(pf.Scheme == "", o.versions())
 	tt := startTerminal(o.term, att, registry.Redact(root), startDest(o, cfg.Output.Dir), cfg.Output.Dir != "", n, (toStdout || o.totals != nil) && stdoutTerminal())
 	defer tt.close()
 	defer watchRequests(fw)() // removed before stderr is restored
@@ -881,6 +881,11 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	err, out := term.classify(sum, err)
 	end := runEnd{settled: settled, unrecorded: unrecorded, started: cfg.Progress.Snapshot().Liveness() > 0, failing: fw.outstanding(time.Now())}
 	return finishList(stdout, o, cfg.Output.Dir, sum, err, out, end, tt)
+}
+
+// versions says --all-versions is on: the run lists every version.
+func (o *options) versions() bool {
+	return o.allVersions != nil && o.allVersions.Value.String() == "true"
 }
 
 // runEnd is what finishList knows of a run besides its report: settled

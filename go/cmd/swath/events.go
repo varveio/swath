@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/go/internal/listing"
-	"github.com/varveio/swath/go/internal/source/objhttp"
+	"github.com/varveio/swath/go/internal/source"
 )
 
 // The event log is every line swath writes to stderr outside the redrawn
@@ -279,7 +279,7 @@ func newFailureWatch(provider string) *failureWatch {
 
 // exchangeCause is a failed exchange's cause ("" for an answer): the
 // innermost transport error, or a 5xx or 429 status.
-func exchangeCause(e objhttp.Exchange) string {
+func exchangeCause(e source.Exchange) string {
 	switch {
 	case e.Err != nil:
 		err := e.Err
@@ -295,7 +295,7 @@ func exchangeCause(e objhttp.Exchange) string {
 
 // exchange takes one exchange at now: an answer (2xx) ends every streak,
 // a failure extends its cause's and warns when it is due.
-func (w *failureWatch) exchange(e objhttp.Exchange, now time.Time) {
+func (w *failureWatch) exchange(e source.Exchange, now time.Time) {
 	if e.Err != nil && errors.Is(e.Err, context.Canceled) {
 		return // the run stopping
 	}
@@ -375,7 +375,7 @@ type requestFields struct {
 
 // request logs one exchange: every one with -vvv, a failed one (no
 // answer, or a status of 400 or more) with -vv.
-func (l *eventLog) request(e objhttp.Exchange) {
+func (l *eventLog) request(e source.Exchange) {
 	failed := e.Err != nil || e.Status >= 400
 	if l.quiet > 0 || l.verbose < 2 || (l.verbose == 2 && !failed) {
 		return
@@ -404,13 +404,13 @@ type retryFields struct {
 }
 
 // retry logs a failed attempt (-vv): retried, throttled or the last.
-func (l *eventLog) retry(f objhttp.Failed) {
-	if !l.shows(lvDebug) || f.Failure == nil {
+func (l *eventLog) retry(f source.Failed) {
+	if !l.shows(lvDebug) {
 		return
 	}
-	r := retryFields{Try: f.Attempt, Class: string(f.Failure.Class), Status: f.Failure.Status, Code: f.Failure.Code, Retry: f.Retry, WaitMs: f.Wait.Milliseconds()}
-	if f.Failure.Cause != nil {
-		r.Cause = f.Failure.Cause.Error()
+	r := retryFields{Try: f.Attempt, Class: f.Class, Status: f.Status, Code: f.Code, Retry: f.Retry, WaitMs: f.Wait.Milliseconds()}
+	if f.Cause != nil {
+		r.Cause = f.Cause.Error()
 	}
 	next := "not retried"
 	if f.Retry {
@@ -420,16 +420,16 @@ func (l *eventLog) retry(f objhttp.Failed) {
 }
 
 // watchRequests installs the request log and the persistent-failure
-// watch on every client (objhttp.SetWatch) for one run; stop removes them.
+// watch on every client (source.SetWatch) for one run; stop removes them.
 func watchRequests(w *failureWatch) (stop func()) {
-	objhttp.SetWatch(&objhttp.Watch{
-		Exchange: func(e objhttp.Exchange) {
+	source.SetWatch(&source.Watch{
+		Exchange: func(e source.Exchange) {
 			w.exchange(e, time.Now())
 			elog().request(e)
 		},
-		Failed: func(f objhttp.Failed) { elog().retry(f) },
+		Failed: func(f source.Failed) { elog().retry(f) },
 	})
-	return func() { objhttp.SetWatch(nil) }
+	return func() { source.SetWatch(nil) }
 }
 
 // shownQuery are the query parameters whose values a request line shows:

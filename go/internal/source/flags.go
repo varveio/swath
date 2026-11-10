@@ -401,3 +401,8 @@ func StoreFlags(fs *pflag.FlagSet) *Store {
 		Long: "Raise it for a slow endpoint or emulator whose pages take longer to answer."})
 	return s
 }
+
+// AllVersionsFlag names the range engine's switch that lists every version
+// of every key. The command reads it by name for the terminal's nouns (a
+// versions run counts rows, not keys) without importing the engine.
+const AllVersionsFlag = "all-versions"

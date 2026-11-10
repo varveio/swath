@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package objhttp
+package source
 
 import (
 	"net/url"
@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// Exchange is one HTTP round trip as a Guard saw it, its body read
-// included: the command's request log and its persistent-failure warning
-// read it.
+// Exchange is one HTTP round trip as a provider's request guard saw it,
+// its body read included: the command's request log and its
+// persistent-failure warning read it.
 type Exchange struct {
 	Method string
 	// URL is the request's. Its query may carry a credential (an Azure
@@ -22,16 +22,21 @@ type Exchange struct {
 	Latency time.Duration
 }
 
-// Failed is one failed attempt of Do: retried after Wait, or the last
-// one (Retry false: not worth repeating, or MaxAttempts reached).
+// Failed is one failed attempt of a provider's retry loop: retried after
+// Wait, or the last one (Retry false: not worth repeating, or the
+// attempts exhausted). Class, Status, Code and Cause are the normalized
+// failure's.
 type Failed struct {
 	Attempt int // 1 for the first
-	Failure *Failure
+	Class   string
+	Status  int
+	Code    string // the provider's code or reason
+	Cause   error
 	Retry   bool
 	Wait    time.Duration
 }
 
-// Watch receives every client's exchanges and Do's failed attempts,
+// Watch receives every client's exchanges and failed attempts,
 // process-wide; either may be nil. Both are called on the request path:
 // they must return promptly.
 type Watch struct {
@@ -44,9 +49,5 @@ var watching atomic.Pointer[Watch]
 // SetWatch installs w for every client built or running (nil: none).
 func SetWatch(w *Watch) { watching.Store(w) }
 
-// failed tells the watch, if any, of a failed attempt.
-func failed(n int, f *Failure, retry bool, wait time.Duration) {
-	if w := watching.Load(); w != nil && w.Failed != nil {
-		w.Failed(Failed{Attempt: n, Failure: f, Retry: retry, Wait: wait})
-	}
-}
+// Watching is the watch installed (nil: none).
+func Watching() *Watch { return watching.Load() }

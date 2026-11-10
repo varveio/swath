@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/go/internal/listing"
+	"github.com/varveio/swath/go/internal/source"
 	"github.com/varveio/swath/go/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
@@ -72,14 +73,14 @@ func TestEventGolden(t *testing.T) {
 	l.progress(listing.ProgressSnapshot{Rows: 120000, Advance: 120000, Answered: 121, Frontier: 121, Requests: 122, Retries: 1, Inflight: 8, Limit: 64,
 		StartedAt: at.Add(-time.Minute), AsOf: at, DurationMs: 60000, PartAgeMs: 60000}, "listing · 120,000 objects · 2,000 keys/s (avg 2,000)")
 	w := newFailureWatch("S3")
-	refused := objhttp.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
+	refused := source.Exchange{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/bucket"}, Err: errConnRefused}
 	for i := range 14 {
 		w.exchange(refused, at.Add(time.Duration(i)*time.Second))
 	}
 	sas, _ := url.Parse("https://acct.blob.core.windows.net/c?restype=container&comp=list&prefix=logs%2F&marker=TOKEN&sv=2022-11-02&sig=SECRET")
-	l.request(objhttp.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
-	l.retry(objhttp.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
-		Failure: &objhttp.Failure{Transient: true, Throttle: true, Status: 503, Code: "SlowDown", Class: objhttp.ClassThrottle, Cause: errors.New("503 SlowDown: Please reduce your request rate.")}})
+	l.request(source.Exchange{Method: http.MethodGet, URL: sas, Status: http.StatusOK, Latency: 42 * time.Millisecond})
+	l.retry(source.Failed{Attempt: 2, Retry: true, Wait: 400 * time.Millisecond,
+		Status: 503, Code: "SlowDown", Class: string(objhttp.ClassThrottle), Cause: errors.New("503 SlowDown: Please reduce your request rate.")})
 	o := outcome{Class: listing.ClassStuck, ExitCode: exitStuck, Resumable: true, Cause: stuckNoRows, Message: errStuck.Error() + " (" + stuckNoRows + ")"}
 	if c := conclude(&exitError{error: errors.New(o.Message), code: o.ExitCode, out: o}); c != exitStuck {
 		t.Fatalf("exit %d", c)
@@ -134,7 +135,7 @@ func TestFailureWatch(t *testing.T) {
 	w := newFailureWatch("S3")
 	at := time.Unix(1_000_000, 0)
 	u := &url.URL{Scheme: "http", Host: "127.0.0.1:9", Path: "/b"}
-	refused := objhttp.Exchange{Method: http.MethodGet, URL: u, Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", errConnRefused)}}
+	refused := source.Exchange{Method: http.MethodGet, URL: u, Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", errConnRefused)}}
 	fail := func(d time.Duration) { w.exchange(refused, at.Add(d)) }
 	for d := time.Duration(0); d < persistFor; d += time.Second {
 		fail(d)
@@ -161,16 +162,16 @@ func TestFailureWatch(t *testing.T) {
 	}
 	// An answer ends the failure; a 404 is an answer that does not.
 	end := at.Add(2 * persistEvery)
-	w.exchange(objhttp.Exchange{URL: u, Status: http.StatusNotFound}, end)
+	w.exchange(source.Exchange{URL: u, Status: http.StatusNotFound}, end)
 	if w.outstanding(end) == "" {
 		t.Fatal("a 404 ended the failure")
 	}
-	w.exchange(objhttp.Exchange{URL: u, Status: http.StatusOK}, end)
+	w.exchange(source.Exchange{URL: u, Status: http.StatusOK}, end)
 	if o := w.outstanding(end); o != "" {
 		t.Fatalf("outstanding after an answer: %q", o)
 	}
 	for d := time.Duration(0); d <= persistFor; d += time.Second {
-		w.exchange(objhttp.Exchange{URL: u, Status: http.StatusServiceUnavailable}, end.Add(d))
+		w.exchange(source.Exchange{URL: u, Status: http.StatusServiceUnavailable}, end.Add(d))
 	}
 	if w.warnings.Load() != 3 || !strings.HasSuffix(stderr.String(), "S3 127.0.0.1:9: 503 Service Unavailable (retrying; 11 attempts)\n") {
 		t.Fatalf("a new failure after an answer: %q", stderr.String())
@@ -179,7 +180,7 @@ func TestFailureWatch(t *testing.T) {
 	setLog(termOptions{quiet: 1, logFormat: logText}, "")
 	n := len(stderr.String())
 	for d := time.Duration(0); d <= persistFor; d += time.Second {
-		w.exchange(objhttp.Exchange{URL: &url.URL{Host: "other:1"}, Status: http.StatusBadGateway}, end.Add(d))
+		w.exchange(source.Exchange{URL: &url.URL{Host: "other:1"}, Status: http.StatusBadGateway}, end.Add(d))
 	}
 	if len(stderr.String()) != n {
 		t.Fatalf("-q printed %q", stderr.String()[n:])

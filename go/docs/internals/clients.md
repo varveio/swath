@@ -110,9 +110,10 @@ built or supplied. It owns no retry policy or counters. Providers embed `objhttp
 store counters. Pool-size and Azure capped-wait probes, counter order and JSON report structs stay
 provider-owned.
 
-`objhttp.SetWatch` installs one process-wide `Watch`, which the command sets for a run: every Guard reports
-each round trip to its `Exchange` (method, URL, status or transport error, latency with the body read), and
-`Do` each failed attempt to `Failed` (the normalized `Failure`, retried with its wait, or the last). The
+`source.SetWatch` installs one process-wide `source.Watch`, which the command sets for a run (the command
+imports no provider package): every objhttp Guard reports each round trip to its `Exchange` (method, URL,
+status or transport error, latency with the body read), and `objhttp.Do` each failed attempt to `Failed` (the
+normalized `Failure`'s class, status, code and cause, retried with its wait, or the last). The
 command's request log (`-vv`, `-vvv`) and its persistent-failure warning read them; the URL's query is the
 reader's to redact. Both are called on the request path and must return promptly (the command's stderr
 writes are bounded); without a watch they cost one atomic load.

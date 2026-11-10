@@ -253,6 +253,13 @@ func (r *Retry) Defaults() {
 	}
 }
 
+// failed tells the watch (source.SetWatch), if any, of a failed attempt.
+func failed(n int, f *Failure, retry bool, wait time.Duration) {
+	if w := source.Watching(); w != nil && w.Failed != nil {
+		w.Failed(source.Failed{Attempt: n, Class: string(f.Class), Status: f.Status, Code: f.Code, Cause: f.Cause, Retry: retry, Wait: wait})
+	}
+}
+
 // Do runs attempt until it succeeds, fails in a way not worth repeating,
 // or has run MaxAttempts times (then an *ExhaustedError), waiting a
 // full-jitter exponential backoff between attempts (or the service's own
@@ -261,7 +268,7 @@ func (r *Retry) Defaults() {
 // one of an exhausted call included). With r.Limiter, each attempt waits for a permit
 // first and returns it with its outcome and latency; no permit is held
 // during a backoff. The caller's cancellation ends it at once. A watch
-// (SetWatch) is told of each failed attempt and whether it is retried.
+// (source.SetWatch) is told of each failed attempt and whether it is retried.
 func Do[T any](ctx context.Context, r Retry, c *Counters, attempt func() (T, error)) (T, error) {
 	var zero T
 	for n := 1; ; n++ {
