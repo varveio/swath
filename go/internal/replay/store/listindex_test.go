@@ -5,11 +5,17 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/go/internal/replay/legacy"
 )
@@ -176,5 +182,90 @@ func TestListIndexBuildFailureServes(t *testing.T) {
 			t.Fatalf("java-era list index %+v, want %s", meta.ListIndex, want)
 		}
 		_ = st.Close()
+	}
+}
+
+// faultSource opens a dataset's files from dir. Once armed, its next read
+// fails with errInjected (fail) or cancels the build's context and then
+// reads (cancel).
+type faultSource struct {
+	dir          string
+	fail, cancel atomic.Bool
+	stop         context.CancelFunc
+}
+
+var errInjected = errors.New("injected storage failure")
+
+type faultFile struct {
+	*os.File
+	size int64
+	src  *faultSource
+}
+
+func (s *faultSource) Open(_ context.Context, path string) (seekparquet.SourceFile, error) {
+	f, err := os.Open(filepath.Join(s.dir, filepath.FromSlash(path)))
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &faultFile{File: f, size: info.Size(), src: s}, nil
+}
+
+func (f *faultFile) Size() int64 { return f.size }
+
+func (f *faultFile) ReadAt(p []byte, off int64) (int, error) {
+	if f.src.fail.Swap(false) {
+		return 0, errInjected
+	}
+	if f.src.cancel.Swap(false) {
+		f.src.stop()
+	}
+	return f.File.ReadAt(p, off)
+}
+
+// TestListIndexBuildStorageFailureAndCancellation: a storage failure during
+// the build, after Verify, is recorded as a failed build with no retained
+// index, and the dataset's reads still succeed without it; a cancellation
+// during a build read is returned, so open fails rather than serving.
+func TestListIndexBuildStorageFailureAndCancellation(t *testing.T) {
+	dir := writeWide(t, 20, 120)
+	for _, cancelled := range []bool{false, true} {
+		ctx, stop := context.WithCancel(context.Background())
+		src := &faultSource{dir: dir, stop: stop}
+		d, err := seekparquet.OpenDataset(ctx, src, seekparquet.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Verify(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if cancelled {
+			src.cancel.Store(true)
+		} else {
+			src.fail.Store(true)
+		}
+		b, err := (&seekReader{d: d}).buildListIndex(ctx, ListIndex{Workers: 1})
+		switch {
+		case cancelled:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("cancelled build: %+v, %v", b, err)
+			}
+		case err != nil || b.State != ListIndexFailed || !errors.Is(b.Err, errInjected) || b.Stats.HasIndex || b.Stats.Entries != 0 || b.Stats.Bytes != 0:
+			t.Errorf("failed build: %+v, %v", b, err)
+		default:
+			var st seekparquet.ReadStats
+			got, err := d.List(context.Background(), seekparquet.List{Delimiter: '/', Limit: 1000, Stats: &st})
+			if err != nil || len(got) != 40 || st.ListIndexSkips != 0 {
+				t.Errorf("read after a failed build: %d entries, %+v, %v", len(got), st, err)
+			}
+		}
+		stop()
+		if err := d.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -108,7 +108,9 @@ var (
 	// (missing_group, dense_page, unsafe_run); and its build at open, row
 	// groups by outcome (indexed, skipped, failed), key pages decoded,
 	// entries and bytes retained, the byte budget, whether the budget ran
-	// out (1) and the build's duration. Without an index they read zero.
+	// out (1) and the build's duration. Zero when no build was attempted. A
+	// failed or empty build still reports its attempted work and budget;
+	// retained entries and bytes are zero.
 	DelimiterIndexSkips           = Def{Name: "swath.replay.delimiter.index.skips", Kind: Counter}
 	DelimiterIndexDeclines        = Def{Name: "swath.replay.delimiter.index.declines", Kind: Counter, Tags: []string{"reason"}}
 	DelimiterIndexBuildGroups     = Def{Name: "swath.replay.delimiter.index.build.groups", Kind: Gauge, Tags: []string{"outcome"}}
