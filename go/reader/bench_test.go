@@ -4,6 +4,7 @@
 package reader
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -162,6 +163,55 @@ func BenchmarkReaderScan(b *testing.B) {
 					benchLoop(b, rows, &counted, func() { scan(d) })
 				})
 			}
+		})
+	}
+}
+
+// BenchmarkReaderScanSkewed: ScanBatches (last_modified and storage class)
+// at Workers 4 and 8 with a callback whose work per object is 32 times
+// higher in the first eighth of the keys than in the rest, as a consumer's
+// work per key can vary. Equal shards then take unequal time, and the scan
+// lasts as long as its slowest worker.
+func BenchmarkReaderScanSkewed(b *testing.B) {
+	dir, rows := benchDataset(b)
+	var hot []byte // the last key of the costly eighth
+	d := benchWarm(b, dir, func(d *Dataset) {
+		var seen int64
+		if err := d.ScanBatches(context.Background(), BatchScanRequest{}, func(batch *ObjectBatch) error {
+			if seen < rows/8 && seen+int64(batch.Len()) >= rows/8 {
+				hot = bytes.Clone(batch.Key(int(rows/8 - seen - 1)))
+			}
+			seen += int64(batch.Len())
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+	})
+	for _, workers := range []int{4, 8} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			var counted, checksum atomic.Int64
+			benchLoop(b, rows, &counted, func() {
+				err := d.ScanBatches(context.Background(), BatchScanRequest{Workers: workers, Fields: FieldLastModified | FieldStorageClass}, func(batch *ObjectBatch) error {
+					var sum int64
+					for i := range batch.Len() {
+						key, rounds := batch.Key(i), 1
+						if bytes.Compare(key, hot) <= 0 {
+							rounds = 32
+						}
+						for range rounds {
+							for _, v := range key {
+								sum = sum*31 + int64(v)
+							}
+						}
+					}
+					counted.Add(int64(batch.Len()))
+					checksum.Add(sum)
+					return nil
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+			})
 		})
 	}
 }

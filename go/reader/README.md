@@ -245,9 +245,12 @@ Azure versions schema.
   to 9999 (`KindRow`). Its errors are `Stream`'s.
 - **`Scan(req)`.** Current objects only, refused as `Stream` refuses, before any read; `Stats` reset first. One
   plan of `Prefix`'s rows (`seekparquet.Dataset.PlanRanges`, projecting the columns `Object` holds, which checks
-  every part holding them), divided into at most `Workers` shards (`RangePlan.Split`: consecutive rows cut at row
-  group boundaries, balanced by projected bytes; `Workers` 0 or less is 1, and a plan with fewer row groups has
-  fewer shards), each scanned by its own goroutine. Each object is decoded and checked as `Stream` checks it and
+  every part holding them), divided into shards (`RangePlan.Split`: consecutive rows cut at row group boundaries,
+  balanced by projected bytes): one for one worker, otherwise at most eight a worker (`shardsPerWorker`), and a
+  plan with fewer row groups has fewer shards. `Workers` goroutines (0 or less is 1) each take the next shard not
+  yet taken until none is left, so a worker whose shards go fast takes more of them instead of waiting on a slow
+  one; at most `Workers` calls of `fn` run at once. A worker keeps its batch slice from shard to shard; a shard's
+  SeekParquet page buffers live while it is scanned, so at most `Workers` sets at once. Each object is decoded and checked as `Stream` checks it and
   handed to `fn` once, in batches of at most 1,024: a shard's batches in ascending key order, one at a time,
   shards' batches concurrently and in no set order, so `fn` must be safe for concurrent use. A batch's slice is
   reused once `fn` returns: `fn` must not keep it (an `Object` copied out of it owns its memory). The first
@@ -438,11 +441,16 @@ objects, before any read; `Page` lists it by `/` in pages of 1, 2 and 100, each 
 each prefix's totals nil-summed under `names`; `Totals` match the `StreamLocal` oracle, a directory counted once
 with its own row and entry bytes nil, never 0, without sizes; a kind the schema does not define fails
 `StreamLocal` and `List` (`KindRow`). `scan_test.go` checks `Scan` against `Stream` for
-0, 1, 2, 7 and 64 workers and several prefixes (each object once, each batch ascending), its statistics against
-a plan, split and shard scans made by hand, a failing row, `fn`'s error stopping each shard at its first batch,
-cancellation (by `fn` on the last batch, and before a scan of an empty dataset: never a success), a Source
-failure while planning (returned unchanged, the failed plan's reads absent from `Stats`) and a versions refusal
-before any read; `BenchmarkScan` tallies 300,000 objects with one worker and
+0, 1, 2, 7, 64 and `math.MaxInt` workers and several prefixes (each object once, each batch ascending), its
+statistics against a plan, split and shard scans made by hand (1, 8 and 16 shards a worker), a failing row,
+`fn`'s error stopping each shard at its first batch, cancellation (by `fn` on the last batch, and before a scan
+of an empty dataset: never a success), a Source failure while planning (returned unchanged, the failed plan's
+reads absent from `Stats`) and a versions refusal before any read. `TestScanShardsPerWorker` runs `Scan` and
+`ScanBatches` at 1, 2, 4, 8 and 16 shards a worker and 1, 2 and 7 workers: Stream's objects, each batch
+ascending, no more calls of `fn` at once than workers, a bad row's position, and `fn`'s error after at most one
+call a worker. `TestScanSlowShardDoesNotHoldTheRest` holds the first key's batch until the other worker has
+handed on three quarters of the objects, which it cannot with one shard a worker (half wait behind the held
+batch). `BenchmarkScan` tallies 300,000 objects with one worker and
 `GOMAXPROCS`. `TestAzblobTotals` totals an Azure dataset against `Stream` (an exact blob's access tier as its
 storage class) and its prefixes' aggregates.
 

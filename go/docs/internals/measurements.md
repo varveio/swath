@@ -1582,6 +1582,65 @@ measured as a probe in the same run (not committed), took 677–702 ns/row with 
 this host's noise of the plan-free pass. `TestStreamAllocations` measured 9.04 allocations an object over its
 20,000-row fixture (9.05 under `-race`), budget 10.5.
 
+### Reader shard queue, 2026-11-10
+
+`Scan` and `ScanBatches` split the plan into up to `shardsPerWorker` shards a worker and `Workers` goroutines
+take them in order, in place of exactly `Workers` shards with one goroutine each (varve#124: on an 18-core
+arm64 host and 57.9M commoncrawl objects, varve's overview took 3.9 s at one shard a core and 2.4 s asking for
+eight a core). Swath main `1357c628` with the change, against the same tree with `scan.go` and `batch.go` as
+on main, both with the same benchmark files; Go 1.27.4 (the module's toolchain), GOMAXPROCS 4, the shared
+4-vCPU host above, the 4M-row seed-1 fixture (20 row groups, so a scan has at most 20 shards), under `flock
+/tmp/swath-gates.lock`, other agents' test runs on the host throughout. `BenchmarkReaderScanSkewed` does 32
+times the work an object in the first eighth of the keys ([testing.md](testing.md#reader-benchmarks)).
+
+Shards per worker, five interleaved rounds (each round every binary once, the order rotated; `-benchtime
+2x`), load average 0.8 to 4.4. ns/row, median of five (minimum in brackets); `old` is main. At 4 workers, 1,
+2, 4 and 8 shards a worker are 4, 8, 16 and 20 shards; at 8 workers, 8, 16, 20 and 20.
+
+| Case | old | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|---:|
+| Skewed, 4 workers | 490.9 (488.7) | 485.2 (478.9) | 370.3 (364.9) | 261.7 (253.9) | 252.7 (248.0) |
+| Skewed, 8 workers | 415.2 (407.9) | 397.8 (393.0) | 268.9 (265.6) | 357.8 (264.3) | 270.1 (266.4) |
+| Batch-noop, 4 workers | 114.8 (112.1) | 122.6 (113.8) | 141.2 (122.4) | 136.0 (127.3) | 133.3 (118.2) |
+| Batch-noop, 8 workers | 114.3 (112.8) | 114.9 (114.6) | 122.9 (119.2) | 116.8 (113.5) | 154.9 (111.3) |
+
+With the skewed callback the queue at eight shards a worker scans in about half old's time at 4 workers
+(253 against 491 ns/row) and two thirds at 8 (270 against 415); one shard a worker is old's schedule and
+time. Four and eight a worker differ little here because the fixture's 20 row groups cap both near 20
+shards. The even-cost `Batch-noop` shows no gain on four vCPUs, and these contended measurements cannot resolve
+an even-cost regression: its medians went from 114.8 to 133.3 ns/row at 4 workers and from 114.3 to 154.9 at
+8, while the minimums overlap (111 to 127 ns/row in every arm), which does not show the two equal. Eight a
+worker allocates 185.0–185.5 B/row against old's 183.7–183.9 (each shard grows its own SeekParquet page
+buffers) and 0.0003–0.0006 more allocations a row. The queue bounds the tail by the slowest shard still
+running, not by an eighth of a worker's time: Split cuts only at row groups, and the callback's cost per
+shard is unequal.
+
+SeekParquet is pinned at `b1c848a4d2d6` here. Its open #55 (key-page buffers reused within a `ScanBatches`
+call) keeps that scratch per call, so per shard under this queue: at most `Workers` sets in use, but their
+growth repeats for every shard. The allocation and RSS of the two changes together are not measured.
+
+Old against eight a worker, the `Scan`, `Batch-noop` and `Batch-touch` arms of `BenchmarkReaderScan` and the
+skewed benchmark (`Batch-all` and `Batch-size` not run), three interleaved rounds at the default
+benchtime, load average 3.7 to 9.1 (the medians carry that contention; the B/row and allocations do not):
+
+| Workers | Path | old ns/row | new ns/row | old B/row | new B/row | old allocs/row | new allocs/row |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | Scan | 1,032.0 | 1,027.0 | 708.4 | 708.4 | 12.02779 | 12.02784 |
+| 1 | Batch-noop | 310.0 | 304.2 | 183.5 | 183.5 | 0.03350 | 0.03354 |
+| 1 | Batch-touch | 366.6 | 347.2 | 183.5 | 183.5 | 0.03353 | 0.03353 |
+| 4 | Scan | 672.9 | 649.0 | 708.1 | 712.5 | 12.02682 | 12.02774 |
+| 4 | Batch-noop | 206.9 | 172.6 | 183.5 | 185.1 | 0.03348 | 0.03413 |
+| 4 | Batch-touch | 210.3 | 207.7 | 183.5 | 185.1 | 0.03351 | 0.03406 |
+| 8 | Scan | 674.6 | 844.1 | 709.2 | 712.1 | 12.02656 | 12.02679 |
+| 8 | Batch-noop | 188.1 | 175.5 | 183.8 | 184.9 | 0.03345 | 0.03377 |
+| 8 | Batch-touch | 197.8 | 191.9 | 183.8 | 184.9 | 0.03350 | 0.03377 |
+| 4 | Skewed | 564.0 | 391.6 | 183.9 | 185.5 | 0.03378 | 0.03417 |
+| 8 | Skewed | 602.0 | 454.3 | 183.9 | 185.0 | 0.03366 | 0.03390 |
+
+Workers 1 is unchanged by design (one shard). The 8-worker `Scan` medians (new 717–1,106, old 650–1,132
+ns/row) overlap under this load. Scan time on many cores, where the imbalance varve measured lives, is not
+measured here.
+
 ## The seekparquet module's part writer, 2026-11-08
 
 The part encoder moved from swath's writer to the seekparquet module's (`write.NewPart`, pages through

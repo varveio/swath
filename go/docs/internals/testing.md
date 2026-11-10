@@ -989,6 +989,8 @@ sets GOMAXPROCS to 1 and can affect decoder initialization.
 **Benchmarks.** `BenchmarkReaderScan/workers={1,4,8}` (end to end: plan, Split and scan, GOMAXPROCS unchanged)
 includes `Scan` (owning), `Batch-noop` (last_modified and storage class), `Batch-touch` (the same selection,
 reading every key byte, size, time and class byte), `Batch-all` (all Object fields) and `Batch-size` (key+size).
+`BenchmarkReaderScanSkewed/workers={4,8}` runs the `Batch-noop` selection with a callback that does 32 times the
+work per object in the first eighth of the keys, the uneven per-key cost that shard scheduling exists for.
 `BenchmarkReaderStream` is ordered and owning, Workers do not apply: `Stream` (one pass) and `Range-pages`
 (the paged `Stream` it replaced, kept in `stream_test.go` as its oracle). Counting-only callbacks serve as the no-op baseline;
 all cases read the whole fixture on a Dataset opened and read once

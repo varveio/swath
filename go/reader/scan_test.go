@@ -8,12 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 )
@@ -54,8 +56,8 @@ func scanAll(t *testing.T, d *Dataset, req ScanRequest) ([]Object, error) {
 	return out, err
 }
 
-// TestScanMatchesStream: for any number of workers, a scan hands fn
-// exactly Stream's objects, each once, under every prefix.
+// TestScanMatchesStream: for any number of workers, up to math.MaxInt,
+// a scan hands fn exactly Stream's objects, each once, under every prefix.
 func TestScanMatchesStream(t *testing.T) {
 	dir := scanDir(t, 5000, 300)
 	all, err := stream(t, openDir(t, dir))
@@ -65,7 +67,7 @@ func TestScanMatchesStream(t *testing.T) {
 	d := openDir(t, dir)
 	for _, prefix := range []string{"", "b/", "a/00001", "zz"} {
 		want := slices.DeleteFunc(slices.Clone(all), func(o Object) bool { return !bytes.HasPrefix(o.Key, []byte(prefix)) })
-		for _, workers := range []int{-1, 0, 1, 2, 7, 64} {
+		for _, workers := range []int{-1, 0, 1, 2, 7, 64, math.MaxInt} {
 			got, err := scanAll(t, d, ScanRequest{Prefix: []byte(prefix), Workers: workers})
 			if err != nil {
 				t.Fatal(err)
@@ -78,36 +80,40 @@ func TestScanMatchesStream(t *testing.T) {
 }
 
 // TestScanStats: a scan's statistics are its plan's, its split's and its
-// shards' scans', summed, whatever the number of workers.
+// shards' scans', summed, whatever the number of workers and of shards per
+// worker.
 func TestScanStats(t *testing.T) {
 	dir := scanDir(t, 3000, 200)
-	for _, workers := range []int{1, 7} {
-		ctx := context.Background()
-		sp := openDir(t, dir).SeekParquet()
-		plan, err := sp.PlanRanges(ctx, []seekparquet.Range{{}}, objectColumns(S3ObjectsV1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := plan.Stats()
-		shards, err := plan.Split(ctx, workers)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, shard := range shards {
-			var st ReadStats
-			if err := shard.Scan(ctx, &st, func(seekparquet.Row) error { return nil }); err != nil {
+	for _, k := range []int{1, 8, 16} {
+		withShardsPerWorker(t, k)
+		for _, workers := range []int{1, 7} {
+			ctx := context.Background()
+			sp := openDir(t, dir).SeekParquet()
+			plan, err := sp.PlanRanges(ctx, []seekparquet.Range{{}}, objectColumns(S3ObjectsV1))
+			if err != nil {
 				t.Fatal(err)
 			}
-			addStats(&want, shard.Stats())
-			addStats(&want, st)
-		}
-		got := ReadStats{PartsOpened: -1}
-		if _, err := scanAll(t, openDir(t, dir), ScanRequest{Workers: workers, Stats: &got}); err != nil {
-			t.Fatal(err)
-		}
-		if got.KeysDecoded != want.KeysDecoded || got.ValuePagesDecoded != want.ValuePagesDecoded ||
-			got.PartsOpened != want.PartsOpened || got.KeysDecoded < 3000 {
-			t.Fatalf("%d workers: stats %+v, want %+v", workers, got, want)
+			want := plan.Stats()
+			shards, err := plan.Split(ctx, scanShards(workers))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, shard := range shards {
+				var st ReadStats
+				if err := shard.Scan(ctx, &st, func(seekparquet.Row) error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				addStats(&want, shard.Stats())
+				addStats(&want, st)
+			}
+			got := ReadStats{PartsOpened: -1}
+			if _, err := scanAll(t, openDir(t, dir), ScanRequest{Workers: workers, Stats: &got}); err != nil {
+				t.Fatal(err)
+			}
+			if got.KeysDecoded != want.KeysDecoded || got.ValuePagesDecoded != want.ValuePagesDecoded ||
+				got.PartsOpened != want.PartsOpened || got.KeysDecoded < 3000 {
+				t.Fatalf("%d workers, %d shards a worker: stats %+v, want %+v", workers, k, got, want)
+			}
 		}
 	}
 }
@@ -235,5 +241,155 @@ func TestScanPlanFailureStats(t *testing.T) {
 	}
 	if _, reads := src.taken(); len(reads) == 0 {
 		t.Fatal("planning read nothing")
+	}
+}
+
+// withShardsPerWorker sets shardsPerWorker to k until the test ends.
+func withShardsPerWorker(t *testing.T, k int) {
+	t.Helper()
+	old := shardsPerWorker
+	shardsPerWorker = k
+	t.Cleanup(func() { shardsPerWorker = old })
+}
+
+// concurrency counts fn's calls in flight and the most at once.
+type concurrency struct{ now, most atomic.Int64 }
+
+func (c *concurrency) enter() {
+	n := c.now.Add(1)
+	for m := c.most.Load(); n > m && !c.most.CompareAndSwap(m, n); m = c.most.Load() {
+	}
+	runtime.Gosched() // let other calls overlap this one
+}
+
+func (c *concurrency) leave() { c.now.Add(-1) }
+
+// TestScanShardsPerWorker: whatever the shards per worker, Scan and
+// ScanBatches hand on exactly Stream's objects, each once, each batch in
+// ascending order, with no more calls of fn at once than Workers; a row
+// that breaks the checks fails both with its position; fn's error stops
+// each worker at its first batch.
+func TestScanShardsPerWorker(t *testing.T) {
+	const n = 6000
+	dir := scanDir(t, n, 150) // 40 row groups: up to 40 shards
+	want, err := stream(t, openDir(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%07d", i)
+	}
+	rows := keyRows(keys)
+	rows[n*2/3].Size = ptr(int64(-1))
+	bad := openDir(t, writeParts(t, s3Spec(), 100, 150, cut(rows, 0, n/3, n)...))
+	d := openDir(t, dir)
+	stop := errors.New("stop")
+	for _, k := range []int{1, 2, 4, 8, 16} {
+		withShardsPerWorker(t, k)
+		for _, workers := range []int{1, 2, 7} {
+			var c concurrency
+			var mu sync.Mutex
+			var scanned, batched []Object
+			err := d.Scan(context.Background(), ScanRequest{Workers: workers}, func(batch []Object) error {
+				c.enter()
+				defer c.leave()
+				for i := 1; i < len(batch); i++ {
+					if bytes.Compare(batch[i-1].Key, batch[i].Key) >= 0 {
+						return fmt.Errorf("batch out of order at %q", batch[i].Key)
+					}
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				scanned = append(scanned, batch...)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = d.ScanBatches(context.Background(), BatchScanRequest{Workers: workers, Fields: AllObjectFields}, func(b *ObjectBatch) error {
+				c.enter()
+				defer c.leave()
+				mu.Lock()
+				defer mu.Unlock()
+				for i := range b.Len() {
+					if i > 0 && bytes.Compare(b.Key(i-1), b.Key(i)) >= 0 {
+						return fmt.Errorf("batch out of order at %q", b.Key(i))
+					}
+					batched = append(batched, copyBatchObject(b, i))
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, got := range [][]Object{scanned, batched} {
+				slices.SortFunc(got, func(a, b Object) int { return bytes.Compare(a.Key, b.Key) })
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("%d workers, %d shards a worker: %d objects, want %d", workers, k, len(got), len(want))
+				}
+			}
+			if most := c.most.Load(); most > int64(workers) {
+				t.Fatalf("%d workers, %d shards a worker: %d calls at once", workers, k, most)
+			}
+
+			err = bad.Scan(context.Background(), ScanRequest{Workers: workers}, func([]Object) error { return nil })
+			if se := semanticAt(t, err, KindRow, "size"); string(se.Row.Key) != keys[n*2/3] {
+				t.Fatalf("Scan row error %v", se)
+			}
+			err = bad.ScanBatches(context.Background(), BatchScanRequest{Workers: workers}, func(*ObjectBatch) error { return nil })
+			if se := semanticAt(t, err, KindRow, "size"); string(se.Row.Key) != keys[n*2/3] || se.Row.Offset != 0 {
+				t.Fatalf("ScanBatches row error %v", se)
+			}
+
+			var calls atomic.Int64
+			err = d.ScanBatches(context.Background(), BatchScanRequest{Workers: workers}, func(*ObjectBatch) error {
+				calls.Add(1)
+				return stop
+			})
+			if err != stop || calls.Load() == 0 || calls.Load() > int64(workers) {
+				t.Fatalf("%d workers, %d shards a worker: fn's error %v after %d calls", workers, k, err, calls.Load())
+			}
+		}
+	}
+}
+
+// TestScanSlowShardDoesNotHoldTheRest: while fn holds the batch of the
+// first key, the other worker goes on to the other shards and hands on
+// three quarters of the objects, which one shard a worker, half of them
+// waiting behind the held batch, could not.
+func TestScanSlowShardDoesNotHoldTheRest(t *testing.T) {
+	const n, workers = 8000, 2
+	withShardsPerWorker(t, 4)
+	d := openDir(t, scanDir(t, n, 500)) // 18 row groups: 8 shards
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, batches := range []bool{false, true} {
+		var others atomic.Int64
+		done := make(chan struct{})
+		var once sync.Once
+		hold := func(key []byte, objects int) error {
+			if !bytes.Equal(key, []byte("a/0000000")) {
+				if others.Add(int64(objects)) >= n*3/4 {
+					once.Do(func() { close(done) })
+				}
+				return nil
+			}
+			select {
+			case <-done:
+				return nil
+			case <-ctx.Done():
+				return fmt.Errorf("%d objects handed on while the first batch was held", others.Load())
+			}
+		}
+		var err error
+		if batches {
+			err = d.ScanBatches(ctx, BatchScanRequest{Workers: workers}, func(b *ObjectBatch) error { return hold(b.Key(0), b.Len()) })
+		} else {
+			err = d.Scan(ctx, ScanRequest{Workers: workers}, func(batch []Object) error { return hold(batch[0].Key, len(batch)) })
+		}
+		if err != nil {
+			t.Fatalf("batches %v: %v", batches, err)
+		}
 	}
 }
