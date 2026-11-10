@@ -157,7 +157,8 @@ and removes CodeQL PR dependency copies, preserving scanning and main's shared c
 Deletion uses a deduplicated snapshot and creation order, so overlapping main runs cannot delete
 a newer cache just because it belongs to another commit. `ci-gate` does not need housekeeping.
 See [CI architecture](../../../docs/ops/dev/CI.md#caching) for the policy and trust boundary.
-The DuckDB downloads retry five times, and SeekParquet conformance's `pip install` ten.
+The Java build's DuckDB download retries five times; the Go image smoke's and `release.yml`'s do not.
+SeekParquet conformance's `pip install` retries ten times.
 
 No per-push job races `internal/listing` or `cmd/swath` on linux/amd64 (`go-nonrace` runs one `listing` test there, without `-race`): they are raced on arm64 when main is selected and on
 amd64 nightly. Their additional non-race platform runs are full-validation work, not ordinary PR work.

@@ -54,7 +54,7 @@ jobs:
         shell: bash
         working-directory: go
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # The ci.yml setup, restored and never saved: the shared module cache, which every runner
       # has, and the build cache of the ci.yml job on the same runner (go-race (rest) on amd64,
