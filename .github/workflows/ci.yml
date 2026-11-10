@@ -910,11 +910,11 @@ jobs:
           fi
           echo "CI gate passed."
 
-  # A release checks this job in the main push run of its exact SHA. Unlike the
-  # PR gate, success here certifies every Go module, platform and packaging tier.
+  # Full-scope PRs exercise this gate too; release accepts only its main push
+  # result at the exact SHA. Ordinary scoped PRs do not emit this qualification.
   go-full-gate:
     needs: [changes, go-lint, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures]
-    if: always() && github.event_name != 'pull_request'
+    if: always() && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

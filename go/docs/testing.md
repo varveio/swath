@@ -111,7 +111,7 @@ Java retains its positive source/build/fixture filter ([CI architecture](../../d
 
 Each job still runs, but an unaffected job skips its work and succeeds. `ci-gate` rejects failed,
 cancelled **and skipped jobs on every event**. Matrix jobs emit a single cheap `off` leg when no
-work is selected. Main/dispatch additionally emit **`go-full-gate`** only after every Go job passes, all Go
+work is selected. Full-scope PRs and main/dispatch additionally emit **`go-full-gate`** only after every Go job passes, all Go
 selections are true, and both expanded matrices match full validation. This Go-specific gate
 does not depend on the Java jobs. Release requires that qualification from the main push run of its
 exact commit; a green PR or mere ancestry in main is insufficient.

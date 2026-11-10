@@ -112,9 +112,10 @@ input-selection mistakes.
 
 ### Full validation and releases
 
-`go-full-gate` depends directly on every Go job on main/dispatch. It requires every job to pass, every
+`go-full-gate` depends directly on every Go job on full-scope PRs and main/dispatch. It requires every job to pass, every
 Go selection to be enabled, the full race-shard matrix and exactly the three full platform legs.
-Regression tests require both aggregates to include every Go job. Main runs retain independent concurrency groups, so a newer merge cannot
+Regression tests require both aggregates to include every Go job. Full-scope PRs exercise the
+qualification before merge, but only its main push result can qualify a release. Main runs retain independent concurrency groups, so a newer merge cannot
 cancel the older commit's qualification. A red main run must be fixed or reverted; green PR checks do
 not qualify a release.
 

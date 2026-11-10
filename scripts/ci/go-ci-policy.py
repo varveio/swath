@@ -123,7 +123,7 @@ def detect(event, base, labels):
                                           capture_output=True, text=True, errors='replace')
                     if file.returncode == 0:
                         build_tags |= any(re.match(r'\s*//\s*(go:build|\+build)\b', line)
-                                          for line in file.stdout.splitlines()[:40])
+                                          for line in file.stdout.splitlines())
         toolchain = any(re.match(r'(?:go\s+\d|toolchain\s+go\d)', line) for line in changed_lines)
     tracked = {path for path in git('ls-files', '-z', 'go/go.mod', 'go/**/go.mod')
                .decode(errors='surrogateescape').split('\0') if path and not fixture_module(path)}

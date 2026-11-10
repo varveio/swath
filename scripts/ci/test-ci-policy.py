@@ -158,12 +158,12 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(rows['full'], 'true')
             # Adding, editing a constrained body, or deleting a build constraint
             # must escalate even when the filename has no platform suffix.
-            (cwd / 'go/source.go').write_text('//go:build linux\n\npackage objfile\n')
+            (cwd / 'go/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage objfile\n')
             subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'constraint'], cwd=temp, check=True)
             self.assertEqual(run()[1]['platforms'], 'true')
             constrained_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
-            (cwd / 'go/source.go').write_text('//go:build linux\n\npackage changed\n')
+            (cwd / 'go/source.go').write_text('// license\n' * 55 + '//go:build linux\n\npackage changed\n')
             subprocess.run(['git', 'add', 'go/source.go'], cwd=temp, check=True)
             subprocess.run(['git', 'commit', '-qm', 'constrained body'], cwd=temp, check=True)
             self.assertEqual(run(BASE=constrained_base)[1]['platforms'], 'true')
@@ -245,7 +245,7 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(check(dict(selection, go_shards='[]')), 0)
 
         # A new Go job cannot be omitted from either aggregate unnoticed.
-        go_jobs = set(re.findall(r'^  (go-[a-z-]+):$', WORKFLOW, re.M)) - {'go-full-gate'}
+        go_jobs = set(re.findall(r'^  (go-[a-z0-9_-]+):$', WORKFLOW, re.M)) - {'go-full-gate'}
         for gate in ['ci-gate', 'go-full-gate']:
             section = WORKFLOW.split('  ' + gate + ':\n', 1)[1]
             needs = set(re.search(r'needs: \[(.*?)\]', section)[1].split(', '))
