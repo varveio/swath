@@ -279,10 +279,16 @@ empty final page: an XML listing's 200 must have `EnumerationResults` as its roo
 and no `Error` element in it; the decoded page must hold `Blobs`. The Arrow decoder (`parseArrowStream`) takes the
 end of the body for the end of the stream, so a stream cut after a record batch reads as a whole page with the
 schema's `NextMarker`, and a schema without `NextMarker` as a final page; an empty body, a stream cut inside a
-message and a body that is not Arrow fail it. An Arrow listing must therefore read without error (the batches are read
-once, not converted), its schema metadata must hold `NextMarker` and `NumberOfRecords`, Azure's documented listing
-metadata, and its batches must hold `NumberOfRecords` rows (`TestArrowEnvelope`). A refused envelope is a parse
-failure, retried. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
+message and a body that is not Arrow fail it. It finds each column it maps by name and type assertion, so a column
+of any other physical type (a dictionary-encoded `AccessTier` or `ResourceType`, say) reads as nulls: blank
+properties, and with `ResourceType` prefixes listed as blobs. An Arrow listing must therefore read without error
+(the batches are read once, not converted), its schema metadata must hold `NextMarker` and `NumberOfRecords`,
+Azure's documented listing metadata, its batches must hold `NumberOfRecords` rows (`TestArrowEnvelope`), and each
+column the SDK maps must have a type its resolver reads (`client.arrowColumns`: utf8 for the strings, bool,
+timestamp, uint64 or int64 for `Content-Length` and the sequence number, uint64 or int32 for the two 32-bit counts,
+a utf8-to-utf8 map for metadata and tags; `TestArrowColumnTypes`). Columns it does not map may have any type. Azure
+sends these types today (a live 4,983-row page: utf8 strings, timestamp[s] times, uint64 `Content-Length`, bool
+flags, one batch, all-null columns left out). A refused envelope is a parse failure, retried. Names are checked for UTF-8. A hierarchy page comes back from the SDK as two arrays, blobs and
 prefixes; both are in wire (UTF-16 code-unit) order and no name is in both, so merging them with
 `utf16order.Compare` restores the one sequence the byte-order adapter needs (`TestWireOrder`, `TestMergeOrder`); a
 page out of order across the two kinds is merged into order and not detected, one out of order within a kind

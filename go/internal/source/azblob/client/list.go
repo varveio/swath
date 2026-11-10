@@ -40,10 +40,12 @@ package client
 //     empty body, any root, or a listing holding an error, as a page, an
 //     empty final one; TestScriptedAnswers, TestSDKDecoding), and the
 //     decoded page must hold Blobs (Segment nil otherwise). Arrow: the
-//     stream must read without error, its schema metadata must hold NextMarker
-//     and NumberOfRecords, and its batches that many rows (the SDK reads a
-//     stream cut after a batch as whole and one without NextMarker as a
-//     final page; TestArrowEnvelope).
+//     stream must read without error, its schema metadata must hold
+//     NextMarker and NumberOfRecords, its batches that many rows, and each
+//     column the SDK maps a type the SDK reads (the SDK reads a stream cut
+//     after a batch as whole, one without NextMarker as a final page, and
+//     a column of another type, a dictionary-encoded one say, as nulls;
+//     TestArrowEnvelope, TestArrowColumnTypes).
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
 //     (TestRedactedRefusal). The SDK's own log, which quotes failed
 //     requests' URLs, is not swath's: the command turns it off at startup
@@ -92,6 +94,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
+	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 
 	"github.com/varveio/swath/go/internal/buildinfo"
@@ -403,19 +406,28 @@ func envelope(req *http.Request, status int, header http.Header, body []byte) er
 }
 
 // arrowEnvelope checks an Arrow listing: an IPC stream whose schema
-// metadata holds NextMarker and NumberOfRecords (Azure's listing metadata)
-// and whose record batches hold NumberOfRecords rows. The SDK's decoder
-// reads a stream cut at a message boundary as whole (the Arrow reader
-// takes the body's end for the stream's), batches missing, all of them
-// included, as a shorter page, and a schema without NextMarker as a final
-// page; each would drop entries, so each is refused (TestArrowEnvelope).
-// The batches are read (one copy of the body), not converted row by row.
+// metadata holds NextMarker and NumberOfRecords (Azure's listing metadata),
+// whose columns the SDK maps each have a type its decoder reads
+// (arrowColumns), and whose record batches hold NumberOfRecords rows. The
+// SDK's decoder reads a stream cut at a message boundary as whole (the
+// Arrow reader takes the body's end for the stream's), batches missing,
+// all of them included, as a shorter page, a schema without NextMarker as
+// a final page, and a column of another type as nulls (a dictionary
+// ResourceType makes prefixes blobs); each would drop or blank entries, so
+// each is refused (TestArrowEnvelope, TestArrowColumnTypes). Columns the
+// SDK does not map are ignored, as it ignores them. The batches are read
+// (one copy of the body), not converted row by row.
 func arrowEnvelope(body []byte) error {
 	r, err := ipc.NewReader(bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("%w: an Arrow listing without a schema (%d bytes): %v", objhttp.ErrSyntax, len(body), err)
 	}
 	defer r.Release()
+	for _, f := range r.Schema().Fields() {
+		if read, ok := arrowColumns[f.Name]; ok && !read(f.Type) {
+			return fmt.Errorf("%w: an Arrow listing's column %q is %s, which the SDK reads as nulls", objhttp.ErrSyntax, f.Name, f.Type)
+		}
+	}
 	md := r.Schema().Metadata()
 	n := md.FindKey("NumberOfRecords")
 	if n < 0 || md.FindKey("NextMarker") < 0 {
@@ -436,6 +448,45 @@ func arrowEnvelope(body []byte) error {
 		return fmt.Errorf("%w: an Arrow listing of %d rows declaring %d (%d bytes)", objhttp.ErrSyntax, rows, want, len(body))
 	}
 	return nil
+}
+
+// The physical types the SDK's Arrow resolvers take (azblob v1.8.3
+// internal/arrow: resolveString, resolveBool, resolveTimestamp,
+// resolveInt64, resolveInt32, resolveMapCol, each a type assertion that
+// yields nil, every value null, on any other type).
+var (
+	arrowString    = func(t arrow.DataType) bool { return t.ID() == arrow.STRING }
+	arrowBool      = func(t arrow.DataType) bool { return t.ID() == arrow.BOOL }
+	arrowTimestamp = func(t arrow.DataType) bool { return t.ID() == arrow.TIMESTAMP }
+	arrowInt64     = func(t arrow.DataType) bool { return t.ID() == arrow.UINT64 || t.ID() == arrow.INT64 }
+	arrowInt32     = func(t arrow.DataType) bool { return t.ID() == arrow.UINT64 || t.ID() == arrow.INT32 }
+	arrowMap       = func(t arrow.DataType) bool {
+		m, ok := t.(*arrow.MapType)
+		return ok && m.KeyType().ID() == arrow.STRING && m.ItemType().ID() == arrow.STRING
+	}
+)
+
+// arrowColumns are the columns the SDK's Arrow decoder maps
+// (resolveColumns), each with the types its resolver reads.
+var arrowColumns = map[string]func(arrow.DataType) bool{
+	"Name": arrowString, "Snapshot": arrowString, "VersionId": arrowString, "Etag": arrowString,
+	"Content-Type": arrowString, "Content-Encoding": arrowString, "Content-Language": arrowString,
+	"Content-Disposition": arrowString, "Cache-Control": arrowString, "Content-MD5": arrowString,
+	"BlobType": arrowString, "AccessTier": arrowString, "SmartAccessTier": arrowString, "LeaseState": arrowString,
+	"LeaseStatus": arrowString, "LeaseDuration": arrowString, "CustomerProvidedKeySha256": arrowString,
+	"EncryptionScope": arrowString, "ArchiveStatus": arrowString, "RehydratePriority": arrowString,
+	"CopyId": arrowString, "CopyStatus": arrowString, "CopySource": arrowString, "CopyProgress": arrowString,
+	"CopyStatusDescription": arrowString, "CopyDestinationSnapshot": arrowString,
+	"ImmutabilityPolicyMode": arrowString, "ResourceType": arrowString,
+	"Deleted": arrowBool, "IsCurrentVersion": arrowBool, "HasVersionsOnly": arrowBool,
+	"AccessTierInferred": arrowBool, "ServerEncrypted": arrowBool, "IncrementalCopy": arrowBool,
+	"Sealed": arrowBool, "LegalHold": arrowBool,
+	"Creation-Time": arrowTimestamp, "Last-Modified": arrowTimestamp, "AccessTierChangeTime": arrowTimestamp,
+	"CopyCompletionTime": arrowTimestamp, "ImmutabilityPolicyUntilDate": arrowTimestamp,
+	"DeletedTime": arrowTimestamp, "LastAccessTime": arrowTimestamp,
+	"Content-Length": arrowInt64, "x-ms-blob-sequence-number": arrowInt64,
+	"RemainingRetentionDays": arrowInt32, "TagCount": arrowInt32,
+	"Metadata": arrowMap, "OrMetadata": arrowMap, "Tags": arrowMap,
 }
 
 // xmlEnvelope checks an XML listing: the root element is

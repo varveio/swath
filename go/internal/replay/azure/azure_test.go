@@ -417,6 +417,9 @@ func TestAcceptRule(t *testing.T) {
 		{"application/vnd.apache.arrow.stream, application/xml", true}, {"application/vnd.apache.arrow.stream,application/xml", true},
 		{"application/xml, application/vnd.apache.arrow.stream;q=0", true},
 		{"application/vnd.apache.arrow.stream", false}, {"application/vnd.apache.arrow.stream, application/xml;q=0", false},
+		// the most specific range matching application/xml sets its quality
+		{"application/vnd.apache.arrow.stream, application/xml;q=0, */*;q=1", false}, {"*/*;q=0, application/xml", true},
+		{"application/*", true}, {"application/*;q=0, */*", false}, {"application/xml;q=0.5, application/*;q=0", true},
 	} {
 		if got := acceptsXML(c.accept); got != c.ok {
 			t.Errorf("%q: %v", c.accept, got)

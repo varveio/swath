@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,5 +193,80 @@ func TestArrowEnvelope(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// columnPage is a one-batch final Arrow listing of the names a/ and b with
+// a second column col holding values, dictionary-encoded when dict is set.
+func columnPage(col string, values [2]string, dict bool) []byte {
+	typ := arrow.DataType(arrow.BinaryTypes.String)
+	if dict {
+		typ = &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int32, ValueType: arrow.BinaryTypes.String}
+	}
+	m := arrow.MetadataFrom(map[string]string{"NextMarker": "", "NumberOfRecords": "2"})
+	schema := arrow.NewSchema([]arrow.Field{{Name: "Name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: col, Type: typ, Nullable: true}}, &m)
+	nb := array.NewStringBuilder(amem.DefaultAllocator)
+	nb.AppendValues([]string{"a/", "b"}, nil)
+	names := nb.NewArray()
+	var vals arrow.Array
+	if dict {
+		db := array.NewDictionaryBuilder(amem.DefaultAllocator, typ.(*arrow.DictionaryType)).(*array.BinaryDictionaryBuilder)
+		for _, v := range values {
+			if err := db.AppendString(v); err != nil {
+				panic(err)
+			}
+		}
+		vals = db.NewArray()
+	} else {
+		vb := array.NewStringBuilder(amem.DefaultAllocator)
+		vb.AppendValues(values[:], nil)
+		vals = vb.NewArray()
+	}
+	rec := array.NewRecordBatch(schema, []arrow.Array{names, vals}, 2)
+	var buf bytes.Buffer
+	w := ipc.NewWriter(&buf, ipc.WithSchema(schema))
+	if err := w.Write(rec); err != nil {
+		panic(err)
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// TestArrowColumnTypes: a column the SDK maps, of a type its resolver does
+// not read, is refused, never decoded as nulls: a dictionary-encoded
+// AccessTier would blank the tier, a dictionary-encoded ResourceType would
+// list the prefix a/ as a blob. The same pages in utf8 (Azure's type) are
+// read, and a column the SDK does not map may have any type.
+func TestArrowColumnTypes(t *testing.T) {
+	for _, c := range []struct {
+		name, delimiter, col string
+		values               [2]string
+		dict                 bool
+		want                 *ListOutput // nil: refused, ErrSyntax
+	}{
+		{"AccessTier utf8", "", "AccessTier", [2]string{"Hot", "Cool"}, false,
+			&ListOutput{Items: []Item{{Name: "a/", AccessTier: "Hot"}, {Name: "b", AccessTier: "Cool"}}}},
+		{"AccessTier dictionary", "", "AccessTier", [2]string{"Hot", "Cool"}, true, nil},
+		{"ResourceType utf8", "/", "ResourceType", [2]string{"blobprefix", "blob"}, false,
+			&ListOutput{Items: []Item{{Name: "a/", Prefix: true}, {Name: "b"}}}},
+		{"ResourceType dictionary", "/", "ResourceType", [2]string{"blobprefix", "blob"}, true, nil},
+		{"unmapped column dictionary", "", "Unmapped", [2]string{"x", "y"}, true,
+			&ListOutput{Items: []Item{{Name: "a/"}, {Name: "b"}}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, _, err := listOnce(t, arrowType, columnPage(c.col, c.values, c.dict), c.delimiter)
+			if c.want == nil {
+				if !errors.Is(err, objhttp.ErrSyntax) || !strings.Contains(err.Error(), c.col) {
+					t.Fatalf("page %+v, error %v: want ErrSyntax naming %s", got, err, c.col)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("page %+v, error %v; want %+v", got, err, c.want)
+			}
+		})
 	}
 }

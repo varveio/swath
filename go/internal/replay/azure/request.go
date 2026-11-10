@@ -353,17 +353,19 @@ func invalidXMLEcho(v string) bool {
 	return false
 }
 
-// acceptsXML is the Accept rule: absent or blank accepts; otherwise some
-// media range must be application/xml or */* with a quality above zero,
-// and no quality may be malformed or outside [0, 1]. Other ranges beside
-// it are allowed, the Arrow stream type among them: the replay answers
-// XML, as Azure does for an account without Arrow listings. An Accept
-// naming Arrow and not XML is refused.
+// acceptsXML is the Accept rule: absent or blank accepts; otherwise no
+// quality may be malformed or outside [0, 1], and application/xml must
+// have a quality above zero, which the most specific range matching it
+// sets (RFC 9110 §12.5.1: application/xml, then application/*, then */*),
+// so "application/xml;q=0, */*" refuses. Other ranges beside it are
+// allowed, the Arrow stream type among them: the replay answers XML, as
+// Azure does for an account without Arrow listings. An Accept naming Arrow
+// and not XML is refused.
 func acceptsXML(accept string) bool {
 	if strings.TrimFunc(accept, unicode.IsSpace) == "" {
 		return true
 	}
-	xml := false
+	xmlRank, xmlQuality := 0, 0.0 // the most specific range matching application/xml, its quality
 	for _, part := range splitDroppingTrailingEmpty(accept, ",") {
 		pieces := strings.Split(strings.ToLower(trimControl(part)), ";")
 		media := trimControl(pieces[0])
@@ -381,12 +383,16 @@ func acceptsXML(accept string) bool {
 		if quality < 0 || quality > 1 {
 			return false
 		}
-		if (media == "application/xml" || media == "*/*") && quality > 0 {
-			xml = true
+		rank := xmlRanges[media]
+		if rank > xmlRank || rank > 0 && rank == xmlRank && quality > xmlQuality {
+			xmlRank, xmlQuality = rank, quality
 		}
 	}
-	return xml
+	return xmlQuality > 0
 }
+
+// xmlRanges are the media ranges matching application/xml, by specificity.
+var xmlRanges = map[string]int{"application/xml": 3, "application/*": 2, "*/*": 1}
 
 // splitDroppingTrailingEmpty splits like strings.Split and then drops
 // trailing empty fields, the split the Accept rule is defined with.
