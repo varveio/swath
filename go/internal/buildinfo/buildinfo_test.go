@@ -32,7 +32,7 @@ func TestVersion(t *testing.T) {
 	if b := Read(); b.Version != Version || b.Tool != Tool {
 		t.Fatalf("stamped build %+v, want version %s", b, Version)
 	}
-	if got, want := UserAgent(), "swath-go/0.4.0-rc.1"; got != want {
+	if got, want := UserAgent(), "swath/0.4.0-rc.1"; got != want {
 		t.Fatalf("UserAgent() = %q, want %q", got, want)
 	}
 }
@@ -43,13 +43,13 @@ func TestUserAgent(t *testing.T) {
 		build Build
 		want  string
 	}{
-		{"unknown", Build{}, "swath-go/devel"},
-		{"development", Build{Version: "devel"}, "swath-go/devel"},
-		{"revision", Build{Version: "devel", Revision: "0123456789abcdef-dirty"}, "swath-go/devel+01234567"},
-		{"unknown with revision", Build{Revision: "0123456789abcdef"}, "swath-go/devel+01234567"},
-		{"short revision", Build{Version: "devel", Revision: "abc"}, "swath-go/devel+abc"},
-		{"release", Build{Version: "v0.2.1", Revision: "0123456789abcdef"}, "swath-go/v0.2.1"},
-		{"release without revision", Build{Version: "v0.2.1"}, "swath-go/v0.2.1"},
+		{"unknown", Build{}, "swath/devel"},
+		{"development", Build{Version: "devel"}, "swath/devel"},
+		{"revision", Build{Version: "devel", Revision: "0123456789abcdef-dirty"}, "swath/devel+01234567"},
+		{"unknown with revision", Build{Revision: "0123456789abcdef"}, "swath/devel+01234567"},
+		{"short revision", Build{Version: "devel", Revision: "abc"}, "swath/devel+abc"},
+		{"release", Build{Version: "v0.2.1", Revision: "0123456789abcdef"}, "swath/v0.2.1"},
+		{"release without revision", Build{Version: "v0.2.1"}, "swath/v0.2.1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.build.userAgent()

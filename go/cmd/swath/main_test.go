@@ -223,7 +223,7 @@ func TestRefusedRunLeavesOwnerMetadata(t *testing.T) {
 // intact journal the outcome is resumable, with the cause named.
 func TestDiskFullIsResumable(t *testing.T) {
 	dir := t.TempDir()
-	j, err := journal.Create(dir, journal.Identity{Tool: "swath-go"}, nil)
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestDiskFullIsResumable(t *testing.T) {
 // signal made an unsafe-layout failure resumable).
 func TestTerminalCausesOutrankStops(t *testing.T) {
 	dir := t.TempDir()
-	j, err := journal.Create(dir, journal.Identity{Tool: "swath-go"}, nil)
+	j, err := journal.Create(dir, journal.Identity{Tool: "swath"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

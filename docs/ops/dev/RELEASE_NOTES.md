@@ -59,7 +59,9 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
   `/opt/swath/swath` (was `java -jar /opt/swath/swath.jar`), and there is no shell or JVM. The replay
   image is `scratch`, with the entrypoint `/opt/swath-replay/swath-replay` (was
   `/opt/swath-replay/bin/swath-replay`). The legal files moved from `/opt/swath/` to `/licenses/`. Both
-  still run as `10001:10001`.
+  run as `65532:65532` (distroless's `nonroot`) instead of `10001:10001`: a mounted output directory
+  must be writable by the new user, and the lister has a home directory, `/home/nonroot`, so mounted
+  credential directories such as `~/.aws` are found there.
 - **Builds from `main` before 0.4.** The Go port's own pre-release flag renames are listed under
   [Changes from 0.3 to 0.4](https://github.com/varveio/swath/blob/v0.4.0-rc.1/go/docs/upgrade.md#changes-from-03-to-04).
 

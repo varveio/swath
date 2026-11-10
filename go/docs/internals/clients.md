@@ -91,7 +91,7 @@ and `unsupported`, the ones [the run report](../reference/run-report.md) documen
 without a label. Each provider's `Failure` method in its `classify.go` produces the signals from status and code,
 held by the shared contract `objhttptest.Contract` that every client passes (`TestRetryContract`).
 
-**The User-Agent.** swath's product token (`buildinfo.UserAgent`, `swath-go/<version>`) comes first and the SDK's own
+**The User-Agent.** swath's product token (`buildinfo.UserAgent`, `swath/<version>`) comes first and the SDK's own
 string follows, as the Java tool's `USER_AGENT_PREFIX` does: S3 through a build middleware inserted after the
 SDK's, GCS by setting the header before the generated client's, Azure through azcore's telemetry policy
 (`TelemetryOptions.ApplicationID`, which azcore cuts to 24 bytes; a development token is 23). `TestUserAgent`,

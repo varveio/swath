@@ -55,19 +55,19 @@ readonly BUCKET=${SWATH_SMOKE_BUCKET:-s3://cmas-smoke-testcase/smoke_example_cas
 # (path-style, the container on the host network), so CI smokes the image without a network.
 readonly ENDPOINT=${SWATH_SMOKE_ENDPOINT:-}
 
-# The image runs as a non-root numeric UID (10001), so the mounted output directory has to
+# The image runs as a non-root numeric UID (65532), so the mounted output directory has to
 # be writable by it. `--user` is deliberately NOT used: the smoke should exercise the
 # image's own default identity, since that is what a user gets by default and a regression
 # that stops it writing as itself is exactly what this must catch.
 #
-# The consequence is that the outputs are owned by 10001, in subdirectories owned by 10001 —
+# The consequence is that the outputs are owned by 65532, in subdirectories owned by 65532 —
 # which the invoking host user generally cannot unlink. So this refuses to reuse a work
 # directory rather than pre-deleting one (a `rm -rf` here would fail on the second local
 # run). CI always starts from a fresh runner, so this only ever affects repeat local use.
 if [[ -e "$workdir" ]]; then
   cat >&2 <<EOF
 work directory already exists: $workdir
-Its contents are owned by the image's UID (10001), so removing it needs elevation:
+Its contents are owned by the image's UID (65532), so removing it needs elevation:
   sudo rm -rf "$workdir"
 Or pass a different work directory as the second argument.
 EOF

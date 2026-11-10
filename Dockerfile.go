@@ -21,9 +21,12 @@
 # /licenses/.
 #
 # Neither runtime stage has a RUN, so a multi-architecture build pulls nothing and emulates
-# nothing. Both run as the numeric user 10001:10001, and the binary is owned by root and not
-# writable by it. The replay runtime is `scratch`: the server speaks plain HTTP (no CA
-# certificates), formats every time in UTC (no zone data) and needs no /etc/passwd, so there
+# nothing. Both run as 65532:65532, distroless's `nonroot` user, and the binary is owned by
+# root and not writable by it. In the lister image that user has a passwd entry and a home
+# directory (/home/nonroot), so credential files mounted under ~ (~/.aws, ~/.config/gcloud,
+# ~/.azure) are found the same way as on a host. The replay runtime is `scratch`: the server
+# speaks plain HTTP (no CA certificates), formats every time in UTC (no zone data) and needs no
+# home directory or /etc/passwd, so it runs as the same numeric user, and there
 # is nothing in the image but the binary to patch or for a scanner to flag, and nothing to
 # exec into. The lister calls S3, GCS and Azure over HTTPS, so its runtime is distroless
 # static: CA certificates, zone data and /etc/passwd, still no shell or package manager.
@@ -68,7 +71,7 @@ ARG TARGETARCH
 COPY --from=build --chmod=0555 /out/${TARGETOS}-${TARGETARCH}/swath-replay /opt/swath-replay/swath-replay
 COPY --chmod=0444 LICENSE NOTICE /licenses/
 COPY --from=build --chmod=0444 /out/THIRD_PARTY_NOTICES /licenses/
-USER 10001:10001
+USER 65532:65532
 WORKDIR /opt/swath-replay
 ENTRYPOINT ["/opt/swath-replay/swath-replay"]
 
@@ -78,6 +81,6 @@ ARG TARGETARCH
 COPY --from=build --chmod=0555 /out/${TARGETOS}-${TARGETARCH}/swath /opt/swath/swath
 COPY --chmod=0444 LICENSE NOTICE /licenses/
 COPY --from=build --chmod=0444 /out/THIRD_PARTY_NOTICES /licenses/
-USER 10001:10001
+USER 65532:65532
 WORKDIR /opt/swath
 ENTRYPOINT ["/opt/swath/swath"]

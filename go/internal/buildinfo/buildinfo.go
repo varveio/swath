@@ -10,7 +10,7 @@ import "runtime/debug"
 
 // Tool is the tool's name in every identity (report, journal, footer,
 // User-Agent).
-const Tool = "swath-go"
+const Tool = "swath"
 
 // Version is the release version (X.Y.Z or X.Y.Z-rc.N), set at link time
 // by go/build.sh from $SWATH_VERSION (the release workflow passes its tag's

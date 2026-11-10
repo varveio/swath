@@ -36,7 +36,7 @@ so far and where `swath resume` will continue:
 $ swath show logs.parquet
 interrupted run in logs.parquet (journal version 9, started 2026-11-10T12:40:50Z)
 command: swath list --endpoint-url=http://127.0.0.1:19777 --anonymous --output=logs.parquet --request-rate=10 --part-interval=1s s3://bkt/logs/
-identity: provider s3, schema swath/s3-objects/v1, writer swath-go/parquet-r3, part size 67108864, source s3://bkt/logs/, endpoint http://127.0.0.1:19777, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
+identity: provider s3, schema swath/s3-objects/v1, writer swath/parquet-r3, part size 67108864, source s3://bkt/logs/, endpoint http://127.0.0.1:19777, region us-east-1, path style true, fips false, dual-stack false, fetch owner false
 1 part committed, 1000 rows; swath resume lists after "logs/2026/00/app-00999.log.gz"
 ```
 
