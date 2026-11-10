@@ -317,7 +317,7 @@ jobs:
 
   # Docker build gate on every event: both images build for both arches from source and the
   # builder-native image runs offline. Nothing is pushed (GHCR is written by release.yml only;
-  # see docs/ops/dev/CI.md), no credentials, no network — fork-safe. On `main` it is what
+  # see docs/ops/dev/CI.md) and no credentials are used — fork-safe. On `main` it is what
   # catches a break that appears only in the merge result (a semantic conflict between two
   # green PRs, a RUN added to the runtime stage) before a tag is cut.
   #
