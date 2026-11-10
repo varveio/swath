@@ -149,9 +149,10 @@ run (resumable; [ordering](internals/ordering.md#spill)).
   strings. Worker requests, seed listings and probes can overlap. Include those allocations, the
   encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
 - **A local listing's largest directory, outside it:** a listing reads each directory whole to sort it,
-  up to about 140 bytes of peak memory per entry (1M files in one directory: about 140 MiB measured), for each directory read at
-  once. A count (`swath du`, `swath diag count`) does not sort and reads large directories a slab at a
-  time.
+  for each directory read at once; the names and keys grow with their lengths (1M files in one directory,
+  names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`, `swath diag count`) does not
+  sort, and on Linux reads large directories a slab at a time; the portable engine (macOS, Windows) reads
+  each directory whole for a count too.
   See [body handling](internals/clients.md#what-swath-keeps) and
   [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
 - **A text file's compressor, outside it:** zstd compresses in parallel jobs, as many as `--encoders`
