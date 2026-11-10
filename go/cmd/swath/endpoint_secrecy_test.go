@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,58 +93,61 @@ func TestEndpointUserinfoReports(t *testing.T) {
 }
 
 func TestEndpointQuerySecrecy(t *testing.T) {
-	for _, root := range []string{"s3://bkt", "gs://bkt", "az://acct/ctr"} {
-		for _, eq := range []bool{false, true} {
-			t.Run(root+"/equals="+strconv.FormatBool(eq), func(t *testing.T) {
-				stderr := captureStderr(t)
-				dir := filepath.Join(t.TempDir(), "ds")
-				report := filepath.Join(t.TempDir(), "report.json")
-				args := append([]string{root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
-				const endpoint = "https://127.0.0.1:1/?sig=SECRET"
-				if eq {
-					args = append(args, "--endpoint="+endpoint)
-				} else {
-					args = append(args, "--endpoint", endpoint)
-				}
-				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer cancel()
-				var stdout bytes.Buffer
-				if code := exitCode(t, run(ctx, args, &stdout, diagList)); code != exitUsage {
-					t.Errorf("exit %d, want usage %d", code, exitUsage)
-				}
-				check := func(where string, raw []byte) {
-					t.Helper()
-					if bytes.Contains(raw, []byte("SECRET")) {
-						t.Errorf("credential in %s: %s", where, raw)
+	// The escaped form is the one an SDK decodes back into a query and
+	// quotes in its own error.
+	for _, endpoint := range []string{"https://127.0.0.1:1/?sig=SECRET", "https://127.0.0.1:1/%3Fsig=SECRET%0A"} {
+		for _, root := range []string{"s3://bkt", "gs://bkt", "az://acct/ctr"} {
+			for _, eq := range []bool{false, true} {
+				t.Run(root+"/equals="+strconv.FormatBool(eq)+"/escaped="+strconv.FormatBool(strings.Contains(endpoint, "%")), func(t *testing.T) {
+					stderr := captureStderr(t)
+					dir := filepath.Join(t.TempDir(), "ds")
+					report := filepath.Join(t.TempDir(), "report.json")
+					args := append([]string{root, "--anonymous", "-o", dir, "--report", report}, unjournaled...)
+					if eq {
+						args = append(args, "--endpoint="+endpoint)
+					} else {
+						args = append(args, "--endpoint", endpoint)
 					}
-				}
-				check("stderr", stderr.Bytes())
-				check("stdout", stdout.Bytes())
-				raw, err := os.ReadFile(report)
-				if err != nil {
-					t.Fatal(err)
-				}
-				check("report", raw)
-				if _, err := os.Stat(dir); os.IsNotExist(err) {
-					return
-				}
-				if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+					var stdout bytes.Buffer
+					if code := exitCode(t, run(ctx, args, &stdout, diagList)); code != exitUsage {
+						t.Errorf("exit %d, want usage %d", code, exitUsage)
+					}
+					check := func(where string, raw []byte) {
+						t.Helper()
+						if bytes.Contains(raw, []byte("SECRET")) {
+							t.Errorf("credential in %s: %s", where, raw)
+						}
+					}
+					check("stderr", stderr.Bytes())
+					check("stdout", stdout.Bytes())
+					raw, err := os.ReadFile(report)
 					if err != nil {
-						return err
+						t.Fatal(err)
 					}
-					check("output path", []byte(path))
-					if !d.IsDir() {
-						raw, err := os.ReadFile(path)
+					check("report", raw)
+					if _, err := os.Stat(dir); os.IsNotExist(err) {
+						return
+					}
+					if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 						if err != nil {
 							return err
 						}
-						check(path, raw)
+						check("output path", []byte(path))
+						if !d.IsDir() {
+							raw, err := os.ReadFile(path)
+							if err != nil {
+								return err
+							}
+							check(path, raw)
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
 					}
-					return nil
-				}); err != nil {
-					t.Fatal(err)
-				}
-			})
+				})
+			}
 		}
 	}
 }

@@ -17,9 +17,11 @@ downstream reader are the acceptance gates ([Gates](#gates)).
 
 S3 and GCS endpoints with a query or fragment are now refused; Azure Blob already refused
 nonempty queries and fragments. All three also refuse empty `?` and `#` delimiters and user
-information. Supply credentials through the provider's credential settings instead of
-`--endpoint`. Refused endpoint messages use fixed rule text; recorded URL arguments with
-credentials become `[redacted]`. Clean roots and endpoint values remain visible in diagnostics,
+information, and a path whose escapes decode to a query, a fragment or a control character
+(`%3F`, `%23`, `%0A`). A root with user information, `?` or `#` in its authority is refused.
+Supply credentials through the provider's credential settings instead of `--endpoint`. A refused
+endpoint is a usage error (exit 2). Refused endpoint messages use fixed rule text; recorded URL
+arguments with credentials become `[redacted]`. Clean roots and endpoint values remain visible in diagnostics,
 including resume mismatches. `swath show` and `swath show --journal` redact credentials
 recorded by older builds without rewriting the journal or changing identity comparisons.
 See [endpoint validation](internals/clients.md#endpoint-validation).

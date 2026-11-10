@@ -11,6 +11,7 @@ func TestParseEndpoint(t *testing.T) {
 		"https://host/?sig=SECRET", "https://host/#SECRET", "https://host?", "https://host#",
 		"https://user:SECRET@host", "host/?sig=SECRET", "https://host/%SECRET",
 		"ftp://host/SECRET", "https:///SECRET", "SECRET",
+		"https://host/%3Fsig=SECRET", "https://host/%23SECRET", "https://host/a%0ASECRET",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			u, err := ParseEndpoint(raw, form)
@@ -20,7 +21,7 @@ func TestParseEndpoint(t *testing.T) {
 			}
 		})
 	}
-	for _, raw := range []string{"https://host", "http://host:9000/a%2Fb/../c", "https://host/%3F%23"} {
+	for _, raw := range []string{"https://host", "http://host:9000/a%2Fb/../c", "https://host/a%20b%7B"} {
 		u, err := ParseEndpoint(raw, form)
 		if err != nil || u.String() != raw {
 			t.Fatalf("%q: URL %v, error %v", raw, u, err)

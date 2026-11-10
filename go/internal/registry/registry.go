@@ -14,7 +14,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -376,7 +375,7 @@ func Register(f Factory) {
 // provider's credential redacted; refused credential-bearing roots are omitted.
 func Redact(root string) string {
 	if rootCredentials(root) {
-		return "[redacted]"
+		return source.RedactRoot(root)
 	}
 	if f, err := Lookup(root); err == nil && f.Redact != nil {
 		return f.Redact(root)
@@ -441,8 +440,7 @@ func RedactArgv(argv []string) []string {
 // RedactURL omits URL values that may carry credentials, including malformed
 // ones whose parse errors would quote the input.
 func RedactURL(value string) string {
-	u, err := url.Parse(value)
-	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") {
+	if source.UnsafeURL(value) {
 		return "[redacted]"
 	}
 	return value
@@ -463,7 +461,7 @@ func Factories() []Factory {
 // Lookup returns the factory for root's scheme.
 func Lookup(root string) (Factory, error) {
 	if rootCredentials(root) {
-		return Factory{}, fmt.Errorf("root: user information, a query or a fragment in the authority is refused; use the provider's credential settings")
+		return Factory{}, fmt.Errorf("root %q: user information, a query or a fragment in the authority is refused; use the provider's credential settings", source.RedactRoot(root))
 	}
 	scheme := ""
 	if i := strings.Index(root, "://"); i > 0 {

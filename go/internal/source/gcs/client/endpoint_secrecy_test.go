@@ -12,7 +12,6 @@ func TestEndpointSecrecy(t *testing.T) {
 	for _, ep := range []string{
 		"https://host/?sig=SECRET", "https://host/#SECRET", "https://host?", "https://host#",
 		"https://user:SECRET@host", "host/?sig=SECRET", "ftp://host/SECRET", "https:///SECRET",
-		"https://host/{SECRET}", "https://host/%7BSECRET%7D",
 	} {
 		t.Run(ep, func(t *testing.T) {
 			_, err := Endpoint(ep)

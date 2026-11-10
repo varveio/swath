@@ -40,8 +40,10 @@ func (id Identity) Redacted() Identity {
 	for i := range id.Source {
 		f := &id.Source[i]
 		switch f.Name {
-		case "endpoint", "source":
-			f.Value, f.Canonical = redactValue(f.Value), redactValue(f.Canonical)
+		case "endpoint":
+			f.Value, f.Canonical = redactEndpoint(f.Value), redactEndpoint(f.Canonical)
+		case "source":
+			f.Value, f.Canonical = redactSource(f.Value), redactSource(f.Canonical)
 		}
 	}
 	return id
@@ -71,8 +73,11 @@ type MismatchError struct {
 func (e *MismatchError) Error() string {
 	// Older journals may have recorded credentials in endpoint or root URLs.
 	stored, requested := e.Stored, e.Requested
-	if e.Field == "endpoint" || e.Field == "source" {
-		stored, requested = redactValue(fmt.Sprint(stored)), redactValue(fmt.Sprint(requested))
+	switch e.Field {
+	case "endpoint":
+		stored, requested = redactEndpoint(fmt.Sprint(stored)), redactEndpoint(fmt.Sprint(requested))
+	case "source":
+		stored, requested = redactSource(fmt.Sprint(stored)), redactSource(fmt.Sprint(requested))
 	}
 	return fmt.Sprintf("cannot resume: %s was %v, now %v", e.Field, stored, requested)
 }
@@ -159,13 +164,30 @@ func (id Identity) Hash() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// redactValue protects diagnostics from credentials recorded by older
-// builds. A root with ? or # is hidden whole: in an Azure root they begin a
-// shared access signature, and this package cannot tell the provider.
-func redactValue(value string) string {
+// redactEndpoint and redactSource protect diagnostics from credentials
+// recorded by older builds, with the standard library only (this package
+// imports no provider). An endpoint is hidden whole when it has user
+// information, a query or a fragment, literal or escaped.
+func redactEndpoint(value string) string {
 	u, err := url.Parse(value)
-	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") {
+	if err != nil || u.User != nil || strings.ContainsAny(value, "?#") ||
+		strings.ContainsFunc(u.Path, func(r rune) bool { return r == '?' || r == '#' || r < 0x20 || r == 0x7f }) {
 		return "[redacted]"
+	}
+	return value
+}
+
+// A source root keeps its prefix, which is a literal key where ? and # are
+// data: only a credential-bearing authority and a signed query (a shared
+// access signature) are hidden.
+func redactSource(value string) string {
+	scheme, rest, ok := strings.Cut(value, "://")
+	authority, _, _ := strings.Cut(rest, "/")
+	if ok && strings.ContainsAny(authority, "@?#") {
+		return scheme + "://[redacted]"
+	}
+	if i := strings.IndexByte(value, '?'); i >= 0 && strings.Contains(value[i:], "sig=") {
+		return value[:i] + "?[redacted]"
 	}
 	return value
 }

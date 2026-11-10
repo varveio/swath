@@ -261,7 +261,7 @@ func Endpoint(ep string) (string, error) {
 		return "", err
 	}
 	if strings.ContainsAny(u.Path, "{}") {
-		return "", source.Unsupported(errors.New("endpoint: want http(s)://host[:port]/storage/v1/ without { or } (escaped or not) in the path; the generated client treats them as a URI template"))
+		return "", source.Unsupported(fmt.Errorf("endpoint %q: a path with { or } (escaped or not) is a URI template to the generated client", ep))
 	}
 	if p := u.EscapedPath(); !strings.HasSuffix(p, "/") {
 		u.Path, u.RawPath = u.Path+"/", p+"/"

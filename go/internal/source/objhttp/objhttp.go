@@ -614,12 +614,12 @@ func (n Counts) Store(set *counters.Set, first counters.ID) {
 // ParseEndpoint refuses credential-bearing URLs before they can be recorded.
 // Errors omit the value; path rules and normalization belong to the provider.
 func ParseEndpoint(raw, form string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.User != nil || strings.ContainsAny(raw, "?#") ||
-		(u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, source.Unsupported(fmt.Errorf("endpoint: want %s without user information, a query or a fragment", form))
+	if !source.UnsafeURL(raw) {
+		if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			return u, nil
+		}
 	}
-	return u, nil
+	return nil, source.Unsupported(fmt.Errorf("endpoint: want %s without user information, a query or a fragment", form))
 }
 
 // CanonicalRoute is the allowlist of equivalent route spellings for
