@@ -570,7 +570,7 @@ func registerFlags(f *flag.FlagSet, o *options, diag bool) {
 	o.rowBudget = listing.DefaultRowBudget
 	f.Var(&o.rowBudget, "row-budget", "`bytes` of rows held between listing and encoding (reorder storage and the encoders' queues); not a cap on resident memory")
 	f.StringVar(&o.seedFrom, "seed-from", "", "start from a previous listing's key distribution instead of the delimiter seed: a committed dataset `path` of the same source and scope, or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected up to it); the engine still splits adaptively")
-	f.IntVar(&o.workers, "workers", 0, "listing goroutines, the most requests in flight (default 64, whatever the CPU count)")
+	f.IntVar(&o.workers, "workers", 0, "listing goroutines, the most requests in flight (default 64 for an object store, whatever the CPU count; for a local path 4 per CPU, at most 64)")
 	f.IntVar(&o.encoders, "encoders", 0, "Parquet encoder goroutines, or a .zst text file's compression jobs (default GOMAXPROCS, lowered to what --row-budget and the descriptor limit carry, never below one); an explicit count is kept, with a warning when they cannot carry it")
 	f.DurationVar(&o.partInterval, "part-interval", listing.DefaultPartInterval, "close an open part with rows after this `duration` although not full (a rotation target: the part is then encoded and published in order, so the recovery point can be older, and a stalled frontier leaves no part to close); 0: parts close by size only")
 	f.Int64Var(&o.partMaxRows, "part-rotation-max-rows", 0, "also close a part at `N` rows (Java's flag; 0: by size and --part-interval only); part of the resume identity")

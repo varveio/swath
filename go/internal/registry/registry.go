@@ -71,6 +71,10 @@ type Factory struct {
 	// provider's schema (parquetout.EncoderBytes), known before the source
 	// is opened; 0 prices it as parquetout.DefaultEncoderBytes.
 	EncoderBytes int64
+	// Workers, if set, returns the provider's default --workers, known
+	// before the source is opened; without it the listing's default
+	// (listing.DefaultWorkers) applies.
+	Workers func() int
 	// Classify, if set, names the class of a failure the provider caused
 	// ("throttle", "access_denied", ...), for the run's outcome; "" if it
 	// does not know the error.

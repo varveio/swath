@@ -292,7 +292,7 @@ func (c *Config) resolve() error {
 		return bad("per-prefix totals need a count (no dataset, no text)")
 	}
 	if l.Workers == 0 {
-		l.Workers = DefaultWorkers
+		l.Workers = defaultWorkers(c.Source.URI)
 	}
 	if l.RowBudget == 0 {
 		l.RowBudget = DefaultRowBudget
@@ -318,6 +318,15 @@ func (c *Config) resolve() error {
 		return bad("row budget %d is below %d bytes", l.RowBudget, minRowBudget)
 	}
 	return nil
+}
+
+// defaultWorkers is the provider of root's default --workers
+// (registry.Factory.Workers), DefaultWorkers for a provider that states none.
+func defaultWorkers(root string) int {
+	if f, err := registry.Lookup(root); err == nil && f.Workers != nil {
+		return f.Workers()
+	}
+	return DefaultWorkers
 }
 
 // encoderPrice is the working set admitted per Parquet encoder of the

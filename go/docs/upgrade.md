@@ -256,7 +256,8 @@ the list below is the earlier history of the unreleased builds.
   GCS run differs from an earlier build's. Finish such a run with the build that started it, or start it over
   with `--overwrite`. A program that lists through its own `gcs.Options.Client` cannot resume at all (before,
   one that named its route could).
-- `--workers` defaults to 64 whatever the CPU count (it was `min(64, max(4, 3*GOMAXPROCS))`).
+- `--workers` defaults to 64 whatever the CPU count for an object store (it was `min(64, max(4, 3*GOMAXPROCS))`);
+  a local path defaults to `min(64, 4 × GOMAXPROCS)`.
 - A custom `--endpoint` is path-style by default: an interrupted run started with `--endpoint` on a host name
   and no `--path-style` resolves the path-style route on resume, so the identity check refuses it; start it
   over with `--overwrite`.

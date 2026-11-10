@@ -115,7 +115,7 @@ decision to add it later).
 
 | Java | Go | Status | Decision |
 |---|---|---|---|
-| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
+| `--concurrency N` (adaptive ceiling, default 64) | `--workers` (listing goroutines and the limiter's start, default 64, as Java's, whatever the CPU count; a local path, which Java did not list, `min(64, 4 × GOMAXPROCS)`, #388); the report names `invocation.workers` | renamed | default 64: owner decision 2026-11-06 |
 | `--request-rate N` (aggregate cap, 0: none) | `--request-rate` (every HTTP attempt counted, 0: none) | kept | – |
 | Adaptive limit: ×0.7 per throttle answer, +1/s after a 10 s clean window | `--limiter` (default on) adapts concurrency to sustained throttling and recovery; `--limiter=false` removes the limit. [Request admission](internals/clients.md#request-admission) owns the controller rules and counters. | changed | [Dated tuning evidence](measurements.md#red-team-fixes-2026-11-07) |
 | Slow start from 4, doubling per second | `swath diag list --limiter-slow-start` enables an experimental ramp, off by default; [request admission](internals/clients.md#request-admission) owns its initial limit and growth rules. | kept | – |
