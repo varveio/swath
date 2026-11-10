@@ -254,8 +254,8 @@ func shown(v string) string {
 		}
 		// An S3 or GCS root's '?' is key data; any other scheme's query (an
 		// Azure root's is where its shared access signature goes) is hidden.
-		if i := strings.IndexByte(v, '?'); i >= 0 && scheme != "s3" && scheme != "gs" {
-			return v[:i] + "?[redacted]"
+		if i := strings.IndexAny(v, "?#"); i >= 0 && scheme != "s3" && scheme != "gs" {
+			return v[:i+1] + "[redacted]"
 		}
 		return v
 	}

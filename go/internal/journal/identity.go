@@ -193,8 +193,8 @@ func redactSource(value string) string {
 	if ok && strings.ContainsAny(authority, "@?#") {
 		return scheme + "://[redacted]"
 	}
-	if i := strings.IndexByte(value, '?'); i >= 0 && scheme != "s3" && scheme != "gs" {
-		return value[:i] + "?[redacted]"
+	if i := strings.IndexAny(value, "?#"); i >= 0 && scheme != "s3" && scheme != "gs" {
+		return value[:i+1] + "[redacted]"
 	}
 	return value
 }
