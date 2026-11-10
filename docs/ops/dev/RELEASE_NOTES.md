@@ -32,7 +32,7 @@ the Java tool: v0.3.2 was the last Java release, and no later release ships Java
 ### Breaking changes from 0.3.2
 
 - **Launcher.** The Java jar (`java -jar swath.jar`) and its `.zip` and `.tar.gz` distributions are
-  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath-go 0.4.0-rc.1`
+  replaced by a native binary per platform; no JRE is needed. `--version` prints `swath 0.4.0-rc.1`
   and the commit.
 - **Command line.** Flags are renamed or removed, without aliases (an unknown flag exits 2). The most
   common: `--concurrency` is `--workers`, `--no-sign-request` is `--anonymous`, `--endpoint-url` is

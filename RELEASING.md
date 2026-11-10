@@ -22,7 +22,7 @@ no release publishes it; v0.3.2 was its last.
   all carry it. There is no version file to bump. A build from a source checkout reports
   `devel`.
 - **The binaries are checked against it.** The build job fails unless each linux/amd64
-  binary prints exactly `swath-go X.Y.Z (<commit>)` or `swath-replay-go X.Y.Z (<commit>)`,
+  binary prints exactly `swath X.Y.Z (<commit>)` or `swath-replay X.Y.Z (<commit>)`,
   and the publish job checks the same of each pushed image digest.
 
 ## What the pipeline produces

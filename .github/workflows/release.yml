@@ -160,7 +160,7 @@ jobs:
           # What a user's --version prints is the tag's version and commit, exactly.
           for cmd in swath swath-replay; do
             got=$("$RUNNER_TEMP/release-bin/linux-amd64/$cmd" --version)
-            want="$cmd-go $VERSION ($GITHUB_SHA)"
+            want="$cmd $VERSION ($GITHUB_SHA)"
             echo "$got"
             test "$got" = "$want" || { echo "::error::$cmd --version is '$got', want '$want'"; exit 1; }
           done
@@ -336,7 +336,7 @@ jobs:
           for pair in "swath ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" "swath-replay ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}"; do
             read -r cmd ref <<< "$pair"
             got=$(docker run --rm "$ref" --version)
-            want="$cmd-go $VERSION ($GITHUB_SHA)"
+            want="$cmd $VERSION ($GITHUB_SHA)"
             echo "$got"
             test "$got" = "$want" || { echo "::error::$ref --version is '$got', want '$want'"; exit 1; }
           done

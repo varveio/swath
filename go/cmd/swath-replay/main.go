@@ -108,9 +108,9 @@ Run "swath-replay serve -h" for the serve flags.
 func version() string {
 	b := buildinfo.Read()
 	if b.Revision == "" {
-		return "swath-replay-go " + b.Version
+		return "swath-replay " + b.Version
 	}
-	return "swath-replay-go " + b.Version + " (" + b.Revision + ")"
+	return "swath-replay " + b.Version + " (" + b.Revision + ")"
 }
 
 // sortFixture sorts an unsorted capture into a SeekParquet fixture. The
