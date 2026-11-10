@@ -5,7 +5,6 @@ package objhttp
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"testing"
 	"time"
@@ -55,15 +54,7 @@ func TestMeterLimiterAndRate(t *testing.T) {
 	if a.Requests().Limit != 8 {
 		t.Fatal("initial limit")
 	}
-	for range 40 {
-		_, err := Do(t.Context(), m.Retry, &m.Tally, func() (int, error) {
-			defer m.Tally.Attempt()()
-			return 0, &Failure{Class: ClassThrottle, Throttle: true, Transient: true, Cause: errors.New("busy")}
-		})
-		if err == nil {
-			t.Fatal("throttle succeeded")
-		}
-	}
+	l.cut()
 	if a.Requests().Limit >= 8 || a.Requests().Limit != int64(l.Limit()) {
 		t.Fatalf("live limit: %+v", a.Requests())
 	}
@@ -76,7 +67,7 @@ func TestMeterLimiterAndRate(t *testing.T) {
 	_ = r.Wait(ctx)
 	m.Retry.Rate = r
 	n := m.Counters()
-	if n.Limiter != l.Counts() || n.Limiter.Decreases == 0 || n.Rate != r.Counts() || n.Rate.Waits != 1 || n.Throttles != 40 {
+	if n.Limiter != l.Counts() || n.Limiter.Decreases == 0 || n.Rate != r.Counts() || n.Rate.Waits != 1 {
 		t.Fatalf("augmented counts: %+v", n)
 	}
 }

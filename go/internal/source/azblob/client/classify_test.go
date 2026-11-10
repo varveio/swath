@@ -26,6 +26,19 @@ import (
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
 
+// Literal wire codes independently pin the SDK constants used in classification.
+const (
+	codeNoAuthentication   = "NoAuthenticationInformation"
+	codeAuthFailed         = "AuthenticationFailed"
+	codeInvalidAuthInfo    = "InvalidAuthenticationInfo"
+	codeAuthorization      = "AuthorizationFailure"
+	codePermissionMismatch = "AuthorizationPermissionMismatch"
+	codeContainerNotFound  = "ContainerNotFound"
+	codeServerBusy         = "ServerBusy"
+	codeOperationTimedOut  = "OperationTimedOut"
+	codeInternalError      = "InternalError"
+)
+
 const (
 	listHead = "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\"?><EnumerationResults ServiceEndpoint=\"https://acct.blob.core.windows.net/\" ContainerName=\"c\"><Blobs>"
 	listTail = "</Blobs><NextMarker /></EnumerationResults>"

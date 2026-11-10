@@ -9,8 +9,12 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/go/internal/counters"
+	"github.com/varveio/swath/go/internal/source/keyrange"
 	"github.com/varveio/swath/go/internal/source/objhttp"
 )
+
+// Counters is the S3 tally in report order, assembled for documentation and ID checks.
+var Counters = append(append([]counters.Def(nil), keyrange.Counters...), clientCounters...)
 
 // TestCountersDoc keeps the S3 table in docs/internals/counters.md generated
 // from Counters: run with UPDATE=1 to rewrite it.

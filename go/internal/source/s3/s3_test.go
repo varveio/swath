@@ -76,13 +76,7 @@ func (c *collect) Write(_ context.Context, segs [][]Row) error {
 
 func list(t *testing.T, opt Options, workers int) ([]Row, Stats) {
 	t.Helper()
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
+	s3test.NoCredentials(t)
 	p, err := New(context.Background(), opt)
 	if err != nil {
 		t.Fatal(err)
