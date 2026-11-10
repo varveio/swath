@@ -149,6 +149,7 @@ func (o *run[R, P]) replayCert(i int, e *emitter[R, P]) error {
 	if err := faults.At("spill-replay"); err != nil {
 		return err
 	}
+	sp.opens.Add(1)
 	fh, err := dataset.OpenRegularIn(c.root, c.rel(d.name), 0)
 	if err != nil {
 		return fmt.Errorf("durable spill: replay %s: %w", d.name, err)

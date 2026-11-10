@@ -57,7 +57,7 @@ re-list it into a new directory.
 | `_SUCCESS` (written last; the commit) | removed: `manifest.json` is installed last, by an atomic rename and a directory sync, and is the commit |
 | `symlink.txt` (the part list) | removed: the manifest lists the parts |
 | `manifest.json` | `manifest.json`, new shape ([Manifest](#manifest)) |
-| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 4: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
+| `_swath_summary.json` (S3), `_swath_local_summary.json` (local) | one `run.json` for every provider (`report_version` 5: [Run report and counters](#run-report-and-counters)); operational only, written after the commit, and never part of acceptance |
 | `data/part-NNNNN.parquet` | unchanged |
 | `.swath/journal`, `.swath.lock`, `data/*.tmp` | `.swath/` is the private workspace: `lock`, `journal`, `parts/` (unpublished parts), `spill/`. Readers ignore it |
 
@@ -301,10 +301,12 @@ the list below is the earlier history of the unreleased builds.
 - `swath diag list --probe` was removed with the 1-key probe; the `probe.*` counters and
   `split.rejected.probe_empty` are gone.
 - `--memory N` is `--row-budget N/2`: the flag names the bytes of rows in flight it bounds, which were half of
-  `--memory`; the default (128 MiB, from 256 MiB of `--memory`) and the encoders it admits are unchanged.
+  `--memory`; the default was 128 MiB on every host (from 256 MiB of `--memory`) and is now 1/16 of memory, at most
+  1 GiB (run report version 5).
   The run report's `invocation.memory_bytes` is `invocation.row_budget_bytes`. A journal that recorded `--memory` is refused on resume.
 - `--spill-max` (now `--spill-budget`) is the one disk budget on `swath list`; `--spill-reserve` (now derived by default: one part per
-  encoder at full size, at least 1 GiB, which is 1 GiB at the defaults) and `--spill-compress` moved to
+  encoder at full size, at least 1 GiB: 1 GiB at the old 128 MiB row budget, more where a larger default
+  admits more encoders) and `--spill-compress` moved to
   `swath diag list`. `swath resume` still accepts both. The report's `resources.spill` adds `reserve_bytes`.
 - Spill frames are delta-coded and zstd-compressed (level 1) by default; `--no-spill-compress` (on `swath diag list` and `swath resume`)
   writes them uncompressed and `--spill-plain` without delta coding. The report's `resources.spill` adds
@@ -336,6 +338,10 @@ of the flags every object store has are gone, one shared flag serving S3, GCS an
 `--azblob-request-timeout` are `--request-timeout` (default 30s, as before); a resume of a run that recorded one
 is refused naming it. The parser is GNU-style (`-d1`, `-vq`; a long name takes two dashes) and the provider flags carry their provider's prefix: `--endpoint` is `--endpoint-url`; `--region`, `--profile`, `--request-payer` are `--s3-region`, `--s3-profile`, `--s3-requester-pays`; `--path-style` is `--s3-path-style` or `--no-s3-path-style`; `--fips`, `--dualstack`, `--fetch-owner`, `--bearer-token-command`, `--bearer-token-refresh-interval` take the `--s3-` prefix; `--gcs-credentials` is `--gcs-credentials-file`, `--gcs-user-project` is `--gcs-billing-project`; `--azblob-sas` is `--azure-sas-token`, `--azblob-flat` is `--azure-assume-flat`; `--one-filesystem` is `--one-file-system`; `--limiter=false` is `--no-adaptive-limit`, `--limiter-slow-start` is `--adaptive-limit-slow-start`, `--seed=false` is `--no-seed`, `--spill-compress=false` is `--no-spill-compress`; `--report-format json` is `--report -` and `--report-format` is gone; `swath list -o` prints no summary line on stdout; `--include` and `--exclude` take globs, the regular expressions they took are `--include-regex` and `--exclude-regex`, and every filter flag is repeatable (the rules add up; `coverage.filters` spells a regex `include_regex=…`); a size's `KB`, `MB`, `GB` and `TB` are decimal (`K`, `M`, `KiB`, `MiB`, ... binary). New in 0.4: `--seed-from PATH`, `swath diag list --spill-plain` and `--slow-split`; spill frames
 are delta coded and zstd compressed by default.
+
+**Run report: version 5.** Version 5 adds `invocation.row_budget` (how the row budget was chosen: by default
+1/16 of memory, at most 1 GiB, where it was 128 MiB on every host) and `resources.spill.frames` and `opens`; a
+version 4 reader reads them by ignoring them.
 
 **Run report: version 4.** Version 4 adds `invocation.narrowing` (whether the includes narrowed the listed
 prefix, or why not; [filters.md](filters.md#what-narrows-the-listing)), `outcome.unreadable` (a local listing skipped

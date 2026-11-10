@@ -1,4 +1,4 @@
-report_version 4
+report_version 5
 args_hash string
 attempt.id string
 attempt.started time
@@ -32,6 +32,12 @@ invocation.prior.cuts int
 invocation.prior.path string
 invocation.prior.source string
 invocation.resume bool
+invocation.row_budget.bound_by string
+invocation.row_budget.cgroup_bytes int64
+invocation.row_budget.go_memory_limit_bytes int64
+invocation.row_budget.memory_bytes int64
+invocation.row_budget.physical_bytes int64
+invocation.row_budget.reason string
 invocation.row_budget_bytes int64
 invocation.schema_id string
 invocation.source string
@@ -185,9 +191,11 @@ resources.spill.durable.sealed_files int64
 resources.spill.durable.slots int
 resources.spill.durable_off string
 resources.spill.format string
+resources.spill.frames int64
 resources.spill.fs_type string
 resources.spill.logical_bytes int64
 resources.spill.max_bytes int64
+resources.spill.opens int64
 resources.spill.peak_bytes int64
 resources.spill.peak_readers int64
 resources.spill.ranges int64
