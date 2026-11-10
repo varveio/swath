@@ -10,11 +10,24 @@ Notable changes per release. The full human summary for the current release is i
   is not recognized or not allowed. The nightly OSV scan covers the Go images and their linked
   modules instead of the Java distributions and images.
 
+- Go port: the command line is reworked (#394). Options are parsed GNU-style: short options bundle (`-vq`)
+  and take attached values (`-d1`), a long option takes two dashes, options and operands interleave, and a
+  default-on switch is turned off by `--no-NAME`. An option one provider has carries its prefix
+  (`--s3-region`, `--s3-profile`, `--s3-requester-pays`, `--gcs-credentials-file`, `--gcs-billing-project`,
+  `--azure-sas-token`, `--azure-assume-flat`); the options every object store has are bare (`--endpoint-url`,
+  `--anonymous`, `--ca-bundle`, `--no-verify-ssl`). `--include` and `--exclude` take globs, and regular
+  expressions move to `--include-regex` and `--exclude-regex`. Text rows use the dataset's column names for
+  every source, chosen with `--columns`; `swath du` sorts with `--sort`. `-h` prints a command's short help,
+  `--help` all of it; `swath completion bash|zsh|fish` prints a completion script; `--log-format json` writes
+  stderr as JSON events. An unknown option names the nearest one, older spellings included (`--region`: did
+  you mean `--s3-region`?). `swath list -o` prints nothing on stdout. The removed names are unknown flags,
+  without aliases; a run recorded by an earlier build is finished with it or started over.
+
 - Go port: refuse credential-bearing endpoint URLs before recording a run, redact query and
   fragment endpoint arguments, and redact credentials in location errors and older journal
   displays while preserving clean diagnostic values.
 
-- Go port: S3, GCS and Azure Blob share `--endpoint`, `--request-timeout` (default 30 s)
+- Go port: S3, GCS and Azure Blob share `--endpoint-url`, `--request-timeout` (default 30 s)
   and `--anonymous`. The provider-prefixed endpoint and timeout flags are removed; resume
   refuses a recorded removed flag by name. Help derives shared groups and provider flags from
   registration, placing shared groups first and providers by scheme within each section (#338).
@@ -53,7 +66,7 @@ Notable changes per release. The full human summary for the current release is i
   and identifies an Azure container by its account and a filesystem by its root (`source.uri`), and requires the
   schema id to be of the source's kind.
 - Go port: `swath list az://ACCOUNT/CONTAINER[/PREFIX]` lists an Azure Blob container on flat-namespace
-  accounts (`--azblob-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
+  accounts (`--azure-*` flags, schema `swath/azblob-objects/v1`), in byte order: names at U+E000 and above, which Azure
   lists in UTF-16 order, are reordered by an adapter whose cost the report's `order_*` counters show.
 - Go port: datasets in swath-dataset format 2 (`"format": "swath-dataset"`, `format_version` 2), which builds
   from `main` wrote between 2026-11-05 and 2026-11-08, are no longer read: `swath show`, `--seed-from` and
