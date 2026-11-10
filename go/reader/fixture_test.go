@@ -410,25 +410,3 @@ func TestFixtureFooter(t *testing.T) {
 		t.Fatalf("%d objects, %d without a class, %d folders", n, nullClass, folders)
 	}
 }
-
-// TestWriteBenchFixture writes a generated fixture of
-// SWATH_READER_BENCH_ROWS rows (default 4,000,000) to the directory
-// SWATH_READER_FIXTURE_OUT names, which must not exist, and logs its
-// geometry; benchmarks then read it with SWATH_READER_BENCH_DIR. Skipped
-// without the variable.
-func TestWriteBenchFixture(t *testing.T) {
-	out := os.Getenv("SWATH_READER_FIXTURE_OUT")
-	if out == "" {
-		t.Skip("SWATH_READER_FIXTURE_OUT not set")
-	}
-	rows := benchRows(t)
-	start := time.Now()
-	if err := writeFixture(context.Background(), out, rows, 1); err != nil {
-		t.Fatal(err)
-	}
-	g, err := inspectFixture(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("wrote %s in %v: %s; encodings %v; codecs %v", out, time.Since(start).Round(time.Millisecond), g, g.Encodings, g.Codecs)
-}
