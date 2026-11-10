@@ -74,7 +74,7 @@ func TestSeedListsEveryKey(t *testing.T) {
 	}
 	for name, keys := range spaces {
 		want := slices.Compact(slices.Sorted(slices.Values(keys)))
-		got, _, leaves := run(t, newSorted(keys, true, 3), Options{Seed: true, Floors: true}, 16)
+		got, _, leaves := run(t, newSorted(keys, true, 3), Options{Seed: true}, 16)
 		if !slices.Equal(got, want) {
 			t.Fatalf("%s: %d keys, want %d", name, len(got), len(want))
 		}

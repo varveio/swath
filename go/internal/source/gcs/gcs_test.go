@@ -94,7 +94,7 @@ func TestListFakeBucket(t *testing.T) {
 		{"one worker", Options{}, 1},
 		{"8 workers", Options{}, 8},
 		{"64 workers, seed", Options{Policy: keyrange.Policy{Seed: true}}, 64},
-		{"64 workers, floors, structure", Options{Policy: keyrange.Policy{Floors: true, Structure: keyrange.StructureOn}}, 64},
+		{"64 workers, structure", Options{Policy: keyrange.Policy{Structure: keyrange.StructureOn}}, 64},
 	} {
 		opt := c.opt
 		opt.Bucket, opt.Endpoint = "bkt", ep

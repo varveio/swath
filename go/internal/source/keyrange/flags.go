@@ -21,7 +21,6 @@ type Policy struct {
 	Seed       bool      // parallel: tile the scope from delimiter listings first (the command's default)
 	Structure  Structure // pivot on folder boundaries from structure probes sent alongside pages
 	MaxKeys    int64     // stop after this many objects (sequential only; 0 = all)
-	Floors     bool      // the gate-chain floors (off by default)
 	SlowSplit  bool      // split latency outliers without an idle worker (off by default)
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
 }
@@ -41,7 +40,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, Floors: p.Floors, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize}
 }
 
 // Group is the engine's flag group, which every provider on the engine
@@ -88,8 +87,6 @@ func Flags(f *pflag.FlagSet, diag bool) *Common {
 		fl.NoOptDefVal = "on"
 		source.Define(f, source.Flag{Name: "slow-split", Value: source.Switch(&p.SlowSplit),
 			Usage: "split a range whose pages are slow without waiting for an idle worker"})
-		source.Define(f, source.Flag{Name: "floors", Value: source.Switch(&p.Floors),
-			Usage: "never split a range of 4 pages or fewer, nor leave a child under 2"})
 		source.Define(f, source.Flag{Name: "sequential", Value: source.Switch(&p.Sequential),
 			Usage: "list with one continuation-token chain (no ranges; the reference)"})
 		source.Define(f, source.Flag{Name: "max-keys", Value: source.Count64(&p.MaxKeys, 0), Metavar: "N",

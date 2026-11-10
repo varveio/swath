@@ -44,7 +44,6 @@ Diagnostics:
                               frontier while its cursor is in a folder, and in bounded ranges whose
                               chain stays inside one folder; on probes every range in a folder.
       --slow-split          split a range whose pages are slow without waiting for an idle worker
-      --floors              never split a range of 4 pages or fewer, nor leave a child under 2
       --sequential          list with one continuation-token chain (no ranges; the reference)
       --max-keys N          with --sequential, stop after N objects (marked incomplete)
       --page-size N         ask for pages of N entries (1 to 1000; default the provider's)
@@ -65,7 +64,6 @@ Diagnostics:
                        while its cursor is in a folder, and in bounded ranges whose chain stays
                        inside one folder; on probes every range in a folder.
       --slow-split   split a range whose pages are slow without waiting for an idle worker
-      --floors       never split a range of 4 pages or fewer, nor leave a child under 2
       --sequential   list with one continuation-token chain (no ranges; the reference)
       --max-keys N   with --sequential, stop after N objects (marked incomplete)
       --page-size N  ask for pages of N entries (1 to 1000; default the provider's)

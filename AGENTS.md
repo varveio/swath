@@ -104,8 +104,9 @@ The contributor reference is
 - The gate is `cd go && go vet ./... && go test -race ./...`; CI runs it sharded. Locally
   run the tests you change, not the whole suite; repeats go through `go-stress.yml`. Static
   builds use `CGO_ENABLED=0`.
-- A commit that touches `go/` needs the Go jobs of `ci.yml` green (`go-lint`, the `go-race`
-  shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them).
+- A commit that touches `go/` needs its selected Go jobs of `ci.yml` green (`go-lint`, the `go-race`
+  shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them). Selection
+  follows complete modules and their dependants; main validates all modules and publishes `go-full-gate`, which release requires at its exact SHA.
   [`go/docs/internals/testing.md`](go/docs/internals/testing.md) says what each job and tier runs and when.
 
 ## Repository discipline

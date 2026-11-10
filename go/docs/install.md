@@ -30,7 +30,7 @@ $ swath --version
 swath devel (11ae90e42babcd159d52e8f492460802b9e0816c)
 ```
 
-`--version` prints the version (a release's `X.Y.Z`, `devel` for a build from a checkout) and the commit it was
+`--version` prints `swath VERSION (REVISION)`: the version (a release's `X.Y.Z`, `devel` for a build from a checkout) and the commit it was
 built from.
 Every run report carries the same in `build`. Keep it with any run you may need to investigate.
 

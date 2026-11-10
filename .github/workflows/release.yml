@@ -14,7 +14,10 @@ concurrency:
 jobs:
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -28,6 +31,7 @@ jobs:
         run: |
           ./scripts/ci/release-assets.sh --self-test
           ./scripts/ci/verify-release-source.sh --self-test
+          python3 scripts/ci/test-release-go-ci.py
           ./scripts/ci/verify-release-notes.sh --self-test
 
       # Ancestor, rather than equality with origin/main: `just release` tags a commit already
@@ -41,6 +45,11 @@ jobs:
           ./scripts/ci/verify-release-source.sh \
             "$GITHUB_SHA" refs/remotes/release/event-tag refs/remotes/origin/main
 
+      - name: Require full Go validation of the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/verify-release-go-ci.py "$GITHUB_SHA"
+
       # The tag is the version's one source: build.sh stamps it into every binary, and the
       # archive names, image tags and labels all read this output. verify-release-notes.sh
       # rejects any other shape than X.Y.Z or X.Y.Z-rc.N.
@@ -53,8 +62,8 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
   # The Go gate on the tag SHA: vet and the race tests of the main module and of the reader
-  # module it compiles in (go.mod replaces it with ./reader). The commit already passed every
-  # ci.yml job to reach main (source proves the ancestry); this reruns the suite that guards
+  # module it compiles in (go.mod replaces it with ./reader). The source job separately
+  # requires main CI's full Go gate at this SHA; this reruns the suite that guards
   # what ships, unsharded on amd64 as nightly's go-race-nightly does, from a cold cache.
   go-tests:
     needs: source
@@ -151,7 +160,7 @@ jobs:
           # What a user's --version prints is the tag's version and commit, exactly.
           for cmd in swath swath-replay; do
             got=$("$RUNNER_TEMP/release-bin/linux-amd64/$cmd" --version)
-            want="$cmd-go $VERSION ($GITHUB_SHA)"
+            want="$cmd $VERSION ($GITHUB_SHA)"
             echo "$got"
             test "$got" = "$want" || { echo "::error::$cmd --version is '$got', want '$want'"; exit 1; }
           done
@@ -327,7 +336,7 @@ jobs:
           for pair in "swath ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" "swath-replay ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}"; do
             read -r cmd ref <<< "$pair"
             got=$(docker run --rm "$ref" --version)
-            want="$cmd-go $VERSION ($GITHUB_SHA)"
+            want="$cmd $VERSION ($GITHUB_SHA)"
             echo "$got"
             test "$got" = "$want" || { echo "::error::$ref --version is '$got', want '$want'"; exit 1; }
           done

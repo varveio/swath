@@ -30,7 +30,7 @@ class HeadlineDocsCommandSmokeTest {
                 .contains("./swath --version")
                 .contains("./swath du /data -d 2")
                 .contains("./swath list " + SMALL_PUBLIC_PREFIX)
-                .contains("--anonymous --region us-east-1")
+                .contains("--anonymous --s3-region us-east-1")
                 .contains("./swath list /data -o /tmp/swath-inventory")
                 .contains("./swath show /tmp/swath-inventory")
                 .doesNotContain("--no-sign-request", "--format parquet", "data/*.parquet");
