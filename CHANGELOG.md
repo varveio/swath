@@ -5,6 +5,37 @@ Notable changes per release. The full human summary for the current release is i
 
 ## Unreleased
 
+- Go port, Azure Blob: listings ask for the Arrow format and read XML wherever the service answers XML
+  (accounts without Arrow listing, Premium Page Blob, Azurite, swath-replay) (#440). On the 468,557-blob
+  `Crime/` prefix of a public container, on a 4-vCPU VM, a listing took 3.4 s and 3.9 CPU-seconds against
+  29.5 s and 58 for XML, with byte-identical output ([measurements](go/docs/internals/measurements.md#arrow-listing-format-2026-11-10)).
+  An Arrow page is checked before it is decoded: a stream missing declared rows or failing to parse, a
+  missing `NextMarker` or `NumberOfRecords`, or a written column in a type the decoder would read as nulls is
+  refused, never listed as a shorter or final page. The run report counts pages per format (`list_format.*`).
+  Requests name service version `2026-06-06`, the oldest with the Arrow format, which Azurite 3.37 also
+  answers; it refused the earlier `2026-10-06` (#451).
+
+- Go port, Azure Blob: the default page is 1,000 entries, not the service's 5,000 (#448). A range reads to its
+  first non-member, and at 5,000 most of each range's last page was discarded; at 1,000 the 1.84M-blob
+  container listed in about half the time with half the memory, for three times the requests
+  ([measurements](go/docs/internals/measurements.md#azure-page-size-2026-11-10)). Follow-ups: #449.
+
+- Go port: a credential failure that will not pass (no credentials found, or configured ones that do not load
+  or are refused) is reported on one line, the source and the first line of its cause, with `--anonymous`
+  suggested only when swath was discovering credentials itself; `-v` and the run report keep the whole
+  cause, and transient failures print as before (#447). A SAS naming a request parameter (`comp`, `restype`,
+  `prefix`, `marker`, `endBefore` and the like) is refused before any request, naming the parameter, never
+  its value.
+
+- Go port: Go 1.27.4; azblob 1.8.3, whose pagers now send `startFrom` themselves (#434, #438). The S3, GCS and
+  Azure clients each check the requests they send against a wire snapshot, so an SDK update that changes them
+  fails a test (#434, #446). azblob 1.8 links `apache/arrow-go` into the binary (about +4.8 MB;
+  Azure/azure-sdk-for-go#27998).
+
+- Release tooling: DuckDB 2.0.0 and Syft 1.57.1 in `release.yml`, OSV-Scanner 2.7.1 in the nightly scan (#442),
+  and Buildx v0.38.1 with BuildKit v0.34.2 pinned by digest in `release.yml` (#444); the next release
+  candidate is the first `release.yml` run with these pins.
+
 - Go port: `go/reader`'s `Dataset.Stream` and `StreamLocal` read the dataset in one ordered pass
   (SeekParquet `Dataset.RangeBatches`) instead of ⌈N/1,024⌉+1 `Range` requests that each re-seeked after the
   last. Objects, order, values and row errors are unchanged. `StreamStats.Requests` counts `RangeBatches`
