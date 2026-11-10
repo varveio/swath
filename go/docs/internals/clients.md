@@ -113,7 +113,9 @@ provider-owned.
 `source.SetWatch` installs one process-wide `source.Watch`, which the command sets for a run (the command
 imports no provider package): every objhttp Guard reports each round trip to its `Exchange` (method, URL,
 status or transport error, latency with the body read), and `objhttp.Do` each failed attempt to `Failed` (the
-normalized `Failure`'s class, status, code and cause, retried with its wait, or the last). The
+normalized `Failure`'s class, status, code and cause, retried with its wait, or the last, and the URL of the
+request it sent: `Do` hands each attempt a context, which the attempt sends on, and the Guard records the
+request's URL there). The
 command's request log (`-vv`, `-vvv`) and its persistent-failure warning read them; the URL's query is the
 reader's to redact. Both are called on the request path and must return promptly (the command's stderr
 writes are bounded); without a watch they cost one atomic load.
