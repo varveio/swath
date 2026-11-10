@@ -28,7 +28,10 @@ const nativeEngine = true
 const (
 	chunkThreshold = 4096 // entries above which a directory is chunked
 	chunkEntries   = 2048 // entries per chunk
-	direntBuffer   = 64 << 10
+	// slabEntries is how many entries a count reads of a directory before
+	// statting them (countSlab): four chunks.
+	slabEntries  = 4 * chunkEntries
+	direntBuffer = 64 << 10
 	// direntHintSlack: a read that returns more than the buffer less this
 	// (the largest record, 280 bytes, with room) filled it, so the
 	// directory likely goes on.
@@ -82,12 +85,15 @@ type scratch struct {
 
 var scratchPool = sync.Pool{New: func() any { return &scratch{buf: make([]byte, direntBuffer)} }}
 
-// chunk is a slice of a large directory's sorted entries sharing one fd.
+// chunk is a slice of a large directory's sorted entries sharing one fd,
+// or, with next, a count's continuation: the directory's next slab, read
+// from the shared fd's offset (countSlab).
 type chunk struct {
 	dir   *sharedFD
 	names []byte
 	keys  []byte
 	ents  []entry
+	next  bool
 }
 
 type sharedFD struct {
@@ -115,6 +121,9 @@ func disposeChunk(r Range) {
 // before stat, so each stat lands in its final slot.
 func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	if c := r.chunk; c != nil { // Expand releases its descriptor share
+		if c.next {
+			return p.countSlab(ctx, c.dir, r, e, st)
+		}
 		rows, err := p.statInto(ctx, c.dir.fd, r.path, c.names, c.keys, c.ents, st)
 		if err != nil {
 			return err
@@ -127,12 +136,15 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		return nil
 	}
 	st.DirsRead++
+	if p.unsorted {
+		st.Unsorted++
+		d := &sharedFD{fd: fd}
+		d.refs.Store(1)
+		defer d.release()
+		return p.countSlab(ctx, d, r, e, st)
+	}
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	if p.unsorted {
-		defer unix.Close(fd)
-		return p.streamNames(ctx, fd, r, sc, e, st)
-	}
 	if err := readNames(ctx, fd, r.path, sc, p.opt.Fields != Names, st); err != nil {
 		unix.Close(fd)
 		return err
@@ -160,51 +172,92 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	return p.emit(r, rows, e, st)
 }
 
-// streamNames lists a directory for a count, whose rows are neither sorted
-// nor kept (opened.Run): each getdents batch is typed, keyed, statted and
-// emitted before the next is read, as find does, so the directory's memory
-// is one batch, not its whole listing. Holding a directory of 1M files
-// (about 140 MiB) was what made a count thrash the page cache on a 512 MiB
-// machine (issue #388). The batch's stats come before the next read, so an
-// NFS client keeps fetching attributes with the names (readNames) without a
-// hint.
-func (p *Provider) streamNames(ctx context.Context, fd int, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
-	st.Unsorted++
-	add := func(_ uint64, typ uint8, name []byte) {
-		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
-		sc.names = append(sc.names, name...)
+// countSlab reads a count's directory one slab at a time: at most
+// slabEntries entries, typed, keyed and then statted. A count's rows are
+// neither sorted nor kept, so it need not hold the whole directory, as a
+// listing must to sort it; holding a directory of 1M files (about 140 MiB)
+// made a count thrash the page cache on a 512 MiB machine (issue #388). A
+// slab that ends the directory within chunkThreshold entries is statted here.
+// Otherwise its entries go to other workers as chunks of chunkEntries, as a
+// listing's do, and the rest of the directory follows as a continuation range
+// on the same fd, emitted after them: order.Count pushes a range's children
+// in reverse and pops the last pushed first, so the continuation is taken
+// only once its slab's chunks are, and a directory holds about one slab
+// beyond the chunks being statted. Reading the whole directory in one
+// worker instead, as find does, lost the chunks' parallel stats: 1.6x slower
+// cold and 2x warm on 1M files in one directory (4-CPU runner).
+func (p *Provider) countSlab(ctx context.Context, d *sharedFD, r Range, e source.Emitter[Range, Entry], st *Stats) error {
+	sc := scratchPool.Get().(*scratch)
+	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
+	more, err := readSlab(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st)
+	if err != nil {
+		return err
 	}
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		n, err := unix.Getdents(fd, sc.buf)
-		if err == unix.EINTR {
-			continue
-		}
-		if err != nil {
-			st.note(&st.ReadErrors, r.path, err)
-			return nil
-		}
-		if n <= 0 {
-			return nil
-		}
-		sc.names, sc.ents = sc.names[:0], sc.ents[:0]
-		if err := parseDirents(sc.buf[:n], add); err != nil {
-			st.note(&st.ReadErrors, r.path, err)
-			return nil
-		}
-		st.StreamedBatches++
-		p.resolveUnknown(fd, sc)
-		buildKeys(r.prefix, sc) // a new arena: the emitted rows are views of it
-		rows, err := p.statInto(ctx, fd, r.path, sc.names, sc.keys, sc.ents, st)
+	st.Slabs++
+	p.resolveUnknown(d.fd, sc)
+	buildKeys(r.prefix, sc)
+	if p.opt.Fields == Names || (!more && len(sc.ents) <= chunkThreshold) {
+		rows, err := p.statInto(ctx, d.fd, r.path, sc.names, sc.keys, sc.ents, st)
 		if err != nil {
 			return err
 		}
 		if err := p.emit(r, rows, e, st); err != nil {
 			return err
 		}
+	} else {
+		names, keys, ents := sc.names, sc.keys, sc.ents
+		sc.names, sc.keys, sc.ents = nil, nil, nil // the chunks own them
+		for i := 0; i < len(ents); i += chunkEntries {
+			d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
+			st.Chunks++
+			if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
+				return err
+			}
+		}
 	}
+	if !more {
+		return nil
+	}
+	d.refs.Add(1)
+	return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
+}
+
+// readSlab reads fd's next entries into sc, whole getdents batches until
+// slabEntries are in or the directory ends; more reports that it may go on.
+// A read error is counted and ends the directory. With stat, a full batch is
+// hinted for NFS as readNames does.
+func readSlab(ctx context.Context, fd int, path string, sc *scratch, stat bool, st *Stats) (more bool, err error) {
+	sc.names, sc.ents = sc.names[:0], sc.ents[:0]
+	add := func(_ uint64, typ uint8, name []byte) {
+		sc.ents = append(sc.ents, entry{nameOff: uint32(len(sc.names)), nameLen: uint32(len(name)), typ: typ})
+		sc.names = append(sc.names, name...)
+	}
+	for len(sc.ents) < slabEntries {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		n, err := unix.Getdents(fd, sc.buf)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			st.note(&st.ReadErrors, path, err)
+			return false, nil
+		}
+		if n <= 0 {
+			return false, nil
+		}
+		first := len(sc.ents)
+		if err := parseDirents(sc.buf[:n], add); err != nil {
+			st.note(&st.ReadErrors, path, err)
+			return false, nil
+		}
+		if stat && n > len(sc.buf)-direntHintSlack {
+			hintReaddirplus(fd, sc, first)
+			st.ReaddirplusHints++
+		}
+	}
+	return true, nil
 }
 
 // openDir opens a directory for reading entries; below the root it never
