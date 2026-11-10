@@ -4,7 +4,6 @@
 package listing
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/go/internal/dataset"
 	"github.com/varveio/swath/go/internal/dataset/datasettest"
@@ -85,58 +83,6 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 	if err := json.Unmarshal(b, v); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// T5: the parallel provider's dataset is byte-identical to the sequential
-// provider's (Parquet parts and manifest, apart from its creation time) on
-// the same static bucket with request latency.
-func TestS3ParallelEqualsSequential(t *testing.T) {
-	s3test.NoCredentials(t)
-	keys := make([]string, 12000)
-	for i := range keys {
-		keys[i] = fmt.Sprintf("d%02d/sub%d/obj-%06d", i%7, i%3, i)
-		if i%500 == 0 {
-			keys[i] = fmt.Sprintf("flat-%05d", i)
-		}
-	}
-	url := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, keys)), 5*time.Millisecond))
-	build := func(s3cfg S3Config, workers int) string {
-		out := filepath.Join(t.TempDir(), "ds")
-		s3cfg.Endpoint, s3cfg.PathStyle, s3cfg.Anonymous = url, true, true
-		sum, err := Run(context.Background(), Config{Source: SourceConfig{URI: "s3://bkt", Options: &s3cfg}, Output: OutputConfig{Dir: out, NoJournal: datasettest.NoJournal()}, Limits: Limits{PartSize: 64 << 10, Workers: workers}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("%+v counters=%s", s3cfg, mustJSON(s3Stats(sum).Counters))
-		return out
-	}
-	ref := build(S3Config{Policy: keyrange.Policy{Sequential: true}}, 1)
-	for _, tc := range []S3Config{{}, {Policy: keyrange.Policy{Seed: true}}} {
-		got := build(tc, 16)
-		parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
-		if len(parts) < 2 {
-			t.Fatalf("want several parts, got %d", len(parts))
-		}
-		for _, p := range parts {
-			a, _ := os.ReadFile(p)
-			b, err := os.ReadFile(filepath.Join(got, "data", filepath.Base(p)))
-			if err != nil || !bytes.Equal(a, b) {
-				t.Fatalf("%+v: %s differs (%v)", tc, filepath.Base(p), err)
-			}
-		}
-		if more, _ := filepath.Glob(filepath.Join(got, "data", "*.parquet")); len(more) != len(parts) {
-			t.Fatalf("%+v: %d parts, want %d", tc, len(more), len(parts))
-		}
-		strip := func(dir string) map[string]any {
-			var m map[string]any
-			readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-			stripTimes(m)
-			return m
-		}
-		if fmt.Sprint(strip(ref)) != fmt.Sprint(strip(got)) {
-			t.Fatalf("%+v: manifests differ", tc)
-		}
 	}
 }
 

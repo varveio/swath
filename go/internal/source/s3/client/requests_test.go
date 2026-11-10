@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -126,32 +127,38 @@ func TestRequestOptions(t *testing.T) {
 	rec := &recorder{}
 	cl := newTest(t, Config{Region: "us-east-1", Anonymous: true, HTTPClient: &http.Client{Transport: rec}})
 	ctx := context.Background()
-	if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: "bkt", Prefix: "p/", StartAfter: "p/a b", MaxKeys: 7, FetchOwner: true}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cl.ListObjectsV2(ctx, &ListInput{Bucket: "bkt", ContinuationToken: "1/tok+==", Delimiter: "/"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cl.ListObjectVersions(ctx, &VersionsInput{Bucket: "bkt", KeyMarker: "k%", VersionIDMarker: "null"}); err != nil {
-		t.Fatal(err)
-	}
-	inputs := []string{"prefix", "start-after", "max-keys", "fetch-owner", "continuation-token", "delimiter", "key-marker", "version-id-marker"}
-	for i, want := range []map[string]string{
-		{"list-type": "2", "encoding-type": "url", "prefix": "p/", "start-after": "p/a b", "max-keys": "7", "fetch-owner": "true"},
-		{"list-type": "2", "encoding-type": "url", "continuation-token": "1/tok+==", "delimiter": "/"},
-		{"versions": "", "encoding-type": "url", "key-marker": "k%", "version-id-marker": "null"},
+	const key = "a b+c%/é&=?<>"
+	for _, tc := range []struct {
+		list     *ListInput
+		versions *VersionsInput
+		want     url.Values
+	}{
+		{list: &ListInput{Bucket: "bkt", Prefix: "p/", StartAfter: "p/a b", MaxKeys: 7, FetchOwner: true},
+			want: url.Values{"list-type": {"2"}, "encoding-type": {"url"}, "prefix": {"p/"}, "start-after": {"p/a b"}, "max-keys": {"7"}, "fetch-owner": {"true"}}},
+		{list: &ListInput{Bucket: "bkt", ContinuationToken: "1/tok+==", Delimiter: "/"},
+			want: url.Values{"list-type": {"2"}, "encoding-type": {"url"}, "continuation-token": {"1/tok+=="}, "delimiter": {"/"}}},
+		{versions: &VersionsInput{Bucket: "bkt"}, want: url.Values{"versions": {""}, "encoding-type": {"url"}}},
+		{versions: &VersionsInput{Bucket: "bkt", KeyMarker: "k%", VersionIDMarker: "null"},
+			want: url.Values{"versions": {""}, "encoding-type": {"url"}, "key-marker": {"k%"}, "version-id-marker": {"null"}}},
+		{versions: &VersionsInput{Bucket: "bkt", Prefix: "p/" + key, Delimiter: "/", KeyMarker: key, VersionIDMarker: "null", MaxKeys: 7},
+			want: url.Values{"versions": {""}, "encoding-type": {"url"}, "prefix": {"p/" + key}, "delimiter": {"/"}, "key-marker": {key}, "version-id-marker": {"null"}, "max-keys": {"7"}}},
 	} {
-		q := rec.urls[i].Query()
-		for k, v := range want {
-			if !q.Has(k) || q.Get(k) != v {
-				t.Errorf("request %d: query %s, want %s=%q", i, rec.urls[i].RawQuery, k, v)
-			}
+		var err error
+		if tc.list != nil {
+			_, err = cl.ListObjectsV2(ctx, tc.list)
+		} else {
+			_, err = cl.ListObjectVersions(ctx, tc.versions)
 		}
-		for _, k := range inputs {
-			if _, set := want[k]; q.Has(k) && !set {
-				t.Errorf("request %d: query %s sends unset %s", i, rec.urls[i].RawQuery, k)
-			}
+		if err != nil {
+			t.Fatal(err)
 		}
+		u := rec.urls[len(rec.urls)-1]
+		if !reflect.DeepEqual(u.Query(), tc.want) {
+			t.Errorf("query %s, want %v", u.RawQuery, tc.want)
+		}
+	}
+	if _, err := cl.ListObjectVersions(ctx, &VersionsInput{Bucket: "bkt", VersionIDMarker: "v"}); err == nil {
+		t.Fatal("a version-id marker without a key marker was sent")
 	}
 }
 

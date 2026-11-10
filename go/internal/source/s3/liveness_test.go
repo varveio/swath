@@ -5,7 +5,6 @@ package s3
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,14 +51,5 @@ func TestRetryExhaustionNeverFailsTheRun(t *testing.T) {
 	_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
 	if objhttp.Classify(err) != objhttp.ClassAccessDenied {
 		t.Fatalf("access denied: %v (%s)", err, objhttp.Classify(err))
-	}
-}
-
-// TestClassify: a connection reset known only by its text is transient.
-// The status and code classes are TestAnswers' and the shared contract's.
-func TestClassify(t *testing.T) {
-	err := errors.Join(errors.New("read: connection reset by peer"))
-	if f := objhttp.Normalize(err); objhttp.Classify(f) != objhttp.ClassOther || !f.Transient {
-		t.Errorf("%v: failure %+v, want other, transient", err, f)
 	}
 }

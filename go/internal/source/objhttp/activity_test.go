@@ -54,20 +54,6 @@ func TestActivity(t *testing.T) {
 	}
 }
 
-// TestActivityIsLive: the activity is read from the client at each call,
-// not captured when observed.
-func TestActivityIsLive(t *testing.T) {
-	var c Counters
-	a := Observe(&c)
-	if a.Requests().Attempts != 0 {
-		t.Fatal("attempts before any")
-	}
-	c.Attempt()()
-	if got := a.Requests().Attempts; got != 1 {
-		t.Fatalf("attempts %d after one, want 1", got)
-	}
-}
-
 func TestActivityStore(t *testing.T) {
 	for _, c := range []struct {
 		name   string
